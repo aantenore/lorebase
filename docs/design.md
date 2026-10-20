@@ -951,6 +951,19 @@ Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (ar
 - HTTP `ETag` on Record reads = hash of `(object_hash, derived hash, mask profile)`; conditional requests return `304`.
 - No external cache is required. A shared cache may be added later behind an interface.
 
+
+### 8.6 Implementation notes
+
+Decisions taken in `lorebase_core.query` (DSL model and validation) and `lorebase_keeper.reading` (SQL compilation, reads, search, history and diff). They refine 8.1 to 8.4 and 6.7, 6.12.
+
+- **DSL.** Predicates are told apart by their leading member: `and`, `or`, `not`, `attr`, `derived`, `via`, `count` (Link count compared with `eq` to `gte` or `between`, optionally over a `where`), `match` (full-text on the Record). `key` and `title` are pseudo fields (an Attribute named `title` wins). `aggregate: {group_by}` counts matches per Kind and value. Operators per type are listed in `query/resolve.py`; `ne` and the comparisons never match absent values. Every problem of a query is reported at once with a JSON pointer.
+- **Compilation.** Values reach SQL as bound parameters only. Equality on a scalar Attribute of one Kind uses `values @> {...}` (GIN); other comparisons cast `values ->> id` to the Attribute's SQL type. Links of `foreign_key` Relations are read from the `from` Records holding the Attribute. Ordering is keyset based on `(value IS NULL, value, [kind], key)`, so absent values sort last in both directions; cursors are bound to the query shape.
+- **Responses** keep canonical values (integers and decimals as strings, 6.1). Sensitivity masking (10.2) and Kind-scoped invisibility in queries (13.3) are not applied yet; Kind-scoped grants are checked on the `kinds/{kind}` routes only.
+- **Time travel.** `at` takes a Revision id, tag or branch. At the branch head the materialized rows serve the read; otherwise the tree does: key reads, Kind and Link listings ordered by key (whole partition scanned, refused above `read.time_travel.max_scan_entries`). Filters, ordering, includes, aggregates, Link and lineage summaries, traversal and search are refused at other Revisions.
+- **Search.** Lexical candidates match the search vector or the title by trigram (`%`, threshold from settings); rank is `ts_rank_cd` plus weighted title similarity. Semantic search ranks stored embeddings of the configured model by cosine distance to the caller's vector. Hybrid fuses both lists with `w / (rrf_k + rank)` in SQL. Search has no cursor.
+- **Diff.** Only differing nodes are loaded, level by level in batched queries, then the core walk runs in memory; a cheap lower bound from partition counts and `read.diff.max_changes` refuse oversized diffs. Pages are offsets into the deterministic diff order; `format=ndjson` streams all changes. The linear-history changeset union of 6.7 is not used.
+- **Log.** The first-parent chain (or every ancestor with `all=true`) is walked with a recursive query on each page; pages continue by `(generation, id)`.
+
 ---
 
 ## 9. Ingestion: Sources, extraction, Proposals
@@ -1402,7 +1415,7 @@ network:
   allow_private_targets: false
 ```
 
-**Implemented so far.** `lorebase_platform.settings` provides the layering above (`LOREBASE_CONFIG` names the YAML file; `LOREBASE__SECTION__KEY` overrides it) and `secret://env/NAME` and `secret://file//path` references. Packages declare their own sections with `register_section`, so a section is validated only where it is used. The sections `logging`, `telemetry`, `keeper`, `inference`, `database` and `store` exist in `config/lorebase.example.yaml`; `database.statement_timeout_ms` defaults to 30000 (bulk commits) rather than the 2000 shown above, which is a read-heavy tuning. `store` holds schema-shape values read once by the initial migration (`layout.hash_partitions`, `embeddings.dims`; see [store-schema-notes.md](store-schema-notes.md)). The sections `auth`, `read`, `search`, `materialization`, `extraction` and `webhooks` arrive with the milestones that use them.
+**Implemented so far.** `lorebase_platform.settings` provides the layering above (`LOREBASE_CONFIG` names the YAML file; `LOREBASE__SECTION__KEY` overrides it) and `secret://env/NAME` and `secret://file//path` references. Packages declare their own sections with `register_section`, so a section is validated only where it is used. The sections `logging`, `telemetry`, `keeper`, `inference`, `database`, `store`, `read` and `search` exist in `config/lorebase.example.yaml`; `database.statement_timeout_ms` defaults to 30000 (bulk commits) rather than the 2000 shown above, which is a read-heavy tuning. `store` holds schema-shape values read once by the initial migration (`layout.hash_partitions`, `embeddings.dims`; see [store-schema-notes.md](store-schema-notes.md)). `read` (page sizes, DSL limits, traversal caps, time travel and diff bounds, the 2000 ms statement timeout of read transactions) and `search` (ranking and fusion weights) belong to Keeper's read path (8.6). The sections `auth`, `materialization`, `extraction` and `webhooks` arrive with the milestones that use them.
 
 ---
 

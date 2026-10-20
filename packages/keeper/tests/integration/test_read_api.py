@@ -600,6 +600,132 @@ async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> No
 # Revisions, log and diff ------------------------------------------------------------------
 
 
+async def test_log_revision_counts_and_changeset(http: httpx.AsyncClient, seeded: Seeded) -> None:
+    revisions = seeded.revisions
+    log = await get_ok(http, "/branches/main/log")
+    assert [item["id"] for item in log["items"]] == [
+        revisions["updated"],
+        revisions["data"],
+        revisions["schema"],
+        revisions["created"],
+    ]
+    paged: list[str] = []
+    cursor = None
+    while True:
+        params: dict[str, Any] = {"limit": 1}
+        if cursor:
+            params["cursor"] = cursor
+        page = await get_ok(http, "/branches/main/log", **params)
+        paged.extend(item["id"] for item in page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert paged == [item["id"] for item in log["items"]]
+    imports = await get_ok(http, "/branches/main/log", origin_type="import")
+    assert [i["id"] for i in imports["items"]] == [revisions["data"], revisions["schema"]]
+    by_author = await get_ok(http, "/branches/feature/risk/log", author="usr_editor")
+    assert [i["id"] for i in by_author["items"]] == [revisions["feature"], revisions["updated"]]
+
+    revision = await get_ok(http, f"/revisions/{revisions['updated']}")
+    assert revision["parents"] == [revisions["data"]]
+    assert revision["origin"]["type"] == "operation"
+    assert (await get_ok(http, "/revisions/main"))["id"] == revisions["updated"]
+
+    counts = await get_ok(http, f"/revisions/{revisions['data']}/counts")
+    by_name = {c["name"]: c["count"] for c in counts["partitions"]}
+    assert by_name["Supplier"] == len(rows("supplier.csv"))
+    assert by_name["supplied_by"] == len(rows("supplied_by.csv"))
+
+    changeset = await get_ok(http, f"/revisions/{revisions['updated']}/changeset")
+    assert changeset["total"] == 1
+    (change,) = changeset["items"]
+    assert change["kind"] == "Supplier"
+    assert change["change"] == "modified"
+    assert change["changes"] == [{"name": "risk_score", "old": "32", "new": "90"}]
+    assert set(change["provenance"]) == {"risk_score"}
+
+
+async def test_diff_between_revisions(http: httpx.AsyncClient, seeded: Seeded) -> None:
+    revisions = seeded.revisions
+    linear = await get_ok(http, "/diff", **{"from": revisions["data"], "to": revisions["updated"]})
+    changeset = await get_ok(http, f"/revisions/{revisions['updated']}/changeset")
+    assert [c | {"provenance": None} for c in linear["items"]] == [
+        c | {"provenance": None} for c in changeset["items"]
+    ]
+
+    full = await get_ok(
+        http,
+        "/diff",
+        **{"from": revisions["schema"], "to": "main", "kinds": "Supplier,Part", "limit": 10},
+    )
+    summary = {s["name"]: s for s in full["summary"]}
+    assert summary["Supplier"]["added"] == len(rows("supplier.csv"))
+    assert summary["Part"]["added"] == len(rows("part.csv"))
+    assert full["total"] == len(rows("supplier.csv")) + len(rows("part.csv"))
+    collected = list(full["items"])
+    cursor = full["next_cursor"]
+    while cursor:
+        page = await get_ok(
+            http,
+            "/diff",
+            **{
+                "from": revisions["schema"],
+                "to": "main",
+                "kinds": "Supplier,Part",
+                "limit": 10,
+                "cursor": cursor,
+            },
+        )
+        collected.extend(page["items"])
+        cursor = page["next_cursor"]
+    assert len(collected) == full["total"]
+    added = next(c for c in collected if c["key"] == "S-1001")
+    assert {v["name"]: v["new"] for v in added["changes"]}["risk_score"] == "90"
+
+    branches = await get_ok(http, "/diff", **{"from": "main", "to": "feature/risk"})
+    assert [(c["kind"], c["key"], c["change"]) for c in branches["items"]] == [
+        ("Supplier", "S-9999", "added")
+    ]
+    # materialized counts difference matches the diff summary
+    main_count = (await get_ok(http, "/revisions/main/counts"))["partitions"]
+    branch_count = (await get_ok(http, f"/revisions/{revisions['feature']}/counts"))["partitions"]
+    difference = {c["name"]: c["count"] for c in branch_count}["Supplier"] - {
+        c["name"]: c["count"] for c in main_count
+    }["Supplier"]
+    assert difference == branches["summary"][0]["added"]
+
+    streamed = await http.get(
+        f"{BASE}/diff",
+        params={"from": revisions["schema"], "to": "main", "kinds": "Supplier", "format": "ndjson"},
+    )
+    assert streamed.status_code == 200
+    lines = [json.loads(line) for line in streamed.text.splitlines() if line]
+    assert lines[0]["type"] == "summary"
+    assert len(lines) == 1 + len(rows("supplier.csv"))
+
+    schema_diff = await get_ok(
+        http, "/diff", **{"from": revisions["created"], "to": revisions["schema"]}
+    )
+    assert schema_diff["summary"][0]["element"] == "schema"
+    kinds = {c["api_name"] for c in schema_diff["items"] if c["element_type"] == "kind"}
+    assert {"Supplier", "Part"} <= kinds
+
+    assert (
+        await http.get(f"{BASE}/diff", params={"from": "nope", "to": "main"})
+    ).status_code == 404
+    too_big = await http.get(
+        f"{BASE}/diff",
+        params={"from": revisions["schema"], "to": "main"},
+    )
+    assert too_big.status_code == 200
+    async with keeper(seeded.app_url, read={"diff": {"max_changes": 5}}) as limited:
+        refused = await limited.get(
+            f"{BASE}/diff", params={"from": revisions["schema"], "to": "main"}
+        )
+    assert refused.status_code == 422
+    assert refused.json()["errors"][0]["code"] == "diff_too_large"
+
+
 async def test_reads_on_another_branch(http: httpx.AsyncClient, seeded: Seeded) -> None:
     on_branch = await get_ok(http, "/kinds/Supplier/records/S-9999", branch="feature/risk")
     assert on_branch["revision"] == seeded.revisions["feature"]
