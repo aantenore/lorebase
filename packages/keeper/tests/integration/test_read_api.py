@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+import random
+from collections.abc import Callable, Iterator
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -255,6 +257,209 @@ async def test_list_with_where_order_select_and_cursor(http: httpx.AsyncClient) 
 # Query DSL --------------------------------------------------------------------------------
 
 
+async def test_query_relations_counts_includes_and_aggregate(http: httpx.AsyncClient) -> None:
+    suppliers = {r["supplier_code"]: r for r in rows("supplier.csv")}
+    supplied = rows("supplied_by.csv")
+    body = {
+        "kind": "Part",
+        "where": {
+            "and": [
+                {"via": "supplied_by", "where": {"attr": "country", "op": "in", "value": ["PL"]}},
+                {"count": "supplied_by", "op": "gte", "value": 1},
+            ]
+        },
+        "select": ["name"],
+        "include": {"supplied_by": {"select": ["country"], "limit": 2}},
+        "order_by": [{"attr": "key"}],
+        "limit": 100,
+        "aggregate": {"group_by": "category"},
+    }
+    result = await post_ok(http, "/query", body)
+    expected = sorted(
+        {s["from_key"] for s in supplied if suppliers[s["to_key"]]["country"] == "PL"}
+    )
+    assert [item["key"] for item in result["items"]] == expected
+    first = result["items"][0]
+    assert set(first["values"]) <= {"name"}
+    included = first["included"]["supplied_by"]
+    assert 1 <= len(included) <= 2
+    assert all(set(i["values"]) <= {"country"} for i in included)
+    parts = {r["part_number"]: r for r in rows("part.csv")}
+    counts: dict[str, int] = {}
+    for key in expected:
+        counts[parts[key]["category"]] = counts.get(parts[key]["category"], 0) + 1
+    assert {c["value"]: c["count"] for c in result["aggregate"]["counts"]} == counts
+
+    multi = await post_ok(
+        http,
+        "/query",
+        {"kind": "Part", "where": {"count": "supplied_by", "op": "gte", "value": 2}, "limit": 100},
+    )
+    per_part: dict[str, int] = {}
+    for s in supplied:
+        per_part[s["from_key"]] = per_part.get(s["from_key"], 0) + 1
+    assert {i["key"] for i in multi["items"]} == {k for k, n in per_part.items() if n >= 2}
+
+    none = await post_ok(
+        http,
+        "/query",
+        {"kind": "Supplier", "where": {"not": {"via": "supplies"}}, "limit": 100},
+    )
+    with_parts = {s["to_key"] for s in supplied}
+    assert {i["key"] for i in none["items"]} == set(suppliers) - with_parts
+
+    via_fk = await post_ok(
+        http,
+        "/query",
+        {
+            "kind": "Supplier",
+            "where": {
+                "via": "purchase_orders",
+                "where": {"attr": "status", "op": "eq", "value": "shipped"},
+            },
+            "limit": 100,
+        },
+    )
+    shipped = {r["supplier"] for r in rows("purchase_order.csv") if r["status"] == "shipped"}
+    assert {i["key"] for i in via_fk["items"]} == shipped
+
+    located = await post_ok(
+        http,
+        "/query",
+        {"trait": "Located", "where": {"attr": "country", "op": "eq", "value": "IT"}, "limit": 100},
+    )
+    italian = {r["supplier_code"] for r in rows("supplier.csv") if r["country"] == "IT"} | {
+        r["plant_code"] for r in rows("plant.csv") if r["country"] == "IT"
+    }
+    assert {i["key"] for i in located["items"]} == italian
+    assert {i["kind"] for i in located["items"]} <= {"Supplier", "Plant"}
+
+    text_match = await post_ok(
+        http, "/query", {"kind": "Part", "where": {"match": "bearing"}, "limit": 100}
+    )
+    assert text_match["items"]
+    assert all(
+        "bearing" in i["title"].lower() or "bearing" in json.dumps(i["values"]).lower()
+        for i in text_match["items"]
+    )
+
+    invalid = await http.post(
+        f"{BASE}/query",
+        json={
+            "kind": "Part",
+            "where": {
+                "and": [
+                    {"attr": "nope", "op": "eq", "value": 1},
+                    {"attr": "unit_cost", "op": "gt", "value": "cheap"},
+                    {"via": "flags"},
+                ]
+            },
+        },
+    )
+    assert invalid.status_code == 422
+    pointers = {e["pointer"]: e["code"] for e in invalid.json()["errors"]}
+    assert pointers == {
+        "/body/where/and/0/attr": "unknown_field",
+        "/body/where/and/1/value": "invalid_value",
+        "/body/where/and/2/via": "relation_not_on_kind",
+    }
+    deep = {
+        "via": "supplied_by",
+        "where": {"via": "supplies", "where": {"via": "supplied_by", "where": {"via": "supplies"}}},
+    }
+    too_deep = await http.post(f"{BASE}/query", json={"kind": "Part", "where": deep})
+    assert too_deep.status_code == 422
+    assert too_deep.json()["errors"][0]["code"] == "depth_exceeded"
+
+
+def _brute(op: str, stored: Any, operand: Any) -> bool:
+    if op == "exists":
+        return (stored is not None) == operand
+    if stored is None:
+        return False
+    if op == "eq":
+        return bool(stored == operand)
+    if op == "ne":
+        return bool(stored != operand)
+    if op == "in":
+        return stored in operand
+    if op == "prefix":
+        return str(stored).startswith(operand)
+    if op == "between":
+        return bool(operand[0] <= stored <= operand[1])
+    return bool(
+        {
+            "lt": stored < operand,
+            "lte": stored <= operand,
+            "gt": stored > operand,
+            "gte": stored >= operand,
+        }[op]
+    )
+
+
+async def test_results_match_a_brute_force_evaluator(http: httpx.AsyncClient) -> None:
+    parts = rows("part.csv")
+    fields: dict[str, Callable[[dict[str, str]], Any]] = {
+        "unit_cost": lambda r: Decimal(r["unit_cost"]) if r["unit_cost"] else None,
+        "category": lambda r: r["category"] or None,
+        "name": lambda r: r["name"],
+        "lifecycle": lambda r: r["lifecycle"] or None,
+        "hazardous": lambda r: r["hazardous"] == "true" if r["hazardous"] else None,
+    }
+    generator = random.Random(20261020)
+
+    def predicate() -> tuple[dict[str, Any], Callable[[dict[str, str]], bool]]:
+        name = generator.choice(list(fields))
+        read = fields[name]
+        values = [read(r) for r in parts if read(r) is not None]
+        sample = generator.choice(values)
+        if name == "unit_cost":
+            op = generator.choice(["eq", "ne", "lt", "lte", "gt", "gte", "between", "exists"])
+            if op == "between":
+                low, high = sorted([sample, generator.choice(values)])
+                return (
+                    {"attr": name, "op": op, "value": [str(low), str(high)]},
+                    lambda r: _brute(op, read(r), (low, high)),
+                )
+            operand: Any = True if op == "exists" else sample
+            return (
+                {"attr": name, "op": op, "value": operand if op == "exists" else str(sample)},
+                lambda r: _brute(op, read(r), operand),
+            )
+        if name == "hazardous":
+            op = generator.choice(["eq", "ne"])
+            return {"attr": name, "op": op, "value": sample}, lambda r: _brute(op, read(r), sample)
+        if name == "name":
+            prefix = str(sample)[: generator.randint(1, 4)]
+            return (
+                {"attr": name, "op": "prefix", "value": prefix},
+                lambda r: _brute("prefix", read(r), prefix),
+            )
+        op = generator.choice(["eq", "ne", "in"])
+        operand = [sample, generator.choice(values)] if op == "in" else sample
+        return {"attr": name, "op": op, "value": operand}, lambda r: _brute(op, read(r), operand)
+
+    for _ in range(40):
+        (left, left_check), (right, right_check) = predicate(), predicate()
+        combine = generator.choice(["and", "or", "not"])
+        if combine == "not":
+            where: dict[str, Any] = {"not": left}
+
+            def check(r: dict[str, str], lc: Any = left_check) -> bool:
+                return not lc(r)
+        else:
+            where = {combine: [left, right]}
+
+            def check(
+                r: dict[str, str], lc: Any = left_check, rc: Any = right_check, c: str = combine
+            ) -> bool:
+                return (lc(r) and rc(r)) if c == "and" else (lc(r) or rc(r))
+
+        result = await post_ok(http, "/query", {"kind": "Part", "where": where, "limit": 500})
+        got = sorted(i["key"] for i in result["items"])
+        assert got == sorted(r["part_number"] for r in parts if check(r)), where
+
+
 # Links and graph --------------------------------------------------------------------------
 
 
@@ -348,6 +553,48 @@ async def test_traverse_and_neighborhood(http: httpx.AsyncClient) -> None:
 
 
 # Search -----------------------------------------------------------------------------------
+
+
+async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> None:
+    lexical = await post_ok(http, "/search", {"q": "bearing", "kinds": ["Part"], "limit": 5})
+    assert lexical["mode"] == "lexical"
+    assert lexical["items"]
+    assert all(hit["kind"] == "Part" for hit in lexical["items"])
+    assert "bearing" in (lexical["items"][0]["snippet"] or "").lower()
+    scores = [hit["score"] for hit in lexical["items"]]
+    assert scores == sorted(scores, reverse=True)
+
+    typo = await post_ok(http, "/search", {"q": "Kavsen Aloys", "kinds": ["Supplier"]})
+    assert "S-1001" in [hit["key"] for hit in typo["items"]]
+
+    filtered = await post_ok(
+        http,
+        "/search",
+        {
+            "q": "bearing",
+            "kinds": ["Part"],
+            "where": {"attr": "lifecycle", "op": "eq", "value": "obsolete"},
+        },
+    )
+    obsolete = {r["part_number"] for r in rows("part.csv") if r["lifecycle"] == "obsolete"}
+    assert {hit["key"] for hit in filtered["items"]} <= obsolete
+
+    semantic = await post_ok(http, "/search", {"query_vector": unit_vector(0), "limit": 3})
+    assert semantic["mode"] == "semantic"
+    assert semantic["items"][0]["key"] == "P-10001"
+    assert semantic["items"][0]["score"] == pytest.approx(1.0)
+
+    hybrid = await post_ok(
+        http, "/search", {"q": "bearing", "query_vector": unit_vector(1), "kinds": ["Part"]}
+    )
+    assert hybrid["mode"] == "hybrid"
+    assert hybrid["items"][0]["key"] in {"P-10001", "P-10002"}
+
+    wrong = await http.post(f"{BASE}/search", json={"query_vector": [0.1, 0.2]})
+    assert wrong.status_code == 422
+    assert wrong.json()["errors"][0]["code"] == "dimension_mismatch"
+    empty = await http.post(f"{BASE}/search", json={"kinds": ["Part"]})
+    assert empty.status_code == 422
 
 
 # Revisions, log and diff ------------------------------------------------------------------

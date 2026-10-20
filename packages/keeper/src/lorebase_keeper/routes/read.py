@@ -19,20 +19,24 @@ from lorebase_core.query import QueryError, QueryPlan, resolve_query
 from lorebase_keeper.auth.deps import Access, require
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import Problem, ValidationProblem
-from lorebase_keeper.reading import graph, records
+from lorebase_keeper.reading import graph, records, search
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, resolve_point
 from lorebase_keeper.reading.problems import invalid, query_problem, request_problem
 from lorebase_keeper.reading.requests import (
     NeighborhoodRequest,
+    QueryRequest,
+    SearchRequest,
     TraverseRequest,
 )
 from lorebase_keeper.reading.runtime import ReadRuntime, ReadRuntimeDep, ReadSessionDep
 from lorebase_keeper.reading.views import (
     LinkPage,
     NeighborhoodResponse,
+    QueryResponse,
     RecordPage,
     RecordResponse,
+    SearchResponse,
     TraverseResponse,
     record_etag,
     served,
@@ -241,7 +245,29 @@ async def list_relation_links(
     return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
 
 
-# Traversal ---------------------------------------------------------------
+# Query, traversal, search ---------------------------------------------------------------
+
+
+@router.post(f"{BASE}/query", summary="Query Records with the DSL", responses=_ERRORS)
+async def query_records(
+    domain_id: str,
+    body: QueryRequest,
+    _access: DataRead,
+    runtime: ReadRuntimeDep,
+    session: ReadSessionDep,
+    response: Response,
+) -> QueryResponse:
+    """Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates."""
+    point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=body.at)
+    query = DslQuery.model_validate(body.model_dump(by_alias=True, exclude={"branch", "at"}))
+    plan = _plan(query, point, runtime, "/body")
+    page = await records.run_query(
+        session, runtime, point, plan, shape=_shape(query), cursor_pointer="/body/cursor"
+    )
+    _mark(response, point)
+    return QueryResponse(
+        **served(point), items=page.items, next_cursor=page.next_cursor, aggregate=page.aggregate
+    )
 
 
 @router.post(f"{BASE}/traverse", summary="Traverse Relations from a Record", responses=_ERRORS)
@@ -272,5 +298,21 @@ async def neighborhood(
     """Breadth-first expansion from seed Records within depth, node and edge caps."""
     point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=None)
     result = await graph.neighborhood(session, runtime, point, body)
+    _mark(response, point)
+    return result
+
+
+@router.post(f"{BASE}/search", summary="Search Records", responses=_ERRORS)
+async def search_records(
+    domain_id: str,
+    body: SearchRequest,
+    _access: DataRead,
+    runtime: ReadRuntimeDep,
+    session: ReadSessionDep,
+    response: Response,
+) -> SearchResponse:
+    """Lexical, semantic (caller-supplied vector) or hybrid search (design 8.4)."""
+    point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=None)
+    result = await search.search(session, runtime, point, body)
     _mark(response, point)
     return result
