@@ -4,12 +4,12 @@
 |-----------------|------------|-------|
 | `POST .../proposals` | `proposal.create` (source branch) | 201; `Idempotency-Key` replays 200 |
 | `GET .../proposals` | `data.read` | filters `status`, `origin`, `source`, `target`, `author` |
-| `GET .../proposals/{p}` | `data.read` | reviews, approvals, latest attempt |
+| `GET .../proposals/{p}` | `data.read` (both branches) | reviews, approvals, latest attempt |
 | `PATCH .../proposals/{p}` | author, else `proposal.merge` | title, description |
 | `POST .../proposals/{p}/close` | author, else `proposal.merge` | attempts abandoned |
 | `POST .../proposals/{p}/reviews` | `proposal.review` (target) | 201 |
 | `POST .../proposals/{p}/merge` | `proposal.merge` (target) | 200 merged; 409 `merge-conflicts` |
-| `GET .../proposals/{p}/conflicts` | `data.read` | attempt and a page of Conflicts |
+| `GET .../proposals/{p}/conflicts` | `data.read` (both branches) | attempt, page of Conflicts |
 | `POST .../proposals/{p}/conflicts/{c}/resolution` | `conflict.resolve` (target) | stores |
 | `POST .../proposals/{p}/conflicts:resolve` | `conflict.resolve` (target) | stores, re-runs |
 
@@ -18,6 +18,10 @@ fast-forward or already up to date) and 409 `merge-conflicts` when Conflicts rem
 problem carries the stored attempt (`attempt`, same shape as the Conflict listing, open
 Conflicts first page). Conflicts are identified by their fingerprint. Reading the Conflicts of
 an open Proposal recomputes its attempt when a head moved since (6.10, stale attempts).
+
+Reads are authorized against the source and the target branch (`services.proposal_reads`):
+listings keep the Proposals the caller may read, so a page may hold fewer items than asked
+while `next_cursor` is set; callers limited to Kinds see the Conflicts of those Kinds only.
 """
 
 from __future__ import annotations
@@ -38,9 +42,16 @@ from lorebase_keeper.context import StoreDep
 from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep
 from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, ValidationProblem
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
+from lorebase_keeper.reading.points import read_guard
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import proposals as service
 from lorebase_keeper.services.errors import commit_problem
+from lorebase_keeper.services.proposal_reads import (
+    ConflictScope,
+    conflict_scope,
+    readable_proposals,
+)
+from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import CommitError
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.repositories import (
@@ -56,6 +67,8 @@ router = APIRouter(tags=["proposals"])
 
 PROPOSALS = "/domains/{domain_id}/proposals"
 PROPOSAL = PROPOSALS + "/{proposal_id}"
+
+DataRead = Annotated[ReadGuard, Depends(read_guard())]
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "Missing permission, or self-approval refused."},
@@ -428,6 +441,19 @@ async def _check(
     await authorize(request, auth, principal, permission, domain_id, AccessContext(branch=branch))
 
 
+async def _readable(
+    store: StoreDep, guard: ReadGuard, domain_id: str, proposal_id: str
+) -> ConflictScope:
+    """What the caller may read of the Proposal (403 when nothing; unknown Proposals are
+    403 for callers whose grants are narrowed)."""
+    await guard.precheck()
+    try:
+        proposal = await service.target_of(store, domain_id, proposal_id)
+    except ProblemError as error:
+        raise guard.unknown(error, wide=await guard.wide()) from None
+    return await conflict_scope(guard, proposal)
+
+
 def _store_problem(error: CommitError, retry_after_s: int) -> ProblemError:
     return commit_problem(error, max_issues=1, retry_after_s=retry_after_s)
 
@@ -490,14 +516,15 @@ async def list_proposals(
     domain_id: str,
     store: StoreDep,
     params: PageParamsDep,
-    _: Annotated[Access, Depends(require(Permission.DATA_READ))],
+    guard: DataRead,
     status: ProposalStatus | None = None,
     origin: ProposalOrigin | None = None,
     source: Annotated[str | None, Query(description="Source branch.")] = None,
     target: Annotated[str | None, Query(description="Target branch.")] = None,
     author: str | None = None,
 ) -> Page[ProposalOut]:
-    """Proposals, newest first."""
+    """Proposals the caller may read, newest first."""
+    await guard.precheck()
     after = None
     if params.position is not None:
         try:
@@ -523,7 +550,8 @@ async def list_proposals(
         if more and rows
         else None
     )
-    return Page[ProposalOut](items=[_proposal(r) for r in rows], next_cursor=next_cursor)
+    items = [_proposal(r) for r in await readable_proposals(guard, rows)]
+    return Page[ProposalOut](items=items, next_cursor=next_cursor)
 
 
 @router.get(PROPOSAL, summary="Get a Proposal", responses=_ERRORS)
@@ -532,9 +560,10 @@ async def get_proposal(
     proposal_id: str,
     store: StoreDep,
     keeper: KeeperSettingsDep,
-    _: Annotated[Access, Depends(require(Permission.DATA_READ))],
+    guard: DataRead,
 ) -> ProposalDetailOut:
     """The Proposal with its reviews, approval state and latest merge attempt."""
+    await _readable(store, guard, domain_id, proposal_id)
     return _detail(await service.get(store, domain_id, proposal_id, keeper.proposals))
 
 
@@ -709,13 +738,14 @@ async def list_conflicts(
     store: StoreDep,
     keeper: KeeperSettingsDep,
     params: PageParamsDep,
-    _: Annotated[Access, Depends(require(Permission.DATA_READ))],
+    guard: DataRead,
     kind: Annotated[
         str | None, Query(description="Conflict codes, comma-separated (`DV1,XS8`).")
     ] = None,
     status: Annotated[Literal["open", "resolved"] | None, Query()] = None,
 ) -> ConflictsOut:
     """The current merge attempt with one page of its Conflicts, ordered by id."""
+    scope = await _readable(store, guard, domain_id, proposal_id)
     after = None if params.position is None else str(params.position.get("after", "")) or None
     try:
         view = await service.conflicts(
@@ -729,6 +759,7 @@ async def list_conflicts(
                 resolved=None if status is None else status == "resolved",
                 limit=params.limit,
                 after=after,
+                scope=scope,
             ),
         )
     except CommitError as error:

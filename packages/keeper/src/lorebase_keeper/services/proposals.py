@@ -15,7 +15,7 @@ review policy:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -26,10 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lorebase_core.merge import Conflict, MergePolicy, Resolution, ResolutionError
 from lorebase_core.model import new_ulid
 from lorebase_keeper.auth.principals import Principal
-from lorebase_keeper.context import StoreAccess, require_branch, require_domain
+from lorebase_keeper.context import StoreAccess, require_branch, require_domain, require_revision
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, ProblemError, ProblemType
 from lorebase_keeper.services.config import ProposalSettings
 from lorebase_keeper.services.errors import ALREADY_EXISTS, IDEMPOTENCY_CONFLICT
+from lorebase_keeper.services.proposal_reads import FULL_SCOPE, ConflictScope, visible_partitions
+from lorebase_keeper.services.schema import schema_at
 from lorebase_store.merging import (
     AttemptResult,
     MergeRequest,
@@ -44,11 +46,13 @@ from lorebase_store.models.enums import (
     ReviewVerdict,
 )
 from lorebase_store.repositories import (
+    EVERY_PARTITION,
     ConflictRepository,
     ConflictRow,
     DomainRow,
     MergeAttemptRepository,
     MergeAttemptRow,
+    PartitionFilter,
     ProposalFilter,
     ProposalRepository,
     ProposalRow,
@@ -146,6 +150,7 @@ class ConflictQuery:
     resolved: bool | None = None
     limit: int = 100
     after: str | None = None
+    scope: ConflictScope = field(default=FULL_SCOPE)
 
 
 @dataclass(frozen=True)
@@ -612,11 +617,40 @@ async def conflicts(
                 query,
                 recomputed=result.computation is not None,
                 stale=result.stale_previous,
+                partitions=await _partitions(store, session, domain_id, result.attempt, query),
             )
         latest = await MergeAttemptRepository(session, domain_id).latest(proposal_id)
         if latest is None:
             raise ProblemError(NOT_FOUND, f"Proposal {proposal_id!r} has no merge attempt.")
-        return await _attempt_view(session, domain_id, proposal, latest, query)
+        return await _attempt_view(
+            session,
+            domain_id,
+            proposal,
+            latest,
+            query,
+            partitions=await _partitions(store, session, domain_id, latest, query),
+        )
+
+
+async def _partitions(
+    store: StoreAccess,
+    session: AsyncSession,
+    domain_id: str,
+    attempt: MergeAttemptRow,
+    query: ConflictQuery,
+) -> PartitionFilter:
+    """The partitions whose Conflicts the reader of `query` sees, by the schemas of the
+    attempt's Revisions."""
+    if query.scope.everything:
+        return EVERY_PARTITION
+    revisions = [r for r in (attempt.base, attempt.ours, attempt.theirs) if r is not None]
+    schemas = [
+        await schema_at(
+            session, domain_id, await require_revision(session, domain_id, r), store.runtime
+        )
+        for r in dict.fromkeys(revisions)
+    ]
+    return visible_partitions(query.scope, schemas)
 
 
 async def resolve(
@@ -718,7 +752,10 @@ async def _attempt_view(
     *,
     recomputed: bool = False,
     stale: bool = False,
+    partitions: PartitionFilter = EVERY_PARTITION,
 ) -> AttemptView:
+    """One page of the Conflicts of `attempt` in `partitions`; a reader limited to some
+    partitions also sees only the resolutions and automatic resolutions of those."""
     repository = ConflictRepository(session, domain_id)
     rows = await repository.page(
         attempt.id,
@@ -726,16 +763,36 @@ async def _attempt_view(
         resolved=query.resolved,
         limit=query.limit + 1,
         after=query.after,
+        partitions=partitions,
     )
     more = len(rows) > query.limit
     rows = rows[: query.limit]
+    resolutions = await ResolutionRepository(session, domain_id).of(proposal.id)
+    if not partitions.everything:
+        visible = await repository.fingerprints(attempt.id, partitions)
+        resolutions = [r for r in resolutions if r.fingerprint in visible]
+        attempt = _limited(attempt, partitions)
     return AttemptView(
         proposal=proposal,
         attempt=attempt,
         conflicts=rows,
         next_after=rows[-1].fingerprint if more and rows else None,
-        counts=await repository.counts(attempt.id),
-        resolutions=await ResolutionRepository(session, domain_id).of(proposal.id),
+        counts=await repository.counts(attempt.id, partitions),
+        resolutions=resolutions,
         recomputed=recomputed,
         stale=stale,
     )
+
+
+def _limited(attempt: MergeAttemptRow, partitions: PartitionFilter) -> MergeAttemptRow:
+    """`attempt` with the outcome members a reader limited to `partitions` may see: automatic
+    resolutions in those partitions, and no unmatched resolutions (their Conflict, and so
+    its partition, is gone)."""
+    outcome = dict(attempt.outcome or {})
+    outcome["auto_resolutions"] = [
+        a
+        for a in outcome.get("auto_resolutions") or []
+        if isinstance(a, dict) and partitions.allows(str(a.get("partition")))
+    ]
+    outcome["unmatched_resolutions"] = []
+    return replace(attempt, outcome=outcome)

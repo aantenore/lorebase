@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, delete, func, insert, select, update
+from sqlalchemy import Select, Table, delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -218,6 +218,34 @@ class MergeAttemptRepository:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PartitionFilter:
+    """The partitions whose Conflicts a reader sees: those in `include` (every partition when
+    None) except those in `exclude`."""
+
+    include: frozenset[str] | None = None
+    exclude: frozenset[str] = frozenset()
+
+    @property
+    def everything(self) -> bool:
+        return self.include is None and not self.exclude
+
+    def allows(self, partition: str) -> bool:
+        return (self.include is None or partition in self.include) and (
+            partition not in self.exclude
+        )
+
+    def apply[T: Select[Any]](self, query: T) -> T:
+        if self.include is not None:
+            query = query.where(CONFLICTS.c.partition.in_(sorted(self.include)))
+        if self.exclude:
+            query = query.where(CONFLICTS.c.partition.not_in(sorted(self.exclude)))
+        return query
+
+
+EVERY_PARTITION = PartitionFilter()
+
+
 class ConflictRepository:
     """Conflicts of the merge attempts of one Domain."""
 
@@ -266,10 +294,13 @@ class ConflictRepository:
         resolved: bool | None = None,
         limit: int,
         after: str | None = None,
+        partitions: PartitionFilter = EVERY_PARTITION,
     ) -> list[ConflictRow]:
         """Conflicts of an attempt ordered by fingerprint, starting after `after`."""
-        query = select(CONFLICTS).where(
-            CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id
+        query = partitions.apply(
+            select(CONFLICTS).where(
+                CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id
+            )
         )
         if codes:
             query = query.where(CONFLICTS.c.code.in_(list(codes)))
@@ -285,15 +316,27 @@ class ConflictRepository:
         result = await self._session.execute(query)
         return [_conflict(row) for row in result.mappings()]
 
-    async def counts(self, attempt_id: str) -> dict[tuple[str, bool], int]:
+    async def counts(
+        self, attempt_id: str, partitions: PartitionFilter = EVERY_PARTITION
+    ) -> dict[tuple[str, bool], int]:
         """Number of Conflicts of an attempt per `(code, resolved)`."""
         resolved = CONFLICTS.c.resolved_by.is_not(None)
-        result = await self._session.execute(
-            select(CONFLICTS.c.code, resolved, func.count())
-            .where(CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id)
-            .group_by(CONFLICTS.c.code, resolved)
+        query = partitions.apply(
+            select(CONFLICTS.c.code, resolved, func.count()).where(
+                CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id
+            )
         )
+        result = await self._session.execute(query.group_by(CONFLICTS.c.code, resolved))
         return {(code, bool(done)): int(count) for code, done, count in result}
+
+    async def fingerprints(self, attempt_id: str, partitions: PartitionFilter) -> frozenset[str]:
+        """Ids of the Conflicts of an attempt in the partitions `partitions` lets through."""
+        query = partitions.apply(
+            select(CONFLICTS.c.id).where(
+                CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id
+            )
+        )
+        return frozenset((await self._session.execute(query)).scalars())
 
 
 class ResolutionRepository:

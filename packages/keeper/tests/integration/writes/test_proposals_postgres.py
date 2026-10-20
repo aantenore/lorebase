@@ -399,3 +399,67 @@ async def test_auto_close_and_unprotected_target(
         listing = await http.get(PROPOSALS, params={"status": "merged"}, headers=admin)
         assert [p["id"] for p in listing.json()["items"]] == [created.json()["id"]]
     await loader.verify("staging")
+
+
+async def narrowed_key(
+    http: Any, admin: dict[str, str], scope_type: str, scope_ref: str
+) -> dict[str, str]:
+    """A service principal holding `viewer` only through a grant narrowed to `scope_ref`."""
+    created = await http.post(
+        f"{DOMAIN}/api-keys", json={"name": f"{scope_ref} reader", "role": "viewer"}, headers=admin
+    )
+    assert created.status_code == 201, created.text
+    principal = created.json()["principal_id"]
+    narrowed = await http.post(
+        f"{DOMAIN}/grants",
+        json={
+            "subject": principal,
+            "role": "viewer",
+            "scope_type": scope_type,
+            "scope_ref": scope_ref,
+        },
+        headers=admin,
+    )
+    assert narrowed.status_code == 201, narrowed.text
+    grants = (await http.get(f"{DOMAIN}/grants", headers=admin)).json()["items"]
+    [wide] = [g for g in grants if g["subject"] == principal and g["scope_type"] == "domain"]
+    revoked = await http.delete(f"{DOMAIN}/grants/{wide['id']}", headers=admin)
+    assert revoked.status_code == 204, revoked.text
+    return {"Authorization": f"Bearer {created.json()['key']}"}
+
+
+async def test_proposal_reads_follow_branch_and_kind_grants(
+    keeper: Any, installation_admin: Any, loader: Loader
+) -> None:
+    admin = installation_admin.headers
+    async with keeper() as http:
+        await setup_domain(http, admin, loader, "work")
+        await loader.edit("work", "S-1001", city="Warsaw")
+        await loader.edit("main", "S-1001", city="Gdansk")
+        created = await http.post(PROPOSALS, json=proposal_body("work"), headers=admin)
+        assert created.status_code == 201, created.text
+        base = f"{PROPOSALS}/{created.json()['id']}"
+        branch_reader = await narrowed_key(http, admin, "branch", "work")
+        suppliers = await narrowed_key(http, admin, "kind", "Supplier")
+        parts = await narrowed_key(http, admin, "kind", "Part")
+
+        # a grant on the source branch only reads neither the Proposal nor its Conflicts
+        assert (await http.get(base, headers=branch_reader)).status_code == 403
+        assert (await http.get(f"{base}/conflicts", headers=branch_reader)).status_code == 403
+        assert (await http.get(f"{PROPOSALS}/prp_unknown", headers=branch_reader)).status_code == (
+            403
+        )
+        listed = await http.get(PROPOSALS, headers=branch_reader)
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["items"] == []
+
+        # Kind grants see the Conflicts of their Kinds only
+        assert (await http.get(base, headers=parts)).status_code == 200
+        assert len((await http.get(PROPOSALS, headers=parts)).json()["items"]) == 1
+        visible = (await http.get(f"{base}/conflicts", headers=suppliers)).json()
+        assert [c["ours"] for c in visible["conflicts"]] == ["Gdansk"]
+        assert visible["open_conflicts"] == 1
+        hidden = (await http.get(f"{base}/conflicts", headers=parts)).json()
+        assert hidden["conflicts"] == []
+        assert hidden["open_conflicts"] == 0
+        assert hidden["resolutions"] == []

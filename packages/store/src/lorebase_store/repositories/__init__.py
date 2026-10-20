@@ -22,10 +22,12 @@ from lorebase_store.repositories.materialized import (
     SchemaRow,
 )
 from lorebase_store.repositories.merges import (
+    EVERY_PARTITION,
     ConflictRepository,
     ConflictRow,
     MergeAttemptRepository,
     MergeAttemptRow,
+    PartitionFilter,
     ResolutionRepository,
     ResolutionRow,
 )
@@ -54,6 +56,7 @@ from lorebase_store.repositories.revisions import (
 from lorebase_store.repositories.scope import scope_to_domain
 
 __all__ = [
+    "EVERY_PARTITION",
     "ChangesetRepository",
     "ConflictRepository",
     "ConflictRow",
@@ -72,6 +75,7 @@ __all__ = [
     "MergeAttemptRepository",
     "MergeAttemptRow",
     "OutboxRepository",
+    "PartitionFilter",
     "PgRevisionGraph",
     "ProposalFilter",
     "ProposalRepository",

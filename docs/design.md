@@ -1208,6 +1208,11 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
   the Conflict of the current attempt and stores it without running the merge;
   `POST .../conflicts:resolve` takes `{resolutions: [{fingerprint, choice, value, values}]}`,
   stores them, re-runs the merge and returns the new attempt like the listing.
+- Reading a Proposal or its Conflicts needs `data.read` on both its source and target branch
+  (10.2 read rules). Callers holding only Kind-narrowed grants see the Conflicts of those
+  Kinds (and of Relations between them); schema Conflicts need `schema.read` on both
+  branches. `GET .../proposals` keeps the Proposals the caller may read, so a page may be
+  shorter than `limit` while `next_cursor` is set.
 
 ### 11.2 MCP (Herald)
 
