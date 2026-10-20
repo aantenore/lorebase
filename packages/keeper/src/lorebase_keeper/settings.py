@@ -16,6 +16,7 @@ from lorebase_keeper.services.config import (
     BranchSettings,
     DomainSettings,
     OperationSettings,
+    ProposalSettings,
     ReadSettings,
     SchemaChangeSettings,
 )
@@ -115,6 +116,7 @@ class KeeperSettings(SectionModel):
     schema_changes: SchemaChangeSettings = Field(default_factory=SchemaChangeSettings)
     reads: ReadSettings = Field(default_factory=ReadSettings)
     operations: OperationSettings = Field(default_factory=OperationSettings)
+    proposals: ProposalSettings = Field(default_factory=ProposalSettings)
 
     @field_validator("api_prefix")
     @classmethod

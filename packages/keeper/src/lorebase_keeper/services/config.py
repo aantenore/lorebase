@@ -108,3 +108,45 @@ class OperationSettings(SectionModel):
         if self.import_batch_rows > self.max_bulk_rows:
             raise ValueError("import_batch_rows cannot exceed max_bulk_rows")
         return self
+
+
+class ProposalSettings(SectionModel):
+    """Proposals, reviews and merges (design 6.10, 10.3).
+
+    A Domain overrides `required_approvals` with its `required_approvals` setting; its
+    `merge_policy` setting holds the merge policy options of new Proposals.
+    """
+
+    required_approvals: int = Field(
+        default=1,
+        ge=0,
+        description="Approvals a Proposal needs before it merges into a protected branch.",
+    )
+    allow_self_approval: bool = Field(
+        default=False,
+        description="Whether authors may approve their own Proposals into protected branches; "
+        "when false their approvals are refused and never counted.",
+    )
+    changes_requested_blocks: bool = Field(
+        default=True,
+        description="Whether an outstanding `request_changes` review blocks merges into "
+        "protected branches.",
+    )
+    auto_close_source_branch: bool = Field(
+        default=False,
+        description="Delete the source branch once its Proposal merged (never the default "
+        "branch or a protected one).",
+    )
+    attempt_retention: int = Field(
+        default=5,
+        ge=1,
+        description="Merge attempts kept per Proposal; older superseded ones are deleted "
+        "(merged attempts are always kept).",
+    )
+    preview_on_create: bool = Field(
+        default=True,
+        description="Compute the merge preview (Conflict count) when a Proposal is created.",
+    )
+    max_resolutions: int = Field(
+        default=1000, ge=1, description="Resolutions accepted by one bulk request."
+    )

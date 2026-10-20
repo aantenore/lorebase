@@ -102,6 +102,47 @@ describe('http adapter', () => {
     expect(calls[2]?.init?.method).toBe('POST');
   });
 
+  it('maps the merge-conflicts problem to the conflicts outcome', async () => {
+    const attempt = {
+      proposal: 'prp_1',
+      base: 'b',
+      ours: 'o',
+      theirs: 't',
+      conflicts: [],
+      resolutions: [],
+      auto_resolutions: [],
+      open_conflicts: 1,
+    };
+    const { calls, fetchStub } = stubFetch(
+      json(
+        {
+          type: 'urn:lorebase:problem:merge-conflicts',
+          title: 'Merge has Conflicts',
+          status: 409,
+          code: 'merge-conflicts',
+          attempt,
+        },
+        409,
+      ),
+    );
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await expect(api.proposals.merge('supply', 'prp_1')).resolves.toEqual({
+      status: 'conflicts',
+      attempt,
+    });
+    expect(calls[0]?.url).toMatch(/proposals\/prp_1\/merge$/);
+
+    const listing = stubFetch(json(attempt));
+    const lister = createHttpApi({
+      baseUrl: 'https://keeper.example.test',
+      fetch: listing.fetchStub,
+    });
+    await lister.conflicts.list('supply', 'prp_1', { kind: ['DV1', 'XS8'], status: 'open' });
+    const url = new URL(listing.calls[0]?.url ?? '');
+    expect(url.searchParams.get('kind')).toBe('DV1,XS8');
+    expect(url.searchParams.get('status')).toBe('open');
+  });
+
   it('posts schema change sets to the Branch', async () => {
     const { calls, fetchStub } = stubFetch(
       json({ valid: true, revision: null, violations: [], migrations: [] }),

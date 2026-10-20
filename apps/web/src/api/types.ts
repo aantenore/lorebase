@@ -50,6 +50,8 @@ export interface ProblemDetails {
   instance?: string;
   /** Machine-readable code, when Keeper provides one. */
   code?: string;
+  /** The merge attempt carried by Keeper's `merge-conflicts` problem (409 of `.../merge`). */
+  attempt?: MergeAttempt;
 }
 
 // ------------------------------------------------------------------ Domain
@@ -651,12 +653,18 @@ export interface Proposal {
   created_at: string;
   merged_revision: RevisionId | null;
   checks: ProposalCheck[];
+  /** Mock only. Keeper returns `policy`, the merge policy options of the Proposal. */
   policies: MergePolicy[];
+  /** Keeper: merge policy options that differ from the defaults (design 6.15). */
+  policy?: Record<string, JsonValue>;
+  updated_at?: string | null;
 }
 
 export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
 export interface ProposalReview {
+  /** Keeper only. */
+  id?: string;
   reviewer: string;
   verdict: ReviewVerdict;
   comment: string;
@@ -665,6 +673,19 @@ export interface ProposalReview {
 
 export interface ProposalDetail extends Proposal {
   reviews: ProposalReview[];
+  /** Keeper: review state against the target branch protection. */
+  approval?: ProposalApproval;
+  /** Keeper: the latest merge attempt (without Conflicts). */
+  attempt?: MergeAttempt | null;
+}
+
+export interface ProposalApproval {
+  protected: boolean;
+  required: number;
+  approvals: number;
+  approvers: string[];
+  changes_requested: string[];
+  satisfied: boolean;
 }
 
 export interface CreateProposalInput {
@@ -770,6 +791,14 @@ export interface Conflict {
   choices: ResolutionChoice[];
   /** A merge policy (`prefer`, `cascade_dangling`) can resolve this kind without a person. */
   machine_resolvable: boolean;
+  /** Keeper: the Conflict id, equal to `fingerprint`. */
+  id?: string;
+  /** Keeper: `resolved` when the attempt applied a stored Resolution. */
+  status?: 'open' | 'resolved';
+  /** Keeper: every member key of a grouped Conflict (`sample` holds the first few). */
+  members?: string[];
+  /** Keeper: the Resolution the attempt applied. */
+  resolution?: Resolution | null;
 }
 
 /** A resolver's decision for the Conflict with `fingerprint`. */
@@ -782,6 +811,10 @@ export interface Resolution {
   values?: Record<string, JsonValue>;
   /** Who decided; `policy:{name}` for policy resolutions. Set by Keeper. */
   resolver?: string;
+  /** When it was stored. Set by Keeper. */
+  at?: string;
+  /** False when the Conflict it resolved is gone from the current attempt (a head moved). */
+  matched?: boolean;
 }
 
 /** A Conflict resolved by the engine or by a policy, kept for Lineage and review. */
@@ -797,10 +830,18 @@ export interface AutoResolution {
   sample: string[];
 }
 
-/** The merge attempt stored on a Proposal when the merge found Conflicts (design 6.8 step 5). */
+/**
+ * The merge attempt stored on a Proposal when the merge found Conflicts (design 6.8 step 5).
+ * Keeper's `GET .../conflicts` returns it with one page of `conflicts` (filters `kind`,
+ * `status`, cursor `next_cursor`) and recomputes it when a head moved since; the members
+ * marked Keeper are absent from the mock.
+ */
 export interface MergeAttempt {
   proposal: string;
-  /** Merge base, target head and source head the attempt was computed from. */
+  /**
+   * Merge base, target head and source head the attempt was computed from. Keeper sends a
+   * null base when the heads share no ancestor or the base is virtual (`virtual_base`).
+   */
   base: RevisionId;
   ours: RevisionId;
   theirs: RevisionId;
@@ -808,6 +849,33 @@ export interface MergeAttempt {
   /** Stored by fingerprint; a Conflict without an entry is unresolved. */
   resolutions: Resolution[];
   auto_resolutions: AutoResolution[];
+  /** Keeper: attempt id. */
+  id?: string;
+  /** Keeper: `conflicted`, `resolved` (clean, not merged yet), `merged`, `stale`, `abandoned`. */
+  status?: string;
+  /** Keeper: `conflicts`, `merged`, `fast_forward` or `up_to_date`. */
+  result?: string | null;
+  virtual_base?: boolean;
+  created_at?: string;
+  created_by?: string | null;
+  /** Keeper: target head after the merge committed. */
+  revision?: RevisionId | null;
+  policy?: Record<string, JsonValue>;
+  open_conflicts?: number;
+  resolved_conflicts?: number;
+  /** Keeper: per Conflict code, open and resolved counts. */
+  counts?: Record<string, { open: number; resolved: number }>;
+  /** Keeper: the request ran the merge; `stale`: a head moved since the previous attempt. */
+  recomputed?: boolean;
+  stale?: boolean;
+  /** Keeper: fingerprints of stored Resolutions whose Conflict is gone. */
+  unmatched_resolutions?: string[];
+  next_cursor?: string | null;
+}
+
+export interface ConflictListParams extends PageParams {
+  kind?: ConflictCode[];
+  status?: 'open' | 'resolved';
 }
 
 export interface ResolveManyInput {
@@ -816,12 +884,21 @@ export interface ResolveManyInput {
 
 export interface MergeResult {
   proposal: Proposal;
+  /** Head of the target branch after the merge. */
   revision: RevisionId;
+  /** Keeper: `merged`, `fast_forward` or `up_to_date`. */
+  result?: string;
+  attempt?: MergeAttempt;
+  /** Keeper: the source branch was deleted (`keeper.proposals.auto_close_source_branch`). */
+  source_deleted?: boolean;
+  replayed?: boolean;
 }
 
 /**
  * Result of `POST .../merge`: the merge Revision, or the attempt with the Conflicts that
  * remain after the stored Resolutions were applied and the consistency checks re-run.
+ * Keeper answers the second case with HTTP 409 `merge-conflicts` carrying `attempt`; the
+ * http adapter maps it to `{ status: 'conflicts', attempt }`.
  */
 export type MergeOutcome =
   ({ status: 'merged' } & MergeResult) | { status: 'conflicts'; attempt: MergeAttempt };

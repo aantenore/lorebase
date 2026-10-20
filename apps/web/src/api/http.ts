@@ -1,9 +1,19 @@
 import type { KeeperApi } from './client';
 import { ApiError } from './errors';
-import type { PageParams, ProblemDetails, ReadScope, Resolution } from './types';
+import type {
+  MergeAttempt,
+  MergeOutcome,
+  PageParams,
+  ProblemDetails,
+  ReadScope,
+  Resolution,
+} from './types';
 
 /** Path prefix of the Keeper REST API (design 11.1). Protocol constant, not configuration. */
 export const API_BASE_PATH = '/api/v1';
+
+/** Problem code of a merge that stopped on Conflicts (HTTP 409 with the attempt). */
+export const MERGE_CONFLICTS = 'merge-conflicts';
 
 type QueryValue = string | number | boolean | string[] | null | undefined;
 type QueryParams = Record<string, QueryValue>;
@@ -57,6 +67,7 @@ async function readProblem(response: Response): Promise<ProblemDetails> {
       ...(body.detail === undefined ? {} : { detail: body.detail }),
       ...(body.instance === undefined ? {} : { instance: body.instance }),
       ...(body.code === undefined ? {} : { code: body.code }),
+      ...(body.attempt === undefined ? {} : { attempt: body.attempt }),
     };
   } catch {
     return { type: 'about:blank', title: response.statusText, status: response.status };
@@ -180,7 +191,18 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
       get: (domain, proposal) => get(prop(domain, proposal)),
       diff: (domain, proposal, params) => get(`${prop(domain, proposal)}/diff`, pageParams(params)),
       review: (domain, proposal, input) => post(`${prop(domain, proposal)}/reviews`, input),
-      merge: (domain, proposal) => post(`${prop(domain, proposal)}/merge`),
+      merge: async (domain, proposal): Promise<MergeOutcome> => {
+        try {
+          return await post<MergeOutcome>(`${prop(domain, proposal)}/merge`);
+        } catch (error) {
+          const attempt: MergeAttempt | undefined =
+            error instanceof ApiError && error.code === MERGE_CONFLICTS
+              ? error.problem.attempt
+              : undefined;
+          if (attempt === undefined) throw error;
+          return { status: 'conflicts', attempt };
+        }
+      },
       close: (domain, proposal) => post(`${prop(domain, proposal)}/close`),
       items: (domain, proposal, params) =>
         get(`${prop(domain, proposal)}/items`, pageParams(params)),
@@ -189,7 +211,12 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
     },
 
     conflicts: {
-      list: (domain, proposal) => get(`${prop(domain, proposal)}/conflicts`),
+      list: (domain, proposal, params) =>
+        get(`${prop(domain, proposal)}/conflicts`, {
+          kind: params?.kind,
+          status: params?.status,
+          ...pageParams(params),
+        }),
       resolve: (domain, proposal, resolution) =>
         post(
           `${prop(domain, proposal)}/conflicts/${enc(resolution.fingerprint)}/resolution`,
