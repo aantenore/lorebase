@@ -26,3 +26,57 @@ telemetry:
   service_namespace: lorebase
   sample_ratio: 0.1              # fraction of root traces sampled, 0 to 1
   metric_export_interval_s: 60
+
+# Model inference, used by Scribe only. Lorebase never imports a model vendor library: every
+# chat model is an OpenAI-compatible HTTP endpoint, local or hosted.
+inference:
+  llm:                           # tier 2; env aliases LLM_BASE_URL, LLM_MODEL, LLM_API_KEY
+    provider: openai_compatible  # openai_compatible | fake
+    base_url: http://localhost:11434/v1   # local Ollama; in docker compose: http://ollama:11434/v1
+    model: qwen2.5:7b-instruct   # any model name the endpoint serves
+    api_key: null                # hosted endpoints: secret://env/LLM_API_KEY
+    structured_output: json_schema        # json_schema | json_mode
+    temperature: 0
+    max_concurrency: 2
+    timeout_s: 120
+    price_per_million_tokens: {input: 0, output: 0}   # zero for local models
+    tasks: {}                    # per-task overrides, see the commented example below
+
+    # Hosted OpenAI-compatible endpoint (OpenAI, Azure OpenAI, Mistral, ...):
+    #   base_url: https://api.openai.com/v1
+    #   model: <model name>
+    #   api_key: secret://env/LLM_API_KEY
+    #   price_per_million_tokens: {input: <price>, output: <price>}
+    #
+    # LiteLLM proxy (compose profile `litellm`), reaching Anthropic, Google, Bedrock, ...:
+    #   base_url: http://litellm:4000/v1
+    #   model: <model alias defined in the proxy>
+    #   api_key: secret://env/LITELLM_KEY
+    #
+    # Small local model for bulk extraction, larger hosted model for schema discovery:
+    #   tasks:
+    #     extraction: {model: qwen2.5:7b-instruct}
+    #     schema_discovery:
+    #       base_url: https://api.openai.com/v1
+    #       model: <model name>
+    #       api_key: secret://env/HOSTED_KEY
+
+  embeddings:
+    provider: fastembed          # fastembed | openai_compatible | fake
+    model: BAAI/bge-small-en-v1.5
+    dims: 384                    # must match the model; the vector index uses it
+    base_url: null               # required for openai_compatible (Ollama or hosted)
+    api_key: null
+
+  local_extractors:              # tier 1; check each checkpoint's weight license
+    provider: gliner             # gliner | fake
+    gliner: {enabled: true, model: urchade/gliner_multi-v2.1, threshold: 0.5}
+    glirel: {enabled: true, model: jackboyla/glirel-large-v0, threshold: 0.5}
+    spacy: {enabled: false, pipeline: en_core_web_sm}
+
+  # Deterministic provider for tests and offline runs: set `provider: fake` in llm,
+  # embeddings and local_extractors. No network access is needed.
+  fake:
+    fixtures_dir: null           # directory of <prompt-hash>.json canned chat answers
+    dictionary: {}               # label -> surface forms matched by the fake span extractor
+    max_schema_depth: 6          # nesting depth beyond which optional properties are omitted
