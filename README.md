@@ -50,7 +50,7 @@ Agents live outside Lorebase, in any framework or language. Lorebase is their kn
 
 ## Quickstart
 
-Lorebase is pre-alpha. Today you can build and test the engine, bring up Postgres with migrations and the Keeper skeleton, and run the web shell against a mock API. The REST API, CLI and MCP server do not exist yet, so there is no end-to-end flow to try; see [Status](#status).
+Lorebase is pre-alpha. Today you can run the versioning and merge engine, bring up Postgres with migrations and the Keeper REST API (Domains, branches, schema change sets, built-in Operations), and run the web shell against a mock API. The read API, Proposals and merge over REST, the CLI and the MCP server do not exist yet, so there is no end-to-end "ask a question" flow to try; see [Status](#status). The step-by-step guide, including loading the supply sample through the REST API, is [docs/quickstart.md](docs/quickstart.md).
 
 Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), Docker with compose, and Node.js 24 with pnpm for the web app.
 
@@ -61,6 +61,9 @@ cd lorebase
 # Python workspace: install, then lint, type-check and run the unit tests
 uv sync --all-packages
 make lint type test-unit
+
+# Core engine demo: branches, three-way merge, Conflicts, resolutions, diff (no services needed)
+uv run python examples/merge_demo.py
 
 # Postgres, migrations and Keeper (builds the backend image on first run)
 cp .env.example .env     # set POSTGRES_PASSWORD and review the other values
@@ -146,11 +149,11 @@ Done:
 - **Three-way merge**: schema merge, attribute-level data merge, consistency rules under the merged schema, the full Conflict taxonomy, resolutions and merge policies (`prefer`, cascade of dangling Links, defaults). The `authority` and `newest_wins` policies are not implemented yet. Implementation notes: [docs/design.md](docs/design.md#615-implementation-notes).
 - **Schema as code**: load and dump a Domain schema as YAML, with the demo Domain in [examples/supply](examples/supply).
 - **Postgres schema**: Alembic migrations for the versioned store, materialized heads, governance tables and row-level security ([notes](docs/store-schema-notes.md)).
-- **Keeper skeleton**: settings, structured logging and telemetry, error format, liveness and readiness endpoints.
+- **Keeper**: settings, structured logging and telemetry, error format, liveness and readiness endpoints, authentication modes with roles and an audit log, and REST endpoints for Domains, branches and tags, the schema (read, validate, change sets) and built-in Operations such as `import_records`. Expressions (CEL) are not enabled yet.
 - **Web shell**: Explorer, Canvas, schema overview and Review screens over a mock API.
 - Inference interfaces with a deterministic fake provider, docker compose for Postgres, migrations and Keeper, and CI.
 
-Next: the commit pipeline and materializer, the REST API, then the CLI. The MCP server (Herald) follows in M3. Ingestion, extraction and semantic search are later milestones; none of them exist yet.
+Next: the read API (Records, Links, query, search), Revisions and diff, Proposals with merge and Conflict resolution over REST, then the Python client and the CLI. The MCP server (Herald) follows in M3. Ingestion, extraction and semantic search are later milestones; none of them exist yet.
 
 ## Roadmap
 
@@ -167,7 +170,9 @@ Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).
 ## Documentation
 
 - [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, UI, security, roadmap
+- [Quickstart](docs/quickstart.md): what runs today, step by step
 - [Glossary](docs/glossary.md): the Lorebase vocabulary with examples
+- [Examples](examples/README.md): the merge demo, schema as code and the supply sample Domain
 - [Comparison](docs/comparison.md): Lorebase next to similar products
 - [M1 plan](docs/plan/m1.md): ordered implementation tasks for the first milestone
 
