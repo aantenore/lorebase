@@ -29,6 +29,7 @@ Agents live outside Lorebase, in any framework or language. Lorebase is their kn
 - **Git-like branching for knowledge.** Work on a Branch, open a Proposal, review the schema and data diff, resolve Conflicts at attribute level, merge. Schema and data are merged together with consistency rules, so a merge never leaves the knowledge base invalid.
 - **MCP-native.** Herald, the built-in MCP server, gives any MCP-capable agent typed tools: describe the Domain, search, query, traverse, Lineage, and execute governed Operations with dry run.
 - **LLM-free read path.** Agent reads are deterministic SQL over materialized branch heads: milliseconds, reproducible, cheap. Language models are used only offline, to propose knowledge that people or policies accept.
+- **Runs free on your laptop, scales to any paid model.** One OpenAI-compatible inference abstraction. Local by default: Ollama (or vLLM, LM Studio, llama.cpp) for LLM extraction, fastembed on CPU for embeddings, GLiNER and GLiREL for zero-cost entity and relation extraction. Hosted models from OpenAI, Azure OpenAI, Anthropic, Google, Amazon Bedrock or Mistral plug into the same abstraction, directly or through a LiteLLM proxy. Switching provider is configuration only. The full demo needs zero API keys.
 - **Self-hosted on Postgres only.** One required store: Postgres 16 (with pgvector for optional semantic search). No graph database, search cluster or queue broker to run.
 - **A GraphRAG alternative for the enterprise.** Instead of letting a model write a graph you cannot audit, Lorebase keeps a reviewed, typed, versioned graph and hands agents precise answers with provenance.
 
@@ -38,7 +39,8 @@ Agents live outside Lorebase, in any framework or language. Lorebase is their kn
 |------|----------|
 | Modeling | Kinds, typed Attributes with constraints and sensitivity tags, directional Relations with cardinality, Traits, Derivations, Source mappings; Modeler UI and YAML |
 | Versioning | Content-addressed Revisions on Postgres, Branches and tags, diff between any two Revisions, three-way merge of schema and data, Conflict taxonomy and resolution flows, time travel reads |
-| Ingestion | CSV, Parquet and Postgres Sources with schema inference; snapshot and incremental syncs; document extraction with a pluggable OpenAI-compatible endpoint, verified evidence and entity resolution; everything lands as Proposals |
+| Ingestion | CSV, Parquet and Postgres Sources with rule-based schema inference (no model needed); snapshot and incremental syncs; tiered document extraction (rules, local GLiNER and GLiREL, then any LLM with JSON schema output) with verified evidence and entity resolution; everything lands as Proposals |
+| Inference | Vendor-agnostic and local-first: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`; Ollama by default; any hosted provider by configuration; fastembed embeddings on CPU; deterministic fake provider for tests; never used on the agent read path |
 | Review | Proposals with checks and approvals, per-item accept and reject with highlighted evidence, side-by-side Conflict resolver, merge policies such as Source authority |
 | Exploration | Explorer (search, filters, record pages, Lineage, history), Canvas graph visualization (Sigma.js), schema graph, diff overlay |
 | Agent access | REST API with OpenAPI 3.1, MCP server (stdio and Streamable HTTP), Python client, governed Operations with dry run and idempotency |
@@ -71,7 +73,7 @@ lorebase diff supply main cleanup/tiers
 lorebase proposal open supply cleanup/tiers --title "Tier cleanup"
 ```
 
-Then open the API docs at `http://localhost:8080/api/v1/docs`. The web UI (`http://localhost:3000`) and the MCP server (`http://localhost:8090/mcp`) arrive in M2 and M3.
+Then open the API docs at `http://localhost:8080/api/v1/docs`. The web UI (`http://localhost:3000`) and the MCP server (`http://localhost:8090/mcp`) arrive in M2 and M3. Model-backed features (document extraction, embeddings) arrive in M4 and run locally with `docker compose --profile local-models up`: Postgres plus Ollama on a laptop, no API keys.
 
 ## Architecture
 
@@ -98,7 +100,7 @@ flowchart LR
   subgraph External
     SRC[Tables, CSV, Parquet,<br/>Postgres sources]
     DOC[Documents]
-    LLM[OpenAI-compatible<br/>model endpoint<br/>offline only]
+    LLM[Model endpoint<br/>Ollama locally or any provider<br/>offline only]
     IDP[OIDC provider]
   end
 
@@ -118,7 +120,7 @@ flowchart LR
   K -. login .-> IDP
 ```
 
-The agent read path is `agent -> Herald -> Keeper -> materialized head`. It never touches a language model.
+The agent read path is `agent -> Herald -> Keeper -> materialized head`. It never touches a model of any kind; only Scribe, offline, uses the inference abstraction.
 
 ## How it compares
 
@@ -135,7 +137,7 @@ Lorebase sits between proprietary operational ontology platforms, versioned data
 | M1 | Engine and API | Versioning engine, Keeper REST API, CLI, docker compose, CI |
 | M2 | Structured ingestion and exploration | Postgres, CSV and Parquet Sources, schema inference, OIDC, Explorer, Canvas, Review basics |
 | M3 | Governance and agents | Custom Operations, full RBAC, Herald MCP server, Modeler, Conflict resolver UI |
-| M4 | Documents and semantic search | Offline extraction into Proposals with evidence, entity resolution, embeddings, hybrid search, Derivations |
+| M4 | Documents and semantic search | Tiered offline extraction into Proposals with evidence (local models by default, any provider by configuration), entity resolution, fastembed embeddings, hybrid search, Derivations |
 | M5 | Enterprise hardening, 1.0 | Overlay branches, PII vault and erasure, Helm chart, 10M-record performance, LinkML import and export |
 
 Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).

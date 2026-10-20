@@ -57,6 +57,7 @@ Teams putting agents in front of real business processes hit the same wall:
 2. The read path must be **deterministic and fast**: no LLM call when an agent asks a question of the knowledge base. LLMs are used offline, to propose knowledge, and humans or policies accept it.
 3. It must run on **one boring, proven store**: Postgres. One database to operate, back up, secure and scale.
 4. It must be **open source** under a permissive license, with enterprise features (RBAC, audit, SSO) in the open core, not behind a paywall.
+5. Model inference is a **pluggable, local-first utility**: the whole product runs free on a laptop with open models, and scales to any paid hosted model by configuration, never by code change.
 
 ---
 
@@ -75,7 +76,7 @@ Teams putting agents in front of real business processes hit the same wall:
 | G7 | Govern writes | All data mutations go through Operations with validation, RBAC, idempotency, dry run, audit |
 | G8 | Explain every fact | Lineage per record and per attribute value: which Source, document span, Operation or person, in which Revision |
 | G9 | Operate simply | Postgres 16 is the only required store; docker compose for local; stateless services; OpenTelemetry |
-| G10 | Stay vendor neutral | Pluggable LLM endpoint (OpenAI-compatible by default), OIDC with any provider, no cloud-specific dependency |
+| G10 | Stay vendor neutral and free to run | One OpenAI-compatible inference abstraction; local by default (Ollama, fastembed, GLiNER and GLiREL); any hosted model through the same abstraction by configuration only; the full demo needs zero API keys; OIDC with any provider; no cloud-specific dependency |
 
 ### 2.2 Non-goals (not now, maybe never)
 
@@ -84,7 +85,7 @@ Teams putting agents in front of real business processes hit the same wall:
 - BI dashboards and report builders.
 - Description logic reasoning (OWL entailment, classification). Lorebase validates constraints; it does not infer new classes.
 - Real-time CDC streaming ingestion in v1 (incremental sync by watermark is supported; CDC is a later connector).
-- Hosting or fine-tuning models.
+- Training, fine-tuning or serving models. Lorebase calls model servers through one abstraction; the optional Ollama compose profile is a convenience, not a serving product.
 - Multi-region active-active writes.
 
 ### 2.3 Anti-goals (things Lorebase refuses to do)
@@ -94,6 +95,7 @@ Teams putting agents in front of real business processes hit the same wall:
 - **No schemaless writes.** Every Record conforms to its Kind in the Revision it belongs to.
 - **No second required datastore.** No mandatory graph database, search cluster, queue broker or cache.
 - **No crippled open core.** Security, audit and governance are part of the open-source product.
+- **No mandatory paid API and no vendor SDK in the core.** Every model-backed feature runs on local open models; hosted models are an option selected by configuration.
 - **No hidden mutations.** Every change is a Revision with an author, a reason and lineage.
 
 ---
@@ -128,7 +130,7 @@ The scenario is what a client team sees during a pilot once M4 is delivered. The
 - The team sees: about 40k Records and 120k Links in Explorer, filtered list views, record pages with Lineage per attribute ("value from Source `erp.vendors`, row id 4411, sync run 7"), Canvas neighborhoods around a supplier.
 
 **Day 3: unstructured extraction.**
-- Sofia uploads 300 supplier contracts (PDF). Scribe runs an extraction job against the `supply` schema with the configured model endpoint.
+- Sofia uploads 300 supplier contracts (PDF). Scribe runs a tiered extraction job against the `supply` schema: tier 0 rules read the contract header tables, tier 1 local models (GLiNER and GLiREL on CPU) find supplier, part and contract mentions and their relations, tier 2 asks the configured LLM for attribute values with JSON schema output. On the pilot VM the LLM is a small open model served by Ollama, at zero API cost; the client may point the same job at its hosted model endpoint by changing configuration only.
 - The job produces a Proposal: 280 new `Contract` Records linked to Suppliers, 1,100 attribute updates, 40 ambiguous entity matches, and a schema suggestion to add the attribute `penalty_clause` to `Contract`.
 - Review shows each proposed item with its evidence span highlighted in the document viewer, a confidence score and the matched Record. Sofia accepts in bulk above a threshold, inspects the ambiguous ones, rejects 12 items.
 - The team sees: no change reaches `main` without review; rejected items are kept in the Proposal history; a re-run of the job with the same documents and model costs nothing because outputs are cached by content hash.
@@ -831,8 +833,8 @@ Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (ar
 ### 8.4 Search
 
 - **Lexical.** `tsvector` per Record built from title (weight A) and searchable Attributes (configured weights) using the Domain's text search configuration. Ranking by `ts_rank_cd`, plus trigram similarity on titles for typo tolerance (`pg_trgm`).
-- **Semantic (optional).** Embeddings are computed offline by Scribe from a per-Kind template over the Record content, keyed by `object_hash` so all branches and Revisions sharing the same content share the vector. Vectors live in pgvector with HNSW indexes per configured model.
-- **Query vectors.** Semantic and hybrid search take a `query_vector` supplied by the caller (agents already hold an embedding client). Keeper can optionally call a configured embedding endpoint for text queries, with a strict timeout and a cache; this is an embedding model, not a generative model, and it is disabled by default. **[Architect call AC-17]**
+- **Semantic (optional).** Embeddings are computed offline by Scribe (9.3; default fastembed, in-process on CPU) from a per-Kind template over the Record content, keyed by `object_hash` so all branches and Revisions sharing the same content share the vector. Vectors live in pgvector with HNSW indexes per configured model; the index dimension comes from configuration.
+- **Query vectors.** Semantic and hybrid search take a `query_vector` supplied by the caller. Keeper and Herald never call a model, not even an embedding model. `describe_domain` and `GET /schema` advertise the embedding model name and dimension so agents compute compatible vectors themselves (for example with the same fastembed model, locally and for free). Without a vector, search runs in lexical mode. **[Architect call AC-17]**
 - **Hybrid.** Reciprocal rank fusion of lexical and vector candidate lists, computed in SQL, with filters applied before fusion.
 - Search results return `{kind, key, title, snippet, score, revision}`; snippets come from `ts_headline` on searchable Attributes.
 
@@ -860,7 +862,7 @@ class SourceConnector(Protocol):
     async def read(self, since: Watermark | None) -> AsyncIterator[RowBatch]
 ```
 
-**Schema inference** (`lorebase source infer`, Modeler wizard):
+**Schema inference** (`lorebase source infer`, Modeler wizard). Rule-based (extraction tier 0): structured sources never need a model.
 - Column types map to Attribute types with a fixed table (for example `numeric(p,s)` to `decimal`, `varchar` to `string`, `text` to `text`, `timestamptz` to `timestamp`); CSV types are inferred from a sample with confidence and shown for confirmation.
 - Primary keys come from constraints or unique non-null columns.
 - Foreign keys become Relations with cardinality from uniqueness (`many_to_one`) and join tables with two foreign keys become `many_to_many` Relations with link Attributes.
@@ -877,29 +879,97 @@ Provenance per changed Attribute: `source_sync` with Source id, run id and row l
 
 ### 9.2 Unstructured extraction
 
-Documents are untrusted input. The LLM proposes; the schema, validators, entity resolution and reviewers decide.
+Documents are untrusted input. Models propose; the schema, validators, entity resolution and reviewers decide. Extraction runs in tiers, from free and deterministic to model-backed; every tier produces Proposals and none writes to a protected Branch. **[Architect call AC-27]**
+
+**Extraction tiers**
+
+| Tier | Technique | Models | API cost | Typical use |
+|------|-----------|--------|----------|-------------|
+| 0. Deterministic | Rules only: schema inference from tables and CSV (9.1), Source mappings, pattern extractors (regular expressions per Attribute), dictionary matching against titles and aliases of existing Records, header-mapped tables inside documents | none | zero | All structured sources need nothing else. Well-formed documents (forms, tables, identifiers) |
+| 1. Local open models | Zero-shot entity extraction with GLiNER (labels and descriptions taken from Kinds), relation extraction with GLiREL (labels taken from Relations), optional spaCy pipelines for sentence splitting and custom entity models | small CPU models, in-process, Apache-2.0 code; weights chosen by configuration | zero | High-recall entity and relation candidates with exact character spans |
+| 2. Any LLM | Structured extraction through the inference abstraction (9.4) with output enforced by a JSON schema derived from the Domain schema; small local models (Qwen, Llama, Gemma families served by Ollama) are first-class targets | any OpenAI-compatible endpoint, local or hosted | zero locally; per token when hosted | Attribute values, complex or implicit relations, schema discovery |
+
+A job declares its tiers. Default: `[0, 1, 2]` when an LLM is configured, `[0, 1]` otherwise. Tiers compose: tier 0 and tier 1 candidates are passed to tier 2 as hints (mentions and spans), which keeps prompts small and lets small models focus on values; when tier 2 is disabled, tier 1 candidates go straight to validation and entity resolution. Every Proposal item records the tier, extractor and model that produced it.
 
 **Pipeline** (Scribe job `extraction`):
 
 1. **Intake.** Document stored through the blob store interface (default backend: Postgres `bytea`; optional S3-compatible backend). SHA-256 recorded; duplicates detected.
 2. **Parse.** Parser plugins convert to text with structure (headings, pages, tables) and stable character offsets. Default parsers: PDF via `pypdf`, DOCX via `python-docx`, HTML via `beautifulsoup4`, Markdown and plain text natively. OCR is out of scope; scanned PDFs are flagged.
 3. **Chunk.** Structure-aware chunks with overlap, each with `(start_offset, end_offset, chunk_hash)`.
-4. **Prompt.** For each chunk, the extraction prompt includes the target Domain schema subset (Kinds, Attributes, Relations with descriptions) as a JSON Schema for structured output, plus instructions to return only facts present in the text with verbatim evidence quotes. The model has no tools.
-5. **Model call.** Through the `ExtractionModel` interface. Default implementation: OpenAI-compatible Chat Completions with JSON schema response format; endpoint, API key reference, model name, temperature, max tokens and concurrency from configuration. Works with any compatible server (hosted APIs, vLLM, Ollama, LiteLLM proxies).
-6. **Cache.** Output cached by `sha256(model, prompt_version, schema_hash, chunk_hash)`. Re-runs on unchanged inputs are free and reproducible.
-7. **Validate.** JSON Schema validation, type casting, constraint checks. **Evidence verification**: each extracted value must cite a quote that appears in the chunk (normalized whitespace match); items without verifiable evidence are discarded and counted.
-8. **Resolve entities.** Match candidates to existing Records: exact key, normalized title equality, trigram similarity, optional embedding similarity, plus Attribute agreement scoring. Outcomes: `matched` (update proposal), `new` (create proposal), `ambiguous` (top candidates kept for the reviewer). Thresholds configurable per Kind.
-9. **Schema discovery (optional mode).** When the model reports facts that do not fit the schema, they are aggregated into schema suggestions (new Attribute, new Kind, new Relation) with frequency and examples.
-10. **Propose.** Changes are committed to branch `extract/{job_id}` and a Proposal is opened with one **Proposal item** per proposed Record, Attribute value, Link or schema suggestion, each with evidence (document, page, offsets, quote), confidence and match details.
-11. **Review.** Reviewers accept or reject items individually, in bulk, or by threshold. Rejecting an item commits a revert change on the extraction branch. Merging follows the normal merge algorithm; Conflicts with concurrent changes are resolved as usual.
+4. **Tier 0 and tier 1.** Rule extractors and local span models run per chunk and emit candidates with exact offsets (evidence is the span itself).
+5. **Tier 2 prompt.** For each chunk, the prompt includes the target Domain schema subset (Kinds, Attributes, Relations with descriptions) as a JSON Schema for structured output, the tier 0 and 1 hints, and instructions to return only facts present in the text with verbatim evidence quotes. The model has no tools.
+6. **Tier 2 model call.** Through the `ChatModel` interface (9.4) with `response_format` of type `json_schema`. If the endpoint lacks JSON schema support, Lorebase falls back to JSON mode plus schema validation and at most one bounded repair attempt; outputs that still fail are discarded and counted.
+7. **Cache.** Output cached by `sha256(tier, extractor, model, model_digest, prompt_version, schema_hash, chunk_hash)`. Re-runs on unchanged inputs are free and reproducible.
+8. **Validate.** JSON Schema validation, type casting, constraint checks. **Evidence verification**: each extracted value must cite a quote that appears in the chunk (normalized whitespace match); items without verifiable evidence are discarded and counted.
+9. **Resolve entities.** Match candidates to existing Records: exact key, normalized title equality, trigram similarity, optional embedding similarity, plus Attribute agreement scoring. Outcomes: `matched` (update proposal), `new` (create proposal), `ambiguous` (top candidates kept for the reviewer). Thresholds configurable per Kind.
+10. **Schema discovery (optional mode).** When the model reports facts that do not fit the schema, they are aggregated into schema suggestions (new Attribute, new Kind, new Relation) with frequency and examples.
+11. **Propose.** Changes are committed to branch `extract/{job_id}` and a Proposal is opened with one **Proposal item** per proposed Record, Attribute value, Link or schema suggestion, each with evidence (document, page, offsets, quote), confidence and match details.
+12. **Review.** Reviewers accept or reject items individually, in bulk, or by threshold. Rejecting an item commits a revert change on the extraction branch. Merging follows the normal merge algorithm; Conflicts with concurrent changes are resolved as usual.
 
-**Budgets and safety.** Per-job limits on tokens, cost estimate, documents and concurrency; jobs stop cleanly when a limit is reached. Prompt injection inside documents can only influence proposed values, which are validated, evidence-checked and reviewed; it cannot trigger actions because the model has no tools and no write access. **[Architect call AC-19]**
+**Budgets and safety.** Per-job limits on tokens, cost estimate, documents and concurrency; jobs stop cleanly when a limit is reached. Budgets are expressed in tokens and in cost; prices per token come from configuration (zero for local models). Prompt injection inside documents can only influence proposed values, which are validated, evidence-checked and reviewed; it cannot trigger actions because the model has no tools and no write access. **[Architect call AC-19]**
 
 **Provenance.** `extraction` with job id, document id, offsets, quote hash, model and prompt version.
 
 ### 9.3 Embedding jobs
 
-Scribe computes embeddings for Records whose `object_hash` has no vector for the configured model, through an `EmbeddingModel` interface (OpenAI-compatible embeddings endpoint by default). Triggered by commits on materialized branches (outbox event) and by backfill commands.
+Scribe computes embeddings for Records whose `object_hash` has no vector for the configured model, through the `EmbeddingModel` interface. Triggered by commits on materialized branches (outbox event) and by backfill commands. **[Architect call AC-26]**
+
+- **Default: fastembed.** ONNX models in-process on CPU: no server, no key, no API cost.
+- **Alternatives:** Ollama embeddings, or any OpenAI-compatible embeddings endpoint (local or hosted).
+- **Model name and dimension come from configuration.** The pgvector index for a model is created with the configured dimension; at startup Scribe embeds a probe string and fails fast if the returned dimension differs.
+- **Switching model** creates new vectors keyed by the new model name next to the old ones; search uses the active model; old vectors are removed by GC once the backfill completes.
+
+### 9.4 Model-agnostic inference
+
+Lorebase never depends on a specific model vendor. All model use lives in one package, `lorebase_inference`, used only by Scribe. **[Architect call AC-25]**
+
+**Interfaces**
+
+```python
+class ChatModel(Protocol):
+    async def complete_json(self, messages: list[Message], schema: JsonSchema,
+                            options: ChatOptions) -> ChatResult      # parsed JSON, usage, model id
+
+class EmbeddingModel(Protocol):
+    name: str
+    dims: int
+    async def embed(self, texts: list[str]) -> list[list[float]]
+
+class SpanExtractor(Protocol):                                      # tier 1
+    async def extract(self, text: str, labels: list[Label]) -> list[Span]
+```
+
+**One chat implementation: OpenAI-compatible HTTP.** A single client speaks the OpenAI-compatible Chat Completions protocol over plain HTTP (`httpx`). There is no vendor SDK in the core. Three settings select the model:
+
+| Setting | Alias of | Example |
+|---------|----------|---------|
+| `LLM_BASE_URL` | `inference.llm.base_url` | `http://ollama:11434/v1` |
+| `LLM_MODEL` | `inference.llm.model` | any model name served by the endpoint |
+| `LLM_API_KEY` (optional) | `inference.llm.api_key` | secret reference; omitted for local servers |
+
+**Local by default.** The docker compose `local-models` profile runs Ollama and pulls the configured model; the same settings work with vLLM, LM Studio and the llama.cpp server. Small open models (Qwen, Llama, Gemma families) are first-class targets: prompts, JSON schemas and evaluation sets are tuned and measured on them, not only on large hosted models. **[Architect call AC-28]**
+
+**Paid hosted models are first-class through the same abstraction.** OpenAI, Azure OpenAI, Anthropic, Google, Amazon Bedrock and Mistral are supported:
+- **natively** when the provider exposes an OpenAI-compatible endpoint (set `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`);
+- **through a LiteLLM proxy** otherwise, or when an enterprise wants central routing, key management, budgets and fallbacks across providers. The proxy runs as a separate container (compose profile `litellm`); Lorebase talks to it as one more OpenAI-compatible endpoint and never imports a provider library.
+Which providers are native and which go through the proxy is kept in a documented compatibility matrix, because provider endpoints evolve. Switching provider is a configuration change only; no code change, no rebuild.
+
+**Per-task routing.** Optional overrides per task (`inference.llm.tasks.extraction`, `inference.llm.tasks.schema_discovery`) let a team use a small local model for bulk extraction and a larger hosted model for schema discovery, each with its own endpoint, key and price.
+
+**Deterministic fake provider.** `provider: fake` implements `ChatModel`, `EmbeddingModel` and `SpanExtractor` without network access: chat answers come from fixture files keyed by prompt hash, or from a rule-based responder that returns schema-valid output built from quoted text in the prompt; embeddings are deterministic unit vectors of the configured dimension derived from `sha256(text)`; spans come from dictionary matching. Unit tests, integration tests and CI use it with network access disabled. **[Architect call AC-29]**
+
+**The read path never calls a model.** Keeper and Herald do not depend on `lorebase_inference`; an import-linter contract fails the build if they do. Semantic search uses caller-supplied vectors (8.4). **[Architect call AC-30]**
+
+**Cost model**
+
+| Setup | Components | API keys | Marginal cost |
+|-------|------------|----------|---------------|
+| Laptop demo (full 5-day scenario) | Postgres, Keeper, Scribe, Herald, web, Ollama with a small open model, fastembed, GLiNER and GLiREL on CPU | none | zero (local compute only) |
+| Team server, local models | Same, with a GPU for Ollama or vLLM for faster tier 2 | none | zero API spend; hardware only |
+| Enterprise, hosted models | Same, `LLM_BASE_URL` pointing to a hosted provider or a LiteLLM proxy | provider keys as secret references | per token for tier 2 only; tiers 0 and 1 stay free; budgets per job |
+| Agent reads (all setups) | Keeper, Herald, Postgres | none | zero model cost: no model in the read path |
+
+Throughput figures for each tier on reference laptop and server hardware are measured by the M4 benchmark and published with it.
 
 ---
 
@@ -1008,7 +1078,7 @@ Design rules for tools:
 
 | Tool | Input | Output |
 |------|-------|--------|
-| `lorebase_describe_domain` | `{domain?, branch?, kinds?: [str], detail?: "summary" or "full"}` | `{domain, branch, revision, kinds: [{name, description, key, attributes: [{name, type, description, required}], relations: [{name, target, cardinality, inverse}], traits}], traits: [...], operations: [{name, description}]}` |
+| `lorebase_describe_domain` | `{domain?, branch?, kinds?: [str], detail?: "summary" or "full"}` | `{domain, branch, revision, kinds: [{name, description, key, attributes: [{name, type, description, required}], relations: [{name, target, cardinality, inverse}], traits}], traits: [...], operations: [{name, description}], search: {modes: [str], embedding: {model, dims} or null}}` |
 | `lorebase_search` | `{query, kinds?, where?, mode?: "lexical" or "hybrid" or "semantic", query_vector?: [float], limit?: int}` | `{revision, results: [{ref, kind, title, snippet, score}], next_cursor?}` |
 | `lorebase_get_record` | `{ref, select?: [str], include_links?: [str], link_limit?: int}` | `{revision, record: {ref, kind, title, attributes: {...}, derived: {...}}, links: {relation: [{ref, title}]}, truncated?: {...}}` |
 | `lorebase_query` | `{kind or trait, where?, select?, include?, order_by?, limit?, cursor?}` | `{revision, rows: [...], next_cursor?}` |
@@ -1149,7 +1219,7 @@ One Lorebase installation serves one organization. Domains are the isolation bou
 
 ### 15.2 Local and small installs
 
-docker compose with: `postgres` (Postgres 16 with pgvector), `migrate` (one-shot Alembic upgrade), `keeper`, `scribe`, `herald`, `web`, and an optional `observability` profile (OpenTelemetry Collector, Prometheus, Grafana, Jaeger). Configuration via `.env` and a mounted `lorebase.yaml`.
+docker compose with: `postgres` (Postgres 16 with pgvector), `migrate` (one-shot Alembic upgrade), `keeper`, `scribe`, `herald`, `web`, and optional profiles: `local-models` (Ollama with the configured model pulled at start), `litellm` (LiteLLM proxy for hosted providers that are not OpenAI-compatible or for central routing), `observability` (OpenTelemetry Collector, Prometheus, Grafana, Jaeger). Configuration via `.env` and a mounted `lorebase.yaml`. The full demo runs on a laptop with `docker compose --profile local-models up` and no API keys.
 
 ### 15.3 Production
 
@@ -1184,26 +1254,35 @@ read:
   neighborhood_max_nodes: 2000
 search:
   language: simple
-  query_embedding:
-    enabled: false
 materialization:
   max_full_branches_per_domain: 20
+inference:                               # used by Scribe only
+  llm:                                   # tier 2; env aliases LLM_BASE_URL, LLM_MODEL, LLM_API_KEY
+    provider: openai_compatible          # openai_compatible | fake
+    base_url: http://ollama:11434/v1     # local default; or a hosted endpoint; or http://litellm:4000/v1
+    model: qwen2.5:7b-instruct           # any model name the endpoint serves
+    api_key: null                        # e.g. secret://env/LLM_API_KEY for hosted providers
+    structured_output: json_schema       # json_schema | json_mode
+    temperature: 0
+    max_concurrency: 2
+    timeout_s: 120
+    price_per_million_tokens: {input: 0, output: 0}
+    tasks: {}                            # optional per-task overrides (extraction, schema_discovery)
+  embeddings:
+    provider: fastembed                  # fastembed | openai_compatible | fake
+    model: BAAI/bge-small-en-v1.5
+    dims: 384
+    base_url: null                       # for openai_compatible (Ollama or hosted)
+    api_key: null
+  local_extractors:                      # tier 1; check each checkpoint's weight license
+    gliner: {enabled: true, model: urchade/gliner_multi-v2.1, threshold: 0.5}
+    glirel: {enabled: true, model: jackboyla/glirel-large-v0, threshold: 0.5}
+    spacy: {enabled: false, pipeline: en_core_web_sm}
 extraction:
-  provider: openai_compatible
-  base_url: https://llm.example.com/v1
-  api_key: secret://env/EXTRACTION_API_KEY
-  model: your-extraction-model
-  temperature: 0
-  max_concurrency: 4
+  default_tiers: [0, 1, 2]
   budget:
     max_tokens_per_job: 5000000
-embeddings:
-  provider: openai_compatible
-  base_url: https://llm.example.com/v1
-  api_key: secret://env/EMBEDDING_API_KEY
-  models:
-    - name: your-embedding-model
-      dims: 1024
+    max_cost_per_job: 0                  # 0 means no cost limit beyond tokens
 telemetry:
   otlp_endpoint: http://otel-collector:4317
   service_namespace: lorebase
@@ -1241,6 +1320,7 @@ lorebase/
     store/                    # lorebase_store: SQLAlchemy models, repositories, migrations, materializer, jobs
       migrations/             # Alembic
     keeper/                   # lorebase_keeper: FastAPI app, auth, services, REST routes
+    inference/                # lorebase_inference: ChatModel, EmbeddingModel, SpanExtractor; OpenAI-compatible HTTP, fastembed, GLiNER, GLiREL adapters; fake provider
     scribe/                   # lorebase_scribe: job runner, connectors, extraction, embeddings, GC
     herald/                   # lorebase_herald: MCP server
     client/                   # lorebase_client: typed HTTP client
@@ -1263,7 +1343,7 @@ lorebase/
   .github/workflows/
 ```
 
-Dependency direction: `core` depends on nothing internal; `store` on `core` and `platform`; `keeper` and `scribe` on `store`; `client` on nothing internal; `cli` and `herald` on `client`. Enforced with import-linter in CI.
+Dependency direction: `core` depends on nothing internal; `store` on `core` and `platform`; `inference` on `core` and `platform`; `keeper` and `scribe` on `store`; only `scribe` depends on `inference`; `client` on nothing internal; `cli` and `herald` on `client`. Enforced with import-linter in CI, including the contract that `keeper` and `herald` never import `inference`.
 
 ---
 
@@ -1271,7 +1351,7 @@ Dependency direction: `core` depends on nothing internal; `store` on `core` and 
 
 ### M1: Engine and API
 
-Scope: canonical JSON and hashing; HAMT trees; Revisions, branches, tags; commit pipeline; full materialization; diff; three-way merge with the full Conflict taxonomy and API-level resolution; schema change sets; built-in Operations; query DSL (without `via` on Traits), record reads, links, full-text search; Lineage for Operations and imports; history; API keys and Domain-level roles; audit log; Keeper REST; CLI; docker compose; CI. Detailed plan: [plan/m1.md](plan/m1.md).
+Scope: canonical JSON and hashing; HAMT trees; Revisions, branches, tags; commit pipeline; full materialization; diff; three-way merge with the full Conflict taxonomy and API-level resolution; schema change sets; built-in Operations; query DSL (without `via` on Traits), record reads, links, full-text search; Lineage for Operations and imports; history; API keys and Domain-level roles; audit log; Keeper REST; CLI; docker compose; CI; inference interfaces, settings and the deterministic fake provider (no model calls yet) with the import contract that keeps Keeper model-free. Detailed plan: [plan/m1.md](plan/m1.md).
 
 Acceptance:
 - A Domain defined in YAML can be applied, filled by CLI import of 1M Records, branched, changed on two branches, merged with Conflicts resolved via API, and diffed, all via REST and CLI.
@@ -1302,13 +1382,16 @@ Acceptance:
 
 ### M4: Documents, extraction and semantic search
 
-Scope: documents and blob store interface; parsers; extraction pipeline with cache, evidence verification, entity resolution, schema discovery; extraction Proposal items and evidence Review UI; embeddings jobs and hybrid search; Derivations (expression, aggregate, path).
+Scope: documents and blob store interface; parsers; tiered extraction (tier 0 rules, tier 1 GLiNER and GLiREL, tier 2 LLM with JSON schema output) with cache, evidence verification, entity resolution, schema discovery; OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings; compose profiles `local-models` (Ollama) and `litellm`; provider compatibility matrix; extraction Proposal items and evidence Review UI; embeddings jobs and hybrid search; Derivations (expression, aggregate, path).
 
 Acceptance:
 - Day 3 of the proof scenario runs on the sample contracts; zero items without verified evidence reach a Proposal.
 - Re-running an unchanged job makes zero model calls (cache).
 - Extraction precision and recall measured on a labeled sample set in `examples/supply`, reported in CI as a tracked metric (no fixed threshold gate in M4).
 - Hybrid search p95 under 80 ms at 1M Records with caller-supplied vectors.
+- The complete 5-day scenario runs on a laptop with Postgres and Ollama, fastembed and tier 1 models on CPU, with zero API keys configured.
+- Switching tier 2 to a hosted provider (directly OpenAI-compatible, and through the LiteLLM proxy) requires configuration changes only; verified against an OpenAI-compatible mock server in CI and documented per provider.
+- CI runs every extraction and embedding test with the fake provider and network access disabled.
 
 ### M5: Enterprise hardening and 1.0
 
@@ -1334,6 +1417,10 @@ Acceptance:
 | Extraction quality varies by model | Low acceptance rates, reviewer fatigue | Evidence verification, confidence thresholds, entity resolution, labeled evaluation set, cache, configurable models |
 | Canvas performance on large graphs | Poor UX | Caps, progressive loading, WebGL rendering, layout in worker, aggregation by Kind |
 | MCP specification changes | Herald breakage | Use official SDK, thin Herald over REST, contract tests per MCP version |
+| Small local models extract less accurately than large hosted ones | Lower acceptance rates on laptop setups | Tiers 0 and 1 carry the cheap, precise work; hints shrink tier 2 prompts; evaluation set measured per model; per-task routing to a larger model when needed |
+| Tier 1 model weights carry different licenses (some checkpoints are non-commercial) | License exposure for users | Default configuration references permissively licensed checkpoints only; license check documented next to each configurable model |
+| OpenAI-compatible endpoints differ in JSON schema support | Extraction failures on some servers | JSON mode fallback with validation and one repair attempt; compatibility matrix; contract tests against a mock server |
+| CPU-only inference is slow on large document sets | Long extraction jobs on laptops | Budgets, progress and resumable jobs; GPU or hosted endpoint by configuration |
 | Scope creep toward a full data platform | Delay | Non-goals in section 2; Sources map, they do not transform |
 | Name collision or trademark issue with "Lorebase" | Rename cost | Trademark and package name search before first public release |
 
@@ -1359,7 +1446,7 @@ Acceptance:
 | AC-14 | No rebase; append-only history | Immutable audit trail | Never for protected branches |
 | AC-15 | Materialized values keyed by Attribute id, generic JSONB tables with partial indexes | No DDL churn on schema change; rename-safe | Read targets missed; switch materializer to typed tables |
 | AC-16 | Full materialization in M1 to M4; overlay mode in M5; cap per Domain | Ship correctness first | Branch count grows faster than expected |
-| AC-17 | No generative model in the read path; semantic search uses caller vectors or an optional embedding endpoint | Milliseconds and determinism | Never for generative models |
+| AC-17 | No model of any kind in the read path; semantic search uses caller-supplied vectors; the embedding model is advertised so agents can match it | Milliseconds, determinism, zero model cost on reads | Never |
 | AC-18 | Postgres-backed job queue with SKIP LOCKED | No extra infrastructure | Job throughput beyond Postgres comfort |
 | AC-19 | Extraction model has no tools; outputs only as Proposal items with verified evidence | Safety against injection and invented facts | Never |
 | AC-20 | Herald calls Keeper over REST | One enforcement point; Herald needs no DB credentials | MCP latency overhead exceeds budget |
@@ -1367,3 +1454,9 @@ Acceptance:
 | AC-22 | PII vault indirection for erasure without rewriting history | Erasure compatible with immutability | Never |
 | AC-23 | One backend image with multiple entrypoints | Simpler release and versioning | Image size or dependency conflicts between roles |
 | AC-24 | Postgres 16 is the only required store; blob store optional with Postgres default | Operational simplicity | Document volume requires object storage by default |
+| AC-25 | One OpenAI-compatible chat abstraction over HTTP (`LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`); no vendor SDK in the core; providers without a compatible endpoint go through a LiteLLM proxy | Vendor neutrality; switching provider is configuration only | A required capability cannot be expressed through the compatible protocol |
+| AC-26 | Embeddings default to fastembed in-process on CPU; Ollama or OpenAI-compatible endpoints as alternatives; model and dimension from configuration | Semantic search with no server, key or spend | Quality needs exceed small CPU models for common Domains |
+| AC-27 | Tiered extraction: tier 0 deterministic, tier 1 local GLiNER and GLiREL, tier 2 any LLM with JSON schema output; all tiers produce Proposals | Cheapest sufficient technique first; reviewability unchanged | Never for the Proposal rule |
+| AC-28 | Local by default: compose ships an Ollama profile; small open models are first-class; the full demo needs zero API keys | Free to try, private by default | Never |
+| AC-29 | Deterministic fake provider for all model interfaces; tests and CI run without network | Reproducible, free, fast tests | Never |
+| AC-30 | Read path model-free by construction: Keeper and Herald cannot import the inference package | Enforced by the build, not by convention | Never |
