@@ -1,0 +1,224 @@
+"""Who is calling: resolving a request's credentials to a principal (design 13.2).
+
+A principal is a user (an OIDC subject, provisioned on first sign-in when settings allow) or a
+service principal (owner of API keys, created by an administrator). Resolution is stateless:
+every request carries its credential.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+
+from lorebase_keeper.auth.api_keys import ApiKeyCodec
+from lorebase_keeper.auth.cache import TtlCache
+from lorebase_keeper.auth.config import AuthSettings
+from lorebase_keeper.auth.oidc import InvalidTokenError, OidcVerifier, ProviderUnavailableError
+from lorebase_keeper.auth.ports import AuthStore
+from lorebase_keeper.errors import FORBIDDEN, UNAUTHORIZED, UNAVAILABLE, ProblemError
+from lorebase_store.auth import ApiKeyRecord
+from lorebase_store.models.enums import PrincipalType
+
+logger = logging.getLogger("lorebase.keeper.auth")
+
+AuthMethod = Literal["none", "api_key", "oidc"]
+
+ANONYMOUS_ID = "anonymous"
+_MISSING_HASH = bytes(32)
+_CHALLENGE = "Bearer"
+_INVALID_CHALLENGE = 'Bearer error="invalid_token"'
+
+
+@dataclass(frozen=True)
+class Principal:
+    """The authenticated caller of a request.
+
+    `subjects` are the ids grants may name: the principal's own id and its groups.
+    `key_scopes` limit an API key to some Domains (`domain:<id>`); empty means no extra limit.
+    """
+
+    id: str
+    type: PrincipalType
+    display_name: str
+    method: AuthMethod
+    subjects: tuple[str, ...]
+    key_scopes: tuple[str, ...] = ()
+    key_id: str | None = None
+    installation_admin: bool = False
+
+
+def anonymous_principal() -> Principal:
+    """The caller when authentication is disabled: an administrator of everything."""
+    return Principal(
+        id=ANONYMOUS_ID,
+        type=PrincipalType.USER,
+        display_name="Anonymous (authentication disabled)",
+        method="none",
+        subjects=(ANONYMOUS_ID,),
+        installation_admin=True,
+    )
+
+
+def _unauthorized(detail: str, *, presented: bool) -> ProblemError:
+    return ProblemError(
+        UNAUTHORIZED,
+        detail,
+        headers={"WWW-Authenticate": _INVALID_CHALLENGE if presented else _CHALLENGE},
+    )
+
+
+class Authenticator:
+    """Turns request headers into a `Principal` or a 401."""
+
+    def __init__(
+        self,
+        settings: AuthSettings,
+        *,
+        store: AuthStore | None,
+        codec: ApiKeyCodec | None = None,
+        oidc: OidcVerifier | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if settings.mode != "none" and store is None:
+            raise ValueError("authentication needs a store")
+        self._settings = settings
+        self._store = store
+        self._codec = codec
+        self._oidc = oidc
+        self._clock = clock
+        self._oidc_cache: TtlCache[tuple[str, tuple[str, ...]], Principal] = TtlCache(
+            settings.oidc.principal_cache_ttl_s,
+            settings.oidc.principal_cache_max_entries,
+            monotonic,
+        )
+        self._admins = frozenset(settings.installation_admins)
+
+    async def authenticate(self, headers: Mapping[str, str]) -> Principal:
+        """The principal behind the request headers (lower-case names)."""
+        if self._settings.mode == "none":
+            return anonymous_principal()
+        bearer, api_key = self._credentials(headers)
+        token = api_key or bearer
+        if token is None:
+            raise _unauthorized("Authentication required.", presented=False)
+        if api_key is not None or (self._codec and self._codec.looks_like_key(token)):
+            if self._codec is None:
+                raise _unauthorized("API keys are not accepted.", presented=True)
+            return await self._with_api_key(token)
+        if self._oidc is None:
+            raise _unauthorized("Bearer tokens are not accepted.", presented=True)
+        return await self._with_token(token)
+
+    def _credentials(self, headers: Mapping[str, str]) -> tuple[str | None, str | None]:
+        bearer: str | None = None
+        authorization = headers.get("authorization")
+        if authorization:
+            scheme, _, value = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not value.strip():
+                raise _unauthorized("Unsupported Authorization header.", presented=True)
+            bearer = value.strip()
+        key = headers.get(self._settings.api_keys.header.lower())
+        return bearer, key.strip() if key else None
+
+    async def _with_api_key(self, token: str) -> Principal:
+        assert self._codec is not None
+        assert self._store is not None
+        parsed = self._codec.parse(token)
+        if parsed is None:
+            raise _unauthorized("Invalid credentials.", presented=True)
+        now = self._clock()
+        async with self._store.unit() as unit:
+            key = await unit.api_keys.get_by_prefix(parsed.prefix)
+            secret_matches = self._codec.matches(parsed.secret, key.hash if key else _MISSING_HASH)
+            if key is None or not secret_matches or not key.is_usable(now):
+                logger.info(
+                    "api key rejected",
+                    extra={
+                        "key_prefix": parsed.prefix,
+                        "reason": _reject_reason(key, secret_matches, now),
+                    },
+                )
+                raise _unauthorized("Invalid credentials.", presented=True)
+            record = await unit.principals.get(key.principal_id)
+            if record is None:
+                raise _unauthorized("Invalid credentials.", presented=True)
+            groups = await unit.groups.group_ids_for(record.id)
+        await self._record_use(key, now)
+        subjects = (record.id, *groups)
+        return Principal(
+            id=record.id,
+            type=record.type,
+            display_name=record.display_name,
+            method="api_key",
+            subjects=subjects,
+            key_scopes=key.scopes,
+            key_id=key.id,
+            installation_admin=self._is_installation_admin(subjects),
+        )
+
+    async def _record_use(self, key: ApiKeyRecord, now: datetime) -> None:
+        """Update the key's last-used time; a failure never fails the request."""
+        assert self._store is not None
+        interval = timedelta(seconds=self._settings.api_keys.last_used_interval_s)
+        if key.last_used_at is not None and now - key.last_used_at < interval:
+            return
+        try:
+            async with self._store.unit() as unit:
+                await unit.api_keys.touch(key.id, now, min_interval=interval)
+        except Exception:
+            logger.warning("cannot record api key use", exc_info=True)
+
+    async def _with_token(self, token: str) -> Principal:
+        assert self._oidc is not None
+        assert self._store is not None
+        try:
+            claims = await self._oidc.verify(token)
+        except InvalidTokenError as exc:
+            logger.info("bearer token rejected: %s", exc)
+            raise _unauthorized("Invalid or expired token.", presented=True) from None
+        except ProviderUnavailableError:
+            raise ProblemError(
+                UNAVAILABLE, "The identity provider's keys are unavailable."
+            ) from None
+        cache_key = (claims.subject, claims.groups)
+        cached = self._oidc_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        async with self._store.unit() as unit:
+            record = await unit.principals.get_by_subject(claims.subject)
+            if record is None:
+                if not self._settings.oidc.auto_provision:
+                    raise ProblemError(FORBIDDEN, "No account exists for this identity.")
+                record, created = await unit.principals.get_or_create_user(
+                    claims.subject, claims.display_name
+                )
+                if created:
+                    logger.info("user provisioned", extra={"principal": record.id})
+            groups = await unit.groups.group_ids_for(record.id, claims.groups)
+        subjects = (record.id, *groups)
+        principal = Principal(
+            id=record.id,
+            type=record.type,
+            display_name=record.display_name,
+            method="oidc",
+            subjects=subjects,
+            installation_admin=self._is_installation_admin((*subjects, claims.subject)),
+        )
+        self._oidc_cache.set(cache_key, principal)
+        return principal
+
+    def _is_installation_admin(self, identities: tuple[str, ...]) -> bool:
+        return not self._admins.isdisjoint(identities)
+
+
+def _reject_reason(key: ApiKeyRecord | None, secret_matches: bool, now: datetime) -> str:
+    if key is None:
+        return "unknown prefix"
+    if not secret_matches:
+        return "wrong secret"
+    return "revoked" if key.revoked_at is not None else "expired"

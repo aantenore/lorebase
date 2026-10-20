@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from lorebase_keeper import __version__
+from lorebase_keeper.auth.audit import AuditMiddleware
+from lorebase_keeper.auth.ports import AuthStore
+from lorebase_keeper.auth.runtime import build_runtime
+from lorebase_keeper.db import create_database
 from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handlers
 from lorebase_keeper.health import router as health_router
 from lorebase_keeper.middleware import BodyLimitMiddleware, RequestContextMiddleware
-from lorebase_keeper.readiness import MigrationHeads, ReadinessCheck, default_checks
-from lorebase_keeper.settings import KeeperSettings, keeper_settings
+from lorebase_keeper.readiness import (
+    MigrationHeads,
+    ReadinessCheck,
+    default_checks,
+    packaged_heads,
+)
+from lorebase_keeper.routes.admin import router as admin_router
+from lorebase_keeper.routes.whoami import router as whoami_router
+from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import Telemetry
 
@@ -31,17 +45,26 @@ def create_app(
     telemetry: Telemetry | None = None,
     readiness_checks: Sequence[ReadinessCheck] | None = None,
     migration_heads: MigrationHeads | None = None,
+    auth_store: AuthStore | None = None,
+    http_client: httpx.AsyncClient | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
     """Build the Keeper ASGI application.
 
     `settings` default to `load_settings()`. `telemetry` supplies the providers used for
     spans and metrics (none: the global OpenTelemetry API). `readiness_checks` replaces the
     default checks, which probe the database named by the settings; `migration_heads` tells
-    that probe which Alembic revisions the code expects.
+    that probe which Alembic revisions the code expects (default: the heads of the store's
+    migrations; a callable returning nothing skips the comparison).
+
+    Authentication needs a database: the `database` section (name from
+    `keeper.readiness.database_section`), or `auth_store` when given. With `keeper.auth.mode:
+    none` the database is optional and only enables the audit log. `http_client` serves
+    identity provider requests (default: a client built from the OIDC settings) and `clock` the
+    expiry checks.
     """
     settings = settings or load_settings()
     keeper = keeper_settings(settings)
-    _require_supported_auth(keeper)
     renderer = ProblemRenderer(keeper.problem_type_base)
     checks = (
         list(readiness_checks)
@@ -51,9 +74,37 @@ def create_app(
             section=keeper.readiness.database_section,
             dsn_key=keeper.readiness.database_dsn_key,
             timeout_s=keeper.readiness.timeout_s,
-            expected_heads=migration_heads,
+            expected_heads=migration_heads or packaged_heads,
         )
     )
+
+    database = (
+        create_database(settings, keeper.readiness.database_section) if auth_store is None else None
+    )
+    store = auth_store or (database.auth_store if database else None)
+    if keeper.auth.mode != "none" and store is None:
+        raise ConfigError(
+            [
+                f"keeper.auth.mode: {keeper.auth.mode!r} needs a database; configure the "
+                f"{keeper.readiness.database_section!r} section"
+            ]
+        )
+    auth = build_runtime(
+        keeper.auth,
+        store=store,
+        http_client=http_client,
+        clock=clock,
+        meter_provider=telemetry.meter_provider if telemetry else None,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await auth.aclose()
+            if database is not None:
+                await database.dispose()
 
     docs = keeper.openapi.docs_enabled
     app = FastAPI(
@@ -65,13 +116,17 @@ def create_app(
         docs_url=f"{keeper.api_prefix}/docs" if docs else None,
         redoc_url=None,
         responses=_DEFAULT_RESPONSES,
+        lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.keeper_settings = keeper
     app.state.readiness_checks = checks
+    app.state.auth = auth
 
     install_error_handlers(app, renderer)
     app.include_router(health_router)
+    app.include_router(whoami_router, prefix=keeper.api_prefix)
+    app.include_router(admin_router, prefix=keeper.api_prefix)
 
     # Innermost first: the last middleware added is the outermost one.
     app.add_middleware(
@@ -87,6 +142,13 @@ def create_app(
             allow_credentials=keeper.cors.allow_credentials,
             max_age=keeper.cors.max_age_s,
         )
+    if auth.audit_writer is not None:
+        app.add_middleware(
+            AuditMiddleware,
+            writer=auth.audit_writer,
+            settings=keeper.auth.audit,
+            api_prefix=keeper.api_prefix,
+        )
     app.add_middleware(
         RequestContextMiddleware,
         header=keeper.request_id_header,
@@ -95,10 +157,3 @@ def create_app(
         meter_provider=telemetry.meter_provider if telemetry else None,
     )
     return app
-
-
-def _require_supported_auth(keeper: KeeperSettings) -> None:
-    if keeper.auth.mode != "none":
-        raise ConfigError(
-            [f"keeper.auth.mode: {keeper.auth.mode!r} is not available yet, only 'none' is"]
-        )

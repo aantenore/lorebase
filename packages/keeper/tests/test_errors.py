@@ -255,8 +255,10 @@ async def test_openapi_follows_prefix_and_can_be_disabled(
         assert (await http.get("/healthz")).status_code == 200
 
 
-def test_unavailable_auth_mode_is_rejected_at_startup(make_app: Callable[..., FastAPI]) -> None:
+def test_auth_mode_without_its_settings_is_rejected_at_startup(
+    make_app: Callable[..., FastAPI],
+) -> None:
     from lorebase_platform.settings import ConfigError
 
-    with pytest.raises(ConfigError, match=r"keeper\.auth\.mode"):
+    with pytest.raises(ConfigError, match=r"keeper\.auth"):
         make_app({"auth": {"mode": "oidc"}})
