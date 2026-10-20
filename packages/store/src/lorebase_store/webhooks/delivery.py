@@ -9,7 +9,9 @@ A pass, safe to run concurrently in several workers (rows are claimed with `SKIP
    `Sender`; a 2xx answer delivers it, anything else is retried after
    `min(backoff_base_s * backoff_factor ** (attempts - 1), backoff_max_s)` until
    `max_attempts`, then marked dead. Targets outside `allowed_schemes`, or resolving to
-   private addresses unless `allow_private_targets`, are marked dead at once;
+   private addresses unless `allow_private_targets`, are marked dead at once. The host is
+   resolved once per attempt and the `Sender` connects to those checked addresses only, so a
+   second lookup (DNS rebinding) cannot redirect the request to an internal service;
 4. prune finished deliveries and handed-off events older than `retention_s`.
 
 The store makes no HTTP calls itself: the caller (Scribe, or a test) passes the `Sender`.
@@ -52,10 +54,21 @@ ERROR_LENGTH = 500
 
 
 class Sender(Protocol):
-    """Sends one POST and answers its HTTP status; transport failures raise."""
+    """Sends one POST and answers its HTTP status; transport failures raise.
+
+    `addresses` are the checked addresses of the URL's host: the sender connects to one of
+    them (keeping the host name for the `Host` header and TLS) and never resolves the host
+    again, and it does not follow redirects. Empty when private targets are allowed: the
+    sender then resolves the host itself.
+    """
 
     async def __call__(
-        self, url: str, body: bytes, headers: Mapping[str, str], timeout_s: float
+        self,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        timeout_s: float,
+        addresses: Sequence[str],
     ) -> int: ...
 
 
@@ -102,19 +115,42 @@ def scheme_problem(url: str, settings: WebhookSettings) -> str | None:
     return None
 
 
-async def target_problem(url: str, settings: WebhookSettings, resolve: Resolver) -> str | None:
-    """Why `url` may not be called now (form, or private addresses after resolution)."""
+@dataclass(frozen=True, slots=True)
+class Target:
+    """A checked target: why it is refused, or the addresses a request may connect to."""
+
+    problem: str | None
+    addresses: tuple[str, ...] = ()
+
+
+async def check_target(url: str, settings: WebhookSettings, resolve: Resolver) -> Target:
+    """Resolve the host of `url` once and check its form and every address it resolves to.
+
+    The addresses returned are the only ones a request to `url` may use: resolving the host
+    again could answer differently (DNS rebinding). None are returned when private targets
+    are allowed.
+    """
     problem = scheme_problem(url, settings)
     if problem is not None or settings.allow_private_targets:
-        return problem
+        return Target(problem)
     host = urlsplit(url).hostname or ""
     try:
-        addresses = await resolve(host)
+        addresses = tuple(await resolve(host))
     except OSError as error:
-        return f"cannot resolve host: {error}"
-    if any(_private(address) for address in addresses):
-        return "resolves to a private address"
-    return None
+        return Target(f"cannot resolve host: {error}")
+    if not addresses:
+        return Target("cannot resolve host: no addresses")
+    try:
+        if any(_private(address) for address in addresses):
+            return Target("resolves to a private address")
+    except ValueError:
+        return Target("resolves to an invalid address")
+    return Target(None, addresses)
+
+
+async def target_problem(url: str, settings: WebhookSettings, resolve: Resolver) -> str | None:
+    """Why `url` may not be called now (form, or private addresses after resolution)."""
+    return (await check_target(url, settings, resolve)).problem
 
 
 def backoff(attempts: int, settings: WebhookSettings) -> timedelta:
@@ -288,9 +324,9 @@ async def _attempt(
     clock: Clock,
     resolve: Resolver,
 ) -> _Outcome:
-    problem = await target_problem(claimed.url, settings, resolve)
-    if problem is not None:
-        return _Outcome(claimed, DEAD, None, f"target refused: {problem}")
+    target = await check_target(claimed.url, settings, resolve)
+    if target.problem is not None:
+        return _Outcome(claimed, DEAD, None, f"target refused: {target.problem}")
     body = json.dumps(claimed.payload, ensure_ascii=False, separators=(",", ":")).encode()
     headers = {
         "Content-Type": "application/json",
@@ -299,7 +335,7 @@ async def _attempt(
         settings.delivery_header: str(claimed.id),
     }
     try:
-        status = await send(claimed.url, body, headers, settings.timeout_s)
+        status = await send(claimed.url, body, headers, settings.timeout_s, target.addresses)
     except Exception as error:  # any transport failure is retried
         message = f"{type(error).__name__}: {error}"[:ERROR_LENGTH]
         return _Outcome(claimed, _after_failure(claimed, settings), None, message)

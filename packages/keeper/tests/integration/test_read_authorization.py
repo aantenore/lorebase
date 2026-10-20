@@ -294,3 +294,45 @@ async def test_kind_grant_reads_only_its_kind(seeded: Seeded) -> None:
         assert {i["kind"] for i in found.json()["items"]} == {"Supplier"}
         named = await _post(http, key, "/search", {"q": "bearing", "kinds": ["Part"]})
         assert named.status_code == 403
+
+
+async def test_kind_grant_keeps_agent_reads_to_its_kind(seeded: Seeded) -> None:
+    key = seeded.facts["kind_key"]
+    domain_key = seeded.facts["domain_key"]
+    async with keeper(seeded.app_url, _auth_section()) as http:
+        # context packs: seeds of another Kind are refused, the neighborhood keeps to Supplier,
+        # also when a wider caller's pack for the same request is cached
+        body = {"refs": ["Supplier/S-1005"], "budget_tokens": 32000}
+        wide = await _post(http, domain_key, "/context", body)
+        assert wide.status_code == 200
+        assert {n["ref"].partition("/")[0] for n in wide.json()["neighbors"]} - {"Supplier"}
+        pack = await _post(http, key, "/context", body)
+        assert pack.status_code == 200, pack.text
+        assert pack.json()["etag"] != wide.json()["etag"]
+        assert {n["ref"].partition("/")[0] for n in pack.json()["neighbors"]} <= {"Supplier"}
+        assert all(
+            ref.partition("/")[0] == "Supplier"
+            for links in pack.json()["links"].values()
+            for link in links
+            for ref in (link["from"], link["to"])
+        )
+        assert "Part/" not in pack.text
+        assert "PurchaseOrder/" not in pack.text
+        other = {"refs": ["Supplier/S-1005", "Part/P-10001"]}
+        assert (await _post(http, key, "/context", other)).status_code == 403
+        query = {"query": {"kind": "Part", "limit": 2}}
+        assert (await _post(http, key, "/context", query)).status_code == 403
+
+        # explanations: the path Kind is authorized, Links keep to Supplier
+        explained = await http.get(
+            BASE + "/kinds/Supplier/records/S-1005/explain",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        assert explained.status_code == 200, explained.text
+        assert all(link["ref"].startswith("Supplier/") for link in explained.json()["links"])
+        assert await _status(http, key, "/kinds/Part/records/P-10001/explain") == 403
+
+        # the change feed is history, not limited to Kinds: refused like the branch log
+        assert await _status(http, key, "/branches/main/changes") == 403
+        assert await _status(http, key, "/branches/main/events") == 403
+        assert await _status(http, key, "/branches/main/log") == 403

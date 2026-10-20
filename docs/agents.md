@@ -287,7 +287,11 @@ Answer 2xx to acknowledge. Other answers and timeouts are retried with exponenti
 Deliveries are made by `lorebase_store.webhooks.deliver_pending`, which a worker runs
 periodically with an HTTP sender (`lorebase_keeper.services.webhooks.HttpxSender`); targets
 must use `webhooks.allowed_schemes` and, unless `webhooks.allow_private_targets`, must not
-resolve to private, loopback or link-local addresses. `GET /webhooks` lists them (never the
+resolve to private, loopback or link-local addresses. The host is resolved once per attempt,
+every address is checked, and the sender connects to those addresses only (the `Host` header
+and TLS keep the host name), so a DNS answer that changes after the check cannot reach an
+internal service; redirects are never followed. Give the sender an `httpx.AsyncClient` built
+with `trust_env=False`, so no proxy from the environment sits in between. `GET /webhooks` lists them (never the
 secret) and `DELETE /webhooks/{id}` removes one with its pending deliveries.
 
 ## Settings
