@@ -1,0 +1,19 @@
+# Minimal LiteLLM proxy configuration for the `litellm` compose profile.
+#
+# Lorebase talks to the proxy as to any OpenAI-compatible endpoint:
+#   inference.llm.base_url: http://litellm:4000/v1
+#   inference.llm.model:    default            (the model_name below)
+#   inference.llm.api_key:  secret://env/LITELLM_KEY   (same value as LITELLM_MASTER_KEY)
+#
+# The upstream provider and its key come from the environment file, so switching provider is a
+# configuration change: LITELLM_UPSTREAM_MODEL uses LiteLLM's "<provider>/<model>" notation.
+# Add more entries to route several aliases (for example one per extraction task).
+
+model_list:
+  - model_name: default
+    litellm_params:
+      model: os.environ/LITELLM_UPSTREAM_MODEL
+      api_key: os.environ/LITELLM_UPSTREAM_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -1,0 +1,30 @@
+# The build context is the repository root; keep it to what the images need.
+.git
+.github
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.import_linter_cache
+.hypothesis
+
+# Secrets and local configuration never enter an image
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+secrets
+
+# Not needed to build the backend
+docs
+tests
+**/tests
+apps
+node_modules
+deploy
+config
+scripts
+*.md

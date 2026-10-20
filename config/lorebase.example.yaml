@@ -27,6 +27,34 @@ telemetry:
   sample_ratio: 0.1              # fraction of root traces sampled, 0 to 1
   metric_export_interval_s: 60
 
+# Keeper, the REST API service. Environment: LOREBASE__KEEPER__PORT, LOREBASE__KEEPER__HOST, ...
+keeper:
+  host: 127.0.0.1                # bind address; containers set 0.0.0.0
+  port: 8080
+  api_prefix: /api/v1            # version prefix of every API route; OpenAPI at <prefix>/openapi.json
+  request_id_header: X-Request-ID          # accepted from clients when well formed, echoed back
+  problem_type_base: "urn:lorebase:problem:"   # error `type` URI = this prefix + error code
+  cors:
+    allow_origins: []            # browser origins allowed to call the API; empty disables CORS
+    allow_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+    allow_headers: [Authorization, Content-Type, Idempotency-Key]
+    allow_credentials: false     # cannot be combined with the "*" origin
+    max_age_s: 600
+  limits:
+    max_request_body_bytes: 1048576   # larger bodies are rejected with 413
+  pagination:
+    default_limit: 50
+    max_limit: 500
+  readiness:
+    timeout_s: 2                 # time budget of each /readyz check
+    database_section: database   # settings section with the connection string; if absent the
+    database_dsn_key: dsn        # database check reports not_configured
+  auth:
+    mode: none                   # none | api_key | oidc; only `none` is available until auth lands
+  openapi:
+    title: Lorebase Keeper
+    docs_enabled: true           # serve <prefix>/docs and <prefix>/openapi.json
+
 # Model inference, used by Scribe only. Lorebase never imports a model vendor library: every
 # chat model is an OpenAI-compatible HTTP endpoint, local or hosted.
 inference:

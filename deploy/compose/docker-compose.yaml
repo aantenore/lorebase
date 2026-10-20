@@ -1,0 +1,203 @@
+# Lorebase on docker compose. Run from the repository root:
+#
+#   cp .env.example .env              # then edit the values marked "change me"
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d
+#
+# Optional profiles (add --profile NAME, repeatable):
+#   local-models   Ollama with the model named by LLM_MODEL pulled at start
+#   litellm        LiteLLM proxy in front of hosted providers
+#   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
+#
+# Every value comes from the environment file; see .env.example for the full list.
+
+name: lorebase
+
+x-backend: &backend
+  image: ${LOREBASE_IMAGE:-lorebase}:${LOREBASE_TAG:-dev}
+  build:
+    context: ../..
+    dockerfile: deploy/docker/backend.Dockerfile
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-database: &database
+  # The connection string is passed as a secret reference (design 16): the value of
+  # LOREBASE_DB_DSN is read from the environment and never written to the YAML or the logs.
+  LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
+  LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lorebase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}
+      POSTGRES_DB: ${POSTGRES_DB:-lorebase}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  migrate:
+    <<: *backend
+    restart: "no"
+    # Alembic reads alembic.ini from the working directory; the store sources, with their
+    # migration scripts, are copied to this path in the image.
+    working_dir: ${MIGRATIONS_DIR:-/opt/lorebase/store}
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *database
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  keeper:
+    <<: *backend
+    command: ["python", "-m", "lorebase_keeper"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      <<: *database
+      LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
+      LOREBASE__KEEPER__HOST: 0.0.0.0
+      LOREBASE__KEEPER__PORT: ${KEEPER_PORT:-8080}
+      LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+      LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
+      LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-keeper
+      LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
+    volumes:
+      - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+    ports:
+      - "${KEEPER_BIND:-127.0.0.1}:${KEEPER_HOST_PORT:-8080}:${KEEPER_PORT:-8080}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${KEEPER_PORT:-8080}/readyz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # ---- profile local-models -------------------------------------------------------------
+
+  ollama:
+    profiles: [local-models]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "${OLLAMA_BIND:-127.0.0.1}:${OLLAMA_HOST_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  ollama-pull:
+    profiles: [local-models]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${LLM_MODEL:-qwen2.5:7b-instruct}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # ---- profile litellm ------------------------------------------------------------------
+
+  litellm:
+    profiles: [litellm]
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    restart: unless-stopped
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "${LITELLM_PORT:-4000}"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-change-me}
+      LITELLM_UPSTREAM_MODEL: ${LITELLM_UPSTREAM_MODEL:-}
+      LITELLM_UPSTREAM_API_KEY: ${LITELLM_UPSTREAM_API_KEY:-}
+    volumes:
+      - ./litellm.yaml:/etc/litellm/config.yaml:ro
+    ports:
+      - "${LITELLM_BIND:-127.0.0.1}:${LITELLM_HOST_PORT:-4000}:${LITELLM_PORT:-4000}"
+
+  # ---- profile observability ------------------------------------------------------------
+
+  otel-collector:
+    profiles: [observability]
+    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:latest}
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ../observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${OTEL_BIND:-127.0.0.1}:${OTEL_GRPC_HOST_PORT:-4317}:4317"
+      - "${OTEL_BIND:-127.0.0.1}:${OTEL_HTTP_HOST_PORT:-4318}:4318"
+    depends_on:
+      - jaeger
+
+  jaeger:
+    profiles: [observability]
+    image: ${JAEGER_IMAGE:-jaegertracing/all-in-one:latest}
+    restart: unless-stopped
+    ports:
+      - "${JAEGER_BIND:-127.0.0.1}:${JAEGER_UI_HOST_PORT:-16686}:16686"
+
+  prometheus:
+    profiles: [observability]
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_BIND:-127.0.0.1}:${PROMETHEUS_HOST_PORT:-9090}:9090"
+    depends_on:
+      - otel-collector
+
+  grafana:
+    profiles: [observability]
+    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_HOST_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+
+volumes:
+  postgres-data:
+  ollama-data:
+  prometheus-data:
+  grafana-data:
