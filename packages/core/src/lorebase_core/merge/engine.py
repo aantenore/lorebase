@@ -3,20 +3,25 @@
 ``merge`` finds the merge base (a virtual one for criss-cross histories, AC-13), merges the
 schema, then the data under the merged schema, then checks consistency. The outcome is a
 ``MergedTree`` ready for the commit pipeline, or a ``MergeAttempt`` listing Conflicts.
+``apply_resolutions`` re-runs the merge with the resolver's decisions.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from lorebase_core.merge.conflicts import (
     AutoResolution,
     Conflict,
+    ConflictKind,
     Resolution,
+    ResolutionChoice,
+    ResolutionError,
     Side,
+    UnresolvedConflictsError,
 )
 from lorebase_core.merge.consistency import check_consistency
 from lorebase_core.merge.data_merge import DataMerge, SideChanges, merge_data, side_changes
@@ -30,7 +35,7 @@ from lorebase_core.merge.objects import (
 from lorebase_core.merge.policies import MergePolicy
 from lorebase_core.merge.resolve import emit_groups
 from lorebase_core.merge.schema_merge import SchemaMerge, known_static_issues, merge_schema
-from lorebase_core.merge.state import SIDES, Context, Directives
+from lorebase_core.merge.state import SIDES, Context, Directives, check_choice
 from lorebase_core.revision import (
     ChangesetEntry,
     MergeStatus,
@@ -59,6 +64,7 @@ __all__ = [
     "MergeResult",
     "MergedTree",
     "ProvenanceLoader",
+    "apply_resolutions",
     "merge",
 ]
 
@@ -143,6 +149,47 @@ MergeOutcome = MergedTree | MergeAttempt
 def merge(merge_input: MergeInput) -> MergeOutcome:
     """Merge ``theirs`` into ``ours`` (design 6.8 steps 0 to 5)."""
     return _Engine(merge_input).run()
+
+
+def apply_resolutions(attempt: MergeAttempt, resolutions: Iterable[Resolution]) -> MergeOutcome:
+    """Apply resolutions to an attempt and merge again.
+
+    Every Conflict of the attempt needs a resolution with an accepted choice; grouped
+    Conflicts resolved with per-member values need a value for every member. The merge is
+    recomputed, so resolutions can surface new Conflicts.
+    """
+    if attempt.input is None:
+        raise ResolutionError("the merge attempt does not carry its merge input")
+    conflicts = {c.fingerprint: c for c in attempt.conflicts}
+    given: dict[str, Resolution] = {}
+    for resolution in resolutions:
+        conflict = conflicts.get(resolution.fingerprint)
+        if conflict is None:
+            raise ResolutionError(f"no conflict with fingerprint {resolution.fingerprint}")
+        check_choice(conflict, resolution)
+        _check_members(attempt, conflict, resolution)
+        given[resolution.fingerprint] = resolution
+    unresolved = conflicts.keys() - given.keys()
+    if unresolved:
+        raise UnresolvedConflictsError(unresolved)
+    combined = {r.fingerprint: r for r in attempt.resolutions}
+    combined.update(given)
+    return merge(replace(attempt.input, resolutions=tuple(combined.values())))
+
+
+def _check_members(attempt: MergeAttempt, conflict: Conflict, resolution: Resolution) -> None:
+    if resolution.choice is not ResolutionChoice.CUSTOM or resolution.values is None:
+        return
+    if conflict.kind in (ConflictKind.UNIQUENESS, ConflictKind.REQUIRED_RELATION):
+        # A new value for some of the Records, or Links for some of them, can be enough.
+        return
+    members = attempt.members.get(conflict.fingerprint, ())
+    missing = [m for m in members if m not in resolution.values]
+    if missing and resolution.value is None:
+        raise ResolutionError(
+            f"custom values of {conflict.fingerprint} miss {len(missing)} member(s), "
+            f"for example {missing[0]!r}"
+        )
 
 
 @dataclass

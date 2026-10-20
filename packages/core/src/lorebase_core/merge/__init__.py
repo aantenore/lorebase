@@ -22,6 +22,7 @@ from lorebase_core.merge.engine import (
     MergeOutcome,
     MergeResult,
     ProvenanceLoader,
+    apply_resolutions,
     merge,
 )
 from lorebase_core.merge.index import TreeIndexView
@@ -65,6 +66,7 @@ __all__ = [
     "Side",
     "TreeIndexView",
     "UnresolvedConflictsError",
+    "apply_resolutions",
     "conflict_fingerprint",
     "load_schema",
     "merge",
