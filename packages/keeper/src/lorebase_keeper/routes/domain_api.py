@@ -1,5 +1,5 @@
 """Routers of the Domain-scoped endpoints (Domains, schema, Operations, reads, agent reads,
-Revisions, branches), in registration order.
+webhooks, change feed, Revisions, branches), in registration order.
 
 Routes taking a hierarchical branch name (`{branch:path}`) match any path suffix, so the
 routers holding them come after routers with more specific branch sub-resources, and the
@@ -10,7 +10,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from lorebase_keeper.routes import agents, branches, domains, operations, read, revisions, schema
+from lorebase_keeper.routes import (
+    agents,
+    branches,
+    domains,
+    events,
+    operations,
+    read,
+    revisions,
+    schema,
+    webhooks,
+)
 
 
 def domain_routers() -> list[APIRouter]:
@@ -21,6 +31,8 @@ def domain_routers() -> list[APIRouter]:
         operations.router,
         read.router,
         agents.router,
+        webhooks.router,
+        events.router,  # `/branches/{branch:path}/events` and `/changes` before the catch-all
         revisions.router,  # `/branches/{branch:path}/log` before the branch catch-all
         branches.router,
     ]

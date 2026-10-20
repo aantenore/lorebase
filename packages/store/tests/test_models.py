@@ -43,6 +43,9 @@ DESIGN_TABLES = {
     "extraction_jobs",
     "extraction_cache",
     "vault",
+    # 10.5 webhooks
+    "webhooks",
+    "webhook_deliveries",
 }
 HASH_PARTITIONED = {"objects", "tree_nodes", "mat_records", "mat_links"}
 
@@ -90,5 +93,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_initial_schema() -> None:
-    assert head_revisions() == ("0001",)
+def test_head_revision_is_the_webhooks_migration() -> None:
+    assert head_revisions() == ("0003",)

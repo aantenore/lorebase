@@ -883,6 +883,11 @@ create unique index on operation_invocations (domain_id, principal, idempotency_
 create table audit_log (seq bigserial, domain_id, at, actor, action, target, details jsonb,
   prev_hash bytea, entry_hash bytea);
 create table outbox (id, domain_id, event_type, payload jsonb, created_at, delivered_at, attempts);
+create table webhooks (domain_id, id, url, description, event_types jsonb, branches jsonb,
+  secret_hash bytea, created_by, created_at);            -- secret_hash: SHA-256 of the secret
+create table webhook_deliveries (domain_id, id, webhook_id, event_id, event_type, payload jsonb,
+  status /* pending | delivered | dead */, attempts, next_attempt_at, last_status, last_error,
+  delivered_at, created_at, updated_at);
 create table jobs (id, type, domain_id, payload jsonb, status, priority, run_after, attempts,
   locked_by, locked_at, result jsonb, created_at);
 create table source_runs (domain_id, id, source_id, status, started_at, finished_at, stats jsonb,
@@ -1182,6 +1187,9 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
 | Sources | `GET/POST .../sources`, `POST .../sources/{s}/runs`, `GET .../sources/{s}/runs/{run}`, `POST /sources:infer` | |
 | Documents and extraction | `POST .../documents`, `GET .../documents/{doc}`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | |
 | Admin | `GET .../audit`, `GET/POST /principals`, `POST /api-keys`, `GET/POST .../grants` | |
+| Agent reads | `POST .../context`, `GET .../kinds/{kind}/records/{key}/explain` | one-call context pack within a token budget; why a Record is what it is ([agents](agents.md)) |
+| Change feed | `GET .../branches/{b}/events` (Server-Sent Events), `GET .../branches/{b}/changes?since=` | Revision events; resume with `Last-Event-ID` |
+| Webhooks | `GET/POST .../webhooks`, `DELETE .../webhooks/{id}` | HMAC-signed deliveries from the outbox |
 | Health | `GET /healthz`, `GET /readyz` | |
 
 ### 11.2 MCP (Herald)

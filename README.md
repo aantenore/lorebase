@@ -51,7 +51,7 @@ The web app today, running on a mock API with sample data. The [visual tour](doc
 | Inference | Vendor-agnostic and local-first: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`; Ollama by default; any hosted provider by configuration; fastembed embeddings on CPU; deterministic fake provider for tests; never used on the agent read path |
 | Review | Proposals with checks and approvals, per-item accept and reject with highlighted evidence, side-by-side Conflict resolver, merge policies such as Source authority |
 | Exploration | Explorer (search, filters, record pages, Lineage, history), Canvas graph visualization (Sigma.js), schema graph, diff overlay |
-| Agent access | REST API with OpenAPI 3.1, MCP server (stdio and Streamable HTTP), Python client, governed Operations with dry run and idempotency |
+| Agent access | REST API with OpenAPI 3.1, one-call context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([guide](docs/agents.md)), MCP server (stdio and Streamable HTTP), Python client, governed Operations with dry run and idempotency |
 | Search | Postgres full-text search, trigram matching, optional pgvector embeddings computed offline, hybrid ranking |
 | Governance | OIDC single sign-on, API keys for agents, RBAC per Domain, Kind and Operation, sensitivity masking, hash-chained audit log |
 | Operations | OpenTelemetry traces and metrics, structured JSON logs, Docker images, docker compose, Helm chart (planned) |
@@ -179,6 +179,7 @@ Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).
 
 - [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, UI, security, roadmap
 - [Quickstart](docs/quickstart.md): what runs today, step by step
+- [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
 - [Glossary](docs/glossary.md): the Lorebase vocabulary with examples
 - [Examples](examples/README.md): the merge demo, schema as code and the supply sample Domain
 - [Comparison](docs/comparison.md): Lorebase next to similar products

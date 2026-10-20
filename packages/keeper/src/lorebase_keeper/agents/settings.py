@@ -1,4 +1,4 @@
-"""The `agents` settings section: context packs and Record explanations.
+"""The `agents` settings section: context packs, Record explanations and the change feed.
 
 Registered with the platform like `read` and `search`; see `config/lorebase.example.yaml`.
 Graph caps of context packs are further bounded by `read.traverse`.
@@ -11,6 +11,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from lorebase_keeper.agents.budget import DEFAULT_TRIM_ORDER, TrimStep
+from lorebase_keeper.reading.settings import Bounds
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 SECTION = "agents"
@@ -56,11 +57,43 @@ class ExplainSettings(SectionModel):
     max_proposals: int = Field(default=20, ge=0, description="Proposals listed.")
 
 
+class FeedSettings(SectionModel):
+    """Change feed of a branch: Server-Sent Events and the polling fallback."""
+
+    poll_interval_s: float = Field(
+        default=1.0, gt=0, description="How often an open stream looks for new events."
+    )
+    heartbeat_s: float = Field(
+        default=15.0, gt=0, description="A comment line is sent after this much silence."
+    )
+    max_connection_s: float = Field(
+        default=300.0,
+        gt=0,
+        description="A stream is closed after this long; clients reconnect with Last-Event-ID.",
+    )
+    retry_ms: int = Field(default=3000, ge=0, description="Reconnection delay advised to clients.")
+    batch_events: int = Field(default=100, ge=1, description="Events read per poll.")
+    changed_keys_max: int = Field(
+        default=100, ge=0, description="Changed Record keys listed per event; more are cut."
+    )
+    changes: Bounds = Field(
+        default_factory=lambda: Bounds(default_limit=50, max_limit=500),
+        description="Revisions per page of `GET .../changes`.",
+    )
+    max_scan: int = Field(
+        default=10_000,
+        ge=1,
+        description="First-parent Revisions walked back from the head to find `since`; an "
+        "older `since` is refused (409: read the current state, then follow from the head).",
+    )
+
+
 class AgentSettings(SectionModel):
     """Agent-facing reads."""
 
     context: ContextSettings = Field(default_factory=ContextSettings)
     explain: ExplainSettings = Field(default_factory=ExplainSettings)
+    feed: FeedSettings = Field(default_factory=FeedSettings)
 
 
 register_section(SECTION, AgentSettings)
