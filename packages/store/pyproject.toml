@@ -12,6 +12,9 @@ dependencies = [
   "pgvector>=0.3",
 ]
 
+[dependency-groups]
+dev = ["testcontainers[postgres]>=4.8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
