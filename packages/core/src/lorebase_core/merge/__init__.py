@@ -1,4 +1,4 @@
-"""Three-way merge of Revisions (design 6.8 to 6.10)."""
+"""Three-way merge of Revisions (design 6.8 to 6.10): schema first, then data, then consistency."""
 
 from lorebase_core.merge.conflicts import (
     CHOICES,
@@ -13,6 +13,16 @@ from lorebase_core.merge.conflicts import (
     Side,
     UnresolvedConflictsError,
     conflict_fingerprint,
+)
+from lorebase_core.merge.engine import (
+    IndexViewFactory,
+    MergeAttempt,
+    MergedTree,
+    MergeInput,
+    MergeOutcome,
+    MergeResult,
+    ProvenanceLoader,
+    merge,
 )
 from lorebase_core.merge.index import TreeIndexView
 from lorebase_core.merge.objects import (
@@ -38,9 +48,16 @@ __all__ = [
     "Conflict",
     "ConflictKind",
     "InMemoryObjectStore",
+    "IndexViewFactory",
+    "MergeAttempt",
+    "MergeInput",
+    "MergeOutcome",
     "MergePolicy",
+    "MergeResult",
+    "MergedTree",
     "MissingObjectError",
     "ObjectStore",
+    "ProvenanceLoader",
     "Resolution",
     "ResolutionChoice",
     "ResolutionError",
@@ -50,6 +67,7 @@ __all__ = [
     "UnresolvedConflictsError",
     "conflict_fingerprint",
     "load_schema",
+    "merge",
     "put_schema",
     "schema_from_documents",
     "tree_schema_loader",
