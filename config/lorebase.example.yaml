@@ -108,3 +108,25 @@ inference:
     fixtures_dir: null           # directory of <prompt-hash>.json canned chat answers
     dictionary: {}               # label -> surface forms matched by the fake span extractor
     max_schema_depth: 6          # nesting depth beyond which optional properties are omitted
+
+# Postgres 16 with the pgvector extension. Environment: LOREBASE__DATABASE__DSN, ...
+database:
+  dsn: postgresql+asyncpg://lorebase@localhost:5432/lorebase
+                                 # alias LOREBASE_DB_DSN; e.g. secret://env/LOREBASE_DB_DSN.
+                                 # postgresql:// URLs are switched to the asyncpg driver; without
+                                 # a password, PGPASSWORD or ~/.pgpass is used
+  pool_size: 10                  # connections kept open per process
+  max_overflow: 10               # extra connections under load
+  pool_timeout_s: 30             # wait for a free pooled connection
+  pool_recycle_s: 1800           # replace older connections; -1 never
+  statement_timeout_ms: 30000    # per statement; 0 disables
+  migration_statement_timeout_ms: 0   # while migrations run; 0 disables
+  application_name: lorebase     # shown in pg_stat_activity
+
+# Schema shape, read once by the initial migration.
+store:
+  layout:
+    hash_partitions: 8           # domain_id hash partitions of objects, tree_nodes, mat_records
+                                 # and mat_links
+  embeddings:
+    dims: 384                    # HNSW index dimension; must equal inference.embeddings.dims

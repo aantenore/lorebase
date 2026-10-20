@@ -3,7 +3,14 @@ name = "lorebase-store"
 version = "0.1.0"
 description = "Lorebase store: persistence, repositories, migrations and materializer"
 requires-python = ">=3.12"
-dependencies = ["lorebase-core", "lorebase-platform"]
+dependencies = [
+  "lorebase-core",
+  "lorebase-platform",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  "pgvector>=0.3",
+]
 
 [build-system]
 requires = ["hatchling"]
