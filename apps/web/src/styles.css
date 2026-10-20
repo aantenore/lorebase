@@ -1,0 +1,94 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. Components use the semantic utilities declared in @theme
+ * (bg-surface, text-muted, border-line, ...), never raw colors, so a theme is
+ * a set of CSS variables. The dark set applies when the user picks it, or when
+ * the system prefers it and the user did not pick light.
+ */
+:root {
+  --lb-bg: #f6f7f9;
+  --lb-surface: #ffffff;
+  --lb-surface-2: #eef0f4;
+  --lb-line: #d6dae1;
+  --lb-text: #161a22;
+  --lb-muted: #5a6372;
+  --lb-accent: #3a4fd6;
+  --lb-accent-fg: #ffffff;
+  --lb-danger: #b42318;
+  --lb-success: #1a7f4b;
+  --lb-warning: #9a6700;
+  --lb-ring: #6f80f0;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --lb-bg: #0e1116;
+  --lb-surface: #161b23;
+  --lb-surface-2: #1f2630;
+  --lb-line: #2c3542;
+  --lb-text: #e7eaf0;
+  --lb-muted: #9aa4b4;
+  --lb-accent: #8b9bff;
+  --lb-accent-fg: #0e1116;
+  --lb-danger: #ff8a7a;
+  --lb-success: #5fd39b;
+  --lb-warning: #e3b341;
+  --lb-ring: #8b9bff;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not([data-theme='dark']) {
+    --lb-bg: #0e1116;
+    --lb-surface: #161b23;
+    --lb-surface-2: #1f2630;
+    --lb-line: #2c3542;
+    --lb-text: #e7eaf0;
+    --lb-muted: #9aa4b4;
+    --lb-accent: #8b9bff;
+    --lb-accent-fg: #0e1116;
+    --lb-danger: #ff8a7a;
+    --lb-success: #5fd39b;
+    --lb-warning: #e3b341;
+    --lb-ring: #8b9bff;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--lb-bg);
+  --color-surface: var(--lb-surface);
+  --color-surface-2: var(--lb-surface-2);
+  --color-line: var(--lb-line);
+  --color-ink: var(--lb-text);
+  --color-muted: var(--lb-muted);
+  --color-accent: var(--lb-accent);
+  --color-accent-fg: var(--lb-accent-fg);
+  --color-danger: var(--lb-danger);
+  --color-success: var(--lb-success);
+  --color-warning: var(--lb-warning);
+  --color-ring: var(--lb-ring);
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--lb-bg);
+  color: var(--lb-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+:focus-visible {
+  outline: 2px solid var(--lb-ring);
+  outline-offset: 2px;
+}
