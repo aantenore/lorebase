@@ -198,6 +198,7 @@ class PgRevisionGraph:
         self._domain = domain_id
         self._parents: dict[bytes, tuple[bytes, ...]] = {}
         self._generations: dict[bytes, int] = {}
+        self._roots: dict[bytes, bytes] = {}
 
     def parents(self, revision_id: bytes) -> Sequence[bytes]:
         if revision_id not in self._parents:
@@ -209,14 +210,22 @@ class PgRevisionGraph:
             self._load(revision_id)
         return self._generations[revision_id]
 
+    def root(self, revision_id: bytes) -> bytes:
+        """Tree root of a Revision (the `revision_root` callable of a merge input)."""
+        if revision_id not in self._roots:
+            self._load(revision_id)
+        return self._roots[revision_id]
+
     def _load(self, revision: bytes) -> None:
-        generation = self._session.execute(
-            select(REVISIONS.c.generation).where(
+        found = self._session.execute(
+            select(REVISIONS.c.generation, REVISIONS.c.root).where(
                 REVISIONS.c.domain_id == self._domain, REVISIONS.c.id == revision
             )
-        ).scalar_one_or_none()
-        if generation is None:
+        ).one_or_none()
+        if found is None:
             raise UnknownRevisionError(revision.hex())
+        generation, root = found
+        self._roots[revision] = root
         parents = self._session.execute(
             select(REVISION_PARENTS.c.parent_id)
             .where(

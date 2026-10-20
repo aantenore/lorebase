@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from pydantic import JsonValue
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from lorebase_core.canonical import ObjectType, canonical_bytes, normalize, object_hash
 from lorebase_store.bulk import bulk_write, chunks
@@ -107,3 +109,54 @@ class PgObjectStore:
             for item in unique.values()
         ]
         await bulk_write(self._session, OBJECTS, rows, writes=self._writes)
+
+
+class SessionObjectStore:
+    """Synchronous core `ObjectStore` of one Domain over a synchronous `Session`.
+
+    Like `PgNodeStore` it runs inside `AsyncSession.run_sync`: reads query `objects` (and are
+    cached for the life of the store), writes are buffered and handed to
+    `PgObjectStore.put_many` with `take_pending`.
+    """
+
+    def __init__(self, session: Session, domain_id: str, *, batch: int = 1000) -> None:
+        self._session = session
+        self._domain = domain_id
+        self._batch = batch
+        self._known: dict[bytes, dict[str, Any]] = {}
+        self._pending: dict[bytes, EncodedObject] = {}
+
+    def get(self, object_hash: bytes) -> JsonValue | None:
+        pending = self._pending.get(object_hash)
+        if pending is not None:
+            return pending.body
+        if object_hash not in self._known:
+            self.prefetch([object_hash])
+        return self._known.get(object_hash)
+
+    def put(self, object_type: str, payload: JsonValue) -> bytes:
+        if not isinstance(payload, dict):
+            raise TypeError("object content must be a JSON object")
+        encoded = encode_object(object_type, payload)
+        self._pending.setdefault(encoded.hash, encoded)
+        return encoded.hash
+
+    def prefetch(self, hashes: Iterable[bytes]) -> None:
+        """Load the given objects in batched queries; known ones are skipped."""
+        missing = [
+            h for h in dict.fromkeys(hashes) if h not in self._known and h not in self._pending
+        ]
+        for chunk in chunks(missing, self._batch):
+            rows = self._session.execute(
+                select(OBJECTS.c.hash, OBJECTS.c.body).where(
+                    OBJECTS.c.domain_id == self._domain, OBJECTS.c.hash.in_(chunk)
+                )
+            )
+            for digest, body in rows:
+                self._known[digest] = body
+
+    def take_pending(self) -> list[EncodedObject]:
+        """Return and forget the buffered writes."""
+        pending, self._pending = self._pending, {}
+        self._known.update({digest: item.body for digest, item in pending.items()})
+        return list(pending.values())
