@@ -1,8 +1,9 @@
-"""Agent-facing reads against the `supply` example in Postgres: context packs.
+"""Agent-facing reads against the `supply` example in Postgres: context packs and Record
+explanations.
 
 Revision ids, timestamps and values of the seeded Domain are deterministic (fixed clock and
-content addressing), so the markdown pack of Supplier/S-1001 is kept as a snapshot in
-`snapshots/`; set LOREBASE_UPDATE_SNAPSHOTS=1 to rewrite it after an intended change.
+content addressing), so the markdown renderings of Supplier/S-1001 are kept as snapshots in
+`snapshots/`; set LOREBASE_UPDATE_SNAPSHOTS=1 to rewrite them after an intended change.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_keeper.agents.explain import ExplainOut
 from lorebase_keeper.agents.pack import ContextPackOut
 from lorebase_store.runtime import StoreRuntime
 
@@ -181,3 +183,63 @@ async def test_invalid_context_requests(http: httpx.AsyncClient) -> None:
     await context(http, {"refs": ["Supplier/S-1001"], "search": "x"}, 422)
     await context(http, {"refs": ["Supplier/S-1001"], "depth": 9}, 422)
     await context(http, {"refs": ["Supplier/S-1001"], "budget_tokens": 10**6}, 422)
+
+
+# Explain --------------------------------------------------------------------------------------
+
+
+async def test_explain_a_supplier(http: httpx.AsyncClient, seeded: Seeded) -> None:
+    path = f"{BASE}/kinds/Supplier/records/S-1001/explain"
+    response = await http.get(path)
+    assert response.status_code == 200, response.text
+    document = response.json()
+    ExplainOut.model_validate(document)
+    data, updated = seeded.revisions["data"], seeded.revisions["updated"]
+    assert document["revision"] == updated
+    assert response.headers["Lorebase-Revision"] == updated
+
+    created = document["created"]
+    assert created["revision"] == data
+    assert created["actor"] == "usr_loader"
+    assert created["origin_type"] == "import"
+    assert created["revision_origin"] == {"type": "import", "ref": "examples/supply"}
+    assert created["message"] == "Import the supply example data"
+
+    attributes = {a["name"]: a for a in document["attributes"]}
+    assert [a["name"] for a in document["attributes"]][:2] == ["supplier_code", "legal_name"]
+    assert attributes["risk_score"]["value"] == "90"
+    assert attributes["risk_score"]["revision"] == updated
+    assert attributes["risk_score"]["actor"] == "usr_editor"
+    assert attributes["risk_score"]["origin_type"] == "operation"
+    assert attributes["legal_name"]["revision"] == data
+    assert attributes["legal_name"]["origin_type"] == "import"
+
+    links = {(link["relation"], link["ref"]): link for link in document["links"]}
+    supplies = links[("supplies", "Part/P-10028")]
+    assert supplies["direction"] == "inverse"
+    assert supplies["revision"] == data
+    assert supplies["values"] == {"is_primary": True, "lead_time_days": "21"}
+    order = links[("purchase_orders", "PurchaseOrder/PO-200002")]
+    assert order["origin_type"] == "import"
+    assert order["revision"] == data
+    assert ("contracts", "Contract/C-3001") in links
+    assert document["links_truncated"] is False
+    assert document["history"] == {"changes": 2, "first_revision": data, "last_revision": updated}
+    assert document["proposals"] == []
+
+    again = await http.get(path, headers={"If-None-Match": response.headers["ETag"]})
+    assert again.status_code == 304
+
+
+async def test_explain_markdown_snapshot(http: httpx.AsyncClient) -> None:
+    path = f"{BASE}/kinds/Supplier/records/S-1001/explain"
+    response = await http.get(path, params={"format": "markdown"})
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "text/markdown; charset=utf-8"
+    check_snapshot("explain_supplier_s1001.md", response.text)
+
+
+async def test_explain_unknown_record(http: httpx.AsyncClient) -> None:
+    missing = await http.get(f"{BASE}/kinds/Supplier/records/S-0000/explain")
+    assert missing.status_code == 404
+    assert (await http.get(f"{BASE}/kinds/Nope/records/x/explain")).status_code == 404

@@ -305,3 +305,6 @@ agents:
       - near_neighbor_values
       - near_neighbors
       - schema
+  explain:                       # GET /domains/{d}/kinds/{kind}/records/{key}/explain
+    max_links: 100               # Links listed with their origin
+    max_proposals: 20            # Proposals that changed the Record

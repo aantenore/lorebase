@@ -1,25 +1,30 @@
-"""Agent-facing reads (design 11): context packs.
+"""Agent-facing reads (design 11): context packs and Record explanations.
 
 `POST /context` answers in one call with the seed Records, their neighborhood, the schema
 fragment, recent changes and lineage, trimmed to a token budget (`agents.context`). It is
 authorized like every read (`services.reads`, Kind-scoped grants included) and cached by
 Revision like GET reads: the `ETag` names the Revision and a digest of the request, and a
 matching `If-None-Match` answers 304.
+
+`GET .../records/{key}/explain` tells why a Record exists and why its values are what they
+are (`agents.explain`), as JSON or markdown, cached like every GET read.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from lorebase_keeper.agents.context import JSON, MARKDOWN, PackContext, build_pack
-from lorebase_keeper.agents.pack import ContextPackOut, ContextRequest
+from lorebase_keeper.agents.explain import ExplainOut, explain_markdown, explain_record
+from lorebase_keeper.agents.pack import ContextPackOut, ContextRequest, dumps
 from lorebase_keeper.agents.settings import AgentSettings, agent_settings
 from lorebase_keeper.errors import Problem, ValidationProblem
-from lorebase_keeper.reading.caching import CacheKey, entity_tag, respond_with
+from lorebase_keeper.reading.caching import CacheKey, cache_key, entity_tag, respond_with
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, open_revision, read_guard, resolve_point
+from lorebase_keeper.reading.records import require_kind
 from lorebase_keeper.reading.runtime import ReadRuntimeDep, ReadSessionDep
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_platform.settings import Settings
@@ -87,4 +92,50 @@ async def context_pack(
 
     return await respond_with(
         request, runtime.cache, key, produce, headers={REVISION_HEADER: point.revision_hex}
+    )
+
+
+@router.get(
+    f"{BASE}/kinds/{{kind}}/records/{{key}}/explain",
+    summary="Explain a Record",
+    responses={
+        **_ERRORS,
+        200: {
+            "model": ExplainOut,
+            "content": {JSON: {}, MARKDOWN: {}},
+            "description": "The explanation in JSON, or markdown with `format=markdown`.",
+        },
+        304: {"description": "Not modified: If-None-Match names the current ETag."},
+    },
+)
+async def explain(
+    domain_id: str,
+    kind: str,
+    key: str,
+    access: DataRead,
+    runtime: ReadRuntimeDep,
+    session: ReadSessionDep,
+    settings: AgentSettingsDep,
+    request: Request,
+    branch: Annotated[
+        str | None, Query(description="Branch to read; default: the Domain's default branch.")
+    ] = None,
+    format: Annotated[Literal["json", "markdown"], Query()] = "json",
+) -> Response:
+    """Creation, per-Attribute lineage, Links with their origin and Proposals of a Record."""
+    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    found = require_kind(point, kind)
+
+    async def produce() -> tuple[bytes, str]:
+        document = await explain_record(session, runtime, point, found, key, settings.explain)
+        if format == "markdown":
+            return explain_markdown(document).encode(), MARKDOWN
+        return dumps(document).encode(), JSON
+
+    return await respond_with(
+        request,
+        runtime.cache,
+        cache_key(request, point.domain.id, point.revision_hex, point.scope.variant),
+        produce,
+        headers={REVISION_HEADER: point.revision_hex},
     )

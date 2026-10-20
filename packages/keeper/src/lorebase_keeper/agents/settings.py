@@ -1,4 +1,4 @@
-"""The `agents` settings section: agent-facing reads such as context packs.
+"""The `agents` settings section: context packs and Record explanations.
 
 Registered with the platform like `read` and `search`; see `config/lorebase.example.yaml`.
 Graph caps of context packs are further bounded by `read.traverse`.
@@ -49,10 +49,18 @@ class ContextSettings(SectionModel):
         return self
 
 
+class ExplainSettings(SectionModel):
+    """`GET .../records/{key}/explain`."""
+
+    max_links: int = Field(default=100, ge=0, description="Links listed with their origin.")
+    max_proposals: int = Field(default=20, ge=0, description="Proposals listed.")
+
+
 class AgentSettings(SectionModel):
     """Agent-facing reads."""
 
     context: ContextSettings = Field(default_factory=ContextSettings)
+    explain: ExplainSettings = Field(default_factory=ExplainSettings)
 
 
 register_section(SECTION, AgentSettings)
