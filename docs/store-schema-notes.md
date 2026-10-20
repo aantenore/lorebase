@@ -16,6 +16,10 @@ difference).
   installed services.
 - `statement_timeout_ms` defaults to 30 s, safe for bulk commits; read-heavy deployments lower it
   (design 16 shows 2 s). Migrations run with `migration_statement_timeout_ms` (default: none).
+- `read_dsn` (optional, several allowed), `read_max_lag_ms`, `read_fallback_to_primary` and
+  `read_probe_timeout_ms` configure read replicas; `lorebase_store.replicas` routes reads and
+  guards freshness (see [deployment.md](deployment.md)). Everything else, writes included, uses
+  `dsn`.
 - `store.layout.hash_partitions` and `store.embeddings.dims` are read when revision `0001` runs.
   Changing them later needs a new migration.
 

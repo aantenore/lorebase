@@ -7,6 +7,9 @@
 #   local-models   Ollama with the model named by LLM_MODEL pulled at start
 #   litellm        LiteLLM proxy in front of hosted providers
 #   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
+#   scale-out      second Keeper, Postgres streaming replica, nginx in front of the Keepers
+#                  (set LOREBASE_DB_READ_DSN and KEEPER_PREFER_REPLICA to route reads to the
+#                  replica; see docs/deployment.md)
 #
 # Every value comes from the environment file; see .env.example for the full list.
 
@@ -28,6 +31,42 @@ x-database: &database
   # LOREBASE_DB_DSN is read from the environment and never written to the YAML or the logs.
   LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
   LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
+  # Read replicas (design 15.3); empty keeps every read on the primary.
+  LOREBASE_DB_READ_DSN: ${LOREBASE_DB_READ_DSN:-}
+
+x-keeper: &keeper
+  <<: *backend
+  command: ["python", "-m", "lorebase_keeper"]
+  read_only: true
+  tmpfs:
+    - /tmp
+  environment:
+    <<: *database
+    LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
+    LOREBASE__KEEPER__HOST: 0.0.0.0
+    LOREBASE__KEEPER__PORT: ${KEEPER_PORT:-8080}
+    LOREBASE__KEEPER__READS__PREFER_REPLICA: ${KEEPER_PREFER_REPLICA:-false}
+    LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+    LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
+    LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-keeper
+    LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
+  volumes:
+    - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${KEEPER_PORT:-8080}/readyz', timeout=3)"
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 10s
 
 services:
   postgres:
@@ -62,39 +101,9 @@ services:
         condition: service_healthy
 
   keeper:
-    <<: *backend
-    command: ["python", "-m", "lorebase_keeper"]
-    read_only: true
-    tmpfs:
-      - /tmp
-    environment:
-      <<: *database
-      LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
-      LOREBASE__KEEPER__HOST: 0.0.0.0
-      LOREBASE__KEEPER__PORT: ${KEEPER_PORT:-8080}
-      LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
-      LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
-      LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-keeper
-      LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
-    volumes:
-      - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+    <<: *keeper
     ports:
       - "${KEEPER_BIND:-127.0.0.1}:${KEEPER_HOST_PORT:-8080}:${KEEPER_PORT:-8080}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${KEEPER_PORT:-8080}/readyz', timeout=3)"
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
 
   # ---- profile local-models -------------------------------------------------------------
 
@@ -196,8 +205,93 @@ services:
       - prometheus
       - jaeger
 
+  # ---- profile scale-out ----------------------------------------------------------------
+  # Stateless Keeper replicas behind a reverse proxy, and a Postgres streaming replica for
+  # reads. Writes keep going to the primary. The replica uses the official image plus two small
+  # scripts (postgres/): no extra image to maintain, the same pgvector build as the primary, and
+  # nothing beyond pg_basebackup, which ships with Postgres.
+
+  keeper-2:
+    <<: *keeper
+    profiles: [scale-out]
+
+  replica-prep:
+    profiles: [scale-out]
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    restart: "no"
+    user: root
+    entrypoint: ["sh", "/scripts/prepare-primary.sh"]
+    environment: &replication
+      PRIMARY_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-lorebase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}
+      POSTGRES_DB: ${POSTGRES_DB:-lorebase}
+      REPLICATION_USER: ${REPLICATION_USER:-replicator}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-}
+      REPLICATION_SLOT: ${REPLICATION_SLOT:-lorebase_replica_1}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/prepare-primary.sh:/scripts/prepare-primary.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres-replica:
+    profiles: [scale-out]
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    restart: unless-stopped
+    user: postgres
+    entrypoint: ["sh", "/scripts/replica-entrypoint.sh"]
+    environment: *replication
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+      - ./postgres/replica-entrypoint.sh:/scripts/replica-entrypoint.sh:ro
+    ports:
+      - "${POSTGRES_REPLICA_BIND:-127.0.0.1}:${POSTGRES_REPLICA_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+    depends_on:
+      replica-prep:
+        condition: service_completed_successfully
+
+  proxy:
+    profiles: [scale-out]
+    image: ${PROXY_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      NGINX_ENVSUBST_FILTER: ^(KEEPER|PROXY)_
+      KEEPER_PORT: ${KEEPER_PORT:-8080}
+      PROXY_PORT: 8080
+      PROXY_MAX_BODY: ${PROXY_MAX_BODY:-2m}
+      PROXY_CONNECT_TIMEOUT: ${PROXY_CONNECT_TIMEOUT:-3s}
+      PROXY_READ_TIMEOUT: ${PROXY_READ_TIMEOUT:-60s}
+    volumes:
+      - ./proxy/keeper.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "${PROXY_BIND:-127.0.0.1}:${PROXY_HOST_PORT:-8088}:8080"
+    depends_on:
+      keeper:
+        condition: service_healthy
+      keeper-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
 volumes:
   postgres-data:
+  postgres-replica-data:
   ollama-data:
   prometheus-data:
   grafana-data:

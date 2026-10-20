@@ -1,0 +1,38 @@
+# Reverse proxy in front of the Keeper replicas (compose profile scale-out).
+#
+# Rendered by the nginx image: variables named KEEPER_* or PROXY_* are replaced from the
+# container environment at start (NGINX_ENVSUBST_FILTER); every other $name is nginx's own.
+# Requests are spread round-robin. Keepers are stateless, so no session affinity is needed;
+# a Keeper that fails to answer is skipped for a while and the request retried on the next one.
+
+upstream keepers {
+    server keeper:${KEEPER_PORT} max_fails=2 fail_timeout=10s;
+    server keeper-2:${KEEPER_PORT} max_fails=2 fail_timeout=10s;
+}
+
+# Pass the client request id through, otherwise let nginx assign one.
+map $http_x_request_id $request_id_out {
+    ""      $request_id;
+    default $http_x_request_id;
+}
+
+server {
+    listen ${PROXY_PORT};
+    server_tokens off;
+    client_max_body_size ${PROXY_MAX_BODY};
+
+    location / {
+        proxy_pass http://keepers;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id_out;
+        proxy_connect_timeout ${PROXY_CONNECT_TIMEOUT};
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        # Only idempotent requests are retried on another Keeper after a connection failure.
+        proxy_next_upstream error timeout;
+        proxy_next_upstream_tries 2;
+    }
+}
