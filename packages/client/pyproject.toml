@@ -1,9 +1,14 @@
 [project]
 name = "lorebase-client"
 version = "0.1.0"
-description = "Lorebase client: typed HTTP client"
+description = "Lorebase client: typed sync and async HTTP client for the Keeper API"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  # Transport: one HTTP stack with sync and async clients and pluggable transports.
+  "httpx>=0.27",
+  # Typed request and response models.
+  "pydantic>=2.7",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -43,7 +43,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
-      - name: mypy strict for core, store and keeper; default settings for the rest
+      - name: mypy strict for core, store, keeper, client and cli; default settings for the rest
         run: make type
 
   unit:
