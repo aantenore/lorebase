@@ -166,6 +166,33 @@ async def test_key_for_a_user_or_unknown_principal_is_refused(
         assert response.status_code == 404
 
 
+async def test_key_for_a_principal_of_another_domain_is_refused(
+    http: httpx.AsyncClient, store: Any, admin: dict[str, str]
+) -> None:
+    store.add_principal("svc_globex", PrincipalType.SERVICE)
+    store.add_grant("globex", "svc_globex", "admin")
+    store.add_principal("svc_idle", PrincipalType.SERVICE)
+    for principal in ("svc_globex", "svc_idle"):
+        response = await http.post(
+            f"{BASE}/api-keys", json={"name": "x", "principal_id": principal}, headers=admin
+        )
+        assert response.status_code == 403
+        assert response.json()["code"] == "forbidden"
+    assert not [k for k in store.key_rows.values() if k.principal_id in {"svc_globex", "svc_idle"}]
+
+
+async def test_key_for_an_installation_admin_is_refused(
+    auth_app: Callable[..., FastAPI], client_for: ClientFor, store: Any, admin: dict[str, str]
+) -> None:
+    store.add_principal("svc_ops", PrincipalType.SERVICE)
+    store.add_grant("acme", "svc_ops", "viewer")
+    async with client_for(auth_app({**API_KEYS, "installation_admins": ["svc_ops"]})) as http:
+        response = await http.post(
+            f"{BASE}/api-keys", json={"name": "x", "principal_id": "svc_ops"}, headers=admin
+        )
+    assert response.status_code == 403
+
+
 async def test_only_admins_manage_keys(
     http: httpx.AsyncClient, store: Any, codec: ApiKeyCodec
 ) -> None:

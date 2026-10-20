@@ -152,6 +152,13 @@ async def test_installation_permission_rules(store: Any) -> None:
         await subject.allows_installation(ops, P.DATA_READ)
 
 
+async def test_scoped_key_of_an_installation_admin_gets_no_installation_access(
+    store: Any,
+) -> None:
+    ops_key = user("usr_ops", installation_admin=True, key_scopes=("domain:acme",))
+    assert not await authorizer(store).allows_installation(ops_key, P.PRINCIPAL_READ)
+
+
 async def test_installation_admin_gets_no_domain_data_access(store: Any) -> None:
     ops = user("usr_ops", installation_admin=True)
     assert not await authorizer(store).allows(ops, P.DATA_READ, "acme")
@@ -324,6 +331,20 @@ async def test_installation_admins_come_from_settings(
         assert (await http.get("/api/v1/installation/probe", headers=headers)).status_code == 200
         data = await http.get("/api/v1/domains/acme/probe/data", headers=headers)
     assert data.status_code == 403
+
+
+async def test_scoped_key_of_an_installation_admin_stays_within_its_scope(
+    routed: Callable[..., FastAPI], client_for: ClientFor, store: Any, codec: Any
+) -> None:
+    store.add_principal("svc_ops", PrincipalType.SERVICE)
+    store.add_grant("acme", "svc_ops", "viewer")
+    headers = auth_header(store, codec, "svc_ops", scopes=("domain:acme",))
+    async with client_for(routed(installation_admins=["svc_ops"])) as http:
+        installation = await http.get("/api/v1/installation/probe", headers=headers)
+        inside = await http.get("/api/v1/domains/acme/probe/data", headers=headers)
+    assert installation.status_code == 403
+    assert installation.json()["permission"] == "principal.read"
+    assert inside.status_code == 200
 
 
 async def test_custom_roles_work_through_the_settings(

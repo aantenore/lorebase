@@ -89,15 +89,19 @@ class Authorizer:
     async def allows_installation(self, principal: Principal, permission: Permission) -> bool:
         """Whether `principal` holds an installation-level permission.
 
-        Installation administrators do. Others do when a Domain-wide grant of theirs has a
-        role containing it. API keys limited to Domains never do.
+        API keys limited to Domains never do, whoever holds them: no Domain scope covers the
+        installation, and the scope check comes before the administrator one. Otherwise
+        installation administrators do, and others do when a Domain-wide grant of theirs has a
+        role containing it.
         """
         if permission not in INSTALLATION_PERMISSIONS:
             raise ValueError(f"{permission.value} is not an installation-level permission")
-        if principal.method == "none" or principal.installation_admin:
+        if principal.method == "none":
             return True
         if principal.key_scopes:
             return False
+        if principal.installation_admin:
+            return True
         grants = await self._grants(principal, ANY_DOMAIN)
         return any(
             grant.scope_type is GrantScope.DOMAIN

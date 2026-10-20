@@ -23,6 +23,7 @@ from lorebase_keeper.auth.ports import AuthUnitPort
 from lorebase_keeper.auth.rbac import domain_scope
 from lorebase_keeper.errors import (
     BAD_REQUEST,
+    FORBIDDEN,
     NOT_FOUND,
     VALIDATION_FAILED,
     Problem,
@@ -91,7 +92,8 @@ class CreateApiKey(BaseModel):
     principal_id: str | None = Field(
         default=None,
         description="Add the key to an existing service principal instead of creating one; "
-        "its grants are left as they are.",
+        "its grants are left as they are. The principal must hold a grant in this Domain and "
+        "must not be an installation administrator.",
     )
 
 
@@ -272,6 +274,7 @@ async def create_api_key(
                 service = await unit.principals.get(body.principal_id)
                 if service is None or service.type is not PrincipalType.SERVICE:
                     raise ProblemError(NOT_FOUND, "Service principal not found.")
+                await _check_key_holder(auth, unit, domain_id, service)
                 role = None
             else:
                 service = await unit.principals.add(PrincipalType.SERVICE, body.name)
@@ -295,6 +298,25 @@ async def create_api_key(
         expires_at=expires_at.isoformat() if expires_at else None,
     )
     return ApiKeyCreated(**_key_out(key), key=token, role=role)
+
+
+async def _check_key_holder(
+    auth: AuthDep, unit: AuthUnitPort, domain_id: str, service: PrincipalRecord
+) -> None:
+    """Refuse a new key for a principal outside this Domain or an installation administrator.
+
+    A Domain admin may only extend principals that already act in the Domain (a grant to them
+    or one of their groups); otherwise a key could carry another Domain's access or
+    installation administration.
+    """
+    subjects = (service.id, *await unit.groups.group_ids_for(service.id))
+    identities = (*subjects, service.external_subject) if service.external_subject else subjects
+    if not set(auth.settings.installation_admins).isdisjoint(identities):
+        raise ProblemError(
+            FORBIDDEN, "API keys of installation administrators cannot be created here."
+        )
+    if not await unit.grants.for_subjects(domain_id, subjects):
+        raise ProblemError(FORBIDDEN, "The service principal holds no grant in this Domain.")
 
 
 async def _add_key(
