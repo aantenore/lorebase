@@ -117,7 +117,10 @@ export function ReviewPage({ status }: { status: StatusFilter }) {
         }
       </QueryBoundary>
       <div className="mt-6">
-        <PlannedScreens area="Review" built={['Proposal list', 'Proposal detail']} />
+        <PlannedScreens
+          area="Review"
+          built={['Proposal list', 'Proposal detail', 'Conflict resolver']}
+        />
       </div>
     </>
   );

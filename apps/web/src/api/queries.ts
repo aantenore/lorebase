@@ -62,6 +62,7 @@ export const keys = {
   proposal: (domain: DomainId, id: string) => ['keeper', 'proposal', domain, id] as const,
   proposalDiff: (domain: DomainId, id: string) => ['keeper', 'proposal-diff', domain, id] as const,
   conflicts: (domain: DomainId, id: string) => ['keeper', 'conflicts', domain, id] as const,
+  revision: (domain: DomainId, id: RevisionId) => ['keeper', 'revision', domain, id] as const,
 };
 
 // ------------------------------------------------------- Domain and Branch
@@ -103,6 +104,15 @@ export function useRevisionLog(
   });
 }
 
+export function useRevision(domain: DomainId, id: RevisionId | null) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.revision(domain, id ?? ''),
+    queryFn: () => api.revisions.get(domain, id ?? ''),
+    enabled: id !== null,
+  });
+}
+
 // ------------------------------------------------------ scoped reads
 
 export function useSchema(scope: QueryScope) {
@@ -110,6 +120,21 @@ export function useSchema(scope: QueryScope) {
   return useQuery({
     queryKey: keys.schema(scope),
     queryFn: () => api.schema.get(toReadScope(scope)),
+  });
+}
+
+/** The schema at the head of any Branch, for screens that look at a Branch other than the current one. */
+export function useBranchSchema(domain: DomainId, branch: BranchName) {
+  const api = useKeeperApi();
+  const info = useBranch(domain, branch);
+  const head = info.data?.head;
+  return useQuery({
+    queryKey:
+      head === undefined
+        ? ['keeper', 'schema-pending', domain, branch]
+        : keys.schema({ domain, branch, head }),
+    queryFn: () => api.schema.get({ domain, branch }),
+    enabled: head !== undefined,
   });
 }
 

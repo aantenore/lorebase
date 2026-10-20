@@ -1,4 +1,10 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import {
+  useId,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { cn } from './cn';
 
 const CONTROL =
@@ -76,6 +82,32 @@ export function Select({ label, options, hint, hideLabel, className, ...props }:
             </option>
           ))}
         </select>
+      )}
+    </FieldFrame>
+  );
+}
+
+export interface TextareaProps extends Omit<
+  TextareaHTMLAttributes<HTMLTextAreaElement>,
+  'className'
+> {
+  label: string;
+  hint?: string;
+  hideLabel?: boolean;
+  className?: string;
+}
+
+/** Labelled multi-line input, for long text and JSON. */
+export function Textarea({ label, hint, hideLabel, className, ...props }: TextareaProps) {
+  return (
+    <FieldFrame label={label} hint={hint} hideLabel={hideLabel} className={className}>
+      {({ controlId, hintId }) => (
+        <textarea
+          id={controlId}
+          aria-describedby={hintId}
+          className={cn(CONTROL, 'h-auto min-h-20 py-1.5 font-mono')}
+          {...props}
+        />
       )}
     </FieldFrame>
   );

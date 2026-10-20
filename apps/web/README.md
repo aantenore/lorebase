@@ -102,9 +102,22 @@ src/
 
 ## Screens
 
-Built with real data from the active adapter: Explorer (Domain home, search with Kind filter, Kind table with sort and paging, Record page), Canvas (graph explorer, schema graph), Modeler (Kinds, Attributes, Relations, Traits, Operations, Derivations, Sources lists), Review (Proposal list with Conflict counts, Proposal detail with checks, reviews, Conflicts, data diff, merge and close), Settings.
+Built with real data from the active adapter: Explorer (Domain home, search with Kind filter, Kind table with sort and paging, Record page), Canvas (graph explorer, schema graph), Modeler (Kinds, Attributes, Relations, Traits, Operations, Derivations, Sources lists), Review (Proposal list with Conflict counts, Proposal detail with checks, reviews, merge attempt and Conflict resolver, data diff, merge and close), Settings.
 
-Every other screen of the inventory in design 12.3 (Trait view, diff overlay, editors, extraction items, Conflict resolver, Sources, History, Admin) appears as a placeholder section marked "Planned", built from `src/features/inventory.ts`.
+Every other screen of the inventory in design 12.3 (Trait view, diff overlay, editors, extraction items, Sources, History, Admin) appears as a placeholder section marked "Planned", built from `src/features/inventory.ts`.
+
+## Conflict resolver
+
+The merge attempt of a Proposal (design 6.8 to 6.10, 12.3) is the "Merge attempt" section of the Proposal detail, `src/features/review/`.
+
+- **List.** Conflicts grouped by kind (`DV1` to `XS11`, with their names and counts), filters by kind, status (open, resolved) and text, a progress bar, and the Conflicts a policy already resolved. The selected Conflict is in the URL (`?conflict=<fingerprint>`), so a Conflict can be linked. The list is one listbox: arrow keys or `j` and `k` move between Conflicts, `Home` and `End` jump to the ends, "Next open Conflict" skips the resolved ones.
+- **Resolver.** Base, ours and theirs side by side. Records are compared attribute by attribute and schema elements property by property (dotted paths, ids replaced by api names); only the paths where a side moved from the base are listed, with the rest one checkbox away. Absent sides (a deleted Record) are shown as absent. The choices are the ones the Conflict carries (`choices`, from `CHOICES` of its kind), never a fixed list.
+- **Custom values.** The input follows the type: number field with the constraints of the Attribute, select for enums and booleans, date field, text area for long text, JSON text for Records, lists and schema documents. A value that breaks the type or the constraints, or JSON that does not parse, blocks "Save resolution" and says why. Types come from the schema of the source Branch.
+- **Grouped Conflicts** (`XS1` to `XS9`) list their members with the values each side holds, take one value per member (`values` keyed by member key), offer "same value for every member", and accept the choices that need no value for the whole group.
+- **Bulk.** One choice for every open Conflict of the current filter that accepts it; the button says how many it touches.
+- **Apply resolutions** calls `POST .../merge`. Merged: the page shows the merged Revision (id, parents marked target and source, changes), the Resolutions applied and the policy resolutions. Conflicts remain: the list shows them, and a Resolution the merge run refused on re-validation is dropped and its reason appears on the Conflict.
+
+Keeper does not publish the merge attempt endpoints yet beyond design 11.1, so two assumptions are marked here: `GET .../conflicts` answers with the whole attempt (Conflicts, Resolutions by fingerprint, automatic Resolutions, base, ours and theirs Revisions), and `POST .../merge` answers 200 with `status: merged` or `status: conflicts` instead of failing while Conflicts remain.
 
 ## Tests
 

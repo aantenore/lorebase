@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { isApiError } from '@/api';
 import { useKeeperApi } from '@/api/provider';
-import { useConflicts, useProposal, useProposalDiff } from '@/api/queries';
+import { useProposal, useProposalDiff } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { Button } from '@/ui/button';
 import {
@@ -15,50 +15,11 @@ import {
 } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { useToast } from '@/ui/toast';
-import { resolutionOf, unresolvedOf } from './conflict-state';
+import { MergeAttemptSection } from './merge-attempt';
+import { unresolvedOf } from './conflict-state';
 import { STATUS_TONE } from './review-page';
 
 const CHECK_TONE = { passed: 'success', failed: 'danger', pending: 'warning' } as const;
-
-function ConflictsSection({ domain, proposal }: { domain: string; proposal: string }) {
-  const conflicts = useConflicts(domain, proposal);
-  return (
-    <Section title="Conflicts">
-      <QueryBoundary query={conflicts}>
-        {(attempt) =>
-          attempt.conflicts.length === 0 ? (
-            <EmptyState>No Conflicts.</EmptyState>
-          ) : (
-            <Table caption="Conflicts">
-              <THead>
-                <TR>
-                  <TH>Code</TH>
-                  <TH>Element</TH>
-                  <TH>Members</TH>
-                  <TH>Resolution</TH>
-                </TR>
-              </THead>
-              <TBody>
-                {attempt.conflicts.map((c) => (
-                  <TR key={c.fingerprint}>
-                    <TD>
-                      <Badge tone="danger">{c.kind}</Badge>
-                    </TD>
-                    <TD>
-                      {c.partition}/{c.key ?? c.attribute ?? ''}
-                    </TD>
-                    <TD>{c.count}</TD>
-                    <TD>{resolutionOf(attempt, c)?.choice ?? 'Unresolved'}</TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
-          )
-        }
-      </QueryBoundary>
-    </Section>
-  );
-}
 
 function DiffSection({ domain, proposal }: { domain: string; proposal: string }) {
   const diff = useProposalDiff(domain, proposal);
@@ -97,7 +58,16 @@ function DiffSection({ domain, proposal }: { domain: string; proposal: string })
 }
 
 /** Proposal detail: summary, checks, reviews, Conflicts, diff, merge and close. */
-export function ProposalPage({ proposalId }: { proposalId: string }) {
+export function ProposalPage({
+  proposalId,
+  conflict = null,
+  onSelectConflict,
+}: {
+  proposalId: string;
+  /** Fingerprint of the Conflict open in the resolver. */
+  conflict?: string | null;
+  onSelectConflict: (fingerprint: string) => void;
+}) {
   const scope = useScope();
   const scopeSearch = useScopeSearch();
   const api = useKeeperApi();
@@ -215,21 +185,19 @@ export function ProposalPage({ proposalId }: { proposalId: string }) {
             )}
           </Section>
 
-          <ConflictsSection domain={scope.domain} proposal={detail.id} />
+          <MergeAttemptSection
+            domain={scope.domain}
+            proposal={detail}
+            selected={conflict}
+            onSelect={onSelectConflict}
+          />
           <DiffSection domain={scope.domain} proposal={detail.id} />
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <PlaceholderSection
-              area="Review"
-              screen="Extraction items"
-              content="Item list with confidence, match status and evidence; accept or reject per item."
-            />
-            <PlaceholderSection
-              area="Review"
-              screen="Conflict resolver"
-              content="Base, ours and theirs panes with choices and a custom value editor."
-            />
-          </div>
+          <PlaceholderSection
+            area="Review"
+            screen="Extraction items"
+            content="Item list with confidence, match status and evidence; accept or reject per item."
+          />
         </>
       )}
     </QueryBoundary>
