@@ -1,6 +1,7 @@
 import type {
   Branch,
   BranchName,
+  ConflictListParams,
   CreateBranchInput,
   CreateDomainInput,
   CreateProposalInput,
@@ -137,8 +138,11 @@ export interface KeeperApi {
   };
 
   readonly conflicts: {
-    /** The merge attempt of a Proposal: Conflicts, stored Resolutions, automatic Resolutions. */
-    list(domain: DomainId, proposal: string): Promise<MergeAttempt>;
+    /**
+     * The merge attempt of a Proposal: Conflicts, stored Resolutions, automatic Resolutions.
+     * Keeper pages the Conflicts (`params`) and recomputes the attempt when a head moved.
+     */
+    list(domain: DomainId, proposal: string, params?: ConflictListParams): Promise<MergeAttempt>;
     /** Stores the Resolution of one Conflict (the Conflict id is its fingerprint). */
     resolve(domain: DomainId, proposal: string, resolution: Resolution): Promise<Resolution>;
     /** Stores several Resolutions at once; answers with the updated attempt. */

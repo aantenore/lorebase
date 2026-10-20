@@ -632,7 +632,7 @@ Engineering notes:
 
 ### 6.15 Implementation notes
 
-Decisions taken in `lorebase_core` (`canonical`, `tree`, `revision`, `merge`) while implementing 6.1 to 6.10. They refine the text above; where a detail differs, this section describes the code. The engine is pure: it reads and writes through the `NodeStore`, `ObjectStore` and `RevisionGraph` protocols, and persisting merge attempts or committing a merged tree belongs to the commit pipeline and the store, which are not implemented yet.
+Decisions taken in `lorebase_core` (`canonical`, `tree`, `revision`, `merge`) while implementing 6.1 to 6.10. They refine the text above; where a detail differs, this section describes the code. The engine is pure: it reads and writes through the `NodeStore`, `ObjectStore` and `RevisionGraph` protocols, and persisting merge attempts or committing a merged tree belongs to the store (`lorebase_store.merging`, which commits like the commit pipeline of 6.6).
 
 **Canonical form**
 - `null` inside an array is kept, because positions are significant. `null` as an object member is omitted (null and absent are the same).
@@ -693,7 +693,6 @@ Choice meanings: `ours`, `theirs`, `base` take that side's value, element or sta
 - The `authority` merge policy: `Attribute.authority` is stored and validated as a Source reference, but the merge does not consult it.
 - The `newest_wins` merge policy.
 - Per-Attribute cast rules in merge policies: cast rules are defined per type pair (5.4) and `allow_checked_casts` is global.
-- Persistence of merge attempts and resolutions, and the commit of a merged tree (commit pipeline, 6.6).
 
 ---
 
@@ -1176,13 +1175,39 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
 | Neighborhood | `POST .../neighborhood` | |
 | Search | `POST .../search` | `{q, kinds, where, mode, query_vector, limit}` |
 | Operations | `POST .../operations/{op}/execute` | `{parameters, branch, dry_run, idempotency_key}` |
-| Proposals | `GET/POST .../proposals`, `GET .../proposals/{p}`, `GET .../proposals/{p}/diff`, `POST .../proposals/{p}/reviews`, `POST .../proposals/{p}/merge`, `POST .../proposals/{p}/close` | |
+| Proposals | `GET/POST .../proposals`, `GET/PATCH .../proposals/{p}`, `GET .../proposals/{p}/diff`, `POST .../proposals/{p}/reviews`, `POST .../proposals/{p}/merge`, `POST .../proposals/{p}/close` | merge: 200 with the new target head, or 409 `merge-conflicts` carrying `attempt` |
 | Proposal items | `GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide` | bulk accept/reject |
-| Conflicts | `GET .../proposals/{p}/conflicts`, `POST .../proposals/{p}/conflicts/{c}/resolution`, `POST .../proposals/{p}/conflicts:resolve` | bulk |
+| Conflicts | `GET .../proposals/{p}/conflicts`, `POST .../proposals/{p}/conflicts/{c}/resolution`, `POST .../proposals/{p}/conflicts:resolve` | `{c}` is the fingerprint; bulk re-runs the merge |
 | Sources | `GET/POST .../sources`, `POST .../sources/{s}/runs`, `GET .../sources/{s}/runs/{run}`, `POST /sources:infer` | |
 | Documents and extraction | `POST .../documents`, `GET .../documents/{doc}`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | |
 | Admin | `GET .../audit`, `GET/POST /principals`, `POST /api-keys`, `GET/POST .../grants` | |
 | Health | `GET /healthz`, `GET /readyz` | |
+
+**Proposal and merge shapes.** (settled in T22)
+
+- `POST .../proposals` takes `{source_ref, target_ref, title, description}`; the merge policy
+  is the Domain's `merge_policy` setting at creation. The response is the Proposal with
+  `reviews`, `approval` (`protected`, `required`, `approvals`, `changes_requested`,
+  `satisfied`), `checks` (`merge`: Conflict count of the latest attempt, `approvals`) and the
+  latest `attempt` (the merge preview).
+- `POST .../merge` runs or re-runs the merge with the stored resolutions. When it commits
+  (merge Revision with parents `[target head, source head]`, fast-forward, or up to date) it
+  answers 200 `{status: "merged", result, revision, proposal, attempt}`. When Conflicts remain
+  it answers 409 with the problem `merge-conflicts` whose `attempt` member holds the stored
+  attempt with the first page of open Conflicts. Merging into a protected branch without the
+  required approvals is 409 `approvals-required`. An `Idempotency-Key` replays a committed
+  merge.
+- `GET .../conflicts` returns the current attempt (`id`, `status`, `result`, `base`, `ours`,
+  `theirs`, counts per code, `resolutions` with `matched`, `unmatched_resolutions`,
+  `auto_resolutions`) with one page of `conflicts` (filters `kind`, comma-separated codes, and
+  `status` `open` or `resolved`; `next_cursor`). For an open Proposal the attempt is recomputed
+  when either head moved since (`recomputed`, `stale`); resolutions whose Conflict disappeared
+  stay stored and are reported as unmatched. Each Conflict is the core Conflict document
+  (6.15) plus `id` (its fingerprint), `status`, `members` and the applied `resolution`.
+- `POST .../conflicts/{c}/resolution` takes `{choice, value, values}`, validates it against
+  the Conflict of the current attempt and stores it without running the merge;
+  `POST .../conflicts:resolve` takes `{resolutions: [{fingerprint, choice, value, values}]}`,
+  stores them, re-runs the merge and returns the new attempt like the listing.
 
 ### 11.2 MCP (Herald)
 

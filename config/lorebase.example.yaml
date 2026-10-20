@@ -141,6 +141,17 @@ keeper:
                                         # directly to protected branches
     skip_expression_preconditions: false   # expressions are not enabled yet: true skips CEL
                                            # preconditions (reported) instead of refusing
+  proposals:                     # a Domain overrides required_approvals with its own
+                                 # `required_approvals` setting; its `merge_policy` setting
+                                 # holds the merge policy options of new Proposals
+    required_approvals: 1        # approvals needed to merge into a protected branch
+    allow_self_approval: false   # authors may approve their own Proposals into protected branches
+    changes_requested_blocks: true   # an outstanding request_changes review blocks such merges
+    auto_close_source_branch: false  # delete the source branch after the merge (never the
+                                     # default or a protected branch)
+    attempt_retention: 5         # merge attempts kept per Proposal (merged ones always kept)
+    preview_on_create: true      # compute the merge preview (Conflict count) on creation
+    max_resolutions: 1000        # resolutions accepted by one bulk request
 
 # Model inference, used by Scribe only. Lorebase never imports a model vendor library: every
 # chat model is an OpenAI-compatible HTTP endpoint, local or hosted.

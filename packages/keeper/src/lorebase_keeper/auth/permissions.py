@@ -9,6 +9,9 @@ Role semantics where the design table leaves room:
 - every role except `admin` is additive on top of read access, so a principal holding only
   `editor` can still read what it edits;
 - `maintainer` includes `editor` and `reviewer`, not `modeler`;
+- `editor` and `modeler` open Proposals (`proposal.create`) from the branches they change;
+  `reviewer` reviews them and resolves Conflicts; merging needs `proposal.merge`
+  (`maintainer`), into protected and unprotected branches alike;
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
   delete the Domain (`domain.delete`). `domain.create` is installation-level: installation
   administrators hold it, and so do admins of any Domain.
@@ -32,6 +35,7 @@ class Permission(StrEnum):
     OPERATION_EXECUTE_CUSTOM = "operation.execute_custom"
     SCHEMA_WRITE = "schema.write"
     SOURCE_MAP = "source.map"
+    PROPOSAL_CREATE = "proposal.create"
     PROPOSAL_REVIEW = "proposal.review"
     CONFLICT_RESOLVE = "conflict.resolve"
     PROPOSAL_MERGE = "proposal.merge"
@@ -51,7 +55,11 @@ INSTALLATION_PERMISSIONS = frozenset({Permission.PRINCIPAL_READ, Permission.DOMA
 principals who hold them through a role in at least one Domain."""
 
 _VIEWER = frozenset({Permission.SCHEMA_READ, Permission.DATA_READ})
-_EDITOR = _VIEWER | {Permission.BRANCH_CREATE, Permission.OPERATION_EXECUTE}
+_EDITOR = _VIEWER | {
+    Permission.BRANCH_CREATE,
+    Permission.OPERATION_EXECUTE,
+    Permission.PROPOSAL_CREATE,
+}
 _REVIEWER = _VIEWER | {Permission.PROPOSAL_REVIEW, Permission.CONFLICT_RESOLVE}
 
 BUILTIN_ROLES: Mapping[str, frozenset[Permission]] = MappingProxyType(
@@ -60,7 +68,8 @@ BUILTIN_ROLES: Mapping[str, frozenset[Permission]] = MappingProxyType(
         "explorer": _VIEWER | {Permission.VIEWS_WRITE},
         "editor": _EDITOR,
         "operator": _VIEWER | {Permission.OPERATION_EXECUTE_CUSTOM},
-        "modeler": _VIEWER | {Permission.SCHEMA_WRITE, Permission.SOURCE_MAP},
+        "modeler": _VIEWER
+        | {Permission.SCHEMA_WRITE, Permission.SOURCE_MAP, Permission.PROPOSAL_CREATE},
         "reviewer": _REVIEWER,
         "maintainer": _EDITOR
         | _REVIEWER
