@@ -87,7 +87,8 @@ class ReadCacheSettings(SectionModel):
 
 
 class ReadsSettings(SectionModel):
-    """Read responses: authorization of Revisions named by id or tag, response cache."""
+    """Read responses: authorization of Revisions named by id or tag, response cache, and the
+    database serving them (design 15.3)."""
 
     cache: ReadCacheSettings = Field(default_factory=ReadCacheSettings)
     reachability_max_depth: int = Field(
@@ -96,6 +97,12 @@ class ReadsSettings(SectionModel):
         description="Parent hops followed from branch heads when checking that a Revision or "
         "tag named by a caller with branch-scoped grants is reachable from a branch the caller "
         "may read. A Revision further back than this is refused (403).",
+    )
+    prefer_replica: bool = Field(
+        default=False,
+        description="Serve reads from the read replicas named by `database.read_dsn` when one "
+        "is fresh enough; otherwise, or when false, from the primary. Without replicas "
+        "configured it has no effect.",
     )
 
 

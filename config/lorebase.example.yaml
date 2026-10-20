@@ -56,6 +56,8 @@ keeper:
       ttl_s: 300
       max_body_bytes: 1048576    # larger responses are not cached
       time_travel_max_entries: 128   # entries for reads at another Revision; 0 never caches them
+    prefer_replica: false        # true: read endpoints use the replicas of database.read_dsn
+                                 # when one is fresh enough (see docs/deployment.md)
   readiness:
     timeout_s: 2                 # time budget of each /readyz check
     database_section: database   # settings section with the connection string; if absent the
@@ -207,6 +209,14 @@ database:
   statement_timeout_ms: 30000    # per statement; 0 disables
   migration_statement_timeout_ms: 0   # while migrations run; 0 disables
   application_name: lorebase     # shown in pg_stat_activity
+  read_dsn: []                   # read replicas (docs/deployment.md): one URL, a comma-separated
+                                 # string or a list; literals or secret references, e.g.
+                                 # [secret://env/LOREBASE_DB_READ_DSN]. Alias LOREBASE_DB_READ_DSN.
+                                 # Reads are spread round-robin; empty keeps every read on the
+                                 # primary. Each replica gets its own pool, sized as above
+  read_max_lag_ms: 5000          # a replica lagging more than this serves no reads; 0: unchecked
+  read_fallback_to_primary: true # reads no replica can serve go to the primary; false: 503
+  read_probe_timeout_ms: 2000    # budget to reach a replica and run its freshness probe
 
 # Storage engine. `layout` and `embeddings` are read once by the initial migration; the other
 # keys are read at runtime.

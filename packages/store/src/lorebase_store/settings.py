@@ -1,21 +1,24 @@
 """Settings sections owned by the store, registered with `lorebase_platform`.
 
-- `database` (design 16): connection string, pool and timeouts. The environment alias
-  `LOREBASE_DB_DSN` sets `database.dsn`, which is handled as a secret.
+- `database` (design 16): connection string, pool and timeouts, optional read replicas. The
+  environment alias `LOREBASE_DB_DSN` sets `database.dsn` and `LOREBASE_DB_READ_DSN` sets
+  `database.read_dsn`; both are handled as secrets.
 - `store`: physical layout and vector storage (read by the initial migration), bulk writes,
   tree node caching, commits and materialization (read at runtime).
 """
 
 from __future__ import annotations
 
-from pydantic import Field, SecretStr
+from typing import Any
+
+from pydantic import Field, SecretStr, field_validator
 
 from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 DATABASE_SECTION = "database"
 STORE_SECTION = "store"
-ENV_ALIASES = {"LOREBASE_DB_DSN": "dsn"}
+ENV_ALIASES = {"LOREBASE_DB_DSN": "dsn", "LOREBASE_DB_READ_DSN": "read_dsn"}
 DEFAULT_DSN = "postgresql+asyncpg://lorebase@localhost:5432/lorebase"
 
 PGVECTOR_HNSW_MAX_DIMS = 2000
@@ -52,6 +55,39 @@ class DatabaseSettings(SectionModel):
     application_name: str = Field(
         default="lorebase", min_length=1, description="Reported in pg_stat_activity."
     )
+    read_dsn: tuple[SecretValue, ...] = Field(
+        default=(),
+        description="Read replicas (design 15.3): one URL, a comma-separated string or a list "
+        "of URLs, each a literal or secret reference. Reads are spread round-robin; empty "
+        "keeps every read on the primary. Alias LOREBASE_DB_READ_DSN. Each replica gets its "
+        "own pool sized like the primary's.",
+    )
+    read_max_lag_ms: int = Field(
+        default=5000,
+        ge=0,
+        description="A replica whose replay lag exceeds this serves no reads; 0 disables the "
+        "lag check (the head check of a pinned read still applies).",
+    )
+    read_fallback_to_primary: bool = Field(
+        default=True,
+        description="Reads that no replica can serve (stale, lagging, unreachable) go to the "
+        "primary; false answers 503 instead, protecting the primary from read load.",
+    )
+    read_probe_timeout_ms: int = Field(
+        default=2000,
+        ge=1,
+        description="Time budget to reach a replica and run its freshness probe before the "
+        "next replica or the fallback is tried.",
+    )
+
+    @field_validator("read_dsn", mode="before")
+    @classmethod
+    def _split_read_dsn(cls, value: Any) -> Any:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
 
 
 class LayoutSettings(SectionModel):

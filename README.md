@@ -98,6 +98,8 @@ pnpm install
 pnpm dev                 # http://localhost:5173
 ```
 
+Several Keepers and Postgres read replicas: compose profile `scale-out`, see [docs/deployment.md](docs/deployment.md).
+
 Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app. See [apps/web/README.md](apps/web/README.md) for the web variables and the mock API.
 
 ## Architecture
@@ -187,6 +189,7 @@ Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).
 
 - [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, UI, security, roadmap
 - [Quickstart](docs/quickstart.md): what runs today, step by step
+- [Deployment and scale-out](docs/deployment.md): topology, what scales where, read replicas, sizing, sharding path
 - [Glossary](docs/glossary.md): the Lorebase vocabulary with examples
 - [Examples](examples/README.md): the merge demo, schema as code and the supply sample Domain
 - [Comparison](docs/comparison.md): Lorebase next to similar products

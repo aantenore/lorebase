@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_platform.settings import ConfigError, Settings
 from lorebase_store.migrations import head_revisions
+from lorebase_store.replicas import ReplicaState
 
 logger = logging.getLogger("lorebase.keeper.readiness")
 
@@ -41,6 +42,7 @@ class CheckStatus(StrEnum):
     """Outcome of one readiness check."""
 
     OK = "ok"
+    DEGRADED = "degraded"
     NOT_CONFIGURED = "not_configured"
     FAILED = "failed"
 
@@ -54,7 +56,7 @@ class CheckResult:
 
     @property
     def passed(self) -> bool:
-        """Failed checks make the service not ready; unconfigured ones do not."""
+        """Failed checks make the service not ready; degraded and unconfigured ones do not."""
         return self.status is not CheckStatus.FAILED
 
 
@@ -130,6 +132,60 @@ class DatabaseCheck:
                 f"migrations at {_join(current)}, expected {_join(expected)}",
             )
         return CheckResult(CheckStatus.OK)
+
+
+class ReplicaProbe(Protocol):
+    """What the replica check needs from the store's replica set."""
+
+    async def probe(self, timeout_s: float) -> list[ReplicaState]:
+        """Probe every replica."""
+        ...
+
+
+class ReplicaCheck:
+    """State of the read replicas.
+
+    Replicas that are unreachable or lag more than `max_lag_ms` degrade the service without
+    taking it out of rotation, since reads fall back to the primary, unless `required`: reads
+    are served by replicas only (`prefer_replica` with no fallback) and none is usable. The
+    detail names each replica by its configuration name and `host:port`, never a credential.
+    """
+
+    name = "database_replicas"
+
+    def __init__(
+        self,
+        replicas: ReplicaProbe,
+        *,
+        timeout_s: float,
+        max_lag_ms: int,
+        required: bool,
+    ) -> None:
+        self._replicas = replicas
+        self._timeout_s = timeout_s
+        self._max_lag_ms = max_lag_ms
+        self._required = required
+
+    async def __call__(self) -> CheckResult:
+        states = await self._replicas.probe(self._timeout_s)
+        usable = [s for s in states if s.usable(self._max_lag_ms)]
+        detail = "; ".join(self._describe(s) for s in states)
+        if len(usable) == len(states):
+            return CheckResult(CheckStatus.OK, detail)
+        if not usable and self._required:
+            return CheckResult(CheckStatus.FAILED, detail)
+        return CheckResult(CheckStatus.DEGRADED, detail)
+
+    def _describe(self, state: ReplicaState) -> str:
+        where = f"{state.name} ({state.endpoint})"
+        if not state.reachable:
+            return f"{where}: unreachable ({state.error})"
+        if state.lagging(self._max_lag_ms):
+            lag = "unknown" if state.lag_ms is None else f"{state.lag_ms:.0f} ms"
+            return f"{where}: lagging ({lag})"
+        if state.in_recovery is False:
+            return f"{where}: ok, not a standby"
+        return f"{where}: ok, lag {state.lag_ms or 0:.0f} ms"
 
 
 def _join(revisions: Collection[str]) -> str:
