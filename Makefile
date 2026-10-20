@@ -11,7 +11,7 @@ help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 sync: ## Install all workspace packages and dev tools
-	$(UV) sync
+	$(UV) sync --all-packages
 
 fmt: ## Format and apply safe lint fixes
 	$(UV) run ruff format $(PY_PATHS)
