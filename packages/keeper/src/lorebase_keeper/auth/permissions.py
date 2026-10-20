@@ -9,7 +9,9 @@ Role semantics where the design table leaves room:
 - every role except `admin` is additive on top of read access, so a principal holding only
   `editor` can still read what it edits;
 - `maintainer` includes `editor` and `reviewer`, not `modeler`;
-- `admin` holds every permission of the Domain (it is the Domain owner role).
+- `admin` holds every permission of the Domain (it is the Domain owner role); only it may
+  delete the Domain (`domain.delete`). `domain.create` is installation-level: installation
+  administrators hold it, and so do admins of any Domain.
 """
 
 from __future__ import annotations
@@ -38,11 +40,13 @@ class Permission(StrEnum):
     GRANT_MANAGE = "grant.manage"
     APIKEY_MANAGE = "apikey.manage"
     DOMAIN_SETTINGS = "domain.settings"
+    DOMAIN_DELETE = "domain.delete"
+    DOMAIN_CREATE = "domain.create"
     AUDIT_READ = "audit.read"
     PRINCIPAL_READ = "principal.read"
 
 
-INSTALLATION_PERMISSIONS = frozenset({Permission.PRINCIPAL_READ})
+INSTALLATION_PERMISSIONS = frozenset({Permission.PRINCIPAL_READ, Permission.DOMAIN_CREATE})
 """Permissions that are not about one Domain: installation administrators hold them, and so do
 principals who hold them through a role in at least one Domain."""
 

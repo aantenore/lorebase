@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, insert, select
+from sqlalchemy import Table, delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.models import metadata
@@ -61,3 +61,37 @@ class DomainRepository:
         if found is None:
             raise DomainNotFoundError(domain_id)
         return found
+
+    async def list(self, *, limit: int, after: str | None = None) -> list[DomainRow]:
+        """Domains ordered by id, starting after `after`."""
+        query = select(DOMAINS).order_by(DOMAINS.c.id).limit(limit)
+        if after is not None:
+            query = query.where(DOMAINS.c.id > after)
+        result = await self._session.execute(query)
+        return [DomainRow(**row) for row in result.mappings()]
+
+    async def update(
+        self,
+        domain_id: str,
+        *,
+        display_name: str | None = None,
+        description: str | None = None,
+    ) -> DomainRow | None:
+        """Change display metadata; `None` leaves a field as it is. Returns the updated row."""
+        values: dict[str, Any] = {}
+        if display_name is not None:
+            values["display_name"] = display_name
+        if description is not None:
+            values["description"] = description or None
+        if values:
+            await self._session.execute(
+                update(DOMAINS).where(DOMAINS.c.id == domain_id).values(**values)
+            )
+        return await self.get(domain_id)
+
+    async def delete(self, domain_id: str) -> bool:
+        """Delete a Domain; every Domain-scoped row goes with it (foreign key cascade)."""
+        result = await self._session.execute(
+            delete(DOMAINS).where(DOMAINS.c.id == domain_id).returning(DOMAINS.c.id)
+        )
+        return result.scalar_one_or_none() is not None
