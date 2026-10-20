@@ -1,0 +1,28 @@
+# Lorebase example configuration.
+#
+# Point LOREBASE_CONFIG at a copy of this file. Precedence, lowest to highest:
+#   code defaults < this file < environment variables LOREBASE__SECTION__KEY
+# (nested keys use more double underscores: LOREBASE__INFERENCE__LLM__BASE_URL).
+#
+# The values below are the defaults compiled into the code; every key is optional.
+# Secret settings accept a literal, `secret://env/NAME` (environment variable) or
+# `secret://file//absolute/path` (file content).
+
+logging:
+  level: INFO                    # CRITICAL | ERROR | WARNING | INFO | DEBUG
+  format: json                   # json | text
+  redact_keys:                   # field names whose values are masked in every log record
+    - password
+    - secret
+    - token
+    - api_key
+    - authorization
+    - credential
+  redact_min_length: 4           # shorter secret values are not masked inside free text
+
+telemetry:
+  otlp_endpoint: null            # e.g. http://otel-collector:4317; unset disables telemetry
+  service_name: lorebase
+  service_namespace: lorebase
+  sample_ratio: 0.1              # fraction of root traces sampled, 0 to 1
+  metric_export_interval_s: 60
