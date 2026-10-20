@@ -6,7 +6,9 @@
 3. canonicalize and hash new objects; insert them with `ON CONFLICT DO NOTHING`;
 4. apply the changes to the tree by path copying; insert new nodes;
 5. insert the Revision with parent `H`, its changeset and provenance entries;
-6. apply the changeset to the materialized head;
+6. apply the changeset to the materialized head; when the schema changed, per-Attribute
+   indexes that would reject the new rows are dropped first and missing ones created after
+   (`lorebase_store.indexes`);
 7. compare-and-swap the ref from `H` to the new Revision;
 8. write the audit entry and the outbox event;
 9. commit.
@@ -89,6 +91,7 @@ from lorebase_store.commit.schema import (
     load_compiled,
     object_type_of,
 )
+from lorebase_store.indexes import BranchIndexes
 from lorebase_store.materialize.apply import MaterializedChange, apply_changeset
 from lorebase_store.materialize.rows import (
     ELEMENT_PROVENANCE_KEY,
@@ -292,6 +295,10 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         *(ProvenanceRow.from_entry(e) for e in prepared.provenance),
     ]
     stored = await _store_revision(session, request.runtime, revision, prepared, provenance_rows)
+    indexes = None
+    if prepared.schema_hash is not None:
+        indexes = BranchIndexes(session, domain_id, branch, settings=settings.indexes)
+        await indexes.retire(prepared.schema)
     await apply_changeset(
         session,
         domain_id,
@@ -304,6 +311,8 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         refresh_kinds=prepared.refresh_kinds,
         settings=settings,
     )
+    if indexes is not None:
+        await indexes.ensure(prepared.schema)
     try:
         version = await refs.compare_and_swap(
             branch,

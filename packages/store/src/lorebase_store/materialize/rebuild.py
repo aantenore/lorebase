@@ -22,6 +22,7 @@ from lorebase_store.commit.schema import (
     element_from_body,
     schema_from_elements,
 )
+from lorebase_store.indexes import BranchIndexes
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
@@ -113,6 +114,8 @@ async def materialize_revision(
     objects = PgObjectStore(session, domain_id, writes=settings.writes, batch=batch)
     tree = await nodes.load_tree(head.root)
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
+    indexes = BranchIndexes(session, domain_id, branch, settings=settings.indexes)
+    await indexes.retire(schema)
     await repository.set_schema(SchemaRow(schema_hash, compile_schema(schema)))
     await repository.rebuild_history(head.id)
     records = links = 0
@@ -160,6 +163,7 @@ async def materialize_revision(
             )
         else:
             links += len(entries)
+    await indexes.ensure(schema)
     return RebuildReport(branch=branch, head=head.id, records=records, links=links)
 
 

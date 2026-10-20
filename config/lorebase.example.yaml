@@ -196,6 +196,7 @@ database:
   statement_timeout_ms: 30000    # per statement; 0 disables
   migration_statement_timeout_ms: 0   # while migrations run; 0 disables
   application_name: lorebase     # shown in pg_stat_activity
+  prepared_statement_cache_size: 500  # prepared statements per connection (asyncpg); 0 disables
 
 # Storage engine. `layout` and `embeddings` are read once by the initial migration; the other
 # keys are read at runtime.
@@ -218,3 +219,19 @@ store:
     text_search_config: simple   # Postgres text search configuration of Record search vectors
     read_batch_rows: 5000        # rows or object bodies per query in rebuild and verification
     verify_max_divergences: 1000 # divergences listed by a verification report
+  indexes:                       # per-Attribute partial indexes on mat_records
+    enabled: true                # false: an administrator manages them (commit role must own
+                                 # mat_records otherwise)
+    inline_max_rows: 50000       # larger Kinds get their indexes from a queued concurrent build
+    job_batch: 10                # queued index jobs claimed per runner pass
+  reads:
+    schema_cache_entries: 256    # compiled schemas per process, keyed by head Revision id
+    max_page_rows: 500           # largest page of Records, Links or query results
+    max_search_rows: 100         # largest full-text search result
+    max_hydrate_keys: 1000       # Records per batched hydration
+  traverse:                      # neighborhood caps
+    max_depth: 3                 # hops
+    max_seeds: 50                # seed Records
+    max_fanout: 50               # Links followed per Record and hop
+    max_links: 2000              # Links walked, breadth first
+    max_nodes: 200               # Records returned, nearest first

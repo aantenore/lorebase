@@ -33,11 +33,13 @@ def create_engine(
     timeout = (
         database.statement_timeout_ms if statement_timeout_ms is None else statement_timeout_ms
     )
-    connect_args = {
+    connect_args: dict[str, Any] = {
         "server_settings": {
             "application_name": database.application_name,
             "statement_timeout": str(timeout),
-        }
+        },
+        # Statements are prepared once per connection and SQL text, then reused.
+        "prepared_statement_cache_size": database.prepared_statement_cache_size,
     }
     pool_args: dict[str, Any] = (
         {

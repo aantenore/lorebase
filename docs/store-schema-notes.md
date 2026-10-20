@@ -61,6 +61,12 @@ difference).
   the HNSW cosine index `embeddings_hnsw_<dims> ... WHERE dims = <dims>` for the configured
   dimension. Index names starting with `embeddings_hnsw_` or `mat_records_attr_` (per-Attribute
   indexes of the materializer) are managed at runtime and ignored by schema comparison.
+- Per-Attribute indexes (`lorebase_store.indexes`) are created on the hash partition that holds
+  the Domain, not on the partitioned parent: one partition is scanned and locked, `CONCURRENTLY`
+  works, and a unique index needs no partition key column. Each one is partial on literal
+  `domain_id`, `branch` and `kind_id`, so a query must repeat those literals to use it; a JSON
+  comment on the index (`domain`, `branch`, `kind`, `attribute`, `unique`, `cast`) is how
+  existing indexes are found again. Index jobs use `jobs.type = 'store.index'`.
 - Extensions `pg_trgm` and `vector` are created if missing and never dropped on downgrade. Where
   the migration role cannot create extensions, an administrator creates them first.
 

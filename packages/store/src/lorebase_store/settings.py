@@ -3,7 +3,8 @@
 - `database` (design 16): connection string, pool and timeouts. The environment alias
   `LOREBASE_DB_DSN` sets `database.dsn`, which is handled as a secret.
 - `store`: physical layout and vector storage (read by the initial migration), bulk writes,
-  tree node caching, commits and materialization (read at runtime).
+  tree node caching, commits, materialization, per-Attribute indexes, reads and neighborhood
+  traversal (read at runtime).
 """
 
 from __future__ import annotations
@@ -51,6 +52,12 @@ class DatabaseSettings(SectionModel):
     )
     application_name: str = Field(
         default="lorebase", min_length=1, description="Reported in pg_stat_activity."
+    )
+    prepared_statement_cache_size: int = Field(
+        default=500,
+        ge=0,
+        description="Prepared statements kept per connection by the asyncpg driver, keyed by "
+        "SQL text; 0 disables the cache.",
     )
 
 
@@ -138,8 +145,65 @@ class MaterializeSettings(SectionModel):
     )
 
 
+class IndexSettings(SectionModel):
+    """Per-Attribute partial indexes on `mat_records` (`lorebase_store.indexes`)."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Create and drop per-Attribute indexes when schemas change. The role that "
+        "commits must own mat_records; false leaves index management to an administrator.",
+    )
+    inline_max_rows: int = Field(
+        default=50000,
+        ge=0,
+        description="Kinds with at most this many Records on the branch get their indexes "
+        "inside the commit transaction; larger ones are queued as jobs and built concurrently.",
+    )
+    job_batch: int = Field(
+        default=10, ge=1, description="Queued index jobs claimed per run of the job runner."
+    )
+
+
+class ReadSettings(SectionModel):
+    """Read primitives on materialized heads (`lorebase_store.reads`)."""
+
+    schema_cache_entries: int = Field(
+        default=256,
+        ge=0,
+        description="Compiled schemas cached per process, keyed by Domain and head Revision "
+        "id; 0 disables the cache.",
+    )
+    max_page_rows: int = Field(
+        default=500, ge=1, description="Largest page of Records, Links or query results."
+    )
+    max_search_rows: int = Field(
+        default=100, ge=1, description="Largest number of full-text search results."
+    )
+    max_hydrate_keys: int = Field(
+        default=1000, ge=1, description="Records fetched by one batched hydration."
+    )
+
+
+class TraverseSettings(SectionModel):
+    """Neighborhood traversal over `mat_links` (`lorebase_store.traverse`)."""
+
+    max_depth: int = Field(default=3, ge=1, le=10, description="Deepest neighborhood, in hops.")
+    max_seeds: int = Field(default=50, ge=1, description="Seed Records of one neighborhood.")
+    max_fanout: int = Field(
+        default=50, ge=1, description="Links followed from one Record in one hop."
+    )
+    max_links: int = Field(
+        default=2000,
+        ge=1,
+        description="Links walked by one neighborhood; the walk stops, breadth first, there.",
+    )
+    max_nodes: int = Field(
+        default=200, ge=1, description="Records returned by one neighborhood, nearest first."
+    )
+
+
 class StoreSettings(SectionModel):
-    """Schema shape, bulk writes, node cache, commits and materialization."""
+    """Schema shape, bulk writes, node cache, commits, materialization, indexes and reads."""
 
     layout: LayoutSettings = Field(default_factory=LayoutSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
@@ -147,6 +211,9 @@ class StoreSettings(SectionModel):
     nodes: NodeSettings = Field(default_factory=NodeSettings)
     commit: CommitSettings = Field(default_factory=CommitSettings)
     materialize: MaterializeSettings = Field(default_factory=MaterializeSettings)
+    indexes: IndexSettings = Field(default_factory=IndexSettings)
+    reads: ReadSettings = Field(default_factory=ReadSettings)
+    traverse: TraverseSettings = Field(default_factory=TraverseSettings)
 
 
 register_section(DATABASE_SECTION, DatabaseSettings, env_aliases=ENV_ALIASES)
