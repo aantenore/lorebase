@@ -15,17 +15,29 @@ cp .env.example .env     # mock mode by default
 pnpm dev                 # http://localhost:5173
 ```
 
-| Script           | What it does                                   |
-| ---------------- | ---------------------------------------------- |
-| `pnpm dev`       | Vite dev server with HMR                       |
-| `pnpm build`     | Type-check, then production build into `dist/` |
-| `pnpm preview`   | Serve the production build locally             |
-| `pnpm test`      | Unit and component tests (Vitest, jsdom)       |
-| `pnpm typecheck` | `tsc --noEmit`                                 |
-| `pnpm lint`      | ESLint (type-aware) and Prettier check         |
-| `pnpm format`    | Prettier write                                 |
+| Script             | What it does                                   |
+| ------------------ | ---------------------------------------------- |
+| `pnpm dev`         | Vite dev server with HMR                       |
+| `pnpm build`       | Type-check, then production build into `dist/` |
+| `pnpm preview`     | Serve the production build locally             |
+| `pnpm test`        | Unit and component tests (Vitest, jsdom)       |
+| `pnpm typecheck`   | `tsc --noEmit`                                 |
+| `pnpm lint`        | ESLint (type-aware) and Prettier check         |
+| `pnpm format`      | Prettier write                                 |
+| `pnpm screenshots` | Regenerate the PNGs in `docs/images/`          |
 
 While iterating, run only the tests that cover what you changed, for example `pnpm test src/features/review`.
+
+## Screenshots
+
+`pnpm screenshots` regenerates the pictures used by `docs/tour.md` and the root README. It builds the app in mock mode into `node_modules/.cache/screenshots-dist`, serves it with `vite preview` on a free port, opens each route in Chromium (1440x900, light theme, plus one dark Explorer shot) and writes `docs/images/<screen>.png`. It does not need a backend or a `.env` file.
+
+```bash
+pnpm exec playwright install chromium   # once per machine
+pnpm screenshots
+```
+
+The routes, viewport, theme and the browser flags live in the `SHOTS` and `CONFIG` constants at the top of `scripts/screenshots.ts`. The Canvas needs WebGL 2, so Chromium is started with SwiftShader flags; if a graph does not draw, the script says so and the list fallback is captured instead.
 
 ## Configuration
 
