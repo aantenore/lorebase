@@ -202,17 +202,27 @@ async def resolve_point(
         ref, revision = await _locate_point(session, guard, domain, branch, at)
         scope = KindScope(guard, granted)
     if revision.id == ref.head:
-        materialized = await MaterializedRepository(
-            session, domain.id, ref.name, writes=runtime.store_settings.writes
-        ).schema()
-        if materialized is not None:
-            schema = runtime.schemas.get(domain.id, materialized.schema_hash)
-            if schema is None:
-                schema = load_compiled(materialized.compiled)
-                runtime.schemas.put(domain.id, materialized.schema_hash, schema)
+        schema = await branch_schema(session, runtime, domain.id, ref.name)
+        if schema is not None:
             return ReadPoint(domain, ref.name, revision, schema, ServedFrom.MATERIALIZED, scope)
     schema = await schema_at(session, runtime, domain.id, revision)
     return ReadPoint(domain, ref.name, revision, schema, ServedFrom.TREE, scope)
+
+
+async def branch_schema(
+    session: AsyncSession, runtime: ReadRuntime, domain_id: str, branch: str
+) -> Schema | None:
+    """Compiled schema of a branch head, cached by schema hash; None when not materialized."""
+    materialized = await MaterializedRepository(
+        session, domain_id, branch, writes=runtime.store_settings.writes
+    ).schema()
+    if materialized is None:
+        return None
+    schema = runtime.schemas.get(domain_id, materialized.schema_hash)
+    if schema is None:
+        schema = load_compiled(materialized.compiled)
+        runtime.schemas.put(domain_id, materialized.schema_hash, schema)
+    return schema
 
 
 async def _open_point(

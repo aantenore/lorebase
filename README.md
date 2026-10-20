@@ -78,6 +78,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
 | Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
 | Operations | Garbage collection, Domain backup and restore bundles, a Postgres job queue ([docs/operations.md](docs/operations.md)) | Done | M5, landed early |
+| Agent access | Context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([docs/agents.md](docs/agents.md)) | Done | M3, landed early |
 | Agent access | Python client and CLI | Planned (empty packages) | M1 |
 | Agent access | MCP server (Herald) | Planned | M3 |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
@@ -193,7 +194,7 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine and the REST API, Proposals included, are done; the client, the CLI, lineage and history endpoints and the 1M-Record performance baseline are not.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
 
 Next: the Python client and the CLI, lineage and history endpoints and the 1M-Record baseline (finishing M1), expressions accepted in schema change sets, Source ingestion (M2), Herald and custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
 
@@ -218,6 +219,7 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Operations](docs/operations.md): garbage collection, backup and restore of a Domain
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
 - [Performance](docs/performance.md): read latency baseline and how to reproduce it
+- [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
 - [Comparison](docs/comparison.md): Lorebase next to similar products
 - [Roadmap](docs/roadmap.md)
 - [Glossary](docs/glossary.md), [examples](examples/README.md), [M1 plan](docs/plan/m1.md)

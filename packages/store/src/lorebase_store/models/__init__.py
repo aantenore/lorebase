@@ -41,6 +41,7 @@ from lorebase_store.models.versioning import (
     StoredObject,
     TreeNode,
 )
+from lorebase_store.models.webhooks import Webhook, WebhookDelivery
 
 metadata = Base.metadata
 
@@ -81,5 +82,7 @@ __all__ = [
     "StoredObject",
     "TreeNode",
     "VaultEntry",
+    "Webhook",
+    "WebhookDelivery",
     "metadata",
 ]

@@ -47,6 +47,7 @@ class CachedResponse:
     body: bytes
     headers: Mapping[str, str] = field(default_factory=dict)
     time_travel: bool = False
+    media_type: str = JSON
 
 
 class ResponseCache(Protocol):
@@ -158,16 +159,41 @@ async def respond(
     or several joined for a diff); `variant` anything else it depends on, such as the Kinds
     the caller may read; `headers` are added to every answer.
     """
-    key = cache_key(request, domain_id, revision, variant)
+
+    async def body() -> tuple[bytes, str]:
+        return (await produce()).model_dump_json().encode(), JSON
+
+    return await respond_with(
+        request,
+        cache,
+        cache_key(request, domain_id, revision, variant),
+        body,
+        time_travel=time_travel,
+        headers=headers,
+    )
+
+
+async def respond_with(
+    request: Request,
+    cache: ResponseCache | None,
+    key: CacheKey,
+    produce: Callable[[], Awaitable[tuple[bytes, str]]],
+    *,
+    time_travel: bool = False,
+    headers: Mapping[str, str] | None = None,
+) -> Response:
+    """Answer a read under `key`: 304, a cached body, or `produce()` (body and media type),
+    cached. The ETag is `entity_tag(key)`."""
     tag = entity_tag(key)
     common = {"ETag": tag, "Cache-Control": CACHE_CONTROL, **(headers or {})}
     if _matches(request, tag):
         return Response(status_code=304, headers=common)
     cached = None if cache is None else await cache.get(key)
     if cached is not None:
-        return Response(cached.body, media_type=JSON, headers={**cached.headers, **common})
-    model = await produce()
-    body = model.model_dump_json().encode()
+        return Response(
+            cached.body, media_type=cached.media_type, headers={**cached.headers, **common}
+        )
+    body, media_type = await produce()
     if cache is not None:
-        await cache.put(key, CachedResponse(body, dict(headers or {}), time_travel))
-    return Response(body, media_type=JSON, headers=common)
+        await cache.put(key, CachedResponse(body, dict(headers or {}), time_travel, media_type))
+    return Response(body, media_type=media_type, headers=common)
