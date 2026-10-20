@@ -1,0 +1,26 @@
+[project]
+name = "lorebase-herald"
+version = "0.1.0"
+description = "Lorebase Herald: MCP server over the Keeper REST API"
+requires-python = ">=3.12"
+# mcp: the official Model Context Protocol SDK (tools, resources and prompts; stdio and
+#   Streamable HTTP transports; in-memory client sessions for tests).
+# httpx: HTTP client for Keeper's REST API.
+# pydantic: tool input schemas and the `herald` settings section.
+# lorebase-platform: layered settings, secret references and structured logging.
+dependencies = [
+  "lorebase-platform",
+  "mcp>=2.3,<3",
+  "httpx>=0.27",
+  "pydantic>=2.7",
+]
+
+[project.scripts]
+lorebase-herald = "lorebase_herald.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lorebase_herald"]

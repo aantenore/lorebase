@@ -11,6 +11,7 @@ dependencies = [
   "lorebase-keeper",
   "lorebase-client",
   "lorebase-cli",
+  "lorebase-herald",
 ]
 
 [dependency-groups]
@@ -41,6 +42,7 @@ lorebase-store = { workspace = true }
 lorebase-keeper = { workspace = true }
 lorebase-client = { workspace = true }
 lorebase-cli = { workspace = true }
+lorebase-herald = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -59,6 +61,7 @@ known-first-party = [
   "lorebase_keeper",
   "lorebase_client",
   "lorebase_cli",
+  "lorebase_herald",
 ]
 
 [tool.mypy]
@@ -72,6 +75,7 @@ mypy_path = [
   "packages/keeper/src",
   "packages/client/src",
   "packages/cli/src",
+  "packages/herald/src",
 ]
 explicit_package_bases = true
 namespace_packages = true

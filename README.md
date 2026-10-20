@@ -11,11 +11,11 @@
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today. The MCP server, the CLI, the Python client, Source syncs and document extraction do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
+> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so does the MCP server (Herald). The CLI, the Python client, Source syncs and document extraction do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
 
 ## What it is
 
-Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. Teams model what the company knows as a typed ontology (Kinds, Attributes, Relations, Operations), keep it in Postgres, and change it the way developers change code: on a branch, reviewed, merged, traceable. It brings git-like branching and merging for knowledge, covering the schema and the data together, with three-way conflicts resolved per attribute. Agents live outside Lorebase, in any framework. They read through a REST API that never calls a language model, so answers are deterministic and arrive in milliseconds, and they write only through governed Operations. Lorebase is MCP-native by design: the MCP server (Herald) is next on the roadmap and wraps the REST API that exists today. It is meant as an open-source alternative to proprietary ontology platforms, small enough to run on a laptop with `docker compose`.
+Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. Teams model what the company knows as a typed ontology (Kinds, Attributes, Relations, Operations), keep it in Postgres, and change it the way developers change code: on a branch, reviewed, merged, traceable. It brings git-like branching and merging for knowledge, covering the schema and the data together, with three-way conflicts resolved per attribute. Agents live outside Lorebase, in any framework. They read through a REST API that never calls a language model, so answers are deterministic and arrive in milliseconds, and they write only through governed Operations. Lorebase is MCP-native by design: the MCP server (Herald) wraps the REST API for any MCP host. It is meant as an open-source alternative to proprietary ontology platforms, small enough to run on a laptop with `docker compose`.
 
 ![Lorebase web app: Explorer, a Record, the Canvas graph and the Review conflict resolver](docs/images/tour.gif)
 
@@ -80,7 +80,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Operations | Garbage collection, Domain backup and restore bundles, a Postgres job queue ([docs/operations.md](docs/operations.md)) | Done | M5, landed early |
 | Agent access | Context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([docs/agents.md](docs/agents.md)) | Done | M3, landed early |
 | Agent access | Python client and CLI | Planned (empty packages) | M1 |
-| Agent access | MCP server (Herald) | Planned | M3 |
+| Agent access | MCP server (Herald) on stdio and Streamable HTTP ([docs/mcp.md](docs/mcp.md)) | Done | M3, landed early |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
 | Ingestion | CSV, Parquet and Postgres Sources with snapshot and incremental syncs | Planned | M2 |
 | Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
@@ -141,7 +141,7 @@ flowchart LR
   end
 
   subgraph Lorebase
-    H[Herald<br/>MCP server]:::planned
+    H[Herald<br/>MCP server]
     K[Keeper<br/>REST API, auth, commit pipeline,<br/>merge engine, read path]
     S[Scribe<br/>Source syncs, extraction,<br/>embeddings, jobs]:::planned
   end
@@ -153,7 +153,7 @@ flowchart LR
   end
 
   A1 -- MCP --> H
-  A1 -. REST today .-> K
+  A1 -- REST --> K
   H -- REST --> K
   A2 -- REST --> K
   K --> V
@@ -166,7 +166,7 @@ flowchart LR
   classDef planned stroke-dasharray: 4 3
 ```
 
-Dashed boxes do not exist yet. The agent read path is `agent -> Keeper -> materialized head`, and later `agent -> Herald -> Keeper -> materialized head`. It never touches a model; only Scribe, offline, will. Postgres is the only required store, with pgvector for optional semantic search. Details: [docs/design.md](docs/design.md).
+Dashed boxes do not exist yet. The agent read path is `agent -> Keeper -> materialized head`, or `agent -> Herald -> Keeper -> materialized head` over MCP. It never touches a model; only Scribe, offline, will. Postgres is the only required store, with pgvector for optional semantic search. Details: [docs/design.md](docs/design.md).
 
 ## How it compares
 
@@ -194,9 +194,9 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine and the REST API, Proposals included, are done; the client, the CLI, lineage and history endpoints and the 1M-Record performance baseline are not.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
 
-Next: the Python client and the CLI, lineage and history endpoints and the 1M-Record baseline (finishing M1), expressions accepted in schema change sets, Source ingestion (M2), Herald and custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
+Next: the Python client and the CLI, lineage and history endpoints and the 1M-Record baseline (finishing M1), expressions accepted in schema change sets, Source ingestion (M2), custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|
@@ -220,6 +220,7 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
 - [Performance](docs/performance.md): read latency baseline and how to reproduce it
 - [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
+- [MCP server](docs/mcp.md): Herald, its tools and its configuration for MCP hosts
 - [Comparison](docs/comparison.md): Lorebase next to similar products
 - [Roadmap](docs/roadmap.md)
 - [Glossary](docs/glossary.md), [examples](examples/README.md), [M1 plan](docs/plan/m1.md)

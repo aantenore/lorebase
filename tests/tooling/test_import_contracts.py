@@ -20,6 +20,7 @@ ROOT_PACKAGES = [
     "lorebase_keeper",
     "lorebase_client",
     "lorebase_cli",
+    "lorebase_herald",
 ]
 
 
@@ -65,6 +66,14 @@ def test_repository_respects_contracts() -> None:
         (("lorebase_inference", "lorebase_store"), "inference depends on core and platform only"),
         (("lorebase_cli", "lorebase_store"), "cli depends on client only"),
         (("lorebase_platform", "lorebase_core"), "platform has no internal dependencies"),
+        (
+            ("lorebase_herald", "lorebase_inference"),
+            "herald depends on platform only and never on inference",
+        ),
+        (
+            ("lorebase_herald", "lorebase_store"),
+            "herald depends on platform only and never on inference",
+        ),
     ],
 )
 def test_forbidden_import_breaks_contract(
