@@ -1,0 +1,116 @@
+# Roadmap
+
+The public roadmap of Lorebase, by milestone. It is derived from [section 18 of the design](design.md#18-roadmap) and from what is on `main` today. A checked box means the item is merged on `main` and covered by tests. An unchecked box is not done, even when part of it exists; the note says what is missing. Dates are deliberately absent: the order is firm, the timing is not.
+
+Lorebase is pre-alpha. Nothing is released, no tag exists and interfaces may change.
+
+## Next up
+
+1. Proposals, reviews, merge and Conflict resolution over REST (M1, task T22). The merge engine is finished; this wires it to the API.
+2. Python client and CLI (M1, T24 and T25).
+3. Lineage and history endpoints, then the 1M-Record performance baseline (M1, T23 and T28).
+4. Scribe and Source ingestion (M2).
+
+The ordered task list of M1 is in the [M1 plan](plan/m1.md).
+
+## M1: Engine and API
+
+Goal: define a Domain in YAML, import data, branch, change, merge with Conflicts resolved through the API, diff, and read Records in milliseconds, all through REST and CLI.
+
+Engine and storage
+
+- [x] Canonical JSON and content hashing, type system and value encoding
+- [x] Schema element models with static validation; schema as YAML (load and dump, stable ids, renames keep identity)
+- [x] Canonical HAMT trees, tree diff, immutable Revisions, ancestry and merge base
+- [x] Data validation against the schema
+- [x] Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies `prefer`, cascade and defaults
+- [ ] Merge policies `authority` and `newest_wins`
+- [x] Postgres schema and Alembic migrations, row-level security, store repositories
+- [x] Commit pipeline, materializer and verification
+- [x] In-memory merge demo ([examples/merge_demo.py](../examples/merge_demo.py))
+
+Keeper REST API
+
+- [x] Application skeleton: settings, structured logging, OpenTelemetry, error format, health and readiness
+- [x] Authentication with API keys and OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log
+- [x] Domains, branches and tags
+- [x] Schema read and validate, schema change sets
+- [x] Built-in Operations: create, update, delete, link, unlink, bulk import, with dry run and idempotency
+- [x] Records and Links, the query DSL, traversal, neighborhood, lexical search, time travel, ETags and conditional reads
+- [x] Revisions, branch log and diff
+- [ ] Proposals, reviews, merge and Conflict resolution API
+- [ ] Lineage and history endpoints (a lineage summary is available on Record reads; per-Record lineage and history endpoints are not)
+- [ ] Expressions (CEL): schemas that use them are refused for now
+
+Clients and operations
+
+- [ ] Python client
+- [ ] CLI
+- [x] Docker image and docker compose for Postgres, migrations and Keeper
+- [x] CI: lint, types, import contracts, unit and integration tests; CodeQL, Scorecard, SBOM and pinned actions
+- [x] Inference interfaces and a deterministic fake provider (no model calls in M1; the read path cannot import them)
+- [x] Read replica routing with a freshness guard and a `scale-out` compose profile ([deployment](deployment.md)). The design lists this under M5; it landed early. Individual read endpoints adopt it incrementally.
+- [ ] Performance baseline on the 1M-Record fixture
+- [ ] M1 documentation and release checklist
+
+Acceptance (design 18): a Domain applied from YAML, filled by CLI import of 1M Records, branched, merged with Conflicts resolved through the API and diffed, with property tests for hashing, merge and diff laws, and the read targets met on the 1M fixture. Not met yet.
+
+## M2: Structured ingestion and exploration
+
+Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario) run end to end.
+
+- [ ] Scribe job runner on the Postgres job queue
+- [ ] CSV, Parquet and Postgres Sources, snapshot and incremental sync
+- [ ] Schema inference from source metadata, with a golden test on the example ERP schema
+- [ ] Source branches, merge policies and Lineage for syncs
+- [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
+- [x] Web app shell, Explorer, Canvas (graph and schema graph) and Review screens on the mock API
+- [ ] Web app verified against a live Keeper
+- [ ] Review: Proposal list and detail, schema and data diff and merge against live Proposals
+- [ ] Canvas rendering 5k nodes and 10k edges smoothly, with a worker layout
+
+## M3: Governance and agents
+
+Goal: day 5 of the proof scenario, an external agent connected through MCP.
+
+- [ ] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP
+- [ ] Custom Operations with CEL, review policies, outbox and webhooks
+- [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (Kind-scoped grants on reads are already enforced)
+- [x] Branch protection on the default branch
+- [ ] Proposal checks and required approvals
+- [ ] Modeler with every editor (schema editing exists on the mock API; Operation, Derivation and Source editors are not built)
+- [ ] Conflict resolver against live data (the screen exists on the mock API)
+- [ ] Traits in queries
+
+## M4: Documents, extraction and semantic search
+
+Goal: day 3 of the proof scenario, on the sample contracts.
+
+- [ ] Document store interface and parsers
+- [ ] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions
+- [ ] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles for local models and a LiteLLM proxy
+- [ ] Extraction Proposal items and evidence Review UI
+- [ ] Embedding jobs and hybrid search (the read path already ranks stored vectors by caller-supplied query vectors; nothing computes embeddings)
+- [ ] Derivations: expression, aggregate and path
+
+## M5: Enterprise hardening and 1.0
+
+- [ ] Overlay branch materialization
+- [ ] PII vault storage and erasure
+- [ ] Helm chart
+- [ ] Garbage collection of unreachable objects
+- [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
+- [ ] Backup and restore guide, audit chain verification, signed images
+- [ ] HTTP JSON Source
+- [ ] LinkML schema import and export
+- [ ] Documentation site and API stability guarantees for `/api/v1`
+- [ ] Threat model published and the security review checklist completed
+- [ ] Full proof scenario (days 1 to 5) as an automated end-to-end test
+
+## Not on the roadmap
+
+These are written down as non-goals or anti-goals in the [design](design.md#2-goals-non-goals-anti-goals): a model in the agent read path, direct model writes to protected branches, schemaless writes, a second required datastore, an agent runtime, an ETL platform, BI dashboards, OWL reasoning, and multi-region active-active writes.
+
+## How to influence it
+
+Open a [discussion](https://github.com/aantenore/lorebase/discussions) with the domain you would model and what your agents need to read or change. Real scenarios move items up. Design changes are proposed as issues that cite the section of the design they challenge; see [CONTRIBUTING.md](../CONTRIBUTING.md).
