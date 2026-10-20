@@ -1,10 +1,10 @@
 # Quickstart
 
 Lorebase is pre-alpha. This page walks through what works on `main` today and says where it
-stops. There is no CLI, no MCP server and no read API for Records yet, so there is no complete
-"ask a question, get an answer" flow to try; what you can do is run the versioning and merge
-engine, bring up the Keeper REST API on Postgres, load the sample Domain through it, and browse
-the web app against a mock backend.
+stops. There is no CLI and no MCP server yet, so there is no complete
+"ask a question, get an answer through an agent" flow; what you can do is run the versioning and
+merge engine, bring up the Keeper REST API on Postgres, load the sample Domain through it, read
+it back with the read API, and browse the web app against a mock backend.
 
 | Step | What you get | State |
 |------|--------------|-------|
@@ -12,8 +12,9 @@ the web app against a mock backend.
 | 4 | Unit tests | works |
 | 5 | Postgres, migrations and Keeper | works |
 | 6, 7 | Create a Domain, apply a schema, import data through the REST API | works, with the limits noted below |
+| 7 | Read Records, query, search, log and diff through the REST API | works |
 | 8 | Web app in mock mode | works, mock data only |
-| later | Read API, Proposals and merge over REST, Python client, CLI, MCP server | [coming next](#coming-next) |
+| later | Python client, CLI, MCP server | [coming next](#coming-next) |
 
 ## 1. Prerequisites
 
@@ -123,9 +124,10 @@ curl -s -X POST http://localhost:8080/api/v1/domains \
   -d '{"id": "supply", "display_name": "Supply chain"}'
 ```
 
-`main` is protected by default (`keeper.domains.protect_default_branch`): changes to it must go
-through a Proposal, and the Proposals API is not there yet, so a direct change answers `409
-protected-branch`. Work on another branch instead:
+`main` is protected by default (`keeper.domains.protect_default_branch`): changes to it go
+through a Proposal (`POST /api/v1/domains/supply/proposals`, then a review and a merge; approvals
+are set by `keeper.proposals` and the Domain's `required_approvals` setting), so a direct change
+answers `409 protected-branch`. Work on another branch:
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/domains/supply/branches \
@@ -238,8 +240,31 @@ Each import is a Revision; the branch moved ahead of `main`:
 curl -s http://localhost:8080/api/v1/domains/supply/branches/work
 ```
 
-There is no endpoint to read Records yet. To look at what was materialized, query Postgres
-(the tables are under row-level security, so the session names the Domain first):
+### Read it back
+
+Reads go through the REST API and need no model. Fetch one Record, with its Lineage, from the
+`work` branch:
+
+```bash
+curl -s 'http://localhost:8080/api/v1/domains/supply/kinds/Supplier/records/S-1001?branch=work&lineage=true'
+```
+
+Query with the JSON DSL (here: up to five Suppliers in Italy or Germany; `branch` picks where
+to read, the rest is the query of the [design](design.md#82-query-model)):
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/query \
+  -H 'Content-Type: application/json' \
+  -d '{"branch": "work", "kind": "Supplier",
+       "where": {"attr": "country", "op": "in", "value": ["IT", "DE"]},
+       "limit": 5}'
+```
+
+The same API serves `search`, `traverse`, `neighborhood`, the branch `log`, `revisions/{id}` and
+`diff`. Every response carries the Revision it was served from in the `Lorebase-Revision` header
+and an `ETag`. The full list is in the OpenAPI docs at `http://localhost:8080/api/v1/docs`. If you
+want to look at the materialized rows directly, query Postgres (the tables are under row-level
+security, so the session names the Domain first):
 
 ```bash
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml exec -T postgres \
@@ -255,8 +280,9 @@ You should see 30 Suppliers, 40 Parts and 20 Plants on `work`, and `S-1001 | Kav
 
 The web app talks to a `KeeperApi` interface with two adapters. In `mock` mode it serves
 its own sample Domains from memory and needs no backend; the `supply` Domain you created above
-is not shown there. `live` mode points at Keeper but most screens need read endpoints that do not exist yet,
-so use mock mode for now.
+is not shown there. `live` mode points at Keeper; the read endpoints it needs exist now, but the
+screens have not been verified against a running Keeper, including Review against the Proposal
+endpoints. Use mock mode for now.
 
 ```bash
 cd apps/web
@@ -282,14 +308,12 @@ Stop `pnpm dev` with Ctrl+C.
 
 These do not exist yet; the order follows the [M1 plan](plan/m1.md).
 
-- **Read API** (T20): Records and Links, the query DSL, search, time travel. Until then, the only
-  way to look at data is SQL.
-- **Revisions, log and diff API** (T21) and **Proposals, merge and Conflict resolution API**
-  (T22). The merge engine is complete and exercised by the demo in step 3, but nothing in Keeper
-  calls it yet, which is why `main` cannot be changed over REST.
-- **Lineage and history API** (T23), **Python client** (T24) and **CLI** (T25).
-- **Herald, the MCP server** (M3), and expressions in schemas: custom Operations are M3 and
-  Derivations M4 on the roadmap.
+- **Lineage and history API** (T23, the per-Record lineage summary is already on Record reads),
+  **Python client** (T24) and **CLI** (T25).
+- **Herald, the MCP server** (M3), and expressions in schemas: the CEL engine exists and stored
+  Operations evaluate it behind `keeper.operations.expressions_enabled`, but schema change sets
+  still refuse schemas that use expressions; custom Operations are M3 and Derivations M4 on the
+  roadmap.
 - Source syncs from CSV or Postgres (`approved.suppliers`, `erp.purchase_orders` in the sample
   schema are declared but nothing runs them), document extraction and semantic search: M2 and
   M4.
