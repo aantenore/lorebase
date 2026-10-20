@@ -256,7 +256,7 @@ export interface Operation {
   side_effects: string[];
   rate_limit: string | null;
   status: ElementStatus;
-  /** Set for built-in Operations generated per Kind or Relation. */
+  /** Set for built-in Operations provided per Kind or Relation. */
   builtin: boolean;
 }
 

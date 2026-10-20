@@ -7,4 +7,6 @@ window.scrollTo = () => {};
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
+  document.documentElement.removeAttribute('data-theme');
 });

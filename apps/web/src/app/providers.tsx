@@ -5,6 +5,7 @@ import { ApiProvider } from '@/api/provider';
 import { ConfigProvider } from '@/config/context';
 import type { AppConfig } from '@/config/env';
 import { ThemeProvider } from '@/ui/theme';
+import { ToastProvider } from '@/ui/toast';
 
 interface AppProvidersProps {
   config: AppConfig;
@@ -28,7 +29,9 @@ export function AppProviders({ config, api, children }: AppProvidersProps) {
     <ConfigProvider config={config}>
       <ThemeProvider>
         <ApiProvider api={adapter}>
-          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider durationMs={config.toastMs}>{children}</ToastProvider>
+          </QueryClientProvider>
         </ApiProvider>
       </ThemeProvider>
     </ConfigProvider>

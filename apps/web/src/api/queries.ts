@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useKeeperApi } from './provider';
 import type {
   BranchName,
@@ -212,5 +212,23 @@ export function useConflicts(domain: DomainId, id: string) {
   return useQuery({
     queryKey: keys.conflicts(domain, id),
     queryFn: () => api.conflicts.list(domain, id),
+  });
+}
+
+/** The first Record of each given Kind, used to seed a default Canvas view. */
+export function useFirstRecordRefs(scope: QueryScope, kinds: string[]) {
+  const api = useKeeperApi();
+  return useQueries({
+    queries: kinds.map((kind) => {
+      const params: RecordListParams = { limit: 1 };
+      return {
+        queryKey: keys.records(scope, kind, params),
+        queryFn: () => api.records.list(toReadScope(scope), kind, params),
+      };
+    }),
+    combine: (results) => ({
+      pending: results.some((r) => r.isPending),
+      refs: results.flatMap((r) => r.data?.rows.map((row) => row.ref) ?? []),
+    }),
   });
 }

@@ -59,11 +59,4 @@ export function headOf(data: BranchData): RevisionId {
   return head.id;
 }
 
-export function refOf(kind: string, key: string): RecordRef {
-  return `${kind}/${key}`;
-}
-
-export function splitRef(ref: RecordRef): { kind: string; key: string } {
-  const index = ref.indexOf('/');
-  return { kind: ref.slice(0, index), key: ref.slice(index + 1) };
-}
+export { refOf, splitRecordRef as splitRef } from '../refs';

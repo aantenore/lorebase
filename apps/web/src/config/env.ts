@@ -12,8 +12,9 @@ export interface AppConfig {
   keeperBaseUrl: string | null;
   pageSize: number;
   searchLimit: number;
-  canvas: { depth: number; maxNodes: number };
+  canvas: { depth: number; maxNodes: number; layoutIterations: number };
   queryStaleMs: number;
+  toastMs: number;
   mockLatencyMs: number;
 }
 
@@ -31,7 +32,9 @@ const NON_FUNCTIONAL_DEFAULTS = {
   searchLimit: 20,
   canvasDepth: 2,
   canvasMaxNodes: 200,
+  canvasLayoutIterations: 100,
   queryStaleMs: 30_000,
+  toastMs: 5000,
   mockLatencyMs: 0,
 } as const;
 
@@ -86,8 +89,14 @@ export function loadConfig(raw: RawEnv): AppConfig {
     canvas: {
       depth: positiveInt(raw, 'VITE_CANVAS_DEPTH', NON_FUNCTIONAL_DEFAULTS.canvasDepth),
       maxNodes: positiveInt(raw, 'VITE_CANVAS_MAX_NODES', NON_FUNCTIONAL_DEFAULTS.canvasMaxNodes),
+      layoutIterations: positiveInt(
+        raw,
+        'VITE_CANVAS_LAYOUT_ITERATIONS',
+        NON_FUNCTIONAL_DEFAULTS.canvasLayoutIterations,
+      ),
     },
     queryStaleMs: positiveInt(raw, 'VITE_QUERY_STALE_MS', NON_FUNCTIONAL_DEFAULTS.queryStaleMs, 0),
+    toastMs: positiveInt(raw, 'VITE_TOAST_MS', NON_FUNCTIONAL_DEFAULTS.toastMs),
     mockLatencyMs: positiveInt(
       raw,
       'VITE_MOCK_LATENCY_MS',
