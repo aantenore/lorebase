@@ -256,3 +256,121 @@ async def test_operations_end_to_end(
         assert report.ok, report
     finally:
         await engine.dispose()
+
+
+def link_targets(relation: str) -> dict[str, list[str]]:
+    """`to` keys of an example Link file by `from` key."""
+    targets: dict[str, list[str]] = {}
+    for row in csv_rows(relation, 10_000):
+        targets.setdefault(row["from_key"], []).append(row["to_key"])
+    return targets
+
+
+def with_links(rows: list[dict[str, Any]], key: str, *relations: str) -> list[dict[str, Any]]:
+    """Rows with a `links` member naming the Link files' targets of each row."""
+    targets = {relation: link_targets(relation) for relation in relations}
+    return [
+        {
+            **row,
+            "links": {r: targets[r][row[key]] for r in relations if row[key] in targets[r]},
+        }
+        for row in rows
+    ]
+
+
+def link_rows(relation: str, *, named: bool = False) -> list[dict[str, Any]]:
+    rows = [
+        {"from": r.pop("from_key"), "to": r.pop("to_key"), **r} for r in csv_rows(relation, 10_000)
+    ]
+    return [{"relation": relation, **r} for r in rows] if named else rows
+
+
+async def test_import_the_supply_example_with_required_links(
+    keeper: Any, installation_admin: Any, role_key: Any, database_url: str
+) -> None:
+    admin = installation_admin.headers
+    async with keeper(operations={"import_batch_rows": 7}) as http:
+        assert (
+            await http.post(f"{API}/domains", json={"id": "supply"}, headers=admin)
+        ).status_code == 201
+        modeler = await role_key(http, "supply", "modeler")
+        editor = await role_key(http, "supply", "editor")
+        viewer = await role_key(http, "supply", "viewer")
+        await http.post(f"{DOMAIN}/branches", json={"name": "load"}, headers=editor)
+        applied = await http.post(
+            f"{DOMAIN}/branches/load/schema/changes", json={"yaml": supply_yaml()}, headers=modeler
+        )
+        assert applied.status_code == 200, applied.text
+
+        async def load(operation: str, parameters: dict[str, Any]) -> Any:
+            loaded = await http.post(
+                execute(operation),
+                json={"branch": "load", "parameters": parameters},
+                headers=editor,
+            )
+            assert loaded.status_code == 200, loaded.text
+            return loaded.json()
+
+        for kind, file in (("Supplier", "supplier"), ("Part", "part"), ("Plant", "plant")):
+            await load("import_records", {"kind": kind, "rows": csv_rows(file, 10_000)})
+
+        # a Contract without its required with_supplier Link is refused
+        [contract] = csv_rows("contract", 1)
+        refused = await http.post(
+            execute("import_records"),
+            json={"branch": "load", "parameters": {"kind": "Contract", "rows": [contract]}},
+            headers=editor,
+        )
+        assert refused.status_code == 422
+        assert refused.json()["issues"][0]["relation"]
+
+        contracts = with_links(csv_rows("contract", 10_000), "contract_number", "with_supplier")
+        loaded = await load("import_records", {"kind": "Contract", "rows": contracts})
+        assert loaded["edit_count"] == 2 * len(contracts)
+        orders = with_links(
+            csv_rows("purchase_order", 10_000), "po_number", "for_part", "delivered_to"
+        )
+        loaded = await load("import_records", {"kind": "PurchaseOrder", "rows": orders})
+        assert len(loaded["revisions"]) > 1  # batches of whole Records with their Links
+
+        flags = [{"kind": "RiskFlag", **row} for row in csv_rows("risk_flag", 10_000)]
+        batch = await load(
+            "import_batch",
+            {
+                "records": flags,
+                "links": [
+                    *link_rows("flags", named=True),
+                    *link_rows("supplied_by", named=True),
+                    *link_rows("stocked_at", named=True),
+                ],
+            },
+        )
+        assert batch["edit_count"] == len(flags) + sum(
+            len(csv_rows(name, 10_000)) for name in ("flags", "supplied_by", "stocked_at")
+        )
+
+        for kind, file in (
+            ("Supplier", "supplier"),
+            ("Part", "part"),
+            ("Plant", "plant"),
+            ("Contract", "contract"),
+            ("PurchaseOrder", "purchase_order"),
+            ("RiskFlag", "risk_flag"),
+        ):
+            page = await http.post(
+                f"{DOMAIN}/query",
+                json={"branch": "load", "kind": kind, "limit": 500},
+                headers=viewer,
+            )
+            assert page.status_code == 200, page.text
+            assert len(page.json()["items"]) == len(csv_rows(file, 10_000)), kind
+
+    engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+    try:
+        async with async_sessionmaker(engine)() as session, session.begin():
+            report = await verify(
+                session, "supply", "load", runtime=StoreRuntime.from_settings(StoreSettings())
+            )
+        assert report.ok, report
+    finally:
+        await engine.dispose()
