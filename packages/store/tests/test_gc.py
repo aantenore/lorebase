@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_store.commit import CommitResult, commit, create_domain
+from lorebase_store.db import create_engine
 from lorebase_store.gc import (
     PHASE_MARKED,
     GcBusyError,
@@ -21,12 +23,13 @@ from lorebase_store.gc import (
     gc_lock_key,
     run_gc_job,
 )
+from lorebase_store.gc import main as gc_main
 from lorebase_store.jobs import claim_jobs, requeue_stale, run_jobs
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.models.enums import RefKind
 from lorebase_store.repositories import RefRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import GcSettings, JobSettings, StoreSettings
+from lorebase_store.settings import DatabaseSettings, GcSettings, JobSettings, StoreSettings
 
 from .support import (
     AUTHOR,
@@ -445,3 +448,30 @@ async def test_failing_job_is_retried_then_failed(sessions: Sessions) -> None:
         ).one()
     assert status == "failed"
     assert "RuntimeError: nope" in result["error"]
+
+
+def test_command_line_reports_and_rejects_unknown_domains(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def seed() -> None:
+        engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+        try:
+            async with async_sessionmaker(engine)() as session:
+                await create_domain(
+                    session,
+                    domain(),
+                    author=AUTHOR,
+                    runtime=StoreRuntime.from_settings(StoreSettings()),
+                    clock=Clock(),
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(seed())
+    monkeypatch.setenv("LOREBASE__DATABASE__DSN", database_url)
+    assert gc_main(["--domain", DOMAIN, "--dry-run", "--grace-seconds", "0"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert (report["domain_id"], report["dry_run"], report["revisions"]) == (DOMAIN, True, 0)
+    assert report["marked_revisions"] == 1
+    assert gc_main(["--domain", "nope"]) == 1
+    assert "nope" in capsys.readouterr().err
