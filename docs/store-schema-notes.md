@@ -86,6 +86,23 @@ difference).
 - Job claim: `SELECT ... FROM jobs WHERE status = 'queued' AND run_after <= now() ORDER BY
   priority DESC, run_after LIMIT :n FOR UPDATE SKIP LOCKED`, served by `ix_jobs_claimable`.
 
+## Audit chain
+
+- One implementation, `lorebase_store.auth.AuditRepository`, used by both the Keeper (request
+  audit, admin listing) and the commit pipeline (step 8, inside the commit transaction).
+- `audit_log` holds one hash chain per Domain plus one installation-wide chain (`domain_id` null):
+  `entry_hash = sha256(prev_hash || JCS(entry))`, `prev_hash` being the hash of the previous
+  entry of the same chain in `seq` order. Lookups use the `(domain_id, seq)` index.
+- Appends take `pg_advisory_xact_lock(audit_lock_key(domain_id))`, a 64-bit key from
+  `sha256("lb1\0audit-chain\0" || domain_id)`. Per-Domain chains were chosen over a single global
+  chain: a commit holds its chain lock until the commit transaction ends, and a global lock
+  would serialize every commit and every audited request of the installation behind it. Lock
+  order is branch lock, then audit lock; Keeper writes take only the audit lock, so no cycle.
+- `verify` walks the whole log in `seq` order and checks each entry against the previous entry
+  of its own chain. With `after_seq`, the first entry of each chain in the range is trusted as
+  the anchor. Truncating the tail of a chain is not detectable from the chain alone.
+- Appends and verification run with the RLS bypass; listing a Domain's entries is scoped to it.
+
 ## Tests
 
 `lorebase_store.testing` provides the server: `LOREBASE_TEST_DATABASE_URL` if set (its role needs

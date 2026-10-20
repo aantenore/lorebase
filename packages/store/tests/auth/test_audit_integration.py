@@ -72,6 +72,50 @@ async def test_concurrent_appends_keep_one_chain(auth_store: SqlAuthStore) -> No
     assert verification.checked == 12
 
 
+async def test_each_domain_has_its_own_chain(
+    auth_store: SqlAuthStore, seed_domain: SeedDomain
+) -> None:
+    for domain in ("acme", "globex"):
+        await seed_domain(domain)
+    for n, domain in enumerate(("acme", "globex", None, "acme", "globex", None)):
+        await append(auth_store, n, domain)
+    async with auth_store.unit() as unit:
+        for domain in ("acme", "globex", None):
+            older, newer = reversed(await unit.audit.list(domain_id=domain, limit=10))
+            assert older.prev_hash is None
+            assert newer.prev_hash == older.entry_hash
+        verification = await unit.audit.verify(batch_size=4)
+    assert verification.ok
+    assert verification.checked == 6
+
+
+async def test_concurrent_appends_to_several_domains_keep_their_chains(
+    auth_store: SqlAuthStore, seed_domain: SeedDomain
+) -> None:
+    domains = ("acme", "globex")
+    for domain in domains:
+        await seed_domain(domain)
+    await asyncio.gather(*(append(auth_store, n, domains[n % 2]) for n in range(12)))
+    async with auth_store.unit() as unit:
+        verification = await unit.audit.verify(batch_size=5)
+    assert verification.ok
+    assert verification.checked == 12
+
+
+async def test_tampering_in_one_domain_is_detected(
+    auth_store: SqlAuthStore, engine: AsyncEngine, seed_domain: SeedDomain
+) -> None:
+    for domain in ("acme", "globex"):
+        await seed_domain(domain)
+    seqs = [await append(auth_store, n, d) for n, d in enumerate(("acme", "globex") * 2)]
+    async with engine.begin() as connection:
+        await connection.execute(text("DELETE FROM audit_log WHERE seq = :seq"), {"seq": seqs[1]})
+    async with auth_store.unit() as unit:
+        verification = await unit.audit.verify()
+    assert verification.bad_seq == seqs[3]
+    assert verification.reason == "chain link broken"
+
+
 async def test_modified_row_is_detected(auth_store: SqlAuthStore, engine: AsyncEngine) -> None:
     seqs = [await append(auth_store, n) for n in range(4)]
     async with engine.begin() as connection:

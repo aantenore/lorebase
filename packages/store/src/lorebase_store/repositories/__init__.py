@@ -6,12 +6,7 @@ the caller's transaction; row-level security is set with `scope_to_domain`.
 
 from lorebase_store.repositories.changesets import ChangesetRepository
 from lorebase_store.repositories.domains import DomainNotFoundError, DomainRepository, DomainRow
-from lorebase_store.repositories.events import (
-    AuditEntry,
-    AuditRepository,
-    OutboxRepository,
-    chain_hash,
-)
+from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.repositories.index_view import (
     LinkState,
     MaterializedIndexView,
@@ -43,8 +38,6 @@ from lorebase_store.repositories.revisions import (
 from lorebase_store.repositories.scope import scope_to_domain
 
 __all__ = [
-    "AuditEntry",
-    "AuditRepository",
     "ChangesetRepository",
     "DomainNotFoundError",
     "DomainRepository",
@@ -71,6 +64,5 @@ __all__ = [
     "RevisionRow",
     "SchemaRow",
     "advisory_lock_key",
-    "chain_hash",
     "scope_to_domain",
 ]

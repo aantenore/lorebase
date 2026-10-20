@@ -15,6 +15,7 @@ from lorebase_core.model import ImportOrigin, ProvenanceEntry
 from lorebase_core.tree import kind_partition, tree_get
 from lorebase_core.types import TypeSpec
 from lorebase_core.validate import IssueCode, RecordDelete
+from lorebase_store.auth import AuditRepository
 from lorebase_store.commit import (
     BranchLockTimeoutError,
     Change,
@@ -134,6 +135,7 @@ async def test_commit_schema_records_and_links(
         assert await count(session, MatHistory, branch="main") == 1 + 9
         assert await count(session, Revision) == 2
         assert await count(session, AuditEntry) == 2
+        assert (await AuditRepository(session).verify()).ok
         assert await count(session, OutboxEvent, event_type="revision.committed") == 2
 
         acme = await session.get(MatRecord, (DOMAIN, "main", SUPPLIER, "S-1"))

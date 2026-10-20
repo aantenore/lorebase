@@ -30,11 +30,10 @@ from lorebase_core.revision import (
     is_ancestor,
 )
 from lorebase_core.validate import LinkUpsert, RecordDelete, RecordUpsert
+from lorebase_store.auth import AuditRepository, NewAuditEntry, audit_lock_key, entry_digest
 from lorebase_store.models import AuditEntry as AuditRow
 from lorebase_store.models import OutboxEvent
 from lorebase_store.repositories import (
-    AuditEntry,
-    AuditRepository,
     ChangesetRepository,
     DomainNotFoundError,
     DomainRepository,
@@ -54,7 +53,6 @@ from lorebase_store.repositories import (
     RevisionRepository,
     SchemaRow,
     advisory_lock_key,
-    chain_hash,
     scope_to_domain,
 )
 from lorebase_store.repositories.refs import sqlstate
@@ -82,11 +80,22 @@ def test_advisory_lock_key_is_stable_and_scoped() -> None:
     assert advisory_lock_key("ab", "c") != advisory_lock_key("a", "bc")
 
 
-def test_chain_hash_links_entries() -> None:
-    entry = AuditEntry(domain_id="d", at=NOW, actor="usr", action="a", details={"x": 1})
-    first = chain_hash(None, entry)
-    assert first == chain_hash(None, entry)
-    assert chain_hash(first, entry) != first
+def test_audit_lock_key_is_per_domain() -> None:
+    assert audit_lock_key("supply") == audit_lock_key("supply")
+    assert audit_lock_key("supply") != audit_lock_key("other")
+    assert audit_lock_key(None) != audit_lock_key("supply")
+    assert audit_lock_key("supply") != advisory_lock_key("supply", "")
+
+
+def test_entry_digest_links_entries() -> None:
+    def digest(previous: bytes | None) -> bytes:
+        return entry_digest(
+            previous, domain_id="d", at=NOW, actor="usr", action="a", target=None, details={"x": 1}
+        )
+
+    first = digest(None)
+    assert first == digest(None)
+    assert digest(first) != first
 
 
 def test_sqlstate_follows_wrapped_errors() -> None:
@@ -286,10 +295,13 @@ async def test_changesets_provenance_and_events(
         assert found[entry.id].at == NOW
 
         audit = AuditRepository(session)
-        first = await audit.append(AuditEntry(domain_id=D, at=NOW, actor="usr_t", action="x"))
-        second = await audit.append(AuditEntry(domain_id=D, at=NOW, actor="usr_t", action="y"))
+        first = await audit.append(NewAuditEntry(domain_id=D, at=NOW, actor="usr_t", action="x"))
+        second = await audit.append(NewAuditEntry(domain_id=D, at=NOW, actor="usr_t", action="y"))
         rows = (await session.execute(select(AuditRow).order_by(AuditRow.seq))).scalars().all()
-        assert [(r.prev_hash, r.entry_hash) for r in rows] == [(None, first), (first, second)]
+        assert [(r.prev_hash, r.entry_hash) for r in rows] == [
+            (None, first.entry_hash),
+            (first.entry_hash, second.entry_hash),
+        ]
         event = await OutboxRepository(session).enqueue(D, "test.event", {"n": 1})
         stored = await session.get(OutboxEvent, event)
         assert stored is not None

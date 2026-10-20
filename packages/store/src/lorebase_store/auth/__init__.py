@@ -6,6 +6,7 @@ from lorebase_store.auth.audit import (
     AuditRepository,
     ChainVerification,
     NewAuditEntry,
+    audit_lock_key,
     entry_digest,
 )
 from lorebase_store.auth.grants import GrantRecord, GrantRepository
@@ -32,6 +33,7 @@ __all__ = [
     "PrincipalRecord",
     "PrincipalRepository",
     "SqlAuthStore",
+    "audit_lock_key",
     "entry_digest",
     "new_id",
     "rls_scope",

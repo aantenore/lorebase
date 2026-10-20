@@ -68,6 +68,7 @@ from lorebase_core.validate import (
     RecordUpsert,
     evaluate_changeset,
 )
+from lorebase_store.auth.audit import AuditRepository, NewAuditEntry
 from lorebase_store.commit.changes import (
     Change,
     CommitResult,
@@ -101,7 +102,7 @@ from lorebase_store.nodestore import NodeRepository, PgNodeStore
 from lorebase_store.objectstore import EncodedObject, PgObjectStore, encode_object
 from lorebase_store.repositories.changesets import ChangesetRepository
 from lorebase_store.repositories.domains import DomainRepository, DomainRow
-from lorebase_store.repositories.events import AuditEntry, AuditRepository, OutboxRepository
+from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.repositories.index_view import MaterializedIndexView
 from lorebase_store.repositories.materialized import MaterializedRepository
 from lorebase_store.repositories.provenance import ProvenanceRepository, ProvenanceRow
@@ -520,7 +521,7 @@ async def _record_events(
         "message": message,
     }
     await AuditRepository(session).append(
-        AuditEntry(
+        NewAuditEntry(
             domain_id=domain_id,
             at=revision.created_at,
             actor=revision.author,
