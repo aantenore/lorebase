@@ -1,0 +1,64 @@
+name: SBOM
+
+# CycloneDX software bills of materials for the Python workspace and the web app, built from the
+# lockfiles. Produced on release tags and on demand; the files are kept as workflow artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+  CYCLONEDX_PY: cyclonedx-bom==7.5.0
+
+jobs:
+  python:
+    name: Python workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Export the locked runtime dependencies
+        run: uv export --all-packages --no-dev --no-emit-workspace -o requirements.sbom.txt
+      - name: Generate the CycloneDX document
+        run: >-
+          uvx --from "$CYCLONEDX_PY" cyclonedx-py requirements requirements.sbom.txt
+          --pyproject pyproject.toml --mc-type application
+          --of JSON -o sbom-python.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-python
+          path: sbom-python.cdx.json
+          if-no-files-found: error
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: apps/web
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          package_json_file: apps/web/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: lts/*
+      - name: Generate the CycloneDX document from the lockfile
+        run: pnpm sbom --sbom-format cyclonedx --lockfile-only --prod --out sbom-web.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-web
+          path: apps/web/sbom-web.cdx.json
+          if-no-files-found: error
