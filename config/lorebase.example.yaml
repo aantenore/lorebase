@@ -293,6 +293,7 @@ database:
   read_max_lag_ms: 5000          # a replica lagging more than this serves no reads; 0: unchecked
   read_fallback_to_primary: true # reads no replica can serve go to the primary; false: 503
   read_probe_timeout_ms: 2000    # budget to reach a replica and run its freshness probe
+  prepared_statement_cache_size: 500  # prepared statements per connection (asyncpg); 0 disables
 
 # Storage engine. `layout` and `embeddings` are read once by the initial migration; the other
 # keys are read at runtime.
@@ -347,6 +348,23 @@ store:
       statement_timeout_ms: 15000
       exact_row_count: false     # true: count(*) per table; false: planner estimate
 
+  indexes:                       # per-Attribute partial indexes on mat_records
+    enabled: true                # false: an administrator manages them; a commit role that does
+                                 # not own mat_records skips them too (warning logged)
+    inline_max_rows: 50000       # larger Kinds get their indexes from a queued concurrent build
+    job_batch: 10                # queued index jobs claimed per runner pass
+  reads:
+    schema_cache_entries: 256    # compiled schemas per process, keyed by head Revision id
+    max_page_rows: 500           # largest page of Records, Links or query results
+    max_search_rows: 100         # largest full-text search result
+    search_candidates: 1000      # matches ranked per search (bounds very common terms)
+    max_hydrate_keys: 1000       # Records per batched hydration
+  traverse:                      # neighborhood caps
+    max_depth: 3                 # hops
+    max_seeds: 50                # seed Records
+    max_fanout: 50               # Links followed per Record and hop
+    max_links: 2000              # Links walked, breadth first
+    max_nodes: 200               # Records returned, nearest first
 # Read path of Keeper (design 8). Reads hit the materialized head of a branch; `at=<revision>`
 # reads go through the Revision tree.
 read:

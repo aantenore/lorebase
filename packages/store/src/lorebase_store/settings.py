@@ -4,8 +4,8 @@
   environment alias `LOREBASE_DB_DSN` sets `database.dsn` and `LOREBASE_DB_READ_DSN` sets
   `database.read_dsn`; both are handled as secrets.
 - `store`: physical layout and vector storage (read by the initial migration), bulk writes,
-  tree node caching, commits, materialization and the profilers of schema inference (read
-  at runtime).
+  tree node caching, commits, materialization, per-Attribute indexes, reads, neighborhood
+  traversal and the profilers of schema inference (read at runtime).
 """
 
 from __future__ import annotations
@@ -89,6 +89,13 @@ class DatabaseSettings(SectionModel):
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
+
+    prepared_statement_cache_size: int = Field(
+        default=500,
+        ge=0,
+        description="Prepared statements kept per connection by the asyncpg driver, keyed by "
+        "SQL text; 0 disables the cache.",
+    )
 
 
 class LayoutSettings(SectionModel):
@@ -294,8 +301,73 @@ class ProfilingSettings(SectionModel):
     postgres: PostgresProfilingSettings = Field(default_factory=PostgresProfilingSettings)
 
 
+class IndexSettings(SectionModel):
+    """Per-Attribute partial indexes on `mat_records` (`lorebase_store.indexes`)."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Create and drop per-Attribute indexes when schemas change. Only a role "
+        "that owns mat_records does so; other roles skip it with a warning. False leaves index "
+        "management to an administrator.",
+    )
+    inline_max_rows: int = Field(
+        default=50000,
+        ge=0,
+        description="Kinds with at most this many Records on the branch get their indexes "
+        "inside the commit transaction; larger ones are queued as jobs and built concurrently.",
+    )
+    job_batch: int = Field(
+        default=10, ge=1, description="Queued index jobs claimed per run of the job runner."
+    )
+
+
+class ReadSettings(SectionModel):
+    """Read primitives on materialized heads (`lorebase_store.reads`)."""
+
+    schema_cache_entries: int = Field(
+        default=256,
+        ge=0,
+        description="Compiled schemas cached per process, keyed by Domain and head Revision "
+        "id; 0 disables the cache.",
+    )
+    max_page_rows: int = Field(
+        default=500, ge=1, description="Largest page of Records, Links or query results."
+    )
+    max_search_rows: int = Field(
+        default=100, ge=1, description="Largest number of full-text search results."
+    )
+    search_candidates: int = Field(
+        default=1000,
+        ge=1,
+        description="Matching Records ranked per search; ranking reads each candidate's search "
+        "vector, so this bounds the cost of very common terms.",
+    )
+    max_hydrate_keys: int = Field(
+        default=1000, ge=1, description="Records fetched by one batched hydration."
+    )
+
+
+class TraverseSettings(SectionModel):
+    """Neighborhood traversal over `mat_links` (`lorebase_store.traverse`)."""
+
+    max_depth: int = Field(default=3, ge=1, le=10, description="Deepest neighborhood, in hops.")
+    max_seeds: int = Field(default=50, ge=1, description="Seed Records of one neighborhood.")
+    max_fanout: int = Field(
+        default=50, ge=1, description="Links followed from one Record in one hop."
+    )
+    max_links: int = Field(
+        default=2000,
+        ge=1,
+        description="Links walked by one neighborhood; the walk stops, breadth first, there.",
+    )
+    max_nodes: int = Field(
+        default=200, ge=1, description="Records returned by one neighborhood, nearest first."
+    )
+
+
 class StoreSettings(SectionModel):
-    """Schema shape, bulk writes, node cache, commits, materialization and profiling."""
+    """Schema shape, bulk writes, node cache, commits, materialization, indexes, reads and
+    profiling."""
 
     layout: LayoutSettings = Field(default_factory=LayoutSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
@@ -307,6 +379,9 @@ class StoreSettings(SectionModel):
     jobs: JobSettings = Field(default_factory=JobSettings)
     bundle: BundleSettings = Field(default_factory=BundleSettings)
     profiling: ProfilingSettings = Field(default_factory=ProfilingSettings)
+    indexes: IndexSettings = Field(default_factory=IndexSettings)
+    reads: ReadSettings = Field(default_factory=ReadSettings)
+    traverse: TraverseSettings = Field(default_factory=TraverseSettings)
 
 
 register_section(DATABASE_SECTION, DatabaseSettings, env_aliases=ENV_ALIASES)

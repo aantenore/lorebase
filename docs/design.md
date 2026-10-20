@@ -933,7 +933,7 @@ Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (ar
 ### 8.3 Traversal and neighborhoods
 
 - `traverse`: from one Record along a path of Relations (forward or inverse), with per-hop filters and limits.
-- `neighborhood`: from seed Records, breadth-first up to depth `d` with node and edge caps, used by Canvas and by agents that need local context. Implemented as an iterative set-based expansion (one query per hop), not a recursive CTE, to enforce caps per hop.
+- `neighborhood`: from seed Records, breadth-first up to depth `d` with node and edge caps, used by Canvas and by agents that need local context. Implemented as one recursive CTE (`lorebase_store.traverse`, 8.7): the per-Record fan-out cap is a `LIMIT` inside the lateral step, and the Link cap is a `LIMIT` on the lazily consumed walk, so caps bound the work per hop without a round trip per hop.
 
 ### 8.4 Search
 
@@ -950,7 +950,6 @@ Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (ar
 - HTTP `ETag` on Record reads = hash of `(object_hash, derived hash, mask profile)`; conditional requests return `304`.
 - No external cache is required. A shared cache may be added later behind an interface.
 
-
 ### 8.6 Implementation notes
 
 Decisions taken in `lorebase_core.query` (DSL model and validation) and `lorebase_keeper.reading` (SQL compilation, reads, search, history and diff). They refine 8.1 to 8.4 and 6.7, 6.12.
@@ -964,6 +963,36 @@ Decisions taken in `lorebase_core.query` (DSL model and validation) and `lorebas
 - **Search.** Lexical candidates match the search vector or the title by trigram (`%`, threshold from settings); rank is `ts_rank_cd` plus weighted title similarity. Semantic search ranks stored embeddings of the configured model by cosine distance to the caller's vector. Hybrid fuses both lists with `w / (rrf_k + rank)` in SQL. Search has no cursor.
 - **Diff.** Only differing nodes are loaded, level by level in batched queries, then the core walk runs in memory; a cheap lower bound from partition counts and `read.diff.max_changes` refuse oversized diffs. Pages are offsets into the deterministic diff order; `format=ndjson` streams all changes. The linear-history changeset union of 6.7 is not used.
 - **Log.** The first-parent chain (or every ancestor with `all=true`) is walked with a recursive query on each page; pages continue by `(generation, id)`.
+
+### 8.7 Agent read budgets
+
+An external agent reasons in a loop of reads, so every read it makes must cost milliseconds on the materialized head, with no model call in the path. Budgets (p95, one read as one request: a transaction that scopes RLS and runs one statement), on a laptop with 100k Records and 300k Links; `docs/performance.md` holds the measured baseline and `tests/perf/bench.py` regenerates it.
+
+| Read | p95 budget |
+|------|-----------:|
+| Record get by key | 5 ms |
+| List page of 50 | 20 ms |
+| Links of a Record | 10 ms |
+| Neighborhood, depth 2 | 30 ms |
+| Query on an indexed Attribute, page of 50 | 25 ms |
+| Full-text search, 20 results | 50 ms |
+
+**Primitives.** `lorebase_store.reads` and `lorebase_store.traverse` give Keeper one statement per read, each shaped for an index scan: `get_record`, `list_records` (keyset on key), `hydrate_records` (batched by `(kind, key)` arrays), `links_of_record`, `query_by_attribute`, `search_records`, `neighborhood`, `head_revision`, `head_schema`. Caps come from `store.reads` and `store.traverse`.
+
+**Index strategy.**
+- Records by key and pages: the `mat_records` primary key `(domain_id, branch, kind_id, key)`; Links: the `mat_links` primary key (outgoing) and `(domain_id, branch, relation_id, to_key)` (incoming).
+- Attributes flagged `indexed` or `unique`, and `ref` Attributes backing a foreign-key Relation, get a partial expression index per Domain, branch, Kind and Attribute on the Domain's hash partition (`lorebase_store.indexes`; store schema notes). The cast follows the type (`bigint`, `numeric`, `double precision`, `boolean`, canonical text otherwise; hash for long `text`, `md5` for unique long `text`). A query matches the index only when it repeats the predicate literals and the expression, so query compilers take both from `IndexSpec` (`expression`, `value_sql`) and `predicate_sql`. Indexes are created in the commit transaction for small Kinds and queued as concurrent builds above `store.indexes.inline_max_rows`; those that would reject new rows (unique ones, casts of a retyped Attribute) are dropped before the rows are written. Index DDL needs the role that owns `mat_records`: a commit role that does not own it (the application role subject to row-level security) skips index management with a warning, and an administrator manages the indexes instead.
+- Search: the GIN index on `search`. The query finds at most `store.reads.search_candidates` matches with `@@` (Kind filter inside that subquery) and ranks only those with `ts_rank_cd`, so common terms cost a bounded amount; `websearch_to_tsquery` parses agent input safely. Snippets (`ts_headline`) and hybrid fusion apply to the final page or to the bounded candidate lists, never to all matches. `VACUUM ANALYZE` (autovacuum) keeps the GIN pending list and statistics current after bulk loads.
+
+**Neighborhood primitive.** One recursive CTE (8.3): seeds, then per hop a lateral union of stored outgoing and incoming Links and foreign-key Links (through the Records and their per-Attribute index), `LIMIT fanout` per Record, `CYCLE` on `(kind_id, key)`, the walk consumed under a `LIMIT` on Links, nodes ranked by depth up to the node cap and hydrated in the same statement, Links returned only between returned nodes. Depth, seeds, fan-out, Links and nodes are capped by `store.traverse`.
+
+**Prepared statements and plans.** SQL text is stable per shape (literals vary only with Domain, branch, Kind and Attribute for partial-index queries), so the asyncpg driver reuses one prepared statement per connection and shape (`database.prepared_statement_cache_size`). Store tests check the custom and the generic plans of the hot paths for index scans.
+
+**Schema and ETag.** `head_revision` reads the branch head with one primary-key lookup. Keeper derives `ETag` from it (plus the caller's mask profile) for collection, query, search and neighborhood reads, and from the Record's `object_hash` for Record reads (8.5); `If-None-Match` is answered with `304` before any other read. `head_schema` serves the compiled schema from a per-process LRU keyed by Domain and Revision id (`store.reads.schema_cache_entries`), which can never be stale. A request whose response must match the Revision it reports runs its reads in one `REPEATABLE READ` transaction.
+
+**Row-level security.** The `domain_isolation` policies make Postgres apply the policy before any condition built from functions not marked leakproof. Text equality and ordering are leakproof, so key, page and stored-Link reads keep their index plans under a role subject to RLS. `->>`, casts and `@@` are not: under such a role, attribute queries filter the Kind's rows, search scans the Domain's partition, and inbound foreign-key Links (and the neighborhoods that follow them) filter every Record of the from Kind. The baseline measures both roles: with RLS, search, Links of a Record and the neighborhood exceed their budgets. Options, to be settled as an architect call: (a) a read-only role with `BYPASSRLS` and `SELECT` on the materialized tables, used only through the store primitives, which always pin `domain_id`; (b) `SECURITY DEFINER` functions for the search and attribute primitives; (c) accept the slower paths. Marking the built-in functions leakproof is not an option: casts raise errors that reveal values.
+
+**Deferred.** Overlay branches (M5) union base and overlay rows and need their own budgets; read replicas with `min_revision` (8.1); a composite GIN index with `btree_gin` on `(domain_id, branch, search)` when many branches share a partition; trigram typo tolerance on titles; per-relation keyset pagination of Links.
 
 ---
 
