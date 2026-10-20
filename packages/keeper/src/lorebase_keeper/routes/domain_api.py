@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from lorebase_keeper.routes import branches, domains
+from lorebase_keeper.routes import branches, domains, schema
 
 
 def domain_routers() -> list[APIRouter]:
     """Routers to include under the API prefix, most specific paths first."""
-    return [domains.router, branches.router]
+    return [domains.router, schema.router, branches.router]

@@ -18,6 +18,7 @@ hint rather than 423, which clients rarely handle.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from lorebase_core.canonical import hex
@@ -45,29 +46,84 @@ IDEMPOTENCY_CONFLICT = ProblemType("idempotency-conflict", 409, "Idempotency key
 LIMIT_EXCEEDED = ProblemType("limit-exceeded", 409, "Limit exceeded")
 
 
-def issue_documents(issues: Iterable[Issue], limit: int) -> list[dict[str, Any]]:
-    """JSON form of the first `limit` issues."""
-    documents: list[dict[str, Any]] = []
-    for issue in issues:
-        if len(documents) >= limit:
-            break
-        documents.append(issue.model_dump(mode="json", exclude_defaults=False))
-    return documents
+@dataclass(frozen=True)
+class Finding:
+    """A validation finding as the API reports it: a core `Issue` or a document problem.
+
+    `path` locates it in the request (schema document paths use api names).
+    """
+
+    code: str
+    message: str
+    path: tuple[str | int, ...] = ()
+    severity: str = "error"
+    kind: str | None = None
+    relation: str | None = None
+    key: str | None = None
+    attribute: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, issue: Issue) -> Finding:
+        return cls(
+            code=issue.code.value,
+            message=issue.message,
+            path=tuple(issue.path),
+            severity=issue.severity.value,
+            kind=issue.kind,
+            relation=issue.relation,
+            key=issue.key,
+            attribute=issue.attribute,
+            details=dict(issue.details),
+        )
+
+    def document(self) -> dict[str, Any]:
+        """JSON form; absent references are omitted."""
+        body: dict[str, Any] = {
+            "code": self.code,
+            "severity": self.severity,
+            "path": list(self.path),
+            "message": self.message,
+        }
+        for name in ("kind", "relation", "key", "attribute"):
+            value = getattr(self, name)
+            if value is not None:
+                body[name] = value
+        if self.details:
+            body["details"] = self.details
+        return body
+
+
+def findings_of(issues: Iterable[Issue]) -> list[Finding]:
+    return [Finding.of(issue) for issue in issues]
+
+
+def finding_documents(findings: Iterable[Finding], limit: int) -> list[dict[str, Any]]:
+    """JSON form of the first `limit` findings."""
+    return [finding.document() for _, finding in zip(range(limit), findings, strict=False)]
 
 
 def violations_problem(
-    issues: Sequence[Issue], *, limit: int, extensions: dict[str, Any] | None = None
+    findings: Sequence[Finding], *, limit: int, extensions: dict[str, Any] | None = None
 ) -> ProblemError:
-    """422 listing validation issues."""
+    """422 listing validation findings."""
     return ProblemError(
         VALIDATION_FAILED,
-        f"{len(issues)} validation issue(s); nothing was written.",
+        f"{len(findings)} validation issue(s); nothing was written.",
         extensions={
-            "issues": issue_documents(issues, limit),
-            "issue_count": len(issues),
+            "issues": finding_documents(findings, limit),
+            "issue_count": len(findings),
             **(extensions or {}),
         },
     )
+
+
+class ProtectedBranchError(Exception):
+    """A direct write to a protected branch; it must go through a Proposal."""
+
+    def __init__(self, branch: str) -> None:
+        super().__init__(f"branch {branch!r} is protected")
+        self.branch = branch
 
 
 def protected_branch_problem(domain_id: str, branch: str, proposals_path: str) -> ProblemError:
@@ -85,7 +141,7 @@ def commit_problem(
     *,
     max_issues: int,
     retry_after_s: int,
-    locate: Callable[[Sequence[Issue]], Sequence[Issue]] | None = None,
+    locate: Callable[[Sequence[Issue]], Sequence[Finding]] = findings_of,
 ) -> ProblemError:
     """The problem detail answering a commit failure.
 
@@ -108,8 +164,7 @@ def commit_problem(
             headers={"Retry-After": str(retry_after_s)},
         )
     if isinstance(error, ValidationFailedError):
-        issues = locate(error.issues) if locate is not None else error.issues
-        return violations_problem(issues, limit=max_issues)
+        return violations_problem(locate(error.issues), limit=max_issues)
     if isinstance(error, SchemaChangeError):
         return ProblemError(SCHEMA_CHANGE_INVALID, str(error))
     if isinstance(error, BranchNotFoundError):
