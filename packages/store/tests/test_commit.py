@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 
 import pytest
 from sqlalchemy import func, select, text
@@ -24,6 +25,7 @@ from lorebase_store.commit import (
     commit,
     create_domain,
 )
+from lorebase_store.materialize import verify
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import (
     AuditEntry,
@@ -66,12 +68,18 @@ LOCK_WAIT_TIMEOUT_S = 10.0
 
 
 @pytest.fixture
-async def sessions(engine: AsyncEngine, runtime: StoreRuntime) -> Sessions:
-    """Sessions on a database holding the `supply` Domain with an empty `main` branch."""
+async def sessions(engine: AsyncEngine, runtime: StoreRuntime) -> AsyncIterator[Sessions]:
+    """Sessions on a database holding the `supply` Domain with an empty `main` branch.
+
+    At teardown the materialized head of `main` must still match its tree.
+    """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         await create_domain(session, domain(), author=AUTHOR, runtime=runtime, clock=Clock())
-    return factory
+    yield factory
+    async with factory() as session:
+        report = await verify(session, DOMAIN, "main", runtime=runtime, deep=True)
+    assert report.ok, report.divergences
 
 
 @pytest.fixture
