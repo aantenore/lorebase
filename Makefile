@@ -30,7 +30,7 @@ test-unit: ## Unit tests of all packages and repository tooling (no external ser
 	$(UV) run pytest packages tests/tooling -m "not integration"
 
 test-int: ## Integration tests (need Docker for Postgres)
-	$(UV) run pytest tests/integration -m integration || [ $$? -eq 5 ]
+	$(UV) run pytest tests/integration packages -m integration || [ $$? -eq 5 ]
 
 test-changed: ## Run only the tests impacted by the current diff
 	$(UV) run python scripts/test_changed.py

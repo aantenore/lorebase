@@ -102,8 +102,8 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync
-      - name: pytest -m integration (passes while no integration tests exist yet)
+      - run: uv sync --all-packages
+      - name: pytest -m integration (tests/integration and packages)
         run: make test-int
 
   web:

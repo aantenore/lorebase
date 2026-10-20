@@ -73,3 +73,6 @@ tests/perf/results/
 Thumbs.db
 *.code-workspace
 .history/
+
+# Session worktrees
+.claude/
