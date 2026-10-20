@@ -99,6 +99,18 @@ from lorebase_core.model.source import (
     TransformName,
 )
 from lorebase_core.model.trait import Trait, TraitAttribute
+from lorebase_core.model.yaml_schema import (
+    SCHEMA_FORMAT,
+    SchemaYamlError,
+    SchemaYamlProblem,
+    dump_schema,
+    load_schema,
+    locate_issues,
+    schema_from_document,
+    schema_to_document,
+    validate_schema_yaml,
+    yaml_path,
+)
 
 if TYPE_CHECKING:
     from lorebase_core.validate.issues import Issue
@@ -113,6 +125,7 @@ def validate_schema(schema: Schema, rules: SchemaRules | None = None) -> list[Is
 
 
 __all__ = [
+    "SCHEMA_FORMAT",
     "SECRET_REFERENCE_PREFIX",
     "AggregateDerivation",
     "AggregateFunction",
@@ -172,6 +185,8 @@ __all__ = [
     "Schema",
     "SchemaElement",
     "SchemaMigrationOrigin",
+    "SchemaYamlError",
+    "SchemaYamlProblem",
     "SearchWeight",
     "Sensitivity",
     "Source",
@@ -189,15 +204,22 @@ __all__ = [
     "UpdateRecordStep",
     "builtin_link_operation_names",
     "builtin_operation_names",
+    "dump_schema",
     "format_ref",
     "id_prefix",
     "is_ulid",
     "is_valid_api_name",
+    "load_schema",
+    "locate_issues",
     "new_id",
     "new_ulid",
     "parse_ref",
     "record_key",
     "render_key",
+    "schema_from_document",
+    "schema_to_document",
     "snake_case",
     "validate_schema",
+    "validate_schema_yaml",
+    "yaml_path",
 ]
