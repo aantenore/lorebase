@@ -1,0 +1,31 @@
+supplier_code,legal_name,country,city,tier,risk_score,status,onboarded_on,vat_number
+S-1001,Kavsen Alloys Sp. z o.o.,PL,Poznan,1,32,active,2024-02-26,PL000007919
+S-1002,Sundello Seals S.A.,PL,Poznan,3,38,active,2020-04-03,PL000015838
+S-1003,Velkrix Valves a.s.,CZ,Brno,1,16,active,2025-05-09,CZ000023757
+S-1004,Lokello Tooling a.s.,CZ,Plzen,1,52,active,2023-12-31,CZ000031676
+S-1005,Nimvane Precision S.L.,ES,Valencia,2,59,active,2020-05-25,ES000039595
+S-1006,Fandello Bearings Sp. z o.o.,PL,Gdansk,2,23,active,2019-08-12,PL000047514
+S-1007,Kavdor Controls Sp. z o.o.,PL,Wroclaw,3,57,active,2019-06-15,PL000055433
+S-1008,Loksen Precision SAS,FR,Toulouse,3,70,active,2024-10-12,FR000063352
+S-1009,Tarsnova Seals S.A.,ES,Zaragoza,3,36,active,2025-03-16,ES000071271
+S-1010,Orssen Seals S.r.l.,IT,Turin,3,61,active,2019-04-22,IT000079190
+S-1011,Bremont Filtration SA,FR,Nantes,3,56,active,2020-01-10,FR000087109
+S-1012,Yverbro Alloys S.L.,ES,Valencia,3,47,active,2020-02-11,ES000095028
+S-1013,Wexrix Filtration Sp. z o.o.,PL,Wroclaw,3,39,active,2018-06-03,PL000102947
+S-1014,Bardgard Castings AB,SE,Gothenburg,3,46,active,2018-10-11,SE000110866
+S-1015,Fandra Fasteners a.s.,CZ,Ostrava,3,33,active,2021-05-25,CZ000118785
+S-1016,Tarsvane Alloys AB,SE,Malmo,2,51,active,2024-08-07,SE000126704
+S-1017,Bardton Industries GmbH,DE,Dresden,3,54,active,2018-12-28,DE000134623
+S-1018,Orsmar Bearings AB,SE,Gothenburg,2,15,active,2021-03-06,SE000142542
+S-1019,Ulmton Castings S.L.,ES,Zaragoza,1,24,terminated,2017-11-04,ES000150461
+S-1020,Quornova Sensors AB,SE,Malmo,3,77,active,2018-03-14,SE000158380
+S-1021,Bardello Tooling S.p.A.,IT,Bologna,2,22,on_hold,2022-01-07,IT000166299
+S-1022,Bremar Sensors Sp. z o.o.,PL,Poznan,2,60,active,2022-08-18,PL000174218
+S-1023,Sundrix Alloys A.S.,TR,Bursa,3,38,active,2024-05-17,TR000182137
+S-1024,Kesstal Components S.A.,ES,Bilbao,3,28,active,2018-09-03,ES000190056
+S-1025,Kavvik Filtration A.S.,TR,Izmir,3,74,active,2021-12-04,TR000197975
+S-1026,Yvervik Valves s.r.o.,CZ,Brno,3,57,active,2019-08-05,CZ000205894
+S-1027,Wexvik Industries SAS,FR,Lyon,2,48,active,2025-03-16,FR000213813
+S-1028,Ilmkel Filtration S.r.l.,IT,Turin,2,25,active,2018-05-12,IT000221732
+S-1029,Yverlund Drives S.r.l.,IT,Milan,2,55,active,2024-07-13,IT000229651
+S-1030,Yversen Controls Sp. z o.o.,PL,Poznan,2,54,active,2024-02-04,PL000237570

@@ -1,0 +1,26 @@
+contract_number,title,status,start_date,end_date,annual_value,currency,incoterm,payment_terms_days,auto_renew,approved_by,approved_at
+C-3001,Framework supply agreement 2023 - Kavsen Alloys Sp. z o.o.,active,2023-02-14,2026-02-13,922000.00,PLN,DDP,30,false,contract-manager-3,2023-01-27T09:30:00.000000Z
+C-3002,Framework supply agreement 2023 - Sundello Seals S.A.,expired,2023-09-04,2025-09-03,387000.00,PLN,FCA,60,false,contract-manager-2,2023-07-28T09:30:00.000000Z
+C-3003,Framework supply agreement 2026 - Velkrix Valves a.s.,draft,2026-04-11,2030-04-10,871000.00,CZK,EXW,45,false,,
+C-3004,Framework supply agreement 2022 - Lokello Tooling a.s.,active,2022-07-23,2026-07-22,825000.00,CZK,EXW,60,true,contract-manager-1,2022-06-17T09:30:00.000000Z
+C-3005,Framework supply agreement 2027 - Nimvane Precision S.L.,terminated,2027-03-19,2029-03-18,1244000.00,EUR,DAP,30,true,contract-manager-2,2027-02-22T09:30:00.000000Z
+C-3006,Framework supply agreement 2027 - Fandello Bearings Sp. z o.o.,active,2027-01-04,2028-01-04,959000.00,PLN,FCA,90,true,contract-manager-3,2026-12-04T09:30:00.000000Z
+C-3007,Framework supply agreement 2025 - Kavdor Controls Sp. z o.o.,active,2025-02-12,2026-02-12,1261000.00,PLN,FCA,30,true,contract-manager-3,2025-01-05T09:30:00.000000Z
+C-3008,Framework supply agreement 2020 - Loksen Precision SAS,expired,2020-05-30,2025-05-29,1545000.00,EUR,DDP,60,false,contract-manager-1,2020-05-01T09:30:00.000000Z
+C-3009,Framework supply agreement 2026 - Tarsnova Seals S.A.,draft,2026-05-08,2031-05-07,734000.00,EUR,EXW,60,false,,
+C-3010,Framework supply agreement 2025 - Orssen Seals S.r.l.,active,2025-09-30,2027-09-30,1102000.00,EUR,EXW,30,false,contract-manager-1,2025-09-18T09:30:00.000000Z
+C-3011,Framework supply agreement 2024 - Bremont Filtration SA,active,2024-03-26,2028-03-25,1913000.00,EUR,DDP,45,true,contract-manager-3,2024-03-19T09:30:00.000000Z
+C-3012,Framework supply agreement 2025 - Yverbro Alloys S.L.,active,2025-03-03,2028-03-02,1904000.00,EUR,DDP,30,true,contract-manager-2,2025-02-03T09:30:00.000000Z
+C-3013,Framework supply agreement 2023 - Wexrix Filtration Sp. z o.o.,active,2023-04-13,2026-04-12,976000.00,PLN,DAP,30,false,contract-manager-3,2023-03-22T09:30:00.000000Z
+C-3014,Framework supply agreement 2020 - Bardgard Castings AB,expired,2020-08-08,2025-08-07,1903000.00,SEK,DDP,90,true,contract-manager-2,2020-07-05T09:30:00.000000Z
+C-3015,Framework supply agreement 2026 - Fandra Fasteners a.s.,draft,2026-02-03,2029-02-02,47000.00,CZK,FCA,90,true,,
+C-3016,Framework supply agreement 2021 - Tarsvane Alloys AB,active,2021-08-02,2026-08-01,737000.00,SEK,DAP,60,false,contract-manager-1,2021-07-21T09:30:00.000000Z
+C-3017,Framework supply agreement 2027 - Bardton Industries GmbH,terminated,2027-11-30,2028-11-29,1170000.00,EUR,EXW,90,true,contract-manager-2,2027-10-25T09:30:00.000000Z
+C-3018,Framework supply agreement 2024 - Orsmar Bearings AB,active,2024-07-03,2028-07-02,1489000.00,SEK,EXW,90,false,contract-manager-1,2024-06-08T09:30:00.000000Z
+C-3019,Framework supply agreement 2022 - Ulmton Castings S.L.,active,2022-02-10,2026-02-09,1352000.00,EUR,EXW,60,false,contract-manager-3,2022-01-09T09:30:00.000000Z
+C-3020,Framework supply agreement 2023 - Quornova Sensors AB,expired,2023-06-16,2025-06-15,207000.00,SEK,DAP,60,false,contract-manager-1,2023-05-13T09:30:00.000000Z
+C-3021,Framework supply agreement 2026 - Bardello Tooling S.p.A.,draft,2026-02-06,2029-02-05,855000.00,EUR,EXW,60,false,,
+C-3022,Framework supply agreement 2026 - Bremar Sensors Sp. z o.o.,active,2026-03-30,2029-03-29,798000.00,PLN,DDP,30,false,contract-manager-1,2026-02-28T09:30:00.000000Z
+C-3023,Framework supply agreement 2025 - Sundrix Alloys A.S.,active,2025-08-22,2028-08-21,1231000.00,EUR,DAP,60,true,contract-manager-3,2025-08-06T09:30:00.000000Z
+C-3024,Framework supply agreement 2027 - Kesstal Components S.A.,active,2027-01-01,2028-12-31,1511000.00,EUR,FCA,30,false,contract-manager-3,2026-12-04T09:30:00.000000Z
+C-3025,Framework supply agreement 2024 - Kavvik Filtration A.S.,active,2024-02-08,2026-02-07,1596000.00,EUR,DDP,60,false,contract-manager-1,2024-01-23T09:30:00.000000Z
