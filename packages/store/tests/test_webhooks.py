@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,17 @@ from lorebase_store.webhooks import (
     verify,
     webhook_settings,
 )
-from lorebase_store.webhooks.delivery import backoff, scheme_problem, target_problem
+from lorebase_store.webhooks.delivery import (
+    DEAD,
+    DELIVERED,
+    Target,
+    _attempt,
+    _Claimed,
+    backoff,
+    check_target,
+    scheme_problem,
+    target_problem,
+)
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "config" / "lorebase.example.yaml"
 NOW = 1_800_000_000
@@ -75,6 +86,70 @@ async def test_names_resolving_to_private_addresses_are_refused() -> None:
     url = "https://hooks.example.com/x"
     assert await target_problem(url, settings, private) == "resolves to a private address"
     assert await target_problem(url, settings, public) is None
+
+
+async def test_every_resolved_address_is_checked() -> None:
+    async def mixed(host: str) -> list[str]:
+        return ["93.184.215.14", "127.0.0.1"]
+
+    async def nothing(host: str) -> list[str]:
+        return []
+
+    url = "https://hooks.example.com/x"
+    assert await target_problem(url, WebhookSettings(), mixed) == "resolves to a private address"
+    assert (await check_target(url, WebhookSettings(), nothing)).problem is not None
+    checked = await check_target(url, WebhookSettings(), _public)
+    assert checked == Target(None, ("93.184.215.14",))
+
+
+async def _public(host: str) -> list[str]:
+    return ["93.184.215.14"]
+
+
+class _Rebinding:
+    """A DNS answer that is public at first and private afterwards."""
+
+    def __init__(self) -> None:
+        self.lookups = 0
+
+    async def __call__(self, host: str) -> list[str]:
+        self.lookups += 1
+        return ["93.184.215.14"] if self.lookups == 1 else ["10.0.0.5"]
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    async def __call__(
+        self,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        timeout_s: float,
+        addresses: Sequence[str],
+    ) -> int:
+        self.calls.append((url, tuple(addresses)))
+        return 204
+
+
+async def test_sender_is_pinned_to_the_checked_addresses_and_rebinding_is_refused() -> None:
+    claimed = _Claimed("acme", 1, "https://hooks.example.com/x", b"k" * 32, "e", {}, 0)
+    resolve, send = _Rebinding(), _Recorder()
+
+    def clock() -> datetime:
+        return datetime(2026, 10, 21, tzinfo=UTC)
+
+    first = await _attempt(claimed, WebhookSettings(), send, clock, resolve)
+    assert first.status == DELIVERED
+    # one lookup per attempt, and the sender gets the addresses that lookup checked
+    assert resolve.lookups == 1
+    assert send.calls == [("https://hooks.example.com/x", ("93.184.215.14",))]
+
+    second = await _attempt(claimed, WebhookSettings(), send, clock, resolve)
+    assert second.status == DEAD
+    assert second.error == "target refused: resolves to a private address"
+    assert len(send.calls) == 1
 
 
 def test_backoff_grows_and_is_capped() -> None:

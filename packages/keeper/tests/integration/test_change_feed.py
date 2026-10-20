@@ -261,7 +261,7 @@ async def test_webhook_delivery_with_signature_and_retries(
     async with (
         keeper(seeded.app_url, webhooks=LOCAL_WEBHOOKS) as http,
         app_sessions(seeded.app_url) as sessions,
-        httpx.AsyncClient() as client,
+        httpx.AsyncClient(trust_env=False) as client,
     ):
         send = HttpxSender(client)
         await deliver_pending(sessions, settings, send, writes=writes)  # drain older events

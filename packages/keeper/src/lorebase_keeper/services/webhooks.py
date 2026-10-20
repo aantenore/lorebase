@@ -1,13 +1,20 @@
 """HTTP sender of webhook deliveries, for `lorebase_store.webhooks.deliver_pending`.
 
 The store worker makes no HTTP calls itself; whoever runs it passes a `Sender`. This one uses
-an `httpx.AsyncClient` owned by the caller and never follows redirects (a redirect could lead
-to a target the URL checks did not see).
+an `httpx.AsyncClient` owned by the caller (build it with `trust_env=False`, so no proxy from
+the environment sits between the checks and the target) and:
+
+- connects to the addresses the worker checked, never to a fresh lookup of the host: the URL
+  is rewritten to the address while the `Host` header and the TLS server name (SNI and
+  certificate verification) keep the host name, so a DNS answer that changed after the check
+  cannot reach an internal service;
+- never follows redirects (a redirect could lead to a target the checks did not see).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import httpx
 
@@ -19,9 +26,47 @@ class HttpxSender:
         self._client = client
 
     async def __call__(
-        self, url: str, body: bytes, headers: Mapping[str, str], timeout_s: float
+        self,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        timeout_s: float,
+        addresses: Sequence[str],
+    ) -> int:
+        target = httpx.URL(url)
+        if not addresses:
+            return await self._post(target, body, dict(headers), timeout_s, {})
+        pinned = {**headers, "Host": target.netloc.decode("ascii")}
+        extensions = {"sni_hostname": target.host} if target.scheme == "https" else {}
+        failure: httpx.TransportError | None = None
+        for address in addresses:
+            try:
+                return await self._post(
+                    target.copy_with(host=address.split("%", 1)[0]),
+                    body,
+                    pinned,
+                    timeout_s,
+                    extensions,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+                failure = error  # the next checked address, never a new lookup
+        assert failure is not None
+        raise failure
+
+    async def _post(
+        self,
+        url: httpx.URL,
+        body: bytes,
+        headers: dict[str, str],
+        timeout_s: float,
+        extensions: dict[str, Any],
     ) -> int:
         response = await self._client.post(
-            url, content=body, headers=dict(headers), timeout=timeout_s, follow_redirects=False
+            url,
+            content=body,
+            headers=headers,
+            timeout=timeout_s,
+            follow_redirects=False,
+            extensions=extensions,
         )
         return response.status_code
