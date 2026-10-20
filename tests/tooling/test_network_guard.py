@@ -6,19 +6,17 @@ import socket
 
 import pytest
 
-from conftest import NetworkAccessError
-
 
 def test_tcp_connection_is_refused() -> None:
     with (
         socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock,
-        pytest.raises(NetworkAccessError),
+        pytest.raises(RuntimeError, match="network access is disabled"),
     ):
         sock.connect(("127.0.0.1", 9))
 
 
 def test_name_resolution_is_refused() -> None:
-    with pytest.raises(NetworkAccessError):
+    with pytest.raises(RuntimeError, match="network access is disabled"):
         socket.getaddrinfo("example.org", 443)
 
 
