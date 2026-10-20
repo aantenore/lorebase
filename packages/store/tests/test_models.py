@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from lorebase_store.migrations import DYNAMIC_INDEX_PREFIXES, head_revisions, include_object
 from lorebase_store.models import metadata
 
 DESIGN_TABLES = {
@@ -79,3 +80,15 @@ def test_named_indexes_and_constraints() -> None:
         "ix_jobs_claimable",
         "ix_outbox_undelivered",
     } <= indexes
+    assert not any(str(name).startswith(DYNAMIC_INDEX_PREFIXES) for name in indexes)
+
+
+def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
+    assert not include_object(None, "objects_p3", "table", True, None)
+    assert include_object(None, "objects", "table", False, None)
+    assert not include_object(None, "embeddings_hnsw_384", "index", True, None)
+    assert include_object(None, "ix_jobs_claimable", "index", True, None)
+
+
+def test_head_revision_is_the_initial_schema() -> None:
+    assert head_revisions() == ("0001",)

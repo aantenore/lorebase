@@ -18,3 +18,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lorebase_store"]
+
+# Ship the Alembic environment so installed services can resolve the expected head revisions.
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "lorebase_store/_migrations"
