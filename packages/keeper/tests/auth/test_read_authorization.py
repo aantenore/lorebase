@@ -10,7 +10,7 @@ import pytest
 from lorebase_keeper.auth.config import AuthzSettings
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
-from lorebase_keeper.auth.rbac import Authorizer
+from lorebase_keeper.auth.rbac import AccessContext, Authorizer
 from lorebase_keeper.context import StoreAccess
 from lorebase_keeper.errors import NOT_FOUND, ProblemError
 from lorebase_keeper.services.reads import (
@@ -102,9 +102,11 @@ async def read(
     permissions: Sequence[Permission] = READ,
     max_depth: int = 100,
     source: FakeSource | None = None,
+    kind: str | None = None,
 ) -> ReadTarget:
     principal = user()
-    wide = all([await authorizer.allows(principal, p, "acme") for p in permissions])
+    context = AccessContext(kind=kind)
+    wide = all([await authorizer.allows(principal, p, "acme", context) for p in permissions])
     return await authorize_read(
         source or FakeSource(),
         authorizer,
@@ -115,6 +117,7 @@ async def read(
         at=at,
         wide=wide,
         max_depth=max_depth,
+        kind=kind,
     )
 
 
@@ -199,6 +202,15 @@ async def test_kind_scoped_grant_reaches_no_revision(store: Any) -> None:
     subject = Authorizer(AuthzSettings(), store=store)
     await denied(subject, at=A1.hex())
     await denied(subject, branch="agent/a")
+
+
+async def test_kind_scoped_grant_reads_its_kind_at_any_revision(store: Any) -> None:
+    store.add_grant("acme", "usr_u", "viewer", GrantScope.KIND, "Supplier")
+    subject = Authorizer(AuthzSettings(), store=store)
+    data = (Permission.DATA_READ,)
+    assert (await read(subject, at=X.hex(), permissions=data, kind="Supplier")).revision == X
+    assert (await read(subject, at="v-m3", permissions=data, kind="Supplier")).revision == M3
+    await denied(subject, at=X.hex(), permissions=data, kind="Part")
 
 
 # Domain-wide grant --------------------------------------------------------------------------

@@ -142,6 +142,9 @@ async def test_branch_grant_cannot_read_other_branches_through_revisions(
         assert await _status(http, key, f"/branches/{BRANCH}/log") == 200
         assert await _status(http, key, f"/revisions/{revs['feature']}", branch=BRANCH) == 200
         assert await _status(http, key, f"/revisions/{revs['data']}", branch=BRANCH) == 200
+        # a Revision reachable from a granted branch needs no branch to be named
+        assert await _status(http, key, f"/revisions/{revs['data']}/counts") == 200
+        assert await _status(http, key, f"/revisions/{revs['data']}") == 200
         assert (
             await _status(
                 http, key, "/diff", **{"from": revs["data"], "to": BRANCH, "branch": BRANCH}
@@ -165,7 +168,7 @@ async def test_branch_grant_cannot_read_other_branches_through_revisions(
         assert await _status(http, key, f"/revisions/{revs['main_only']}") == 403
         assert await _status(http, key, f"/revisions/{revs['main_only']}", branch=BRANCH) == 403
         assert await _status(http, key, "/revisions/audit-main/changeset", branch=BRANCH) == 403
-        assert await _status(http, key, f"/revisions/{revs['data']}/counts") == 403
+        assert await _status(http, key, f"/revisions/{revs['main_only']}/counts") == 403
         assert (
             await _status(
                 http,

@@ -27,8 +27,6 @@ from lorebase_keeper.readiness import (
 )
 from lorebase_keeper.routes.admin import router as admin_router
 from lorebase_keeper.routes.domain_api import domain_routers
-from lorebase_keeper.routes.read import router as read_router
-from lorebase_keeper.routes.revisions import router as revisions_router
 from lorebase_keeper.routes.whoami import router as whoami_router
 from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import ConfigError, Settings, load_settings
@@ -131,8 +129,6 @@ def create_app(
     app.include_router(health_router)
     app.include_router(whoami_router, prefix=keeper.api_prefix)
     app.include_router(admin_router, prefix=keeper.api_prefix)
-    app.include_router(read_router, prefix=keeper.api_prefix)
-    app.include_router(revisions_router, prefix=keeper.api_prefix)
     for router in domain_routers():  # last: branch routes match hierarchical names
         app.include_router(router, prefix=keeper.api_prefix)
 

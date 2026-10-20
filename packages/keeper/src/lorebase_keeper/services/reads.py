@@ -1,10 +1,12 @@
 """Authorization of reads against the Revision actually read (design 10.2).
 
-A request that names a branch, a tag or a Revision id (`branch`, `at`, a branch `source`) is
-resolved first; the permission is then checked against what the name resolved to:
+Every read path (records and links, query and search, Revisions, log and diff, schema, branch
+listings) resolves what it reads first and then checks the permission against it:
 
-- a Domain-wide grant (not narrowed to a branch, Kind or Operation) covers every Revision;
-- a branch, or `at` naming a branch, is checked with `AccessContext(branch=<that branch>)`;
+- a grant not narrowed to a branch (Domain-wide, or narrowed to the Kind being read) covers
+  every Revision;
+- a branch, or `at` / a diff side naming a branch, is checked with
+  `AccessContext(branch=<that branch>)`;
 - a tag or a bare Revision id is a pointer into the history: it is allowed when the caller may
   read some branch from whose head the Revision is reachable, following parents for at most
   `keeper.reads.reachability_max_depth` hops.
@@ -24,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lorebase_keeper.auth.deps import missing_permission
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
-from lorebase_keeper.auth.rbac import NO_CONTEXT, AccessContext, Authorizer
+from lorebase_keeper.auth.rbac import AccessContext, Authorizer
 from lorebase_keeper.context import StoreAccess, require_domain, resolve_revision
 from lorebase_keeper.errors import ProblemError
 from lorebase_store.models.enums import RefKind
@@ -109,6 +111,72 @@ async def reachable(
     return False
 
 
+@dataclass(frozen=True)
+class ReadGuard:
+    """A caller reading one Domain, whose permissions are checked against what is read.
+
+    `kind` is the Kind the request reads, when it names one, so grants narrowed to that Kind
+    apply.
+    """
+
+    authorizer: Authorizer
+    principal: Principal
+    permissions: tuple[Permission, ...]
+    domain_id: str
+    max_depth: int
+    kind: str | None = None
+
+    async def may(self, branch: str | None = None) -> bool:
+        """Every permission for `branch`; `None` asks for grants not narrowed to branches."""
+        context = AccessContext(kind=self.kind, branch=branch)
+        return all(
+            [
+                await self.authorizer.allows(self.principal, p, self.domain_id, context)
+                for p in self.permissions
+            ]
+        )
+
+    async def wide(self) -> bool:
+        """Whether the grants cover every Revision (none of them is narrowed to branches)."""
+        return await self.may(None)
+
+    async def precheck(self) -> None:
+        """403 before any lookup when no grant of the caller holds a permission at all."""
+        for permission in self.permissions:
+            if not await self.authorizer.allows_anywhere(
+                self.principal, permission, self.domain_id
+            ):
+                raise missing_permission(permission, self.domain_id)
+
+    def denied(self) -> ProblemError:
+        return missing_permission(self.permissions[0], self.domain_id)
+
+    async def require_branch(self, name: str) -> None:
+        if not await self.may(name):
+            raise self.denied()
+
+    async def require(self, source: ReadSource, target: ReadTarget, *, wide: bool) -> None:
+        """Require the permissions for the Revision `target` resolved to (see module doc)."""
+        if wide:
+            return
+        if target.kind is RefKind.BRANCH:
+            assert target.ref is not None
+            await self.require_branch(target.ref)
+            return
+        readable = [
+            head for name, head in (await source.branch_heads()).items() if await self.may(name)
+        ]
+        if readable and await reachable(source, readable, target.revision, self.max_depth):
+            return
+        raise self.denied()
+
+    def unknown(self, error: ProblemError, *, wide: bool) -> ProblemError:
+        """The answer to a lookup that found nothing: the 404 itself only for wide callers."""
+        if wide or error.status_code != 404:
+            return error
+        return self.denied()
+
+
 async def authorize_read(
     source: ReadSource,
     authorizer: Authorizer,
@@ -120,39 +188,21 @@ async def authorize_read(
     at: str | None,
     wide: bool,
     max_depth: int,
+    kind: str | None = None,
 ) -> ReadTarget:
     """Resolve `branch`/`at` and require every permission for the Revision it resolved to.
 
-    `wide` tells whether the caller holds the permissions through Domain-wide grants, which
-    cover every Revision; the lookup then answers 404 for unknown names. Otherwise unknown
-    names are refused as forbidden, like Revisions the caller may not read.
+    `wide` tells whether the caller holds the permissions through grants not narrowed to
+    branches, which cover every Revision; the lookup then answers 404 for unknown names.
+    Otherwise unknown names are refused as forbidden, like Revisions the caller may not read.
     """
+    guard = ReadGuard(authorizer, principal, tuple(permissions), domain_id, max_depth, kind)
     try:
         target = await source.lookup(branch=branch, at=at)
     except ProblemError as error:
-        if wide or error.status_code != 404:
-            raise
-        raise missing_permission(permissions[0], domain_id) from None
-    if wide:
-        return target
-
-    async def may(context: AccessContext) -> bool:
-        return all([await authorizer.allows(principal, p, domain_id, context) for p in permissions])
-
-    if target.kind is RefKind.BRANCH:
-        assert target.ref is not None
-        if await may(AccessContext(branch=target.ref)):
-            return target
-        raise missing_permission(permissions[0], domain_id)
-
-    readable = [
-        head
-        for name, head in (await source.branch_heads()).items()
-        if await may(AccessContext(branch=name))
-    ]
-    if readable and await reachable(source, readable, target.revision, max_depth):
-        return target
-    raise missing_permission(permissions[0], domain_id)
+        raise guard.unknown(error, wide=wide) from None
+    await guard.require(source, target, wide=wide)
+    return target
 
 
 async def resolve_readable(
@@ -165,16 +215,16 @@ async def resolve_readable(
     branch: str | None,
     at: str | None,
     max_depth: int,
+    kind: str | None = None,
 ) -> ReadTarget:
     """The Revision a request reads, after requiring `permissions` for it.
 
     403 (naming the first permission) when the caller lacks them for what `branch`/`at`
     resolve to; 404 for unknown names only to callers whose grants are Domain-wide.
     """
-    for permission in permissions:
-        if not await authorizer.allows_anywhere(principal, permission, domain_id):
-            raise missing_permission(permission, domain_id)
-    wide = all([await authorizer.allows(principal, p, domain_id, NO_CONTEXT) for p in permissions])
+    guard = ReadGuard(authorizer, principal, tuple(permissions), domain_id, max_depth, kind)
+    await guard.precheck()
+    wide = await guard.wide()
     try:
         async with store.sessions() as session, session.begin():
             domain = await require_domain(session, domain_id)
@@ -188,8 +238,7 @@ async def resolve_readable(
                 at=at,
                 wide=wide,
                 max_depth=max_depth,
+                kind=kind,
             )
     except ProblemError as error:
-        if not wide and error.status_code == 404:
-            raise missing_permission(permissions[0], domain_id) from None
-        raise
+        raise guard.unknown(error, wide=wide) from None

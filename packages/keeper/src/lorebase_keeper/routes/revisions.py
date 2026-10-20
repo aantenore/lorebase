@@ -1,7 +1,8 @@
 """Revisions, log and diff API (design 6.3, 6.4, 6.7, 11.1).
 
-Revisions are named by id (hex), tag or branch (its head); `branch` anchors Revisions named
-by id or tag for callers whose grants are narrowed to branches (`reading.access`).
+Revisions are named by id (hex), tag or branch (its head). Callers whose grants are narrowed
+to branches read the branches they are granted and Revisions reachable from their heads
+(`services.reads`).
 `GET .../diff` pages through the changes between two Revisions (`format=ndjson` streams all of
 them as JSON lines, after a summary line); changes are expanded to Attribute level for Records
 and Links and to property level for schema elements.
@@ -20,7 +21,6 @@ from pydantic import BaseModel, Field
 from lorebase_core.model import Schema
 from lorebase_core.tree import kind_partition, relation_partition
 from lorebase_keeper.errors import Problem, ValidationProblem
-from lorebase_keeper.reading.access import ReadAccess, read_access
 from lorebase_keeper.reading.caching import respond
 from lorebase_keeper.reading.cursors import fingerprint, invalid_cursor, issue, position_of
 from lorebase_keeper.reading.diff import (
@@ -41,10 +41,10 @@ from lorebase_keeper.reading.history import (
 )
 from lorebase_keeper.reading.points import (
     REVISION_HEADER,
-    open_anchor,
     open_branch,
     open_domain,
     open_revision,
+    read_guard,
     schema_at,
 )
 from lorebase_keeper.reading.problems import invalid
@@ -54,6 +54,7 @@ from lorebase_keeper.reading.runtime import (
     ReadSessionDep,
     begin_read,
 )
+from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.repositories import ChangesetRepository, RevisionRepository, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 
@@ -70,14 +71,7 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     422: {"model": ValidationProblem, "description": "Invalid request."},
 }
 
-DataRead = Annotated[ReadAccess, Depends(read_access())]
-Anchor = Annotated[
-    str | None,
-    Query(
-        description="Branch the named Revisions belong to; lets grants narrowed to "
-        "branches read Revisions reachable from that branch."
-    ),
-]
+DataRead = Annotated[ReadGuard, Depends(read_guard())]
 _NOT_MODIFIED: dict[int | str, dict[str, Any]] = {
     304: {"description": "Not modified: If-None-Match names the current ETag."}
 }
@@ -180,12 +174,10 @@ async def get_revision(
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     request: Request,
-    branch: Anchor = None,
 ) -> Response:
     """A Revision by id, tag or branch name."""
     domain = await open_domain(session, access)
-    anchor = await open_anchor(session, access, domain, branch)
-    found = await open_revision(session, access, domain_id, revision, anchor=anchor)
+    found = await open_revision(session, access, domain, revision)
 
     async def produce() -> RevisionOut:
         return revision_out(found)
@@ -206,12 +198,10 @@ async def revision_counts(
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     request: Request,
-    branch: Anchor = None,
 ) -> Response:
     """Schema elements, Records per Kind and Links per Relation at a Revision."""
     domain = await open_domain(session, access)
-    anchor = await open_anchor(session, access, domain, branch)
-    found = await open_revision(session, access, domain_id, revision, anchor=anchor)
+    found = await open_revision(session, access, domain, revision)
 
     async def produce() -> CountsResponse:
         schema = await schema_at(session, runtime, domain_id, found)
@@ -236,14 +226,12 @@ async def revision_changeset(
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     request: Request,
-    branch: Anchor = None,
     limit: Limit = None,
     cursor: Cursor = None,
 ) -> Response:
     """The stored changeset (design 6.3), with provenance per changed Attribute."""
     domain = await open_domain(session, access)
-    anchor = await open_anchor(session, access, domain, branch)
-    found = await open_revision(session, access, domain_id, revision, anchor=anchor)
+    found = await open_revision(session, access, domain, revision)
 
     async def produce() -> ChangesPage:
         entries = await ChangesetRepository(
@@ -292,7 +280,6 @@ async def diff(
     request: Request,
     from_: Annotated[str, Query(alias="from", description="Revision id, tag or branch.")],
     to: Annotated[str, Query(description="Revision id, tag or branch.")],
-    branch: Anchor = None,
     kinds: Annotated[
         list[str] | None, Query(description="Kind api names (repeated or comma-separated).")
     ] = None,
@@ -309,9 +296,8 @@ async def diff(
 ) -> Response:
     """Element changes from `from` to `to`, with a per-partition summary."""
     domain = await open_domain(session, access)
-    anchor = await open_anchor(session, access, domain, branch)
-    old = await open_revision(session, access, domain_id, from_, anchor=anchor)
-    new = await open_revision(session, access, domain_id, to, anchor=anchor)
+    old = await open_revision(session, access, domain, from_)
+    new = await open_revision(session, access, domain, to)
 
     async def changes_between() -> tuple[list[HashChange], Schema, Schema, set[str] | None]:
         old_schema = await schema_at(session, runtime, domain_id, old)

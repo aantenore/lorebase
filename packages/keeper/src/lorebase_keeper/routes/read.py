@@ -20,10 +20,9 @@ from lorebase_core.query import Query as DslQuery
 from lorebase_core.query import QueryError, QueryPlan, resolve_query
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, records, search
-from lorebase_keeper.reading.access import ReadAccess, read_access
 from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
 from lorebase_keeper.reading.cursors import fingerprint
-from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, resolve_point
+from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, read_guard, resolve_point
 from lorebase_keeper.reading.problems import invalid, query_problem, request_problem
 from lorebase_keeper.reading.requests import (
     NeighborhoodRequest,
@@ -42,6 +41,7 @@ from lorebase_keeper.reading.views import (
     TraverseResponse,
     served,
 )
+from lorebase_keeper.services.reads import ReadGuard
 
 router = APIRouter(tags=["read"])
 
@@ -55,8 +55,8 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     422: {"model": ValidationProblem, "description": "Invalid request or query."},
 }
 
-DataRead = Annotated[ReadAccess, Depends(read_access())]
-KindRead = Annotated[ReadAccess, Depends(read_access(kind_param="kind"))]
+DataRead = Annotated[ReadGuard, Depends(read_guard())]
+KindRead = Annotated[ReadGuard, Depends(read_guard(kind_param="kind"))]
 Branch = Annotated[
     str | None, Query(description="Branch to read; default: the Domain's default branch.")
 ]
