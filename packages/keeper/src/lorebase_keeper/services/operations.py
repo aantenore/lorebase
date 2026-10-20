@@ -1,0 +1,558 @@
+"""Operation execution (design 10.1).
+
+    resolve the Operation (stored, or built-in from the schema of the branch head)
+    -> authorize (built-in: operation.execute; custom: operation.execute_custom and the
+       Operation's own `permissions`)
+    -> expressions gate (CEL is not enabled yet: preconditions are refused or, when settings
+       allow, skipped with a warning; steps and expression review policies are refused)
+    -> idempotency check (principal, key): same parameters replay, others conflict
+    -> review policy (custom `always`, or any Operation on a protected branch unless settings
+       allow direct commits): refused with a pointer to Proposals
+    -> take the branch lock, check the expected head
+    -> bind parameters, compute edits
+    -> dry run: commit inside a transaction that is rolled back; report edits and violations
+    -> commit (imports in batches, one Revision each), then the invocation record and an
+       `operation.invoke` audit entry in the transaction of the last Revision.
+
+Every Revision has origin `operation` (or `import` for bulk imports) with the invocation id as
+reference; every changed Attribute is attributed to a provenance entry naming the invocation,
+the Operation and the principal. The parameters hash is kept in the invocation record and in
+the audit entry.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+from pydantic import JsonValue
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from lorebase_core.canonical import from_hex, hex
+from lorebase_core.model import (
+    IdPrefix,
+    ImportOrigin,
+    Operation,
+    OperationOrigin,
+    ProvenanceEntry,
+    ReviewMode,
+    Schema,
+    new_id,
+    new_ulid,
+)
+from lorebase_core.revision import Origin
+from lorebase_core.validate import DataChange
+from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.auth.principals import Principal
+from lorebase_keeper.auth.rbac import AccessContext
+from lorebase_keeper.context import StoreAccess, author_of, require_branch, require_domain
+from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, VALIDATION_FAILED, ProblemError
+from lorebase_keeper.services.config import OperationSettings
+from lorebase_keeper.services.errors import (
+    EXPRESSIONS_NOT_ENABLED,
+    IDEMPOTENCY_CONFLICT,
+    REVIEW_REQUIRED,
+    Finding,
+    finding_documents,
+    findings_of,
+)
+from lorebase_keeper.services.operation_catalog import (
+    BuiltinOperation,
+    bind,
+    builtin_definition,
+    edit_document,
+    import_rows,
+    plan_edits,
+)
+from lorebase_store.auth import AuditRepository, NewAuditEntry
+from lorebase_store.bulk import chunks
+from lorebase_store.commit import (
+    BranchNotMaterializedError,
+    Change,
+    StaleHeadError,
+    ValidationFailedError,
+    commit,
+)
+from lorebase_store.commit.schema import load_compiled
+from lorebase_store.models.enums import InvocationStatus
+from lorebase_store.repositories import (
+    InvocationRepository,
+    InvocationRow,
+    MaterializedRepository,
+    RefRepository,
+)
+
+INVOKE_ACTION = "operation.invoke"
+INVOCATION_PREFIX = "inv"
+PRECONDITIONS_SKIPPED = "operation.preconditions_skipped"
+
+Check = Callable[[Permission, AccessContext], Awaitable[None]]
+
+
+class ExecutionStatus(StrEnum):
+    COMMITTED = "committed"
+    DRY_RUN = "dry_run"
+
+
+@dataclass(frozen=True)
+class ExecutionRequest:
+    """What the caller asked for."""
+
+    operation: str
+    parameters: Mapping[str, JsonValue]
+    branch: str | None = None
+    dry_run: bool = False
+    idempotency_key: str | None = None
+    expected_head: bytes | None = None
+    message: str | None = None
+
+
+@dataclass
+class ExecutionOutcome:
+    """Result of an execution or a dry run."""
+
+    status: ExecutionStatus
+    operation: str
+    branch: str
+    invocation_id: str
+    parameters_hash: str
+    head: bytes
+    revisions: list[bytes] = field(default_factory=list)
+    edits: list[dict[str, Any]] = field(default_factory=list)
+    edit_count: int = 0
+    violations: list[Finding] = field(default_factory=list)
+    warnings: list[Finding] = field(default_factory=list)
+    review_required: bool = False
+    replayed: bool = False
+
+
+@dataclass(frozen=True)
+class _Resolved:
+    name: str
+    custom: Operation | None
+    builtin: BuiltinOperation | None
+
+
+def parameters_hash(operation: str, branch: str, parameters: Mapping[str, JsonValue]) -> str:
+    """Stable digest of an invocation's inputs (idempotency, provenance, audit)."""
+    payload = json.dumps(
+        {"operation": operation, "branch": branch, "parameters": parameters},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def resolve(schema: Schema, name: str) -> _Resolved:
+    """A stored Operation of that api name, else a built-in; 404 otherwise."""
+    custom = schema.operation_by_api_name(name)
+    if custom is not None:
+        return _Resolved(name, custom, None)
+    builtin = builtin_definition(schema, name)
+    if builtin is None:
+        raise ProblemError(NOT_FOUND, f"No Operation {name!r} on this branch.")
+    return _Resolved(name, None, builtin)
+
+
+def expressions_gate(operation: Operation, settings: OperationSettings) -> list[Finding]:
+    """Refuse what needs CEL; returns warnings for skipped preconditions."""
+    warnings: list[Finding] = []
+    if operation.preconditions:
+        if not settings.skip_expression_preconditions:
+            raise ProblemError(
+                EXPRESSIONS_NOT_ENABLED,
+                f"Operation {operation.api_name!r} has preconditions written in CEL, and "
+                "expressions are not enabled yet: nothing was evaluated or executed.",
+                extensions={"operation": operation.api_name},
+            )
+        warnings.append(
+            Finding(
+                PRECONDITIONS_SKIPPED,
+                f"{len(operation.preconditions)} precondition(s) skipped: expressions are "
+                "not enabled",
+                ("preconditions",),
+                severity="warning",
+            )
+        )
+    if operation.steps or operation.review_policy.mode is ReviewMode.EXPRESSION:
+        raise ProblemError(
+            EXPRESSIONS_NOT_ENABLED,
+            f"Operation {operation.api_name!r} computes its edits or review policy with CEL, "
+            "and expressions are not enabled yet: nothing was executed.",
+            extensions={"operation": operation.api_name},
+        )
+    return warnings
+
+
+def review_required(resolved: _Resolved, *, protected: bool, settings: OperationSettings) -> bool:
+    """Whether the edits must go through a Proposal instead of a direct commit."""
+    if resolved.custom is not None and resolved.custom.review_policy.mode is ReviewMode.ALWAYS:
+        return True
+    return protected and not settings.direct_commit_on_protected
+
+
+def _origin(resolved: _Resolved, invocation_id: str) -> Origin:
+    return Origin(type="import" if _is_import(resolved) else "operation", ref=invocation_id)
+
+
+def _is_import(resolved: _Resolved) -> bool:
+    return resolved.builtin is not None and resolved.builtin.is_import
+
+
+def _provenance(
+    resolved: _Resolved, invocation_id: str, principal: Principal, at: Any
+) -> ProvenanceEntry:
+    origin: ImportOrigin | OperationOrigin
+    if _is_import(resolved):
+        origin = ImportOrigin(batch_id=invocation_id)
+    else:
+        origin = OperationOrigin(
+            invocation_id=invocation_id,
+            operation=resolved.name,
+            operation_id=None if resolved.custom is None else resolved.custom.id,
+            principal=principal.id,
+        )
+    return ProvenanceEntry(id=new_id(IdPrefix.PROVENANCE), origin=origin, actor=principal.id, at=at)
+
+
+def _permission(resolved: _Resolved, branch: str) -> tuple[Permission, AccessContext]:
+    if resolved.custom is not None:
+        return Permission.OPERATION_EXECUTE_CUSTOM, AccessContext(
+            operation=resolved.name, branch=branch
+        )
+    builtin = resolved.builtin
+    assert builtin is not None
+    kind = None if builtin.kind is None else builtin.kind.api_name
+    return Permission.OPERATION_EXECUTE, AccessContext(
+        kind=kind, operation=resolved.name, branch=branch
+    )
+
+
+def _replay(
+    found: InvocationRow, request: ExecutionRequest, branch: str, digest: str
+) -> ExecutionOutcome:
+    params = found.params
+    if params.get("parameters_hash") != digest:
+        raise ProblemError(
+            IDEMPOTENCY_CONFLICT,
+            "This Idempotency-Key was used with another Operation, branch or parameters.",
+            extensions={"invocation_id": found.id},
+        )
+    revisions = [from_hex(r) for r in params.get("revisions", [])]
+    return ExecutionOutcome(
+        status=ExecutionStatus.COMMITTED,
+        operation=request.operation,
+        branch=branch,
+        invocation_id=found.id,
+        parameters_hash=digest,
+        head=from_hex(params["head"]),
+        revisions=revisions,
+        edit_count=int(params.get("edit_count", 0)),
+        replayed=True,
+    )
+
+
+def rejected(
+    findings: Sequence[Finding],
+    *,
+    limit: int,
+    edits: Sequence[dict[str, Any]] = (),
+    committed: Sequence[bytes] = (),
+) -> ProblemError:
+    """422 with the violations; `committed` lists Revisions of earlier import batches."""
+    return ProblemError(
+        VALIDATION_FAILED,
+        f"{len(findings)} violation(s); the edits were not committed.",
+        extensions={
+            "status": "rejected",
+            "issues": finding_documents(findings, limit),
+            "issue_count": len(findings),
+            "edits": list(edits),
+            "committed_revisions": [hex(r) for r in committed],
+        },
+    )
+
+
+async def execute(
+    store: StoreAccess,
+    domain_id: str,
+    request: ExecutionRequest,
+    principal: Principal,
+    settings: OperationSettings,
+    *,
+    check: Check,
+    proposals_path: str,
+) -> ExecutionOutcome:
+    """Run an Operation on a branch (default: the Domain's default branch).
+
+    Raises `ProblemError` for refusals and violations and the commit pipeline's `CommitError`s
+    (`StaleHeadError`, `BranchLockTimeoutError`, ...), which the route maps.
+    """
+    started = time.monotonic()
+    async with store.sessions() as session:
+        await session.begin()
+        try:
+            return await _execute(
+                session,
+                store,
+                domain_id,
+                request,
+                principal,
+                settings,
+                check,
+                proposals_path,
+                started,
+            )
+        finally:
+            if session.in_transaction():
+                await session.rollback()
+
+
+async def _execute(
+    session: AsyncSession,
+    store: StoreAccess,
+    domain_id: str,
+    request: ExecutionRequest,
+    principal: Principal,
+    settings: OperationSettings,
+    check: Check,
+    proposals_path: str,
+    started: float,
+) -> ExecutionOutcome:
+    domain = await require_domain(session, domain_id)
+    branch = request.branch or domain.default_branch
+    ref = await require_branch(session, domain_id, branch)
+    writes = store.runtime.settings.writes
+    rows = MaterializedRepository(session, domain_id, branch, writes=writes)
+    compiled = await rows.schema()
+    if compiled is None:
+        raise BranchNotMaterializedError(f"branch {branch!r} has no materialized head")
+    schema = load_compiled(compiled.compiled)
+    resolved = resolve(schema, request.operation)
+    permission, context = _permission(resolved, branch)
+    await check(permission, context)
+    warnings: list[Finding] = []
+    if resolved.custom is not None:
+        _check_operation_permissions(resolved.custom, principal)
+        warnings = expressions_gate(resolved.custom, settings)
+    digest = parameters_hash(resolved.name, branch, request.parameters)
+    invocations = InvocationRepository(session, domain_id)
+    if request.idempotency_key is not None and not request.dry_run:
+        found = await invocations.by_key(principal.id, request.idempotency_key)
+        if found is not None:
+            return _replay(found, request, branch, digest)
+    needs_review = review_required(resolved, protected=ref.protected, settings=settings)
+    if needs_review and not request.dry_run:
+        raise ProblemError(
+            REVIEW_REQUIRED,
+            f"Edits of {resolved.name!r} on branch {branch!r} need review: run the Operation on "
+            "another branch and open a Proposal.",
+            extensions={"branch": branch, "operation": resolved.name, "proposals": proposals_path},
+        )
+
+    refs = RefRepository(session, domain_id)
+    await refs.lock(branch, timeout_ms=store.runtime.settings.commit.lock_timeout_ms)
+    ref = await require_branch(session, domain_id, branch)
+    if request.expected_head is not None and request.expected_head != ref.head:
+        raise StaleHeadError(branch, request.expected_head, ref.head)
+
+    invocation_id = f"{INVOCATION_PREFIX}_{new_ulid()}"
+    outcome = ExecutionOutcome(
+        status=ExecutionStatus.DRY_RUN if request.dry_run else ExecutionStatus.COMMITTED,
+        operation=resolved.name,
+        branch=branch,
+        invocation_id=invocation_id,
+        parameters_hash=digest,
+        head=ref.head,
+        warnings=warnings,
+        review_required=needs_review,
+    )
+    changes, findings = await _plan(schema, resolved, request, rows, settings)
+    outcome.edit_count = len(changes)
+    outcome.edits = [edit_document(schema, c) for c in changes[: settings.dry_run_max_edits]]
+    if findings:
+        if request.dry_run:
+            outcome.violations = findings
+            return outcome
+        raise rejected(findings, limit=settings.max_issues, edits=outcome.edits)
+
+    entry = _provenance(resolved, invocation_id, principal, store.clock())
+    origin = _origin(resolved, invocation_id)
+    message = request.message or f"{resolved.name} ({invocation_id})"
+    batch_size = settings.import_batch_rows if _is_import(resolved) else max(len(changes), 1)
+    batches = list(chunks(changes, batch_size)) or [[]]
+    head = ref.head
+    for position, batch in enumerate(batches):
+        if position and not request.dry_run:
+            await session.commit()
+            await session.begin()
+            await require_domain(session, domain_id)
+            await refs.lock(branch, timeout_ms=store.runtime.settings.commit.lock_timeout_ms)
+        try:
+            result = await commit(
+                session,
+                domain_id,
+                branch,
+                [Change(c, provenance=entry.id) for c in batch],
+                author=author_of(principal),
+                message=message,
+                origin=origin,
+                provenance=[entry],
+                expected_head=head,
+                runtime=store.runtime,
+                clock=store.clock,
+            )
+        except ValidationFailedError as error:
+            located = _locate(findings_of(error.issues), position, batch_size, resolved)
+            if request.dry_run:
+                outcome.violations = located
+                return outcome
+            raise rejected(
+                located,
+                limit=settings.max_issues,
+                edits=outcome.edits,
+                committed=outcome.revisions,
+            ) from error
+        if not result.no_op:
+            outcome.revisions.append(result.revision_id)
+            head = result.revision_id
+    if request.dry_run:
+        outcome.revisions = []
+        return outcome
+    try:
+        await _record(
+            session, domain_id, request, principal, outcome, resolved, store, started, head
+        )
+        await session.commit()
+    except IntegrityError:
+        # A concurrent request with the same idempotency key won: answer with its result.
+        await session.rollback()
+        async with store.sessions() as fresh, fresh.begin():
+            await require_domain(fresh, domain_id)
+            assert request.idempotency_key is not None
+            found = await InvocationRepository(fresh, domain_id).by_key(
+                principal.id, request.idempotency_key
+            )
+        if found is None:
+            raise
+        return _replay(found, request, branch, digest)
+    return outcome
+
+
+def _check_operation_permissions(operation: Operation, principal: Principal) -> None:
+    """A stored Operation's `permissions` restrict it to principals or groups listed there."""
+    if not operation.permissions or principal.method == "none":
+        return
+    if set(operation.permissions) & set(principal.subjects):
+        return
+    raise ProblemError(
+        FORBIDDEN,
+        f"Operation {operation.api_name!r} is restricted to {', '.join(operation.permissions)}.",
+        extensions={"operation": operation.api_name},
+    )
+
+
+async def _plan(
+    schema: Schema,
+    resolved: _Resolved,
+    request: ExecutionRequest,
+    rows: MaterializedRepository,
+    settings: OperationSettings,
+) -> tuple[list[DataChange], list[Finding]]:
+    builtin = resolved.builtin
+    if builtin is None:
+        return [], []  # a stored Operation without steps edits nothing
+    bound = bind(builtin, request.parameters)
+    if bound.findings:
+        return [], bound.findings
+    if builtin.is_import:
+        plan = import_rows(schema, builtin, bound.values, max_rows=settings.max_bulk_rows)
+    else:
+
+        async def read(kind_id: str, keys: Sequence[str]) -> dict[str, Mapping[str, JsonValue]]:
+            found = await rows.records(kind_id, keys)
+            return {key: row.values for key, row in found.items()}
+
+        plan = await plan_edits(builtin, bound.values, read)
+    return plan.changes, plan.findings
+
+
+def _locate(
+    findings: list[Finding], batch: int, batch_size: int, resolved: _Resolved
+) -> list[Finding]:
+    """Findings of an import batch keep their Record keys; the batch is noted in details."""
+    if not _is_import(resolved):
+        return findings
+    return [
+        Finding(
+            f.code,
+            f.message,
+            f.path,
+            f.severity,
+            f.kind,
+            f.relation,
+            f.key,
+            f.attribute,
+            {**f.details, "batch": batch, "batch_size": batch_size},
+        )
+        for f in findings
+    ]
+
+
+async def _record(
+    session: AsyncSession,
+    domain_id: str,
+    request: ExecutionRequest,
+    principal: Principal,
+    outcome: ExecutionOutcome,
+    resolved: _Resolved,
+    store: StoreAccess,
+    started: float,
+    head: bytes,
+) -> None:
+    """Invocation record and audit entry, in the transaction of the last Revision."""
+    revisions = [hex(r) for r in outcome.revisions]
+    await InvocationRepository(session, domain_id).insert(
+        InvocationRow(
+            id=outcome.invocation_id,
+            operation_id=resolved.custom.id if resolved.custom else resolved.name,
+            principal=principal.id,
+            params={
+                "operation": resolved.name,
+                "branch": outcome.branch,
+                "parameters": dict(request.parameters),
+                "parameters_hash": outcome.parameters_hash,
+                "head": hex(outcome.head),
+                "revisions": revisions,
+                "edit_count": outcome.edit_count,
+            },
+            status=InvocationStatus.COMMITTED,
+            revision_id=head,
+            proposal_id=None,
+            idempotency_key=request.idempotency_key,
+            created_at=store.clock(),
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+    )
+    await AuditRepository(session).append(
+        NewAuditEntry(
+            domain_id=domain_id,
+            actor=principal.id,
+            action=INVOKE_ACTION,
+            target=f"{outcome.branch}@{hex(head)}",
+            details={
+                "invocation_id": outcome.invocation_id,
+                "operation": resolved.name,
+                "parameters_hash": outcome.parameters_hash,
+                "revisions": revisions,
+                "edits": outcome.edit_count,
+            },
+        )
+    )

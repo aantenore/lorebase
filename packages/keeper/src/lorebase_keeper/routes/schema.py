@@ -38,6 +38,7 @@ from lorebase_keeper.services.errors import (
     protected_branch_problem,
     violations_problem,
 )
+from lorebase_keeper.services.operation_catalog import builtin_definition
 from lorebase_store.commit import CommitError
 
 router = APIRouter(tags=["schema"])
@@ -246,7 +247,12 @@ async def get_schema(
 def _element(schema: Schema, section: Section, name: str) -> dict[str, Any] | None:
     elements: dict[str, Any] = getattr(schema, section)
     found = elements.get(name) or next((e for e in elements.values() if e.api_name == name), None)
-    return None if found is None else dict(found.content())
+    if found is not None:
+        return dict(found.content())
+    if section == "operations":
+        builtin = builtin_definition(schema, name)
+        return None if builtin is None else builtin.document()
+    return None
 
 
 @router.get(
@@ -266,7 +272,11 @@ async def get_element(
     branch: Annotated[str | None, Query(description="Default: the default branch.")] = None,
     at: Annotated[str | None, Query(description="Revision id or tag.")] = None,
 ) -> dict[str, Any]:
-    """A Kind, Relation, Trait, Operation, Derivation or Source by api name or id."""
+    """A Kind, Relation, Trait, Operation, Derivation or Source by api name or id.
+
+    Built-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are
+    described with the parameters derived from the schema.
+    """
     await authorize(
         request, auth, principal, Permission.SCHEMA_READ, domain_id, AccessContext(branch=branch)
     )
