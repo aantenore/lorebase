@@ -27,6 +27,7 @@ from lorebase_core.merge.objects import ObjectStore, SchemaLoader, load_object
 from lorebase_core.merge.policies import MergePolicy
 from lorebase_core.model import Schema
 from lorebase_core.tree import NodeStore, TreeParams
+from lorebase_core.validate import SchemaRules
 
 __all__ = [
     "MISSING",
@@ -192,6 +193,8 @@ class Context:
     resolutions: Mapping[str, Resolution]
     directives: Directives
     virtual: bool = False
+    #: Options of the static checks of the merged schema.
+    rules: SchemaRules = field(default_factory=SchemaRules)
     conflicts: list[Conflict] = field(default_factory=list)
     auto: list[AutoResolution] = field(default_factory=list)
     out: Directives = field(default_factory=Directives)

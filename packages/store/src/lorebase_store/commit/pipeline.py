@@ -360,7 +360,9 @@ def _prepare(
         schema, upserted, removed = apply_schema_changes(
             old_schema, request.schema_changes, request.domain_id
         )
-        issues.extend(i for i in validate_schema(schema) if i.is_error)
+        issues.extend(
+            i for i in validate_schema(schema, request.runtime.schema.rules()) if i.is_error
+        )
         elements.extend(_schema_element(e) for e in upserted)
         elements.extend(_Element(PARTITION_SCHEMA, key, None) for key in removed)
         plan = plan_migrations(

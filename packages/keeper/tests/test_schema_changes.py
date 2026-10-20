@@ -18,16 +18,17 @@ from lorebase_keeper.services.schema import (
     target_schema,
 )
 from lorebase_store.commit import SchemaDelete, SchemaUpsert
+from lorebase_store.settings import SchemaSettings
 
 SUPPLY_SCHEMA = Path(__file__).resolve().parents[3] / "examples" / "supply" / "schema.yaml"
 
 
+RULES = SchemaSettings().rules()
+
+
 def supply_document() -> dict[str, Any]:
-    """The example schema without the elements that need expressions (not enabled yet)."""
+    """The example schema, CEL Operations and Derivations included."""
     document: dict[str, Any] = yaml.safe_load(SUPPLY_SCHEMA.read_text())
-    del document["operations"]
-    del document["derivations"]["single_sourced"]
-    del document["kinds"]["Part"]["attributes"]["single_sourced"]
     return document
 
 
@@ -43,7 +44,7 @@ def empty() -> Schema:
 
 def test_full_document_creates_every_element(empty: Schema, supply: Schema) -> None:
     target = target_schema(empty, ChangeSetInput(yaml=yaml.safe_dump(supply_document())))
-    assert static_issues(target) == []
+    assert static_issues(target, RULES) == []
     changes, described = diff_schemas(empty, target)
     created = {(c.section, c.api_name) for c in described if c.op == "create"}
     assert {("kinds", "Supplier"), ("relations", "supplied_by"), ("traits", "Located")} <= created
@@ -101,16 +102,22 @@ def test_static_issues_use_api_names(supply: Schema) -> None:
     document = supply_document()
     document["kinds"]["Supplier"]["attributes"]["risk_score"]["constraints"] = {"min": 9, "max": 1}
     target = target_schema(supply, ChangeSetInput(yaml=yaml.safe_dump(document)))
-    issues = static_issues(target)
+    issues = static_issues(target, RULES)
     assert issues
     assert issues[0].path[:4] == ("kinds", "Supplier", "attributes", "risk_score")
 
 
-def test_expressions_are_refused(supply: Schema) -> None:
-    full = yaml.safe_load(SUPPLY_SCHEMA.read_text())
-    target = target_schema(supply, ChangeSetInput(yaml=yaml.safe_dump(full)))
-    codes = {finding.code for finding in static_issues(target)}
+def test_expressions_follow_the_schema_settings(supply: Schema) -> None:
+    target = target_schema(supply, ChangeSetInput(yaml=yaml.safe_dump(supply_document())))
+    assert static_issues(target, RULES) == []
+    disabled = SchemaSettings(expressions_enabled=False).rules()
+    codes = {finding.code for finding in static_issues(target, disabled)}
     assert codes == {"schema.expressions_disabled"}
+    document = supply_document()
+    document["derivations"]["single_sourced"]["definition"]["expression"] = "supplier_count + 1"
+    broken = target_schema(supply, ChangeSetInput(yaml=yaml.safe_dump(document)))
+    (issue,) = static_issues(broken, RULES)
+    assert issue.code == "schema.expression_invalid"
 
 
 def test_domain_id_cannot_change(supply: Schema) -> None:

@@ -52,22 +52,8 @@ class Clock:
 
 
 def supply_schema() -> Schema:
-    """The example schema without what needs expressions, which commits do not enable yet:
-    Operations and expression Derivations (with the Attributes they derive)."""
-    schema = load_schema((EXAMPLE / "schema.yaml").read_text())
-    dropped = {d.id for d in schema.derivations.values() if d.definition.variant == "expression"}
-    kinds = {
-        kind_id: kind.model_copy(
-            update={
-                "attributes": {
-                    a.id: a for a in kind.attributes.values() if a.derivation_id not in dropped
-                }
-            }
-        )
-        for kind_id, kind in schema.kinds.items()
-    }
-    derivations = {k: d for k, d in schema.derivations.items() if k not in dropped}
-    return schema.model_copy(update={"kinds": kinds, "derivations": derivations, "operations": {}})
+    """The example schema, CEL Operations and Derivations included."""
+    return load_schema((EXAMPLE / "schema.yaml").read_text())
 
 
 def encode(attribute: Attribute, raw: str) -> Any:

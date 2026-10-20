@@ -189,6 +189,9 @@ def test_import_rows_locate_bad_rows(schema: Schema) -> None:
     assert isinstance(linked.changes[0], LinkUpsert)
 
 
+DISABLED = OperationSettings(expressions_enabled=False)
+
+
 def _custom(**fields: Any) -> Operation:
     return Operation(id=OPERATION_ID, api_name="flag_supplier", description="Flag.", **fields)
 
@@ -196,16 +199,19 @@ def _custom(**fields: Any) -> Operation:
 def test_preconditions_are_refused_unless_skipping_is_allowed() -> None:
     operation = _custom(preconditions=(Precondition(expression="true", message="m"),))
     with pytest.raises(ProblemError) as raised:
-        expressions_gate(operation, OperationSettings())
+        expressions_gate(operation, DISABLED)
     assert raised.value.problem.code == "expressions-not-enabled"
-    warnings = expressions_gate(operation, OperationSettings(skip_expression_preconditions=True))
+    warnings = expressions_gate(
+        operation,
+        OperationSettings(expressions_enabled=False, skip_expression_preconditions=True),
+    )
     assert warnings[0].severity == "warning"
 
 
 def test_steps_and_expression_review_policies_are_refused() -> None:
     policy = ReviewPolicy(mode=ReviewMode.EXPRESSION, expression="true")
     with pytest.raises(ProblemError):
-        expressions_gate(_custom(review_policy=policy), OperationSettings())
+        expressions_gate(_custom(review_policy=policy), DISABLED)
 
 
 def test_review_policy(schema: Schema) -> None:
@@ -268,9 +274,9 @@ def _keys() -> Any:
     return lambda: f"01KF00000000000000000000{next(counter):02d}"
 
 
-def test_expressions_are_off_by_default_and_bounded_by_settings() -> None:
+def test_expressions_are_on_by_default_and_bounded_by_settings() -> None:
     settings = OperationSettings()
-    assert settings.expressions_enabled is False
+    assert settings.expressions_enabled is True
     assert settings.expression_limits == ExprLimits()
     tuned = OperationSettings.model_validate({"expression_limits": {"max_steps": 50}})
     assert tuned.expression_limits.max_steps == 50

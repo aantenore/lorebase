@@ -1084,10 +1084,10 @@ def _parser() -> argparse.ArgumentParser:
 async def _main(args: argparse.Namespace) -> int:
     from lorebase_platform.settings import load_settings
     from lorebase_store.db import create_engine
-    from lorebase_store.settings import database_settings, store_settings
+    from lorebase_store.settings import database_settings
 
     settings = load_settings()
-    runtime = StoreRuntime.from_settings(store_settings(settings))
+    runtime = StoreRuntime.from_loaded(settings)
     engine = create_engine(database_settings(settings), pooled=False, statement_timeout_ms=0)
     try:
         if args.command == "export":

@@ -54,7 +54,7 @@ from lorebase_core.tree import (
     tree_diff,
     tree_entries,
 )
-from lorebase_core.validate import IndexView
+from lorebase_core.validate import IndexView, SchemaRules
 
 __all__ = [
     "IndexViewFactory",
@@ -83,7 +83,8 @@ class MergeInput:
 
     ``base`` overrides the merge base search. Without ``schema_loader`` schemas are read from
     the ``schema`` partition; without ``index_view`` the target head is read from its tree.
-    ``resolutions`` are matched to Conflicts by fingerprint.
+    ``resolutions`` are matched to Conflicts by fingerprint. ``schema_rules`` are the options
+    of the static checks of the merged schema (the defaults when unset).
     """
 
     store: NodeStore
@@ -99,6 +100,7 @@ class MergeInput:
     policy: MergePolicy = field(default_factory=MergePolicy)
     tree_params: TreeParams = field(default_factory=TreeParams)
     resolutions: tuple[Resolution, ...] = ()
+    schema_rules: SchemaRules | None = None
 
 
 class MergeResult(StrEnum):
@@ -350,13 +352,14 @@ class _Engine:
             resolutions=resolutions,
             directives=directives.copy(),
             virtual=index is None,
+            rules=self.input.schema_rules or SchemaRules(),
         )
         ctx.schema_hashes = {side: _schema_hashes(self.store, root) for side, root in roots.items()}
         if index is not None:
             ctx.known_issues = (
                 known
                 if known is not None
-                else known_static_issues([schemas[Side.OURS], schemas[Side.THEIRS]])
+                else known_static_issues([schemas[Side.OURS], schemas[Side.THEIRS]], ctx.rules)
             )
         changes: dict[Side, SideChanges] = {
             side: side_changes(tree_diff(self.store, roots[Side.BASE], roots[side]))
