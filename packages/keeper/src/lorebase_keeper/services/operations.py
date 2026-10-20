@@ -3,13 +3,16 @@
     resolve the Operation (stored, or built-in from the schema of the branch head)
     -> authorize (built-in: operation.execute; custom: operation.execute_custom and the
        Operation's own `permissions`)
-    -> expressions gate (CEL is not enabled yet: preconditions are refused or, when settings
-       allow, skipped with a warning; steps and expression review policies are refused)
+    -> expressions gate (unless `expressions_enabled`: preconditions are refused or, when
+       settings allow, skipped with a warning; steps and expression review policies are
+       refused)
     -> idempotency check (principal, key): same parameters replay, others conflict
     -> review policy (custom `always`, or any Operation on a protected branch unless settings
        allow direct commits): refused with a pointer to Proposals
     -> take the branch lock, check the expected head
-    -> bind parameters, compute edits
+    -> bind parameters, compute edits (stored Operations with `expressions_enabled`: evaluate
+       preconditions, the review policy expression (true: refused as above) and the steps
+       with `lorebase_core.expr`, loading the Records the expressions read)
     -> dry run: commit inside a transaction that is rolled back; report edits and violations
     -> commit (imports in batches, one Revision each), then the invocation record and an
        `operation.invoke` audit entry in the transaction of the last Revision.
@@ -27,6 +30,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -35,6 +39,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.canonical import from_hex, hex
+from lorebase_core.expr import (
+    EvaluationContext,
+    ExprError,
+    ExprErrorCode,
+    MemoryResolver,
+    RecordNotLoaded,
+    RecordRequest,
+    check_preconditions,
+    compile_operation,
+    evaluate_review_policy,
+    plan_steps,
+)
+from lorebase_core.expr import Principal as ExpressionPrincipal
 from lorebase_core.model import (
     IdPrefix,
     ImportOrigin,
@@ -63,7 +80,10 @@ from lorebase_keeper.services.errors import (
     findings_of,
 )
 from lorebase_keeper.services.operation_catalog import (
+    Action,
     BuiltinOperation,
+    Parameter,
+    RecordReader,
     bind,
     builtin_definition,
     edit_document,
@@ -91,6 +111,7 @@ from lorebase_store.repositories import (
 INVOKE_ACTION = "operation.invoke"
 INVOCATION_PREFIX = "inv"
 PRECONDITIONS_SKIPPED = "operation.preconditions_skipped"
+PRECONDITION_FAILED = "operation.precondition_failed"
 
 Check = Callable[[Permission, AccessContext], Awaitable[None]]
 
@@ -162,8 +183,11 @@ def resolve(schema: Schema, name: str) -> _Resolved:
 
 
 def expressions_gate(operation: Operation, settings: OperationSettings) -> list[Finding]:
-    """Refuse what needs CEL; returns warnings for skipped preconditions."""
+    """Refuse what needs CEL unless expressions are enabled; returns warnings for skipped
+    preconditions."""
     warnings: list[Finding] = []
+    if settings.expressions_enabled:
+        return warnings
     if operation.preconditions:
         if not settings.skip_expression_preconditions:
             raise ProblemError(
@@ -350,12 +374,7 @@ async def _execute(
             return _replay(found, request, branch, digest)
     needs_review = review_required(resolved, protected=ref.protected, settings=settings)
     if needs_review and not request.dry_run:
-        raise ProblemError(
-            REVIEW_REQUIRED,
-            f"Edits of {resolved.name!r} on branch {branch!r} need review: run the Operation on "
-            "another branch and open a Proposal.",
-            extensions={"branch": branch, "operation": resolved.name, "proposals": proposals_path},
-        )
+        raise _review_problem(resolved.name, branch, proposals_path)
 
     refs = RefRepository(session, domain_id)
     await refs.lock(branch, timeout_ms=store.runtime.settings.commit.lock_timeout_ms)
@@ -374,7 +393,12 @@ async def _execute(
         warnings=warnings,
         review_required=needs_review,
     )
-    changes, findings = await _plan(schema, resolved, request, rows, settings)
+    planned = await _plan(schema, resolved, request, rows, settings, principal, store.clock())
+    changes, findings = planned.changes, planned.findings
+    if planned.review and not needs_review:
+        outcome.review_required = True
+        if not request.dry_run:
+            raise _review_problem(resolved.name, branch, proposals_path)
     outcome.edit_count = len(changes)
     outcome.edits = [edit_document(schema, c) for c in changes[: settings.dry_run_max_edits]]
     if findings:
@@ -446,6 +470,15 @@ async def _execute(
     return outcome
 
 
+def _review_problem(operation: str, branch: str, proposals_path: str) -> ProblemError:
+    return ProblemError(
+        REVIEW_REQUIRED,
+        f"Edits of {operation!r} on branch {branch!r} need review: run the Operation on "
+        "another branch and open a Proposal.",
+        extensions={"branch": branch, "operation": operation, "proposals": proposals_path},
+    )
+
+
 def _check_operation_permissions(operation: Operation, principal: Principal) -> None:
     """A stored Operation's `permissions` restrict it to principals or groups listed there."""
     if not operation.permissions or principal.method == "none":
@@ -465,23 +498,132 @@ async def _plan(
     request: ExecutionRequest,
     rows: MaterializedRepository,
     settings: OperationSettings,
-) -> tuple[list[DataChange], list[Finding]]:
+    principal: Principal,
+    now: datetime,
+) -> PlannedEdits:
+    async def read(kind_id: str, keys: Sequence[str]) -> dict[str, Mapping[str, JsonValue]]:
+        found = await rows.records(kind_id, keys)
+        return {key: row.values for key, row in found.items()}
+
     builtin = resolved.builtin
     if builtin is None:
-        return [], []  # a stored Operation without steps edits nothing
+        custom = resolved.custom
+        if custom is None or not settings.expressions_enabled:
+            return PlannedEdits()  # without expressions a stored Operation edits nothing
+        return await plan_custom(schema, custom, request.parameters, read, principal, now, settings)
     bound = bind(builtin, request.parameters)
     if bound.findings:
-        return [], bound.findings
+        return PlannedEdits(findings=bound.findings)
     if builtin.is_import:
         plan = import_rows(schema, builtin, bound.values, max_rows=settings.max_bulk_rows)
     else:
-
-        async def read(kind_id: str, keys: Sequence[str]) -> dict[str, Mapping[str, JsonValue]]:
-            found = await rows.records(kind_id, keys)
-            return {key: row.values for key, row in found.items()}
-
         plan = await plan_edits(builtin, bound.values, read)
-    return plan.changes, plan.findings
+    return PlannedEdits(changes=plan.changes, findings=plan.findings)
+
+
+# Stored Operations with expressions ------------------------------------------------------------
+
+
+@dataclass
+class PlannedEdits:
+    """Edits of an execution, or the findings preventing them; `review` is true when an
+    expression review policy sends the edits to a Proposal."""
+
+    changes: list[DataChange] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
+    review: bool = False
+
+
+def _expression_finding(error: ExprError) -> Finding:
+    details: dict[str, Any] = {}
+    if error.source is not None:
+        details["expression"] = error.source
+    if error.position is not None:
+        details["line"] = error.position.line
+        details["column"] = error.position.column
+    return Finding(error.code.value, error.describe(), tuple(error.path), details=details)
+
+
+async def _with_records[T](
+    compute: Callable[[], T],
+    resolver: MemoryResolver,
+    read: RecordReader,
+    settings: OperationSettings,
+) -> T:
+    """Run a pure evaluation, loading each Record it asks for, then run it again."""
+    for _ in range(settings.expression_limits.max_record_lookups + 1):
+        try:
+            return compute()
+        except RecordNotLoaded as missing:
+            request = missing.request
+            if not isinstance(request, RecordRequest):
+                raise ExprError(
+                    ExprErrorCode.EVALUATION, "links() is not available in Operations yet"
+                ) from None
+            found = await read(request.kind, [request.key])
+            resolver.records[(request.kind, request.key)] = found.get(request.key)
+    raise ExprError(
+        ExprErrorCode.LIMIT_EXCEEDED,
+        f"more than {settings.expression_limits.max_record_lookups} Record lookups",
+    )
+
+
+async def plan_custom(
+    schema: Schema,
+    operation: Operation,
+    parameters: Mapping[str, JsonValue],
+    read: RecordReader,
+    principal: Principal,
+    now: datetime,
+    settings: OperationSettings,
+    *,
+    mint_key: Callable[[], str] = new_ulid,
+) -> PlannedEdits:
+    """Bind parameters, check preconditions, evaluate the review policy and plan the steps
+    of a stored Operation with the expression engine (pure apart from `read`)."""
+    definition = BuiltinOperation(  # only the parameters matter to `bind`
+        operation.api_name,
+        Action.CREATE,
+        operation.description,
+        tuple(Parameter(p.name, p.type, p.required, p.description) for p in operation.parameters),
+    )
+    bound = bind(definition, parameters)
+    if bound.findings:
+        return PlannedEdits(findings=bound.findings)
+    resolver = MemoryResolver()
+    context = EvaluationContext(
+        now=now,
+        resolver=resolver,
+        principal=ExpressionPrincipal(principal.id, principal.subjects),
+        limits=settings.expression_limits,
+        mint_key=mint_key,
+    )
+    try:
+        compiled = compile_operation(schema, operation, settings.expression_limits)
+        failures = await _with_records(
+            lambda: check_preconditions(compiled, bound.values, context), resolver, read, settings
+        )
+        if failures:
+            return PlannedEdits(
+                findings=[
+                    _expression_finding(f.error)
+                    if f.error is not None
+                    else Finding(PRECONDITION_FAILED, f.message, ("preconditions", f.index))
+                    for f in failures
+                ]
+            )
+        review = await _with_records(
+            lambda: evaluate_review_policy(compiled, bound.values, context),
+            resolver,
+            read,
+            settings,
+        )
+        steps = await _with_records(
+            lambda: plan_steps(compiled, bound.values, context), resolver, read, settings
+        )
+    except ExprError as error:
+        return PlannedEdits(findings=[_expression_finding(error)])
+    return PlannedEdits(changes=steps.changes, review=review)
 
 
 def _locate(

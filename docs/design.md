@@ -632,7 +632,7 @@ Engineering notes:
 
 ### 6.15 Implementation notes
 
-Decisions taken in `lorebase_core` (`canonical`, `tree`, `revision`, `merge`) while implementing 6.1 to 6.10. They refine the text above; where a detail differs, this section describes the code. The engine is pure: it reads and writes through the `NodeStore`, `ObjectStore` and `RevisionGraph` protocols, and persisting merge attempts or committing a merged tree belongs to the commit pipeline and the store, which are not implemented yet.
+Decisions taken in `lorebase_core` (`canonical`, `tree`, `revision`, `merge`, `expr`) while implementing 6.1 to 6.10 and 5.7 to 5.8. They refine the text above; where a detail differs, this section describes the code. The engine is pure: it reads and writes through the `NodeStore`, `ObjectStore` and `RevisionGraph` protocols, and persisting merge attempts or committing a merged tree belongs to the commit pipeline and the store, which are not implemented yet.
 
 **Canonical form**
 - `null` inside an array is kept, because positions are significant. `null` as an object member is omitted (null and absent are the same).
@@ -689,7 +689,16 @@ Choice meanings: `ours`, `theirs`, `base` take that side's value, element or sta
 | `sample_size` | `10` | Member keys listed in a grouped Conflict |
 | `atomic_properties` | `type`, `default`, `definition` | Schema properties merged as whole values instead of entry by entry |
 
+**Expressions** (`expr/`, AC-06)
+- cel-python supplies the CEL grammar and parser; type checking and evaluation are Lorebase's own, over a small AST, because cel-python has no static checker, no decimal and no evaluation budget. Regular expressions run on RE2.
+- Types: CEL types plus `decimal` (exact; `int` operands promote, `double` does not mix), `date`, `ref(Kind)` and `record(Kind)`. Enum Attributes are closed string types: comparing one with a string outside its values, or assigning such a literal, is a type error.
+- Environments: Operation expressions see `params.<name>`, each parameter by name, `principal.id`, `principal.subjects`, `record(ref)`, `links(ref, "relation")` and, in steps, `$step[n]` (rewritten to `_step[n]` before parsing). Derivations and aggregate filters see their Record's Attributes, `key` and `links.<relation>` (one hop).
+- Evaluation is deterministic (the caller passes `now`) and bounded by `ExprLimits` (exposed as `keeper.operations.expression_limits`). An absent value is `null`; ordering or arithmetic on it is an error that points to `has()`. `&&` and `||` absorb an error when the other side decides.
+- Records come from a caller's `RecordResolver`; one that has not loaded a Record raises `RecordNotLoaded` and the caller loads it and evaluates again. Steps see the Records written by earlier steps.
+- Not supported: unsigned integers, message construction, three-argument `map`, time zones in timestamp accessors, `links()` in Keeper (no Link read by endpoint yet).
+
 **Not implemented yet**
+- Recomputation of derived values: `expr` computes an `expression` Derivation or an aggregate filter for one Record, but the materializer does not recompute derived values on writes and merges yet.
 - The `authority` merge policy: `Attribute.authority` is stored and validated as a Source reference, but the merge does not consult it.
 - The `newest_wins` merge policy.
 - Per-Attribute cast rules in merge policies: cast rules are defined per type pair (5.4) and `allow_checked_casts` is global.
@@ -1579,7 +1588,7 @@ Architect calls with code in the repository (M1 in progress). Paths are under `p
 | AC-02 | Implemented | `model/record.py` (`(kind, key)`, natural key or minted ULID), `validate/data_rules.py` |
 | AC-03 | Implemented | `model/record.py` and `tree/root.py` (`link_key`: one Link per Relation and endpoint pair), `validate/changeset.py` |
 | AC-05 | Implemented | `types/types.py` (scalar types, arrays of scalars only), `types/casts.py` |
-| AC-06 | Partial | Expressions are held as CEL source strings in `model/operation.py`; the `expr` module (evaluation and type checking) is not implemented |
+| AC-06 | Implemented, off by default | `expr/` (compile, type check, evaluate, plan steps; 6.15); `validate_schema` checks every expression when `SchemaRules.allow_expressions` is set; Keeper evaluates stored Operations when `keeper.operations.expressions_enabled` is true. Derivation recomputation in the materializer is not implemented |
 | AC-07 | Implemented in the model | `model/derivation.py`; `validate/data_rules.py` rejects stored derived values. Recomputation belongs to the materializer, not implemented |
 | AC-08 | Implemented in the engine | `model/lineage.py`, `revision/changeset.py` (provenance on changes, outside hashes); the merge engine carries provenance through `ProvenanceLoader` |
 | AC-09 | Implemented | `canonical/jcs.py`, `canonical/hashing.py`, `types/encoding.py` (6.15) |

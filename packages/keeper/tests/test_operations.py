@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
+from lorebase_core.expr import ExprLimits
 from lorebase_core.model import (
     Operation,
     Precondition,
@@ -19,6 +21,7 @@ from lorebase_core.model import (
     load_schema,
 )
 from lorebase_core.validate import LinkDelete, LinkUpsert, RecordDelete, RecordUpsert
+from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.services.config import OperationSettings
 from lorebase_keeper.services.operation_catalog import (
@@ -36,11 +39,14 @@ from lorebase_keeper.services.operation_catalog import (
     plan_edits,
 )
 from lorebase_keeper.services.operations import (
+    PRECONDITION_FAILED,
     expressions_gate,
     parameters_hash,
+    plan_custom,
     resolve,
     review_required,
 )
+from lorebase_store.models.enums import PrincipalType
 
 SUPPLY_SCHEMA = Path(__file__).resolve().parents[3] / "examples" / "supply" / "schema.yaml"
 OPERATION_ID = "opr_01KEZF7C00000000000000000A"
@@ -225,3 +231,132 @@ def test_parameters_hash_is_stable() -> None:
     first = parameters_hash("create_supplier", "work", {"a": 1, "b": [1, 2]})
     assert first == parameters_hash("create_supplier", "work", {"b": [1, 2], "a": 1})
     assert first != parameters_hash("create_supplier", "main", {"a": 1, "b": [1, 2]})
+
+
+# Stored Operations with expressions (keeper.operations.expressions_enabled) --------------------
+
+ENABLED = OperationSettings(expressions_enabled=True)
+NOW = datetime(2026, 10, 21, 9, 30, tzinfo=UTC)
+ANA = Principal(
+    id="user:ana",
+    type=PrincipalType.USER,
+    display_name="Ana",
+    method="api_key",
+    subjects=("user:ana", "risk-analyst"),
+)
+
+
+@pytest.fixture(scope="module")
+def supply() -> Schema:
+    return load_schema(SUPPLY_SCHEMA.read_text())
+
+
+def _operation(schema: Schema, name: str) -> Operation:
+    operation = schema.operation_by_api_name(name)
+    assert operation is not None
+    return operation
+
+
+def _ids(schema: Schema, kind_name: str) -> tuple[str, dict[str, str]]:
+    kind = schema.kind_by_api_name(kind_name)
+    assert kind is not None
+    return kind.id, {a.api_name: a.id for a in kind.attributes.values()}
+
+
+def _keys() -> Any:
+    counter = iter(range(1, 100))
+    return lambda: f"01KF00000000000000000000{next(counter):02d}"
+
+
+def test_expressions_are_off_by_default_and_bounded_by_settings() -> None:
+    settings = OperationSettings()
+    assert settings.expressions_enabled is False
+    assert settings.expression_limits == ExprLimits()
+    tuned = OperationSettings.model_validate({"expression_limits": {"max_steps": 50}})
+    assert tuned.expression_limits.max_steps == 50
+    operation = _custom(preconditions=(Precondition(expression="true", message="m"),))
+    assert expressions_gate(operation, ENABLED) == []
+    policy = ReviewPolicy(mode=ReviewMode.EXPRESSION, expression="true")
+    assert expressions_gate(_custom(review_policy=policy), ENABLED) == []
+
+
+async def test_flag_supplier_risk_runs_with_the_engine(supply: Schema) -> None:
+    supplier, attributes = _ids(supply, "Supplier")
+    records = FakeRecords({(supplier, "S-1001"): {attributes["status"]: "active"}})
+    operation = _operation(supply, "flag_supplier_risk")
+    parameters: dict[str, JsonValue] = {
+        "supplier": "S-1001",
+        "severity": "high",
+        "reason": "Two late deliveries in March",
+    }
+    plan = await plan_custom(
+        supply, operation, parameters, records, ANA, NOW, ENABLED, mint_key=_keys()
+    )
+    assert plan.findings == []
+    assert plan.review is False
+    created, linked = plan.changes
+    assert isinstance(created, RecordUpsert)
+    assert isinstance(linked, LinkUpsert)
+    flag, flag_attributes = _ids(supply, "RiskFlag")
+    assert created.record.kind == flag
+    assert created.record.values[flag_attributes["raised_by"]] == "user:ana"
+    assert created.record.values[flag_attributes["raised_at"]] == "2026-10-21T09:30:00.000000Z"
+    assert (linked.link.from_key, linked.link.to_key) == (created.record.key, "S-1001")
+    assert edit_document(supply, created)["values"]["severity"] == "high"
+    critical = await plan_custom(
+        supply, operation, {**parameters, "severity": "critical"}, records, ANA, NOW, ENABLED
+    )
+    assert critical.review is True
+
+
+async def test_flag_supplier_risk_reports_preconditions_and_parameters(supply: Schema) -> None:
+    supplier, attributes = _ids(supply, "Supplier")
+    operation = _operation(supply, "flag_supplier_risk")
+    parameters: dict[str, JsonValue] = {"supplier": "S-1001", "severity": "low", "reason": "x"}
+    terminated = FakeRecords({(supplier, "S-1001"): {attributes["status"]: "terminated"}})
+    refused = await plan_custom(supply, operation, parameters, terminated, ANA, NOW, ENABLED)
+    assert [(f.code, f.path, f.message) for f in refused.findings] == [
+        (PRECONDITION_FAILED, ("preconditions", 0), "Terminated suppliers cannot be flagged.")
+    ]
+    assert refused.changes == []
+    missing = await plan_custom(supply, operation, parameters, FakeRecords(), ANA, NOW, ENABLED)
+    [finding] = missing.findings
+    assert finding.code == "record.not_found"
+    assert finding.path == ("preconditions", 0, "expression")
+    assert finding.details["expression"] == 'record(supplier).status != "terminated"'
+    unbound = await plan_custom(
+        supply, operation, {"supplier": "S-1001", "severity": "dire"}, terminated, ANA, NOW, ENABLED
+    )
+    assert {f.code for f in unbound.findings} == {PARAMETER_INVALID, PARAMETER_REQUIRED}
+
+
+async def test_approve_contract_runs_with_the_engine(supply: Schema) -> None:
+    contract, attributes = _ids(supply, "Contract")
+    draft: dict[str, JsonValue] = {
+        attributes["contract_number"]: "C-3001",
+        attributes["title"]: "Seals 2026",
+        attributes["status"]: "draft",
+        attributes["start_date"]: "2026-01-01",
+        attributes["annual_value"]: "750000.00",
+    }
+    records = FakeRecords({(contract, "C-3001"): draft})
+    operation = _operation(supply, "approve_contract")
+    plan = await plan_custom(supply, operation, {"contract": "C-3001"}, records, ANA, NOW, ENABLED)
+    assert plan.findings == []
+    assert plan.review is True  # annual_value > 500000
+    [change] = plan.changes
+    assert isinstance(change, RecordUpsert)
+    assert change.record.values == {
+        **draft,
+        attributes["status"]: "active",
+        attributes["approved_by"]: "user:ana",
+        attributes["approved_at"]: "2026-10-21T09:30:00.000000Z",
+    }
+    active = FakeRecords({(contract, "C-3001"): {**draft, attributes["status"]: "active"}})
+    refused = await plan_custom(
+        supply, operation, {"contract": "C-3001"}, active, ANA, NOW, ENABLED
+    )
+    assert [f.message for f in refused.findings] == ["Only draft contracts can be approved."]
+    tight = OperationSettings(expressions_enabled=True, expression_limits=ExprLimits(max_steps=3))
+    limited = await plan_custom(supply, operation, {"contract": "C-3001"}, records, ANA, NOW, tight)
+    assert [f.code for f in limited.findings] == ["expression.limit_exceeded"]
