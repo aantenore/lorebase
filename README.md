@@ -33,6 +33,14 @@ Agents live outside Lorebase, in any framework or language. Lorebase is their kn
 - **Self-hosted on Postgres only.** One required store: Postgres 16 (with pgvector for optional semantic search). No graph database, search cluster or queue broker to run.
 - **A GraphRAG alternative for the enterprise.** Instead of letting a model write a graph you cannot audit, Lorebase keeps a reviewed, typed, versioned graph and hands agents precise answers with provenance.
 
+## See it
+
+The web app today, running on a mock API with sample data. The [visual tour](docs/tour.md) walks through every screen and says what is mock and what is live.
+
+| Explorer | Canvas | Conflict resolver |
+|----------|--------|-------------------|
+| [![Explorer: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home.png)](docs/tour.md#explorer) | [![Canvas: graph of Records coloured by Kind](docs/images/canvas-graph.png)](docs/tour.md#canvas) | [![Conflict resolver: base, ours and theirs for one Conflict of Proposal 41](docs/images/review-conflict.png)](docs/tour.md#review) |
+
 ## Key features
 
 | Area | Features |
