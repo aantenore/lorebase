@@ -1,106 +1,116 @@
 # Lorebase
 
-**Git for company knowledge: an open-source ontology platform that gives AI agents a versioned, governed knowledge graph they can read in milliseconds.**
+**Git for knowledge: an open-source ontology platform where AI agents read a versioned, governed knowledge graph in milliseconds.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Status: M1 in progress](https://img.shields.io/badge/status-M1%20in%20progress%20%2F%20pre--alpha-orange)
+![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 [![CI](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml/badge.svg)](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml)
 [![CodeQL](https://github.com/aantenore/lorebase/actions/workflows/codeql.yaml/badge.svg)](https://github.com/aantenore/lorebase/actions/workflows/codeql.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/aantenore/lorebase/badge)](https://scorecard.dev/viewer/?uri=github.com/aantenore/lorebase)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab)
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
-![MCP](https://img.shields.io/badge/MCP-native-6f42c1)
 
-> Status: pre-alpha, M1 in progress. The founding design is in [docs/design.md](docs/design.md) and the first milestone plan in [docs/plan/m1.md](docs/plan/m1.md). The feature lists below describe the target product; see [Status](#status) for what exists today.
+> **Pre-alpha.** The versioning and merge engine and the Keeper REST API run today. The MCP server, the CLI, the Python client, ingestion and document extraction do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
 
-## What is Lorebase
+## What it is
 
-Lorebase is an **open-source ontology platform** and a **versioned knowledge graph for AI agents**, built for enterprise teams and self-hosted on Postgres. It is one system to:
+Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. Teams model what the company knows as a typed ontology (Kinds, Attributes, Relations, Operations), keep it in Postgres, and change it the way developers change code: on a branch, reviewed, merged, traceable. It brings git-like branching and merging for knowledge, covering the schema and the data together, with three-way conflicts resolved per attribute. Agents live outside Lorebase, in any framework. They read through a REST API that never calls a language model, so answers are deterministic and arrive in milliseconds, and they write only through governed Operations. Lorebase is MCP-native by design: the MCP server (Herald) is next on the roadmap and wraps the REST API that exists today. It is meant as an open-source alternative to proprietary ontology platforms, small enough to run on a laptop with `docker compose`.
 
-- **model** company knowledge as a typed ontology: Kinds, Attributes, Relations, Traits, Operations, Derivations;
-- **fill** it from structured sources (CSV, Parquet, Postgres tables) and from documents through offline extraction that produces **reviewable Proposals**, never direct writes;
-- **version** schema and data together with Branches, immutable Revisions, three-way merge and Conflict resolution, like **git for knowledge**;
-- **explore** it in a web UI with search, record pages, Lineage and a graph Canvas;
-- **expose** it to external agents through a REST API and an **MCP server**, with governed write Operations and a read path that never calls an LLM.
+![Lorebase web app: Explorer, a Record, the Canvas graph and the Review conflict resolver](docs/images/tour.gif)
 
-Agents live outside Lorebase, in any framework or language. Lorebase is their knowledge system of record.
+<sub>The web app walking through Explorer, Canvas and a Conflict in Review. It runs on a mock API with sample data; see the [visual tour](docs/tour.md).</sub>
 
-## Why we exist
+## 30-second demo
 
-AI agents are only as good as the knowledge they can trust, and most company knowledge lives in tables, documents and heads, with no history and no review. Lorebase is an open-source ontology platform that turns it into a versioned knowledge graph for AI agents: typed, governed, and stored in Postgres only, with no graph database to run. It brings git-like branching to knowledge, so changes are proposed on a Branch, reviewed, merged and traceable down to the attribute value, and it is MCP-native, so any agent framework can read it and change it through governed Operations.
+The core engine runs in memory, with no services. This script loads the sample `supply` Domain into `main`, branches `model/risk` (analysts change the schema and data) and `source/erp` (a nightly feed changes data), merges both, lists the Conflicts, resolves them and diffs.
 
-## Why
+```bash
+git clone https://github.com/aantenore/lorebase.git && cd lorebase
+uv sync --all-packages
+uv run python examples/merge_demo.py
+```
 
-- **Versioned knowledge for agents.** When an agent answers wrongly, you need to know what it knew and since when. Every change in Lorebase is a Revision with author, reason and Lineage down to the attribute value. Time travel and diffs come for free.
-- **An open-source alternative to proprietary ontology platforms.** Typed objects, links, governed actions and an object explorer should not require a closed enterprise suite. Lorebase is Apache-2.0, with security, audit and RBAC in the open-source core.
-- **Git-like branching for knowledge.** Work on a Branch, open a Proposal, review the schema and data diff, resolve Conflicts at attribute level, merge. Schema and data are merged together with consistency rules, so a merge never leaves the knowledge base invalid.
-- **MCP-native.** Herald, the built-in MCP server, gives any MCP-capable agent typed tools: describe the Domain, search, query, traverse, Lineage, and execute governed Operations with dry run.
-- **LLM-free read path.** Agent reads are deterministic SQL over materialized branch heads: milliseconds, reproducible, cheap. Language models are used only offline, to propose knowledge that people or policies accept.
-- **Runs free on your laptop, scales to any paid model.** One OpenAI-compatible inference abstraction. Local by default: Ollama (or vLLM, LM Studio, llama.cpp) for LLM extraction, fastembed on CPU for embeddings, GLiNER and GLiREL for zero-cost entity and relation extraction. Hosted models from OpenAI, Azure OpenAI, Anthropic, Google, Amazon Bedrock or Mistral plug into the same abstraction, directly or through a LiteLLM proxy. Switching provider is configuration only. The full demo needs zero API keys.
-- **Self-hosted on Postgres only.** One required store: Postgres 16 (with pgvector for optional semantic search). No graph database, search cluster or queue broker to run.
-- **A GraphRAG alternative for the enterprise.** Instead of letting a model write a graph you cannot audit, Lorebase keeps a reviewed, typed, versioned graph and hands agents precise answers with provenance.
+```text
+== 5. merge source/erp into main
+merge base 7ad4a553: 5 Conflicts
+
+DV1 ATTRIBUTE_VALUE (1)
+  where            attribute   base  ours  theirs  choices
+  -----            ---------   ----  ----  ------  -------
+  Supplier S-1001  risk_score  32    80    45      ours/theirs/base/custom
+
+DV2 DELETE_MODIFY (1)
+  where         attribute  base      ours      theirs    choices
+  -----         ---------  ----      ----      ------    -------
+  Part P-10003  -          {record}  (absent)  {record}  ours/theirs/base/custom
+...
+== 7. merge again
+merged: Revision 2cacd1bb, parents 60f665d3, 4d5440a3
+validation: 72 Records against the merged schema, 0 issues
+```
+
+The analysts say 80, the ERP says 45, and someone has to decide. That decision is a recorded resolution, not a silent overwrite. The walkthrough of the whole output is in the [quickstart](docs/quickstart.md#3-run-the-core-demo).
+
+## Why Lorebase
+
+- **Branch and merge schema and data, with three-way conflicts.** Change the model and the data on a branch, merge, and get typed Conflicts (attribute value, delete or modify, type coercion, cardinality, dangling link and more) instead of a corrupted knowledge base. The merge engine checks the merged data against the merged schema before it commits.
+- **Milliseconds reads for agents.** Reads are deterministic SQL over materialized branch heads, with no model in the path. This is enforced by the build: Keeper cannot import the inference package. Every response names the Revision it was served from.
+- **Governed writes through Operations and Proposals.** Agents change knowledge only through Operations with validation, permissions, dry run, idempotency and audit. Writes to a protected branch go through a Proposal. The Operations are there today; the Proposals API is the next piece.
+- **Schema as code.** The ontology is a YAML document you review in a pull request and apply as one schema change set. Attribute ids are stable, so renames merge cleanly.
+- **Runs free on a laptop, scales out when you need it.** One `docker compose`, Postgres 16, no API keys. Add Keepers behind a load balancer and Postgres read replicas with a freshness guard for read load. Model-backed ingestion will use one OpenAI-compatible abstraction, local or paid, selected by configuration; it is not built yet.
+
+## Features
+
+| Area | Feature | Status | Milestone |
+|------|---------|--------|-----------|
+| Modeling | Typed ontology as YAML: Kinds, Attributes, Relations with cardinality, Traits, Operations, Derivations, Sources, with static validation | Done | M1 |
+| Modeling | Expressions (CEL) in Operations and Derivations | Planned | M3, M4 |
+| Versioning | Content-addressed Revisions, branches, tags, diff, time travel reads | Done | M1 |
+| Versioning | Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies (`prefer`, cascade, defaults) | Done in the engine, not yet over REST | M1 |
+| Versioning | Proposals, reviews, merge and Conflict resolution over REST | In progress | M1 |
+| Reads | Records, Links, query DSL, traversal, neighborhood, lexical search, log and diff over REST, with ETags | Done | M1 |
+| Reads | Semantic and hybrid search with caller-supplied vectors | Planned (nothing computes embeddings yet) | M4 |
+| Governance | Built-in Operations (create, update, delete, link, unlink, bulk import) with dry run and idempotency | Done | M1 |
+| Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
+| Governance | Custom Operations, review policies, sensitivity masking | Planned | M3 |
+| Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
+| Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
+| Agent access | Python client and CLI | Planned (empty packages) | M1 |
+| Agent access | MCP server (Herald) | Planned | M3 |
+| Ingestion | CSV, Parquet and Postgres Sources with schema inference | Planned | M2 |
+| Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
+| Web app | Explorer, Canvas, Modeler, Review with Conflict resolver | Done on the mock API; live adapter not yet verified | M2, M3 |
+| Scale | Overlay branches, PII vault, Helm chart, 10M-Record performance | Planned | M5 |
+
+The milestone breakdown with checkboxes is in the [roadmap](docs/roadmap.md).
 
 ## See it
 
-The web app today, running on a mock API with sample data. The [visual tour](docs/tour.md) walks through every screen and says what is mock and what is live.
+Screens of the web app, running on a mock API with sample data. The [visual tour](docs/tour.md) says what is mock and what is live.
 
 | Explorer | Canvas | Conflict resolver |
 |----------|--------|-------------------|
 | [![Explorer: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home.png)](docs/tour.md#explorer) | [![Canvas: graph of Records coloured by Kind](docs/images/canvas-graph.png)](docs/tour.md#canvas) | [![Conflict resolver: base, ours and theirs for one Conflict of Proposal 41](docs/images/review-conflict.png)](docs/tour.md#review) |
 
-## Key features
-
-| Area | Features |
-|------|----------|
-| Modeling | Kinds, typed Attributes with constraints and sensitivity tags, directional Relations with cardinality, Traits, Derivations, Source mappings; Modeler UI and YAML |
-| Versioning | Content-addressed Revisions on Postgres, Branches and tags, diff between any two Revisions, three-way merge of schema and data, Conflict taxonomy and resolution flows, time travel reads |
-| Ingestion | CSV, Parquet and Postgres Sources with rule-based schema inference (no model needed); snapshot and incremental syncs; tiered document extraction (rules, local GLiNER and GLiREL, then any LLM with JSON schema output) with verified evidence and entity resolution; everything lands as Proposals |
-| Inference | Vendor-agnostic and local-first: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`; Ollama by default; any hosted provider by configuration; fastembed embeddings on CPU; deterministic fake provider for tests; never used on the agent read path |
-| Review | Proposals with checks and approvals, per-item accept and reject with highlighted evidence, side-by-side Conflict resolver, merge policies such as Source authority |
-| Exploration | Explorer (search, filters, record pages, Lineage, history), Canvas graph visualization (Sigma.js), schema graph, diff overlay |
-| Agent access | REST API with OpenAPI 3.1, MCP server (stdio and Streamable HTTP), Python client, governed Operations with dry run and idempotency |
-| Search | Postgres full-text search, trigram matching, optional pgvector embeddings computed offline, hybrid ranking |
-| Governance | OIDC single sign-on, API keys for agents, RBAC per Domain, Kind and Operation, sensitivity masking, hash-chained audit log |
-| Operations | OpenTelemetry traces and metrics, structured JSON logs, Docker images, docker compose, Helm chart (planned) |
-
 ## Quickstart
-
-Lorebase is pre-alpha. Today you can run the versioning and merge engine, bring up Postgres with migrations and the Keeper REST API (Domains, branches, schema change sets, built-in Operations), and run the web shell against a mock API. The read API, Proposals and merge over REST, the CLI and the MCP server do not exist yet, so there is no end-to-end "ask a question" flow to try; see [Status](#status). The step-by-step guide, including loading the supply sample through the REST API, is [docs/quickstart.md](docs/quickstart.md).
 
 Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), Docker with compose, and Node.js 24 with pnpm for the web app.
 
 ```bash
-git clone https://github.com/aantenore/lorebase.git
-cd lorebase
-
-# Python workspace: install, then lint, type-check and run the unit tests
+git clone https://github.com/aantenore/lorebase.git && cd lorebase
 uv sync --all-packages
-make lint type test-unit
 
-# Core engine demo: branches, three-way merge, Conflicts, resolutions, diff (no services needed)
+# Core engine demo: branches, three-way merge, Conflicts, resolutions, diff (no services)
 uv run python examples/merge_demo.py
 
 # Postgres, migrations and Keeper (builds the backend image on first run)
-cp .env.example .env     # set POSTGRES_PASSWORD and review the other values
-docker compose --env-file .env -f deploy/compose/docker-compose.yaml up postgres migrate keeper
-
-# in a second terminal
+cp .env.example .env     # set POSTGRES_PASSWORD
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postgres migrate keeper
 curl http://localhost:8080/readyz
 ```
 
-Web app, in mock mode (no backend needed):
-
-```bash
-cd apps/web
-cp .env.example .env     # VITE_API_MODE=mock
-pnpm install
-pnpm dev                 # http://localhost:5173
-```
-
-Several Keepers and Postgres read replicas: compose profile `scale-out`, see [docs/deployment.md](docs/deployment.md).
-
-Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app. See [apps/web/README.md](apps/web/README.md) for the web variables and the mock API.
+The [quickstart](docs/quickstart.md) continues from there: create the `supply` Domain, apply its schema, import the sample data through the REST API and run the web app in mock mode. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
 
 ## Architecture
 
@@ -108,103 +118,96 @@ Configuration is external: `.env` for compose, `config/lorebase.example.yaml` fo
 flowchart LR
   subgraph Clients
     A1[External agents<br/>any framework]
-    A2[Web UI<br/>Explorer, Canvas, Modeler, Review]
-    A3[CLI and Python client]
+    A2[Web app<br/>Explorer, Canvas, Modeler, Review]
   end
 
   subgraph Lorebase
-    H[Herald<br/>MCP server]
+    H[Herald<br/>MCP server]:::planned
     K[Keeper<br/>REST API, auth, commit pipeline,<br/>merge engine, read path]
-    S[Scribe<br/>Source syncs, extraction,<br/>embeddings, jobs]
+    S[Scribe<br/>Source syncs, extraction,<br/>embeddings, jobs]:::planned
   end
 
-  subgraph Postgres16[Postgres 16 + pgvector]
+  subgraph PG[Postgres 16]
     V[(Versioned store<br/>objects, trees, Revisions, refs)]
-    M[(Materialized branch heads<br/>records, links, search, lineage)]
-    G[(Governance<br/>Proposals, Conflicts, grants, audit, jobs)]
-  end
-
-  subgraph External
-    SRC[Tables, CSV, Parquet,<br/>Postgres sources]
-    DOC[Documents]
-    LLM[Model endpoint<br/>Ollama locally or any provider<br/>offline only]
-    IDP[OIDC provider]
+    M[(Materialized branch heads<br/>records, links, search)]
+    G[(Governance<br/>grants, audit, jobs)]
   end
 
   A1 -- MCP --> H
+  A1 -. REST today .-> K
   H -- REST --> K
   A2 -- REST --> K
-  A3 -- REST --> K
   K --> V
   K --> M
   K --> G
   S --> V
   S --> M
-  S --> G
-  SRC --> S
-  DOC --> S
-  S -. extraction and embeddings .-> LLM
-  K -. login .-> IDP
+  S -. extraction, offline only .-> L[Model endpoint]:::planned
+
+  classDef planned stroke-dasharray: 4 3
 ```
 
-The agent read path is `agent -> Herald -> Keeper -> materialized head`. It never touches a model of any kind; only Scribe, offline, uses the inference abstraction.
+Dashed boxes do not exist yet. The agent read path is `agent -> Keeper -> materialized head`, and later `agent -> Herald -> Keeper -> materialized head`. It never touches a model; only Scribe, offline, will. Postgres is the only required store, with pgvector for optional semantic search. Details: [docs/design.md](docs/design.md).
 
 ## How it compares
 
-Lorebase sits between proprietary operational ontology platforms, versioned databases, graph databases and agent memory engines. The honest, detailed comparison with Palantir Foundry Ontology, TerminusDB, Dolt, Neo4j, Cognee, Graphiti and Zep, Mem0, LinkML and Protégé is in [docs/comparison.md](docs/comparison.md).
+Lorebase sits between proprietary ontology platforms, versioned databases, graph databases and agent memory engines. The full comparison, including where each of them is the better choice, is in [docs/comparison.md](docs/comparison.md).
 
-| | Typed ontology | Branch and merge schema plus data | Reviewed extraction | MCP | LLM-free reads | Open source, Postgres only |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Lorebase | yes | yes | yes | yes | yes | yes |
+| Product | What it is | Branch and merge of knowledge | Choose it instead when |
+|---------|-----------|-------------------------------|------------------------|
+| **Lorebase** | Typed ontology as a shared system of record, Postgres only | Yes, schema and data together, three-way | You want agents to read a reviewed, versioned knowledge base and change it only through governed Operations |
+| Palantir Foundry Ontology | Proprietary operational ontology inside a full data platform | Within the platform | You need the whole platform and a vendor to run it |
+| TerminusDB | Versioned document and graph database | Yes, on its own storage engine | You want a general versioned graph database to build on |
+| Dolt | SQL database with git semantics | Yes, on tables | Your data is tabular and you want versioned SQL |
+| Neo4j | Property graph database | No | You need graph algorithms and pattern queries at scale |
+| Cognee | Agent memory built by LLM pipelines | No | You want automated memory for a single agent |
+| Graphiti and Zep | Temporal knowledge graph for agent memory | No (facts carry validity time) | You need conversational memory with temporal reasoning |
+| Mem0 | Per-user memory layer | No | You want personalization memory for assistants |
 
-## Status
+## Who is it for
 
-M1 (engine and API) is in progress. Nothing is released and interfaces may change.
+- **Platform teams** that need one governed place for company knowledge that many agents and applications read, with SSO, roles, audit and no new proprietary platform to buy.
+- **Data teams** that own the definitions (suppliers, parts, contracts) and want them modeled, reviewed and versioned like code, with structured sources mapped in.
+- **Agent builders** who are tired of agents answering from stale chunks, and want typed entities, provenance, a deterministic read API and a safe write path.
+- **Consultancies** that deliver the same kind of knowledge system to several clients and want an open, self-hostable base with a clean multi-Domain model, instead of reselling a closed suite.
 
-Done:
+## Status and roadmap
 
-- **Core engine** (`lorebase_core`): canonical JSON and hashing, type system, schema element models with static validation, data validation, canonical HAMT trees, tree diff, Revisions, changesets and ancestry.
-- **Three-way merge**: schema merge, attribute-level data merge, consistency rules under the merged schema, the full Conflict taxonomy, resolutions and merge policies (`prefer`, cascade of dangling Links, defaults). The `authority` and `newest_wins` policies are not implemented yet. Implementation notes: [docs/design.md](docs/design.md#615-implementation-notes).
-- **Schema as code**: load and dump a Domain schema as YAML, with the demo Domain in [examples/supply](examples/supply).
-- **Postgres schema**: Alembic migrations for the versioned store, materialized heads, governance tables and row-level security ([notes](docs/store-schema-notes.md)).
-- **Keeper**: settings, structured logging and telemetry, error format, liveness and readiness endpoints, authentication modes with roles and an audit log, and REST endpoints for Domains, branches and tags, the schema (read, validate, change sets) and built-in Operations such as `import_records`. Expressions (CEL) are not enabled yet.
-- **Web shell**: Explorer, Canvas, schema overview and Review screens over a mock API.
-- Inference interfaces with a deterministic fake provider, docker compose for Postgres, migrations and Keeper, and CI.
+Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine and most of the REST API are done; Proposals over REST, the client, the CLI and the performance baseline are not.
 
-Next: the read API (Records, Links, query, search), Revisions and diff, Proposals with merge and Conflict resolution over REST, then the Python client and the CLI. The MCP server (Herald) follows in M3. Ingestion, extraction and semantic search are later milestones; none of them exist yet.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the Postgres store with materialized heads and row-level security; the Keeper REST API for Domains, branches, schema change sets, Operations, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; docker compose; CI with CodeQL; the web app on a mock API.
 
-## Roadmap
+Next: Proposals, merge and Conflict resolution over REST, then the Python client and the CLI (finishing M1), Source ingestion (M2), Herald and custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|
 | M1 | Engine and API | Versioning engine, Keeper REST API, CLI, docker compose, CI |
-| M2 | Structured ingestion and exploration | Postgres, CSV and Parquet Sources, schema inference, OIDC, Explorer, Canvas, Review basics |
+| M2 | Structured ingestion and exploration | Postgres, CSV and Parquet Sources, schema inference, Explorer, Canvas, Review basics |
 | M3 | Governance and agents | Custom Operations, full RBAC, Herald MCP server, Modeler, Conflict resolver UI |
-| M4 | Documents and semantic search | Tiered offline extraction into Proposals with evidence (local models by default, any provider by configuration), entity resolution, fastembed embeddings, hybrid search, Derivations |
-| M5 | Enterprise hardening, 1.0 | Overlay branches, PII vault and erasure, Helm chart, 10M-record performance, LinkML import and export |
+| M4 | Documents and semantic search | Offline extraction into Proposals with evidence, entity resolution, embeddings, hybrid search |
+| M5 | Enterprise hardening, 1.0 | Overlay branches, PII vault, Helm chart, 10M-Record performance, LinkML import and export |
 
-Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).
+The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind the project is in [docs/why.md](docs/why.md), common questions in the [FAQ](docs/faq.md).
 
 ## Documentation
 
-- [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, UI, security, roadmap
+- [Why Lorebase](docs/why.md): the case for git-like knowledge
+- [FAQ](docs/faq.md)
 - [Quickstart](docs/quickstart.md): what runs today, step by step
-- [Deployment and scale-out](docs/deployment.md): topology, what scales where, read replicas, sizing, sharding path
-- [Glossary](docs/glossary.md): the Lorebase vocabulary with examples
-- [Examples](examples/README.md): the merge demo, schema as code and the supply sample Domain
+- [Visual tour](docs/tour.md): every screen of the web app
+- [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, security, roadmap
+- [Deployment and scale-out](docs/deployment.md): topology, read replicas, sizing
 - [Comparison](docs/comparison.md): Lorebase next to similar products
-- [M1 plan](docs/plan/m1.md): ordered implementation tasks for the first milestone
+- [Roadmap](docs/roadmap.md)
+- [Glossary](docs/glossary.md), [examples](examples/README.md), [M1 plan](docs/plan/m1.md)
 
 ## Community
 
-- [Issues](https://github.com/aantenore/lorebase/issues): bug reports, feature requests and questions, with templates
+- [Issues](https://github.com/aantenore/lorebase/issues): bug reports, feature requests and questions
 - [Discussions](https://github.com/aantenore/lorebase/discussions): ideas, use cases and design conversations
-- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow, commit conventions and labels
+- [CONTRIBUTING.md](CONTRIBUTING.md): workflow, commit conventions, labels. Design feedback and real use cases are as valuable as code at this stage.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability privately
-
-## Contributing
-
-Contributions are welcome: design feedback, issues, and code once M1 work starts. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Security issues: see [SECURITY.md](SECURITY.md).
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## License
 

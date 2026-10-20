@@ -15,16 +15,17 @@ cp .env.example .env     # mock mode by default
 pnpm dev                 # http://localhost:5173
 ```
 
-| Script             | What it does                                   |
-| ------------------ | ---------------------------------------------- |
-| `pnpm dev`         | Vite dev server with HMR                       |
-| `pnpm build`       | Type-check, then production build into `dist/` |
-| `pnpm preview`     | Serve the production build locally             |
-| `pnpm test`        | Unit and component tests (Vitest, jsdom)       |
-| `pnpm typecheck`   | `tsc --noEmit`                                 |
-| `pnpm lint`        | ESLint (type-aware) and Prettier check         |
-| `pnpm format`      | Prettier write                                 |
-| `pnpm screenshots` | Regenerate the PNGs in `docs/images/`          |
+| Script                  | What it does                                   |
+| ----------------------- | ---------------------------------------------- |
+| `pnpm dev`              | Vite dev server with HMR                       |
+| `pnpm build`            | Type-check, then production build into `dist/` |
+| `pnpm preview`          | Serve the production build locally             |
+| `pnpm test`             | Unit and component tests (Vitest, jsdom)       |
+| `pnpm typecheck`        | `tsc --noEmit`                                 |
+| `pnpm lint`             | ESLint (type-aware) and Prettier check         |
+| `pnpm format`           | Prettier write                                 |
+| `pnpm screenshots`      | Regenerate the PNGs in `docs/images/`          |
+| `pnpm screenshots flow` | Record `docs/images/tour.gif`                  |
 
 While iterating, run only the tests that cover what you changed, for example `pnpm test src/features/review`.
 
@@ -36,6 +37,8 @@ While iterating, run only the tests that cover what you changed, for example `pn
 pnpm exec playwright install chromium   # once per machine
 pnpm screenshots
 ```
+
+`pnpm screenshots flow` records a scripted walk (Explorer, a Record, Canvas, the Review resolver) with Playwright video and encodes `docs/images/tour.gif` with ffmpeg; without ffmpeg it stitches PNG frames with Pillow through `uv run --with pillow`. Keep the file under 2 MB; the script warns when it is larger. Frame rate, width and palette are in `FLOW.gif`.
 
 The routes, viewport, theme and the browser flags live in the `SHOTS` and `CONFIG` constants at the top of `scripts/screenshots.ts`. The Canvas needs WebGL 2, so Chromium is started with SwiftShader flags; if a graph does not draw, the script says so and the list fallback is captured instead.
 

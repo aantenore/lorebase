@@ -2,9 +2,11 @@
 
 Screenshots of the Lorebase web app (`apps/web`), taken from the `supply` sample Domain at 1440x900 in the light theme.
 
-**Mock versus live.** Every picture below comes from mock mode: the app talks to an in-memory implementation of the Keeper API with two sample Domains (`supply` and `hr`), so no backend is involved. The same screens run against a real Keeper by switching the adapter to `live`, but the Keeper REST API does not exist yet (see [Status](../README.md#status)), so nothing here has been exercised against a real Keeper. Data you see is sample data, and changes made in the app live only for the browser session.
+**Mock versus live.** Every picture below comes from mock mode: the app talks to an in-memory implementation of the Keeper API with two sample Domains (`supply` and `hr`), so no backend is involved. The Keeper REST API now covers Domains, branches, schema and schema change sets, Operations, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff, and the app has an HTTP adapter (`live` mode) for it, but the screens have not been exercised against a running Keeper. Proposals, merge and Conflict resolution do not exist on the Keeper side yet, so Review works on the mock only (see [Status](../README.md#status-and-roadmap)). Data you see is sample data, and changes made in the app live only for the browser session.
 
-The images are regenerated with `pnpm screenshots` in `apps/web`; see [apps/web/README.md](../apps/web/README.md#screenshots).
+![Explorer, a Record, the Canvas and the Review resolver in one pass](images/tour.gif)
+
+The images are regenerated with `pnpm screenshots` in `apps/web`, and the animation above with `pnpm screenshots flow`; see [apps/web/README.md](../apps/web/README.md#screenshots).
 
 ## Explorer
 
@@ -12,7 +14,7 @@ The images are regenerated with `pnpm screenshots` in `apps/web`; see [apps/web/
 
 ![Explorer, Domain home](images/explorer-home.png)
 
-The entry point of a Domain on a Branch. It offers search over Records with a Kind filter, the Kinds of the Domain, the latest Revisions of the Branch (with their origin, such as `source_sync` or `schema_change`) and the Proposals waiting for review. The Domain and Branch switchers and the head Revision in the top bar apply to every screen. Mock: all content is sample data. Live today: nothing yet; the screen reads only through the public API interface. Screens listed under "planned" at the bottom are placeholders.
+The entry point of a Domain on a Branch. It offers search over Records with a Kind filter, the Kinds of the Domain, the latest Revisions of the Branch (with their origin, such as `source_sync` or `schema_change`) and the Proposals waiting for review. The Domain and Branch switchers and the head Revision in the top bar apply to every screen. Mock: all content is sample data. The screen reads only through the public API interface, so the same code runs against Keeper once live mode is verified. Screens listed under "planned" at the bottom are placeholders.
 
 ### Kind table
 
@@ -52,7 +54,7 @@ The schema of the current Branch as lists: Kinds, Attributes, Relations, Traits,
 
 ![Modeler, schema editor](images/modeler-edit.png)
 
-The schema as one document in two synchronized views: a form for Kinds, Relations and Traits and a YAML editor (CodeMirror) for everything, including Operations, Derivations and Sources. Validation issues point at the field and the YAML line; the change set summary shows the commands and the data migrations a dry run reports. On a protected Branch "Open Proposal" creates a Branch and a Proposal instead of committing. Mock: validation, migrations and commits run in the mock with the same rules as the Keeper design; the command vocabulary of the schema change endpoint is an assumption until Keeper publishes it.
+The schema as one document in two synchronized views: a form for Kinds, Relations and Traits and a YAML editor (CodeMirror) for everything, including Operations, Derivations and Sources. Validation issues point at the field and the YAML line; the change set summary shows the commands and the data migrations a dry run reports. On a protected Branch "Open Proposal" creates a Branch and a Proposal instead of committing. Mock: validation, migrations and commits run in the mock with the same rules as the Keeper design. Keeper now has a schema change endpoint, but this editor has not been run against it yet.
 
 ## Review
 
@@ -66,7 +68,7 @@ The Proposals of the Domain with origin (manual or extraction), the Branches the
 
 ![Review, Conflict resolver on Proposal 41](images/review-conflict.png)
 
-Proposal 41 merges `model/risk` into `main` and ends up with six Conflicts of six kinds, plus one that a merge policy already resolved. Conflicts are grouped by kind, filterable, and one is selected in the URL. The resolver shows base, ours and theirs side by side and offers only the resolutions that fit the Conflict's kind (take ours, take theirs, revert to base, custom value); grouped Conflicts take one value per member. "Apply resolutions" attempts the merge and, once every Conflict is resolved, creates the merge Revision. Mock: the Conflicts are seeded, not computed from the Branches, and the merge applies resolutions to a copy of the source state; Keeper's merge endpoints are an assumption until they are published.
+Proposal 41 merges `model/risk` into `main` and ends up with six Conflicts of six kinds, plus one that a merge policy already resolved. Conflicts are grouped by kind, filterable, and one is selected in the URL. The resolver shows base, ours and theirs side by side and offers only the resolutions that fit the Conflict's kind (take ours, take theirs, revert to base, custom value); grouped Conflicts take one value per member. "Apply resolutions" attempts the merge and, once every Conflict is resolved, creates the merge Revision. Mock: the Conflicts are seeded, not computed from the Branches, and the merge applies resolutions to a copy of the source state; Keeper has no Proposal or merge endpoints yet, so this screen cannot run against it today. The merge engine itself is complete and shown by `examples/merge_demo.py`.
 
 ## Settings
 
