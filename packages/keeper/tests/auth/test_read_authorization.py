@@ -14,6 +14,7 @@ from lorebase_keeper.auth.rbac import AccessContext, Authorizer
 from lorebase_keeper.context import StoreAccess
 from lorebase_keeper.errors import NOT_FOUND, ProblemError
 from lorebase_keeper.services.reads import (
+    ReadGuard,
     ReadTarget,
     authorize_read,
     reachable,
@@ -247,6 +248,64 @@ async def test_no_grant_is_refused_before_any_lookup(store: Any) -> None:
             max_depth=10,
         )
     assert raised.value.status_code == 403
+
+
+async def resolve_in_ghost(authorizer: Authorizer, principal: Principal) -> ProblemError:
+    with pytest.raises(ProblemError) as raised:
+        await resolve_readable(
+            cast(StoreAccess, None),  # never reached: the check comes first
+            authorizer,
+            principal,
+            READ,
+            "ghost",  # not a Domain
+            branch=None,
+            at=None,
+            max_depth=10,
+        )
+    return raised.value
+
+
+async def test_missing_domain_is_404_for_installation_admins(store: Any) -> None:
+    admin = Principal(
+        id="usr_ops",
+        type=PrincipalType.USER,
+        display_name="ops",
+        method="oidc",
+        subjects=("usr_ops",),
+        installation_admin=True,
+    )
+    error = await resolve_in_ghost(Authorizer(AuthzSettings(), store=store), admin)
+    assert error.status_code == 404
+
+
+async def test_missing_domain_is_404_for_a_domain_wide_grant(store: Any) -> None:
+    # a Domain-wide role without schema.read: the permission check fails before any lookup
+    store.add_grant("ghost", "usr_u", "data-only")
+    settings = AuthzSettings(custom_roles={"data-only": ["data.read"]})
+    error = await resolve_in_ghost(Authorizer(settings, store=store), user())
+    assert error.status_code == 404
+
+
+async def test_missing_domain_is_403_for_ungranted_callers(store: Any) -> None:
+    error = await resolve_in_ghost(Authorizer(AuthzSettings(), store=store), user())
+    assert error.status_code == 403
+    assert error.extensions["permission"] == "schema.read"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("scope_type", "scope_ref"), [(GrantScope.BRANCH, "agent/a"), (GrantScope.KIND, "Supplier")]
+)
+async def test_missing_domain_is_403_for_narrowed_callers(
+    store: Any, scope_type: GrantScope, scope_ref: str
+) -> None:
+    store.add_grant("ghost", "usr_u", "viewer", scope_type, scope_ref)
+    authorizer = Authorizer(AuthzSettings(), store=store)
+    guard = ReadGuard(authorizer, user(), READ, "ghost", 10)
+    await guard.precheck()  # the caller holds the permission through a narrowed grant
+    wide = await guard.wide()
+    assert not wide
+    error = guard.unknown(ProblemError(NOT_FOUND, "Domain 'ghost' not found."), wide=wide)
+    assert error.status_code == 403
 
 
 # Reachability -------------------------------------------------------------------------------
