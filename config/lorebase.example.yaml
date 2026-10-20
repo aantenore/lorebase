@@ -282,3 +282,26 @@ search:
     rrf_k: 60
     lexical_weight: 1.0
     semantic_weight: 1.0
+
+# Agent-facing reads (docs/agents.md). Context packs are also bounded by read.traverse;
+# nothing here calls a model.
+agents:
+  context:                       # POST /domains/{d}/context
+    default_budget_tokens: 4000  # estimated token budget when the request gives none
+    max_budget_tokens: 32000
+    chars_per_token: 4.0         # estimate: tokens = ceil(characters / chars_per_token)
+    default_depth: 1             # neighborhood depth when the request gives none
+    max_depth: 2
+    max_seeds: 20                # seed Records of one pack
+    max_neighbors: 200           # Records around the seeds
+    max_links: 500
+    recent_changes_max: 50       # change entries read before trimming, newest first
+    trim_order:                  # sections trimmed, in this order, to fit the budget
+      - lineage
+      - recent_changes
+      - far_neighbor_values
+      - far_neighbors
+      - schema_descriptions
+      - near_neighbor_values
+      - near_neighbors
+      - schema
