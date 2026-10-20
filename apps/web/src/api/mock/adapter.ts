@@ -1,14 +1,15 @@
 import type { KeeperApi } from '../client';
-import { notFound, notSupported, problem, stateError } from '../errors';
+import { notFound, notSupported, stateError } from '../errors';
 import type {
   Branch,
   BranchName,
-  Conflict,
   DomainId,
+  MergeAttempt,
   Page,
   Proposal,
   ProposalDetail,
   ReadScope,
+  Resolution,
   Revision,
   Schema,
 } from '../types';
@@ -23,9 +24,18 @@ import {
   runSearch,
   toRow,
 } from './engine';
+import { assertShape, attemptOf, runMerge } from './merge';
+import { evaluateSchemaChanges } from './schema-changes';
 import { buildHrDomain } from './sample/hr';
 import { buildSupplyDomain } from './sample/supply';
-import { headOf, refOf, type BranchData, type DomainData, type MockSeed } from './state';
+import {
+  headOf,
+  refOf,
+  type BranchData,
+  type DomainData,
+  type MockSeed,
+  type ProposalState,
+} from './state';
 
 export interface MockOptions {
   /** Defaults applied when a request omits its own limit. */
@@ -128,6 +138,26 @@ export function createMockApi(options: MockOptions): KeeperApi {
     revisionCounter += 1;
     return `e${revisionCounter.toString(16).padStart(11, '0')}`;
   };
+
+  const conflictOf = (state: ProposalState, fingerprint: string) => {
+    const found = state.conflicts.find((c) => c.fingerprint === fingerprint);
+    if (found === undefined) throw notFound(`Conflict ${fingerprint}`);
+    return found;
+  };
+
+  const storeResolution = (state: ProposalState, resolution: Resolution) => {
+    assertShape(conflictOf(state, resolution.fingerprint), resolution);
+    const kept = state.resolutions.filter((r) => r.fingerprint !== resolution.fingerprint);
+    state.resolutions = [...kept, { ...structuredClone(resolution), resolver: 'usr_mock' }];
+  };
+
+  const attemptFor = (domain: DomainData, proposal: string, state: ProposalState): MergeAttempt =>
+    attemptOf(
+      proposal,
+      state,
+      branchOf(domain, state.detail.target_ref),
+      branchOf(domain, state.detail.source_ref),
+    );
 
   const requireOperation = (data: BranchData, name: string) => {
     const operation = data.schema.operations.find((o) => o.api_name === name);
@@ -258,7 +288,38 @@ export function createMockApi(options: MockOptions): KeeperApi {
         };
         return Promise.resolve(schema);
       },
-      applyChanges: () => Promise.reject(notSupported('Schema changes')),
+      applyChanges: (id, name, request) => {
+        const domain = domainOf(id);
+        const data = branchOf(domain, name);
+        const evaluation = evaluateSchemaChanges(data, request.changes);
+        const dryRun = request.dry_run === true;
+        if (!dryRun && data.protected) {
+          return Promise.reject(
+            stateError(
+              `Branch ${name} is protected. Commit the schema changes on another Branch and open a Proposal.`,
+              'branch_protected',
+            ),
+          );
+        }
+        const { valid, violations, migrations } = evaluation;
+        if (dryRun || !valid) {
+          return Promise.resolve({ valid, revision: null, violations, migrations });
+        }
+        const committed = buildRevision(
+          id,
+          nextRevisionId(),
+          headOf(data),
+          request.message ?? 'Change the schema',
+          new Date().toISOString(),
+          'schema_change',
+          { changes: request.changes.length },
+        );
+        data.schema = evaluation.next.schema;
+        data.records = evaluation.next.records;
+        data.links = evaluation.next.links;
+        data.log = [committed, ...data.log];
+        return Promise.resolve({ valid, revision: committed.id, violations, migrations });
+      },
     },
 
     records: {
@@ -400,7 +461,13 @@ export function createMockApi(options: MockOptions): KeeperApi {
           policies: [],
           reviews: [],
         };
-        domain.proposals.set(detail.id, { detail, conflicts: [], items: [] });
+        domain.proposals.set(detail.id, {
+          detail,
+          conflicts: [],
+          resolutions: [],
+          autoResolutions: [],
+          items: [],
+        });
         return Promise.resolve(summary(detail));
       },
       get: (id, proposal) => Promise.resolve(proposalOf(domainOf(id), proposal).detail),
@@ -441,13 +508,17 @@ export function createMockApi(options: MockOptions): KeeperApi {
             stateError('Only open Proposals can be merged.', 'proposal_not_open'),
           );
         }
-        if (state.conflicts.some((c) => c.resolution === null)) {
-          return Promise.reject(
-            stateError('Resolve all Conflicts before merging.', 'unresolved_conflicts'),
-          );
-        }
         const source = branchOf(domain, state.detail.source_ref);
         const target = branchOf(domain, state.detail.target_ref);
+        const run = runMerge(state, target, source);
+        if (run.merged === null) {
+          return Promise.resolve({
+            status: 'conflicts' as const,
+            attempt: attemptOf(proposal, state, target, source),
+          });
+        }
+        const heads = attemptOf(proposal, state, target, source);
+        const changes = diffBranches(target, run.merged, { from: 'ours', to: 'merged' }, undefined);
         const merged = buildRevision(
           id,
           nextRevisionId(),
@@ -455,15 +526,22 @@ export function createMockApi(options: MockOptions): KeeperApi {
           `Merge proposal #${proposal}`,
           new Date().toISOString(),
           'merge',
-          { originRef: proposal },
+          { originRef: proposal, changes: changes.changes.length },
         );
-        target.schema = structuredClone(source.schema);
-        target.records = structuredClone(source.records);
-        target.links = structuredClone(source.links);
+        merged.parents = [headOf(target), headOf(source)];
+        merged.stats.partitions_changed = Object.keys(changes.summary).length;
+        target.schema = run.merged.schema;
+        target.records = run.merged.records;
+        target.links = run.merged.links;
         target.log = [merged, ...target.log];
+        state.mergedHeads = { base: heads.base, ours: heads.ours, theirs: heads.theirs };
         state.detail.status = 'merged';
         state.detail.merged_revision = merged.id;
-        return Promise.resolve({ proposal: summary(state.detail), revision: merged.id });
+        return Promise.resolve({
+          status: 'merged' as const,
+          proposal: summary(state.detail),
+          revision: merged.id,
+        });
       },
       close: (id, proposal) => {
         const state = proposalOf(domainOf(id), proposal);
@@ -493,34 +571,25 @@ export function createMockApi(options: MockOptions): KeeperApi {
     },
 
     conflicts: {
-      list: (id, proposal) => Promise.resolve(page(proposalOf(domainOf(id), proposal).conflicts)),
-      resolve: (id, proposal, conflictId, resolution) => {
-        const found = proposalOf(domainOf(id), proposal).conflicts.find((c) => c.id === conflictId);
-        if (found === undefined) return Promise.reject(notFound(`Conflict ${conflictId}`));
-        if (resolution.choice === 'custom' && resolution.value === undefined) {
-          return Promise.reject(
-            problem(
-              422,
-              'Invalid resolution',
-              'A custom choice needs a value.',
-              'invalid_resolution',
-            ),
-          );
-        }
-        found.resolution = resolution;
-        found.resolved_by = 'usr_mock';
-        found.resolved_at = new Date().toISOString();
-        return Promise.resolve(found);
+      list: (id, proposal) => {
+        const domain = domainOf(id);
+        const state = proposalOf(domain, proposal);
+        return Promise.resolve(attemptFor(domain, proposal, state));
+      },
+      resolve: (id, proposal, resolution) => {
+        const state = proposalOf(domainOf(id), proposal);
+        storeResolution(state, resolution);
+        return Promise.resolve(structuredClone(resolution));
       },
       resolveMany: (id, proposal, input) => {
-        const all = proposalOf(domainOf(id), proposal).conflicts;
-        const touched: Conflict[] = all.filter((c) => input.conflict_ids.includes(c.id));
-        for (const c of touched) {
-          c.resolution = input.resolution;
-          c.resolved_by = 'usr_mock';
-          c.resolved_at = new Date().toISOString();
+        const domain = domainOf(id);
+        const state = proposalOf(domain, proposal);
+        // Check them all first so a bad entry stores nothing.
+        for (const resolution of input.resolutions) {
+          assertShape(conflictOf(state, resolution.fingerprint), resolution);
         }
-        return Promise.resolve(page(touched));
+        for (const resolution of input.resolutions) storeResolution(state, resolution);
+        return Promise.resolve(attemptFor(domain, proposal, state));
       },
     },
   };

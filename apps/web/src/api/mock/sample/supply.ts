@@ -1,4 +1,11 @@
-import type { Conflict, Operation, ProposalDetail, ProposalItem } from '../../types';
+import type {
+  AutoResolution,
+  Conflict,
+  JsonValue,
+  Operation,
+  ProposalDetail,
+  ProposalItem,
+} from '../../types';
 import {
   attr,
   builtinOperations,
@@ -10,6 +17,7 @@ import {
   revision,
   trait,
 } from '../builders';
+import { digest, makeConflict } from '../conflicts';
 import type { BranchData, DomainData, ProposalState, SchemaBody } from '../state';
 
 const DOMAIN = 'supply';
@@ -430,6 +438,34 @@ function derivedBranch(
   return copy;
 }
 
+const RISK_SCORE = eid('att', 'supplier_risk_score');
+const TIER = eid('att', 'supplier_tier');
+const RISK_BAND = attr('supplier', 'risk_band', 'enum', {
+  required: true,
+  description: 'Risk band assigned by the risk model.',
+  constraints: { enum_values: ['low', 'medium', 'high'] },
+});
+
+/** What the risk model changes on Suppliers: score range, a required band, a tier, a closed Plant. */
+function reshapeSupplier(data: BranchData) {
+  const supplierKind = data.schema.kinds.find((k) => k.api_name === 'Supplier');
+  const score = supplierKind?.attributes[RISK_SCORE];
+  if (supplierKind === undefined || score === undefined) return;
+  score.description = 'Weighted risk score from the risk model, 0 (none) to 60 (severe).';
+  score.constraints = { min: 0, max: 60 };
+  supplierKind.attributes[RISK_BAND.id] = structuredClone(RISK_BAND);
+
+  const bands: Record<string, string> = { 'S-1001': 'medium', 'S-1002': 'low', 'S-1003': 'high' };
+  for (const rec of data.records) {
+    if (rec.kind !== 'Supplier') continue;
+    const band = bands[rec.key];
+    if (band !== undefined) rec.values['risk_band'] = band;
+    if (rec.key === 'S-1003') rec.values['tier'] = '1';
+  }
+  data.records = data.records.filter((r) => !(r.kind === 'Plant' && r.key === 'MNZ'));
+  data.links = data.links.filter((l) => l.to !== 'Plant/MNZ');
+}
+
 function riskBranch(main: BranchData): BranchData {
   const ancestor = main.log[1];
   return derivedBranch(
@@ -453,6 +489,7 @@ function riskBranch(main: BranchData): BranchData {
       ),
     ],
     (data) => {
+      reshapeSupplier(data);
       data.schema.kinds.push(riskFlag);
       data.schema.relations.push(flags);
       data.schema.operations.push(flagSupplierRisk);
@@ -533,20 +570,110 @@ function cleanupBranch(main: BranchData): BranchData {
 
 // -------------------------------------------------------------- proposals
 
-const conflict = (id: string, code: Conflict['code'], rest: Partial<Conflict> = {}): Conflict => ({
-  id,
-  code,
-  fingerprint: `fp_${id}`,
-  partition: 'Supplier',
-  element_key: 'S-1001',
-  attribute_id: null,
-  payload: { base: null, ours: null, theirs: null },
-  member_count: 1,
-  resolution: null,
-  resolved_by: null,
-  resolved_at: null,
-  ...rest,
+const supplierKindId = supplier.id;
+
+const monza = (name: string): JsonValue => ({
+  plant_code: 'MNZ',
+  name,
+  country: 'IT',
+  city: 'Monza',
 });
+
+const feedsLinks = [
+  { relation: 'feeds', from: 'Supplier/S-1003', to: 'Plant/MNZ' },
+  { relation: 'feeds', from: 'Supplier/S-1006', to: 'Plant/MNZ' },
+];
+
+/** The merge attempt of Proposal 41: model/risk into main, six Conflicts of six kinds. */
+function riskConflicts(): Conflict[] {
+  return [
+    makeConflict({
+      kind: 'SC1',
+      partition: 'schema',
+      key: supplierKindId,
+      attribute: `attributes.${RISK_SCORE}.description`,
+      base: 'Risk score.',
+      ours: 'Composite risk score, 0 (none) to 100 (severe).',
+      theirs: 'Weighted risk score from the risk model, 0 (none) to 60 (severe).',
+      message: 'Both Branches changed the description of Supplier.risk_score.',
+      details: { element: supplierKindId, path: ['attributes', RISK_SCORE, 'description'] },
+    }),
+    makeConflict({
+      kind: 'DV1',
+      partition: 'Supplier',
+      key: 'S-1003',
+      attribute: TIER,
+      base: '2',
+      ours: '3',
+      theirs: '1',
+      message: 'Supplier S-1003: the tier changed on both Branches.',
+    }),
+    makeConflict({
+      kind: 'DV2',
+      partition: 'Plant',
+      key: 'MNZ',
+      base: monza('Monza Foundry S.r.l.'),
+      ours: monza('Monza Foundry'),
+      theirs: null,
+      message: 'Plant MNZ was modified on main and deleted on model/risk.',
+    }),
+    makeConflict({
+      kind: 'XS9',
+      partition: 'feeds',
+      count: 2,
+      sample: feedsLinks.map((l) => `${l.from} -> ${l.to}`),
+      message: '2 feeds Links added on main point to Plant MNZ, deleted on model/risk.',
+      details: { relation: 'feeds', record: 'Plant/MNZ', links: feedsLinks },
+    }),
+    makeConflict({
+      kind: 'XS4',
+      partition: 'Supplier',
+      attribute: RISK_BAND.id,
+      sample: ['S-1004', 'S-1005', 'S-1006'],
+      message: '3 Suppliers changed on main have no value for the required Attribute risk_band.',
+      details: {
+        element: supplierKindId,
+        path: ['attributes', RISK_BAND.id, 'required'],
+        relaxed: false,
+        members: {
+          'S-1004': { base: null, ours: null, theirs: null },
+          'S-1005': { base: null, ours: null, theirs: null },
+          'S-1006': { base: null, ours: null, theirs: null },
+        },
+      },
+    }),
+    makeConflict({
+      kind: 'XS5',
+      partition: 'Supplier',
+      attribute: RISK_SCORE,
+      sample: ['S-1003', 'S-1006'],
+      message: '2 Supplier values written on main exceed the new maximum 60 of risk_score.',
+      details: {
+        element: supplierKindId,
+        path: ['attributes', RISK_SCORE, 'constraints'],
+        relaxed: { min: 0, max: 100 },
+        members: {
+          'S-1003': { base: 65, ours: 71, theirs: 71 },
+          'S-1006': { base: 60, ours: 64, theirs: 64 },
+        },
+      },
+    }),
+  ];
+}
+
+const autoResolved: AutoResolution[] = [
+  {
+    kind: 'DV1',
+    fingerprint: digest('policy:erp-authority:S-1005:tier'),
+    partition: 'Supplier',
+    key: 'S-1005',
+    attribute: TIER,
+    choice: 'ours',
+    resolver: 'policy:erp-authority',
+    count: 1,
+    sample: [],
+  },
+];
 
 function proposal(
   detail: Omit<ProposalDetail, 'merged_revision' | 'reviews' | 'policies'> &
@@ -616,12 +743,13 @@ function proposals(): Map<string, ProposalState> {
         status: 'open',
         author: 'usr_marco',
         created_at: '2026-10-17T10:30:00Z',
+        policies: [{ name: 'erp-authority', rule: 'authority' }],
         checks: [
           { name: 'Schema validation', status: 'passed' },
           {
             name: 'Data consistency',
             status: 'failed',
-            message: '3 Supplier Records have no risk_score.',
+            message: '3 Supplier Records have no risk_band.',
           },
           { name: 'Operation dry run', status: 'pending' },
         ],
@@ -634,19 +762,9 @@ function proposals(): Map<string, ProposalState> {
           },
         ],
       }),
-      conflicts: [
-        conflict('c1', 'SC1', {
-          partition: 'schema',
-          element_key: 'Supplier.risk_score',
-          attribute_id: 'att_supplier_risk_score',
-          payload: { base: { max: 100 }, ours: { max: 10 }, theirs: { max: 100 } },
-        }),
-        conflict('c2', 'XS4', {
-          element_key: '3 Records',
-          attribute_id: 'att_supplier_risk_score',
-          member_count: 3,
-        }),
-      ],
+      conflicts: riskConflicts(),
+      resolutions: [],
+      autoResolutions: autoResolved,
       items: [],
     },
     {
@@ -666,6 +784,8 @@ function proposals(): Map<string, ProposalState> {
         ],
       }),
       conflicts: [],
+      resolutions: [],
+      autoResolutions: [],
       items,
     },
     {
@@ -683,11 +803,19 @@ function proposals(): Map<string, ProposalState> {
         checks: [{ name: 'Schema validation', status: 'passed' }],
       }),
       conflicts: [
-        conflict('c3', 'DV1', {
-          attribute_id: 'att_supplier_tier',
-          payload: { base: '2', ours: '1', theirs: '3' },
+        makeConflict({
+          kind: 'DV1',
+          partition: 'Supplier',
+          key: 'S-1001',
+          attribute: TIER,
+          base: '3',
+          ours: '2',
+          theirs: '1',
+          message: 'Supplier S-1001: the tier changed on both Branches.',
         }),
       ],
+      resolutions: [],
+      autoResolutions: [],
       items: [],
     },
     {
@@ -705,6 +833,8 @@ function proposals(): Map<string, ProposalState> {
         checks: [{ name: 'Schema validation', status: 'passed' }],
       }),
       conflicts: [],
+      resolutions: [],
+      autoResolutions: [],
       items: [],
     },
   ];
