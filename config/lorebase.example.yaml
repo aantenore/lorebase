@@ -94,7 +94,9 @@ keeper:
                                  # operation.execute operation.execute_custom schema.write
                                  # source.map proposal.review conflict.resolve proposal.merge
                                  # source.manage job.manage grant.manage apikey.manage
-                                 # domain.settings audit.read principal.read
+                                 # domain.settings domain.delete audit.read
+                                 # principal.read domain.create (the last two are
+                                 # installation-level)
     audit:
       enabled: true              # hash-chained log of mutations and denied requests; needs the
                                  # `database` section
@@ -103,6 +105,29 @@ keeper:
   openapi:
     title: Lorebase Keeper
     docs_enabled: true           # serve <prefix>/docs and <prefix>/openapi.json
+  domains:
+    leaf_size: 512               # tree leaf size of new Domains, fixed for a Domain's life
+    creator_role: admin          # role granted to the creator in a new Domain; null: none
+    protect_default_branch: true # the default branch accepts changes only through Proposals
+  branches:
+    materialization: full        # M1 supports full only: rows copied from the source head or
+                                 # rebuilt from the tree of the start Revision
+    max_materialized_per_domain: 20
+    name_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'
+    max_name_length: 200
+    lock_retry_after_s: 1        # Retry-After of 503 branch-busy answers
+  schema_changes:
+    max_issues: 200              # issues listed in one response
+    max_listed_changes: 1000     # element changes listed in one response
+  operations:
+    max_bulk_rows: 10000         # rows accepted by one import_records or import_links call
+    import_batch_rows: 1000      # rows committed per Revision by bulk imports
+    dry_run_max_edits: 1000      # edits listed in a response; longer lists are cut
+    max_issues: 200              # violations listed in one response
+    direct_commit_on_protected: false   # true: Operations with review policy `never` commit
+                                        # directly to protected branches
+    skip_expression_preconditions: false   # expressions are not enabled yet: true skips CEL
+                                           # preconditions (reported) instead of refusing
 
 # Model inference, used by Scribe only. Lorebase never imports a model vendor library: every
 # chat model is an OpenAI-compatible HTTP endpoint, local or hosted.

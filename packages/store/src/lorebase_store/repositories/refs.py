@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Table, func, insert, select, text, update
+from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,6 +118,48 @@ class RefRepository:
             query = query.where(REFS.c.kind == kind)
         result = await self._session.execute(query)
         return [RefRow(**row) for row in result.mappings()]
+
+    async def page(self, kind: RefKind, *, limit: int, after: str | None = None) -> list[RefRow]:
+        """Refs of one kind ordered by name, starting after `after`."""
+        query = (
+            select(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.kind == kind)
+            .order_by(REFS.c.name)
+            .limit(limit)
+        )
+        if after is not None:
+            query = query.where(REFS.c.name > after)
+        result = await self._session.execute(query)
+        return [RefRow(**row) for row in result.mappings()]
+
+    async def count(self, kind: RefKind, materialization: Materialization | None = None) -> int:
+        """Number of refs of one kind, optionally with one materialization mode."""
+        query = (
+            select(func.count())
+            .select_from(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.kind == kind)
+        )
+        if materialization is not None:
+            query = query.where(REFS.c.materialization == materialization)
+        return int(await self._session.scalar(query) or 0)
+
+    async def set_protected(self, name: str, protected: bool) -> RefRow | None:
+        """Set the protection flag of a branch; returns the ref, `None` when it does not exist."""
+        await self._session.execute(
+            update(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.name == name)
+            .values(protected=protected)
+        )
+        return await self.get(name)
+
+    async def delete(self, name: str) -> bool:
+        """Remove a ref. Materialized rows of a branch go with it; the ref log is kept."""
+        result = await self._session.execute(
+            delete(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.name == name)
+            .returning(REFS.c.name)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def create(
         self,

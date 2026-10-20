@@ -22,7 +22,7 @@ from fastapi.security import HTTPBearer
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
-from lorebase_keeper.auth.rbac import AccessContext
+from lorebase_keeper.auth.rbac import NO_CONTEXT, AccessContext
 from lorebase_keeper.auth.runtime import AuthRuntime
 from lorebase_keeper.errors import FORBIDDEN, UNAVAILABLE, ProblemError
 
@@ -86,22 +86,36 @@ def require(
 
     async def dependency(request: Request, principal: PrincipalDep, auth: AuthDep) -> Access:
         params = request.path_params
-        domain_id = str(params[domain_param])
         context = AccessContext(
             kind=_param(params, kind_param),
             operation=_param(params, operation_param),
             branch=_param(params, branch_param),
         )
-        annotate(request, domain_id=domain_id, permission=permission.value)
-        if not await auth.authorizer.allows(principal, permission, domain_id, context):
-            raise ProblemError(
-                FORBIDDEN,
-                f"Missing permission {permission.value} in Domain {domain_id}.",
-                extensions={"permission": permission.value, "domain": domain_id},
-            )
-        return Access(principal=principal, domain_id=domain_id, permission=permission)
+        return await authorize(
+            request, auth, principal, permission, str(params[domain_param]), context
+        )
 
     return dependency
+
+
+async def authorize(
+    request: Request,
+    auth: AuthRuntime,
+    principal: Principal,
+    permission: Permission,
+    domain_id: str,
+    context: AccessContext = NO_CONTEXT,
+) -> Access:
+    """Check `permission` in a Domain for a context known only inside the route (a branch or
+    Operation named in the body). Answers 403 naming the missing permission."""
+    annotate(request, domain_id=domain_id, permission=permission.value)
+    if not await auth.authorizer.allows(principal, permission, domain_id, context):
+        raise ProblemError(
+            FORBIDDEN,
+            f"Missing permission {permission.value} in Domain {domain_id}.",
+            extensions={"permission": permission.value, "domain": domain_id},
+        )
+    return Access(principal=principal, domain_id=domain_id, permission=permission)
 
 
 def require_installation(permission: Permission) -> Callable[..., Awaitable[Access]]:

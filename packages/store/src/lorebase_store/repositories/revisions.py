@@ -37,6 +37,30 @@ _FIRST_PARENT_CHAIN = text(
 )
 
 
+_AHEAD_BEHIND = text(
+    """
+    WITH RECURSIVE
+    left_side(id) AS (
+        SELECT CAST(:left AS bytea)
+        UNION
+        SELECT p.parent_id
+        FROM left_side
+        JOIN revision_parents p ON p.domain_id = :domain AND p.revision_id = left_side.id
+    ),
+    right_side(id) AS (
+        SELECT CAST(:right AS bytea)
+        UNION
+        SELECT p.parent_id
+        FROM right_side
+        JOIN revision_parents p ON p.domain_id = :domain AND p.revision_id = right_side.id
+    )
+    SELECT
+        (SELECT count(*) FROM left_side WHERE id NOT IN (SELECT id FROM right_side)),
+        (SELECT count(*) FROM right_side WHERE id NOT IN (SELECT id FROM left_side))
+    """
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RevisionRow:
     id: bytes
@@ -147,6 +171,16 @@ class RevisionRepository:
             )
         )
         return {rev: int(generation) for rev, generation in result}
+
+    async def ahead_behind(self, left: bytes, right: bytes) -> tuple[int, int]:
+        """Revisions reachable from `left` but not from `right`, and the other way round."""
+        if left == right:
+            return 0, 0
+        result = await self._session.execute(
+            _AHEAD_BEHIND, {"left": left, "right": right, "domain": self._domain}
+        )
+        ahead, behind = result.one()
+        return int(ahead), int(behind)
 
     async def first_parent_chain(self, head: bytes) -> list[bytes]:
         """`head` and its first-parent ancestors, newest first."""

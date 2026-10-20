@@ -12,6 +12,7 @@ from lorebase_store.repositories.index_view import (
     MaterializedIndexView,
     RecordState,
 )
+from lorebase_store.repositories.invocations import InvocationRepository, InvocationRow
 from lorebase_store.repositories.materialized import (
     HistoryRow,
     HistoryStep,
@@ -44,6 +45,8 @@ __all__ = [
     "DomainRow",
     "HistoryRow",
     "HistoryStep",
+    "InvocationRepository",
+    "InvocationRow",
     "LinkRow",
     "LinkState",
     "LockTimeoutError",

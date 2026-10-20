@@ -12,6 +12,12 @@ from typing import Self
 from pydantic import Field, field_validator, model_validator
 
 from lorebase_keeper.auth.config import AuthSettings
+from lorebase_keeper.services.config import (
+    BranchSettings,
+    DomainSettings,
+    OperationSettings,
+    SchemaChangeSettings,
+)
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 SECTION = "keeper"
@@ -103,6 +109,10 @@ class KeeperSettings(SectionModel):
     readiness: ReadinessSettings = Field(default_factory=ReadinessSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     openapi: OpenApiSettings = Field(default_factory=OpenApiSettings)
+    domains: DomainSettings = Field(default_factory=DomainSettings)
+    branches: BranchSettings = Field(default_factory=BranchSettings)
+    schema_changes: SchemaChangeSettings = Field(default_factory=SchemaChangeSettings)
+    operations: OperationSettings = Field(default_factory=OperationSettings)
 
     @field_validator("api_prefix")
     @classmethod
