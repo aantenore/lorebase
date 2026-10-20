@@ -1,0 +1,111 @@
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { yaml } from '@codemirror/lang-yaml';
+import { defaultHighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
+import { Annotation, EditorState } from '@codemirror/state';
+import { EditorView, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
+import { useEffect, useRef } from 'react';
+
+export interface Jump {
+  line: number;
+  col: number;
+  /** Changes on every request, so asking for the same place twice still moves the cursor. */
+  nonce: number;
+}
+
+export interface YamlEditorProps {
+  value: string;
+  onChange: (text: string) => void;
+  label: string;
+  jump: Jump | null;
+}
+
+/** Marks edits that come from the `value` prop, so they are not reported back as changes. */
+const External = Annotation.define<boolean>();
+
+const theme = EditorView.theme({
+  '&': {
+    backgroundColor: 'var(--lb-surface)',
+    color: 'var(--lb-text)',
+    border: '1px solid var(--lb-line)',
+    borderRadius: '0.375rem',
+    fontSize: '0.8125rem',
+    height: '100%',
+  },
+  '&.cm-focused': { outline: '2px solid var(--lb-ring)' },
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', overflow: 'auto' },
+  '.cm-gutters': {
+    backgroundColor: 'var(--lb-surface-2)',
+    color: 'var(--lb-muted)',
+    border: 'none',
+  },
+  '.cm-activeLine': { backgroundColor: 'var(--lb-surface-2)' },
+  '.cm-activeLineGutter': { backgroundColor: 'var(--lb-surface-2)' },
+  '.cm-cursor': { borderLeftColor: 'var(--lb-text)' },
+});
+
+/**
+ * YAML editor on CodeMirror 6: YAML language, history, line numbers. `value` is the source
+ * of truth: when it changes from outside (the form edited the document) the text is
+ * replaced; typing reports the new text through `onChange`.
+ */
+export default function YamlEditor({ value, onChange, label, jump }: YamlEditorProps) {
+  const host = useRef<HTMLDivElement>(null);
+  const view = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+
+  useEffect(() => {
+    if (host.current === null) return;
+    const editor = new EditorView({
+      parent: host.current,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          lineNumbers(),
+          history(),
+          indentOnInput(),
+          highlightActiveLine(),
+          yaml(),
+          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
+          theme,
+          EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true' }),
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged) return;
+            if (update.transactions.some((t) => t.annotation(External) === true)) return;
+            onChangeRef.current(update.state.doc.toString());
+          }),
+        ],
+      }),
+    });
+    view.current = editor;
+    return () => {
+      editor.destroy();
+      view.current = null;
+    };
+    // The editor is created once; later `value` and `label` changes are applied below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const editor = view.current;
+    if (editor === null || editor.state.doc.toString() === value) return;
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: value },
+      annotations: External.of(true),
+    });
+  }, [value]);
+
+  useEffect(() => {
+    const editor = view.current;
+    if (editor === null || jump === null) return;
+    const line = editor.state.doc.line(Math.min(Math.max(jump.line, 1), editor.state.doc.lines));
+    const position = Math.min(line.from + Math.max(jump.col - 1, 0), line.to);
+    editor.dispatch({ selection: { anchor: position }, scrollIntoView: true });
+    editor.focus();
+  }, [jump]);
+
+  return <div ref={host} role="group" aria-label={`${label} editor`} className="h-96 min-h-0" />;
+}

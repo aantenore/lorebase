@@ -6,7 +6,14 @@ import { PlannedScreens } from '@/features/planned-screens';
 import { Badge, EmptyState, PageHeader, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { Tabs } from '@/ui/tabs';
-import { isModelerTab, MODELER_TABS, type ModelerTab } from './search';
+import { SchemaEditor } from './schema-editor';
+import {
+  isModelerTab,
+  isModelerView,
+  MODELER_TABS,
+  type ModelerTab,
+  type ModelerView,
+} from './search';
 
 function kindName(schema: Schema, id: string): string {
   return schema.kinds.find((k) => k.id === id)?.api_name ?? id;
@@ -281,8 +288,30 @@ function TabContent({ tab, schema }: { tab: ModelerTab; schema: Schema }) {
   }
 }
 
-/** Modeler schema overview: read-only lists of every schema element on the Branch. */
-export function ModelerPage({ tab }: { tab: ModelerTab }) {
+function SchemaOverview({ tab, schema }: { tab: ModelerTab; schema: Schema }) {
+  const navigate = useNavigate();
+  const scopeSearch = useScopeSearch();
+  return (
+    <Tabs
+      label="Schema elements"
+      value={tab}
+      onChange={(id) => {
+        void navigate({
+          to: '.',
+          search: { ...scopeSearch, tab: isModelerTab(id) ? id : 'kinds' },
+        });
+      }}
+      tabs={MODELER_TABS.map((id) => ({
+        id,
+        label: `${LABEL_OF[id]} (${COUNT_OF[id](schema)})`,
+        content: <TabContent tab={id} schema={schema} />,
+      }))}
+    />
+  );
+}
+
+/** Modeler: the schema of the Branch as lists, and an editor with form and YAML views. */
+export function ModelerPage({ tab, view }: { tab: ModelerTab; view: ModelerView }) {
   const scope = useScope();
   const schema = useSchema(scope);
   const navigate = useNavigate();
@@ -308,24 +337,40 @@ export function ModelerPage({ tab }: { tab: ModelerTab }) {
       <QueryBoundary query={schema}>
         {(data) => (
           <Tabs
-            label="Schema elements"
-            value={tab}
+            label="Modeler views"
+            value={view}
             onChange={(id) => {
               void navigate({
                 to: '.',
-                search: { ...scopeSearch, tab: isModelerTab(id) ? id : 'kinds' },
+                search: { ...scopeSearch, tab, view: isModelerView(id) ? id : 'overview' },
               });
             }}
-            tabs={MODELER_TABS.map((id) => ({
-              id,
-              label: `${LABEL_OF[id]} (${COUNT_OF[id](data)})`,
-              content: <TabContent tab={id} schema={data} />,
-            }))}
+            tabs={[
+              {
+                id: 'overview',
+                label: 'Overview',
+                content: <SchemaOverview tab={tab} schema={data} />,
+              },
+              {
+                id: 'edit',
+                label: 'Edit schema',
+                content: <SchemaEditor key={data.revision} base={data} />,
+              },
+            ]}
           />
         )}
       </QueryBoundary>
       <div className="mt-6">
-        <PlannedScreens area="Modeler" built={['Schema overview']} />
+        <PlannedScreens
+          area="Modeler"
+          built={[
+            'Schema overview',
+            'Kind editor',
+            'Relation editor',
+            'Trait editor',
+            'Change set summary',
+          ]}
+        />
       </div>
     </>
   );

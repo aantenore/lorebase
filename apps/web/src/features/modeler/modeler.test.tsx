@@ -42,6 +42,8 @@ describe('Modeler', () => {
 
   it('lists the planned editors from the screen inventory', async () => {
     renderApp('/supply/modeler');
-    expect(await screen.findByRole('region', { name: 'Modeler: Kind editor' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Modeler: Operation editor' }),
+    ).toBeInTheDocument();
   });
 });

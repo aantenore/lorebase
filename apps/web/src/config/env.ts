@@ -16,6 +16,8 @@ export interface AppConfig {
   queryStaleMs: number;
   toastMs: number;
   mockLatencyMs: number;
+  /** Prefix of the Branch the Modeler creates to carry schema changes of a protected Branch. */
+  schemaBranchPrefix: string;
 }
 
 export type RawEnv = Readonly<Record<string, string | boolean | undefined>>;
@@ -36,6 +38,7 @@ const NON_FUNCTIONAL_DEFAULTS = {
   queryStaleMs: 30_000,
   toastMs: 5000,
   mockLatencyMs: 0,
+  schemaBranchPrefix: 'schema/',
 } as const;
 
 function text(raw: RawEnv, key: string): string | undefined {
@@ -103,6 +106,8 @@ export function loadConfig(raw: RawEnv): AppConfig {
       NON_FUNCTIONAL_DEFAULTS.mockLatencyMs,
       0,
     ),
+    schemaBranchPrefix:
+      text(raw, 'VITE_SCHEMA_BRANCH_PREFIX') ?? NON_FUNCTIONAL_DEFAULTS.schemaBranchPrefix,
   };
 }
 
