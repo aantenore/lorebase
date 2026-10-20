@@ -47,7 +47,7 @@ The web app today, running on a mock API with sample data. The [visual tour](doc
 |------|----------|
 | Modeling | Kinds, typed Attributes with constraints and sensitivity tags, directional Relations with cardinality, Traits, Derivations, Source mappings; Modeler UI and YAML |
 | Versioning | Content-addressed Revisions on Postgres, Branches and tags, diff between any two Revisions, three-way merge of schema and data, Conflict taxonomy and resolution flows, time travel reads |
-| Ingestion | CSV, Parquet and Postgres Sources with rule-based schema inference (no model needed); snapshot and incremental syncs; tiered document extraction (rules, local GLiNER and GLiREL, then any LLM with JSON schema output) with verified evidence and entity resolution; everything lands as Proposals |
+| Ingestion | CSV, Parquet and Postgres Sources with rule-based [schema inference](docs/inference.md) (no model needed); snapshot and incremental syncs; tiered document extraction (rules, local GLiNER and GLiREL, then any LLM with JSON schema output) with verified evidence and entity resolution; everything lands as Proposals |
 | Inference | Vendor-agnostic and local-first: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`; Ollama by default; any hosted provider by configuration; fastembed embeddings on CPU; deterministic fake provider for tests; never used on the agent read path |
 | Review | Proposals with checks and approvals, per-item accept and reject with highlighted evidence, side-by-side Conflict resolver, merge policies such as Source authority |
 | Exploration | Explorer (search, filters, record pages, Lineage, history), Canvas graph visualization (Sigma.js), schema graph, diff overlay |
@@ -153,6 +153,7 @@ Done:
 - **Core engine** (`lorebase_core`): canonical JSON and hashing, type system, schema element models with static validation, data validation, canonical HAMT trees, tree diff, Revisions, changesets and ancestry.
 - **Three-way merge**: schema merge, attribute-level data merge, consistency rules under the merged schema, the full Conflict taxonomy, resolutions and merge policies (`prefer`, cascade of dangling Links, defaults). The `authority` and `newest_wins` policies are not implemented yet. Implementation notes: [docs/design.md](docs/design.md#615-implementation-notes).
 - **Schema as code**: load and dump a Domain schema as YAML, with the demo Domain in [examples/supply](examples/supply).
+- **Schema inference**: deterministic proposal of Kinds, typed Attributes, keys and Relations from CSV files or Postgres tables, with evidence and issues to review (`POST /domains/{d}/schema:infer`, [docs/inference.md](docs/inference.md)).
 - **Postgres schema**: Alembic migrations for the versioned store, materialized heads, governance tables and row-level security ([notes](docs/store-schema-notes.md)).
 - **Keeper skeleton**: settings, structured logging and telemetry, error format, liveness and readiness endpoints.
 - **Web shell**: Explorer, Canvas, schema overview and Review screens over a mock API.

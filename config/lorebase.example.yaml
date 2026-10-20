@@ -119,6 +119,71 @@ keeper:
   schema_changes:
     max_issues: 200              # issues listed in one response
     max_listed_changes: 1000     # element changes listed in one response
+  schema_inference:              # POST /domains/{d}/schema:infer (docs/inference.md)
+    max_files: 50                # CSV/TSV files per request
+    max_file_bytes: 1048576      # per file (413 above); uploads also obey limits.max_request_body_bytes
+    max_total_bytes: 1048576     # all files together (413 above)
+    file_suffixes: [.csv, .tsv, .txt]
+    allowed_sources: []          # secret references of Postgres URLs callers may name, e.g.
+                                 # secret://env/ERP_DSN; empty disables Postgres inference
+    max_issues: 500              # issues listed in one response
+    options:                     # thresholds and naming rules; a request may override them
+      sample_size: 10000         # values read per column
+      null_tokens: ["", "NULL", "null"]   # text read as null (after trimming)
+      trim_text: true
+      max_evidence_samples: 5    # sample values kept per evidence entry
+      min_support_values: 20     # non-null values for full confidence; fewer scale it down
+      sampled_uniqueness_factor: 0.8   # confidence factor when only a sample was read
+      true_tokens: ["true", "t", "yes", "y"]     # boolean tokens, case-insensitive
+      false_tokens: ["false", "f", "no", "n"]
+      type_tolerance: 0.0        # share of values allowed not to parse as the detected type
+      mixed_type_report_ratio: 0.5     # report text columns that mostly parse as one type
+      leading_zero_integers_as_text: true   # 007 stays a text code
+      decimal_max_scale: 4       # more fractional digits: float
+      decimal_precision_headroom: 2    # integer digits added to the largest seen
+      decimal_max_precision: 38
+      date_formats: ["%Y-%m-%d"]
+      timestamp_formats: ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"]   # without offset: UTC;
+                                 # RFC 3339 with offset is always recognized
+      enum_max_cardinality: 12   # enum: at most this many distinct values,
+      enum_max_distinct_ratio: 0.5     # at most this distinct/non-null ratio,
+      enum_min_values: 10        # at least this many non-null values,
+      enum_max_value_length: 40  # and short values (numbered codes such as a-1, a-2 never)
+      text_min_length: 256       # longer values: text
+      text_name_hints: [description, "*_description", summary, reason, notes, note, comment,
+                        comments, body, content, details]   # prose under these names: text
+      text_hint_min_words: 3.0
+      string_length_buckets: [16, 32, 64, 128, 256]   # max_length rounded up to a bucket
+      propose_max_length: true
+      propose_patterns: true     # e.g. ^S-[0-9]{4,}$ for code-like values
+      pattern_min_values: 5
+      propose_non_negative_min: true   # min 0 on numbers that are never negative
+      required_max_null_ratio: 0.0     # at most this share of nulls: required
+      unique_min_values: 2
+      unique_name_patterns: ["*_number", "*_code", "*_id", "*_key", email, "*_email", "vat*",
+                             iban]   # unique non-key columns flagged unique only when named so
+      key_name_patterns: [id, key, code, "{table}_id", "{table}_key", "{table}_code",
+                          "{table}_number", "{table}_no", "*_id", "*_key", "*_code",
+                          "*_number", "*_no"]   # ranked primary key names
+      allow_unnamed_primary_key: true    # else the first unique, never-null column
+      composite_key_max_columns: 2
+      minted_key_columns: [key]  # key column of generated ids (ULID, UUID): minted keys
+      min_inclusion_ratio: 0.95  # share of a column's values found in a key for a Relation
+      foreign_key_suffixes: [_id, _key, _code, _number, _no, _ref, _fk]
+      integer_reference_needs_name: true
+      weak_name_factor: 0.9      # confidence factor: reference suffix without the target name
+      no_name_factor: 0.75       # confidence factor: no name hint at all
+      detect_junction_tables: true     # two references forming the key: a Relation
+      junction_max_attributes: 8
+      one_to_one_needs_declared_unique: true
+      singular_kind_names: true  # suppliers -> Supplier
+      strip_table_prefixes: []   # e.g. [tbl_]
+      title_names: [name, title, label, display_name, "*_name", "*_title", "*_label"]
+      propose_search: true       # title searchable (A), text Attributes searchable (B)
+      reserved_attribute_names: [key, kind, ref, revision]   # renamed <kind>_<column>
+      element_status: draft      # status of proposed Kinds and Relations
+      id_seed: lorebase.infer    # same input and seed: same ids
+      id_timestamp_ms: 0
   reads:
     reachability_max_depth: 1000 # parent hops followed to prove that a Revision or tag named by
                                  # a caller with branch-scoped grants is reachable from a branch
