@@ -99,6 +99,27 @@ class Authorizer:
         grants = await self._grants(principal, domain_id)
         return any(permission in self._roles.get(grant.role, frozenset()) for grant in grants)
 
+    async def reveals_missing_domain(self, principal: Principal, domain_id: str) -> bool:
+        """Whether `domain_id` names no Domain and `principal` may be told so (404, not 403).
+
+        Installation administrators and holders of a Domain-wide grant on that id may. Callers
+        without grants there, or with grants narrowed to a Kind, Operation or branch, may not:
+        for them a missing Domain and one they cannot read answer alike, so the answer does not
+        tell whether the Domain exists. A key limited to other Domains never may.
+        """
+        if principal.key_scopes and domain_scope(domain_id) not in principal.key_scopes:
+            return False
+        if not principal.installation_admin:
+            grants = await self._grants(principal, domain_id)
+            if not any(grant.scope_type is GrantScope.DOMAIN for grant in grants):
+                return False
+        return not await self._domain_exists(domain_id)
+
+    async def _domain_exists(self, domain_id: str) -> bool:
+        assert self._store is not None, "authorization needs a store"
+        async with self._store.unit() as unit:
+            return await unit.grants.domain_exists(domain_id)
+
     async def granted_kinds(
         self, principal: Principal, permission: Permission, domain_id: str
     ) -> frozenset[str]:

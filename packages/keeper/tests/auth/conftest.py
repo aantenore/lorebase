@@ -183,6 +183,9 @@ class MemGrants:
             g for g in self.s.grant_rows if g.domain_id == domain_id and g.subject in set(subjects)
         ]
 
+    async def domain_exists(self, domain_id: str) -> bool:
+        return domain_id in self.s.domains
+
     async def for_subjects_anywhere(self, subjects: Collection[str]) -> list[GrantRecord]:
         self.s.grant_lookups += 1
         return [g for g in self.s.grant_rows if g.subject in set(subjects)]

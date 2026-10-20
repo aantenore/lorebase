@@ -403,3 +403,81 @@ async def test_granted_kinds_lists_kind_narrowed_grants_only(store: Any) -> None
     assert await subject.granted_kinds(user(), P.DATA_READ, "acme") == {"Supplier", "Part"}
     assert await subject.granted_kinds(user(), P.DATA_READ, "globex") == frozenset()
     assert await subject.granted_kinds(user(), P.GRANT_MANAGE, "acme") == frozenset()
+
+
+# a missing Domain: 404 only for callers who could see it --------------------------------------
+
+
+async def test_missing_domain_is_revealed_to_admins_and_domain_wide_holders_only(
+    store: Any,
+) -> None:
+    store.add_grant("ghost", "usr_wide", "viewer")
+    store.add_grant("ghost", "usr_kind", "editor", GrantScope.KIND, "Part")
+    store.add_grant("ghost", "usr_branch", "editor", GrantScope.BRANCH, "agent/*")
+    store.add_grant("acme", "usr_wide", "viewer")
+    subject = authorizer(store)
+    ops = user("usr_ops", installation_admin=True)
+
+    assert await subject.reveals_missing_domain(ops, "ghost")
+    assert await subject.reveals_missing_domain(user("usr_wide"), "ghost")
+    assert not await subject.reveals_missing_domain(user("usr_kind"), "ghost")
+    assert not await subject.reveals_missing_domain(user("usr_branch"), "ghost")
+    assert not await subject.reveals_missing_domain(user("usr_nobody"), "ghost")
+    # an existing Domain is never reported missing, whoever asks
+    assert not await subject.reveals_missing_domain(ops, "acme")
+    assert not await subject.reveals_missing_domain(user("usr_wide"), "acme")
+
+
+async def test_key_limited_to_other_domains_does_not_reveal_a_missing_domain(store: Any) -> None:
+    ops_key = user("usr_ops", installation_admin=True, key_scopes=("domain:acme",))
+    subject = authorizer(store)
+    assert not await subject.reveals_missing_domain(ops_key, "ghost")
+    inside = user("usr_ops", installation_admin=True, key_scopes=("domain:ghost",))
+    assert await subject.reveals_missing_domain(inside, "ghost")
+
+
+async def test_installation_admin_gets_404_for_a_missing_domain_and_403_for_an_existing_one(
+    routed: Callable[..., FastAPI], client_for: ClientFor, store: Any, codec: Any
+) -> None:
+    store.add_principal("svc_ops", PrincipalType.SERVICE)
+    headers = auth_header(store, codec, "svc_ops")
+    async with client_for(routed(installation_admins=["svc_ops"])) as http:
+        missing = await http.get("/api/v1/domains/ghost/probe/data", headers=headers)
+        existing = await http.get("/api/v1/domains/acme/probe/data", headers=headers)
+    assert missing.status_code == 404
+    assert missing.headers["content-type"] == "application/problem+json"
+    assert missing.json()["code"] == "not-found"
+    assert existing.status_code == 403
+
+
+async def test_domain_wide_grant_gets_404_for_a_missing_domain(
+    routed: Callable[..., FastAPI], client_for: ClientFor, store: Any, codec: Any
+) -> None:
+    store.add_principal("svc_wide", PrincipalType.SERVICE)
+    store.add_grant("ghost", "svc_wide", "viewer")  # lacks branch.create there
+    headers = auth_header(store, codec, "svc_wide")
+    async with client_for(routed()) as http:
+        missing = await http.get("/api/v1/domains/ghost/kinds/Part/probe", headers=headers)
+    assert missing.status_code == 404
+
+
+async def test_narrowed_or_ungranted_callers_get_403_for_a_missing_domain(
+    routed: Callable[..., FastAPI], client_for: ClientFor, store: Any, codec: Any
+) -> None:
+    store.add_principal("svc_none", PrincipalType.SERVICE)
+    store.add_principal("svc_kind", PrincipalType.SERVICE)
+    store.add_principal("svc_ops_key", PrincipalType.SERVICE)
+    store.add_grant("ghost", "svc_kind", "editor", GrantScope.KIND, "Part")
+    nobody = auth_header(store, codec, "svc_none")
+    narrowed = auth_header(store, codec, "svc_kind")
+    other_scope = auth_header(store, codec, "svc_ops_key", scopes=("domain:acme",))
+    app = routed(installation_admins=["svc_ops_key"])
+    async with client_for(app) as http:
+        for headers in (nobody, narrowed, other_scope):
+            response = await http.get("/api/v1/domains/ghost/probe/data", headers=headers)
+            assert response.status_code == 403
+            assert response.json()["permission"] == "data.read"
+            assert response.json()["domain"] == "ghost"
+        # the same answer as for a Domain that exists and is not theirs
+        existing = await http.get("/api/v1/domains/acme/probe/data", headers=narrowed)
+        assert existing.status_code == 403

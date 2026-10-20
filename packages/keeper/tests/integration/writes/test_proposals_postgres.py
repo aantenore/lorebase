@@ -463,3 +463,45 @@ async def test_proposal_reads_follow_branch_and_kind_grants(
         assert hidden["conflicts"] == []
         assert hidden["open_conflicts"] == 0
         assert hidden["resolutions"] == []
+
+
+DOMAIN_SCOPED_TABLES = (
+    "revisions",
+    "revision_parents",
+    "changesets",
+    "provenance",
+    "refs",
+    "proposals",
+    "proposal_items",
+    "merge_attempts",
+    "conflicts",
+    "mat_records",
+    "mat_history",
+)
+
+
+async def test_deleting_a_domain_removes_its_history_and_keeps_the_audit_log(
+    keeper: Any, installation_admin: Any, loader: Loader
+) -> None:
+    """Revisions on two branches, a tag, a Proposal and its merge attempt go with the Domain."""
+    admin = installation_admin.headers
+    async with keeper(proposals={"required_approvals": 0}) as http:
+        await setup_domain(http, admin, loader, "left", "right")
+        await loader.edit("left", "S-1001", city="Gdansk")
+        await loader.edit("right", "S-1001", city="Warsaw")
+        tag = await http.post(f"{DOMAIN}/tags", json={"name": "v1"}, headers=admin)
+        assert tag.status_code == 201, tag.text
+        created = await http.post(PROPOSALS, json=proposal_body("left"), headers=admin)
+        assert created.status_code == 201, created.text
+        assert await loader.scalar("SELECT count(*) FROM revisions") >= 3
+        assert await loader.scalar("SELECT count(*) FROM merge_attempts") == 1
+        audited = await loader.scalar("SELECT count(*) FROM audit_log")
+
+        deleted = await http.delete(DOMAIN, headers=admin, params={"confirm": "supply"})
+        assert deleted.status_code == 204, deleted.text
+
+    for table in ("domains", *DOMAIN_SCOPED_TABLES):
+        assert await loader.scalar(f"SELECT count(*) FROM {table}") == 0, table
+    assert await loader.scalar("SELECT count(*) FROM audit_log") > audited
+    assert await loader.scalar("SELECT count(*) FROM audit_log WHERE action = 'domain.delete'") == 1
+    assert await loader.scalar("SELECT count(*) FROM audit_log WHERE action = 'proposal.create'")
