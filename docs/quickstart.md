@@ -1,20 +1,19 @@
 # Quickstart
 
 Lorebase is pre-alpha. This page walks through what works on `main` today and says where it
-stops. There is no CLI and no MCP server yet, so there is no complete
-"ask a question, get an answer through an agent" flow; what you can do is run the versioning and
-merge engine, bring up the Keeper REST API on Postgres, load the sample Domain through it, read
-it back with the read API, and browse the web app against a mock backend.
+stops. What you can do is run the versioning and merge engine, bring up the Keeper REST API on
+Postgres, load the sample Domain through it with curl or with the `lorebase` command line, read it
+back (Records, queries, search, history, diff), and browse the web app against a mock backend.
+The MCP server (Herald) has its own page: [mcp.md](mcp.md).
 
 | Step | What you get | State |
 |------|--------------|-------|
 | 3 | Core engine demo: branches, three-way merge, Conflicts, resolutions, diff | works, no services needed |
 | 4 | Unit tests | works |
 | 5 | Postgres, migrations and Keeper | works |
-| 6, 7 | Create a Domain, apply a schema, import data through the REST API | works, with the limits noted below |
-| 7 | Read Records, query, search, log and diff through the REST API | works |
+| 6, 7 | Create a Domain, apply a schema, import data and read it back, with curl and with the CLI | works, with the limits noted below |
 | 8 | Web app in mock mode | works, mock data only |
-| later | Python client, CLI, MCP server | [coming next](#coming-next) |
+| later | Lineage and history API, expressions in schemas, Source syncs | [coming next](#coming-next) |
 
 ## 1. Prerequisites
 
@@ -116,23 +115,50 @@ docs.
 
 ## 6. Create a Domain and apply the supply schema
 
+Each step is shown twice: with curl against the REST API, and with the `lorebase` command line
+(installed by `uv sync --all-packages`, run as `uv run lorebase`). Both call the same
+endpoints. Tell the CLI where Keeper is:
+
+```bash
+export LOREBASE_URL=http://localhost:8080
+export LOREBASE_DOMAIN=supply        # the default for --domain
+uv run lorebase whoami
+```
+
+With `keeper.auth.mode: api_key` or `oidc` also set `LOREBASE_API_KEY` (or `LOREBASE_TOKEN`, an
+OIDC access token). Instead of environment variables you can keep a profile with the URL,
+credentials, `domain` and `branch` in `~/.config/lorebase/config.toml` (see
+[the settings module](../packages/cli/src/lorebase_cli/settings.py)). Every command takes `--json`
+for machine-readable output; exit codes are 0 success, 1 usage or not found, 2 validation or
+conflict, 3 authentication or permission, 4 server error. `lorebase --install-completion` sets
+up shell completion. The same API is available from Python (`lorebase_client`, sync and async).
+
 Create the Domain `supply`. It starts with one Revision and a protected `main` branch.
 
 ```bash
+# curl
 curl -s -X POST http://localhost:8080/api/v1/domains \
   -H 'Content-Type: application/json' \
   -d '{"id": "supply", "display_name": "Supply chain"}'
+
+# CLI
+uv run lorebase domain create supply --name "Supply chain"
 ```
 
 `main` is protected by default (`keeper.domains.protect_default_branch`): changes to it go
-through a Proposal (`POST /api/v1/domains/supply/proposals`, then a review and a merge; approvals
-are set by `keeper.proposals` and the Domain's `required_approvals` setting), so a direct change
-answers `409 protected-branch`. Work on another branch:
+through a Proposal (`POST /api/v1/domains/supply/proposals` or `lorebase proposal create`, then a
+review and a merge; approvals are set by `keeper.proposals` and the Domain's `required_approvals`
+setting), so a direct change answers `409 protected-branch` (exit code 2 in the CLI). Work on
+another branch:
 
 ```bash
+# curl
 curl -s -X POST http://localhost:8080/api/v1/domains/supply/branches \
   -H 'Content-Type: application/json' \
   -d '{"name": "work"}'
+
+# CLI
+uv run lorebase branch create work
 ```
 
 The schema of the sample Domain has two Operations and one Derivation written in CEL. Expressions
@@ -142,12 +168,24 @@ make schemas with expressions valid). You can see the refusal with the validate 
 writes nothing:
 
 ```bash
+# curl
 curl -s -X POST 'http://localhost:8080/api/v1/domains/supply/schema:validate?branch=work' \
   -H 'Content-Type: text/yaml' --data-binary @examples/supply/schema.yaml
+
+# CLI (exit code 2 when the document is not valid)
+uv run lorebase schema validate examples/supply/schema.yaml -b work
 ```
 
-The answer has `"valid":false` and three `schema.expressions_disabled` issues. Strip those
-elements into a copy of the schema:
+The answer has `"valid":false` and three `schema.expressions_disabled` issues:
+
+```text
+not valid: 3 issue(s)
+  operations.flag_supplier_risk: Operation 'flag_supplier_risk' uses expressions, which are not enabled [schema.expressions_disabled]
+  operations.approve_contract: Operation 'approve_contract' uses expressions, which are not enabled [schema.expressions_disabled]
+  derivations.single_sourced.definition: Derivation 'single_sourced' uses expressions, which are not enabled [schema.expressions_disabled]
+```
+
+Strip those elements into a copy of the schema:
 
 ```bash
 uv run python - <<'EOF'
@@ -165,28 +203,68 @@ EOF
 ```
 
 Apply it to `work` as one schema change set (a YAML body is the full schema document; options
-go in the query string):
+go in the query string). `schema diff` shows what would change first:
 
 ```bash
+# curl
 curl -s -X POST 'http://localhost:8080/api/v1/domains/supply/branches/work/schema/changes?message=Apply%20supply%20schema' \
   -H 'Content-Type: text/yaml' --data-binary @/tmp/supply-schema.yaml
+
+# CLI
+uv run lorebase schema diff /tmp/supply-schema.yaml -b work
+uv run lorebase schema apply /tmp/supply-schema.yaml -b work -m "Apply supply schema"
 ```
 
 The answer is `"status":"committed"` with the new Revision and 18 changes (the Domain, six
 Kinds, seven Relations, a Trait, a Derivation and two Sources). Read the schema back:
 
 ```bash
+# curl
 curl -s 'http://localhost:8080/api/v1/domains/supply/schema?branch=work&format=yaml'
+
+# CLI (YAML by default, JSON with --json)
+uv run lorebase schema get -b work
 ```
 
-## 7. Import the sample data
+## 7. Import the sample data and read it back
 
 Every write goes through an Operation. The built-in `import_records` and `import_links`
 Operations take rows keyed by Attribute api name; booleans must be JSON booleans and Link rows
-use `from` and `to`. This script posts the CSV files of `examples/supply/data` to the `work`
-branch (it is safe to run twice: imports upsert):
+use `from` and `to`. The CLI does the conversions for you: it reads the schema of the branch,
+turns `true` and `false` into booleans, keeps integers and decimals exact, leaves empty cells
+unset, maps `from_key` and `to_key` to `from` and `to`, and sends the file in batches (one
+Revision each, `--batch-size`) with progress on standard error. Imports upsert, so running one
+twice is safe.
 
 ```bash
+# CLI
+uv run lorebase import records Supplier examples/supply/data/supplier.csv -b work
+uv run lorebase import records Part examples/supply/data/part.csv -b work
+uv run lorebase import records Plant examples/supply/data/plant.csv -b work
+uv run lorebase import links supplied_by examples/supply/data/supplied_by.csv -b work
+uv run lorebase import links stocked_at examples/supply/data/stocked_at.csv -b work
+```
+
+```text
+batch 1/1: rows 1-30 committed, 30 edits
+field      value
+record     Supplier
+branch     work
+mode       committed
+rows       30
+edits      30
+batches    1
+revisions  3403d8d356d9
+```
+
+Files can be CSV, TSV, JSON Lines, a JSON array or Parquet (`pip install 'lorebase-cli[parquet]'`);
+`--map file_column=attribute` renames columns, `--dry-run` computes without committing.
+
+The same with curl: this script posts the CSV files to the `work` branch, doing the conversions
+itself:
+
+```bash
+# curl (Python standard library)
 uv run python - <<'EOF'
 import csv
 import json
@@ -230,41 +308,69 @@ Plant committed 20 edits
 supplied_by committed 48 edits
 ```
 
-Add `"dry_run": true` next to `"branch"` to compute the edits and violations without committing.
-Rows that break the schema are rejected as a whole with `422` and `issues` that point at the row
-and Attribute.
+Add `"dry_run": true` next to `"branch"` (CLI: `--dry-run`) to compute the edits and
+violations without committing. Rows that break the schema are rejected as a whole with `422` and
+`issues` that point at the row and Attribute; the CLI prints them with the row numbers of the
+file and says which earlier rows are already committed.
+
+`Contract`, `PurchaseOrder` and `RiskFlag` need a Link when they are created (`with_supplier`,
+`for_part`, `flags`), which the import Operations cannot supply, so the sample files for them are
+not loaded here.
 
 Each import is a Revision; the branch moved ahead of `main`:
 
 ```bash
+# curl
 curl -s http://localhost:8080/api/v1/domains/supply/branches/work
+
+# CLI
+uv run lorebase branch list
+uv run lorebase log work -n 3
 ```
 
 ### Read it back
 
-Reads go through the REST API and need no model. Fetch one Record, with its Lineage, from the
-`work` branch:
+Reads go through the REST API and need no model. Fetch one Record with its Lineage, list and
+query with the JSON DSL (the query of the [design](design.md#82-query-model); `branch` picks where
+to read), search and diff, on `work`:
 
 ```bash
+# curl
 curl -s 'http://localhost:8080/api/v1/domains/supply/kinds/Supplier/records/S-1001?branch=work&lineage=true'
-```
-
-Query with the JSON DSL (here: up to five Suppliers in Italy or Germany; `branch` picks where
-to read, the rest is the query of the [design](design.md#82-query-model)):
-
-```bash
+curl -s -G 'http://localhost:8080/api/v1/domains/supply/kinds/Part/records' \
+  --data-urlencode 'branch=work' --data-urlencode 'limit=5' \
+  --data-urlencode 'where={"attr":"category","op":"eq","value":"bearing"}'
 curl -s -X POST http://localhost:8080/api/v1/domains/supply/query \
   -H 'Content-Type: application/json' \
-  -d '{"branch": "work", "kind": "Supplier",
-       "where": {"attr": "country", "op": "in", "value": ["IT", "DE"]},
-       "limit": 5}'
+  -d '{"kind": "Part", "branch": "work", "aggregate": {"group_by": "category"}}'
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/search \
+  -H 'Content-Type: application/json' -d '{"branch": "work", "q": "bearing", "kinds": ["Part"]}'
+curl -s 'http://localhost:8080/api/v1/domains/supply/diff?from=main&to=work&kinds=Supplier&limit=3'
+
+# CLI
+uv run lorebase record get Supplier S-1001 -b work
+uv run lorebase record list Part -b work -n 5 \
+  --where '{"attr": "category", "op": "eq", "value": "bearing"}' --select category --select unit_cost
+uv run lorebase query '{"kind": "Part", "aggregate": {"group_by": "category"}}' -b work
+uv run lorebase search bearing --kind Part -b work
+uv run lorebase diff main work --kind Supplier -n 3
 ```
 
-The same API serves `search`, `traverse`, `neighborhood`, the branch `log`, `revisions/{id}` and
-`diff`. Every response carries the Revision it was served from in the `Lorebase-Revision` header
-and an `ETag`. The full list is in the OpenAPI docs at `http://localhost:8080/api/v1/docs`. If you
-want to look at the materialized rows directly, query Postgres (the tables are under row-level
-security, so the session names the Domain first):
+```text
+key      title                        category  unit_cost
+P-10001  Tapered roller bearing 6305  bearing   10.79
+P-10010  Needle roller bearing 6305   bearing   40.48
+P-10013  Needle roller bearing NK25   bearing   25.62
+P-10023  Needle roller bearing NK25   bearing   37.59
+P-10029  Needle roller bearing 6001   bearing   45.94
+```
+
+The same API serves `traverse`, `neighborhood`, the branch `log`, `revisions/{id}`, context
+packs and Record explanations. Every response carries the Revision it was served from in the
+`Lorebase-Revision` header and an `ETag`. The full list is in the OpenAPI docs at
+`http://localhost:8080/api/v1/docs` and in [openapi.json](openapi.json). If you want to look at
+the materialized rows directly, query Postgres (the tables are under row-level security, so the
+session names the Domain first):
 
 ```bash
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml exec -T postgres \
@@ -274,7 +380,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml exec -T pos
   -c "select key, title from mat_records where key = 'S-1001'"
 ```
 
-You should see 30 Suppliers, 40 Parts and 20 Plants on `work`, and `S-1001 | Kavsen Alloys Sp. z o.o.`.
+You should see 30 Suppliers, 40 Parts and 20 Plants on `work`, and `S-1001` titled
+`Kavsen Alloys Sp. z o.o.`.
 
 ## 8. Web app in mock mode
 
@@ -308,12 +415,10 @@ Stop `pnpm dev` with Ctrl+C.
 
 These do not exist yet; the order follows the [M1 plan](plan/m1.md).
 
-- **Lineage and history API** (T23, the per-Record lineage summary is already on Record reads),
-  **Python client** (T24) and **CLI** (T25).
-- **Herald, the MCP server** (M3), and expressions in schemas: the CEL engine exists and stored
-  Operations evaluate it behind `keeper.operations.expressions_enabled`, but schema change sets
-  still refuse schemas that use expressions; custom Operations are M3 and Derivations M4 on the
-  roadmap.
+- **Lineage and history API** (T23; the per-Record lineage summary is already on Record reads).
+- Expressions in schemas: the CEL engine exists and stored Operations evaluate it behind
+  `keeper.operations.expressions_enabled`, but schema change sets still refuse schemas that use
+  expressions; custom Operations are M3 and Derivations M4 on the roadmap.
 - Source syncs from CSV or Postgres (`approved.suppliers`, `erp.purchase_orders` in the sample
   schema are declared but nothing runs them), document extraction and semantic search: M2 and
   M4.

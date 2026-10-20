@@ -68,11 +68,11 @@ def test_repository_respects_contracts() -> None:
         (("lorebase_platform", "lorebase_core"), "platform has no internal dependencies"),
         (
             ("lorebase_herald", "lorebase_inference"),
-            "herald depends on platform only and never on inference",
+            "herald depends on platform and client only and never on inference",
         ),
         (
             ("lorebase_herald", "lorebase_store"),
-            "herald depends on platform only and never on inference",
+            "herald depends on platform and client only and never on inference",
         ),
     ],
 )

@@ -6,10 +6,10 @@ PNPM ?= pnpm
 WEB_DIR ?= apps/web
 AUDIT_DIR ?= build/audit
 PY_PATHS := packages scripts tests
-STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src
-OTHER_SRC := packages/platform/src packages/inference/src packages/client/src packages/cli/src
+STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src packages/client/src packages/cli/src
+OTHER_SRC := packages/platform/src packages/inference/src
 
-.PHONY: help sync fmt lint type test-unit test-int test-changed test-perf security
+.PHONY: help sync fmt lint type openapi test-unit test-int test-changed test-perf security
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -26,9 +26,12 @@ lint: ## Ruff (check and format check) and import-linter contracts
 	$(UV) run ruff format --check $(PY_PATHS)
 	$(UV) run lint-imports
 
-type: ## mypy: strict for core, store, keeper and herald; default settings for the rest
+type: ## mypy: strict for core, store, keeper, herald, client and cli; default settings for the rest
 	$(UV) run mypy --strict $(STRICT_SRC)
 	$(UV) run mypy $(OTHER_SRC)
+
+openapi: ## Regenerate docs/openapi.json from the Keeper application
+	$(UV) run python scripts/export_openapi.py
 
 test-unit: ## Unit tests of all packages and repository tooling (no external services)
 	$(UV) run pytest packages tests/tooling -m "not integration"
