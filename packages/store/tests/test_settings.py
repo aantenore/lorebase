@@ -94,3 +94,63 @@ def test_engine_uses_pool_settings() -> None:
         assert engine.url.drivername == "postgresql+asyncpg"
     finally:
         engine.sync_engine.dispose()
+
+
+# Read replicas ------------------------------------------------------------------------------
+
+
+def test_read_replicas_are_off_by_default() -> None:
+    database = database_settings(load_settings())
+    assert database.read_dsn == ()
+    assert database.read_max_lag_ms == 5000
+    assert database.read_fallback_to_primary is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "postgresql://r1/db,postgresql://r2/db",
+        " postgresql://r1/db , postgresql://r2/db ,",
+        ["postgresql://r1/db", "postgresql://r2/db"],
+    ],
+)
+def test_read_dsn_accepts_a_string_or_a_list(value: str | list[str]) -> None:
+    database = DatabaseSettings(read_dsn=value)  # type: ignore[arg-type]
+    assert [dsn.get_secret_value() for dsn in database.read_dsn] == [
+        "postgresql://r1/db",
+        "postgresql://r2/db",
+    ]
+
+
+def test_read_dsn_entries_are_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPLICA_ONE", "postgresql://app:hunter2-long@r1/db")
+    monkeypatch.setenv("LOREBASE__DATABASE__READ_DSN", '["secret://env/REPLICA_ONE"]')
+    database = database_settings(load_settings())
+    assert database.read_dsn[0].get_secret_value() == "postgresql://app:hunter2-long@r1/db"
+    assert "hunter2" not in repr(database)
+
+
+def test_alias_sets_read_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOREBASE_DB_READ_DSN", "postgresql://r1/db,postgresql://r2/db")
+    assert len(database_settings(load_settings()).read_dsn) == 2
+
+
+def test_unresolvable_read_dsn_fails_at_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOREBASE__DATABASE__READ_DSN", "secret://env/LOREBASE_NO_SUCH_VARIABLE")
+    with pytest.raises(ConfigError, match=r"database\.read_dsn"):
+        load_settings()
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("LOREBASE__DATABASE__READ_MAX_LAG_MS", "-1"),
+        ("LOREBASE__DATABASE__READ_PROBE_TIMEOUT_MS", "0"),
+    ],
+)
+def test_invalid_read_values_fail_at_startup(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ConfigError, match=key.removeprefix("LOREBASE__").lower().split("__")[1]):
+        load_settings()

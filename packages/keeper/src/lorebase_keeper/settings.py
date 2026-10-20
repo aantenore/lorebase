@@ -77,6 +77,17 @@ class ReadinessSettings(SectionModel):
     )
 
 
+class ReadSettings(SectionModel):
+    """Where read endpoints get their database sessions (design 15.3)."""
+
+    prefer_replica: bool = Field(
+        default=False,
+        description="Serve reads from the read replicas named by `database.read_dsn` when one "
+        "is fresh enough; otherwise, or when false, from the primary. Without replicas "
+        "configured it has no effect.",
+    )
+
+
 class OpenApiSettings(SectionModel):
     """OpenAPI document and interactive docs, served under the API prefix."""
 
@@ -107,6 +118,7 @@ class KeeperSettings(SectionModel):
     limits: LimitSettings = Field(default_factory=LimitSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
     readiness: ReadinessSettings = Field(default_factory=ReadinessSettings)
+    reads: ReadSettings = Field(default_factory=ReadSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     openapi: OpenApiSettings = Field(default_factory=OpenApiSettings)
     domains: DomainSettings = Field(default_factory=DomainSettings)

@@ -23,7 +23,7 @@ class Liveness(BaseModel):
 class CheckReport(BaseModel):
     """Outcome of one dependency check."""
 
-    status: Literal["ok", "not_configured", "failed"]
+    status: Literal["ok", "degraded", "not_configured", "failed"]
     detail: str | None = None
 
 

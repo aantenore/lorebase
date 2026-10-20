@@ -22,6 +22,7 @@ from lorebase_keeper.middleware import BodyLimitMiddleware, RequestContextMiddle
 from lorebase_keeper.readiness import (
     MigrationHeads,
     ReadinessCheck,
+    ReplicaCheck,
     default_checks,
     packaged_heads,
 )
@@ -80,8 +81,24 @@ def create_app(
     )
 
     database = (
-        create_database(settings, keeper.readiness.database_section) if auth_store is None else None
+        create_database(
+            settings,
+            keeper.readiness.database_section,
+            meter_provider=telemetry.meter_provider if telemetry else None,
+        )
+        if auth_store is None
+        else None
     )
+    replicas = database.reads.replicas if database and database.reads else None
+    if readiness_checks is None and database is not None and database.reads and replicas:
+        checks.append(
+            ReplicaCheck(
+                replicas,
+                timeout_s=database.reads.probe_timeout_s,
+                max_lag_ms=database.reads.max_lag_ms,
+                required=keeper.reads.prefer_replica and not database.reads.fallback_to_primary,
+            )
+        )
     store = auth_store or (database.auth_store if database else None)
     if keeper.auth.mode != "none" and store is None:
         raise ConfigError(
