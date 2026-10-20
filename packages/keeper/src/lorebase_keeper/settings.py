@@ -16,7 +16,6 @@ from lorebase_keeper.services.config import (
     BranchSettings,
     DomainSettings,
     OperationSettings,
-    ReadSettings,
     SchemaChangeSettings,
 )
 from lorebase_platform.settings import SectionModel, Settings, register_section
@@ -63,6 +62,43 @@ class PaginationSettings(SectionModel):
         return self
 
 
+class ReadCacheSettings(SectionModel):
+    """In-process cache of GET read responses, keyed by the Revision they were served from.
+
+    Entries never go stale (a new commit means a new Revision, hence a new key); they leave
+    by size, count or time to live.
+    """
+
+    enabled: bool = True
+    max_entries: int = Field(default=1024, ge=1, description="Responses kept.")
+    max_bytes: int = Field(
+        default=32 * 1024 * 1024, ge=1, description="Total size of kept response bodies."
+    )
+    ttl_s: float = Field(default=300, gt=0, description="Lifetime of an entry in seconds.")
+    max_body_bytes: int = Field(
+        default=1024 * 1024, ge=1, description="Larger responses are not cached."
+    )
+    time_travel_max_entries: int = Field(
+        default=128,
+        ge=0,
+        description="Entries for reads served from the tree at another Revision; once reached, "
+        "such reads are not cached. 0 never caches them.",
+    )
+
+
+class ReadsSettings(SectionModel):
+    """Read responses: authorization of Revisions named by id or tag, response cache."""
+
+    cache: ReadCacheSettings = Field(default_factory=ReadCacheSettings)
+    reachability_max_depth: int = Field(
+        default=1000,
+        ge=1,
+        description="Parent hops followed from branch heads when checking that a Revision or "
+        "tag named by a caller with branch-scoped grants is reachable from a branch the caller "
+        "may read. A Revision further back than this is refused (403).",
+    )
+
+
 class ReadinessSettings(SectionModel):
     """How `/readyz` finds and probes the database."""
 
@@ -107,13 +143,13 @@ class KeeperSettings(SectionModel):
     cors: CorsSettings = Field(default_factory=CorsSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
+    reads: ReadsSettings = Field(default_factory=ReadsSettings)
     readiness: ReadinessSettings = Field(default_factory=ReadinessSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     openapi: OpenApiSettings = Field(default_factory=OpenApiSettings)
     domains: DomainSettings = Field(default_factory=DomainSettings)
     branches: BranchSettings = Field(default_factory=BranchSettings)
     schema_changes: SchemaChangeSettings = Field(default_factory=SchemaChangeSettings)
-    reads: ReadSettings = Field(default_factory=ReadSettings)
     operations: OperationSettings = Field(default_factory=OperationSettings)
 
     @field_validator("api_prefix")

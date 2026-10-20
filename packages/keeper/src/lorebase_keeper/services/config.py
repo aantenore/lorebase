@@ -67,18 +67,6 @@ class SchemaChangeSettings(SectionModel):
     )
 
 
-class ReadSettings(SectionModel):
-    """Authorization of reads that name a Revision or tag."""
-
-    reachability_max_depth: int = Field(
-        default=1000,
-        ge=1,
-        description="Parent hops followed from a branch head when checking that a Revision "
-        "or tag named by a caller with branch-scoped grants is reachable from a branch the "
-        "caller may read. A Revision further back than this is refused (403).",
-    )
-
-
 class OperationSettings(SectionModel):
     """Operation execution (design 10.1)."""
 

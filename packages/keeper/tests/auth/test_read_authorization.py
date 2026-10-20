@@ -13,13 +13,13 @@ from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import Authorizer
 from lorebase_keeper.context import StoreAccess
 from lorebase_keeper.errors import NOT_FOUND, ProblemError
-from lorebase_keeper.services.config import ReadSettings
 from lorebase_keeper.services.reads import (
     ReadTarget,
     authorize_read,
     reachable,
     resolve_readable,
 )
+from lorebase_keeper.settings import ReadsSettings
 from lorebase_store.models.enums import GrantScope, PrincipalType, RefKind
 
 READ = (Permission.SCHEMA_READ,)
@@ -256,6 +256,6 @@ async def test_reachable_does_not_walk_below_the_target() -> None:
 
 
 def test_reachability_depth_setting_has_a_default() -> None:
-    assert ReadSettings().reachability_max_depth == 1000
+    assert ReadsSettings().reachability_max_depth == 1000
     with pytest.raises(ValueError, match="greater than or equal to 1"):
-        ReadSettings(reachability_max_depth=0)
+        ReadsSettings(reachability_max_depth=0)
