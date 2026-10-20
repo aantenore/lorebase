@@ -110,12 +110,17 @@ async def authorize(
     Operation named in the body). Answers 403 naming the missing permission."""
     annotate(request, domain_id=domain_id, permission=permission.value)
     if not await auth.authorizer.allows(principal, permission, domain_id, context):
-        raise ProblemError(
-            FORBIDDEN,
-            f"Missing permission {permission.value} in Domain {domain_id}.",
-            extensions={"permission": permission.value, "domain": domain_id},
-        )
+        raise missing_permission(permission, domain_id)
     return Access(principal=principal, domain_id=domain_id, permission=permission)
+
+
+def missing_permission(permission: Permission, domain_id: str) -> ProblemError:
+    """The 403 problem naming the permission a caller lacks in a Domain."""
+    return ProblemError(
+        FORBIDDEN,
+        f"Missing permission {permission.value} in Domain {domain_id}.",
+        extensions={"permission": permission.value, "domain": domain_id},
+    )
 
 
 def require_installation(permission: Permission) -> Callable[..., Awaitable[Access]]:

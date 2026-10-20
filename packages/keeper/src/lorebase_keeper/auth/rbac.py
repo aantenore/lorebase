@@ -86,6 +86,19 @@ class Authorizer:
         grants = await self._grants(principal, domain_id)
         return any(self._grant_allows(grant, permission, context) for grant in grants)
 
+    async def allows_anywhere(
+        self, principal: Principal, permission: Permission, domain_id: str
+    ) -> bool:
+        """Whether some grant of the principal in the Domain has a role containing
+        `permission`, whatever its scope. Lets a route refuse callers without any such grant
+        before it looks anything up."""
+        if principal.method == "none":
+            return True
+        if principal.key_scopes and domain_scope(domain_id) not in principal.key_scopes:
+            return False
+        grants = await self._grants(principal, domain_id)
+        return any(permission in self._roles.get(grant.role, frozenset()) for grant in grants)
+
     async def allows_installation(self, principal: Principal, permission: Permission) -> bool:
         """Whether `principal` holds an installation-level permission.
 

@@ -119,6 +119,10 @@ keeper:
   schema_changes:
     max_issues: 200              # issues listed in one response
     max_listed_changes: 1000     # element changes listed in one response
+  reads:
+    reachability_max_depth: 1000 # parent hops followed to prove that a Revision or tag named by
+                                 # a caller with branch-scoped grants is reachable from a branch
+                                 # the caller may read; further back: 403
   operations:
     max_bulk_rows: 10000         # rows accepted by one import_records or import_links call
     import_batch_rows: 1000      # rows committed per Revision by bulk imports

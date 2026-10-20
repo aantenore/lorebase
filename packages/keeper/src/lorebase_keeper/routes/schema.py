@@ -6,6 +6,9 @@
 | `POST /domains/{d}/schema:validate` | `schema.read` |
 | `POST /domains/{d}/branches/{b}/schema/changes` | `schema.write` on the branch |
 
+`schema.read` is checked against the Revision that `branch`/`at` resolve to, not the name given
+(`services/reads.py`).
+
 The schema is served as JSON (elements keyed by id, with api names and descriptions) or, with
 `Accept: text/yaml` or `format=yaml`, as the YAML document of `lorebase_core.model.yaml_schema`.
 A change set is sent as JSON (`yaml`: a full document, or `patch` and `remove`) or as a raw
@@ -24,10 +27,11 @@ from pydantic import BaseModel, Field, JsonValue, ValidationError, model_validat
 from lorebase_core.canonical import hex
 from lorebase_core.model import Schema, dump_schema
 from lorebase_keeper.auth.audit import annotate
-from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, authorize, require
+from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, require
 from lorebase_keeper.auth.permissions import Permission
-from lorebase_keeper.auth.rbac import AccessContext
-from lorebase_keeper.context import StoreDep, parse_revision_id
+from lorebase_keeper.auth.principals import Principal
+from lorebase_keeper.auth.runtime import AuthRuntime
+from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.services import schema as service
@@ -39,6 +43,8 @@ from lorebase_keeper.services.errors import (
     violations_problem,
 )
 from lorebase_keeper.services.operation_catalog import builtin_definition
+from lorebase_keeper.services.reads import ReadTarget, resolve_readable
+from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
 
 router = APIRouter(tags=["schema"])
@@ -122,7 +128,7 @@ class SchemaValidateRequest(ChangeSetBody):
     """A change set to validate against the schema of a branch or Revision."""
 
     branch: str | None = None
-    at: str | None = Field(default=None, description="Revision id or tag.")
+    at: str | None = Field(default=None, description="Revision id, tag or branch name.")
 
 
 class ElementChangeOut(BaseModel):
@@ -201,6 +207,30 @@ def _wants_yaml(request: Request, format_: str | None) -> bool:
     return any(media in accept for media in YAML_MEDIA_TYPES)
 
 
+async def _readable(
+    request: Request,
+    auth: AuthRuntime,
+    principal: Principal,
+    store: StoreAccess,
+    keeper: KeeperSettings,
+    domain_id: str,
+    branch: str | None,
+    at: str | None,
+) -> ReadTarget:
+    """The Revision a read names, once the caller may read it (not just the named branch)."""
+    annotate(request, domain_id=domain_id, permission=Permission.SCHEMA_READ.value)
+    return await resolve_readable(
+        store,
+        auth.authorizer,
+        principal,
+        (Permission.SCHEMA_READ,),
+        domain_id,
+        branch=branch,
+        at=at,
+        max_depth=keeper.reads.reachability_max_depth,
+    )
+
+
 def _changes(changes: list[service.ElementChange], limit: int) -> list[ElementChangeOut]:
     return [
         ElementChangeOut(op=c.op, section=c.section, id=c.id, api_name=c.api_name)
@@ -220,22 +250,21 @@ async def get_schema(
     principal: PrincipalDep,
     auth: AuthDep,
     store: StoreDep,
+    keeper: KeeperSettingsDep,
     branch: Annotated[str | None, Query(description="Default: the default branch.")] = None,
-    at: Annotated[str | None, Query(description="Revision id or tag.")] = None,
+    at: Annotated[str | None, Query(description="Revision id, tag or branch name.")] = None,
     format_: Annotated[Literal["json", "yaml"] | None, Query(alias="format")] = None,
 ) -> Response:
     """The schema at a branch head or at a Revision, as JSON or YAML."""
-    await authorize(
-        request, auth, principal, Permission.SCHEMA_READ, domain_id, AccessContext(branch=branch)
-    )
-    schema, resolved = await service.read(store, domain_id, branch=branch, at=at)
-    revision = hex(resolved.revision.id)
+    target = await _readable(request, auth, principal, store, keeper, domain_id, branch, at)
+    schema = await service.read(store, domain_id, target)
+    revision = hex(target.revision)
     headers = {REVISION_HEADER: revision}
     if _wants_yaml(request, format_):
         return Response(dump_schema(schema), media_type="text/yaml", headers=headers)
     body = SchemaOut(
         domain=domain_id,
-        branch=None if resolved.ref is None else resolved.ref.name,
+        branch=target.ref,
         revision=revision,
         schema=schema.content(),
     )
@@ -268,23 +297,22 @@ async def get_element(
     principal: PrincipalDep,
     auth: AuthDep,
     store: StoreDep,
+    keeper: KeeperSettingsDep,
     response: Response,
     branch: Annotated[str | None, Query(description="Default: the default branch.")] = None,
-    at: Annotated[str | None, Query(description="Revision id or tag.")] = None,
+    at: Annotated[str | None, Query(description="Revision id, tag or branch name.")] = None,
 ) -> dict[str, Any]:
     """A Kind, Relation, Trait, Operation, Derivation or Source by api name or id.
 
     Built-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are
     described with the parameters derived from the schema.
     """
-    await authorize(
-        request, auth, principal, Permission.SCHEMA_READ, domain_id, AccessContext(branch=branch)
-    )
-    schema, resolved = await service.read(store, domain_id, branch=branch, at=at)
+    target = await _readable(request, auth, principal, store, keeper, domain_id, branch, at)
+    schema = await service.read(store, domain_id, target)
     element = _element(schema, section, name)
     if element is None:
         raise ProblemError(NOT_FOUND, f"No element {name!r} in {section}.")
-    response.headers[REVISION_HEADER] = hex(resolved.revision.id)
+    response.headers[REVISION_HEADER] = hex(target.revision)
     return element
 
 
@@ -310,18 +338,11 @@ async def validate_schema(
     Issue paths point into the schema document (api names). Nothing is written.
     """
     body = _parse(payload, SchemaValidateRequest, {"branch": branch, "at": at})
-    await authorize(
-        request,
-        auth,
-        principal,
-        Permission.SCHEMA_READ,
-        domain_id,
-        AccessContext(branch=body.branch),
+    target = await _readable(
+        request, auth, principal, store, keeper, domain_id, body.branch, body.at
     )
     limits = keeper.schema_changes
-    issues, changes = await service.validate(
-        store, domain_id, body.to_input(), branch=body.branch, at=body.at
-    )
+    issues, changes = await service.validate(store, domain_id, body.to_input(), target)
     return SchemaValidationOut(
         valid=not issues,
         issues=finding_documents(issues, limits.max_issues),

@@ -7,7 +7,7 @@ on creation, in the body.
 | Route | Permission |
 |-------|------------|
 | list, get branches and tags | `schema.read` |
-| create or delete a branch, create a tag | `branch.create` |
+| create or delete a branch, create a tag | `branch.create`, plus read of the start point |
 | protect or unprotect a branch | `domain.settings` |
 """
 
@@ -24,13 +24,17 @@ from lorebase_core.canonical import hex
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, authorize, require
 from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext
-from lorebase_keeper.context import StoreDep, parse_revision_id
+from lorebase_keeper.auth.runtime import AuthRuntime
+from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import branches as service
+from lorebase_keeper.services.reads import resolve_readable
+from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories import RefRow
 
@@ -123,6 +127,30 @@ def _tag(ref: RefRow) -> TagOut:
     )
 
 
+async def _require_source_readable(
+    auth: AuthRuntime,
+    principal: Principal,
+    store: StoreAccess,
+    keeper: KeeperSettings,
+    domain_id: str,
+    *,
+    source: str | None,
+    revision: str | None,
+) -> None:
+    """A new branch or tag starts at content the caller must be able to read: the Revision
+    given, else the source branch or tag (default: the default branch)."""
+    await resolve_readable(
+        store,
+        auth.authorizer,
+        principal,
+        (Permission.SCHEMA_READ, Permission.DATA_READ),
+        domain_id,
+        branch=None,
+        at=revision or source,
+        max_depth=keeper.reads.reachability_max_depth,
+    )
+
+
 def _after(params: Any) -> str | None:
     return None if params.position is None else str(params.position.get("name", ""))
 
@@ -176,6 +204,9 @@ async def create_branch(
         AccessContext(branch=body.name),
     )
     revision = None if body.revision is None else parse_revision_id(body.revision, "/body/revision")
+    await _require_source_readable(
+        auth, principal, store, keeper, domain_id, source=body.source, revision=body.revision
+    )
     created = await service.create(
         store,
         domain_id,
@@ -243,6 +274,9 @@ async def create_tag(
         AccessContext(branch=body.name),
     )
     revision = None if body.revision is None else parse_revision_id(body.revision, "/body/revision")
+    await _require_source_readable(
+        auth, principal, store, keeper, domain_id, source=body.source, revision=body.revision
+    )
     created = await service.create_tag(
         store,
         domain_id,

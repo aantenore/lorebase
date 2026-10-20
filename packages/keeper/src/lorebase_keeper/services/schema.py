@@ -31,15 +31,14 @@ from lorebase_core.revision import Origin
 from lorebase_core.validate import Issue
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.context import (
-    ResolvedRevision,
     StoreAccess,
     author_of,
     require_branch,
     require_domain,
     require_revision,
-    resolve_revision,
 )
 from lorebase_keeper.services.errors import Finding, ProtectedBranchError, findings_of
+from lorebase_keeper.services.reads import ReadTarget
 from lorebase_store.commit import (
     CommitError,
     CommitResult,
@@ -240,28 +239,23 @@ async def schema_at(
     return schema
 
 
-async def read(
-    store: StoreAccess, domain_id: str, *, branch: str | None, at: str | None
-) -> tuple[Schema, ResolvedRevision]:
-    """The schema at a branch head (default branch by default) or at a Revision or tag."""
+async def read(store: StoreAccess, domain_id: str, target: ReadTarget) -> Schema:
+    """The schema at a Revision the caller was authorized to read (`reads.resolve_readable`)."""
     async with store.sessions() as session, session.begin():
-        domain = await require_domain(session, domain_id)
-        resolved = await resolve_revision(session, domain, branch=branch, at=at)
-        schema = await schema_at(session, domain_id, resolved.revision, store.runtime)
-    return schema, resolved
+        await require_domain(session, domain_id)
+        revision = await require_revision(session, domain_id, target.revision)
+        return await schema_at(session, domain_id, revision, store.runtime)
 
 
 async def validate(
     store: StoreAccess,
     domain_id: str,
     change: ChangeSetInput,
-    *,
-    branch: str | None,
-    at: str | None,
+    revision: ReadTarget,
 ) -> tuple[list[Finding], list[ElementChange]]:
-    """Static issues of a change set against the schema of a branch or Revision, and the
+    """Static issues of a change set against the schema at an authorized Revision, and the
     element changes it would make. Nothing is written."""
-    current, _ = await read(store, domain_id, branch=branch, at=at)
+    current = await read(store, domain_id, revision)
     try:
         target = target_schema(current, change)
     except ChangeSetInvalidError as invalid:
