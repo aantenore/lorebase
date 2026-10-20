@@ -15,6 +15,7 @@ import {
 } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { useToast } from '@/ui/toast';
+import { resolutionOf, unresolvedOf } from './conflict-state';
 import { STATUS_TONE } from './review-page';
 
 const CHECK_TONE = { passed: 'success', failed: 'danger', pending: 'warning' } as const;
@@ -24,8 +25,8 @@ function ConflictsSection({ domain, proposal }: { domain: string; proposal: stri
   return (
     <Section title="Conflicts">
       <QueryBoundary query={conflicts}>
-        {(page) =>
-          page.items.length === 0 ? (
+        {(attempt) =>
+          attempt.conflicts.length === 0 ? (
             <EmptyState>No Conflicts.</EmptyState>
           ) : (
             <Table caption="Conflicts">
@@ -38,16 +39,16 @@ function ConflictsSection({ domain, proposal }: { domain: string; proposal: stri
                 </TR>
               </THead>
               <TBody>
-                {page.items.map((c) => (
-                  <TR key={c.id}>
+                {attempt.conflicts.map((c) => (
+                  <TR key={c.fingerprint}>
                     <TD>
-                      <Badge tone="danger">{c.code}</Badge>
+                      <Badge tone="danger">{c.kind}</Badge>
                     </TD>
                     <TD>
-                      {c.partition}/{c.element_key}
+                      {c.partition}/{c.key ?? c.attribute ?? ''}
                     </TD>
-                    <TD>{c.member_count}</TD>
-                    <TD>{c.resolution === null ? 'Unresolved' : c.resolution.choice}</TD>
+                    <TD>{c.count}</TD>
+                    <TD>{resolutionOf(attempt, c)?.choice ?? 'Unresolved'}</TD>
                   </TR>
                 ))}
               </TBody>
@@ -110,8 +111,16 @@ export function ProposalPage({ proposalId }: { proposalId: string }) {
   };
   const merge = useMutation({
     mutationFn: () => api.proposals.merge(scope.domain, proposalId),
-    onSuccess: () => {
-      toast.notify(`Proposal #${proposalId} merged.`, 'success');
+    onSuccess: (outcome) => {
+      if (outcome.status === 'conflicts') {
+        const open = unresolvedOf(outcome.attempt).length;
+        toast.notify(
+          `${open} ${open === 1 ? 'Conflict still needs' : 'Conflicts still need'} a resolution.`,
+          'error',
+        );
+      } else {
+        toast.notify(`Proposal #${proposalId} merged.`, 'success');
+      }
       return refresh();
     },
     onError,

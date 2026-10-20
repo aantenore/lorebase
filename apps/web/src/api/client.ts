@@ -1,9 +1,6 @@
 import type {
   Branch,
   BranchName,
-  BulkResolutionInput,
-  Conflict,
-  ConflictResolution,
   CreateBranchInput,
   CreateDomainInput,
   CreateProposalInput,
@@ -17,7 +14,8 @@ import type {
   HistoryResponse,
   LineageResponse,
   LinksResponse,
-  MergeResult,
+  MergeAttempt,
+  MergeOutcome,
   NeighborhoodRequest,
   NeighborhoodResponse,
   Page,
@@ -34,6 +32,8 @@ import type {
   RecordResponse,
   Revision,
   RevisionId,
+  Resolution,
+  ResolveManyInput,
   ReviewInput,
   ProposalReview,
   Schema,
@@ -122,7 +122,11 @@ export interface KeeperApi {
     get(domain: DomainId, proposal: string): Promise<ProposalDetail>;
     diff(domain: DomainId, proposal: string, params?: PageParams): Promise<DiffResponse>;
     review(domain: DomainId, proposal: string, input: ReviewInput): Promise<ProposalReview>;
-    merge(domain: DomainId, proposal: string): Promise<MergeResult>;
+    /**
+     * Applies the stored Resolutions, re-runs the merge and its consistency checks, and
+     * commits the merge Revision, or reports the Conflicts that remain.
+     */
+    merge(domain: DomainId, proposal: string): Promise<MergeOutcome>;
     close(domain: DomainId, proposal: string): Promise<Proposal>;
     items(domain: DomainId, proposal: string, params?: PageParams): Promise<Page<ProposalItem>>;
     decideItems(
@@ -133,17 +137,11 @@ export interface KeeperApi {
   };
 
   readonly conflicts: {
-    list(domain: DomainId, proposal: string): Promise<Page<Conflict>>;
-    resolve(
-      domain: DomainId,
-      proposal: string,
-      conflict: string,
-      resolution: ConflictResolution,
-    ): Promise<Conflict>;
-    resolveMany(
-      domain: DomainId,
-      proposal: string,
-      input: BulkResolutionInput,
-    ): Promise<Page<Conflict>>;
+    /** The merge attempt of a Proposal: Conflicts, stored Resolutions, automatic Resolutions. */
+    list(domain: DomainId, proposal: string): Promise<MergeAttempt>;
+    /** Stores the Resolution of one Conflict (the Conflict id is its fingerprint). */
+    resolve(domain: DomainId, proposal: string, resolution: Resolution): Promise<Resolution>;
+    /** Stores several Resolutions at once; answers with the updated attempt. */
+    resolveMany(domain: DomainId, proposal: string, input: ResolveManyInput): Promise<MergeAttempt>;
   };
 }

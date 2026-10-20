@@ -1,6 +1,6 @@
 import type { KeeperApi } from './client';
 import { ApiError } from './errors';
-import type { PageParams, ProblemDetails, ReadScope } from './types';
+import type { PageParams, ProblemDetails, ReadScope, Resolution } from './types';
 
 /** Path prefix of the Keeper REST API (design 11.1). Protocol constant, not configuration. */
 export const API_BASE_PATH = '/api/v1';
@@ -18,6 +18,16 @@ export interface HttpAdapterOptions {
 }
 
 const enc = encodeURIComponent;
+
+/** The fingerprint travels in the path; the body carries the decision only. */
+function resolutionBody(resolution: Resolution) {
+  const { choice, value, values } = resolution;
+  return {
+    choice,
+    ...(value === undefined ? {} : { value }),
+    ...(values === undefined ? {} : { values }),
+  };
+}
 
 function toSearch(params: QueryParams): string {
   const search = new URLSearchParams();
@@ -180,8 +190,11 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
 
     conflicts: {
       list: (domain, proposal) => get(`${prop(domain, proposal)}/conflicts`),
-      resolve: (domain, proposal, conflict, resolution) =>
-        post(`${prop(domain, proposal)}/conflicts/${enc(conflict)}/resolution`, resolution),
+      resolve: (domain, proposal, resolution) =>
+        post(
+          `${prop(domain, proposal)}/conflicts/${enc(resolution.fingerprint)}/resolution`,
+          resolutionBody(resolution),
+        ),
       resolveMany: (domain, proposal, input) =>
         post(`${prop(domain, proposal)}/conflicts:resolve`, input),
     },

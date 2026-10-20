@@ -9,7 +9,7 @@ describe('Review', () => {
     const table = await screen.findByRole('table', { name: 'Proposals' });
 
     const risk = within(table).getByRole('row', { name: /Risk model/ });
-    expect(await within(risk).findByText('2 (2 unresolved)')).toBeInTheDocument();
+    expect(await within(risk).findByText('6 (6 unresolved)')).toBeInTheDocument();
     const contracts = within(table).getByRole('row', { name: /Contracts batch October/ });
     expect(await within(contracts).findByText('0')).toBeInTheDocument();
     expect(within(table).queryByText('Sync erp.vendors run 6')).not.toBeInTheDocument();
@@ -23,7 +23,7 @@ describe('Review', () => {
     expect(screen.queryByText('Contracts batch October')).not.toBeInTheDocument();
   });
 
-  it('refuses to merge while Conflicts are unresolved, then merges', async () => {
+  it('does not merge while Conflicts are unresolved', async () => {
     const user = userEvent.setup();
     renderApp('/supply/review/43');
     expect(await screen.findByRole('heading', { name: '#43 Tier cleanup' })).toBeInTheDocument();
@@ -33,7 +33,7 @@ describe('Review', () => {
 
     await user.click(screen.getByRole('button', { name: 'Merge' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Resolve all Conflicts before merging.',
+      '1 Conflict still needs a resolution.',
     );
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Merge' })).toBeEnabled();

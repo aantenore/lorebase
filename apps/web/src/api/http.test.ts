@@ -5,7 +5,7 @@ function stubFetch(response: Response) {
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   const fetchStub = ((input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: input instanceof Request ? input.url : input.toString(), init });
-    return Promise.resolve(response);
+    return Promise.resolve(response.clone());
   }) as typeof fetch;
   return { calls, fetchStub };
 }
@@ -75,5 +75,45 @@ describe('http adapter', () => {
     const { fetchStub } = stubFetch(new Response(null, { status: 204 }));
     const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
     await expect(api.branches.delete('supply', 'tmp')).resolves.toBeUndefined();
+  });
+
+  it('stores a Resolution at the Conflict path and merges with a POST', async () => {
+    const { calls, fetchStub } = stubFetch(json({ fingerprint: 'ab12', choice: 'ours' }));
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await api.conflicts.resolve('supply', '41', {
+      fingerprint: 'ab12',
+      choice: 'custom',
+      values: { 'S-1004': 'low' },
+    });
+    expect(calls[0]?.url).toBe(
+      'https://keeper.example.test/api/v1/domains/supply/proposals/41/conflicts/ab12/resolution',
+    );
+    expect(JSON.parse(bodyOf(calls[0]?.init))).toEqual({
+      choice: 'custom',
+      values: { 'S-1004': 'low' },
+    });
+
+    await api.conflicts.resolveMany('supply', '41', {
+      resolutions: [{ fingerprint: 'ab12', choice: 'theirs' }],
+    });
+    expect(calls[1]?.url).toMatch(/proposals\/41\/conflicts:resolve$/);
+    await api.proposals.merge('supply', '41');
+    expect(calls[2]?.url).toMatch(/proposals\/41\/merge$/);
+    expect(calls[2]?.init?.method).toBe('POST');
+  });
+
+  it('posts schema change sets to the Branch', async () => {
+    const { calls, fetchStub } = stubFetch(
+      json({ valid: true, revision: null, violations: [], migrations: [] }),
+    );
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await api.schema.applyChanges('supply', 'model/risk', {
+      changes: [{ command: 'remove_kind', target: 'knd_x', arguments: {} }],
+      dry_run: true,
+    });
+    expect(calls[0]?.url).toBe(
+      'https://keeper.example.test/api/v1/domains/supply/branches/model%2Frisk/schema/changes',
+    );
+    expect(JSON.parse(bodyOf(calls[0]?.init))).toMatchObject({ dry_run: true });
   });
 });

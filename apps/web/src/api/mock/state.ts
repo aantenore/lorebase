@@ -1,10 +1,12 @@
 import type {
+  AutoResolution,
   BranchName,
   Conflict,
   Domain,
   ProposalDetail,
   ProposalItem,
   RecordRef,
+  Resolution,
   Revision,
   RevisionId,
   Schema,
@@ -39,7 +41,13 @@ export interface BranchData {
 
 export interface ProposalState {
   detail: ProposalDetail;
+  /** The Conflicts of the merge attempt; empty when the merge is clean. */
   conflicts: Conflict[];
+  /** Stored by fingerprint; a Conflict without an entry is unresolved. */
+  resolutions: Resolution[];
+  autoResolutions: AutoResolution[];
+  /** Base, target and source heads, frozen once the merge Revision exists. */
+  mergedHeads?: { base: RevisionId; ours: RevisionId; theirs: RevisionId };
   items: ProposalItem[];
 }
 

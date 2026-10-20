@@ -5,6 +5,7 @@ import { useScope, useScopeSearch } from '@/app/scope';
 import { PlannedScreens } from '@/features/planned-screens';
 import { Select } from '@/ui/field';
 import { Badge, EmptyState, PageHeader, QueryBoundary, type BadgeTone } from '@/ui/layout';
+import { unresolvedOf } from './conflict-state';
 import { isStatusFilter, type StatusFilter } from './search';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 
@@ -19,8 +20,8 @@ export function ConflictCount({ domain, proposal }: { domain: string; proposal: 
   const conflicts = useConflicts(domain, proposal);
   if (conflicts.isPending) return <span className="text-muted">...</span>;
   if (conflicts.isError) return <span className="text-danger">error</span>;
-  const total = conflicts.data.items.length;
-  const unresolved = conflicts.data.items.filter((c) => c.resolution === null).length;
+  const total = conflicts.data.conflicts.length;
+  const unresolved = unresolvedOf(conflicts.data).length;
   if (total === 0) return <Badge tone="success">0</Badge>;
   return (
     <Badge tone={unresolved > 0 ? 'danger' : 'success'}>

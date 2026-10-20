@@ -17,6 +17,10 @@ export type RecordRef = string;
 
 // ----------------------------------------------------------------- generic
 
+/** Any JSON value; Conflict sides and Resolutions carry these. */
+export type JsonValue =
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 export interface Page<T> {
   items: T[];
   /** Opaque cursor; `null` when there is no further page. */
@@ -128,7 +132,9 @@ export type ScalarType =
   | 'geo_point'
   | 'uri';
 
-export type AttributeType = ScalarType | `array<${ScalarType}>`;
+/** `decimal(12,2)` and `ref(Supplier)` are the YAML spellings of precision and reference types. */
+export type AttributeType =
+  ScalarType | `array<${ScalarType}>` | `decimal(${number},${number})` | `ref(${string})`;
 export type Sensitivity = 'pii' | 'confidential' | 'restricted';
 export type ElementStatus = 'draft' | 'active' | 'deprecated';
 export type Cardinality = 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many';
@@ -209,6 +215,8 @@ export interface Relation {
   attributes: Record<ElementId, Attribute>;
   on_delete: 'cascade' | 'restrict';
   backing: 'explicit' | 'foreign_key';
+  /** Attribute of the `from` Kind that holds the target key, for `foreign_key` backing. */
+  foreign_key_attribute?: ElementId | null;
 }
 
 export interface TraitAttribute {
@@ -316,9 +324,20 @@ export interface Schema {
   search: SearchCapabilities;
 }
 
+export type SchemaElementType =
+  'kind' | 'attribute' | 'relation' | 'trait' | 'operation' | 'derivation' | 'source';
+
+/** Change commands of a schema change set (design 11.1, `POST .../schema/changes`). */
+export type SchemaCommand = `${'add' | 'update' | 'remove'}_${SchemaElementType}`;
+
+/**
+ * One command of a change set. `add_*` carries the new element in `arguments.element`
+ * (`add_attribute` also names the owner in `arguments.owner`, a Kind or Relation id);
+ * `update_*` names the element in `target` and the changed top-level fields in
+ * `arguments.set`; `remove_*` only needs `target`.
+ */
 export interface SchemaChange {
-  /** Change command, for example `add_attribute` or `rename_kind`. */
-  command: string;
+  command: SchemaCommand;
   /** Stable id of the element the command targets, when it exists already. */
   target?: ElementId;
   arguments: Record<string, unknown>;
@@ -326,21 +345,32 @@ export interface SchemaChange {
 
 export interface SchemaChangeRequest {
   changes: SchemaChange[];
+  /** Revision message; Keeper writes a default when absent. */
+  message?: string;
   dry_run?: boolean;
+}
+
+export interface SchemaMigration {
+  description: string;
+  affected_values: number;
+  failing_values: number;
 }
 
 export interface SchemaChangeResult {
   valid: boolean;
+  /** The new Revision; `null` for a dry run or when the change set is invalid. */
   revision: RevisionId | null;
   violations: Violation[];
   /** Data migrations the changes imply, such as casts and defaults. */
-  migrations: { description: string; affected_values: number; failing_values: number }[];
+  migrations: SchemaMigration[];
 }
 
 export interface Violation {
   code: string;
   message: string;
   ref?: RecordRef;
+  /** Schema path such as `kinds/Supplier/attributes/tier`, for schema violations. */
+  path?: string;
 }
 
 // ------------------------------------------------------- Records and Links
@@ -682,7 +712,9 @@ export interface DecideItemsInput {
 }
 
 // ----------------------------------------------------------------- Conflicts
+// Mirrors packages/core/src/lorebase_core/merge/conflicts.py (design 6.8 to 6.10).
 
+/** Stable Conflict codes: `DV` data, `SC` schema, `XS` cross-cutting. */
 export type ConflictCode =
   | 'DV1'
   | 'DV2'
@@ -702,44 +734,94 @@ export type ConflictCode =
   | 'XS10'
   | 'XS11';
 
-export type ResolutionChoice =
-  | 'ours'
-  | 'theirs'
-  | 'base'
-  | 'custom'
-  | 'keep_deleted'
-  | 'keep_modified'
-  | 'drop'
-  | 'restore'
-  | 'relax';
+export type ResolutionChoice = 'ours' | 'theirs' | 'base' | 'custom' | 'drop' | 'restore' | 'relax';
 
-export interface ConflictResolution {
-  choice: ResolutionChoice;
-  /** Custom value when `choice` is `custom`. */
-  value?: AttributeValue;
-}
-
+/**
+ * One Conflict of a merge attempt. `partition` and `key` locate the element (for schema
+ * Conflicts the partition is `schema` and the key the element id); `attribute` is an
+ * Attribute id for data Conflicts and a dotted property path for schema Conflicts.
+ * `base`, `ours` and `theirs` hold the competing values (`null` means absent). Grouped
+ * Conflicts carry `count` members and a `sample` of their keys.
+ */
 export interface Conflict {
-  id: string;
-  code: ConflictCode;
+  kind: ConflictCode;
+  /** `sha256(code, partition, key, attribute, base_hash, ours_hash, theirs_hash)`; the Conflict id. */
   fingerprint: string;
   partition: string;
-  element_key: string;
-  attribute_id: ElementId | null;
-  payload: { base: AttributeValue; ours: AttributeValue; theirs: AttributeValue };
-  /** More than 1 for grouped Conflicts. */
-  member_count: number;
-  resolution: ConflictResolution | null;
-  resolved_by: string | null;
-  resolved_at: string | null;
+  key: string | null;
+  attribute: string | null;
+  base: JsonValue;
+  ours: JsonValue;
+  theirs: JsonValue;
+  base_hash: string | null;
+  ours_hash: string | null;
+  theirs_hash: string | null;
+  count: number;
+  sample: string[];
+  message: string;
+  /**
+   * Kind-specific facts. Conventions the UI reads: `path` (schema property path, or the
+   * property a `relax` choice changes), `relaxed` (the value `relax` sets), `members`
+   * (per-member `{base, ours, theirs}` of a grouped Conflict), `rejected` (why the last
+   * merge run refused the stored Resolution).
+   */
+  details: Record<string, JsonValue>;
+  /** Choices accepted for this Conflict (`CHOICES` of its kind). */
+  choices: ResolutionChoice[];
+  /** A merge policy (`prefer`, `cascade_dangling`) can resolve this kind without a person. */
+  machine_resolvable: boolean;
 }
 
-export interface BulkResolutionInput {
-  conflict_ids: string[];
-  resolution: ConflictResolution;
+/** A resolver's decision for the Conflict with `fingerprint`. */
+export interface Resolution {
+  fingerprint: string;
+  choice: ResolutionChoice;
+  /** Custom value; `null` means absent. Only for `custom`. */
+  value?: JsonValue;
+  /** Custom values keyed by member key, for grouped Conflicts. Only for `custom`. */
+  values?: Record<string, JsonValue>;
+  /** Who decided; `policy:{name}` for policy resolutions. Set by Keeper. */
+  resolver?: string;
+}
+
+/** A Conflict resolved by the engine or by a policy, kept for Lineage and review. */
+export interface AutoResolution {
+  kind: ConflictCode;
+  fingerprint: string;
+  partition: string;
+  key: string | null;
+  attribute: string | null;
+  choice: ResolutionChoice;
+  resolver: string;
+  count: number;
+  sample: string[];
+}
+
+/** The merge attempt stored on a Proposal when the merge found Conflicts (design 6.8 step 5). */
+export interface MergeAttempt {
+  proposal: string;
+  /** Merge base, target head and source head the attempt was computed from. */
+  base: RevisionId;
+  ours: RevisionId;
+  theirs: RevisionId;
+  conflicts: Conflict[];
+  /** Stored by fingerprint; a Conflict without an entry is unresolved. */
+  resolutions: Resolution[];
+  auto_resolutions: AutoResolution[];
+}
+
+export interface ResolveManyInput {
+  resolutions: Resolution[];
 }
 
 export interface MergeResult {
   proposal: Proposal;
   revision: RevisionId;
 }
+
+/**
+ * Result of `POST .../merge`: the merge Revision, or the attempt with the Conflicts that
+ * remain after the stored Resolutions were applied and the consistency checks re-run.
+ */
+export type MergeOutcome =
+  ({ status: 'merged' } & MergeResult) | { status: 'conflicts'; attempt: MergeAttempt };

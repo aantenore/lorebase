@@ -100,15 +100,16 @@ describe('mock adapter', () => {
     expect(diff.summary['with_supplier']).toEqual({ added: 2, modified: 0, removed: 0 });
   });
 
-  it('requires every Conflict to be resolved before a Proposal merges', async () => {
+  it('keeps a Proposal open while Conflicts are unresolved, then merges', async () => {
     const api = setup();
-    await expect(api.proposals.merge('supply', '43')).rejects.toMatchObject({
-      status: 409,
-      code: 'unresolved_conflicts',
-    });
-    await api.conflicts.resolve('supply', '43', 'c3', { choice: 'theirs' });
+    const open = await api.proposals.merge('supply', '43');
+    expect(open.status).toBe('conflicts');
+
+    const attempt = await api.conflicts.list('supply', '43');
+    const fingerprint = attempt.conflicts[0]?.fingerprint ?? '';
+    await api.conflicts.resolve('supply', '43', { fingerprint, choice: 'theirs' });
     const merged = await api.proposals.merge('supply', '43');
-    expect(merged.proposal.status).toBe('merged');
+    expect(merged.status).toBe('merged');
     const supplier = await api.records.get(supply, 'Supplier', 'S-1001');
     expect(supplier.record.attributes['tier']).toBe('1');
   });
