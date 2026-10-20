@@ -51,6 +51,10 @@ difference).
 - `revision_parents`, `changesets` and `refs.head` reference `revisions`; materialized tables
   reference `refs (domain_id, name)` with cascade, so deleting a branch drops its rows; Proposal,
   merge attempt and document children cascade from their parent.
+- `revision_parents.parent_id` and `refs.head` reference `revisions` without a cascade, so a
+  Revision that is still referenced cannot be deleted on its own. Both constraints are
+  `DEFERRABLE INITIALLY DEFERRED` (revision `0003`): deleting a Domain removes Revisions, edges
+  and refs in one cascade of no fixed order, and the check runs at commit, when none is left.
 - No foreign keys point at the content-addressed `objects` and `tree_nodes` (bulk `COPY` order,
   garbage collection), nor from `ref_log`, which keeps entries of deleted refs.
 
