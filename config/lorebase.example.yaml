@@ -428,3 +428,60 @@ search:
     rrf_k: 60
     lexical_weight: 1.0
     semantic_weight: 1.0
+
+# Agent-facing reads (docs/agents.md). Context packs are also bounded by read.traverse;
+# nothing here calls a model.
+agents:
+  context:                       # POST /domains/{d}/context
+    default_budget_tokens: 4000  # estimated token budget when the request gives none
+    max_budget_tokens: 32000
+    chars_per_token: 4.0         # estimate: tokens = ceil(characters / chars_per_token)
+    default_depth: 1             # neighborhood depth when the request gives none
+    max_depth: 2
+    max_seeds: 20                # seed Records of one pack
+    max_neighbors: 200           # Records around the seeds
+    max_links: 500
+    recent_changes_max: 50       # change entries read before trimming, newest first
+    trim_order:                  # sections trimmed, in this order, to fit the budget
+      - lineage
+      - recent_changes
+      - far_neighbor_values
+      - far_neighbors
+      - schema_descriptions
+      - near_neighbor_values
+      - near_neighbors
+      - schema
+  explain:                       # GET /domains/{d}/kinds/{kind}/records/{key}/explain
+    max_links: 100               # Links listed with their origin
+    max_proposals: 20            # Proposals that changed the Record
+  feed:                          # GET .../branches/{b}/events (SSE) and .../changes
+    poll_interval_s: 1.0         # how often an open stream looks for new events
+    heartbeat_s: 15.0            # comment line after this much silence
+    max_connection_s: 300.0      # streams close after this long; clients resume with Last-Event-ID
+    retry_ms: 3000               # reconnection delay advised to clients
+    batch_events: 100            # events read per poll
+    changed_keys_max: 100        # changed Record keys listed per event
+    changes:                     # pages of GET .../changes
+      default_limit: 50
+      max_limit: 500
+    max_scan: 10000              # first-parent Revisions walked back to find `since`
+
+# Webhooks (design 10.5): managed through Keeper, delivered from the outbox by
+# lorebase_store.webhooks.deliver_pending (run periodically by a worker).
+webhooks:
+  allowed_schemes: [https]       # URL schemes a webhook may use
+  allow_private_targets: false   # refuse loopback, private and link-local targets
+  max_per_domain: 20
+  secret_bytes: 32               # random bytes of a new signing secret
+  signature_header: Lorebase-Signature   # t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">
+  event_header: Lorebase-Event
+  delivery_header: Lorebase-Delivery
+  timeout_s: 10.0                # time budget of one request
+  max_attempts: 8                # then the delivery is marked dead
+  backoff_base_s: 30.0           # delay after the first failure ...
+  backoff_factor: 2.0            # ... multiplied by this after each next one ...
+  backoff_max_s: 3600.0          # ... up to this
+  lease_s: 120.0                 # a claimed delivery is retried by another worker after this
+  batch: 100                     # events and deliveries per worker pass
+  changed_keys_max: 100          # changed Record keys listed per event payload
+  retention_s: 604800.0          # finished deliveries and handed-off events kept (7 days)

@@ -76,7 +76,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
 - [ ] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP
-- [ ] Custom Operations with CEL, review policies, outbox and webhooks (the executor evaluates CEL and review policies behind a setting, see M1; outbox and webhooks are not built)
+- [ ] Custom Operations with CEL, review policies, outbox and webhooks (the executor evaluates CEL and review policies behind a setting, see M1; signed webhooks on Revision events are built, see [agents](agents.md); the Operation outbox is not)
 - [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (Kind-scoped grants on reads are already enforced)
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals

@@ -20,8 +20,12 @@ from lorebase_core.query import (
     KEY_FIELD,
     Hop,
     IncludePlan,
+    Query,
+    QueryError,
     QueryPlan,
+    plan_kinds,
     resolve_hop,
+    resolve_query,
     target_of_kind,
 )
 from lorebase_core.tree import kind_partition, relation_partition
@@ -37,7 +41,7 @@ from lorebase_keeper.reading.compiler import (
 )
 from lorebase_keeper.reading.cursors import invalid_cursor, issue, position_of
 from lorebase_keeper.reading.points import ReadPoint, not_found
-from lorebase_keeper.reading.problems import tree_unsupported
+from lorebase_keeper.reading.problems import query_problem, tree_unsupported
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.tree import TreeReader
 from lorebase_keeper.reading.views import (
@@ -261,6 +265,18 @@ async def lineage_summary(
 
 
 # Lists and queries ------------------------------------------------------------------------
+
+
+def plan_query(query: Query, point: ReadPoint, runtime: ReadRuntime, prefix: str) -> QueryPlan:
+    """The resolved query, once every Kind it reads is one the caller may read."""
+    if query.kind is not None:
+        point.scope.require([query.kind])
+    try:
+        plan = resolve_query(query, point.schema, runtime.read.query_limits())
+    except QueryError as error:
+        raise query_problem(error, prefix) from None
+    point.scope.require(plan_kinds(plan))
+    return plan
 
 
 def _key_ordered(plan: QueryPlan) -> bool:

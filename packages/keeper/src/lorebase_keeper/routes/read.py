@@ -17,13 +17,12 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ValidationError
 
 from lorebase_core.query import Query as DslQuery
-from lorebase_core.query import QueryError, QueryPlan, plan_kinds, resolve_query
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, records, search
 from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, read_guard, resolve_point
-from lorebase_keeper.reading.problems import invalid, query_problem, request_problem
+from lorebase_keeper.reading.problems import invalid, request_problem
 from lorebase_keeper.reading.requests import (
     NeighborhoodRequest,
     QueryRequest,
@@ -103,18 +102,6 @@ def _limit(runtime: ReadRuntime, limit: int | None) -> int:
     return effective
 
 
-def _plan(query: DslQuery, point: ReadPoint, runtime: ReadRuntime, prefix: str) -> QueryPlan:
-    """The resolved query, once every Kind it reads is one the caller may read."""
-    if query.kind is not None:
-        point.scope.require([query.kind])
-    try:
-        plan = resolve_query(query, point.schema, runtime.read.query_limits())
-    except QueryError as error:
-        raise query_problem(error, prefix) from None
-    point.scope.require(plan_kinds(plan))
-    return plan
-
-
 def _shape(query: DslQuery) -> str:
     return fingerprint("query", query.model_dump(mode="json", exclude={"cursor", "limit"}))
 
@@ -168,7 +155,7 @@ async def list_records(
         query = DslQuery.model_validate(document)
     except ValidationError as error:
         raise request_problem(error, "/query") from None
-    plan = _plan(query, point, runtime, "/query")
+    plan = records.plan_query(query, point, runtime, "/query")
 
     async def produce() -> RecordPage:
         page = await records.run_query(
@@ -309,7 +296,7 @@ async def query_records(
     """Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     query = DslQuery.model_validate(body.model_dump(by_alias=True, exclude={"branch", "at"}))
-    plan = _plan(query, point, runtime, "/body")
+    plan = records.plan_query(query, point, runtime, "/body")
     page = await records.run_query(
         session, runtime, point, plan, shape=_shape(query), cursor_pointer="/body/cursor"
     )
