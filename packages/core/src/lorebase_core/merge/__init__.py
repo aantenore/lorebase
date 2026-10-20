@@ -14,6 +14,7 @@ from lorebase_core.merge.conflicts import (
     UnresolvedConflictsError,
     conflict_fingerprint,
 )
+from lorebase_core.merge.index import TreeIndexView
 from lorebase_core.merge.objects import (
     DOMAIN_KEY,
     InMemoryObjectStore,
@@ -45,6 +46,7 @@ __all__ = [
     "ResolutionError",
     "SchemaLoader",
     "Side",
+    "TreeIndexView",
     "UnresolvedConflictsError",
     "conflict_fingerprint",
     "load_schema",
