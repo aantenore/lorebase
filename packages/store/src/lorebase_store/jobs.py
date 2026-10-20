@@ -265,10 +265,10 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_store.db import create_engine
     from lorebase_store.gc import run_gc_job
     from lorebase_store.runtime import StoreRuntime
-    from lorebase_store.settings import database_settings, store_settings
+    from lorebase_store.settings import database_settings
 
     settings = load_settings()
-    runtime = StoreRuntime.from_settings(store_settings(settings))
+    runtime = StoreRuntime.from_loaded(settings)
     engine: AsyncEngine = create_engine(
         database_settings(settings), pooled=False, statement_timeout_ms=0
     )

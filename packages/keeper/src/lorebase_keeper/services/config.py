@@ -93,15 +93,18 @@ class OperationSettings(SectionModel):
         "as warnings) instead of refusing the execution.",
     )
     expressions_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Evaluate the CEL preconditions, expression review policies and steps of "
-        "stored Operations with the expression engine. When false, Operations that need CEL "
-        "are refused (expressions-not-enabled).",
+        "stored Operations with the expression engine (sandboxed: no I/O, deterministic, "
+        "bounded by expression_limits). When false, Operations that need CEL are refused "
+        "(expressions-not-enabled). Whether schemas may hold CEL at all is "
+        "`schema.expressions_enabled`.",
     )
     expression_limits: ExprLimits = Field(
         default_factory=ExprLimits,
-        description="Budget of one expression: source length, nesting depth, evaluation "
-        "steps and time, sizes of built strings and lists, Record lookups, decimal precision.",
+        description="Budget of one expression evaluated by an Operation: source length, "
+        "nesting depth, evaluation steps and time, sizes of built strings and lists, Record "
+        "and Link lookups, decimal precision.",
     )
 
     @model_validator(mode="after")

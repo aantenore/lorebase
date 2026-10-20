@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -34,12 +33,8 @@ LOADER = Author(principal="usr_loader")
 
 
 def supply_schema() -> Schema:
-    """The example schema without the elements that need expressions (not enabled yet)."""
-    document: dict[str, Any] = yaml.safe_load((EXAMPLE / "schema.yaml").read_text())
-    del document["operations"]
-    del document["derivations"]["single_sourced"]
-    del document["kinds"]["Part"]["attributes"]["single_sourced"]
-    return load_schema(yaml.safe_dump(document, sort_keys=False))
+    """The example schema, CEL Operations and Derivations included."""
+    return load_schema((EXAMPLE / "schema.yaml").read_text())
 
 
 SCHEMA = supply_schema()

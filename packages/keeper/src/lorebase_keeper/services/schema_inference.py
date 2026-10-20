@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from lorebase_core.infer import InferenceOptions, SchemaProposal, TableProfile, infer_schema
 from lorebase_core.model import SECRET_REFERENCE_PREFIX, Domain
+from lorebase_core.validate import SchemaRules
 from lorebase_keeper.errors import PAYLOAD_TOO_LARGE, UNAVAILABLE, VALIDATION_FAILED, ProblemError
 from lorebase_keeper.services.config import SchemaInferenceSettings
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
@@ -128,13 +129,14 @@ async def infer_from_files(
     settings: SchemaInferenceSettings,
     csv: CsvProfilingSettings,
     options: InferenceOptions,
+    rules: SchemaRules | None = None,
 ) -> SchemaProposal:
-    """Profile uploaded CSV/TSV files and propose a schema."""
+    """Profile uploaded CSV/TSV files and propose a schema (validated with `rules`)."""
     domain = domain_of(domain_id)
     check_upload_sizes(files, settings)
 
     def run() -> SchemaProposal:
-        return infer_schema(_profile_files(files, csv), domain, options)
+        return infer_schema(_profile_files(files, csv), domain, options, rules)
 
     return await run_in_threadpool(run)
 
@@ -160,8 +162,10 @@ async def infer_from_postgres(
     database: DatabaseSettings,
     postgres: PostgresProfilingSettings,
     options: InferenceOptions,
+    rules: SchemaRules | None = None,
 ) -> SchemaProposal:
-    """Profile tables of an allowed Postgres source (read-only) and propose a schema."""
+    """Profile tables of an allowed Postgres source (read-only) and propose a schema
+    (validated with `rules`)."""
     domain = domain_of(domain_id)
     url = _resolve_source(source, settings)
     try:
@@ -182,4 +186,4 @@ async def infer_from_postgres(
         raise ProblemError(UNAVAILABLE, "The source database cannot be read.") from None
     finally:
         await engine.dispose()
-    return await run_in_threadpool(infer_schema, profiles, domain, options)
+    return await run_in_threadpool(infer_schema, profiles, domain, options, rules)

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydantic import JsonValue
 
@@ -60,8 +60,13 @@ def infer_schema(
     tables: Iterable[TableProfile],
     domain: Domain | str,
     options: InferenceOptions | None = None,
+    rules: SchemaRules | None = None,
 ) -> SchemaProposal:
-    """Propose a schema for ``tables``. Pure: no I/O, no model, nothing committed."""
+    """Propose a schema for ``tables``. Pure: no I/O, no model, nothing committed.
+
+    The proposal is validated with ``rules`` (the defaults when unset); their reserved
+    Attribute names are replaced by those of ``options``.
+    """
     options = options or InferenceOptions()
     domain = Domain(id=domain) if isinstance(domain, str) else domain
     profiles = sorted(tables, key=lambda t: (normalize(t.name), t.name))
@@ -69,7 +74,7 @@ def infer_schema(
     issues: list[InferenceIssue] = []
     references = find_references(analyses, options, issues)
     junctions = find_junctions(analyses, references, options)
-    return _Builder(domain, options, analyses, references, junctions, issues).build()
+    return _Builder(domain, options, analyses, references, junctions, issues, rules).build()
 
 
 @dataclass
@@ -90,7 +95,9 @@ class _Builder:
         references: list[Reference],
         junctions: dict[int, Junction],
         issues: list[InferenceIssue],
+        rules: SchemaRules | None = None,
     ) -> None:
+        self.rules = rules or SchemaRules()
         self.domain = domain
         self.options = options
         self.tables = tables
@@ -169,8 +176,9 @@ class _Builder:
                         self.build_foreign_key(self.slots[index], column, reference)
 
         schema = Schema(domain=self.domain, kinds=self.kinds, relations=self.relations)
-        rules = SchemaRules(
-            reserved_attribute_names=frozenset(self.options.reserved_attribute_names)
+        rules = replace(
+            self.rules,
+            reserved_attribute_names=frozenset(self.options.reserved_attribute_names),
         )
         for issue in locate_issues(schema, validate_schema(schema, rules)):
             self.note(

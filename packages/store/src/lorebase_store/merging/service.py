@@ -278,6 +278,7 @@ class MergeService:
                 provenance=BranchLineage(sync, domain_id, source.name),
                 policy=request.policy,
                 tree_params=TreeParams(domain.leaf_size),
+                schema_rules=runtime.schema.rules(),
             )
             computation = compute_attempt(merge_input, resolutions)
             prepared = None
