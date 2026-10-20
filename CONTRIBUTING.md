@@ -1,6 +1,6 @@
 # Contributing to Lorebase
 
-Thank you for your interest in Lorebase. The project is in its design phase; the most valuable contributions right now are design feedback, use cases, and, once M1 starts, implementation of the tasks in [docs/plan/m1.md](docs/plan/m1.md).
+Thank you for your interest in Lorebase. The project is pre-alpha and M1 is in progress; the most valuable contributions right now are design feedback, real use cases, and implementation of the open tasks in [docs/plan/m1.md](docs/plan/m1.md) (see the [roadmap](docs/roadmap.md) for what is done).
 
 By participating you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 

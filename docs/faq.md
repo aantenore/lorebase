@@ -52,7 +52,7 @@ No. Nothing in Lorebase today calls a model, and the read path never will: Keepe
 
 ### How do agents read?
 
-Through the REST API: Record reads, the query DSL, traversal, neighborhood and search, with time travel to any Revision. Every response names the Revision it was served from and supports `ETag` conditional requests. Because it is plain REST, any framework works today (LangGraph, the OpenAI and Anthropic SDKs, or plain code). An MCP server (Herald) that exposes the same operations as typed tools is planned for M3; it will call Keeper over REST.
+Through the REST API: Record reads, the query DSL, traversal, neighborhood and search, with time travel to any Revision. Every response names the Revision it was served from and supports `ETag` conditional requests. Because it is plain REST, any framework works today (an agent graph library, a vendor SDK or plain code). An MCP server (Herald) that exposes the same operations as typed tools is planned for M3; it will call Keeper over REST.
 
 ### How do agents write?
 

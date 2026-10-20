@@ -1,0 +1,32 @@
+# LinkedIn
+
+A single post from a personal account, with the GIF (`docs/images/tour.gif`) attached as media and the repository link in the first comment, since links in the body lower reach. Keep it plain and first person. Tag no one.
+
+## Post
+
+Agents are only as good as the knowledge they read, and in most companies that knowledge has no history and no review. When an agent gets a supplier risk question wrong, nobody can say what it knew or since when.
+
+I have been building Lorebase to fix that: an open-source ontology platform, a versioned knowledge graph for AI agents, on Postgres and nothing else.
+
+The idea is to treat knowledge the way we treat code.
+
+- Changes happen on a branch and arrive as a proposal.
+- Merging is a three-way merge of schema and data together. Two people change the same supplier's risk score, and the merge asks for a decision instead of silently keeping the last writer.
+- Every change is a Revision with an author and a reason, so you can read the knowledge base as it was last month.
+- Agents read through an API that never calls a language model, so answers are deterministic and take milliseconds. They write only through governed Operations.
+
+It is pre-alpha, and I would rather say what works than oversell. The versioning engine, the Postgres store and a REST API for reading and changing the model run today. The MCP server, the CLI and document ingestion are next.
+
+If you run knowledge for agents, or you are weighing a proprietary ontology platform, I would like your view on the model. What would you version first?
+
+First comment: https://github.com/aantenore/lorebase
+
+## Shorter variant
+
+Branches, reviews and merges for company knowledge, so that agents read something you can audit. Lorebase is an open-source versioned knowledge graph on Postgres, with a model-free read path and governed writes. Pre-alpha: the engine and REST API work, MCP and ingestion are next. Feedback on the merge model welcome.
+
+## Notes
+
+- Do not claim performance numbers; none are published.
+- Do not call it production ready.
+- Reuse the same wording for any newsletter or community announcement.
