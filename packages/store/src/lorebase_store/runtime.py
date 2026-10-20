@@ -1,4 +1,4 @@
-"""Process-wide store state: the `store` settings and the tree node cache."""
+"""Process-wide store state: the `store` settings, the tree node cache and the schema cache."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from lorebase_platform.settings import load_settings
 from lorebase_store.nodestore import NodeCache
+from lorebase_store.schema_cache import SchemaCache
 from lorebase_store.settings import StoreSettings, store_settings
 
 
@@ -15,10 +16,15 @@ class StoreRuntime:
 
     settings: StoreSettings
     node_cache: NodeCache
+    schema_cache: SchemaCache
 
     @classmethod
     def from_settings(cls, settings: StoreSettings) -> StoreRuntime:
-        return cls(settings=settings, node_cache=NodeCache.from_settings(settings.nodes))
+        return cls(
+            settings=settings,
+            node_cache=NodeCache.from_settings(settings.nodes),
+            schema_cache=SchemaCache(settings.reads.schema_cache_entries),
+        )
 
 
 _default: StoreRuntime | None = None

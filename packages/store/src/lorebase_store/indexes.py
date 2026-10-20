@@ -123,6 +123,20 @@ class IndexSpec:
         """Whether range comparisons and ordering can use the index."""
         return self.method is IndexMethod.BTREE and self.attribute_type is not AttributeType.TEXT
 
+    @property
+    def digest(self) -> bool:
+        """Whether the index holds a digest of the value (unique long text)."""
+        return self.expression.startswith("md5(")
+
+    def value_sql(self, placeholder: str) -> str:
+        """SQL of a value compared with `expression`; `placeholder` binds its canonical text."""
+        value = f"CAST({placeholder} AS text)"
+        if self.digest:
+            return f"md5({value})"
+        if self.cast is not None:
+            return f"CAST({value} AS {self.cast})"
+        return value
+
     def name(self, domain_id: str, branch: str) -> str:
         digest = hashlib.sha256(
             _NAME_SCOPE

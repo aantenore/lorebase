@@ -228,6 +228,7 @@ store:
     schema_cache_entries: 256    # compiled schemas per process, keyed by head Revision id
     max_page_rows: 500           # largest page of Records, Links or query results
     max_search_rows: 100         # largest full-text search result
+    search_candidates: 1000      # matches ranked per search (bounds very common terms)
     max_hydrate_keys: 1000       # Records per batched hydration
   traverse:                      # neighborhood caps
     max_depth: 3                 # hops

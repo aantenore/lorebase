@@ -179,6 +179,12 @@ class ReadSettings(SectionModel):
     max_search_rows: int = Field(
         default=100, ge=1, description="Largest number of full-text search results."
     )
+    search_candidates: int = Field(
+        default=1000,
+        ge=1,
+        description="Matching Records ranked per search; ranking reads each candidate's search "
+        "vector, so this bounds the cost of very common terms.",
+    )
     max_hydrate_keys: int = Field(
         default=1000, ge=1, description="Records fetched by one batched hydration."
     )
