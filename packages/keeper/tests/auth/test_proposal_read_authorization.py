@@ -17,16 +17,25 @@ from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import Authorizer
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.services.proposal_reads import (
+    NO_SCOPE,
     ConflictScope,
     conflict_scope,
     readable_proposals,
     require_target_read,
     require_visible,
     visible_partitions,
+    visible_scope,
 )
+from lorebase_keeper.services.proposals import limited_summary
 from lorebase_keeper.services.reads import ReadGuard
-from lorebase_store.models.enums import GrantScope, PrincipalType, ProposalOrigin, ProposalStatus
-from lorebase_store.repositories import ConflictRow, ProposalRow
+from lorebase_store.models.enums import (
+    GrantScope,
+    MergeAttemptStatus,
+    PrincipalType,
+    ProposalOrigin,
+    ProposalStatus,
+)
+from lorebase_store.repositories import ConflictRow, MergeAttemptRow, ProposalRow
 
 SCHEMA = Path(__file__).resolve().parents[4] / "examples" / "supply" / "schema.yaml"
 
@@ -153,3 +162,41 @@ async def test_creating_a_proposal_needs_read_on_its_target(store: Any) -> None:
 
 async def test_kind_grants_may_target_any_branch(store: Any) -> None:
     await require_target_read(guard(store, GrantScope.KIND, "Supplier"), "main")
+
+
+async def test_kind_narrowed_detail_counts_only_visible_conflicts(store: Any) -> None:
+    scope = await conflict_scope(
+        guard(store, GrantScope.KIND, "Supplier"), proposal("agent/a", "main")
+    )
+    schema = load_schema(SCHEMA.read_text())
+    kinds = {kind.api_name: kind.id for kind in schema.kinds.values()}
+    supplier, plant = kind_partition(kinds["Supplier"]), kind_partition(kinds["Plant"])
+    partitions = visible_partitions(scope, [schema])
+    attempt = MergeAttemptRow(
+        id="mat_1",
+        proposal_id="prp_1",
+        base=None,
+        ours=b"o",
+        theirs=b"t",
+        status=MergeAttemptStatus.CONFLICTED,
+        created_at=datetime(2026, 10, 21, tzinfo=UTC),
+        outcome={
+            "open": 7,
+            "resolved": 3,
+            "auto_resolutions": [{"partition": supplier}, {"partition": plant}],
+            "unmatched_resolutions": ["a" * 64],
+        },
+    )
+    summary = limited_summary(attempt, partitions, {("DV1", False): 2, ("DV1", True): 1})
+    assert summary.outcome is not None
+    assert (summary.outcome["open"], summary.outcome["resolved"]) == (2, 1)
+    assert summary.outcome["auto_resolutions"] == [{"partition": supplier}]
+    assert summary.outcome["unmatched_resolutions"] == []
+
+
+async def test_callers_who_cannot_read_a_proposal_see_no_conflict(store: Any) -> None:
+    narrowed = guard(store, GrantScope.BRANCH, "agent/*")
+    assert await visible_scope(narrowed, proposal("agent/a", "main")) == NO_SCOPE
+    assert (await visible_scope(narrowed, proposal("agent/a", "agent/b"))).everything
+    schema = load_schema(SCHEMA.read_text())
+    assert visible_partitions(NO_SCOPE, [schema]).include == frozenset()

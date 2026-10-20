@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from lorebase_keeper.errors import ProblemError
+from lorebase_keeper.routes.proposals import _checks
 from lorebase_keeper.services.config import ProposalSettings
 from lorebase_keeper.services.proposals import (
     approval_of,
@@ -135,3 +137,12 @@ async def test_proposal_routes_need_a_database(
     response = await client.request(method, path)
     assert response.status_code == 503
     assert response.headers["content-type"] == "application/problem+json"
+
+
+def test_merge_check_states_no_count_for_partial_readers() -> None:
+    row = replace(proposal(), checks={"merge": {"open_conflicts": 4, "ours": "ab" * 32}})
+    assert _checks(row)[0].message == f"4 open Conflict(s) at {'ab' * 6}."
+    hidden = _checks(row, counted=False)[0]
+    assert hidden.status == "failed"
+    assert hidden.message is not None
+    assert "4" not in hidden.message

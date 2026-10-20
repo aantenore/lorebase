@@ -24,7 +24,9 @@ listings keep the Proposals the caller may read, so a page may hold fewer items 
 while `next_cursor` is set; callers limited to Kinds see the Conflicts of those Kinds only.
 Writes keep that scope ("read" above): merging and resolving need the read access of the
 Conflict listing, a resolution naming a Conflict outside it is refused (403), and the
-attempts they return list only the Conflicts the caller may read.
+attempts they return list only the Conflicts the caller may read. Proposal details count only
+those Conflicts too, and the merge check of a caller who does not see every Conflict states no
+count.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from lorebase_keeper.services.proposal_reads import (
     conflict_scope,
     readable_proposals,
     require_target_read,
+    visible_scope,
 )
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import CommitError
@@ -253,17 +256,22 @@ class MergeOut(BaseModel):
 # Mapping ----------------------------------------------------------------------------------
 
 
-def _checks(row: ProposalRow, approval: service.Approval | None = None) -> list[CheckOut]:
+def _checks(
+    row: ProposalRow, approval: service.Approval | None = None, *, counted: bool = True
+) -> list[CheckOut]:
+    """The checks of `row`; `counted` false leaves the number of open Conflicts out (callers
+    who do not see every Conflict)."""
     checks: list[CheckOut] = []
     merge = (row.checks or {}).get("merge")
     if isinstance(merge, dict):
         open_count = int(merge.get("open_conflicts") or 0)
         status: Literal["passed", "failed", "pending"] = "passed" if open_count == 0 else "failed"
-        message = (
-            "No Conflicts."
-            if open_count == 0
-            else f"{open_count} open Conflict(s) at {str(merge.get('ours'))[:12]}."
-        )
+        if open_count == 0:
+            message = "No Conflicts."
+        elif counted:
+            message = f"{open_count} open Conflict(s) at {str(merge.get('ours'))[:12]}."
+        else:
+            message = f"Open Conflicts at {str(merge.get('ours'))[:12]}."
         checks.append(CheckOut(name="merge", status=status, message=message))
     else:
         checks.append(CheckOut(name="merge", status="pending", message="Not computed yet."))
@@ -283,7 +291,9 @@ def _checks(row: ProposalRow, approval: service.Approval | None = None) -> list[
     return checks
 
 
-def _proposal(row: ProposalRow, approval: service.Approval | None = None) -> ProposalOut:
+def _proposal(
+    row: ProposalRow, approval: service.Approval | None = None, *, counted: bool = True
+) -> ProposalOut:
     return ProposalOut(
         id=row.id,
         title=row.title,
@@ -297,7 +307,7 @@ def _proposal(row: ProposalRow, approval: service.Approval | None = None) -> Pro
         updated_at=row.updated_at,
         merged_revision=None if row.merged_revision is None else hex(row.merged_revision),
         policy=dict((row.policies or {}).get(service.POLICY_KEY) or {}),
-        checks=_checks(row, approval),
+        checks=_checks(row, approval, counted=counted),
     )
 
 
@@ -402,8 +412,9 @@ def _conflicts(view: service.AttemptView) -> ConflictsOut:
     )
 
 
-def _detail(view: service.ProposalView) -> ProposalDetailOut:
-    base = _proposal(view.proposal, view.approval)
+def _detail(view: service.ProposalView, scope: ConflictScope) -> ProposalDetailOut:
+    """`view`, whose attempt `service.scoped` limited to `scope`."""
+    base = _proposal(view.proposal, view.approval, counted=scope.everything)
     return ProposalDetailOut(
         **base.model_dump(),
         reviews=[_review(r) for r in view.reviews],
@@ -514,7 +525,8 @@ async def create_proposal(
     response.headers["Location"] = (
         f"{keeper.api_prefix}/domains/{domain_id}/proposals/{proposal.id}"
     )
-    return _detail(created.view)
+    scope = await visible_scope(guard, proposal)
+    return _detail(await service.scoped(store, domain_id, created.view, scope), scope)
 
 
 @router.get(PROPOSALS, summary="List Proposals", responses=_ERRORS)
@@ -556,7 +568,10 @@ async def list_proposals(
         if more and rows
         else None
     )
-    items = [_proposal(r) for r in await readable_proposals(guard, rows)]
+    items = [
+        _proposal(r, counted=(await visible_scope(guard, r)).everything)
+        for r in await readable_proposals(guard, rows)
+    ]
     return Page[ProposalOut](items=items, next_cursor=next_cursor)
 
 
@@ -569,8 +584,9 @@ async def get_proposal(
     guard: DataRead,
 ) -> ProposalDetailOut:
     """The Proposal with its reviews, approval state and latest merge attempt."""
-    await _readable(store, guard, domain_id, proposal_id)
-    return _detail(await service.get(store, domain_id, proposal_id, keeper.proposals))
+    scope = await _readable(store, guard, domain_id, proposal_id)
+    view = await service.get(store, domain_id, proposal_id, keeper.proposals)
+    return _detail(await service.scoped(store, domain_id, view, scope), scope)
 
 
 async def _author_or_merger(
@@ -598,6 +614,7 @@ async def update_proposal(
     auth: AuthDep,
     store: StoreDep,
     keeper: KeeperSettingsDep,
+    guard: DataRead,
     _: Annotated[Access, Depends(require(Permission.DATA_READ))],
 ) -> ProposalDetailOut:
     """Change the title or description of an open Proposal (its author or a maintainer)."""
@@ -616,7 +633,8 @@ async def update_proposal(
         target=proposal_id,
         fields=sorted(body.model_dump(exclude_unset=True)),
     )
-    return _detail(view)
+    scope = await visible_scope(guard, view.proposal)
+    return _detail(await service.scoped(store, domain_id, view, scope), scope)
 
 
 @router.post(PROPOSAL + "/close", summary="Close a Proposal", responses=_ERRORS)
@@ -628,13 +646,15 @@ async def close_proposal(
     auth: AuthDep,
     store: StoreDep,
     keeper: KeeperSettingsDep,
+    guard: DataRead,
     _: Annotated[Access, Depends(require(Permission.DATA_READ))],
 ) -> ProposalDetailOut:
     """Close without merging; the merge attempt is discarded and the target is unchanged."""
     await _author_or_merger(request, auth, principal, store, domain_id, proposal_id)
     view = await service.close(store, domain_id, proposal_id, keeper.proposals)
     annotate(request, action="proposal.close", target=proposal_id)
-    return _detail(view)
+    scope = await visible_scope(guard, view.proposal)
+    return _detail(await service.scoped(store, domain_id, view, scope), scope)
 
 
 @router.post(PROPOSAL + "/reviews", status_code=201, summary="Review a Proposal", responses=_ERRORS)
@@ -732,7 +752,7 @@ async def merge_proposal(
     return MergeOut(
         result=outcome.view.attempt.result or "merged",
         revision=hex(outcome.head),
-        proposal=_proposal(outcome.proposal),
+        proposal=_proposal(outcome.proposal, counted=scope.everything),
         attempt=attempt,
         source_deleted=outcome.source_deleted,
         replayed=outcome.replayed,

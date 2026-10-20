@@ -47,6 +47,8 @@ class ConflictScope:
 
 
 FULL_SCOPE = ConflictScope()
+NO_SCOPE = ConflictScope(kinds=frozenset(), schema=False)
+"""Shows no Conflict."""
 
 
 async def _both(guard: ReadGuard, proposal: ProposalRow) -> bool:
@@ -63,6 +65,22 @@ async def conflict_scope(data: ReadGuard, proposal: ProposalRow) -> ConflictScop
     if not kinds:
         raise data.denied()
     return ConflictScope(kinds=kinds, schema=schema_readable)
+
+
+async def reads_both(data: ReadGuard, proposal: ProposalRow) -> bool:
+    """Whether `data` reads both branches of `proposal` (not only some Kinds)."""
+    return await _both(data, proposal)
+
+
+async def visible_scope(data: ReadGuard, proposal: ProposalRow) -> ConflictScope:
+    """`conflict_scope`, or `NO_SCOPE` instead of 403: for responses of writes whose
+    authorization does not depend on reading the Proposal."""
+    try:
+        return await conflict_scope(data, proposal)
+    except ProblemError as error:
+        if error.status_code != 403:
+            raise
+        return NO_SCOPE
 
 
 async def readable_proposals(data: ReadGuard, rows: Sequence[ProposalRow]) -> list[ProposalRow]:

@@ -805,6 +805,31 @@ async def _attempt_view(
     )
 
 
+async def scoped(
+    store: StoreAccess, domain_id: str, view: ProposalView, scope: ConflictScope
+) -> ProposalView:
+    """`view` with its attempt summary limited to the Conflicts `scope` shows."""
+    if scope.everything or view.attempt is None:
+        return view
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        partitions = await _partitions(store, session, domain_id, view.attempt, scope)
+        counts = await ConflictRepository(session, domain_id).counts(view.attempt.id, partitions)
+    return replace(view, attempt=limited_summary(view.attempt, partitions, counts))
+
+
+def limited_summary(
+    attempt: MergeAttemptRow, partitions: PartitionFilter, counts: dict[tuple[str, bool], int]
+) -> MergeAttemptRow:
+    """`attempt` limited to `partitions` (see `_limited`), its open and resolved totals taken
+    from `counts`, the per-code counts of those partitions."""
+    limited = _limited(attempt, partitions)
+    outcome = dict(limited.outcome or {})
+    outcome["open"] = sum(n for (_, resolved), n in counts.items() if not resolved)
+    outcome["resolved"] = sum(n for (_, resolved), n in counts.items() if resolved)
+    return replace(limited, outcome=outcome)
+
+
 def _limited(attempt: MergeAttemptRow, partitions: PartitionFilter) -> MergeAttemptRow:
     """`attempt` with the outcome members a reader limited to `partitions` may see: automatic
     resolutions in those partitions, and no unmatched resolutions (their Conflict, and so
