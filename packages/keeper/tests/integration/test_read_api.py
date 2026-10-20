@@ -152,8 +152,17 @@ async def test_get_record_with_links_lineage_and_etag(
     assert links["purchase_orders"] == len(purchase_orders)
 
     etag = response.headers["ETag"]
-    again = await http.get(f"{BASE}/kinds/Supplier/records/S-1001", headers={"If-None-Match": etag})
+    assert etag.startswith(f'"{seeded.revisions["updated"]}.')
+    assert response.headers["Cache-Control"] == "private, must-revalidate"
+    path = f"{BASE}/kinds/Supplier/records/S-1001"
+    again = await http.get(path, params={"links": True}, headers={"If-None-Match": etag})
     assert again.status_code == 304
+    assert again.headers["ETag"] == etag
+    cached = await http.get(path, params={"links": True})
+    assert cached.status_code == 200
+    assert cached.json() == body
+    other = await http.get(path, headers={"If-None-Match": etag})
+    assert other.status_code == 200  # other parameters, other tag
 
     lineage = (await get_ok(http, "/kinds/Supplier/records/S-1001", lineage=True))["record"]
     assert lineage["lineage"]["risk_score"]["origin_type"] == "operation"

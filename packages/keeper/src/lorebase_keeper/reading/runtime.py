@@ -19,12 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
 from lorebase_keeper.errors import UNAVAILABLE, ProblemError
+from lorebase_keeper.reading.caching import ResponseCache, build_cache
 from lorebase_keeper.reading.settings import (
     ReadSettings,
     SearchSettings,
     read_settings,
     search_settings,
 )
+from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import Settings
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings, store_settings
@@ -64,6 +66,7 @@ class ReadRuntime:
     read: ReadSettings
     search: SearchSettings
     store: StoreRuntime
+    cache: ResponseCache | None = None
     schemas: SchemaCache = field(init=False)
 
     def __post_init__(self) -> None:
@@ -80,6 +83,7 @@ class ReadRuntime:
             read=read_settings(settings),
             search=search_settings(settings),
             store=StoreRuntime.from_settings(store_settings(settings)),
+            cache=build_cache(keeper_settings(settings).reads.cache),
         )
 
 

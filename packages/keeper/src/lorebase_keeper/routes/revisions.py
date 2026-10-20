@@ -13,7 +13,7 @@ import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,7 @@ from lorebase_core.model import Schema
 from lorebase_core.tree import kind_partition, relation_partition
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading.access import ReadAccess, read_access
+from lorebase_keeper.reading.caching import respond
 from lorebase_keeper.reading.cursors import fingerprint, invalid_cursor, issue, position_of
 from lorebase_keeper.reading.diff import (
     ChangeOut,
@@ -77,6 +78,9 @@ Anchor = Annotated[
         "branches read Revisions reachable from that branch."
     ),
 ]
+_NOT_MODIFIED: dict[int | str, dict[str, Any]] = {
+    304: {"description": "Not modified: If-None-Match names the current ETag."}
+}
 Limit = Annotated[int | None, Query(ge=1, description="Page size.")]
 Cursor = Annotated[str | None, Query(max_length=4096, description="Opaque page cursor.")]
 
@@ -112,7 +116,10 @@ def _bounded(limit: int | None, default: int, maximum: int) -> int:
 
 
 @router.get(
-    f"{BASE}/branches/{{branch:path}}/log", summary="History of a branch", responses=_ERRORS
+    f"{BASE}/branches/{{branch:path}}/log",
+    summary="History of a branch",
+    response_model=LogPage,
+    responses={**_ERRORS, **_NOT_MODIFIED},
 )
 async def branch_log(
     domain_id: str,
@@ -120,7 +127,7 @@ async def branch_log(
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     all_parents: Annotated[
         bool, Query(alias="all", description="Every ancestor instead of the first-parent chain.")
     ] = False,
@@ -128,7 +135,7 @@ async def branch_log(
     author: Annotated[str | None, Query(description="Only Revisions by this principal.")] = None,
     limit: Limit = None,
     cursor: Cursor = None,
-) -> LogPage:
+) -> Response:
     """Revisions of a branch, newest first (first parents by default)."""
     domain = await open_domain(session, access)
     ref = await open_branch(session, access, domain, branch)
@@ -142,42 +149,55 @@ async def branch_log(
             after = (int(position[0]), bytes.fromhex(position[1]))
         except (IndexError, TypeError, ValueError):
             raise invalid_cursor("/query/cursor") from None
-    items, more = await log(
-        session,
-        domain.id,
-        ref.head,
-        first_parent=not all_parents,
-        origin_type=origin_type,
-        author=author,
-        limit=effective,
-        after=after,
-    )
-    next_cursor = issue(shape, [items[-1].generation, items[-1].id]) if more and items else None
-    response.headers[REVISION_HEADER] = ref.head.hex()
-    return LogPage(branch=ref.name, head=ref.head.hex(), items=items, next_cursor=next_cursor)
+
+    async def produce() -> LogPage:
+        items, more = await log(
+            session,
+            domain.id,
+            ref.head,
+            first_parent=not all_parents,
+            origin_type=origin_type,
+            author=author,
+            limit=effective,
+            after=after,
+        )
+        next_cursor = issue(shape, [items[-1].generation, items[-1].id]) if more and items else None
+        return LogPage(branch=ref.name, head=ref.head.hex(), items=items, next_cursor=next_cursor)
+
+    return await _answer(request, runtime, domain.id, ref.head.hex(), produce)
 
 
-@router.get(f"{BASE}/revisions/{{revision}}", summary="Get a Revision", responses=_ERRORS)
+@router.get(
+    f"{BASE}/revisions/{{revision}}",
+    summary="Get a Revision",
+    response_model=RevisionOut,
+    responses={**_ERRORS, **_NOT_MODIFIED},
+)
 async def get_revision(
     domain_id: str,
     revision: str,
     access: DataRead,
+    runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Anchor = None,
-) -> RevisionOut:
+) -> Response:
     """A Revision by id, tag or branch name."""
     domain = await open_domain(session, access)
     anchor = await open_anchor(session, access, domain, branch)
     found = await open_revision(session, access, domain_id, revision, anchor=anchor)
-    response.headers[REVISION_HEADER] = found.id.hex()
-    return revision_out(found)
+
+    async def produce() -> RevisionOut:
+        return revision_out(found)
+
+    return await _answer(request, runtime, domain.id, found.id.hex(), produce)
 
 
 @router.get(
     f"{BASE}/revisions/{{revision}}/counts",
     summary="Element counts per partition at a Revision",
-    responses=_ERRORS,
+    response_model=CountsResponse,
+    responses={**_ERRORS, **_NOT_MODIFIED},
 )
 async def revision_counts(
     domain_id: str,
@@ -185,25 +205,29 @@ async def revision_counts(
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Anchor = None,
-) -> CountsResponse:
+) -> Response:
     """Schema elements, Records per Kind and Links per Relation at a Revision."""
     domain = await open_domain(session, access)
     anchor = await open_anchor(session, access, domain, branch)
     found = await open_revision(session, access, domain_id, revision, anchor=anchor)
-    schema = await schema_at(session, runtime, domain_id, found)
-    response.headers[REVISION_HEADER] = found.id.hex()
-    return CountsResponse(
-        revision=found.id.hex(),
-        partitions=await partition_counts(session, runtime, domain_id, found, schema),
-    )
+
+    async def produce() -> CountsResponse:
+        schema = await schema_at(session, runtime, domain_id, found)
+        return CountsResponse(
+            revision=found.id.hex(),
+            partitions=await partition_counts(session, runtime, domain_id, found, schema),
+        )
+
+    return await _answer(request, runtime, domain.id, found.id.hex(), produce)
 
 
 @router.get(
     f"{BASE}/revisions/{{revision}}/changeset",
     summary="Changes of a Revision against its first parent",
-    responses=_ERRORS,
+    response_model=ChangesPage,
+    responses={**_ERRORS, **_NOT_MODIFIED},
 )
 async def revision_changeset(
     domain_id: str,
@@ -211,57 +235,61 @@ async def revision_changeset(
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Anchor = None,
     limit: Limit = None,
     cursor: Cursor = None,
-) -> ChangesPage:
+) -> Response:
     """The stored changeset (design 6.3), with provenance per changed Attribute."""
     domain = await open_domain(session, access)
     anchor = await open_anchor(session, access, domain, branch)
     found = await open_revision(session, access, domain_id, revision, anchor=anchor)
-    entries = await ChangesetRepository(
-        session, domain_id, writes=runtime.store_settings.writes
-    ).entries(found.id)
-    changes = [
-        HashChange(e.partition, e.key, e.old_hash, e.new_hash, dict(e.provenance) or None)
-        for e in entries
-    ]
-    parent = await _first_parent(session, domain_id, found)
-    new_schema = await schema_at(session, runtime, domain_id, found)
-    old_schema = (
-        new_schema if parent is None else await schema_at(session, runtime, domain_id, parent)
-    )
-    page = await _page(
-        session,
-        runtime,
-        domain_id,
-        changes,
-        old_schema,
-        new_schema,
-        limit=limit,
-        cursor=cursor,
-        shape=fingerprint("changeset", found.id.hex()),
-    )
-    response.headers[REVISION_HEADER] = found.id.hex()
-    return ChangesPage(
-        from_revision=None if parent is None else parent.id.hex(),
-        to_revision=found.id.hex(),
-        **page,
-    )
+
+    async def produce() -> ChangesPage:
+        entries = await ChangesetRepository(
+            session, domain_id, writes=runtime.store_settings.writes
+        ).entries(found.id)
+        changes = [
+            HashChange(e.partition, e.key, e.old_hash, e.new_hash, dict(e.provenance) or None)
+            for e in entries
+        ]
+        parent = await _first_parent(session, domain_id, found)
+        new_schema = await schema_at(session, runtime, domain_id, found)
+        old_schema = (
+            new_schema if parent is None else await schema_at(session, runtime, domain_id, parent)
+        )
+        page = await _page(
+            session,
+            runtime,
+            domain_id,
+            changes,
+            old_schema,
+            new_schema,
+            limit=limit,
+            cursor=cursor,
+            shape=fingerprint("changeset", found.id.hex()),
+        )
+        return ChangesPage(
+            from_revision=None if parent is None else parent.id.hex(),
+            to_revision=found.id.hex(),
+            **page,
+        )
+
+    return await _answer(request, runtime, domain.id, found.id.hex(), produce)
 
 
 @router.get(
     f"{BASE}/diff",
     summary="Diff two Revisions",
-    responses={**_ERRORS, 200: {"content": {NDJSON: {}}}},
+    response_model=ChangesPage,
+    responses={**_ERRORS, **_NOT_MODIFIED, 200: {"content": {NDJSON: {}}}},
 )
 async def diff(
     domain_id: str,
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     from_: Annotated[str, Query(alias="from", description="Revision id, tag or branch.")],
     to: Annotated[str, Query(description="Revision id, tag or branch.")],
     branch: Anchor = None,
@@ -278,39 +306,72 @@ async def diff(
     format: Annotated[Literal["json", "ndjson"], Query()] = "json",
     limit: Limit = None,
     cursor: Cursor = None,
-) -> Any:
+) -> Response:
     """Element changes from `from` to `to`, with a per-partition summary."""
     domain = await open_domain(session, access)
     anchor = await open_anchor(session, access, domain, branch)
     old = await open_revision(session, access, domain_id, from_, anchor=anchor)
     new = await open_revision(session, access, domain_id, to, anchor=anchor)
-    old_schema = await schema_at(session, runtime, domain_id, old)
-    new_schema = await schema_at(session, runtime, domain_id, new)
-    partitions = _partitions((new_schema, old_schema), _names(kinds), _names(relations), schema)
-    entries = await compute_diff(
-        session, runtime, domain_id, old.root, new.root, partitions=partitions
-    )
-    changes = [as_hash_change(e) for e in entries]
-    headers = {REVISION_HEADER: new.id.hex()}
+
+    async def changes_between() -> tuple[list[HashChange], Schema, Schema, set[str] | None]:
+        old_schema = await schema_at(session, runtime, domain_id, old)
+        new_schema = await schema_at(session, runtime, domain_id, new)
+        partitions = _partitions((new_schema, old_schema), _names(kinds), _names(relations), schema)
+        entries = await compute_diff(
+            session, runtime, domain_id, old.root, new.root, partitions=partitions
+        )
+        return [as_hash_change(e) for e in entries], old_schema, new_schema, partitions
+
     if format == "ndjson":
+        changes, old_schema, new_schema, _ = await changes_between()
         return StreamingResponse(
             _stream(runtime, domain_id, changes, old_schema, new_schema, old, new),
             media_type=NDJSON,
-            headers=headers,
+            headers={REVISION_HEADER: new.id.hex()},
         )
-    page = await _page(
-        session,
+
+    async def produce() -> ChangesPage:
+        changes, old_schema, new_schema, partitions = await changes_between()
+        page = await _page(
+            session,
+            runtime,
+            domain_id,
+            changes,
+            old_schema,
+            new_schema,
+            limit=limit,
+            cursor=cursor,
+            shape=fingerprint("diff", old.id.hex(), new.id.hex(), sorted(partitions or [])),
+        )
+        return ChangesPage(from_revision=old.id.hex(), to_revision=new.id.hex(), **page)
+
+    return await _answer(
+        request,
         runtime,
-        domain_id,
-        changes,
-        old_schema,
-        new_schema,
-        limit=limit,
-        cursor=cursor,
-        shape=fingerprint("diff", old.id.hex(), new.id.hex(), sorted(partitions or [])),
+        domain.id,
+        f"{old.id.hex()}..{new.id.hex()}",
+        produce,
+        headers={REVISION_HEADER: new.id.hex()},
     )
-    response.headers.update(headers)
-    return ChangesPage(from_revision=old.id.hex(), to_revision=new.id.hex(), **page)
+
+
+async def _answer(
+    request: Request,
+    runtime: ReadRuntime,
+    domain_id: str,
+    revision: str,
+    produce: Any,
+    *,
+    headers: dict[str, str] | None = None,
+) -> Response:
+    return await respond(
+        request,
+        runtime.cache,
+        domain_id=domain_id,
+        revision=revision,
+        produce=produce,
+        headers=headers or {REVISION_HEADER: revision},
+    )
 
 
 def _names(values: list[str] | None) -> list[str] | None:

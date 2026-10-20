@@ -56,9 +56,34 @@ class PaginationSettings(SectionModel):
         return self
 
 
-class ReadsSettings(SectionModel):
-    """Authorization of reads that name a Revision by id or tag."""
+class ReadCacheSettings(SectionModel):
+    """In-process cache of GET read responses, keyed by the Revision they were served from.
 
+    Entries never go stale (a new commit means a new Revision, hence a new key); they leave
+    by size, count or time to live.
+    """
+
+    enabled: bool = True
+    max_entries: int = Field(default=1024, ge=1, description="Responses kept.")
+    max_bytes: int = Field(
+        default=32 * 1024 * 1024, ge=1, description="Total size of kept response bodies."
+    )
+    ttl_s: float = Field(default=300, gt=0, description="Lifetime of an entry in seconds.")
+    max_body_bytes: int = Field(
+        default=1024 * 1024, ge=1, description="Larger responses are not cached."
+    )
+    time_travel_max_entries: int = Field(
+        default=128,
+        ge=0,
+        description="Entries for reads served from the tree at another Revision; once reached, "
+        "such reads are not cached. 0 never caches them.",
+    )
+
+
+class ReadsSettings(SectionModel):
+    """Read responses: authorization of Revisions named by id or tag, response cache."""
+
+    cache: ReadCacheSettings = Field(default_factory=ReadCacheSettings)
     reachability_max_depth: int = Field(
         default=10_000,
         ge=1,

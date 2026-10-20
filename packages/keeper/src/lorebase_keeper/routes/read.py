@@ -3,7 +3,9 @@
 Every read takes `branch` (default: the Domain's default branch); Record and Link reads also
 take `at`, a Revision id or tag, served from the Revision tree. Responses carry the Revision
 they were served from in `revision` and in the `Lorebase-Revision` header, and `served_from`
-(`materialized` or `tree`). Record reads carry an `ETag` and answer `If-None-Match` with 304.
+(`materialized` or `tree`). GET reads carry an `ETag` bound to that Revision, answer
+`If-None-Match` with 304 and are cached per Revision (`reading.caching`); POST reads carry
+an `ETag` too.
 """
 
 from __future__ import annotations
@@ -11,14 +13,15 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Query, Response
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, Query, Request, Response
+from pydantic import BaseModel, ValidationError
 
 from lorebase_core.query import Query as DslQuery
 from lorebase_core.query import QueryError, QueryPlan, resolve_query
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, records, search
 from lorebase_keeper.reading.access import ReadAccess, read_access
+from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, resolve_point
 from lorebase_keeper.reading.problems import invalid, query_problem, request_problem
@@ -37,7 +40,6 @@ from lorebase_keeper.reading.views import (
     RecordResponse,
     SearchResponse,
     TraverseResponse,
-    record_etag,
     served,
 )
 
@@ -66,8 +68,31 @@ Limit = Annotated[int | None, Query(ge=1, description="Page size.")]
 Cursor = Annotated[str | None, Query(max_length=4096, description="Opaque page cursor.")]
 
 
-def _mark(response: Response, point: ReadPoint) -> None:
+_NOT_MODIFIED: dict[int | str, dict[str, Any]] = {
+    304: {"description": "Not modified: If-None-Match names the current ETag."}
+}
+
+
+def _mark(response: Response, point: ReadPoint, body: BaseModel) -> None:
+    """Headers of a POST read: Revision, and an ETag of the Revision and the request body."""
+    digest = fingerprint(body.model_dump(mode="json"))
     response.headers[REVISION_HEADER] = point.revision_hex
+    response.headers["ETag"] = f'"{point.revision_hex}.{digest}"'
+    response.headers["Cache-Control"] = CACHE_CONTROL
+
+
+async def _answer(
+    request: Request, runtime: ReadRuntime, point: ReadPoint, produce: Any
+) -> Response:
+    return await respond(
+        request,
+        runtime.cache,
+        domain_id=point.domain.id,
+        revision=point.revision_hex,
+        produce=produce,
+        time_travel=not point.materialized,
+        headers={REVISION_HEADER: point.revision_hex},
+    )
 
 
 def _limit(runtime: ReadRuntime, limit: int | None) -> int:
@@ -92,14 +117,19 @@ def _shape(query: DslQuery) -> str:
 # Records ----------------------------------------------------------------------------------
 
 
-@router.get(f"{BASE}/kinds/{{kind}}/records", summary="List Records of a Kind", responses=_ERRORS)
+@router.get(
+    f"{BASE}/kinds/{{kind}}/records",
+    summary="List Records of a Kind",
+    response_model=RecordPage,
+    responses={**_ERRORS, **_NOT_MODIFIED},
+)
 async def list_records(
     domain_id: str,
     kind: str,
     access: KindRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Branch = None,
     at: At = None,
     where: Annotated[
@@ -111,7 +141,7 @@ async def list_records(
     select: Annotated[str | None, Query(description="Comma-separated field names.")] = None,
     limit: Limit = None,
     cursor: Cursor = None,
-) -> RecordPage:
+) -> Response:
     """Records of a Kind filtered with the DSL, ordered and paginated by keyset."""
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     records.require_kind(point, kind)
@@ -134,17 +164,21 @@ async def list_records(
     except ValidationError as error:
         raise request_problem(error, "/query") from None
     plan = _plan(query, point, runtime, "/query")
-    page = await records.run_query(
-        session, runtime, point, plan, shape=_shape(query), cursor_pointer="/query/cursor"
-    )
-    _mark(response, point)
-    return RecordPage(**served(point), items=page.items, next_cursor=page.next_cursor)
+
+    async def produce() -> RecordPage:
+        page = await records.run_query(
+            session, runtime, point, plan, shape=_shape(query), cursor_pointer="/query/cursor"
+        )
+        return RecordPage(**served(point), items=page.items, next_cursor=page.next_cursor)
+
+    return await _answer(request, runtime, point, produce)
 
 
 @router.get(
     f"{BASE}/kinds/{{kind}}/records/{{key}}/links/{{relation}}",
     summary="List the Links of a Record along a Relation",
-    responses=_ERRORS,
+    response_model=LinkPage,
+    responses={**_ERRORS, **_NOT_MODIFIED},
 )
 async def list_record_links(
     domain_id: str,
@@ -154,34 +188,39 @@ async def list_record_links(
     access: KindRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Branch = None,
     at: At = None,
     limit: Limit = None,
     cursor: Cursor = None,
-) -> LinkPage:
+) -> Response:
     """Links of the Record along `relation`, a forward or inverse api name, by far key."""
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
-    page = await records.record_links(
-        session,
-        runtime,
-        point,
-        found,
-        key,
-        relation,
-        limit=_limit(runtime, limit),
-        cursor=cursor,
-        shape=fingerprint("record-links", kind, key, relation),
-    )
-    _mark(response, point)
-    return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
+    effective = _limit(runtime, limit)
+
+    async def produce() -> LinkPage:
+        page = await records.record_links(
+            session,
+            runtime,
+            point,
+            found,
+            key,
+            relation,
+            limit=effective,
+            cursor=cursor,
+            shape=fingerprint("record-links", kind, key, relation),
+        )
+        return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
+
+    return await _answer(request, runtime, point, produce)
 
 
 @router.get(
     f"{BASE}/kinds/{{kind}}/records/{{key}}",
     summary="Get a Record by key",
-    responses={**_ERRORS, 304: {"description": "Not modified (If-None-Match)."}},
+    response_model=RecordResponse,
+    responses={**_ERRORS, **_NOT_MODIFIED},
 )
 async def get_record(
     domain_id: str,
@@ -190,31 +229,30 @@ async def get_record(
     access: KindRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Branch = None,
     at: At = None,
     links: Annotated[bool, Query(description="Add Link counts per Relation.")] = False,
     lineage: Annotated[bool, Query(description="Add the provenance of each value.")] = False,
-    if_none_match: Annotated[str | None, Header()] = None,
-) -> Any:
+) -> Response:
     """One Record, optionally with its Link counts and the lineage of its values."""
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
-    record, fetched = await records.get_record(
-        session, runtime, point, found, key, links=links, lineage=lineage
-    )
-    etag = record_etag(fetched.object_hash, fetched.row.get("derived"))
-    headers = {REVISION_HEADER: point.revision_hex, "ETag": etag}
-    if if_none_match is not None and etag in {t.strip() for t in if_none_match.split(",")}:
-        return Response(status_code=304, headers=headers)
-    response.headers.update(headers)
-    return RecordResponse(**served(point), record=record)
+
+    async def produce() -> RecordResponse:
+        record, _ = await records.get_record(
+            session, runtime, point, found, key, links=links, lineage=lineage
+        )
+        return RecordResponse(**served(point), record=record)
+
+    return await _answer(request, runtime, point, produce)
 
 
 @router.get(
     f"{BASE}/relations/{{relation}}/links",
     summary="List the Links of a Relation",
-    responses=_ERRORS,
+    response_model=LinkPage,
+    responses={**_ERRORS, **_NOT_MODIFIED},
 )
 async def list_relation_links(
     domain_id: str,
@@ -222,29 +260,33 @@ async def list_relation_links(
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
+    request: Request,
     branch: Branch = None,
     at: At = None,
     from_key: Annotated[str | None, Query(description="Only Links from this key.")] = None,
     to_key: Annotated[str | None, Query(description="Only Links to this key.")] = None,
     limit: Limit = None,
     cursor: Cursor = None,
-) -> LinkPage:
+) -> Response:
     """Links of a Relation (either api name) ordered by `(from_key, to_key)`."""
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
-    page = await records.relation_links(
-        session,
-        runtime,
-        point,
-        relation,
-        from_key=from_key,
-        to_key=to_key,
-        limit=_limit(runtime, limit),
-        cursor=cursor,
-        shape=fingerprint("relation-links", relation, from_key, to_key),
-    )
-    _mark(response, point)
-    return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
+    effective = _limit(runtime, limit)
+
+    async def produce() -> LinkPage:
+        page = await records.relation_links(
+            session,
+            runtime,
+            point,
+            relation,
+            from_key=from_key,
+            to_key=to_key,
+            limit=effective,
+            cursor=cursor,
+            shape=fingerprint("relation-links", relation, from_key, to_key),
+        )
+        return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
+
+    return await _answer(request, runtime, point, produce)
 
 
 # Query, traversal, search ---------------------------------------------------------------
@@ -266,7 +308,7 @@ async def query_records(
     page = await records.run_query(
         session, runtime, point, plan, shape=_shape(query), cursor_pointer="/body/cursor"
     )
-    _mark(response, point)
+    _mark(response, point, body)
     return QueryResponse(
         **served(point), items=page.items, next_cursor=page.next_cursor, aggregate=page.aggregate
     )
@@ -284,7 +326,7 @@ async def traverse(
     """Follow a path of Relations, with a filter and a cap per hop (design 8.3)."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await graph.traverse(session, runtime, point, body)
-    _mark(response, point)
+    _mark(response, point, body)
     return result
 
 
@@ -300,7 +342,7 @@ async def neighborhood(
     """Breadth-first expansion from seed Records within depth, node and edge caps."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await graph.neighborhood(session, runtime, point, body)
-    _mark(response, point)
+    _mark(response, point, body)
     return result
 
 
@@ -316,5 +358,5 @@ async def search_records(
     """Lexical, semantic (caller-supplied vector) or hybrid search (design 8.4)."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await search.search(session, runtime, point, body)
-    _mark(response, point)
+    _mark(response, point, body)
     return result

@@ -7,8 +7,6 @@ Attributes the schema no longer knows are left out.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -212,13 +210,6 @@ def record_ref(schema: Schema, kind_id: str, key: str, title: str | None = None)
 
 def link_values(relation: Relation, values: Mapping[str, Any] | None) -> dict[str, Any]:
     return named_values(relation.attributes, values or {})
-
-
-def record_etag(object_hash: bytes, derived: Mapping[str, Any] | None) -> str:
-    """Strong ETag of a Record read: content hash, derived values, (no) mask profile."""
-    digest = hashlib.sha256(object_hash)
-    digest.update(json.dumps(derived or {}, sort_keys=True, separators=(",", ":")).encode())
-    return f'"{digest.hexdigest()[:32]}"'
 
 
 def served(point: ReadPoint) -> dict[str, Any]:
