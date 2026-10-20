@@ -45,6 +45,11 @@ def test_statement_follows_the_schema() -> None:
     sql, params = neighborhood_sql(schema, DOMAIN, "main", Direction.IN, [SOURCED_FROM])
     assert params["out_ids"] == params["in_ids"] == params["fk_ids"] == []
     assert f"w.kind_id = '{SUPPLIER}'" in sql
+    follow = {SUPPLIED_BY: Direction.OUT, SOURCED_FROM: Direction.IN}
+    sql, params = neighborhood_sql(schema, DOMAIN, "main", Direction.BOTH, None, follow)
+    assert params["out_ids"] == [SUPPLIED_BY]
+    assert params["in_ids"] == params["fk_ids"] == []
+    assert f"w.kind_id = '{SUPPLIER}'" in sql, "each Relation in its own direction"
 
 
 @pytest.fixture
@@ -100,6 +105,9 @@ async def test_direction_relations_and_foreign_keys(walk: Sessions, runtime: Sto
     filtered = await around(walk, runtime, [(PART, "P-1")], depth=2, relation_ids=[SOURCED_FROM])
     assert nodes(filtered) == [(0, "P-1"), (1, "S-2")]
     assert [link.object_hash for link in filtered.links] == [None]
+    follow = {SUPPLIED_BY: Direction.IN}
+    pinned = await around(walk, runtime, [(SUPPLIER, "S-2")], depth=1, follow=follow)
+    assert nodes(pinned) == [(0, "S-2"), (1, "P-4")]
     missing = await around(walk, runtime, [(PART, "P-404")], depth=2)
     assert missing.records == []
     assert missing.links == []

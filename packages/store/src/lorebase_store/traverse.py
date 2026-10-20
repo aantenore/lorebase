@@ -12,7 +12,7 @@ the Links walked between them: one round trip.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -126,22 +126,27 @@ def neighborhood_sql(
     branch: str,
     direction: Direction,
     relation_ids: Sequence[str] | None,
+    follow: Mapping[str, Direction] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The neighborhood statement and its schema-derived parameters.
+
+    `follow` (Relation id to direction), when given, replaces `direction` and
+    `relation_ids`: each Relation is followed in its own direction only.
 
     Other parameters: `:domain`, `:branch`, `:seed_kinds`, `:seed_keys`, `:depth`,
     `:fanout`, `:max_steps` (Links walked plus seeds) and `:max_nodes`.
     """
-    wanted = None if relation_ids is None else set(relation_ids)
-    relations = [
-        r
-        for r in sorted(schema.relations.values(), key=lambda r: r.id)
-        if wanted is None or r.id in wanted
-    ]
-    out_rels = stored_relation_ids(relations) if direction.outgoing else []
-    in_rels = stored_relation_ids(relations) if direction.incoming else []
-    foreign = foreign_key_relations(relations)
-    foreign_out = foreign if direction.outgoing else []
+    if follow is None:
+        wanted = None if relation_ids is None else set(relation_ids)
+        follow = {
+            r.id: direction for r in schema.relations.values() if wanted is None or r.id in wanted
+        }
+    relations = [r for r in sorted(schema.relations.values(), key=lambda r: r.id) if r.id in follow]
+    outgoing = [r for r in relations if follow[r.id].outgoing]
+    incoming = [r for r in relations if follow[r.id].incoming]
+    out_rels = stored_relation_ids(outgoing)
+    in_rels = stored_relation_ids(incoming)
+    foreign_out = foreign_key_relations(outgoing)
     by_id = {r.id: r for r in relations}
     params: dict[str, Any] = {
         "out_ids": out_rels,
@@ -159,7 +164,7 @@ def neighborhood_sql(
         bool(out_rels),
         bool(in_rels),
         bool(foreign_out),
-        foreign if direction.incoming else [],
+        foreign_key_relations(incoming),
         domain_id,
         branch,
     )
@@ -241,6 +246,7 @@ async def neighborhood(
     depth: int = 2,
     direction: Direction = Direction.BOTH,
     relation_ids: Sequence[str] | None = None,
+    follow: Mapping[str, Direction] | None = None,
     fanout: int | None = None,
     max_nodes: int | None = None,
     max_links: int | None = None,
@@ -248,15 +254,16 @@ async def neighborhood(
 ) -> Neighborhood:
     """Records within `depth` hops of `seeds` (`(kind_id, key)` pairs) and the Links between.
 
-    Caps default to and may not exceed `store.traverse`. Seeds that do not exist are absent
-    from the result.
+    Links of every Relation in `relation_ids` (default: all) are followed in `direction`;
+    `follow` (Relation id to direction) replaces both. Caps default to and may not exceed
+    `store.traverse`. Seeds that do not exist are absent from the result.
     """
     caps = (runtime or default_runtime()).settings.traverse
     seeds = list(dict.fromkeys(seeds))
     _within("seed count", len(seeds), caps.max_seeds)
     nodes_cap = _within("max_nodes", max_nodes or caps.max_nodes, caps.max_nodes)
     links_cap = _within("max_links", max_links or caps.max_links, caps.max_links)
-    sql, params = neighborhood_sql(schema, domain_id, branch, direction, relation_ids)
+    sql, params = neighborhood_sql(schema, domain_id, branch, direction, relation_ids, follow)
     params.update(
         domain=domain_id,
         branch=branch,

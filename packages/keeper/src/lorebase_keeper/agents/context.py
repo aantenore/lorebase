@@ -1,7 +1,8 @@
 """`POST /context`: one call that returns what an agent needs about some Records.
 
 Seeds come from `refs`, a DSL `query` or a lexical `search`. Around them the materialized
-head gives the neighborhood up to `depth` (the existing set-based expansion, `reading.graph`),
+head gives the neighborhood up to `depth` (one statement, `lorebase_store.traverse`, walking
+only Relations between Kinds the caller may read),
 the schema fragment of what is present, the recent changes of those Records and Links (the
 branch history, `mat_history`, which mirrors the first-parent changesets) and the lineage of
 the seed values. The pack is then trimmed to the token budget (`agents.budget`) and rendered
@@ -43,19 +44,20 @@ from lorebase_keeper.agents.pack import (
 )
 from lorebase_keeper.agents.settings import ContextSettings
 from lorebase_keeper.reading.compiler import record_columns
-from lorebase_keeper.reading.graph import neighborhood
 from lorebase_keeper.reading.history import REVISIONS
 from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import invalid, tree_unsupported
 from lorebase_keeper.reading.records import plan_query, require_kind, run_query
-from lorebase_keeper.reading.requests import NeighborhoodRequest, RecordAddress, SearchRequest
+from lorebase_keeper.reading.requests import SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.search import search
-from lorebase_keeper.reading.views import RecordOut, record_out
+from lorebase_keeper.reading.views import RecordOut, link_values, named_values, record_out
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY, PartitionType, parse_partition
 from lorebase_store.models import metadata
+from lorebase_store.reads import Direction
 from lorebase_store.repositories import ProvenanceRepository
 from lorebase_store.repositories.materialized import MAT_RECORDS
+from lorebase_store.traverse import TraversalLimitError, neighborhood
 
 MAT_HISTORY: Table = metadata.tables["mat_history"]
 MARKDOWN = "text/markdown; charset=utf-8"
@@ -87,7 +89,11 @@ def effective(
             "/body/budget_tokens", f"must not exceed {settings.max_budget_tokens}", "limit_exceeded"
         )
     depth = settings.default_depth if request.depth is None else request.depth
-    deepest = min(settings.max_depth, runtime.read.traverse.max_depth)
+    deepest = min(
+        settings.max_depth,
+        runtime.read.traverse.max_depth,
+        runtime.store_settings.traverse.max_depth,
+    )
     if depth > deepest:
         raise invalid("/body/depth", f"must not exceed {deepest}", "limit_exceeded")
     return PackSettings(budget, depth)
@@ -202,48 +208,88 @@ async def surroundings(
 ) -> Surroundings:
     if depth == 0 or not seeds:
         return Surroundings((), (), False)
-    caps = runtime.read.traverse
-    found = await neighborhood(
-        session,
-        runtime,
-        point,
-        NeighborhoodRequest(
-            seeds=[RecordAddress(kind=s.kind, key=s.key) for s in seeds],
+    caps, walk = runtime.read.traverse, runtime.store_settings.traverse
+    try:
+        found = await neighborhood(
+            session,
+            point.domain.id,
+            point.branch,
+            point.schema,
+            [(require_kind(point, s.kind).id, s.key) for s in seeds],
             depth=depth,
-            relations=request.relations,
-            max_nodes=min(len(seeds) + settings.max_neighbors, caps.max_nodes),
-            max_edges=max(min(settings.max_links, caps.max_edges), 1),
-        ),
-    )
+            follow=_follow(point, request.relations),
+            max_nodes=min(len(seeds) + settings.max_neighbors, caps.max_nodes, walk.max_nodes),
+            max_links=max(min(settings.max_links, caps.max_edges, walk.max_links), 1),
+            runtime=runtime.store,
+        )
+    except TraversalLimitError as error:
+        raise invalid("/body", str(error), "limit_exceeded") from None
+    schema = point.schema
     links: dict[tuple[str, str, str], LinkItem] = {}
-    for edge in found.edges:
-        named = point.schema.relation_by_api_name(edge.relation)
-        if named is None:
-            continue
-        relation, direction = named
-        near, far = ref_of(edge.source.kind, edge.source.key), ref_of(edge.to.kind, edge.to.key)
-        source, target = (near, far) if direction is LinkDirection.FORWARD else (far, near)
+    for link in found.links:
+        relation = schema.relations[link.relation_id]
+        source = ref_of(schema.kinds[relation.from_kind].api_name, link.from_key)
+        target = ref_of(schema.kinds[relation.to_kind].api_name, link.to_key)
         links.setdefault(
             (relation.api_name, source, target),
-            LinkItem(relation.api_name, source, target, ordered_values(relation, edge.values)),
+            LinkItem(
+                relation.api_name,
+                source,
+                target,
+                ordered_values(relation, link_values(relation, link.values)),
+            ),
         )
     seed_refs = [ref_of(s.kind, s.key) for s in seeds]
     ordered_links = tuple(links[k] for k in sorted(links))
     depths = _depths(seed_refs, ordered_links)
     seeded = set(seed_refs)
-    neighbors = [
-        NeighborItem(
-            ref=ref_of(node.kind, node.key),
-            kind=node.kind,
-            title=node.title,
-            depth=depths.get(ref_of(node.kind, node.key), depth),
-            values=ordered_values(point.schema.kind_by_api_name(node.kind), node.values),
+    neighbors = []
+    for reached in found.records:
+        record = reached.record
+        kind = schema.kinds[record.kind_id]
+        ref = ref_of(kind.api_name, record.key)
+        if ref in seeded:
+            continue
+        neighbors.append(
+            NeighborItem(
+                ref=ref,
+                kind=kind.api_name,
+                title=record.title,
+                depth=depths.get(ref, depth),
+                values=ordered_values(kind, named_values(kind.attributes, record.values)),
+            )
         )
-        for node in found.nodes
-        if ref_of(node.kind, node.key) not in seeded
-    ]
     neighbors.sort(key=lambda n: (n.depth, n.kind, n.ref))
     return Surroundings(tuple(neighbors), ordered_links, found.truncated)
+
+
+def _follow(point: ReadPoint, names: list[str] | None) -> dict[str, Direction]:
+    """Relations to walk (id to direction): those named (forward or inverse api name; default:
+    all), in the directions named, between Kinds the caller may read."""
+    schema = point.schema
+    wanted: dict[str, set[LinkDirection]] = defaultdict(set)
+    if names is None:
+        for relation in schema.relations.values():
+            wanted[relation.id] = set(LinkDirection)
+    else:
+        for index, name in enumerate(names):
+            found = schema.relation_by_api_name(name)
+            if found is None:
+                raise invalid(f"/body/relations/{index}", f"unknown Relation {name!r}", "unknown")
+            wanted[found[0].id].add(found[1])
+    follow: dict[str, Direction] = {}
+    for relation_id, directions in sorted(wanted.items()):
+        relation = schema.relations[relation_id]
+        ends = (schema.kinds.get(relation.from_kind), schema.kinds.get(relation.to_kind))
+        if any(kind is None or not point.scope.allows(kind.api_name) for kind in ends):
+            continue  # Kinds the caller may not read are neither returned nor walked through
+        if len(directions) == 2:
+            follow[relation_id] = Direction.BOTH
+        else:
+            follow[relation_id] = (
+                Direction.OUT if LinkDirection.FORWARD in directions else Direction.IN
+            )
+    return follow
 
 
 # History and lineage --------------------------------------------------------------------------
