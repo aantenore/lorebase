@@ -3,7 +3,9 @@
 Recomputes what the tree at the branch head says the materialized rows must be and compares:
 the schema partition hash, the set of `(key, object_hash)` of every Kind and Relation
 partition, and the per-partition counts. With `deep=True`, Record and Link values and Record
-titles are also recomputed from the stored objects.
+titles are also recomputed from the stored objects. With `derived=True`, derived values are
+recomputed from the materialized Records and Links (`materialize.derived`, nothing written) and
+compared with the stored ones.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, link_key, relation_partition
 from lorebase_store.commit.schema import load_compiled
+from lorebase_store.materialize.derived import DerivedValues
 from lorebase_store.materialize.rebuild import load_schema
 from lorebase_store.materialize.rows import (
     PartitionType,
@@ -41,6 +44,7 @@ class DivergenceReason(StrEnum):
     HASH_MISMATCH = "hash_mismatch"
     VALUES_MISMATCH = "values_mismatch"
     COUNT_MISMATCH = "count_mismatch"
+    DERIVED_MISMATCH = "derived_mismatch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +90,10 @@ async def verify(
     *,
     runtime: StoreRuntime,
     deep: bool = False,
+    derived: bool = False,
 ) -> VerifyReport:
-    """Compare the materialized head of `branch` with the tree at its head."""
+    """Compare the materialized head of `branch` with the tree at its head (and, with
+    `derived`, its derived values with recomputed ones)."""
     settings = runtime.settings
     batch = settings.materialize.read_batch_rows
     await scope_to_domain(session, domain_id)
@@ -144,7 +150,44 @@ async def verify(
         _compare_hashes(report, partition, expected, {k: v[0] for k, v in actual.items()})
         if deep:
             await _compare_values(report, partition, expected, actual, objects, schema)
+    if derived:
+        await _compare_derived(report, repository, schema, runtime, head.created_at)
     return report
+
+
+async def _compare_derived(
+    report: VerifyReport,
+    repository: MaterializedRepository,
+    schema: Schema,
+    runtime: StoreRuntime,
+    at: Any,
+) -> None:
+    """Recompute every derived value without writing and compare with the stored ones."""
+    settings = runtime.settings.materialize
+    recomputed = DerivedValues(
+        repository,
+        schema,
+        limits=runtime.schema.expression_limits,
+        now=at,
+        batch=settings.read_batch_rows,
+        max_incremental=settings.derivation_max_incremental_records,
+        write=False,
+    )
+    await recomputed.recompute_all()
+    for kind_id in sorted(await repository.record_counts()):
+        async for rows in repository.stream_records(kind_id, batch=settings.read_batch_rows):
+            for row in rows:
+                want = recomputed.expected.get((kind_id, row.key), {})
+                if row.derived != want:
+                    report.add(
+                        Divergence(
+                            DivergenceReason.DERIVED_MISMATCH,
+                            kind_partition(kind_id),
+                            row.key,
+                            expected=want,
+                            actual=row.derived,
+                        )
+                    )
 
 
 async def _materialized(

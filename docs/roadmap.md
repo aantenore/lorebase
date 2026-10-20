@@ -8,8 +8,7 @@ Lorebase is pre-alpha. Nothing is released, no tag exists and interfaces may cha
 
 1. Python client and CLI (M1, T24 and T25).
 2. Lineage and history endpoints, then the 1M-Record performance baseline (M1, T23 and T28).
-3. Expressions accepted in schema change sets, so the CEL path of stored Operations can be used end to end.
-4. Scribe and Source ingestion (M2).
+3. Scribe and Source ingestion (M2).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -42,7 +41,7 @@ Keeper REST API
 - [x] Revisions, branch log and diff
 - [x] Proposals, reviews, required approvals, merge and Conflict resolution API, scoped to what the caller may read
 - [ ] Lineage and history endpoints (a lineage summary is available on Record reads; per-Record lineage and history endpoints are not)
-- [ ] Expressions (CEL): stored Operations evaluate them behind `keeper.operations.expressions_enabled` (off by default), but schema change sets still refuse schemas that use expressions
+- [x] Expressions (CEL) end to end: schema change sets type check them (`schema.expressions_enabled`), Keeper executes custom Operations with them and the materializer recomputes `expression` and `aggregate` Derivations
 
 Clients and operations
 
@@ -76,7 +75,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
 - [ ] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP
-- [ ] Custom Operations with CEL, review policies, outbox and webhooks (the executor evaluates CEL and review policies behind a setting, see M1; outbox and webhooks are not built)
+- [ ] Custom Operations with CEL, review policies, outbox and webhooks (CEL and review policies work, see M1; outbox and webhooks are not built)
 - [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (Kind-scoped grants on reads are already enforced)
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals
@@ -93,7 +92,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [ ] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles for local models and a LiteLLM proxy
 - [ ] Extraction Proposal items and evidence Review UI
 - [ ] Embedding jobs and hybrid search (the read path already ranks stored vectors by caller-supplied query vectors; nothing computes embeddings)
-- [ ] Derivations: expression, aggregate and path
+- [ ] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path is not)
 
 ## M5: Enterprise hardening and 1.0
 

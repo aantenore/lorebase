@@ -135,45 +135,27 @@ curl -s -X POST http://localhost:8080/api/v1/domains/supply/branches \
   -d '{"name": "work"}'
 ```
 
-The schema of the sample Domain has two Operations and one Derivation written in CEL. Expressions
-are not enabled yet, so Keeper refuses them (the `keeper.operations` setting
-`skip_expression_preconditions` only skips CEL preconditions when an Operation runs, it does not
-make schemas with expressions valid). You can see the refusal with the validate endpoint, which
-writes nothing:
+The schema of the sample Domain has two Operations (`flag_supplier_risk`, `approve_contract`)
+and two Derivations (`Part.supplier_count`, `Part.single_sourced`); the Operations and
+`single_sourced` are written in CEL. Expressions are type checked against the schema when it is
+applied (`schema.expressions_enabled`, on by default). Check it first with the validate
+endpoint, which writes nothing:
 
 ```bash
 curl -s -X POST 'http://localhost:8080/api/v1/domains/supply/schema:validate?branch=work' \
   -H 'Content-Type: text/yaml' --data-binary @examples/supply/schema.yaml
 ```
 
-The answer has `"valid":false` and three `schema.expressions_disabled` issues. Strip those
-elements into a copy of the schema:
-
-```bash
-uv run python - <<'EOF'
-import pathlib
-
-import yaml
-
-doc = yaml.safe_load(pathlib.Path("examples/supply/schema.yaml").read_text())
-for name in ("flag_supplier_risk", "approve_contract"):
-    del doc["operations"][name]
-del doc["derivations"]["single_sourced"]
-del doc["kinds"]["Part"]["attributes"]["single_sourced"]
-pathlib.Path("/tmp/supply-schema.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
-EOF
-```
-
-Apply it to `work` as one schema change set (a YAML body is the full schema document; options
-go in the query string):
+The answer has `"valid":true`. Apply it to `work` as one schema change set (a YAML body is the
+full schema document; options go in the query string):
 
 ```bash
 curl -s -X POST 'http://localhost:8080/api/v1/domains/supply/branches/work/schema/changes?message=Apply%20supply%20schema' \
-  -H 'Content-Type: text/yaml' --data-binary @/tmp/supply-schema.yaml
+  -H 'Content-Type: text/yaml' --data-binary @examples/supply/schema.yaml
 ```
 
-The answer is `"status":"committed"` with the new Revision and 18 changes (the Domain, six
-Kinds, seven Relations, a Trait, a Derivation and two Sources). Read the schema back:
+The answer is `"status":"committed"` with the new Revision and 21 changes (the Domain, six
+Kinds, seven Relations, a Trait, two Derivations, two Operations and two Sources). Read the schema back:
 
 ```bash
 curl -s 'http://localhost:8080/api/v1/domains/supply/schema?branch=work&format=yaml'
@@ -181,9 +163,12 @@ curl -s 'http://localhost:8080/api/v1/domains/supply/schema?branch=work&format=y
 
 ## 7. Import the sample data
 
-Every write goes through an Operation. The built-in `import_records` and `import_links`
-Operations take rows keyed by Attribute api name; booleans must be JSON booleans and Link rows
-use `from` and `to`. This script posts the CSV files of `examples/supply/data` to the `work`
+Every write goes through an Operation. The built-in `import_records`, `import_links` and
+`import_batch` Operations take rows keyed by Attribute api name; booleans must be JSON booleans
+and Link rows use `from` and `to`. A Record row may carry `links`, a map from a Relation name to
+the key (or keys) at the other end: `Contract`, `PurchaseOrder` and `RiskFlag` need their
+`with_supplier`, `for_part` and `flags` Link to exist, so each one is committed in the same
+Revision as its Links. This script posts the CSV files of `examples/supply/data` to the `work`
 branch (it is safe to run twice: imports upsert):
 
 ```bash
@@ -215,11 +200,39 @@ def rows(name):
         ]
 
 
+def with_links(name, key, *relations):
+    """Record rows with the targets of their Links of `relations`."""
+    targets = {r: {} for r in relations}
+    for relation in relations:
+        for link in rows(relation):
+            targets[relation].setdefault(link["from"], []).append(link["to"])
+    return [
+        {**row, "links": {r: targets[r][row[key]] for r in relations if row[key] in targets[r]}}
+        for row in rows(name)
+    ]
+
+
 for kind, file in (("Supplier", "supplier"), ("Part", "part"), ("Plant", "plant")):
     result = execute("import_records", {"kind": kind, "rows": rows(file)})
     print(kind, result["status"], result["edit_count"], "edits")
-result = execute("import_links", {"relation": "supplied_by", "rows": rows("supplied_by")})
-print("supplied_by", result["status"], result["edit_count"], "edits")
+contracts = with_links("contract", "contract_number", "with_supplier")
+result = execute("import_records", {"kind": "Contract", "rows": contracts})
+print("Contract", result["status"], result["edit_count"], "edits")
+orders = with_links("purchase_order", "po_number", "for_part", "delivered_to")
+result = execute("import_records", {"kind": "PurchaseOrder", "rows": orders})
+print("PurchaseOrder", result["status"], result["edit_count"], "edits")
+result = execute(
+    "import_batch",
+    {
+        "records": [{"kind": "RiskFlag", **row} for row in rows("risk_flag")],
+        "links": [
+            {"relation": relation, **row}
+            for relation in ("flags", "supplied_by", "stocked_at")
+            for row in rows(relation)
+        ],
+    },
+)
+print("RiskFlag and Links", result["status"], result["edit_count"], "edits")
 EOF
 ```
 
@@ -227,7 +240,9 @@ EOF
 Supplier committed 30 edits
 Part committed 40 edits
 Plant committed 20 edits
-supplied_by committed 48 edits
+Contract committed 50 edits
+PurchaseOrder committed 150 edits
+RiskFlag and Links committed 136 edits
 ```
 
 Add `"dry_run": true` next to `"branch"` to compute the edits and violations without committing.
@@ -276,6 +291,38 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml exec -T pos
 
 You should see 30 Suppliers, 40 Parts and 20 Plants on `work`, and `S-1001 | Kavsen Alloys Sp. z o.o.`.
 
+### Derived values and custom Operations
+
+`Part.supplier_count` and `Part.single_sourced` are computed in the materialized head on every
+commit (never stored in the Revision tree) and read like any other value:
+
+```bash
+curl -s 'http://localhost:8080/api/v1/domains/supply/kinds/Part/records/P-10001?branch=work'
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/query \
+  -H 'Content-Type: application/json' \
+  -d '{"branch": "work", "kind": "Part",
+       "where": {"attr": "single_sourced", "op": "eq", "value": true}, "limit": 5}'
+```
+
+The custom Operations of the schema run with their CEL preconditions, steps and review policy
+(`keeper.operations.expressions_enabled`, on by default). Flag a supplier, try a terminated
+one (`422 precondition-failed`, with the expression and its position) and approve a small draft
+contract. A `critical` flag or a contract above 500000 (such as `C-3003`) answers
+`409 review-required`: its review policy sends the edits to a Proposal.
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/operations/flag_supplier_risk/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"branch": "work", "parameters": {"supplier": "S-1001", "severity": "high",
+       "reason": "Two late deliveries in March"}}'
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/operations/flag_supplier_risk/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"branch": "work", "parameters": {"supplier": "S-1019", "severity": "low", "reason": "x"}}'
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/operations/approve_contract/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"branch": "work", "parameters": {"contract": "C-3015"}}'
+```
+
 ## 8. Web app in mock mode
 
 The web app talks to a `KeeperApi` interface with two adapters. In `mock` mode it serves
@@ -310,10 +357,7 @@ These do not exist yet; the order follows the [M1 plan](plan/m1.md).
 
 - **Lineage and history API** (T23, the per-Record lineage summary is already on Record reads),
   **Python client** (T24) and **CLI** (T25).
-- **Herald, the MCP server** (M3), and expressions in schemas: the CEL engine exists and stored
-  Operations evaluate it behind `keeper.operations.expressions_enabled`, but schema change sets
-  still refuse schemas that use expressions; custom Operations are M3 and Derivations M4 on the
-  roadmap.
+- **Herald, the MCP server** (M3).
 - Source syncs from CSV or Postgres (`approved.suppliers`, `erp.purchase_orders` in the sample
   schema are declared but nothing runs them), document extraction and semantic search: M2 and
   M4.
