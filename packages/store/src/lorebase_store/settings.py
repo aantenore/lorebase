@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, SecretStr
 
 from lorebase_platform.secrets import SecretValue
@@ -138,6 +140,79 @@ class MaterializeSettings(SectionModel):
     )
 
 
+class GcSettings(SectionModel):
+    """Garbage collection of unreachable Revisions, tree nodes and objects (design 6.13)."""
+
+    grace_seconds: int = Field(
+        default=3600,
+        ge=0,
+        description="Revisions younger than this are kept with everything they reach, even when "
+        "no ref reaches them. Protects commits that land while a collection runs.",
+    )
+    mark_batch: int = Field(
+        default=1000, ge=1, description="Tree node hashes read per query while marking."
+    )
+    sweep_batch_rows: int = Field(
+        default=5000, ge=1, description="Rows deleted per transaction while sweeping."
+    )
+    guard_branch_locks: bool = Field(
+        default=True,
+        description="Take every branch lock of the Domain (without waiting) around each sweep "
+        "batch, so no commit that reuses a stored object is in flight while it is deleted. "
+        "Off: only the grace period protects commits.",
+    )
+    max_guarded_branches: int = Field(
+        default=500,
+        ge=1,
+        description="Largest number of refs whose locks one sweep batch takes; a Domain with "
+        "more refs needs a larger value (mind max_locks_per_transaction) or guard_branch_locks "
+        "off.",
+    )
+    guard_wait_seconds: float = Field(
+        default=60,
+        gt=0,
+        description="How long a sweep batch waits for commits holding a branch lock before the "
+        "collection stops; progress already made is kept.",
+    )
+    guard_retry_ms: int = Field(
+        default=200, ge=1, description="Pause between attempts to take the branch locks."
+    )
+
+
+class JobSettings(SectionModel):
+    """Job queue workers (design 7.4): claiming, retries and stale locks."""
+
+    max_attempts: int = Field(
+        default=3, ge=1, description="Runs of a job before it is marked failed."
+    )
+    retry_delay_seconds: float = Field(
+        default=60, ge=0, description="Delay before a failed job is run again."
+    )
+    stale_after_seconds: float = Field(
+        default=3600,
+        gt=0,
+        description="A running job locked for longer than this is assumed lost and requeued.",
+    )
+
+
+class BundleSettings(SectionModel):
+    """Domain export and import bundles (see docs/operations.md)."""
+
+    batch_rows: int = Field(
+        default=5000, ge=1, description="Rows read, written or verified per batch."
+    )
+    compression: Literal["gzip", "none"] = Field(
+        default="gzip", description="Compression of the bundle's .jsonl files."
+    )
+    compression_level: int = Field(
+        default=6, ge=1, le=9, description="gzip level (1 fastest, 9 smallest)."
+    )
+    verify_after_import: bool = Field(
+        default=True,
+        description="Verify every rebuilt branch against its tree after an import.",
+    )
+
+
 class StoreSettings(SectionModel):
     """Schema shape, bulk writes, node cache, commits and materialization."""
 
@@ -147,6 +222,9 @@ class StoreSettings(SectionModel):
     nodes: NodeSettings = Field(default_factory=NodeSettings)
     commit: CommitSettings = Field(default_factory=CommitSettings)
     materialize: MaterializeSettings = Field(default_factory=MaterializeSettings)
+    gc: GcSettings = Field(default_factory=GcSettings)
+    jobs: JobSettings = Field(default_factory=JobSettings)
+    bundle: BundleSettings = Field(default_factory=BundleSettings)
 
 
 register_section(DATABASE_SECTION, DatabaseSettings, env_aliases=ENV_ALIASES)

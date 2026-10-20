@@ -222,3 +222,20 @@ store:
     text_search_config: simple   # Postgres text search configuration of Record search vectors
     read_batch_rows: 5000        # rows or object bodies per query in rebuild and verification
     verify_max_divergences: 1000 # divergences listed by a verification report
+  gc:                            # garbage collection (docs/operations.md)
+    grace_seconds: 3600          # Revisions younger than this are kept with all they reach
+    mark_batch: 1000             # tree node hashes per query while marking
+    sweep_batch_rows: 5000       # rows deleted per transaction while sweeping
+    guard_branch_locks: true     # hold every branch lock (try-lock) around each sweep batch
+    max_guarded_branches: 500    # refs one sweep batch may lock; more refs need a larger value
+    guard_wait_seconds: 60       # wait for in-flight commits before the collection stops
+    guard_retry_ms: 200          # pause between lock attempts
+  jobs:                          # job queue workers
+    max_attempts: 3              # runs of a job before it is marked failed
+    retry_delay_seconds: 60      # delay before a failed job runs again
+    stale_after_seconds: 3600    # running jobs locked longer than this are requeued
+  bundle:                        # Domain export and import (docs/operations.md)
+    batch_rows: 5000             # rows read, written or verified per batch
+    compression: gzip            # gzip | none, applied to the .jsonl files
+    compression_level: 6         # gzip level 1-9
+    verify_after_import: true    # verify rebuilt branches against their trees
