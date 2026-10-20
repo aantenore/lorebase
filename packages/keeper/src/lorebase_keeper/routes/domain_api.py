@@ -18,6 +18,7 @@ from lorebase_keeper.routes import (
     read,
     revisions,
     schema,
+    schema_inference,
 )
 
 
@@ -26,6 +27,7 @@ def domain_routers() -> list[APIRouter]:
     return [
         domains.router,
         schema.router,
+        schema_inference.router,
         operations.router,
         read.router,
         proposals.router,

@@ -9,6 +9,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
+from lorebase_core.infer import InferenceOptions
 from lorebase_core.tree import DEFAULT_LEAF_SIZE
 from lorebase_platform.settings import SectionModel
 
@@ -137,4 +138,32 @@ class ProposalSettings(SectionModel):
     )
     max_resolutions: int = Field(
         default=1000, ge=1, description="Resolutions accepted by one bulk request."
+    )
+
+
+class SchemaInferenceSettings(SectionModel):
+    """Schema inference from uploaded CSV files or Postgres tables (design 9.1, tier 0).
+
+    Uploads are also bounded by `keeper.limits.max_request_body_bytes`.
+    """
+
+    max_files: int = Field(default=50, ge=1, description="Files accepted by one request.")
+    max_file_bytes: int = Field(
+        default=1_048_576, ge=1, description="Largest file accepted, in bytes (413 above)."
+    )
+    max_total_bytes: int = Field(
+        default=1_048_576, ge=1, description="Largest sum of file sizes, in bytes (413 above)."
+    )
+    file_suffixes: tuple[str, ...] = Field(
+        default=(".csv", ".tsv", ".txt"), min_length=1, description="Accepted file name suffixes."
+    )
+    allowed_sources: tuple[str, ...] = Field(
+        default=(),
+        description="Secret references (secret://env/NAME, secret://file/PATH) holding Postgres "
+        "URLs that callers may name as sources. Empty: Postgres inference is disabled.",
+    )
+    max_issues: int = Field(default=500, ge=1, description="Issues listed in one response.")
+    options: InferenceOptions = Field(
+        default_factory=InferenceOptions,
+        description="Thresholds and naming rules; a request may override some of them.",
     )

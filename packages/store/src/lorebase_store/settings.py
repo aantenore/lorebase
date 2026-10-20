@@ -4,7 +4,8 @@
   environment alias `LOREBASE_DB_DSN` sets `database.dsn` and `LOREBASE_DB_READ_DSN` sets
   `database.read_dsn`; both are handled as secrets.
 - `store`: physical layout and vector storage (read by the initial migration), bulk writes,
-  tree node caching, commits and materialization (read at runtime).
+  tree node caching, commits, materialization and the profilers of schema inference (read
+  at runtime).
 """
 
 from __future__ import annotations
@@ -247,8 +248,54 @@ class BundleSettings(SectionModel):
     )
 
 
+class CsvProfilingSettings(SectionModel):
+    """Reading CSV and TSV files for schema inference."""
+
+    sample_rows: int = Field(
+        default=10000, ge=1, description="Rows kept per file; every row is still counted."
+    )
+    sampling: Literal["head", "reservoir"] = Field(
+        default="reservoir",
+        description="head keeps the first rows; reservoir keeps a uniform, seeded sample.",
+    )
+    seed: int = Field(default=0, description="Seed of reservoir sampling (same file, same rows).")
+    encodings: tuple[str, ...] = Field(
+        default=("utf-8-sig", "cp1252"),
+        min_length=1,
+        description="Encodings tried in order; the first that decodes the file wins.",
+    )
+    sniff_bytes: int = Field(
+        default=65536, ge=1024, description="Leading bytes used to detect the delimiter."
+    )
+    delimiters: str = Field(
+        default=",;\t|", min_length=1, description="Delimiters the dialect sniffer may pick."
+    )
+    max_columns: int = Field(default=500, ge=1, description="Wider files are refused.")
+
+
+class PostgresProfilingSettings(SectionModel):
+    """Reading Postgres tables for schema inference: catalog reflection plus sampled SELECTs."""
+
+    sample_rows: int = Field(default=10000, ge=1, description="Rows read per table (LIMIT).")
+    max_tables: int = Field(default=200, ge=1, description="Tables profiled per request.")
+    statement_timeout_ms: int = Field(
+        default=15000, ge=1, description="statement_timeout of each sampling query."
+    )
+    exact_row_count: bool = Field(
+        default=False,
+        description="count(*) each table; false uses the planner estimate (pg_class.reltuples).",
+    )
+
+
+class ProfilingSettings(SectionModel):
+    """Profilers that feed schema inference (design 9.1)."""
+
+    csv: CsvProfilingSettings = Field(default_factory=CsvProfilingSettings)
+    postgres: PostgresProfilingSettings = Field(default_factory=PostgresProfilingSettings)
+
+
 class StoreSettings(SectionModel):
-    """Schema shape, bulk writes, node cache, commits and materialization."""
+    """Schema shape, bulk writes, node cache, commits, materialization and profiling."""
 
     layout: LayoutSettings = Field(default_factory=LayoutSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
@@ -259,6 +306,7 @@ class StoreSettings(SectionModel):
     gc: GcSettings = Field(default_factory=GcSettings)
     jobs: JobSettings = Field(default_factory=JobSettings)
     bundle: BundleSettings = Field(default_factory=BundleSettings)
+    profiling: ProfilingSettings = Field(default_factory=ProfilingSettings)
 
 
 register_section(DATABASE_SECTION, DatabaseSettings, env_aliases=ENV_ALIASES)

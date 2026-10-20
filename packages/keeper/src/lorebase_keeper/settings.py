@@ -18,6 +18,7 @@ from lorebase_keeper.services.config import (
     OperationSettings,
     ProposalSettings,
     SchemaChangeSettings,
+    SchemaInferenceSettings,
 )
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
@@ -158,6 +159,7 @@ class KeeperSettings(SectionModel):
     domains: DomainSettings = Field(default_factory=DomainSettings)
     branches: BranchSettings = Field(default_factory=BranchSettings)
     schema_changes: SchemaChangeSettings = Field(default_factory=SchemaChangeSettings)
+    schema_inference: SchemaInferenceSettings = Field(default_factory=SchemaInferenceSettings)
     operations: OperationSettings = Field(default_factory=OperationSettings)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
 
