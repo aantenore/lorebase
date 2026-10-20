@@ -1,0 +1,21 @@
+plant_code,name,plant_type,country,city,capacity_per_month
+PL-01,Milan Machining,machining,IT,Milan,2200
+PL-02,Dresden Distribution Hub,distribution_hub,DE,Dresden,26600
+PL-03,Lyon Assembly,assembly,FR,Lyon,17200
+PL-04,Valencia Machining,machining,ES,Valencia,21300
+PL-05,Wroclaw Assembly,assembly,PL,Wroclaw,37800
+PL-06,Ostrava Machining,machining,CZ,Ostrava,17100
+PL-07,Turin Assembly,assembly,IT,Turin,30000
+PL-08,Stuttgart Distribution Hub,distribution_hub,DE,Stuttgart,11100
+PL-09,Lyon Distribution Hub,distribution_hub,FR,Lyon,28500
+PL-10,Zaragoza Distribution Hub,distribution_hub,ES,Zaragoza,27300
+PL-11,Poznan Warehouse,warehouse,PL,Poznan,28900
+PL-12,Ostrava Assembly,assembly,CZ,Ostrava,8700
+PL-13,Bologna Warehouse,warehouse,IT,Bologna,34500
+PL-14,Dresden Assembly,assembly,DE,Dresden,26200
+PL-15,Nantes Warehouse,warehouse,FR,Nantes,14500
+PL-16,Valencia Assembly,assembly,ES,Valencia,3300
+PL-17,Poznan Assembly,assembly,PL,Poznan,3800
+PL-18,Ostrava Assembly,assembly,CZ,Ostrava,8700
+PL-19,Milan Machining,machining,IT,Milan,15400
+PL-20,Hamburg Distribution Hub,distribution_hub,DE,Hamburg,16900

@@ -1,0 +1,21 @@
+key,severity,reason,raised_at,raised_by
+01JZ72C4HR2QRFWCVF58JF4E0G,high,Audit found open critical findings on process control.,2025-07-03T02:38:11.000000Z,analyst-4
+01JZA84NH8NRV3HQWNMETSSK2G,low,Two late delivery notices on recent orders.,2025-07-04T08:16:41.000000Z,analyst-1
+01JZB0C3ZR46JSEFDMMFMR8NHH,low,Minor quality deviation reported at incoming inspection.,2025-07-04T15:20:11.000000Z,analyst-3
+01JZE082SGC7Y04TYNKVS9W1EA,medium,On-time delivery fell below 85 percent over the last quarter.,2025-07-05T19:15:42.000000Z,analyst-3
+01JZJ74240ZNP2MMMS3TJA29VJ,medium,Repeated packaging damage on inbound shipments.,2025-07-07T10:32:48.000000Z,analyst-2
+01K1MNPX2GA358G5RC9RAN4PX6,medium,Repeated packaging damage on inbound shipments.,2025-08-02T05:57:38.000000Z,analyst-1
+01K2B8EB6GFKKG4NKDJPP6T1W5,low,Minor quality deviation reported at incoming inspection.,2025-08-11T00:28:18.000000Z,analyst-1
+01K3118TYRXNQ5M46QCM2D3V0X,medium,Price increase request outside the contract index clause.,2025-08-19T11:26:15.000000Z,analyst-4
+01K3759AP0VB70YMDHJS8XSDJS,medium,Repeated packaging damage on inbound shipments.,2025-08-21T20:31:52.000000Z,analyst-4
+01K3BEBE50KNHR2X4KFBF314T8,medium,Price increase request outside the contract index clause.,2025-08-23T12:27:16.000000Z,analyst-2
+01K3J2MKZRWQSZ357CP39PP22K,medium,On-time delivery fell below 85 percent over the last quarter.,2025-08-26T02:17:15.000000Z,analyst-2
+01K44DQ8V00AXNEYAS1HGETF5Z,medium,On-time delivery fell below 85 percent over the last quarter.,2025-09-02T05:17:16.000000Z,analyst-1
+01K7CVHP4GT4WXV017XPSAB1KS,high,Capacity constraint announced for the next two quarters.,2025-10-12T18:39:54.000000Z,analyst-2
+01K84ZF1G0DN7VW1ABEE7V7NRR,medium,On-time delivery fell below 85 percent over the last quarter.,2025-10-22T03:30:08.000000Z,analyst-3
+01KC628K003B67M9YHQRGCQDDA,low,Minor quality deviation reported at incoming inspection.,2025-12-11T06:41:04.000000Z,analyst-2
+01KCK0GMBGSRSSB3KFRNHAH00D,medium,Price increase request outside the contract index clause.,2025-12-16T07:20:38.000000Z,analyst-3
+01KDMNHN707M3Q1N0C8QBQ1GTF,medium,Price increase request outside the contract index clause.,2025-12-29T09:03:08.000000Z,analyst-3
+01KDYF9Z8874KFCH82CBFQX355,low,Minor quality deviation reported at incoming inspection.,2026-01-02T04:26:29.000000Z,analyst-2
+01KEJC9030F8W777CWVQ7QE115,low,Minor quality deviation reported at incoming inspection.,2026-01-09T21:58:20.000000Z,analyst-4
+01KES3K6DG02TKG3DKJZDDYZDT,high,Audit found open critical findings on process control.,2026-01-12T12:41:18.000000Z,analyst-3

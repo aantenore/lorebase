@@ -1,0 +1,41 @@
+part_number,name,category,summary,unit_cost,weight_kg,lifecycle,hazardous
+P-10001,Tapered roller bearing 6305,bearing,Stock item for pump assemblies; tapered roller bearing 6305.,10.79,1.436,active,false
+P-10002,Flat washer M10x60,fastener,Stock item for gearboxes; flat washer M10x60.,0.34,0.032,active,false
+P-10003,Mechanical seal 40x62x8,seal,Stock item for gearboxes; mechanical seal 40x62x8.,33.45,0.129,phase_out,false
+P-10004,Flange gasket DN50 PN40,gasket,Stock item for pump assemblies; flange gasket DN50 PN40.,39.55,0.310,active,false
+P-10005,Solenoid valve DN15,valve,Stock item for pump assemblies; solenoid valve DN15.,276.98,4.858,active,false
+P-10006,Air filter cartridge F-120,filter,Stock item for packaging lines; air filter cartridge F-120.,58.70,2.370,obsolete,false
+P-10007,Temperature probe 0-250 bar,sensor,Stock item for robot joints; temperature probe 0-250 bar.,87.55,0.494,active,false
+P-10008,Gear motor 11 kW,motor,Stock item for hydraulic presses; gear motor 11 kW.,1182.74,19.007,active,false
+P-10009,Pneumatic tube DN16 1.5 m,hose,Stock item for robot joints; pneumatic tube DN16 1.5 m.,66.35,4.119,active,false
+P-10010,Needle roller bearing 6305,bearing,Stock item for hydraulic presses; needle roller bearing 6305.,40.48,1.896,active,false
+P-10011,Pressure transmitter M12 PNP,sensor,Stock item for gearboxes; pressure transmitter M12 PNP.,112.72,0.877,active,false
+P-10012,Temperature probe PT100 150 mm,sensor,Stock item for pump assemblies; temperature probe PT100 150 mm.,154.69,0.315,obsolete,false
+P-10013,Needle roller bearing NK25,bearing,Stock item for packaging lines; needle roller bearing NK25.,25.62,1.170,active,false
+P-10014,Flat washer M6x30,fastener,Stock item for hydraulic presses; flat washer M6x30.,1.37,0.119,active,false
+P-10015,Radial shaft seal 25x42x7,seal,Stock item for conveyor drives; radial shaft seal 25x42x7.,24.11,0.193,active,false
+P-10016,Servo motor 11 kW,motor,Stock item for gearboxes; servo motor 11 kW.,2022.20,51.304,active,false
+P-10017,Pressure transmitter M18 NO,sensor,Stock item for compressor stations; pressure transmitter M18 NO.,226.34,0.742,obsolete,false
+P-10018,Air filter cartridge 10 micron,filter,Stock item for compressor stations; air filter cartridge 10 micron.,119.61,0.661,active,false
+P-10019,Induction motor 0.75 kW,motor,Stock item for compressor stations; induction motor 0.75 kW.,882.39,39.401,active,false
+P-10020,Hydraulic filter element F-120,filter,Stock item for packaging lines; hydraulic filter element F-120.,136.46,2.502,active,false
+P-10021,Servo motor 0.75 kW,motor,Stock item for robot joints; servo motor 0.75 kW.,1791.57,44.551,active,false
+P-10022,Pressure relief valve DN15,valve,Stock item for gearboxes; pressure relief valve DN15.,207.35,4.800,active,false
+P-10023,Needle roller bearing NK25,bearing,Stock item for compressor stations; needle roller bearing NK25.,37.59,2.197,active,false
+P-10024,Flange gasket DN50 PN40,gasket,Stock item for packaging lines; flange gasket DN50 PN40.,43.77,0.048,active,false
+P-10025,O-ring 40x62x8,seal,Stock item for packaging lines; o-ring 40x62x8.,33.13,0.145,active,false
+P-10026,Hex bolt M6x30,fastener,Stock item for conveyor drives; hex bolt M6x30.,1.80,0.070,active,false
+P-10027,Flange gasket DN150 PN25,gasket,Stock item for machine tool spindles; flange gasket DN150 PN25.,33.50,0.090,active,false
+P-10028,Radial shaft seal 25x42x7,seal,Stock item for machine tool spindles; radial shaft seal 25x42x7.,24.01,0.081,active,false
+P-10029,Needle roller bearing 6001,bearing,Stock item for robot joints; needle roller bearing 6001.,45.94,1.564,active,false
+P-10030,Solenoid valve DN40,valve,Stock item for pump assemblies; solenoid valve DN40.,371.68,0.624,active,false
+P-10031,O-ring FKM 90 18x2.5,seal,Stock item for robot joints; o-ring FKM 90 18x2.5.,14.25,0.065,obsolete,false
+P-10032,O-ring NBR 70 30x3,seal,Stock item for gearboxes; o-ring NBR 70 30x3.,16.08,0.253,active,false
+P-10033,Needle roller bearing NK25,bearing,Stock item for machine tool spindles; needle roller bearing NK25.,17.87,0.951,active,false
+P-10034,Oil filter H-360,filter,Stock item for packaging lines; oil filter H-360.,146.56,0.620,active,false
+P-10035,Oil filter 10 micron,filter,Stock item for compressor stations; oil filter 10 micron.,17.10,2.942,active,true
+P-10036,Hex bolt M16,fastener,Stock item for machine tool spindles; hex bolt M16.,1.93,0.069,active,false
+P-10037,Air filter cartridge H-360,filter,Stock item for machine tool spindles; air filter cartridge H-360.,55.48,2.013,active,false
+P-10038,Oil filter 25 micron,filter,Stock item for compressor stations; oil filter 25 micron.,34.67,1.810,phase_out,false
+P-10039,Air filter cartridge 10 micron,filter,Stock item for robot joints; air filter cartridge 10 micron.,80.45,0.487,active,false
+P-10040,Gear motor 2.2 kW,motor,Stock item for packaging lines; gear motor 2.2 kW.,1015.73,7.704,active,false
