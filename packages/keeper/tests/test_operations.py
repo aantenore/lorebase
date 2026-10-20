@@ -29,6 +29,7 @@ from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.services.config import OperationSettings
 from lorebase_keeper.services.operation_catalog import (
+    IMPORT_BATCH,
     IMPORT_LINKS,
     IMPORT_RECORDS,
     PARAMETER_INVALID,
@@ -36,6 +37,7 @@ from lorebase_keeper.services.operation_catalog import (
     PARAMETER_UNKNOWN,
     RECORD_EXISTS,
     Action,
+    batches,
     bind,
     builtin_definition,
     edit_document,
@@ -191,6 +193,89 @@ def test_import_rows_locate_bad_rows(schema: Schema) -> None:
         max_rows=10,
     )
     assert isinstance(linked.changes[0], LinkUpsert)
+
+
+CONTRACT_ROW: dict[str, JsonValue] = {
+    "contract_number": "C-3001",
+    "title": "Seals 2026",
+    "status": "draft",
+    "start_date": "2026-01-01",
+}
+
+
+def test_import_records_with_links(schema: Schema) -> None:
+    definition = builtin_definition(schema, IMPORT_RECORDS)
+    assert definition is not None
+    rows: list[JsonValue] = [
+        {**CONTRACT_ROW, "links": {"with_supplier": "S-1001"}},
+        {**CONTRACT_ROW, "contract_number": "C-3002"},
+        {**CONTRACT_ROW, "contract_number": "C-3003", "links": {"with_supplier": ["S-2"]}},
+    ]
+    plan = import_rows(schema, definition, {"kind": "Contract", "rows": rows}, max_rows=10)
+    assert plan.findings == []
+    assert plan.units == [1, 2, 2]  # Records without Links first
+    record, link = plan.changes[1:3]
+    assert isinstance(record, RecordUpsert)
+    assert isinstance(link, LinkUpsert)
+    assert (record.record.key, link.link.from_key, link.link.to_key) == (
+        "C-3001",
+        "C-3001",
+        "S-1001",
+    )
+    parts = {**SUPPLIER_ROW, "links": {"supplies": [{"key": "P-1", "is_primary": True}]}}
+    inverse = import_rows(schema, definition, {"kind": "Supplier", "rows": [parts]}, max_rows=10)
+    [_, supplied] = inverse.changes
+    assert isinstance(supplied, LinkUpsert)
+    assert (supplied.link.from_key, supplied.link.to_key) == ("P-1", "S-1001")
+    bad = {**CONTRACT_ROW, "links": {"flags": "S-1", "with_supplier": {"key": None}}}
+    refused = import_rows(schema, definition, {"kind": "Contract", "rows": [bad]}, max_rows=10)
+    assert [f.path for f in refused.findings] == [
+        ("parameters", "rows", 0, "links", "flags"),
+        ("parameters", "rows", 0, "links", "with_supplier", "to"),
+    ]
+    over = import_rows(schema, definition, {"kind": "Contract", "rows": rows}, max_rows=4)
+    assert over.findings[0].code == "parameter.limit_exceeded"
+
+
+def test_import_batch_groups_links_with_their_records(schema: Schema) -> None:
+    definition = builtin_definition(schema, IMPORT_BATCH)
+    assert definition is not None
+    assert definition.is_import
+    parameters: dict[str, JsonValue] = {
+        "records": [
+            {"kind": "Contract", **CONTRACT_ROW},
+            {"kind": "Supplier", **SUPPLIER_ROW},
+        ],
+        "links": [
+            {"relation": "with_supplier", "from": "C-3001", "to": "S-1001"},
+            {"relation": "supplied_by", "from": "P-1", "to": "S-9"},
+        ],
+    }
+    plan = import_rows(schema, definition, parameters, max_rows=10)
+    assert plan.findings == []
+    assert plan.units == [1, 2, 1]  # lone Records, Records with Links, lone Links
+    assert [type(c).__name__ for c in plan.changes] == [
+        "RecordUpsert",
+        "RecordUpsert",
+        "LinkUpsert",
+        "LinkUpsert",
+    ]
+    changes = plan.changes
+    assert batches(changes, plan.units, 3) == [changes[:3], changes[3:]]
+    assert batches(changes, plan.units, 1) == [changes[:1], changes[1:3], changes[3:]]
+    assert batches(changes, [], 2) == [changes[:2], changes[2:]]
+    unknown = import_rows(
+        schema,
+        definition,
+        {"records": [{"kind": "Nope"}], "links": [{"relation": "supplies"}]},
+        max_rows=10,
+    )
+    assert [f.path for f in unknown.findings] == [
+        ("parameters", "records", 0, "kind"),
+        ("parameters", "links", 0, "relation"),
+    ]
+    empty = import_rows(schema, definition, {}, max_rows=10)
+    assert empty.findings[0].code == PARAMETER_REQUIRED
 
 
 DISABLED = OperationSettings(expressions_enabled=False)

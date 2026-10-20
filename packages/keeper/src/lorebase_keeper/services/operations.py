@@ -16,7 +16,8 @@
        `lorebase_core.expr`, loading from the materialized head the Records `record()` reads
        and the Links `links()` follows)
     -> dry run: commit inside a transaction that is rolled back; report edits and violations
-    -> commit (imports in batches, one Revision each), then the invocation record and an
+    -> commit (imports in batches of whole units, a Record with its Links, one Revision
+       each), then the invocation record and an
        `operation.invoke` audit entry in the transaction of the last Revision.
 
 Every Revision has origin `operation` (or `import` for bulk imports) with the invocation id as
@@ -93,6 +94,7 @@ from lorebase_keeper.services.operation_catalog import (
     BuiltinOperation,
     Parameter,
     RecordReader,
+    batches,
     bind,
     builtin_definition,
     edit_document,
@@ -100,7 +102,6 @@ from lorebase_keeper.services.operation_catalog import (
     plan_edits,
 )
 from lorebase_store.auth import AuditRepository, NewAuditEntry
-from lorebase_store.bulk import chunks
 from lorebase_store.commit import (
     BranchNotMaterializedError,
     Change,
@@ -428,9 +429,9 @@ async def _execute(
     origin = _origin(resolved, invocation_id)
     message = request.message or f"{resolved.name} ({invocation_id})"
     batch_size = settings.import_batch_rows if _is_import(resolved) else max(len(changes), 1)
-    batches = list(chunks(changes, batch_size)) or [[]]
+    planned_batches = batches(changes, planned.units, batch_size) or [[]]
     head = ref.head
-    for position, batch in enumerate(batches):
+    for position, batch in enumerate(planned_batches):
         if position and not request.dry_run:
             await session.commit()
             await session.begin()
@@ -606,7 +607,7 @@ async def _plan(
         plan = import_rows(schema, builtin, bound.values, max_rows=settings.max_bulk_rows)
     else:
         plan = await plan_edits(builtin, bound.values, read)
-    return PlannedEdits(changes=plan.changes, findings=plan.findings)
+    return PlannedEdits(changes=plan.changes, findings=plan.findings, units=plan.units)
 
 
 # Stored Operations with expressions ------------------------------------------------------------
@@ -616,12 +617,14 @@ async def _plan(
 class PlannedEdits:
     """Edits of an execution, or the findings preventing them; `review` is true when an
     expression review policy sends the edits to a Proposal, `preconditions_failed` when the
-    findings are the preconditions that did not hold."""
+    findings are the preconditions that did not hold; `units` are the runs of changes
+    committed together (see `operation_catalog.Plan`)."""
 
     changes: list[DataChange] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     review: bool = False
     preconditions_failed: bool = False
+    units: list[int] = field(default_factory=list)
 
 
 def _false_precondition(program: CompiledExpression, index: int, message: str) -> Finding:
