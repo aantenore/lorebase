@@ -1679,7 +1679,7 @@ Architect calls with code in the repository (M1 in progress). Paths are under `p
 | AC-13 | Implemented | `revision/ancestry.py` (lowest common ancestors, `merge_base`), `merge/engine.py` (virtual base) |
 | AC-15, AC-16 | Schema only | `mat_records` and `mat_links` tables in `packages/store`; the materializer is not implemented |
 | AC-12, AC-18 | Schema only | Ref compare-and-swap and `SKIP LOCKED` claim contracts are documented in [store-schema-notes.md](store-schema-notes.md); no commit pipeline or job runner yet |
-| AC-30 | Partial | `.importlinter` forbids `keeper` from importing `inference`; the contract for `herald` joins when that package is created |
+| AC-30 | Implemented | `.importlinter` forbids `keeper` and `herald` from importing `inference` |
 | AC-25, AC-29 | Partial | `packages/inference`: interfaces, settings, registry and the deterministic fake provider; no HTTP provider yet |
 
 Merge (6.8 to 6.10) is implemented in `merge/` on top of AC-09, AC-11 and AC-13; its decisions are in 6.15.
