@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from lorebase_keeper import __version__
+from lorebase_keeper.auth.audit import AuditMiddleware
 from lorebase_keeper.auth.ports import AuthStore
 from lorebase_keeper.auth.runtime import build_runtime
 from lorebase_keeper.db import create_database
@@ -19,6 +20,7 @@ from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handl
 from lorebase_keeper.health import router as health_router
 from lorebase_keeper.middleware import BodyLimitMiddleware, RequestContextMiddleware
 from lorebase_keeper.readiness import MigrationHeads, ReadinessCheck, default_checks
+from lorebase_keeper.routes.admin import router as admin_router
 from lorebase_keeper.routes.whoami import router as whoami_router
 from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import ConfigError, Settings, load_settings
@@ -50,8 +52,8 @@ def create_app(
     that probe which Alembic revisions the code expects.
 
     Authentication needs a database: the `database` section (name from
-    `keeper.readiness.database_section`), or `auth_store` when given; with `keeper.auth.mode:
-    none` it is optional. `http_client` serves
+    `keeper.readiness.database_section`), or `auth_store` when given. With `keeper.auth.mode:
+    none` the database is optional and only enables the audit log. `http_client` serves
     identity provider requests (default: a client built from the OIDC settings) and `clock` the
     expiry checks.
     """
@@ -86,6 +88,7 @@ def create_app(
         store=store,
         http_client=http_client,
         clock=clock,
+        meter_provider=telemetry.meter_provider if telemetry else None,
     )
 
     @asynccontextmanager
@@ -117,6 +120,7 @@ def create_app(
     install_error_handlers(app, renderer)
     app.include_router(health_router)
     app.include_router(whoami_router, prefix=keeper.api_prefix)
+    app.include_router(admin_router, prefix=keeper.api_prefix)
 
     # Innermost first: the last middleware added is the outermost one.
     app.add_middleware(
@@ -131,6 +135,13 @@ def create_app(
             expose_headers=[keeper.request_id_header],
             allow_credentials=keeper.cors.allow_credentials,
             max_age=keeper.cors.max_age_s,
+        )
+    if auth.audit_writer is not None:
+        app.add_middleware(
+            AuditMiddleware,
+            writer=auth.audit_writer,
+            settings=keeper.auth.audit,
+            api_prefix=keeper.api_prefix,
         )
     app.add_middleware(
         RequestContextMiddleware,

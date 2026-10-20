@@ -1,4 +1,4 @@
-"""The `keeper.auth` settings section: authentication.
+"""The `keeper.auth` settings section: authentication, authorization and audit.
 
 Every value has a documented default; deployments override it in the YAML file or with
 `LOREBASE__KEEPER__AUTH__...` variables. See `config/lorebase.example.yaml`.
@@ -11,6 +11,7 @@ from typing import Any, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
+from lorebase_keeper.auth.permissions import BUILTIN_ROLES, permission_names
 from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel
 
@@ -24,6 +25,7 @@ a provider's keys are public, so accepting HS* would let anyone sign a token."""
 
 MIN_PEPPER_LENGTH = 32
 _TOKEN_PREFIX = re.compile(r"^[a-z][a-z0-9]{1,15}$")
+_ROLE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class ApiKeySettings(SectionModel):
@@ -150,8 +152,58 @@ class OidcSettings(SectionModel):
         return value
 
 
+class AuthzSettings(SectionModel):
+    """Authorization: grant caching and extra roles."""
+
+    grants_cache_ttl_s: float = Field(
+        default=15,
+        ge=0,
+        description="How long a principal's grants in a Domain are reused. Grant changes made "
+        "through another Keeper process take effect after at most this long; 0 disables.",
+    )
+    grants_cache_max_entries: int = Field(default=2048, ge=1)
+    custom_roles: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict,
+        description="Extra roles: name -> permissions (see docs for the names). Built-in roles "
+        "cannot be redefined. Example: {contributor: [schema.read, data.read, branch.create]}.",
+    )
+
+    @field_validator("custom_roles")
+    @classmethod
+    def _valid_roles(cls, roles: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        known = permission_names()
+        for name, permissions in roles.items():
+            if not _ROLE_NAME.match(name):
+                raise ValueError(f"role name {name!r} must match {_ROLE_NAME.pattern}")
+            if name in BUILTIN_ROLES:
+                raise ValueError(f"role {name!r} is built in and cannot be redefined")
+            unknown = sorted(set(permissions) - known)
+            if unknown:
+                raise ValueError(f"role {name!r} has unknown permissions {unknown}")
+        return roles
+
+
+class AuditSettings(SectionModel):
+    """Audit log of mutations and denied requests (design 10.4)."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Write the audit log. Takes effect when a database is configured.",
+    )
+    record_denied: bool = Field(
+        default=True,
+        description="Also record requests rejected with 401 or 403.",
+    )
+    write_timeout_s: float = Field(
+        default=2.0,
+        gt=0,
+        description="Time budget of one audit write. A failed write is logged and counted, "
+        "never surfaced to the client.",
+    )
+
+
 class AuthSettings(SectionModel):
-    """Authentication of the API."""
+    """Authentication and authorization of the API."""
 
     mode: AuthMode = Field(
         default="none",
@@ -166,6 +218,8 @@ class AuthSettings(SectionModel):
     )
     api_keys: ApiKeySettings = Field(default_factory=ApiKeySettings)
     oidc: OidcSettings = Field(default_factory=OidcSettings)
+    authz: AuthzSettings = Field(default_factory=AuthzSettings)
+    audit: AuditSettings = Field(default_factory=AuditSettings)
 
     @property
     def uses_api_keys(self) -> bool:

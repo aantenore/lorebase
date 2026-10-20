@@ -1,14 +1,30 @@
-"""FastAPI dependencies for authentication: `PrincipalDep` is the authenticated caller."""
+"""FastAPI dependencies for authentication and authorization.
+
+Routes depend on `require(permission)` (a Domain permission, the Domain taken from the path) or
+`require_installation(permission)`; both authenticate first and return what they decided on:
+
+    @router.get("/domains/{domain_id}/grants")
+    async def list_grants(access: Annotated[Access, Depends(require(Permission.GRANT_MANAGE))]): ...
+
+Kind, Operation and branch scoped grants are evaluated when the route names the path parameter
+that carries them (`kind_param`, `operation_param`, `branch_param`).
+"""
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Annotated, cast
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPBearer
 
+from lorebase_keeper.auth.audit import annotate
+from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
+from lorebase_keeper.auth.rbac import AccessContext
 from lorebase_keeper.auth.runtime import AuthRuntime
+from lorebase_keeper.errors import FORBIDDEN, UNAVAILABLE, ProblemError
 
 _PRINCIPAL_KEY = "principal"
 _bearer_scheme = HTTPBearer(auto_error=False, description="API key (lbk_...) or OIDC access token.")
@@ -22,6 +38,12 @@ def get_auth(request: Request) -> AuthRuntime:
 AuthDep = Annotated[AuthRuntime, Depends(get_auth)]
 
 
+def require_store(auth: AuthRuntime) -> None:
+    """Raise 503 when no database is configured (administration needs one)."""
+    if auth.store is None:
+        raise ProblemError(UNAVAILABLE, "This operation needs a configured database.")
+
+
 async def current_principal(
     request: Request,
     auth: AuthDep,
@@ -33,7 +55,71 @@ async def current_principal(
     if principal is None:
         principal = await auth.authenticator.authenticate(request.headers)
         state[_PRINCIPAL_KEY] = principal
+    annotate(request, actor=principal.id)
     return cast(Principal, principal)
 
 
 PrincipalDep = Annotated[Principal, Depends(current_principal)]
+
+
+@dataclass(frozen=True)
+class Access:
+    """An authorized request: who, in which Domain (none for installation-level), what for."""
+
+    principal: Principal
+    domain_id: str | None
+    permission: Permission
+
+
+def require(
+    permission: Permission,
+    *,
+    domain_param: str = "domain_id",
+    kind_param: str | None = None,
+    operation_param: str | None = None,
+    branch_param: str | None = None,
+) -> Callable[..., Awaitable[Access]]:
+    """Dependency: the caller holds `permission` in the Domain named by the path.
+
+    Answers 401 without a valid credential and 403, naming the missing permission, otherwise.
+    """
+
+    async def dependency(request: Request, principal: PrincipalDep, auth: AuthDep) -> Access:
+        params = request.path_params
+        domain_id = str(params[domain_param])
+        context = AccessContext(
+            kind=_param(params, kind_param),
+            operation=_param(params, operation_param),
+            branch=_param(params, branch_param),
+        )
+        annotate(request, domain_id=domain_id, permission=permission.value)
+        if not await auth.authorizer.allows(principal, permission, domain_id, context):
+            raise ProblemError(
+                FORBIDDEN,
+                f"Missing permission {permission.value} in Domain {domain_id}.",
+                extensions={"permission": permission.value, "domain": domain_id},
+            )
+        return Access(principal=principal, domain_id=domain_id, permission=permission)
+
+    return dependency
+
+
+def require_installation(permission: Permission) -> Callable[..., Awaitable[Access]]:
+    """Dependency: the caller holds an installation-level `permission`."""
+
+    async def dependency(request: Request, principal: PrincipalDep, auth: AuthDep) -> Access:
+        annotate(request, permission=permission.value)
+        if not await auth.authorizer.allows_installation(principal, permission):
+            raise ProblemError(
+                FORBIDDEN,
+                f"Missing permission {permission.value}.",
+                extensions={"permission": permission.value},
+            )
+        return Access(principal=principal, domain_id=None, permission=permission)
+
+    return dependency
+
+
+def _param(params: dict[str, object], name: str | None) -> str | None:
+    value = params.get(name) if name else None
+    return None if value is None else str(value)

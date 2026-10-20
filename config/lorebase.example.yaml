@@ -82,6 +82,24 @@ keeper:
       auto_provision: true       # create the user on the first valid token
       principal_cache_ttl_s: 60  # reuse of a subject's principal and groups
       principal_cache_max_entries: 4096
+    authz:
+      grants_cache_ttl_s: 15     # grants are cached this long; other processes see changes after
+                                 # at most this; 0 disables
+      grants_cache_max_entries: 2048
+      custom_roles: {}           # extra roles, name -> permissions. Built-in roles: viewer,
+                                 # explorer, editor, operator, modeler, reviewer, maintainer,
+                                 # admin, agent-reader. Example:
+                                 #   contributor: [schema.read, data.read, branch.create]
+                                 # Permissions: schema.read data.read views.write branch.create
+                                 # operation.execute operation.execute_custom schema.write
+                                 # source.map proposal.review conflict.resolve proposal.merge
+                                 # source.manage job.manage grant.manage apikey.manage
+                                 # domain.settings audit.read principal.read
+    audit:
+      enabled: true              # hash-chained log of mutations and denied requests; needs the
+                                 # `database` section
+      record_denied: true        # also record requests rejected with 401 or 403
+      write_timeout_s: 2         # a failed or slow write is logged and counted, never surfaced
   openapi:
     title: Lorebase Keeper
     docs_enabled: true           # serve <prefix>/docs and <prefix>/openapi.json

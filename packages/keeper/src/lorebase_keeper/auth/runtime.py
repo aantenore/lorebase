@@ -8,24 +8,29 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
+from opentelemetry.metrics import MeterProvider
 
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
+from lorebase_keeper.auth.audit import AuditWriter
 from lorebase_keeper.auth.config import AuthSettings
 from lorebase_keeper.auth.oidc import JwksCache, OidcVerifier
 from lorebase_keeper.auth.ports import AuthStore
 from lorebase_keeper.auth.principals import Authenticator
+from lorebase_keeper.auth.rbac import Authorizer
 
 logger = logging.getLogger("lorebase.keeper.auth")
 
 
 @dataclass
 class AuthRuntime:
-    """Authenticator, key codec and store of an application."""
+    """Authenticator, authorizer, key codec, audit writer and store of an application."""
 
     settings: AuthSettings
     store: AuthStore | None
     authenticator: Authenticator
+    authorizer: Authorizer
     codec: ApiKeyCodec | None
+    audit_writer: AuditWriter | None
     clock: Callable[[], datetime]
     http: httpx.AsyncClient | None = None
     owns_http: bool = False
@@ -42,10 +47,11 @@ def build_runtime(
     store: AuthStore | None,
     http_client: httpx.AsyncClient | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    meter_provider: MeterProvider | None = None,
 ) -> AuthRuntime:
     """Wire the auth components for `settings`.
 
-    `store` is required for every mode but `none`.
+    `store` is required for every mode but `none`; with `none` it only enables the audit log.
     `http_client` is used for identity provider requests (tests inject a mock transport); when
     absent one is created with the configured timeout.
     """
@@ -67,11 +73,18 @@ def build_runtime(
             owns_http = True
         verifier = OidcVerifier(settings.oidc, JwksCache(settings.oidc, http))
 
+    audit_writer = (
+        AuditWriter(store, settings.audit, meter_provider)
+        if store is not None and settings.audit.enabled
+        else None
+    )
     return AuthRuntime(
         settings=settings,
         store=store,
         authenticator=Authenticator(settings, store=store, codec=codec, oidc=verifier, clock=clock),
+        authorizer=Authorizer(settings.authz, store=store),
         codec=codec,
+        audit_writer=audit_writer,
         clock=clock,
         http=http,
         owns_http=owns_http,
