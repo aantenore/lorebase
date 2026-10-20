@@ -1,0 +1,13 @@
+[project]
+name = "lorebase-store"
+version = "0.1.0"
+description = "Lorebase store: persistence, repositories, migrations and materializer"
+requires-python = ">=3.12"
+dependencies = ["lorebase-core", "lorebase-platform"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lorebase_store"]

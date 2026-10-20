@@ -1,0 +1,13 @@
+[project]
+name = "lorebase-cli"
+version = "0.1.0"
+description = "Lorebase CLI"
+requires-python = ">=3.12"
+dependencies = ["lorebase-client"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lorebase_cli"]
