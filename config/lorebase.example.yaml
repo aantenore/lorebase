@@ -50,7 +50,38 @@ keeper:
     database_section: database   # settings section with the connection string; if absent the
     database_dsn_key: dsn        # database check reports not_configured
   auth:
-    mode: none                   # none | api_key | oidc; only `none` is available until auth lands
+    mode: none                   # none | api_key | oidc | api_key+oidc. `none` accepts every
+                                 # request as an administrator: local development only. The
+                                 # other modes need the `database` section below
+    installation_admins: []      # principal ids, identity provider subjects or group ids allowed
+                                 # to administer the installation (list principals). They get
+                                 # no access to Domain data
+    api_keys:                    # agents and automation: Authorization: Bearer lbk_... or X-Api-Key
+      token_prefix: lbk          # keys look like <token_prefix>_<prefix>_<secret>
+      header: X-Api-Key          # header accepted besides Authorization: Bearer
+      pepper: null               # REQUIRED with api_key modes: >= 32 characters, e.g.
+                                 # secret://env/LOREBASE_API_KEY_PEPPER. Changing it invalidates
+                                 # every issued key
+      prefix_length: 10          # characters of the public lookup prefix
+      secret_bytes: 32           # random bytes of the secret part
+      default_ttl_days: 365      # lifetime of new keys; null: no expiry
+      max_ttl_days: null         # longest lifetime an admin may request; null: no limit
+      last_used_interval_s: 60   # a key's last-used time is written at most this often
+    oidc:                        # bearer tokens of any OpenID Connect provider
+      issuer: null               # REQUIRED with oidc modes: expected `iss`, base of discovery
+      audience: []               # REQUIRED with oidc modes: accepted `aud` values
+      jwks_uri: null             # null: read from <issuer>/.well-known/openid-configuration
+      algorithms: [RS256, ES256] # asymmetric algorithms only
+      clock_skew_s: 60           # tolerance for exp, nbf and iat
+      jwks_cache_ttl_s: 300      # signing keys are refreshed after this long
+      jwks_min_refresh_s: 30     # shortest time between key refreshes (unknown key id, errors)
+      http_timeout_s: 5          # timeout of provider requests
+      subject_claim: sub
+      name_claims: [name, preferred_username, email]   # display name, in order of preference
+      groups_claim: groups       # claim with provider group names (matched to groups)
+      auto_provision: true       # create the user on the first valid token
+      principal_cache_ttl_s: 60  # reuse of a subject's principal and groups
+      principal_cache_max_entries: 4096
   openapi:
     title: Lorebase Keeper
     docs_enabled: true           # serve <prefix>/docs and <prefix>/openapi.json

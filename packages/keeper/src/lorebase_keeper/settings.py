@@ -7,15 +7,14 @@ Every value has a code default for local runs; deployments override them through
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 
+from lorebase_keeper.auth.config import AuthSettings
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 SECTION = "keeper"
-
-AuthMode = Literal["none", "api_key", "oidc"]
 
 
 class CorsSettings(SectionModel):
@@ -69,16 +68,6 @@ class ReadinessSettings(SectionModel):
     )
     database_dsn_key: str = Field(
         default="dsn", min_length=1, description="Key of the connection string in that section."
-    )
-
-
-class AuthSettings(SectionModel):
-    """Authentication. Only `none` is available until authentication is implemented."""
-
-    mode: AuthMode = Field(
-        default="none",
-        description="none | api_key | oidc. Anything but none is rejected at startup for now "
-        "rather than silently serving unauthenticated traffic.",
     )
 
 
