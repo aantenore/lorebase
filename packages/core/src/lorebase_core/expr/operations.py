@@ -36,6 +36,7 @@ from lorebase_core.model.operation import (
     UpdateRecordStep,
 )
 from lorebase_core.model.record import Link, Record, format_ref, record_key
+from lorebase_core.model.relation import RelationBacking
 from lorebase_core.model.schema import Schema
 from lorebase_core.types import normalize_key
 from lorebase_core.validate.changes import (
@@ -190,8 +191,8 @@ class _Builder:
         environment = operation_environment(self.schema, operation, step_index=index)
         if isinstance(step, CreateLinkStep | DeleteLinkStep):
             relation = self.schema.relations.get(step.relation)
-            if relation is None:
-                self.unknown(f"unknown Relation {step.relation}", (*path, "relation"))
+            if relation is None or relation.backing is not RelationBacking.EXPLICIT:
+                self.unknown(f"Relation {step.relation} cannot be written", (*path, "relation"))
                 return CompiledStep(index, step, environment)
             from_ = self.expression(
                 (*path, "from"), step.from_, environment, ref_of(relation.from_kind), nullable=False

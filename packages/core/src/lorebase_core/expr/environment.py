@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from lorebase_core.expr.types import (
     DOUBLE,
+    DYN,
     GEO_POINT,
     STRING,
     ExprType,
@@ -118,7 +119,7 @@ def operation_environment(
     variables[PRINCIPAL] = object_of(PRINCIPAL)
     step_types: tuple[ExprType | None, ...] | None = None
     if step_index is not None:
-        step_types = tuple(_step_type(step) for step in operation.steps[:step_index])
+        step_types = tuple(_step_type(schema, step) for step in operation.steps[:step_index])
     return Environment(
         schema=schema,
         variables=variables,
@@ -129,9 +130,11 @@ def operation_environment(
     )
 
 
-def _step_type(step: object) -> ExprType | None:
+def _step_type(schema: Schema, step: object) -> ExprType | None:
+    """Type of ``$step[n]``: the Record reference, ``dyn`` for an unknown Kind (reported by
+    schema validation), ``None`` for Link steps."""
     if isinstance(step, CreateRecordStep | UpdateRecordStep | DeleteRecordStep):
-        return ref_of(step.kind)
+        return ref_of(step.kind) if step.kind in schema.kinds else DYN
     return None
 
 
