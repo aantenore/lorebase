@@ -123,10 +123,24 @@ database:
   migration_statement_timeout_ms: 0   # while migrations run; 0 disables
   application_name: lorebase     # shown in pg_stat_activity
 
-# Schema shape, read once by the initial migration.
+# Storage engine. `layout` and `embeddings` are read once by the initial migration; the other
+# keys are read at runtime.
 store:
   layout:
     hash_partitions: 8           # domain_id hash partitions of objects, tree_nodes, mat_records
                                  # and mat_links
   embeddings:
     dims: 384                    # HNSW index dimension; must equal inference.embeddings.dims
+  writes:
+    insert_batch_rows: 1000      # rows per multi-row INSERT
+    copy_threshold_rows: 5000    # larger batches use COPY into a staging table; 0 disables COPY
+  nodes:
+    cache_bytes: 67108864        # in-process LRU cache of tree nodes (64 MiB); 0 disables it
+    prefetch_batch: 1000         # node hashes per prefetch query
+  commit:
+    lock_timeout_ms: 10000       # wait for the branch lock before failing; 0 waits forever
+    prefetch_batch: 1000         # keys per query when validation prefetches materialized rows
+  materialize:
+    text_search_config: simple   # Postgres text search configuration of Record search vectors
+    read_batch_rows: 5000        # rows or object bodies per query in rebuild and verification
+    verify_max_divergences: 1000 # divergences listed by a verification report

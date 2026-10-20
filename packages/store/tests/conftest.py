@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from lorebase_platform import settings as platform_settings
 from lorebase_store import migrations, testing
+from lorebase_store.db import create_engine
+from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import ENV_ALIASES, DatabaseSettings, StoreSettings
 
 
@@ -53,3 +56,19 @@ def database_url(empty_database_url: str, database: DatabaseSettings, store: Sto
     """A fresh database migrated to head."""
     migrations.upgrade(database=database, store=store, url=empty_database_url)
     return empty_database_url
+
+
+@pytest.fixture
+async def engine(database_url: str, database: DatabaseSettings) -> AsyncIterator[AsyncEngine]:
+    """Unpooled async engine on a freshly migrated database."""
+    engine = create_engine(database, url=database_url, pooled=False)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+def runtime(store: StoreSettings) -> StoreRuntime:
+    """Store runtime with code defaults and its own node cache."""
+    return StoreRuntime.from_settings(store)

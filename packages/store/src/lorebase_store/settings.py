@@ -2,7 +2,8 @@
 
 - `database` (design 16): connection string, pool and timeouts. The environment alias
   `LOREBASE_DB_DSN` sets `database.dsn`, which is handled as a secret.
-- `store`: physical layout and vector storage, read by the initial migration.
+- `store`: physical layout and vector storage (read by the initial migration), bulk writes,
+  tree node caching, commits and materialization (read at runtime).
 """
 
 from __future__ import annotations
@@ -77,11 +78,75 @@ class EmbeddingStoreSettings(SectionModel):
     )
 
 
+class WriteSettings(SectionModel):
+    """Bulk writes of objects, tree nodes, changesets and materialized rows."""
+
+    insert_batch_rows: int = Field(
+        default=1000, ge=1, description="Rows per multi-row INSERT statement."
+    )
+    copy_threshold_rows: int = Field(
+        default=5000,
+        ge=0,
+        description="Batches with at least this many rows go through COPY into a staging table "
+        "and one set-based INSERT; 0 disables COPY.",
+    )
+
+
+class NodeSettings(SectionModel):
+    """Tree node reads (design 6.14: nodes are immutable and cached by hash)."""
+
+    cache_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        ge=0,
+        description="In-process LRU cache of tree node bodies, in bytes; 0 disables it.",
+    )
+    prefetch_batch: int = Field(
+        default=1000, ge=1, description="Node hashes fetched per query when prefetching."
+    )
+
+
+class CommitSettings(SectionModel):
+    """Commit pipeline (design 6.6)."""
+
+    lock_timeout_ms: int = Field(
+        default=10000,
+        ge=0,
+        description="Wait for the branch advisory lock before failing; 0 waits without limit.",
+    )
+    prefetch_batch: int = Field(
+        default=1000,
+        ge=1,
+        description="Keys per query when validation prefetches materialized Records and Links.",
+    )
+
+
+class MaterializeSettings(SectionModel):
+    """Materialized heads (design 6.11, 8.4)."""
+
+    text_search_config: str = Field(
+        default="simple",
+        min_length=1,
+        description="Postgres text search configuration of the Record search vectors.",
+    )
+    read_batch_rows: int = Field(
+        default=5000,
+        ge=1,
+        description="Rows or object bodies read per query by rebuild and verification.",
+    )
+    verify_max_divergences: int = Field(
+        default=1000, ge=1, description="Divergences listed by a verification report."
+    )
+
+
 class StoreSettings(SectionModel):
-    """Schema shape: partitioning and vector index."""
+    """Schema shape, bulk writes, node cache, commits and materialization."""
 
     layout: LayoutSettings = Field(default_factory=LayoutSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
+    writes: WriteSettings = Field(default_factory=WriteSettings)
+    nodes: NodeSettings = Field(default_factory=NodeSettings)
+    commit: CommitSettings = Field(default_factory=CommitSettings)
+    materialize: MaterializeSettings = Field(default_factory=MaterializeSettings)
 
 
 register_section(DATABASE_SECTION, DatabaseSettings, env_aliases=ENV_ALIASES)
