@@ -1,4 +1,5 @@
-"""Proposal reads are authorized against both branches, and Kind grants limit the Conflicts."""
+"""Proposal reads are authorized against both branches, and Kind grants limit the Conflicts;
+Proposal creation and Conflict resolution keep that scope."""
 
 from __future__ import annotations
 
@@ -19,11 +20,13 @@ from lorebase_keeper.services.proposal_reads import (
     ConflictScope,
     conflict_scope,
     readable_proposals,
+    require_target_read,
+    require_visible,
     visible_partitions,
 )
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.models.enums import GrantScope, PrincipalType, ProposalOrigin, ProposalStatus
-from lorebase_store.repositories import ProposalRow
+from lorebase_store.repositories import ConflictRow, ProposalRow
 
 SCHEMA = Path(__file__).resolve().parents[4] / "examples" / "supply" / "schema.yaml"
 
@@ -109,3 +112,44 @@ async def test_listing_keeps_proposals_the_caller_may_read(store: Any) -> None:
 async def test_listing_with_kind_grants_keeps_every_proposal(store: Any) -> None:
     rows = [proposal("agent/a", "agent/b", 1), proposal("agent/a", "main", 2)]
     assert len(await readable_proposals(guard(store, GrantScope.KIND, "Supplier"), rows)) == 2
+
+
+def conflict(partition: str) -> ConflictRow:
+    return ConflictRow(
+        fingerprint="f" * 64,
+        code="DV1",
+        partition=partition,
+        element_key=None,
+        attribute_id=None,
+        payload={},
+        member_count=0,
+    )
+
+
+async def test_kind_narrowed_caller_cannot_resolve_a_conflict_of_another_kind(
+    store: Any,
+) -> None:
+    scope = await conflict_scope(
+        guard(store, GrantScope.KIND, "Supplier"), proposal("agent/a", "main")
+    )
+    schema = load_schema(SCHEMA.read_text())
+    kinds = {kind.api_name: kind.id for kind in schema.kinds.values()}
+    partitions = visible_partitions(scope, [schema])
+    require_visible(partitions, conflict(kind_partition(kinds["Supplier"])))
+    for hidden in (kind_partition(kinds["Plant"]), PARTITION_SCHEMA):
+        with pytest.raises(ProblemError) as raised:
+            require_visible(partitions, conflict(hidden))
+        assert raised.value.status_code == 403
+    require_visible(visible_partitions(ConflictScope(), [schema]), conflict(PARTITION_SCHEMA))
+
+
+async def test_creating_a_proposal_needs_read_on_its_target(store: Any) -> None:
+    narrowed = guard(store, GrantScope.BRANCH, "agent/*")
+    await require_target_read(narrowed, "agent/b")
+    with pytest.raises(ProblemError) as raised:
+        await require_target_read(narrowed, "main")
+    assert raised.value.status_code == 403
+
+
+async def test_kind_grants_may_target_any_branch(store: Any) -> None:
+    await require_target_read(guard(store, GrantScope.KIND, "Supplier"), "main")

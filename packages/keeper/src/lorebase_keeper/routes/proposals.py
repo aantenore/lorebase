@@ -2,16 +2,16 @@
 
 | Method and path | Permission | Notes |
 |-----------------|------------|-------|
-| `POST .../proposals` | `proposal.create` (source branch) | 201; `Idempotency-Key` replays 200 |
+| `POST .../proposals` | `proposal.create` (source), `data.read` (target) | 201; key replays 200 |
 | `GET .../proposals` | `data.read` | filters `status`, `origin`, `source`, `target`, `author` |
 | `GET .../proposals/{p}` | `data.read` (both branches) | reviews, approvals, latest attempt |
 | `PATCH .../proposals/{p}` | author, else `proposal.merge` | title, description |
 | `POST .../proposals/{p}/close` | author, else `proposal.merge` | attempts abandoned |
 | `POST .../proposals/{p}/reviews` | `proposal.review` (target) | 201 |
-| `POST .../proposals/{p}/merge` | `proposal.merge` (target) | 200 merged; 409 `merge-conflicts` |
+| `POST .../proposals/{p}/merge` | `proposal.merge` (target), read | 200; 409 `merge-conflicts` |
 | `GET .../proposals/{p}/conflicts` | `data.read` (both branches) | attempt, page of Conflicts |
-| `POST .../proposals/{p}/conflicts/{c}/resolution` | `conflict.resolve` (target) | stores |
-| `POST .../proposals/{p}/conflicts:resolve` | `conflict.resolve` (target) | stores, re-runs |
+| `POST .../proposals/{p}/conflicts/{c}/resolution` | `conflict.resolve` (target), read | stores |
+| `POST .../proposals/{p}/conflicts:resolve` | `conflict.resolve` (target), read | stores, re-runs |
 
 The merge answers 200 with the merge outcome when the target moved (merge Revision,
 fast-forward or already up to date) and 409 `merge-conflicts` when Conflicts remain; that
@@ -22,6 +22,9 @@ an open Proposal recomputes its attempt when a head moved since (6.10, stale att
 Reads are authorized against the source and the target branch (`services.proposal_reads`):
 listings keep the Proposals the caller may read, so a page may hold fewer items than asked
 while `next_cursor` is set; callers limited to Kinds see the Conflicts of those Kinds only.
+Writes keep that scope ("read" above): merging and resolving need the read access of the
+Conflict listing, a resolution naming a Conflict outside it is refused (403), and the
+attempts they return list only the Conflicts the caller may read.
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ from lorebase_keeper.services.proposal_reads import (
     ConflictScope,
     conflict_scope,
     readable_proposals,
+    require_target_read,
 )
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import CommitError
@@ -472,6 +476,7 @@ async def create_proposal(
     store: StoreDep,
     keeper: KeeperSettingsDep,
     idempotency_key: IdempotencyKeyDep,
+    guard: DataRead,
 ) -> ProposalDetailOut:
     """Open a Proposal and compute its merge preview (Conflict count).
 
@@ -480,6 +485,7 @@ async def create_proposal(
     `Idempotent-Replayed: true`.
     """
     await _check(request, auth, principal, Permission.PROPOSAL_CREATE, domain_id, body.source_ref)
+    await require_target_read(guard, body.target_ref)
     created = await service.create(
         store,
         domain_id,
@@ -675,6 +681,7 @@ async def merge_proposal(
     store: StoreDep,
     keeper: KeeperSettingsDep,
     idempotency_key: IdempotencyKeyDep,
+    guard: DataRead,
     body: MergeIn | None = None,
 ) -> MergeOut:
     """Run or re-run the merge with the stored resolutions.
@@ -688,6 +695,7 @@ async def merge_proposal(
     await _check(
         request, auth, principal, Permission.PROPOSAL_MERGE, domain_id, proposal.target_ref
     )
+    scope = await conflict_scope(guard, proposal)
     try:
         outcome = await service.merge(
             store,
@@ -698,6 +706,7 @@ async def merge_proposal(
             idempotency_key=idempotency_key,
             message=None if body is None else body.message,
             page_limit=keeper.pagination.default_limit,
+            scope=scope,
         )
     except CommitError as error:
         raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
@@ -782,12 +791,14 @@ async def resolve_conflict(
     auth: AuthDep,
     store: StoreDep,
     keeper: KeeperSettingsDep,
+    guard: DataRead,
 ) -> ResolutionOut:
     """Store the resolution of one Conflict of the current attempt (no merge run)."""
     proposal = await service.target_of(store, domain_id, proposal_id)
     await _check(
         request, auth, principal, Permission.CONFLICT_RESOLVE, domain_id, proposal.target_ref
     )
+    scope = await conflict_scope(guard, proposal)
     try:
         rows, _view = await service.resolve(
             store,
@@ -805,6 +816,7 @@ async def resolve_conflict(
             ],
             rerun=False,
             page_limit=keeper.pagination.default_limit,
+            scope=scope,
         )
     except CommitError as error:
         raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
@@ -824,6 +836,7 @@ async def resolve_conflicts(
     auth: AuthDep,
     store: StoreDep,
     keeper: KeeperSettingsDep,
+    guard: DataRead,
 ) -> ConflictsOut:
     """Store several resolutions, re-run the merge and return the new attempt."""
     if len(body.resolutions) > keeper.proposals.max_resolutions:
@@ -835,6 +848,7 @@ async def resolve_conflicts(
     await _check(
         request, auth, principal, Permission.CONFLICT_RESOLVE, domain_id, proposal.target_ref
     )
+    scope = await conflict_scope(guard, proposal)
     try:
         _rows, view = await service.resolve(
             store,
@@ -854,6 +868,7 @@ async def resolve_conflicts(
             ],
             rerun=True,
             page_limit=keeper.pagination.default_limit,
+            scope=scope,
         )
     except CommitError as error:
         raise _store_problem(error, keeper.branches.lock_retry_after_s) from None

@@ -30,7 +30,12 @@ from lorebase_keeper.context import StoreAccess, require_branch, require_domain,
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, ProblemError, ProblemType
 from lorebase_keeper.services.config import ProposalSettings
 from lorebase_keeper.services.errors import ALREADY_EXISTS, IDEMPOTENCY_CONFLICT
-from lorebase_keeper.services.proposal_reads import FULL_SCOPE, ConflictScope, visible_partitions
+from lorebase_keeper.services.proposal_reads import (
+    FULL_SCOPE,
+    ConflictScope,
+    require_visible,
+    visible_partitions,
+)
 from lorebase_keeper.services.schema import schema_at
 from lorebase_store.merging import (
     AttemptResult,
@@ -511,10 +516,12 @@ async def merge(
     idempotency_key: str | None,
     message: str | None,
     page_limit: int,
+    scope: ConflictScope = FULL_SCOPE,
 ) -> MergeOutcome:
     """Run (or re-run) the merge of an open Proposal and commit it when no Conflict remains.
 
     A retried merge with the key of the merge that committed returns that merge (`replayed`).
+    The returned attempt lists the Conflicts `scope` shows.
     """
     async with store.sessions() as session, session.begin():
         domain = await require_domain(session, domain_id)
@@ -524,7 +531,12 @@ async def merge(
             done = await attempts.by_key(proposal.id, idempotency_key)
             if done is not None and done.status is MergeAttemptStatus.MERGED:
                 view = await _attempt_view(
-                    session, domain_id, proposal, done, ConflictQuery(limit=page_limit)
+                    session,
+                    domain_id,
+                    proposal,
+                    done,
+                    ConflictQuery(limit=page_limit),
+                    partitions=await _partitions(store, session, domain_id, done, scope),
                 )
                 return MergeOutcome(proposal, None, view, head=done.revision, replayed=True)
         if proposal.status is not ProposalStatus.OPEN:
@@ -575,6 +587,7 @@ async def merge(
             query,
             recomputed=True,
             stale=result.stale_previous,
+            partitions=await _partitions(store, session, domain_id, result.attempt, scope),
         )
         return MergeOutcome(
             updated,
@@ -617,7 +630,9 @@ async def conflicts(
                 query,
                 recomputed=result.computation is not None,
                 stale=result.stale_previous,
-                partitions=await _partitions(store, session, domain_id, result.attempt, query),
+                partitions=await _partitions(
+                    store, session, domain_id, result.attempt, query.scope
+                ),
             )
         latest = await MergeAttemptRepository(session, domain_id).latest(proposal_id)
         if latest is None:
@@ -628,7 +643,7 @@ async def conflicts(
             proposal,
             latest,
             query,
-            partitions=await _partitions(store, session, domain_id, latest, query),
+            partitions=await _partitions(store, session, domain_id, latest, query.scope),
         )
 
 
@@ -637,11 +652,11 @@ async def _partitions(
     session: AsyncSession,
     domain_id: str,
     attempt: MergeAttemptRow,
-    query: ConflictQuery,
+    scope: ConflictScope,
 ) -> PartitionFilter:
-    """The partitions whose Conflicts the reader of `query` sees, by the schemas of the
+    """The partitions whose Conflicts a reader limited to `scope` sees, by the schemas of the
     attempt's Revisions."""
-    if query.scope.everything:
+    if scope.everything:
         return EVERY_PARTITION
     revisions = [r for r in (attempt.base, attempt.ours, attempt.theirs) if r is not None]
     schemas = [
@@ -650,7 +665,7 @@ async def _partitions(
         )
         for r in dict.fromkeys(revisions)
     ]
-    return visible_partitions(query.scope, schemas)
+    return visible_partitions(scope, schemas)
 
 
 async def resolve(
@@ -663,11 +678,14 @@ async def resolve(
     *,
     rerun: bool,
     page_limit: int,
+    scope: ConflictScope = FULL_SCOPE,
 ) -> tuple[list[ResolutionRow], AttemptView | None]:
     """Store resolutions of Conflicts of the current attempt; with `rerun`, merge again.
 
     Every resolution must name a Conflict of the current attempt (recomputed first when a
-    head moved) and fit it: 422 otherwise, and nothing is stored.
+    head moved, 404 otherwise) that `scope` shows (403 otherwise) and fit it (422
+    otherwise); on any error nothing is stored. The re-run attempt lists the Conflicts
+    `scope` shows.
     """
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
@@ -679,6 +697,7 @@ async def resolve(
             current = await service.current(_request(proposal, principal.id))
         except ProposalBranchMissingError as error:
             raise _branch_missing(error) from None
+        partitions = await _partitions(store, session, domain_id, current.attempt, scope)
         conflicts_repo = ConflictRepository(session, domain_id)
         now = store.clock()
         rows: list[ResolutionRow] = []
@@ -690,6 +709,7 @@ async def resolve(
                     f"Conflict {item.fingerprint} is not part of the current merge attempt.",
                     extensions={"conflict": item.fingerprint, "attempt": current.attempt.id},
                 )
+            require_visible(partitions, stored)
             resolution = _resolution(item, principal.id)
             payload = {k: v for k, v in stored.payload.items() if k != "members"}
             try:
@@ -724,6 +744,7 @@ async def resolve(
             ConflictQuery(limit=page_limit),
             recomputed=True,
             stale=result.stale_previous,
+            partitions=await _partitions(store, session, domain_id, result.attempt, scope),
         )
         return rows, view
 

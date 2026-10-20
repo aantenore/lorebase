@@ -10,7 +10,9 @@ the base, ours and theirs values), so reading them follows the read rules of
 - schema Conflicts need `schema.read` on both branches, through grants not narrowed to a Kind;
 - callers with neither get 403, also for unknown Proposals when their grants are narrowed.
 
-Listings keep the Proposals the caller may read in this sense.
+Listings keep the Proposals the caller may read in this sense. Writes follow the same scope:
+creating a Proposal needs read access to its target branch, and resolving a Conflict (or
+receiving the attempt of a merge) is limited to the Conflicts the caller may read.
 """
 
 from __future__ import annotations
@@ -21,8 +23,14 @@ from dataclasses import dataclass, replace
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, relation_partition
 from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.errors import FORBIDDEN, ProblemError
 from lorebase_keeper.services.reads import ReadGuard
-from lorebase_store.repositories import EVERY_PARTITION, PartitionFilter, ProposalRow
+from lorebase_store.repositories import (
+    EVERY_PARTITION,
+    ConflictRow,
+    PartitionFilter,
+    ProposalRow,
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,24 @@ async def readable_proposals(data: ReadGuard, rows: Sequence[ProposalRow]) -> li
     if await data.wide() or await data.granted_kinds():
         return list(rows)
     return [row for row in rows if await _both(data, row)]
+
+
+async def require_target_read(data: ReadGuard, target_ref: str) -> None:
+    """403 unless the caller of `data` may read the branch `target_ref`: `data.read` on it,
+    or grants narrowed to Kinds (which cover every branch)."""
+    if await data.may(target_ref) or await data.granted_kinds():
+        return
+    raise data.denied()
+
+
+def require_visible(partitions: PartitionFilter, conflict: ConflictRow) -> None:
+    """403 for a Conflict stored in a partition outside `partitions`."""
+    if not partitions.allows(conflict.partition):
+        raise ProblemError(
+            FORBIDDEN,
+            f"Conflict {conflict.fingerprint} is outside what the caller may read.",
+            extensions={"conflict": conflict.fingerprint},
+        )
 
 
 def visible_partitions(scope: ConflictScope, schemas: Iterable[Schema]) -> PartitionFilter:
