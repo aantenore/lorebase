@@ -25,11 +25,17 @@ def postgres_server_url() -> Iterator[str]:
 
 
 @pytest.fixture
-def database_url(postgres_server_url: str) -> Iterator[str]:
-    """A fresh database migrated to head, dropped after the test."""
+def empty_database_url(postgres_server_url: str) -> Iterator[str]:
+    """A fresh empty database, dropped after the test."""
     with testing.scratch_database(postgres_server_url) as url:
-        migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
         yield url
+
+
+@pytest.fixture
+def database_url(empty_database_url: str) -> str:
+    """A fresh database migrated to head."""
+    migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=empty_database_url)
+    return empty_database_url
 
 
 async def _create_role(url: str, role: str) -> None:

@@ -19,7 +19,12 @@ from lorebase_keeper.db import create_database
 from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handlers
 from lorebase_keeper.health import router as health_router
 from lorebase_keeper.middleware import BodyLimitMiddleware, RequestContextMiddleware
-from lorebase_keeper.readiness import MigrationHeads, ReadinessCheck, default_checks
+from lorebase_keeper.readiness import (
+    MigrationHeads,
+    ReadinessCheck,
+    default_checks,
+    packaged_heads,
+)
 from lorebase_keeper.routes.admin import router as admin_router
 from lorebase_keeper.routes.whoami import router as whoami_router
 from lorebase_keeper.settings import keeper_settings
@@ -49,7 +54,8 @@ def create_app(
     `settings` default to `load_settings()`. `telemetry` supplies the providers used for
     spans and metrics (none: the global OpenTelemetry API). `readiness_checks` replaces the
     default checks, which probe the database named by the settings; `migration_heads` tells
-    that probe which Alembic revisions the code expects.
+    that probe which Alembic revisions the code expects (default: the heads of the store's
+    migrations; a callable returning nothing skips the comparison).
 
     Authentication needs a database: the `database` section (name from
     `keeper.readiness.database_section`), or `auth_store` when given. With `keeper.auth.mode:
@@ -68,7 +74,7 @@ def create_app(
             section=keeper.readiness.database_section,
             dsn_key=keeper.readiness.database_dsn_key,
             timeout_s=keeper.readiness.timeout_s,
-            expected_heads=migration_heads,
+            expected_heads=migration_heads or packaged_heads,
         )
     )
 

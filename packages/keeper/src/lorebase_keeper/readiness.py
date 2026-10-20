@@ -1,14 +1,16 @@
 """Readiness checks behind `/readyz`.
 
-A check is an async callable with a `name`. The database check connects, runs `SELECT 1` and,
-when the expected Alembic heads are known, compares them with the revision stored in the
-`alembic_version` table. Check failures are logged in full and reported to callers as a short
+A check is an async callable with a `name`. The database check connects, runs `SELECT 1` and
+compares the Alembic heads the code expects (`packaged_heads`, from the store) with the revision
+stored in the `alembic_version` table, so a service whose migrations are missing or behind is not
+ready. Check failures are logged in full and reported to callers as a short
 reason that never contains connection strings or credentials.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import logging
 import re
@@ -19,6 +21,7 @@ from typing import Any, Protocol
 
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_platform.settings import ConfigError, Settings
+from lorebase_store.migrations import head_revisions
 
 logger = logging.getLogger("lorebase.keeper.readiness")
 
@@ -26,6 +29,12 @@ MigrationHeads = Callable[[], Collection[str]]
 """Returns the Alembic head revisions the running code expects; empty skips the comparison."""
 
 _DRIVER_SUFFIX = re.compile(r"^(postgres(?:ql)?)\+\w+://")
+
+
+@functools.cache
+def packaged_heads() -> tuple[str, ...]:
+    """Alembic head revisions of the installed store code (read once: they cannot change)."""
+    return head_revisions()
 
 
 class CheckStatus(StrEnum):
@@ -97,11 +106,16 @@ class DatabaseCheck:
         self._expected_heads = expected_heads
         self._connect = connect
 
+    @property
+    def expected_heads(self) -> frozenset[str]:
+        """Revisions the database must be at; empty when migrations are not verified."""
+        return frozenset(self._expected_heads()) if self._expected_heads else frozenset()
+
     async def __call__(self) -> CheckResult:
         connection = await self._connect(self._dsn, self._timeout_s)
         try:
             await connection.fetchval("SELECT 1")
-            expected = frozenset(self._expected_heads()) if self._expected_heads else frozenset()
+            expected = self.expected_heads
             if not expected:
                 return CheckResult(CheckStatus.OK, "migration revision not verified")
             if await connection.fetchval("SELECT to_regclass('alembic_version')") is None:
