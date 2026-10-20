@@ -11,15 +11,19 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from lorebase_core.expr import ExprLimits
+from lorebase_core.expr import ExprLimits, LinkedRecord
 from lorebase_core.model import (
+    LinkDirection,
     Operation,
+    OperationParameter,
     Precondition,
     ReviewMode,
     ReviewPolicy,
     Schema,
+    UpdateRecordStep,
     load_schema,
 )
+from lorebase_core.types import TypeSpec
 from lorebase_core.validate import LinkDelete, LinkUpsert, RecordDelete, RecordUpsert
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.errors import ProblemError
@@ -366,3 +370,46 @@ async def test_approve_contract_runs_with_the_engine(supply: Schema) -> None:
     tight = OperationSettings(expressions_enabled=True, expression_limits=ExprLimits(max_steps=3))
     limited = await plan_custom(supply, operation, {"contract": "C-3001"}, records, ANA, NOW, tight)
     assert [f.code for f in limited.findings] == ["expression.limit_exceeded"]
+
+
+async def test_links_are_read_through_the_link_reader(supply: Schema) -> None:
+    part, part_attributes = _ids(supply, "Part")
+    _, supplier_attributes = _ids(supply, "Supplier")
+    found = supply.relation_by_api_name("supplied_by")
+    assert found is not None
+    asked: list[tuple[str, LinkDirection, str]] = []
+    status = supplier_attributes["status"]
+
+    async def read_links(
+        relation_id: str, direction: LinkDirection, key: str
+    ) -> list[LinkedRecord]:
+        asked.append((relation_id, direction, key))
+        return [LinkedRecord("S-1001", {status: "active"}), LinkedRecord("S-1007", {})]
+
+    operation = Operation(
+        id=OPERATION_ID,
+        api_name="phase_out_part",
+        description="Phase out a part with several suppliers.",
+        parameters=(OperationParameter(name="part", type=TypeSpec.ref(part), required=True),),
+        preconditions=(
+            Precondition(expression='size(links(part, "supplied_by")) > 1', message="single"),
+        ),
+        steps=(
+            UpdateRecordStep(
+                kind=part,
+                target="params.part",
+                values={part_attributes["lifecycle"]: '"phase_out"'},
+            ),
+        ),
+    )
+    records = FakeRecords({(part, "P-10028"): {part_attributes["name"]: "Seal"}})
+    plan = await plan_custom(
+        supply, operation, {"part": "P-10028"}, records, ANA, NOW, ENABLED, read_links=read_links
+    )
+    assert plan.findings == []
+    assert asked == [(found[0].id, LinkDirection.FORWARD, "P-10028")]
+    [change] = plan.changes
+    assert isinstance(change, RecordUpsert)
+    assert change.record.values[part_attributes["lifecycle"]] == "phase_out"
+    unread = await plan_custom(supply, operation, {"part": "P-10028"}, records, ANA, NOW, ENABLED)
+    assert [f.code for f in unread.findings] == ["expression.evaluation"]

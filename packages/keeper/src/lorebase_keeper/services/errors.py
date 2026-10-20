@@ -41,6 +41,7 @@ SCHEMA_CHANGE_INVALID = ProblemType("schema-change-invalid", 422, "Schema change
 PROTECTED_BRANCH = ProblemType("protected-branch", 409, "Branch is protected")
 REVIEW_REQUIRED = ProblemType("review-required", 409, "Review required")
 EXPRESSIONS_NOT_ENABLED = ProblemType("expressions-not-enabled", 422, "Expressions not enabled")
+PRECONDITION_FAILED = ProblemType("precondition-failed", 422, "Precondition failed")
 ALREADY_EXISTS = ProblemType("already-exists", 409, "Already exists")
 IDEMPOTENCY_CONFLICT = ProblemType("idempotency-conflict", 409, "Idempotency key reused")
 LIMIT_EXCEEDED = ProblemType("limit-exceeded", 409, "Limit exceeded")
