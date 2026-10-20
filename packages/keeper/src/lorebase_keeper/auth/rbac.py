@@ -99,6 +99,24 @@ class Authorizer:
         grants = await self._grants(principal, domain_id)
         return any(permission in self._roles.get(grant.role, frozenset()) for grant in grants)
 
+    async def granted_kinds(
+        self, principal: Principal, permission: Permission, domain_id: str
+    ) -> frozenset[str]:
+        """Kinds that grants narrowed to a Kind give `permission` on, on every branch and
+        Revision of the Domain. Grants not narrowed to a Kind are not listed."""
+        if principal.method == "none":
+            return frozenset()
+        if principal.key_scopes and domain_scope(domain_id) not in principal.key_scopes:
+            return frozenset()
+        grants = await self._grants(principal, domain_id)
+        return frozenset(
+            grant.scope_ref
+            for grant in grants
+            if grant.scope_type is GrantScope.KIND
+            and grant.scope_ref is not None
+            and permission in self._roles.get(grant.role, frozenset())
+        )
+
     async def allows_installation(self, principal: Principal, permission: Permission) -> bool:
         """Whether `principal` holds an installation-level permission.
 

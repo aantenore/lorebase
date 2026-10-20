@@ -34,7 +34,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind
-from lorebase_core.query import QueryError, Target, resolve_where
+from lorebase_core.query import QueryError, Target, condition_kinds, resolve_where
 from lorebase_keeper.reading.compiler import Compiler, json_text
 from lorebase_keeper.reading.points import ReadPoint
 from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupported
@@ -69,8 +69,15 @@ def search_mode(request: SearchRequest) -> SearchMode:
 
 def _target(point: ReadPoint, request: SearchRequest) -> Target:
     if request.kinds is None:
-        kinds = tuple(sorted(point.schema.kinds.values(), key=lambda k: k.id))
+        # Default: every Kind the caller may read; Kinds named explicitly must be readable.
+        kinds = tuple(
+            sorted(
+                (k for k in point.schema.kinds.values() if point.scope.allows(k.api_name)),
+                key=lambda k: k.id,
+            )
+        )
         return Target("search", kinds)
+    point.scope.require(request.kinds)
     found: list[Kind] = []
     for index, name in enumerate(request.kinds):
         kind = point.schema.kind_by_api_name(name)
@@ -115,6 +122,7 @@ async def search(
             )
         except QueryError as error:
             raise query_problem(error, "/body") from None
+        point.scope.require(condition_kinds(where))
 
     compiler = compiler_for(point, runtime)
     r = compiler.records("r")

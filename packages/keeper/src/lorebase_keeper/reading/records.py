@@ -88,6 +88,8 @@ def compiler_for(point: ReadPoint, runtime: ReadRuntime) -> Compiler:
 
 
 def require_kind(point: ReadPoint, api_name: str) -> Kind:
+    """The Kind named `api_name`: 403 when the caller may not read it, 404 when unknown."""
+    point.scope.require([api_name])
     kind = point.schema.kind_by_api_name(api_name)
     if kind is None:
         raise not_found(f"Kind {api_name}")
@@ -171,6 +173,9 @@ async def link_counts(
         for direction in LinkDirection:
             if relation.endpoint(direction) != kind.id:
                 continue
+            far = point.schema.kinds.get(relation.far_endpoint(direction))
+            if far is None or not point.scope.allows(far.api_name):
+                continue  # Links to Kinds the caller may not read are not counted
             if relation.backing is RelationBacking.FOREIGN_KEY:
                 count = await _foreign_key_count(session, point, relation, direction, row)
                 counts.append(
@@ -415,6 +420,7 @@ def require_hop(point: ReadPoint, kind: Kind, name: str) -> Hop:
     hop = resolve_hop(point.schema, target, name)
     if isinstance(hop, str):
         raise not_found(f"Relation {name} of Kind {kind.api_name}")
+    point.scope.require([kind.api_name, *(k.api_name for k in hop.far.kinds)])
     return hop
 
 

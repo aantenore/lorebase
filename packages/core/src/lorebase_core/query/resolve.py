@@ -296,6 +296,26 @@ class QueryPlan:
     aggregate: AggregatePlan | None
 
 
+def condition_kinds(condition: Condition | None) -> frozenset[str]:
+    """Api names of the Kinds a condition reaches through Relation predicates."""
+    match condition:
+        case LinkExists(hop=hop, where=where) | LinkCount(hop=hop, where=where):
+            return frozenset(k.api_name for k in hop.far.kinds) | condition_kinds(where)
+        case Conjunction(items=items) | Disjunction(items=items):
+            return frozenset().union(*(condition_kinds(item) for item in items))
+        case Negation(item=item):
+            return condition_kinds(item)
+    return frozenset()
+
+
+def plan_kinds(plan: QueryPlan) -> frozenset[str]:
+    """Api names of every Kind a query reads: its target, Relation predicates and includes."""
+    kinds = {k.api_name for k in plan.target.kinds} | condition_kinds(plan.where)
+    for include in plan.include:
+        kinds |= {k.api_name for k in include.hop.far.kinds} | condition_kinds(include.where)
+    return frozenset(kinds)
+
+
 # Resolution -------------------------------------------------------------------------------
 
 

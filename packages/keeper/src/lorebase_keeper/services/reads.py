@@ -4,7 +4,8 @@ Every read path (records and links, query and search, Revisions, log and diff, s
 listings) resolves what it reads first and then checks the permission against it:
 
 - a grant not narrowed to a branch (Domain-wide, or narrowed to the Kind being read) covers
-  every Revision;
+  every Revision; a grant narrowed to a Kind covers only that Kind, so the record reads
+  check every Kind a request touches against `ReadGuard.granted_kinds`;
 - a branch, or `at` / a diff side naming a branch, is checked with
   `AccessContext(branch=<that branch>)`;
 - a tag or a bare Revision id is a pointer into the history: it is allowed when the caller may
@@ -28,7 +29,7 @@ from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext, Authorizer
 from lorebase_keeper.context import StoreAccess, require_domain, resolve_revision
-from lorebase_keeper.errors import ProblemError
+from lorebase_keeper.errors import FORBIDDEN, ProblemError
 from lorebase_store.models.enums import RefKind
 from lorebase_store.repositories import DomainRow, RefRepository, RevisionRepository
 
@@ -139,6 +140,24 @@ class ReadGuard:
     async def wide(self) -> bool:
         """Whether the grants cover every Revision (none of them is narrowed to branches)."""
         return await self.may(None)
+
+    async def granted_kinds(self) -> frozenset[str]:
+        """Kinds the caller may read through grants narrowed to a Kind: every Revision, those
+        Kinds only."""
+        found: frozenset[str] | None = None
+        for permission in self.permissions:
+            kinds = await self.authorizer.granted_kinds(self.principal, permission, self.domain_id)
+            found = kinds if found is None else found & kinds
+        return found or frozenset()
+
+    def kind_denied(self, kind: str) -> ProblemError:
+        """403 for a Kind outside the Kinds a Kind-narrowed caller may read."""
+        permission = self.permissions[0]
+        return ProblemError(
+            FORBIDDEN,
+            f"Missing permission {permission.value} on Kind {kind} in Domain {self.domain_id}.",
+            extensions={"permission": permission.value, "domain": self.domain_id, "kind": kind},
+        )
 
     async def precheck(self) -> None:
         """403 before any lookup when no grant of the caller holds a permission at all."""

@@ -13,7 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind, LinkDirection
-from lorebase_core.query import Hop, QueryError, Target, resolve_hop, resolve_where
+from lorebase_core.query import (
+    Hop,
+    QueryError,
+    Target,
+    condition_kinds,
+    resolve_hop,
+    resolve_where,
+)
 from lorebase_keeper.reading.compiler import record_columns
 from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupported
@@ -65,6 +72,7 @@ async def traverse(
         hop = resolve_hop(point.schema, current, step.relation)
         if isinstance(hop, str):
             raise invalid(f"{pointer}/relation", hop, "unknown_relation")
+        point.scope.require(k.api_name for k in hop.far.kinds)
         limit = step.limit or caps.max_nodes_per_hop
         if limit > caps.max_nodes_per_hop:
             raise invalid(
@@ -80,6 +88,7 @@ async def traverse(
             )
         except QueryError as error:
             raise query_problem(error, pointer) from None
+        point.scope.require(condition_kinds(where))
         rows: list[Mapping[Any, Any]] = []
         if frontier:
             query = compiler.neighbors(hop, frontier, where=where, limit=limit + 1)
@@ -213,8 +222,8 @@ def _hops(
             if wanted is not None and (relation.id, direction) not in wanted:
                 continue
             far: Kind | None = point.schema.kinds.get(relation.far_endpoint(direction))
-            if far is None:
-                continue
+            if far is None or not point.scope.allows(far.api_name):
+                continue  # Kinds the caller may not read are left out of the neighborhood
             name = (
                 relation.api_name
                 if direction is LinkDirection.FORWARD

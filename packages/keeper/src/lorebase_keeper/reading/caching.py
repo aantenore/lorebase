@@ -38,6 +38,8 @@ class CacheKey:
     revision: str
     path: str
     query: tuple[tuple[str, str], ...]
+    variant: str = ""
+    """What else the body depends on, such as the Kinds the caller may read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,9 +118,9 @@ def build_cache(settings: ReadCacheSettings) -> ResponseCache | None:
     return InMemoryResponseCache(settings) if settings.enabled else None
 
 
-def cache_key(request: Request, domain_id: str, revision: str) -> CacheKey:
+def cache_key(request: Request, domain_id: str, revision: str, variant: str = "") -> CacheKey:
     query = tuple(sorted(request.query_params.multi_items()))
-    return CacheKey(domain_id, revision, request.url.path, query)
+    return CacheKey(domain_id, revision, request.url.path, query, variant)
 
 
 def entity_tag(key: CacheKey) -> str:
@@ -126,6 +128,8 @@ def entity_tag(key: CacheKey) -> str:
     digest = hashlib.sha256(key.path.encode())
     for name, value in key.query:
         digest.update(b"\x00" + name.encode() + b"\x1f" + value.encode())
+    if key.variant:
+        digest.update(b"\x1e" + key.variant.encode())
     return f'"{key.revision}.{digest.hexdigest()[:16]}"'
 
 
@@ -146,13 +150,15 @@ async def respond(
     produce: Callable[[], Awaitable[BaseModel]],
     time_travel: bool = False,
     headers: Mapping[str, str] | None = None,
+    variant: str = "",
 ) -> Response:
     """Answer a GET read: 304, a cached body, or `produce()` serialized and cached.
 
     `revision` names everything the response depends on besides the request (one Revision id,
-    or several joined for a diff); `headers` are added to every answer.
+    or several joined for a diff); `variant` anything else it depends on, such as the Kinds
+    the caller may read; `headers` are added to every answer.
     """
-    key = cache_key(request, domain_id, revision)
+    key = cache_key(request, domain_id, revision, variant)
     tag = entity_tag(key)
     common = {"ETag": tag, "Cache-Control": CACHE_CONTROL, **(headers or {})}
     if _matches(request, tag):

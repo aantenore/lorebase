@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ValidationError
 
 from lorebase_core.query import Query as DslQuery
-from lorebase_core.query import QueryError, QueryPlan, resolve_query
+from lorebase_core.query import QueryError, QueryPlan, plan_kinds, resolve_query
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, records, search
 from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
@@ -56,7 +56,6 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 }
 
 DataRead = Annotated[ReadGuard, Depends(read_guard())]
-KindRead = Annotated[ReadGuard, Depends(read_guard(kind_param="kind"))]
 Branch = Annotated[
     str | None, Query(description="Branch to read; default: the Domain's default branch.")
 ]
@@ -75,7 +74,7 @@ _NOT_MODIFIED: dict[int | str, dict[str, Any]] = {
 
 def _mark(response: Response, point: ReadPoint, body: BaseModel) -> None:
     """Headers of a POST read: Revision, and an ETag of the Revision and the request body."""
-    digest = fingerprint(body.model_dump(mode="json"))
+    digest = fingerprint(body.model_dump(mode="json"), point.scope.variant)
     response.headers[REVISION_HEADER] = point.revision_hex
     response.headers["ETag"] = f'"{point.revision_hex}.{digest}"'
     response.headers["Cache-Control"] = CACHE_CONTROL
@@ -92,6 +91,7 @@ async def _answer(
         produce=produce,
         time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
+        variant=point.scope.variant,
     )
 
 
@@ -104,10 +104,15 @@ def _limit(runtime: ReadRuntime, limit: int | None) -> int:
 
 
 def _plan(query: DslQuery, point: ReadPoint, runtime: ReadRuntime, prefix: str) -> QueryPlan:
+    """The resolved query, once every Kind it reads is one the caller may read."""
+    if query.kind is not None:
+        point.scope.require([query.kind])
     try:
-        return resolve_query(query, point.schema, runtime.read.query_limits())
+        plan = resolve_query(query, point.schema, runtime.read.query_limits())
     except QueryError as error:
         raise query_problem(error, prefix) from None
+    point.scope.require(plan_kinds(plan))
+    return plan
 
 
 def _shape(query: DslQuery) -> str:
@@ -126,7 +131,7 @@ def _shape(query: DslQuery) -> str:
 async def list_records(
     domain_id: str,
     kind: str,
-    access: KindRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     request: Request,
@@ -185,7 +190,7 @@ async def list_record_links(
     kind: str,
     key: str,
     relation: str,
-    access: KindRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     request: Request,
@@ -226,7 +231,7 @@ async def get_record(
     domain_id: str,
     kind: str,
     key: str,
-    access: KindRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     request: Request,

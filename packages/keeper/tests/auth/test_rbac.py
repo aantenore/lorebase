@@ -393,3 +393,13 @@ async def test_provider_groups_grant_access_through_group_grants(
     async with client_for(app) as http:
         assert (await http.get(url, headers=member)).status_code == 200
         assert (await http.get(url, headers=outsider)).status_code == 403
+
+
+async def test_granted_kinds_lists_kind_narrowed_grants_only(store: Any) -> None:
+    store.add_grant("acme", "usr_u", "viewer", GrantScope.KIND, "Supplier")
+    store.add_grant("acme", "usr_u", "viewer", GrantScope.BRANCH, "feature/*")
+    store.add_grant("acme", "usr_u", "editor", GrantScope.KIND, "Part")
+    subject = authorizer(store)
+    assert await subject.granted_kinds(user(), P.DATA_READ, "acme") == {"Supplier", "Part"}
+    assert await subject.granted_kinds(user(), P.DATA_READ, "globex") == frozenset()
+    assert await subject.granted_kinds(user(), P.GRANT_MANAGE, "acme") == frozenset()

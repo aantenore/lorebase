@@ -1,7 +1,9 @@
-"""Reads are authorized against the branch or Revision actually read.
+"""Reads are authorized against the branch, Revision and Kinds actually read.
 
 A grant narrowed to `feature/*` must not read `main` data by naming a `main`-only Revision
-through `at`, a tag, a Revision route or a diff side.
+through `at`, a tag, a Revision route or a diff side. A grant narrowed to the Kind `Supplier`
+must not read other Kinds through links, Relation predicates, traversals, neighborhoods or
+search.
 """
 
 from __future__ import annotations
@@ -96,6 +98,9 @@ async def seed(
             store, "branch reader", scope_type=GrantScope.BRANCH, scope_ref="feature/*"
         )
         domain_key = await _principal(store, "domain reader")
+        kind_key = await _principal(
+            store, "supplier reader", scope_type=GrantScope.KIND, scope_ref="Supplier"
+        )
     finally:
         await engine.dispose()
     seeded = Seeded(owner_url=owner_url, app_url=app_url, schema=schema)
@@ -105,7 +110,7 @@ async def seed(
         "main_only": main_only.revision_id.hex(),
         "feature": feature.revision_id.hex(),
     }
-    seeded.facts = {"branch_key": branch_key, "domain_key": domain_key}
+    seeded.facts = {"branch_key": branch_key, "domain_key": domain_key, "kind_key": kind_key}
     return seeded
 
 
@@ -216,3 +221,76 @@ async def test_reachability_walk_is_bounded(seeded: Seeded) -> None:
             at=seeded.revisions["schema"],
         )
     assert status == 403
+
+
+async def _post(
+    http: httpx.AsyncClient, key: str, path: str, body: dict[str, Any]
+) -> httpx.Response:
+    return await http.post(BASE + path, json=body, headers={"Authorization": f"Bearer {key}"})
+
+
+async def test_kind_grant_reads_only_its_kind(seeded: Seeded) -> None:
+    key = seeded.facts["kind_key"]
+    domain_key = seeded.facts["domain_key"]
+    revs = seeded.revisions
+    async with keeper(seeded.app_url, _auth_section()) as http:
+        # its Kind, on any branch and at any Revision
+        assert await _status(http, key, "/kinds/Supplier/records") == 200
+        assert await _status(http, key, "/kinds/Supplier/records/S-1002") == 200
+        assert await _status(http, key, "/kinds/Supplier/records", branch=BRANCH) == 200
+        assert (
+            await _status(http, key, "/kinds/Supplier/records/S-1002", at=revs["main_only"]) == 200
+        )
+        listed = await _post(http, key, "/query", {"kind": "Supplier", "limit": 5})
+        assert listed.status_code == 200
+        assert {i["kind"] for i in listed.json()["items"]} == {"Supplier"}
+
+        # other Kinds directly
+        assert await _status(http, key, "/kinds/Part/records") == 403
+        assert await _status(http, key, "/kinds/Part/records/P-10001") == 403
+        assert (await _post(http, key, "/query", {"kind": "Part"})).status_code == 403
+        # far-side Records of another Kind through Links
+        assert await _status(http, key, "/kinds/Supplier/records/S-1005/links/supplies") == 403
+        assert await _status(http, key, "/relations/supplied_by/links") == 403
+        # Relation predicates and includes reaching another Kind
+        via = {"kind": "Supplier", "where": {"via": "supplies"}}
+        assert (await _post(http, key, "/query", via)).status_code == 403
+        count = {"kind": "Supplier", "where": {"count": "supplies", "op": "gte", "value": 1}}
+        assert (await _post(http, key, "/query", count)).status_code == 403
+        include = {"kind": "Supplier", "include": {"supplies": {"limit": 1}}}
+        assert (await _post(http, key, "/query", include)).status_code == 403
+        where = '{"via": "supplies"}'
+        assert await _status(http, key, "/kinds/Supplier/records", where=where) == 403
+        # traversal hops into another Kind
+        hop = {"start": {"kind": "Supplier", "key": "S-1005"}, "path": [{"relation": "supplies"}]}
+        assert (await _post(http, key, "/traverse", hop)).status_code == 403
+        # history is not limited to Kinds: refused
+        assert await _status(http, key, f"/revisions/{revs['data']}") == 403
+
+        # Link counts leave out Relations to other Kinds, also when a wider caller's response
+        # for the same request is cached
+        record = "/kinds/Supplier/records/S-1005"
+        assert await _status(http, domain_key, record, links="true") == 200
+        counted = await http.get(
+            BASE + record, params={"links": "true"}, headers={"Authorization": f"Bearer {key}"}
+        )
+        assert counted.status_code == 200
+        assert "supplies" not in {c["relation"] for c in counted.json()["record"]["links"]}
+
+        # neighborhoods keep to the readable Kinds
+        hood = await _post(
+            http, key, "/neighborhood", {"seeds": [{"kind": "Supplier", "key": "S-1005"}]}
+        )
+        assert hood.status_code == 200
+        assert {n["kind"] for n in hood.json()["nodes"]} == {"Supplier"}
+        assert hood.json()["edges"] == []
+        seed = {"seeds": [{"kind": "Part", "key": "P-10001"}]}
+        assert (await _post(http, key, "/neighborhood", seed)).status_code == 403
+
+        # search filters to the readable Kinds, and refuses others named explicitly
+        found = await _post(http, key, "/search", {"q": "Kavsen Aloys"})
+        assert found.status_code == 200
+        assert found.json()["items"]
+        assert {i["kind"] for i in found.json()["items"]} == {"Supplier"}
+        named = await _post(http, key, "/search", {"q": "bearing", "kinds": ["Part"]})
+        assert named.status_code == 403

@@ -10,7 +10,7 @@ authorized against what it reads (`services.reads`).
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -53,14 +53,39 @@ class ServedFrom(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class KindScope:
+    """The Kinds a read may touch: every Kind (`kinds` is None), or only the Kinds named by
+    the caller's Kind-narrowed grants."""
+
+    guard: ReadGuard
+    kinds: frozenset[str] | None = None
+
+    def allows(self, kind: str) -> bool:
+        return self.kinds is None or kind in self.kinds
+
+    @property
+    def variant(self) -> str:
+        """Distinguishes cached responses built for callers limited to different Kinds."""
+        return "" if self.kinds is None else "kinds=" + ",".join(sorted(self.kinds))
+
+    def require(self, kinds: Iterable[str]) -> None:
+        """403 naming the first Kind (by api name) the caller may not read."""
+        for kind in sorted(kinds):
+            if not self.allows(kind):
+                raise self.guard.kind_denied(kind)
+
+
+@dataclass(frozen=True, slots=True)
 class ReadPoint:
-    """A resolved read: the Domain, the branch, the Revision served and its schema."""
+    """A resolved read: the Domain, the branch, the Revision served, its schema and the Kinds
+    the caller may read there."""
 
     domain: DomainRow
     branch: str
     revision: RevisionRow
     schema: Schema
     served_from: ServedFrom
+    scope: KindScope
 
     @property
     def materialized(self) -> bool:
@@ -75,26 +100,24 @@ def not_found(what: str) -> ProblemError:
     return ProblemError(NOT_FOUND, f"{what} not found.")
 
 
-def read_guard(*, kind_param: str | None = None) -> Callable[..., Awaitable[ReadGuard]]:
+def read_guard() -> Callable[..., Awaitable[ReadGuard]]:
     """Dependency: the authenticated reader of the Domain named by the path (401 otherwise).
 
-    `data.read` itself is checked once the read point is resolved (`services.reads`).
+    `data.read` itself is checked once the read point is resolved (`services.reads`), and
+    the Kinds a request touches against the point's `KindScope`.
     """
 
     async def dependency(
         request: Request, principal: PrincipalDep, auth: AuthDep, keeper: KeeperSettingsDep
     ) -> ReadGuard:
-        params = request.path_params
-        domain_id = str(params["domain_id"])
+        domain_id = str(request.path_params["domain_id"])
         annotate(request, domain_id=domain_id, permission=Permission.DATA_READ.value)
-        kind = params.get(kind_param) if kind_param else None
         return ReadGuard(
             authorizer=auth.authorizer,
             principal=principal,
             permissions=(Permission.DATA_READ,),
             domain_id=domain_id,
             max_depth=keeper.reads.reachability_max_depth,
-            kind=None if kind is None else str(kind),
         )
 
     return dependency
@@ -163,14 +186,21 @@ async def resolve_point(
     branch: str | None,
     at: str | None,
 ) -> ReadPoint:
-    """Resolve and authorize the read point of a request (see module doc)."""
+    """Resolve and authorize the read point of a request (see module doc).
+
+    Callers who may not read the point in full but hold grants narrowed to Kinds read it
+    limited to those Kinds: such grants cover every branch and Revision.
+    """
     domain = await open_domain(session, guard)
-    ref = await open_branch(session, guard, domain, branch)
-    revision = (
-        await RevisionRepository(session, domain.id).require(ref.head)
-        if at is None
-        else await open_revision(session, guard, domain, at)
-    )
+    try:
+        ref, revision = await _open_point(session, guard, domain, branch, at)
+        scope = KindScope(guard)
+    except ProblemError as error:
+        granted = await guard.granted_kinds() if error.status_code == 403 else frozenset()
+        if not granted:
+            raise
+        ref, revision = await _locate_point(session, guard, domain, branch, at)
+        scope = KindScope(guard, granted)
     if revision.id == ref.head:
         materialized = await MaterializedRepository(
             session, domain.id, ref.name, writes=runtime.store_settings.writes
@@ -180,9 +210,34 @@ async def resolve_point(
             if schema is None:
                 schema = load_compiled(materialized.compiled)
                 runtime.schemas.put(domain.id, materialized.schema_hash, schema)
-            return ReadPoint(domain, ref.name, revision, schema, ServedFrom.MATERIALIZED)
+            return ReadPoint(domain, ref.name, revision, schema, ServedFrom.MATERIALIZED, scope)
     schema = await schema_at(session, runtime, domain.id, revision)
-    return ReadPoint(domain, ref.name, revision, schema, ServedFrom.TREE)
+    return ReadPoint(domain, ref.name, revision, schema, ServedFrom.TREE, scope)
+
+
+async def _open_point(
+    session: AsyncSession, guard: ReadGuard, domain: DomainRow, branch: str | None, at: str | None
+) -> tuple[RefRow, RevisionRow]:
+    """Branch and Revision of a read, authorized in full."""
+    ref = await open_branch(session, guard, domain, branch)
+    if at is None:
+        return ref, await RevisionRepository(session, domain.id).require(ref.head)
+    return ref, await open_revision(session, guard, domain, at)
+
+
+async def _locate_point(
+    session: AsyncSession, guard: ReadGuard, domain: DomainRow, branch: str | None, at: str | None
+) -> tuple[RefRow, RevisionRow]:
+    """Branch and Revision of a read limited to Kinds; unknown names answer 403."""
+    ref = await RefRepository(session, domain.id).get(branch or domain.default_branch)
+    if ref is None or ref.kind is not RefKind.BRANCH:
+        raise guard.denied()
+    if at is None:
+        return ref, await RevisionRepository(session, domain.id).require(ref.head)
+    found = await find_revision(session, domain.id, at)
+    if found is None:
+        raise guard.denied()
+    return ref, found[0]
 
 
 async def schema_at(

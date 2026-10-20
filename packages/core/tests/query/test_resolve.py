@@ -20,6 +20,7 @@ from lorebase_core.query import (
     Query,
     QueryError,
     QueryLimits,
+    plan_kinds,
     resolve_query,
     resolve_where,
     target_of_kind,
@@ -254,3 +255,20 @@ def test_standalone_predicates_resolve_against_a_target() -> None:
             SCHEMA,
             LIMITS,
         )
+
+
+def test_plan_kinds_lists_every_kind_a_query_reads() -> None:
+    assert plan_kinds(plan({"kind": "Supplier"})) == {"Supplier"}
+    resolved = plan(
+        {
+            "kind": "Supplier",
+            "where": {
+                "and": [
+                    {"not": {"via": "supplies", "where": {"via": "made_at"}}},
+                    {"count": "contracts", "op": "gte", "value": 1},
+                ]
+            },
+            "include": {"flagged_by": {"limit": 1}},
+        }
+    )
+    assert plan_kinds(resolved) == {"Supplier", "Part", "Plant", "Contract", "RiskFlag"}
