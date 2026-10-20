@@ -186,6 +186,18 @@ class MaterializeSettings(SectionModel):
     verify_max_divergences: int = Field(
         default=1000, ge=1, description="Divergences listed by a verification report."
     )
+    derivations_enabled: bool = Field(
+        default=True,
+        description="Recompute derived Attributes (expression and aggregate Derivations) in "
+        "the materialized head on every commit, merge and rebuild.",
+    )
+    derivation_max_incremental_records: int = Field(
+        default=10000,
+        ge=1,
+        description="Records one Derivation recomputes incrementally in one commit (Records "
+        "written plus Records whose Links or linked Records changed); above this the "
+        "Derivation is recomputed for every Record of its Kind, in batches of read_batch_rows.",
+    )
 
 
 class GcSettings(SectionModel):

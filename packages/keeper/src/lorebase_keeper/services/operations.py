@@ -550,7 +550,7 @@ def _link_reader(
         far = {(link.to_key if forward else link.from_key): link for link in found}
         records = await rows.records(relation.far_endpoint(direction), list(far))
         return [
-            LinkedRecord(far_key, records[far_key].values, link.values)
+            LinkedRecord(far_key, records[far_key].inputs, link.values)
             for far_key, link in far.items()
             if far_key in records
         ]
@@ -585,6 +585,11 @@ async def _plan(
         found = await rows.records(kind_id, keys)
         return {key: row.values for key, row in found.items()}
 
+    async def read_inputs(kind_id: str, keys: Sequence[str]) -> dict[str, Mapping[str, JsonValue]]:
+        """Stored and derived values: what `record()` returns to expressions."""
+        found = await rows.records(kind_id, keys)
+        return {key: row.inputs for key, row in found.items()}
+
     builtin = resolved.builtin
     if builtin is None:
         custom = resolved.custom
@@ -594,7 +599,7 @@ async def _plan(
             schema,
             custom,
             request.parameters,
-            read,
+            read_inputs,
             principal,
             now,
             settings,

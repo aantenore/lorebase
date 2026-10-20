@@ -13,4 +13,7 @@ uv run python examples/merge_demo.py
 ```
 
 The demo is covered by `tests/tooling/test_merge_demo.py`. To load the supply sample into a
-running Keeper through the REST API, follow [the quickstart](../docs/quickstart.md#6-create-a-domain-and-apply-the-supply-schema).
+running Keeper through the REST API, follow [the quickstart](../docs/quickstart.md#6-create-a-domain-and-apply-the-supply-schema):
+the schema is applied as is, CEL Operations and Derivations included, the six Kinds are imported
+with their Links, `Part.supplier_count` and `Part.single_sourced` are computed by the
+materializer, and `flag_supplier_risk` and `approve_contract` run through the Operation endpoint.

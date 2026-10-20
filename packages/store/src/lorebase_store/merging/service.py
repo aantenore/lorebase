@@ -409,6 +409,7 @@ class MergeService:
             schema_hash=prepared.schema_hash,
             refresh_kinds=prepared.refresh_kinds,
             settings=settings,
+            expression_limits=self._runtime.schema.expression_limits,
         )
         refs = RefRepository(session, domain_id)
         try:

@@ -35,9 +35,11 @@ governed writes through two Operations.
   `Contract with_supplier Supplier` and `RiskFlag flags Supplier` (many to one).
 - **Operations:** `flag_supplier_risk` (critical flags go to a Proposal) and `approve_contract`
   (contracts above 500000 go to a Proposal). Preconditions, step values and review policies are
-  CEL source strings; static validation needs `SchemaRules(allow_expressions=True)`.
+  CEL source strings; static validation needs `SchemaRules(allow_expressions=True)` (Keeper and
+  the store set it from `schema.expressions_enabled`, on by default).
 - **Derivations:** `Part.supplier_count` (aggregate over `supplied_by`) and
-  `Part.single_sourced` (expression over `supplier_count`).
+  `Part.single_sourced` (expression over `supplier_count`), both recomputed in the materialized
+  head on every commit.
 - **Sources:** `approved.suppliers` (CSV, snapshot, auto-merge when clean) and
   `erp.purchase_orders` (Postgres table, incremental by watermark, auto-merge for Attributes the
   ERP owns). Connections are secret references such as `secret://env/ERP_DSN`, never literals.

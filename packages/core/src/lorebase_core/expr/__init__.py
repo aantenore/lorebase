@@ -3,7 +3,8 @@ the Schema and evaluated in a bounded, deterministic sandbox without I/O.
 
 - ``compile(expression, environment)`` parses and type checks; environments come from
   ``operation_environment`` and ``record_environment``.
-- ``compile_operation`` / ``compile_derivation`` compile every expression of an element.
+- ``compile_operation`` / ``compile_derivation`` compile every expression of an element;
+  ``derivation_inputs`` and ``links_read`` tell what a Derivation reads.
 - ``evaluate_precondition``, ``check_preconditions``, ``evaluate_review_policy`` and
   ``plan_steps`` evaluate Operations; ``evaluate_derivation`` and ``matches_filter``
   evaluate Derivations. Records come from a caller-supplied ``RecordResolver``.
@@ -17,10 +18,17 @@ from lorebase_core.expr.derivations import (
     CompiledDerivation,
     compile_derivation,
     derivation_expression_errors,
+    derivation_inputs,
     evaluate_derivation,
+    links_read,
     matches_filter,
 )
-from lorebase_core.expr.environment import Environment, operation_environment, record_environment
+from lorebase_core.expr.environment import (
+    Environment,
+    LinkField,
+    operation_environment,
+    record_environment,
+)
 from lorebase_core.expr.errors import ExprError, ExprErrorCode, Position
 from lorebase_core.expr.limits import ExprLimits
 from lorebase_core.expr.operations import (
@@ -58,6 +66,7 @@ __all__ = [
     "ExprErrorCode",
     "ExprLimits",
     "ExprType",
+    "LinkField",
     "LinkedRecord",
     "LinksRequest",
     "MemoryResolver",
@@ -75,10 +84,12 @@ __all__ = [
     "compile_derivation",
     "compile_operation",
     "derivation_expression_errors",
+    "derivation_inputs",
     "evaluate_derivation",
     "evaluate_precondition",
     "evaluate_review_policy",
     "from_type_spec",
+    "links_read",
     "matches_filter",
     "operation_environment",
     "operation_expression_errors",

@@ -310,6 +310,7 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         schema_hash=prepared.schema_hash,
         refresh_kinds=prepared.refresh_kinds,
         settings=settings,
+        expression_limits=request.runtime.schema.expression_limits,
     )
     if indexes is not None:
         await indexes.ensure(prepared.schema)
