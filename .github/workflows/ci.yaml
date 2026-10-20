@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# No secrets are used anywhere in this workflow, and no model provider key exists in CI: tests
+# run against the deterministic fake provider.
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    name: Lint and import contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync
+      - name: ruff and import-linter
+        run: make lint
+
+  types:
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync
+      - name: mypy strict for core, store and keeper; default settings for the rest
+        run: make type
+
+  unit:
+    name: Unit tests (no network)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync
+      - name: pytest inside an empty network namespace
+        # The test suite also refuses outbound sockets in-process (conftest.py); this second
+        # layer removes every network interface for the whole run, and the step first proves
+        # that the namespace really has no connectivity.
+        env:
+          UV_NO_SYNC: "1"
+        run: |
+          isolated() {
+            sudo -E unshare --net -- \
+              setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
+              env "PATH=$PATH" "$@"
+          }
+          if isolated uv run python -c \
+            "import socket; socket.create_connection(('1.1.1.1', 53), timeout=3)" 2>/dev/null; then
+            echo "the network namespace is not isolated" >&2
+            exit 1
+          fi
+          isolated make test-unit
+
+  integration:
+    name: Integration tests (Postgres 16 with pgvector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: lorebase
+          POSTGRES_PASSWORD: lorebase-ci
+          POSTGRES_DB: lorebase_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lorebase -d lorebase_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      LOREBASE_TEST_DATABASE_URL: postgresql+asyncpg://lorebase:lorebase-ci@localhost:5432/lorebase_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync
+      - name: pytest -m integration (passes while no integration tests exist yet)
+        run: make test-int
+
+  web:
+    name: Web (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apps/web
+      - name: Detect the web app
+        id: detect
+        working-directory: .
+        run: echo "present=$([ -f apps/web/package.json ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: No web app yet
+        if: steps.detect.outputs.present != 'true'
+        working-directory: .
+        run: echo "apps/web does not exist yet; nothing to check."
+      - uses: pnpm/action-setup@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          package_json_file: apps/web/package.json
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm run lint
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm run typecheck
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm run test
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm run build
+
+  # Single required check for branch protection: fails when any job above failed or was cancelled.
+  ci:
+    name: CI
+    if: always()
+    needs: [lint, types, unit, integration, web]
+    runs-on: ubuntu-latest
+    env:
+      RESULTS: ${{ join(needs.*.result, ' ') }}
+    steps:
+      - run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*) exit 1 ;;
+          esac
