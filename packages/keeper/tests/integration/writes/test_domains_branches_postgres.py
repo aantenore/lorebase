@@ -77,8 +77,15 @@ async def test_domain_lifecycle(
         assert (
             await http.delete(DOMAIN, headers=admin, params={"confirm": "supply"})
         ).status_code == 204
-        # the creator's grant went with the Domain: nothing tells whether it existed
-        assert (await http.get(DOMAIN, headers=admin)).status_code == 403
+        # an installation admin is told the Domain is gone; the viewer, whose grant went with
+        # it, is not told whether it ever existed
+        gone = await http.get(DOMAIN, headers=admin)
+        assert gone.status_code == 404
+        assert gone.json()["code"] == "not-found"
+        assert (await http.get(DOMAIN, headers=viewer)).status_code == 403
+        assert (
+            await http.delete(DOMAIN, headers=admin, params={"confirm": "supply"})
+        ).status_code == 404
 
     assert await _count(database_url, "SELECT count(*) FROM revisions") == 0
     actions = await _count(

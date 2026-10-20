@@ -24,7 +24,7 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_keeper.auth.deps import missing_permission
+from lorebase_keeper.auth.deps import missing_permission, refusal
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext, Authorizer
@@ -160,12 +160,13 @@ class ReadGuard:
         )
 
     async def precheck(self) -> None:
-        """403 before any lookup when no grant of the caller holds a permission at all."""
+        """403 before any lookup when no grant of the caller holds a permission at all; 404
+        instead when the Domain does not exist and the caller may be told so."""
         for permission in self.permissions:
             if not await self.authorizer.allows_anywhere(
                 self.principal, permission, self.domain_id
             ):
-                raise missing_permission(permission, self.domain_id)
+                raise await refusal(self.authorizer, self.principal, permission, self.domain_id)
 
     def denied(self) -> ProblemError:
         return missing_permission(self.permissions[0], self.domain_id)
