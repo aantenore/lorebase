@@ -1,11 +1,15 @@
 .DEFAULT_GOAL := help
 
 UV ?= uv
+UVX ?= uvx
+PNPM ?= pnpm
+WEB_DIR ?= apps/web
+AUDIT_DIR ?= build/audit
 PY_PATHS := packages scripts tests
 STRICT_SRC := packages/core/src packages/store/src packages/keeper/src
 OTHER_SRC := packages/platform/src packages/inference/src packages/client/src packages/cli/src
 
-.PHONY: help sync fmt lint type test-unit test-int test-changed
+.PHONY: help sync fmt lint type test-unit test-int test-changed security
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -34,3 +38,26 @@ test-int: ## Integration tests (need Docker for Postgres)
 
 test-changed: ## Run only the tests impacted by the current diff
 	$(UV) run python scripts/test_changed.py
+
+# Fails only on advisories that have a fixed version; unfixable ones are listed as warnings.
+define AUDIT_CHECK
+import json, sys
+deps = json.load(open(sys.argv[1]))["dependencies"]
+found = [(d["name"], d["version"], v["id"], v["fix_versions"]) for d in deps for v in d.get("vulns", [])]
+for name, version, vid, fixes in found:
+    print(f"{name} {version} {vid} fix: {', '.join(fixes) or 'none yet'}")
+sys.exit(1 if any(fixes for *_, fixes in found) else 0)
+endef
+export AUDIT_CHECK
+
+security: ## Advisories: pip-audit on the uv lock, pnpm audit (high) in apps/web
+	@mkdir -p $(AUDIT_DIR)
+	@rm -f $(AUDIT_DIR)/pip-audit.json
+	$(UV) export --frozen --all-packages --no-dev --no-emit-workspace --quiet -o $(AUDIT_DIR)/requirements.txt
+	-$(UVX) pip-audit -r $(AUDIT_DIR)/requirements.txt --no-deps --disable-pip --progress-spinner off -f json -o $(AUDIT_DIR)/pip-audit.json
+	$(UV) run --no-project python -c "$$AUDIT_CHECK" $(AUDIT_DIR)/pip-audit.json
+	@# --ignore-unfixable makes pnpm write an empty pnpm-workspace.yaml; remove it unless it was already there
+	@cd $(WEB_DIR) && keep=$$([ -e pnpm-workspace.yaml ] && echo 1); \
+		echo "$(PNPM) audit --audit-level=high --ignore-unfixable"; \
+		$(PNPM) audit --audit-level=high --ignore-unfixable; status=$$?; \
+		[ -n "$$keep" ] || rm -f pnpm-workspace.yaml; exit $$status

@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work as documented
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Do not include secrets, tokens or personal data in logs.
+        For security problems use the private channel described in SECURITY.md instead.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core (engine, merge, schema)
+        - store (Postgres schema, migrations)
+        - keeper (API)
+        - inference
+        - client or CLI
+        - web app
+        - deploy (Docker, compose)
+        - CI or tooling
+        - docs
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Commands, input data or a minimal schema that triggers the problem.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "main at abc1234"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python and Node versions, Postgres version, how you run Lorebase.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Trimmed output with secrets removed.
+      render: text

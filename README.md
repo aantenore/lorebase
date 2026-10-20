@@ -5,6 +5,10 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: M1 in progress](https://img.shields.io/badge/status-M1%20in%20progress%20%2F%20pre--alpha-orange)
 [![CI](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml/badge.svg)](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml)
+[![CodeQL](https://github.com/aantenore/lorebase/actions/workflows/codeql.yaml/badge.svg)](https://github.com/aantenore/lorebase/actions/workflows/codeql.yaml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/aantenore/lorebase/badge)](https://scorecard.dev/viewer/?uri=github.com/aantenore/lorebase)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab)
+![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 ![MCP](https://img.shields.io/badge/MCP-native-6f42c1)
 
@@ -21,6 +25,10 @@ Lorebase is an **open-source ontology platform** and a **versioned knowledge gra
 - **expose** it to external agents through a REST API and an **MCP server**, with governed write Operations and a read path that never calls an LLM.
 
 Agents live outside Lorebase, in any framework or language. Lorebase is their knowledge system of record.
+
+## Why we exist
+
+AI agents are only as good as the knowledge they can trust, and most company knowledge lives in tables, documents and heads, with no history and no review. Lorebase is an open-source ontology platform that turns it into a versioned knowledge graph for AI agents: typed, governed, and stored in Postgres only, with no graph database to run. It brings git-like branching to knowledge, so changes are proposed on a Branch, reviewed, merged and traceable down to the attribute value, and it is MCP-native, so any agent framework can read it and change it through governed Operations.
 
 ## Why
 
@@ -170,6 +178,13 @@ Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).
 - [Glossary](docs/glossary.md): the Lorebase vocabulary with examples
 - [Comparison](docs/comparison.md): Lorebase next to similar products
 - [M1 plan](docs/plan/m1.md): ordered implementation tasks for the first milestone
+
+## Community
+
+- [Issues](https://github.com/aantenore/lorebase/issues): bug reports, feature requests and questions, with templates
+- [Discussions](https://github.com/aantenore/lorebase/discussions): ideas, use cases and design conversations
+- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow, commit conventions and labels
+- [SECURITY.md](SECURITY.md): how to report a vulnerability privately
 
 ## Contributing
 

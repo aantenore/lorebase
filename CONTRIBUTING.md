@@ -15,16 +15,27 @@ By participating you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Lorebase has its own glossary ([docs/glossary.md](docs/glossary.md)). Use it in code, API, UI and docs: Domain, Kind, Attribute, Relation, Trait, Operation, Derivation, Source, Record, Link, Branch, Revision, Proposal, Conflict, Lineage. Pull requests that introduce other names for these concepts will be asked to rename them.
 
-## Development setup (from M1)
+## Development workflow
 
-Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Docker, Node.js LTS with pnpm (web app, from M2).
+Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Docker (integration tests), Node.js 24 with pnpm (web app in `apps/web`).
 
 ```bash
-uv sync
-make lint type
-make test-changed      # tests impacted by your changes only
-make test-int          # integration tests (needs Docker for Postgres)
+uv sync --all-packages            # install every workspace package and the dev tools
+make lint type test-unit          # ruff and import contracts, mypy, unit tests
+make test-changed                 # only the tests impacted by your diff
+make test-int                     # integration tests (needs Docker for Postgres)
+make security                     # dependency advisories (see below)
 ```
+
+1. Branch from `main` (`feat/...`, `fix/...`, `docs/...`).
+2. Make a focused change with tests, then run `make lint type test-changed` before pushing. The full suite runs in CI on every pull request.
+3. Write the commit subject in conventional form: imperative mood, at most 72 characters, no trailing period, optional type prefix (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`). Explain why in the body when it is not obvious.
+4. Commits carry the author only: no trailers (`Signed-off-by`, `Co-authored-by` and similar).
+5. Open a pull request; CI must be green before merge.
+
+### Dependency advisories
+
+`make security` exports the locked Python runtime dependencies with `uv export` and checks them with `uvx pip-audit`, then runs `pnpm audit --audit-level=high` in `apps/web`. Advisories that have no fixed version yet are reported but do not fail the target; any advisory with a fix does. It needs network access. Dependabot opens weekly grouped update pull requests for Python, npm, GitHub Actions and container images.
 
 ### Testing policy
 
@@ -44,10 +55,31 @@ make test-int          # integration tests (needs Docker for Postgres)
 
 1. Fork and branch from `main` (`feat/...`, `fix/...`, `docs/...`).
 2. Keep pull requests focused on one task or fix.
-3. Write commit messages in the imperative mood with a short subject line and a body explaining why when it is not obvious.
-4. Sign off your commits (`git commit -s`) to certify the [Developer Certificate of Origin](https://developercertificate.org/).
-5. Fill in the pull request template: what changed, why, how it was tested.
-6. A maintainer reviews; CI must be green before merge.
+3. Follow the commit conventions in [Development workflow](#development-workflow).
+4. Fill in the pull request template: what changed, why, how it was tested.
+5. A maintainer reviews; CI must be green before merge.
+
+## Labels
+
+Issues and pull requests use these labels.
+
+| Label | Meaning |
+|-------|---------|
+| `bug`, `enhancement`, `question` | Set by the issue templates |
+| `design` | Feedback on [docs/design.md](docs/design.md) |
+| `good first issue` | Small, well-scoped task suited to a first contribution |
+| `help wanted` | Maintainers would welcome a contribution |
+| `dependencies` | Dependency update pull requests (Dependabot) |
+| `area/core` | Engine: hashing, trees, diff, merge, schema |
+| `area/store` | Postgres schema and migrations |
+| `area/keeper` | REST API, auth, commit pipeline |
+| `area/inference` | Model abstraction and extraction |
+| `area/client` | Python client and CLI |
+| `area/backend` | Python workspace as a whole, tooling and dependencies |
+| `area/web` | Web app in `apps/web` |
+| `area/deploy` | Docker images and compose |
+| `area/ci` | Workflows and repository automation |
+| `area/docs` | Documentation |
 
 ## Reporting bugs
 
