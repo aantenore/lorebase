@@ -1,5 +1,6 @@
-"""Partitioned canonical HAMT: the Revision manifest (design 6.2)."""
+"""Partitioned canonical HAMT: the Revision manifest (design 6.2, 6.7)."""
 
+from lorebase_core.tree.diff import DiffEntry, tree_diff
 from lorebase_core.tree.hamt import (
     TreeChange,
     empty_tree,
@@ -44,6 +45,7 @@ __all__ = [
     "LINK_KEY_SEPARATOR",
     "PARTITION_SCHEMA",
     "BranchNode",
+    "DiffEntry",
     "InMemoryNodeStore",
     "LeafNode",
     "MemoryNodeStore",
@@ -68,6 +70,7 @@ __all__ = [
     "relation_partition",
     "tree_apply",
     "tree_count",
+    "tree_diff",
     "tree_entries",
     "tree_get",
 ]
