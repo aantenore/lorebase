@@ -9,6 +9,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
+from lorebase_core.expr import ExprLimits
 from lorebase_core.infer import InferenceOptions
 from lorebase_core.tree import DEFAULT_LEAF_SIZE
 from lorebase_platform.settings import SectionModel
@@ -88,8 +89,19 @@ class OperationSettings(SectionModel):
     )
     skip_expression_preconditions: bool = Field(
         default=False,
-        description="Expressions are not enabled yet: when true, CEL preconditions are skipped "
-        "(reported as warnings) instead of refusing the execution.",
+        description="When expressions are not enabled: true skips CEL preconditions (reported "
+        "as warnings) instead of refusing the execution.",
+    )
+    expressions_enabled: bool = Field(
+        default=False,
+        description="Evaluate the CEL preconditions, expression review policies and steps of "
+        "stored Operations with the expression engine. When false, Operations that need CEL "
+        "are refused (expressions-not-enabled).",
+    )
+    expression_limits: ExprLimits = Field(
+        default_factory=ExprLimits,
+        description="Budget of one expression: source length, nesting depth, evaluation "
+        "steps and time, sizes of built strings and lists, Record lookups, decimal precision.",
     )
 
     @model_validator(mode="after")

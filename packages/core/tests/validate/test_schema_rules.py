@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import pytest
 
+from lorebase_core.expr import ExprLimits
 from lorebase_core.model import (
     AggregateDerivation,
     AggregateFunction,
@@ -18,6 +19,7 @@ from lorebase_core.model import (
     OperationStep,
     PathDerivation,
     PathStep,
+    Precondition,
     Relation,
     RelationBacking,
     RelationMapping,
@@ -88,6 +90,10 @@ def set_step(schema: Schema, index: int, step: OperationStep) -> Schema:
     steps = list(operation.steps)
     steps[index] = step
     return replace_element(schema, "operations", FLAG_SUPPLIER_RISK, steps=tuple(steps))
+
+
+def flag_parameters() -> tuple[OperationParameter, ...]:
+    return supply_schema(with_operation=True).operations[FLAG_SUPPLIER_RISK].parameters
 
 
 def add_relation(schema: Schema, relation: Relation) -> Schema:
@@ -294,8 +300,8 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
             "operations",
             FLAG_SUPPLIER_RISK,
             parameters=(
-                OperationParameter(name="supplier", type=T("string")),
-                OperationParameter(name="supplier", type=T("string")),
+                *flag_parameters(),
+                OperationParameter(name="reason", type=T("text")),
             ),
         ),
         {C.SCHEMA_API_NAME_DUPLICATE},
@@ -556,7 +562,7 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
     ),
     (
         "operation-step-derived-attribute",
-        lambda s: set_step(s, 0, CreateRecordStep(kind=PART, values={SUPPLIER_COUNT: "1"})),
+        lambda s: set_step(s, 1, CreateRecordStep(kind=PART, values={SUPPLIER_COUNT: "1"})),
         {C.SCHEMA_OPERATION_INVALID},
         EXPRESSIONS,
     ),
@@ -584,9 +590,29 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
             with_operation(s),
             "operations",
             FLAG_SUPPLIER_RISK,
-            parameters=(OperationParameter(name="target", type=TypeSpec.ref(ident("knd", 99))),),
+            parameters=(
+                *flag_parameters(),
+                OperationParameter(name="target", type=TypeSpec.ref(ident("knd", 99))),
+            ),
         ),
         {C.SCHEMA_TYPE_REFERENCE_UNKNOWN},
+        EXPRESSIONS,
+    ),
+    (
+        "operation-expression-invalid",
+        lambda s: replace_element(
+            with_operation(s),
+            "operations",
+            FLAG_SUPPLIER_RISK,
+            preconditions=(Precondition(expression="record(supplier).tierr", message="m"),),
+        ),
+        {C.SCHEMA_EXPRESSION_INVALID},
+        EXPRESSIONS,
+    ),
+    (
+        "derivation-filter-invalid",
+        lambda s: set_aggregate(s, filter="tier + 1"),
+        {C.SCHEMA_EXPRESSION_INVALID},
         EXPRESSIONS,
     ),
     # Derivations
@@ -711,6 +737,31 @@ def test_issues_carry_paths() -> None:
     assert issue.path == ("kinds", SUPPLIER, "attributes", TIER, "default")
     assert issue.kind == SUPPLIER
     assert issue.attribute == TIER
+
+
+def test_expression_issues_locate_the_expression() -> None:
+    schema = replace_element(
+        with_operation(supply_schema()),
+        "operations",
+        FLAG_SUPPLIER_RISK,
+        preconditions=(Precondition(expression="params.severity == 1", message="m"),),
+    )
+    (issue,) = validate_schema(schema, EXPRESSIONS)
+    assert issue.code is C.SCHEMA_EXPRESSION_INVALID
+    assert issue.path == ("operations", FLAG_SUPPLIER_RISK, "preconditions", 0, "expression")
+    assert issue.message.startswith("expression: 1:1: cannot compare enum(high, low) with int")
+    assert issue.details == {
+        "error": "expression.type",
+        "expression": "params.severity == 1",
+        "line": 1,
+        "column": 1,
+    }
+    limited = SchemaRules(allow_expressions=True, expression_limits=ExprLimits(max_steps=1))
+    assert validate_schema(with_operation(supply_schema()), limited) == []
+    tight = SchemaRules(allow_expressions=True, expression_limits=ExprLimits(max_source_length=5))
+    assert {i.details["error"] for i in validate_schema(schema, tight)} == {
+        "expression.limit_exceeded"
+    }
 
 
 def test_reserved_names_are_configurable() -> None:

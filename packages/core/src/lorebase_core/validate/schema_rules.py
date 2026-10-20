@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from lorebase_core.model.attribute import Attribute
 from lorebase_core.model.base import ElementStatus, NameStyle, is_valid_api_name
@@ -44,6 +44,9 @@ from lorebase_core.types import (
     encode_value,
 )
 from lorebase_core.validate.issues import Issue, IssueCode, PathPart, Severity
+
+if TYPE_CHECKING:
+    from lorebase_core.expr.limits import ExprLimits
 
 #: Attribute api names reserved for Record envelopes in the API and the query DSL.
 DEFAULT_RESERVED_ATTRIBUTE_NAMES = frozenset({"key", "kind", "ref", "revision"})
@@ -86,12 +89,15 @@ def _where(path: tuple[PathPart, ...]) -> str:
 class SchemaRules:
     """Options of static validation.
 
-    ``allow_expressions`` gates Operations and Derivations that carry CEL expressions, which
-    are only accepted once expression support is enabled.
+    ``allow_expressions`` gates Operations and Derivations that carry CEL expressions. When
+    false they are refused (``schema.expressions_disabled``); when true every expression is
+    parsed and type checked (``schema.expression_invalid``) within ``expression_limits``
+    (the ``ExprLimits`` defaults when unset).
     """
 
     reserved_attribute_names: frozenset[str] = DEFAULT_RESERVED_ATTRIBUTE_NAMES
     allow_expressions: bool = False
+    expression_limits: ExprLimits | None = None
 
 
 class Refs(NamedTuple):
@@ -968,7 +974,16 @@ class _Checker:
         self.check_derivation_cycles()
         for source in self.schema.sources.values():
             self.check_source(source)
+        if self.rules.allow_expressions:
+            self.check_expressions()
         return self.issues
+
+    def check_expressions(self) -> None:
+        """Parse and type check every expression. Imported here because the expression
+        engine itself imports this package."""
+        from lorebase_core.expr.validation import schema_expression_issues
+
+        self.issues.extend(schema_expression_issues(self.schema, self.rules.expression_limits))
 
 
 def validate_schema(schema: Schema, rules: SchemaRules | None = None) -> list[Issue]:

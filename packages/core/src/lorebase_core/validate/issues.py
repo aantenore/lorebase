@@ -45,6 +45,7 @@ class IssueCode(StrEnum):
     SCHEMA_TRAIT_MAPPING_REQUIRED = "schema.trait_mapping_required"
     # Schema: Operations, Derivations, Sources
     SCHEMA_EXPRESSIONS_DISABLED = "schema.expressions_disabled"
+    SCHEMA_EXPRESSION_INVALID = "schema.expression_invalid"
     SCHEMA_OPERATION_REFERENCE_UNKNOWN = "schema.operation_reference_unknown"
     SCHEMA_OPERATION_INVALID = "schema.operation_invalid"
     SCHEMA_DERIVATION_REFERENCE_UNKNOWN = "schema.derivation_reference_unknown"

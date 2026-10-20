@@ -204,8 +204,19 @@ keeper:
     max_issues: 200              # violations listed in one response
     direct_commit_on_protected: false   # true: Operations with review policy `never` commit
                                         # directly to protected branches
-    skip_expression_preconditions: false   # expressions are not enabled yet: true skips CEL
+    skip_expression_preconditions: false   # with expressions off: true skips CEL
                                            # preconditions (reported) instead of refusing
+    expressions_enabled: false   # true: stored Operations evaluate CEL preconditions, review
+                                 # policies and steps (lorebase_core.expr); false: refused
+    expression_limits:           # budget of one expression (lorebase_core.expr.ExprLimits)
+      max_source_length: 4096    # characters of expression source
+      max_depth: 48              # nesting depth of the expression tree
+      max_steps: 10000           # evaluation steps, comprehension iterations included
+      max_duration_ms: 250       # wall-clock safety net behind max_steps
+      max_list_size: 10000       # elements of a list or map built during evaluation
+      max_string_length: 65536   # characters of a string built during evaluation
+      max_record_lookups: 100    # Records read through record() in one evaluation
+      decimal_precision: 34      # significant digits of decimal arithmetic
   proposals:                     # a Domain overrides required_approvals with its own
                                  # `required_approvals` setting; its `merge_policy` setting
                                  # holds the merge policy options of new Proposals

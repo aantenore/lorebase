@@ -275,10 +275,9 @@ def flag_operation() -> Operation:
         parameters=(
             OperationParameter(name="supplier", type=TypeSpec.ref(SUPPLIER), required=True),
             OperationParameter(name="severity", type=TypeSpec.enum("low", "high"), required=True),
+            OperationParameter(name="reason", type=TypeSpec.of("text"), required=True),
         ),
-        preconditions=(
-            Precondition(expression='record(supplier).status != "terminated"', message="No."),
-        ),
+        preconditions=(Precondition(expression='record(supplier).tier != "3"', message="No."),),
         steps=(
             CreateRecordStep(
                 kind=RISK_FLAG, values={SEVERITY: "params.severity", REASON: "params.reason"}
