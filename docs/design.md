@@ -1,0 +1,1369 @@
+# Lorebase Design
+
+Status: founding design, version 0.1
+Owner: Antonio Antenore
+Scope: product intent, domain model, versioning engine, storage, read path, ingestion, governance, agent interface, UI, security, operations, delivery plan.
+
+Decisions marked **[Architect call AC-nn]** are settled for v1. They are listed again in section 20 with rationale and the condition under which they may be revisited.
+
+---
+
+## Table of contents
+
+1. Intent and why
+2. Goals, non-goals, anti-goals
+3. Personas and the 5-day proof scenario
+4. Glossary
+5. Domain model
+6. Versioning engine
+7. Data model and Postgres schema outline
+8. Read path and search
+9. Ingestion: Sources, extraction, Proposals
+10. Operations and governance
+11. Agent interface: REST and MCP
+12. User interface
+13. Security and multi-tenancy
+14. Observability
+15. Deployment
+16. Configuration
+17. Repository layout
+18. Roadmap M1 to M5
+19. Risks
+20. Architect calls (settled decisions)
+
+---
+
+## 1. Intent and why
+
+### 1.1 Intent
+
+Lorebase is the system of record for company knowledge that AI agents consume and act upon. It lets a team model what the company knows (the kinds of things that exist, their attributes, how they relate, what may be done to them), fill that model from structured and unstructured sources, keep every change versioned with branches and reviews, explore it visually, and expose it to agents through a fast, governed interface.
+
+Agents are not built in Lorebase. They live in any framework, any language, any vendor. Lorebase is what they read from and the only place they may change company knowledge, through governed Operations.
+
+### 1.2 Why now
+
+Teams putting agents in front of real business processes hit the same wall:
+
+- **Knowledge is scattered and untyped.** Retrieval over document chunks answers "what does this text say", not "which suppliers are single-sourced for parts used in plant 3". Agents need typed entities and relations, not paragraphs.
+- **Knowledge changes and nobody can say what changed.** When an agent gives a wrong answer, the first question is "what did it know, and since when?". Without revisions and lineage, there is no answer.
+- **Agent writes are dangerous.** Letting an agent update a database directly bypasses validation, permissions and audit. Letting it write only to a chat memory makes the knowledge useless to anyone else.
+- **LLM-built knowledge graphs are unreviewable.** Pipelines that let a model write straight into a graph produce silent drift, duplicates and invented facts.
+- **The proprietary platforms that solve this are closed and expensive.** Operational ontology platforms exist, but they are proprietary, coupled to a large data platform, and not deployable as a small self-hosted service.
+
+### 1.3 Thesis
+
+1. Company knowledge for agents should be **modeled** (typed schema), **versioned** (branches, revisions, merges), **reviewed** (Proposals, never direct LLM writes), and **governed** (Operations with validation, permissions, audit).
+2. The read path must be **deterministic and fast**: no LLM call when an agent asks a question of the knowledge base. LLMs are used offline, to propose knowledge, and humans or policies accept it.
+3. It must run on **one boring, proven store**: Postgres. One database to operate, back up, secure and scale.
+4. It must be **open source** under a permissive license, with enterprise features (RBAC, audit, SSO) in the open core, not behind a paywall.
+
+---
+
+## 2. Goals, non-goals, anti-goals
+
+### 2.1 Goals
+
+| ID | Goal | Measure |
+|----|------|---------|
+| G1 | Model a Domain from zero in the Modeler or as YAML | A new Kind with attributes and Relations is usable via API within one minute of saving |
+| G2 | Build a Domain from structured sources (CSV, Parquet, Postgres tables) | Schema inference proposes Kinds, attributes and Relations from source metadata; a sync of 1M rows completes in under 10 minutes on reference hardware |
+| G3 | Build and enrich a Domain from documents via offline LLM extraction | Extraction output is always a Proposal with evidence spans; zero direct writes to protected branches |
+| G4 | Version schema and data together | Branches, immutable Revisions, diff, three-way merge at attribute level, Conflicts on both schema and data, resolution flows |
+| G5 | Explore and visualize | Explorer search and record pages, Canvas graph exploration with up to 5k visible nodes at interactive frame rates |
+| G6 | Expose to agents | REST API and MCP server; read p95 under 10 ms server-side for key lookups at 10M records; no LLM in the read path |
+| G7 | Govern writes | All data mutations go through Operations with validation, RBAC, idempotency, dry run, audit |
+| G8 | Explain every fact | Lineage per record and per attribute value: which Source, document span, Operation or person, in which Revision |
+| G9 | Operate simply | Postgres 16 is the only required store; docker compose for local; stateless services; OpenTelemetry |
+| G10 | Stay vendor neutral | Pluggable LLM endpoint (OpenAI-compatible by default), OIDC with any provider, no cloud-specific dependency |
+
+### 2.2 Non-goals (not now, maybe never)
+
+- A general data integration or ETL platform. Sources map data into Kinds; heavy transformation belongs upstream (dbt, Spark, SQL views).
+- An agent runtime, orchestration framework, or prompt management tool.
+- BI dashboards and report builders.
+- Description logic reasoning (OWL entailment, classification). Lorebase validates constraints; it does not infer new classes.
+- Real-time CDC streaming ingestion in v1 (incremental sync by watermark is supported; CDC is a later connector).
+- Hosting or fine-tuning models.
+- Multi-region active-active writes.
+
+### 2.3 Anti-goals (things Lorebase refuses to do)
+
+- **No LLM in the agent read path.** Not for query planning, not for answer synthesis, not for reranking.
+- **No direct LLM writes to protected branches.** Extraction produces Proposals. Always.
+- **No schemaless writes.** Every Record conforms to its Kind in the Revision it belongs to.
+- **No second required datastore.** No mandatory graph database, search cluster, queue broker or cache.
+- **No crippled open core.** Security, audit and governance are part of the open-source product.
+- **No hidden mutations.** Every change is a Revision with an author, a reason and lineage.
+
+---
+
+## 3. Personas and the 5-day proof scenario
+
+### 3.1 Personas
+
+| Persona | Wants | Primary surfaces |
+|---------|-------|------------------|
+| Domain Steward (Sofia) | Correct, trusted knowledge in her business area; decides what is accepted | Review, Explorer |
+| Modeler (Marco) | Clear schema that reflects the business; safe schema evolution | Modeler, Canvas (schema mode), Review |
+| Data Engineer (Dana) | Map existing tables and files without writing glue code; repeatable syncs | Sources, CLI, Review |
+| Agent Developer (Alex) | Fast, predictable, typed access for agents; safe write path | MCP (Herald), REST, Operations, dry run |
+| Business Explorer (Luca) | Find things and understand how they connect | Explorer, Canvas |
+| Platform and Security Admin (Priya) | SSO, roles, audit, isolation, observability, simple operations | Admin, audit log, metrics |
+
+### 3.2 The 5-day proof scenario
+
+The scenario is what a client team sees during a pilot once M4 is delivered. The fictional client is Corvane Industries, an industrial components distributor. The pilot Domain is `supply`: suppliers, parts, plants, purchase orders and supplier contracts. Success is judged on day 5 by an external agent answering supply-risk questions correctly, quickly, and with provenance, and performing one governed write.
+
+**Day 1: install and model from zero.**
+- Priya runs `docker compose up` on a VM, connects the company OIDC provider, creates the Domain `supply`, assigns roles.
+- Marco opens the Modeler on a branch `model/initial` and creates Kinds `Supplier`, `Part`, `Plant`, and Relations `Part supplied_by Supplier` (many-to-many), `Part stocked_at Plant` (many-to-many with link attribute `quantity`). He defines the Trait `Located` (attributes `country`, `city`) implemented by `Supplier` and `Plant`.
+- He opens a Proposal; Sofia reviews the schema diff in Review and merges it into `main`.
+- The team sees: the schema graph in Canvas, an empty but typed Explorer, the first Revisions in history, and the audit log entries.
+
+**Day 2: structured ingestion.**
+- Dana registers three Sources: ERP Postgres tables `vendors` and `purchase_orders`, a CSV of approved suppliers, and a Parquet inventory snapshot.
+- Schema inference proposes a new Kind `PurchaseOrder` and the Relation `PurchaseOrder issued_to Supplier` from the foreign key. Dana adjusts the mapping in the Source mapping editor with live sample preview.
+- Each sync runs on its own Source branch and opens a Proposal. Clean syncs auto-merge according to policy; the first one is reviewed manually.
+- The team sees: about 40k Records and 120k Links in Explorer, filtered list views, record pages with Lineage per attribute ("value from Source `erp.vendors`, row id 4411, sync run 7"), Canvas neighborhoods around a supplier.
+
+**Day 3: unstructured extraction.**
+- Sofia uploads 300 supplier contracts (PDF). Scribe runs an extraction job against the `supply` schema with the configured model endpoint.
+- The job produces a Proposal: 280 new `Contract` Records linked to Suppliers, 1,100 attribute updates, 40 ambiguous entity matches, and a schema suggestion to add the attribute `penalty_clause` to `Contract`.
+- Review shows each proposed item with its evidence span highlighted in the document viewer, a confidence score and the matched Record. Sofia accepts in bulk above a threshold, inspects the ambiguous ones, rejects 12 items.
+- The team sees: no change reaches `main` without review; rejected items are kept in the Proposal history; a re-run of the job with the same documents and model costs nothing because outputs are cached by content hash.
+
+**Day 4: versioning and conflicts.**
+- Sofia, on branch `cleanup/tiers`, reclassifies 200 suppliers' `tier` values.
+- Marco, on branch `model/risk`, changes `risk_score` from `string` to `integer`, makes `Part supplied_by Supplier` require at least one Supplier, and adds a Derivation `single_sourced` (count of `supplied_by` Links equals 1).
+- Meanwhile the nightly ERP sync updates `main`.
+- Merging `cleanup/tiers` produces 6 attribute-level Conflicts with the sync (same supplier, same attribute, different values). Merging `model/risk` produces 9 type-coercion Conflicts (values like "high" cannot become integers) and 3 cardinality Conflicts.
+- In Review they resolve conflicts individually and with bulk policies ("take Source value for attributes the ERP owns"), then merge. They compare `main` today with `main` on day 2 in Canvas diff mode.
+- The team sees: schema and data merged together with consistency rules, every resolution recorded, history and time travel reads.
+
+**Day 5: agents.**
+- Alex connects an external agent (built in any framework) to Herald via MCP with an API key bound to role `agent-reader` plus the Operation grant `flag_supplier_risk`.
+- The agent answers: "Which parts used in plant Turin depend on a single supplier whose contract expires within 90 days?" using `describe_domain`, `query` and `traverse` tools. Server-side latency per call: single-digit milliseconds. Every answer cites Record keys and Lineage.
+- The agent calls `execute_operation` for `flag_supplier_risk` in dry-run, then for real; the Operation policy routes flags with `severity = critical` to a Proposal for Sofia, others commit directly.
+- Priya shows the audit log, the trace of a full agent call in the tracing backend, and the Grafana panel for read latency.
+- The team sees: the full lifecycle, end to end, with no LLM call on the agent read path.
+
+---
+
+## 4. Glossary
+
+Lorebase uses its own vocabulary consistently in code, API, UI and docs. The full glossary with examples is in [glossary.md](glossary.md).
+
+| Term | Meaning |
+|------|---------|
+| Domain | An ontology workspace for one company area. Isolation boundary. Has branches. |
+| Kind | A type of thing. |
+| Attribute | A typed field on a Kind. |
+| Relation | A typed, directional connection between two Kinds, with cardinality. |
+| Trait | A shared attribute set that Kinds implement. |
+| Operation | A governed write with validation, permissions and audit. The only way to mutate data. |
+| Derivation | A computed attribute or relation. |
+| Source | External backing data (table, file, API) mapped into Kinds. |
+| Record | An instance of a Kind. |
+| Link | An instance of a Relation. |
+| Branch | A named, movable pointer to a Revision. |
+| Revision | An immutable snapshot of schema and data. |
+| Proposal | A request to merge a branch, with review. Also the output of extraction jobs. |
+| Conflict | A disagreement found during merge, attribute-level or structural. |
+| Lineage | Where a Record and its values came from. |
+| Explorer, Canvas, Modeler, Review | The four UI areas: search and navigation, graph visualization, schema editor, proposal and conflict UI. |
+| Keeper, Scribe, Herald | Components: API service, ingestion and extraction worker, MCP server. |
+
+---
+
+## 5. Domain model
+
+### 5.1 Identity rules
+
+- Every schema element (Kind, Attribute, Relation, Trait, Operation, Derivation, Source) has a **stable id** minted at creation: a prefixed ULID, for example `knd_01JB8Z...`, `att_01JB8Z...`, `rel_...`, `trt_...`, `opr_...`, `drv_...`, `src_...`.
+- Every schema element also has an **api name** (`snake_case` for Attributes, Relations, Operations; `PascalCase` for Kinds and Traits) unique within its scope, and a display name. Api names may be renamed; ids never change. **[Architect call AC-01]** Identity by id makes rename-on-one-side plus edit-on-the-other a clean merge.
+- A **Record** is identified by `(kind_id, key)`. `key` is the value of the Kind's primary key Attribute(s), rendered as a canonical string. Kinds without a natural key mint a ULID at creation. **[Architect call AC-02]**
+- A **Link** is identified by `(relation_id, from_key, to_key)`. There are no parallel Links between the same two Records for the same Relation; multiplicity is modeled with an intermediate Kind. **[Architect call AC-03]**
+- External references use the form `{kind_api_name}/{key}` (for example `Supplier/S-1001`). The API resolves api names to ids per Revision.
+
+### 5.2 Domain
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | slug | `supply`; immutable |
+| display_name, description | string | |
+| default_branch | string | default `main` |
+| settings | object | search language, materialization policy, extraction defaults, merge policies |
+| created_at, created_by | | |
+
+A Domain is the unit of isolation for data, permissions, storage scoping (object hashes are scoped per Domain) and deletion. Cross-Domain Relations are not supported in v1; cross-Domain reads are done by agents calling both Domains. **[Architect call AC-04]**
+
+### 5.3 Kind
+
+| Field | Notes |
+|-------|-------|
+| id, api_name, display_name, description | |
+| primary_key | list of Attribute ids (one or more); empty means minted ULID key |
+| title_attribute | Attribute used as the human label |
+| attributes | map `attribute_id -> Attribute` |
+| traits | list of `{trait_id, attribute_map: {trait_attribute_id: attribute_id}}` |
+| status | `draft`, `active`, `deprecated` |
+| search | `{text_attributes: [...weights], embedding_template: string or null}` |
+| icon, color | presentation hints for Explorer and Canvas |
+| operations_builtin | which built-in Operations are enabled (`create`, `update`, `delete`) |
+
+### 5.4 Attribute
+
+| Field | Notes |
+|-------|-------|
+| id, api_name, display_name, description | descriptions are surfaced to agents; required to be non-empty for `active` Kinds |
+| type | see type system below |
+| required | boolean |
+| unique | boolean; enforced per branch |
+| default | literal of the type |
+| constraints | `min`, `max`, `min_length`, `max_length`, `pattern` (RE2 syntax), `enum_values` |
+| sensitivity | list of tags: `pii`, `confidential`, `restricted`; drives masking and vault storage |
+| indexed | boolean; creates a partial expression index on the materialized head |
+| searchable | boolean plus weight `A` to `D` for full-text |
+| derivation_id | set when the value is computed by a Derivation (read-only) |
+| authority | optional Source id that owns this Attribute's values (used by merge policies) |
+
+**Type system.** `string`, `text` (long, full-text), `integer` (int64), `decimal` (precision, scale), `float` (float64), `boolean`, `date`, `timestamp` (UTC, microseconds), `duration`, `enum` (closed value list), `json` (opaque, not filterable beyond existence), `geo_point` (lat, lon), `uri`, and `array<T>` of any scalar type. No nested structs in v1; model them as Kinds. **[Architect call AC-05]**
+
+**Type change rules.** Each pair `(from_type, to_type)` has a cast rule: `safe` (always succeeds, e.g. integer to decimal), `checked` (may fail per value, e.g. string to integer), or `forbidden` (e.g. geo_point to boolean). Checked casts are evaluated on every existing value when the schema change is committed, so each Revision stays valid (invariant I1 below).
+
+### 5.5 Relation
+
+| Field | Notes |
+|-------|-------|
+| id, api_name (forward), inverse_api_name | `supplied_by` and `supplies` |
+| from_kind, to_kind | Kind ids; self-relations allowed |
+| cardinality | `one_to_one`, `one_to_many`, `many_to_one`, `many_to_many` |
+| required_from | boolean: every `from` Record must have at least one Link |
+| attributes | Link attributes, same Attribute model (no unique, no primary key) |
+| on_delete | what happens to Links when an endpoint Record is deleted: `cascade` (default), `restrict` |
+| backing | `explicit` (Links stored) or `foreign_key` (Links derived from an Attribute of the `from` Kind referencing the `to` Kind key, used by Source mappings) |
+
+Cardinality is enforced on every commit and checked again after merges.
+
+### 5.6 Trait
+
+A Trait declares a set of Attributes (name, type, required). A Kind implements a Trait by mapping each Trait Attribute to one of its own Attributes with a compatible type. Queries and search may target a Trait (`Located` returns Suppliers and Plants), and Operations may be declared against a Trait. Traits cannot hold data themselves. A Trait change that a Kind no longer satisfies is a structural Conflict at merge time and a validation error at commit time.
+
+### 5.7 Operation
+
+An Operation is a named, typed, governed write. It is the only way to mutate Records and Links.
+
+| Field | Notes |
+|-------|-------|
+| id, api_name, display_name, description | description is what agents read |
+| parameters | ordered list of `{name, type, required, description, kind_ref?}`; `kind_ref` parameters accept Record references |
+| preconditions | list of `{expression, message}` in CEL; all must be true |
+| steps | ordered list of edits: `create_record`, `update_record`, `delete_record`, `create_link`, `delete_link`, each with CEL expressions for values |
+| review_policy | `never`, `always`, or a CEL expression (true means the edits go to a Proposal instead of committing) |
+| permissions | roles or groups allowed to execute; evaluated with Domain RBAC |
+| side_effects | list of outbox events (webhook targets by name from configuration) emitted after commit |
+| rate_limit | optional per-principal limit |
+| status | `draft`, `active`, `deprecated` |
+
+**Built-in Operations.** For every Kind, Lorebase provides `create_{kind}`, `update_{kind}`, `delete_{kind}`, and for every Relation `link_{relation}` and `unlink_{relation}`. They can be disabled or restricted per Kind. UI edits and CLI imports use them. Custom Operations express business intent (`flag_supplier_risk`, `approve_contract`) and are what agents should normally be granted.
+
+**Expression language.** CEL (Common Expression Language) with a Lorebase function library (`record(ref)`, `links(ref, relation)`, `now()`, `count()`, string and date helpers). CEL is non-Turing-complete, side-effect free, has a specification and multiple implementations. Expressions are type-checked against the schema when the Operation is saved. **[Architect call AC-06]**
+
+Example:
+
+```yaml
+operation: flag_supplier_risk
+description: Flag a supplier as a risk with a reason and severity.
+parameters:
+  - { name: supplier, type: ref, kind_ref: Supplier, required: true }
+  - { name: severity, type: enum, enum_values: [low, medium, high, critical], required: true }
+  - { name: reason, type: text, required: true, description: Evidence-based reason }
+preconditions:
+  - expression: record(supplier).status != "terminated"
+    message: Terminated suppliers cannot be flagged.
+steps:
+  - create_record:
+      kind: RiskFlag
+      values:
+        severity: params.severity
+        reason: params.reason
+        raised_at: now()
+        raised_by: principal.id
+  - create_link: { relation: flags, from: $step[0], to: params.supplier }
+review_policy: params.severity == "critical"
+permissions: [risk-analyst, agent-risk]
+side_effects: [risk_flag_raised]
+```
+
+### 5.8 Derivation
+
+A Derivation computes an Attribute or a Relation. Derivations are pure and deterministic; they never call external services or models.
+
+| Variant | Definition | Evaluation |
+|---------|-----------|------------|
+| `expression` | CEL over the Record's own Attributes | on write, stored in the materialized head (`derived` column) |
+| `aggregate` | count, sum, min, max, avg over a Relation with optional filter | incrementally on Link and Record changes in the materializer |
+| `path` | composed Relation `A -r1-> B -r2-> C` exposed as virtual Relation `A -> C` | at query time via joins; optionally materialized |
+
+Derived values are **not** part of Record objects and do not participate in hashing or merge; they are recomputed from merged inputs. This avoids derived-value conflicts entirely. **[Architect call AC-07]** Lineage of a derived value points to the Derivation and its inputs.
+
+Custom code Derivations (Python functions) are out of scope until after M5; when added they will run only in Scribe as batch jobs.
+
+### 5.9 Source
+
+| Field | Notes |
+|-------|-------|
+| id, api_name, type | `postgres_table`, `postgres_query`, `csv`, `parquet`, `http_json` (M5) |
+| connection | reference to a secret, never a literal: `secret://env/ERP_DSN` or `secret://file/erp.dsn` |
+| target_kind | Kind id |
+| key_mapping | source columns to primary key |
+| attribute_mapping | `{attribute_id: {column or expression, transform}}`; transforms from a fixed set: `cast`, `trim`, `lower`, `upper`, `parse_date(format)`, `concat`, `constant`, `map(values)`, `null_if` |
+| relation_mapping | foreign key columns to Relation and target Kind key |
+| scope_filter | SQL predicate or file filter limiting what the Source owns |
+| sync_mode | `snapshot` (Source owns its scope; missing keys are deletions) or `incremental` (by watermark column; no deletions unless tombstone column) |
+| schedule | cron expression, or manual |
+| target_branch_policy | branch name template (default `source/{source}`) and merge policy: `auto_when_clean`, `proposal`, `auto_with_authority` |
+
+### 5.10 Record and Link
+
+A Record's canonical content is `{kind, key, values}` where `values` maps Attribute ids to canonical values. Null or absent values are omitted. A Link's content is `{relation, from, to, values}`.
+
+### 5.11 Lineage
+
+Lineage answers "where did this value come from". It is attached to changes, not to content.
+
+- A **provenance entry** describes one origin: `{id, origin_type, origin_ref, actor, at}`. Origin types: `operation` (invocation id, Operation id, principal), `source_sync` (Source id, run id, source row locator), `extraction` (job id, document id, span offsets, model id, prompt version), `merge_resolution` (Proposal id, Conflict id, resolver), `schema_migration` (cast applied by a schema change), `import` (CLI bulk import batch).
+- Each change in a Revision changeset carries a map `attribute_id -> provenance_id` for the Attributes it changed.
+- The materialized head keeps, per Record, the latest provenance per Attribute. Full per-value history is available from the branch history table.
+- Provenance is **not** part of content hashes. Two Sources writing the same value produce no diff; Lineage records which change set it last. **[Architect call AC-08]**
+
+### 5.12 Invariants
+
+- **I1. Every Revision is valid.** Schema is internally consistent; every Record conforms to its Kind; Links respect cardinality, required_from and referential integrity; unique Attributes are unique.
+- **I2. Revisions are immutable** and identified by content hash.
+- **I3. Branch heads move only by compare-and-swap** inside the commit transaction.
+- **I4. Materialized head equals the Revision tree** of the branch head (verifiable).
+- **I5. Data changes only through Operations.** Schema changes only through schema change sets on a branch. Protected branches change only through Proposal merges and Operations whose policy allows direct commit.
+- **I6. Derived values are never stored in content objects.**
+
+---
+
+## 6. Versioning engine
+
+The versioning engine is the core of Lorebase. It is built in-house on Postgres and is content-addressed.
+
+### 6.1 Objects and canonical form
+
+Every schema element, Record and Link is serialized to **canonical JSON** following RFC 8785 (JSON Canonicalization Scheme) with these Lorebase rules: **[Architect call AC-09]**
+
+- Keys are Attribute and element ids, never api names, so renames do not change hashes.
+- `integer` and `decimal` values are encoded as JSON strings in canonical form (`"42"`, `"12.50"` normalized to declared scale) to avoid float precision loss. `float` values are encoded with the RFC 8785 number rules.
+- `timestamp` is RFC 3339 UTC with exactly six fractional digits. `date` is `YYYY-MM-DD`.
+- Arrays keep order (arrays are ordered values). Sets do not exist as a type.
+- Strings are NFC-normalized.
+- Null and absent are the same: omitted.
+- Values of Attributes tagged `pii` with vault storage enabled are replaced by a vault reference `{"$vault": "<vault_id>"}` (see 13.5).
+
+The object hash is
+
+```
+hash = sha256( "lb1\x00" || object_type || "\x00" || canonical_json_bytes )
+```
+
+`lb1` versions the hashing scheme so it can evolve. `object_type` is one of `schema.kind`, `schema.relation`, `schema.trait`, `schema.operation`, `schema.derivation`, `schema.source`, `schema.domain`, `record`, `link`. Hashes are 32 raw bytes in storage and lowercase hex in APIs.
+
+Objects are stored once per Domain: `(domain_id, hash)` is the primary key. Scoping per Domain prevents cross-Domain existence probing and allows Domain deletion without reference counting across Domains. **[Architect call AC-10]**
+
+### 6.2 Trees: the Revision manifest
+
+A Revision must map every element key to an object hash. With millions of Records per Domain, storing a flat manifest per Revision is not viable. Lorebase uses a **partitioned, canonical hash array mapped trie** (HAMT) with structural sharing. **[Architect call AC-11]**
+
+**Partitions.** The root of a Revision tree is a small sorted map from partition id to partition root hash:
+
+- `schema`: all schema elements, keyed by element id.
+- `k:{kind_id}`: one partition per Kind, keyed by Record key.
+- `r:{relation_id}`: one partition per Relation, keyed by `from_key \x1f to_key`.
+
+Partitioning by Kind and Relation gives cheap per-Kind diffs, per-Kind counts and the ability to skip whole partitions during merges.
+
+**Trie shape.** Inside a partition, entries are placed by `h = sha256(element_key)`. A node at depth `d` is either:
+
+- a **leaf** holding up to `L` entries `(element_key, object_hash)` sorted by `h`, or
+- a **branch** with up to 256 children, selected by byte `h[d]`, each child being a node hash.
+
+A node is a leaf if and only if its subtree holds `L` or fewer entries. This rule depends only on content, so **the same set of entries always produces the same tree and the same root hash**, regardless of insertion order or history. Equal partitions have equal hashes. This canonicity is what makes diff and merge cheap and correct. `L` defaults to 512 and is fixed per Domain at creation (it is part of the hashing contract).
+
+**Node encoding.** Compact binary: a header (format version, node type, depth, entry count, subtree count) followed by length-prefixed keys and 32-byte hashes (leaves) or a 256-bit occupancy bitmap and child hashes (branches). Node hash = `sha256("lb1\x00node\x00" || bytes)`. Node bodies are stored in a `bytea` column with Postgres `lz4` TOAST compression.
+
+**Cost.** With `L = 512` and 256-way fanout, 10M entries in a partition fit in depth 3. An update to one Record rewrites one leaf and at most three branch nodes. A Revision touching `n` Records writes about `n` leaves in the worst case and far fewer when changes cluster in the same leaves. Unchanged subtrees are shared by hash across Revisions and branches.
+
+**Subtree counts** stored in each node give per-partition and per-Kind Record counts at any Revision in O(1).
+
+### 6.3 Changesets: the delta encoding
+
+In addition to its tree, every Revision stores a **changeset** against its first parent: rows of `(partition, element_key, old_hash, new_hash, provenance)`. The tree gives snapshot semantics and arbitrary-pair diff; the changeset gives O(changes) access to "what changed in this Revision", drives incremental materialization, history and Lineage, and is what the Review UI renders for linear branches.
+
+Changesets of merge Revisions are computed against the first parent (the target branch), so walking the first-parent chain of a branch yields every change visible on that branch, including merged ones.
+
+### 6.4 Revisions
+
+A Revision object:
+
+```json
+{
+  "parents": ["<rev hash>", "..."],
+  "root": "<root node hash>",
+  "domain": "supply",
+  "author": {"principal": "usr_...", "on_behalf_of": null},
+  "message": "Sync erp.vendors run 7",
+  "origin": {"type": "source_sync", "ref": "run_01J..."},
+  "created_at": "2026-10-20T09:12:44.123456Z",
+  "stats": {"partitions_changed": 2, "changes": 1840}
+}
+```
+
+Revision id = `sha256("lb1\x00revision\x00" || canonical_json)`. Revisions carry a **generation number** (`1 + max(parent generations)`) for fast ancestor queries.
+
+### 6.5 Branches and refs
+
+A ref is a row `(domain_id, name, head, kind, protected, version)`. Kinds: `branch` (movable) and `tag` (immutable pointer, used for releases and audits). Branch names are hierarchical (`model/risk`, `source/erp.vendors`, `extract/job-42`, `agent/{principal}/{task}`).
+
+- Creating a branch is O(1): insert a ref pointing at an existing Revision. Materialization cost is discussed in 6.10.
+- Branch head updates are compare-and-swap on `(head, version)` within the commit transaction.
+- Writers to the same branch are serialized with a transaction-scoped advisory lock on `hash(domain_id, branch)`. **[Architect call AC-12]** Single writer per branch keeps commits simple and correct; throughput comes from batching (one Revision can hold thousands of changes) and from using multiple branches.
+- Protected branches (default: `main`) accept only Proposal merges and Operations whose review policy evaluates to direct commit.
+- Branch deletion removes the ref; objects become eligible for garbage collection if unreachable.
+
+### 6.6 The commit pipeline
+
+Every write (Operation, schema change set, sync batch, merge) goes through one pipeline in one Postgres transaction:
+
+1. Acquire the branch advisory lock; read head `H` and ref version.
+2. Validate the requested changes against the materialized head of `H` (fast indexed reads): types, constraints, uniqueness, cardinality, referential integrity, Trait conformance. For schema changes, compute required data migrations (casts, defaults) and include them as data changes.
+3. Canonicalize and hash new objects; insert into `objects` with `ON CONFLICT DO NOTHING`.
+4. Apply changes to the tree by path copying; insert new nodes.
+5. Insert the Revision with parent `H`, its changeset and provenance entries.
+6. Apply the changeset to the materialized head (records, links, history, search vectors, derived values).
+7. Compare-and-swap the ref from `H` to the new Revision.
+8. Write the audit entry and outbox events.
+9. Commit.
+
+Reads after the commit see the new head immediately (read-your-writes on the primary). If any step fails, nothing is visible.
+
+### 6.7 Diff
+
+`diff(A, B)` walks both trees from the roots: partitions with equal hashes are skipped; within a partition, branch nodes with equal hashes are skipped; differing leaves are compared entry by entry. Cost is proportional to the number of differing leaves, not to the size of the Domain. Output is a stream of `(partition, key, hash_a, hash_b)` that is then expanded into element-level changes (attribute-level for Records and schema elements) for display.
+
+For linear history (`A` is an ancestor of `B` on the first-parent chain), the engine may union changesets instead of walking trees when that is cheaper (small number of Revisions).
+
+### 6.8 Merge algorithm
+
+Merging source branch `S` (theirs) into target branch `T` (ours):
+
+**Step 0. Merge base.** Find the lowest common ancestors of `head(T)` and `head(S)` using generation numbers to prune the search. If `head(S)` is an ancestor of `head(T)`, the merge is a no-op. If `head(T)` is an ancestor of `head(S)` and the target allows it, fast-forward. If there are several lowest common ancestors (criss-cross history), merge them recursively into a virtual base Revision, as git does. **[Architect call AC-13]**
+
+**Step 1. Three-way diff.** Compute `D_ours = diff(base, T)` and `D_theirs = diff(base, S)` per partition, streamed and batched.
+
+**Step 2. Schema merge.** Merge the `schema` partition first. For each schema element changed on either side:
+- changed on one side only: take that side;
+- changed identically on both: take it;
+- changed differently on both: run a structural three-way merge of the element's JSON document. Maps keyed by id (for example a Kind's `attributes`) merge entry by entry; scalars conflict if both sides changed them differently; ordered lists (Operation steps, parameters) conflict if both sides changed them. Each scalar conflict becomes a schema property Conflict.
+- deleted on one side and modified on the other: schema delete/modify Conflict.
+- api name collisions between different ids in the same scope: naming Conflict.
+The result is the merged schema `Σm` plus a list of schema Conflicts.
+
+**Step 3. Data merge.** For each Record and Link key changed on either side:
+- one side only: take it;
+- same new hash on both: take it;
+- both modified: attribute-level three-way merge on `values`. For each Attribute: one side changed it, take it; both changed it to the same value, take it; otherwise an attribute value Conflict. Array values are compared as whole values.
+- added on both sides with different content: three-way merge against an empty base; differing Attributes conflict.
+- deleted on one side and modified on the other: delete/modify Conflict.
+Every taken change keeps its original provenance.
+
+**Step 4. Consistency under the merged schema.** The merged data must satisfy invariant I1 against `Σm`. The engine runs rule checks scoped to what changed, using indexed reads on the materialized target head plus the in-flight merge set:
+
+| Rule | Detected when | Conflict |
+|------|---------------|----------|
+| Orphaned data | A Kind or Relation removed on one side; Records or Links of it added or modified on the other | Orphaned data Conflict (grouped per Kind, with count). Unmodified Records of a removed Kind are dropped silently (removal intended). |
+| Removed Attribute with new values | Attribute removed on one side; the other side set values for it | Orphaned value Conflict (grouped) |
+| Type change | Attribute type changed on one side; the other side wrote values | Values are cast with the cast rule; failures become type coercion Conflicts (per Record, grouped) |
+| New required Attribute | Attribute became required or was added as required on one side; Records created or modified on the other lack a value | Default applied if defined, otherwise missing value Conflict |
+| Constraint tightened | New `max_length`, `pattern`, `enum_values`, range on one side; violating values from the other | Constraint Conflict |
+| Cardinality | Relation cardinality tightened on one side and extra Links added on the other; or both sides added a Link that is fine alone but together violate `one_to_*` or `*_to_one` | Cardinality Conflict listing the competing Links |
+| Required relation | `required_from` set on one side; the other side created Records without the Link, or removed the last Link | Required relation Conflict |
+| Uniqueness | Both sides set the same unique value on different Records; or uniqueness added on one side and duplicates created on the other | Uniqueness Conflict |
+| Dangling Link | Link added on one side to a Record deleted on the other | If `on_delete = cascade`, the Link is dropped and recorded as an automatic resolution; if `restrict`, Dangling Link Conflict |
+| Trait conformance | Trait changed on one side so that a Kind changed on the other no longer conforms | Trait conformance Conflict |
+| Broken reference | Operation, Derivation, Source or Trait mapping references an element removed or retyped on the other side | Broken reference Conflict |
+
+**Step 5. Outcome.** If there are no Conflicts, the engine writes a merge Revision with parents `[head(T), head(S)]` via the commit pipeline. Otherwise it stores a **merge attempt** with base, ours and theirs Revision ids and the Conflict list, attached to the Proposal.
+
+### 6.9 Conflict taxonomy
+
+| Code | Class | Scope | Resolution choices |
+|------|-------|-------|--------------------|
+| `DV1` | Attribute value | Record or Link Attribute | ours, theirs, base, custom value |
+| `DV2` | Delete/modify | Record or Link | keep deleted, keep modified (ours or theirs version) |
+| `DV3` | Add/add | Record or Link key | attribute-level choices as DV1 |
+| `SC1` | Schema property | Schema element property | ours, theirs, base, custom |
+| `SC2` | Schema delete/modify | Schema element | keep deleted, keep modified |
+| `SC3` | Naming collision | Api name in scope | rename one side (custom value) |
+| `XS1` | Orphaned data | Kind or Relation removed vs data changes | drop data, restore schema element |
+| `XS2` | Orphaned value | Attribute removed vs values written | drop values, restore Attribute |
+| `XS3` | Type coercion | Value not castable | custom value, null (if not required), drop Record, revert type change |
+| `XS4` | Missing value | Required Attribute without value | custom value, set default for all, relax required |
+| `XS5` | Constraint | Value violates tightened constraint | custom value, relax constraint |
+| `XS6` | Cardinality | Competing Links | choose Links to keep, relax cardinality |
+| `XS7` | Required relation | Record without required Link | add Link (custom), relax requirement, drop Record |
+| `XS8` | Uniqueness | Duplicate unique values | custom value on one Record, relax uniqueness |
+| `XS9` | Dangling Link | Link to deleted Record | drop Link, restore Record |
+| `XS10` | Trait conformance | Kind no longer implements Trait | adjust mapping, remove Trait from Kind |
+| `XS11` | Broken reference | Schema reference to removed element | edit referencing element, restore referenced element |
+
+Grouped Conflicts (XS classes over many Records) are presented as one Conflict with a member list, and accept bulk resolutions.
+
+### 6.10 Resolution flows
+
+- **Conflict fingerprint.** Each Conflict has a fingerprint `sha256(code, partition, key, attribute, base_hash, ours_hash, theirs_hash)`. Resolutions are stored by fingerprint.
+- **Interactive.** Review shows base, ours and theirs side by side; the resolver picks a choice or enters a custom value (validated against the merged schema). Grouped Conflicts offer bulk choices.
+- **Policies.** A Proposal or a Source can carry merge policies applied before humans see anything:
+  - `prefer: ours | theirs` per Kind or per Attribute;
+  - `authority`: the Source that owns an Attribute wins for that Attribute (`auto_with_authority`);
+  - `newest_wins` by provenance timestamp for specified Attributes;
+  - `cascade_dangling: true`.
+  Policy resolutions are recorded as resolutions with resolver `policy:{name}`.
+- **Stale attempts.** If the target head moves while Conflicts are being resolved, the merge attempt is recomputed against the new head. Resolutions whose fingerprints still match are re-applied automatically; new or changed Conflicts are shown as unresolved. This makes long reviews safe.
+- **Completion.** When all Conflicts are resolved, the engine applies the resolutions, re-runs consistency checks (resolutions can create new violations, for example a custom value that breaks uniqueness), and commits the merge Revision. Resolutions are stored as provenance `merge_resolution` on the affected values.
+- **Abandon.** Closing a Proposal discards the merge attempt; nothing changes on the target.
+- **No rebase in v1.** History is append-only; branches are updated by merging the target into them. **[Architect call AC-14]**
+
+### 6.11 Materialized heads
+
+Agents need millisecond reads, which a tree walk cannot provide for filters, traversals and search. Lorebase keeps a **materialized head** per materialized branch: relational rows that mirror the tree at the branch head, maintained incrementally by the commit pipeline in the same transaction (invariant I4).
+
+- Records: one row per Record with values as `jsonb` keyed by **Attribute id**, so rows stay stable across renames; the query compiler maps api names to ids. **[Architect call AC-15]**
+- Links: one row per Link, indexed in both directions.
+- Search vectors, derived values, Lineage pointers and history are maintained in the same transaction.
+
+**Branch materialization modes.** **[Architect call AC-16]**
+- `full`: the branch has its own rows. Creating a full branch copies rows from its parent's materialization with `INSERT ... SELECT` (about 1M rows in seconds). Used for `main`, protected branches, Source branches and long-lived work.
+- `overlay` (M5): the branch stores only the difference between its head and the head of its base materialized branch, computed by tree diff and kept current when either side moves. Reads union the base rows with the overlay. Used for short-lived agent and extraction branches.
+- M1 to M4 implement `full` only, with a configurable cap on materialized branches per Domain; branches over the cap are readable through the tree-based slow path (6.12).
+
+**Verification.** `lorebase admin verify --branch main` checks that every materialized row's `object_hash` matches the tree at the head and that counts per partition match. Run in CI against fixtures and on a schedule in production.
+
+### 6.12 Reads at an arbitrary Revision (time travel)
+
+`GET ...?at={revision}` reads directly from the tree: key lookups are O(depth) node fetches (about 3 to 4 indexed reads, cached), list operations scan the Kind partition. No filters on non-key Attributes and no search at arbitrary Revisions in v1; the response states that it was served from the tree. Tags can be materialized on demand for audits.
+
+### 6.13 Garbage collection and retention
+
+- Objects and nodes are immutable and only become garbage when no ref, open Proposal or retained tag reaches them.
+- GC is a mark-and-sweep job per Domain run by Scribe: mark from all refs, tags, open merge attempts and Revisions younger than the retention window; sweep unmarked objects and nodes in batches.
+- History is never rewritten. Erasure of personal data uses the vault (13.5) so that history keeps its shape while the values disappear.
+
+### 6.14 Performance notes and targets
+
+Reference hardware: 8 vCPU, 32 GB RAM, NVMe, Postgres 16 tuned per the deployment guide. Targets are p95 server-side.
+
+| Path | Target |
+|------|--------|
+| Record get by key, 10M Records in Domain | under 5 ms |
+| Filtered list on indexed Attributes, 50 rows | under 25 ms |
+| One-hop traversal, 100 neighbors | under 10 ms |
+| Full-text search, 20 results | under 50 ms |
+| Hybrid search with caller-supplied vector, 20 results | under 80 ms |
+| Neighborhood depth 2, cap 200 nodes | under 50 ms |
+| Operation commit, under 10 edits | under 75 ms |
+| Bulk commit, 10k Record changes in one Revision | under 5 s |
+| Diff of two Revisions with 10k changed Records | under 2 s |
+| Merge with 100k changed Records, no Conflicts | under 60 s |
+
+Engineering notes:
+- Tree nodes are cached in-process (LRU by hash; immutable, so no invalidation).
+- Schema per Revision is cached by schema partition hash; compiled query plans and CEL programs are cached by the same key.
+- Bulk paths use `COPY` into staging tables and set-based SQL.
+- Long merges run as Scribe jobs and stream through partitions; memory is bounded by batch size.
+- Hot `objects` table is hash-partitioned by `domain_id`.
+
+---
+
+## 7. Data model and Postgres schema outline
+
+All tables carry `domain_id` and are protected by row-level security policies on `domain_id` as defense in depth (13.3). Types: `h32` is `bytea` of 32 bytes. Names are indicative; Alembic migrations are the source of truth.
+
+### 7.1 Versioning core
+
+```sql
+create table domains (
+  id text primary key,
+  display_name text not null,
+  description text,
+  default_branch text not null default 'main',
+  leaf_size int not null,              -- trie leaf threshold, fixed at creation
+  settings jsonb not null default '{}',
+  created_at timestamptz not null, created_by text not null
+);
+
+create table objects (                 -- content-addressed elements
+  domain_id text not null,
+  hash bytea not null,                 -- h32
+  object_type smallint not null,
+  body jsonb not null,                 -- canonical content
+  size int not null,
+  primary key (domain_id, hash)
+) partition by hash (domain_id);
+
+create table tree_nodes (
+  domain_id text not null,
+  hash bytea not null,
+  body bytea not null,                 -- binary node, lz4 TOAST
+  primary key (domain_id, hash)
+) partition by hash (domain_id);
+
+create table revisions (
+  domain_id text not null,
+  id bytea not null,
+  root bytea not null,
+  generation bigint not null,
+  author text not null,
+  on_behalf_of text,
+  message text not null,
+  origin jsonb not null,
+  stats jsonb not null,
+  created_at timestamptz not null,
+  primary key (domain_id, id)
+);
+
+create table revision_parents (
+  domain_id text not null, revision_id bytea not null,
+  position smallint not null, parent_id bytea not null,
+  primary key (domain_id, revision_id, position)
+);
+create index on revision_parents (domain_id, parent_id);
+
+create table changesets (
+  domain_id text not null, revision_id bytea not null,
+  partition text not null, element_key text not null,
+  old_hash bytea, new_hash bytea,       -- null means absent
+  provenance jsonb,                     -- {attribute_id: provenance_id}
+  primary key (domain_id, revision_id, partition, element_key)
+);
+
+create table provenance (
+  domain_id text not null, id text not null,
+  origin_type text not null, origin_ref jsonb not null,
+  actor text not null, at timestamptz not null,
+  primary key (domain_id, id)
+);
+
+create table refs (
+  domain_id text not null, name text not null,
+  kind text not null,                   -- branch | tag
+  head bytea not null,
+  protected boolean not null default false,
+  materialization text not null,        -- full | overlay | none
+  version bigint not null,
+  created_at timestamptz not null, created_by text not null,
+  primary key (domain_id, name)
+);
+
+create table ref_log (                  -- every head movement
+  domain_id text not null, ref_name text not null, seq bigint not null,
+  old_head bytea, new_head bytea not null, reason text not null,
+  actor text not null, at timestamptz not null,
+  primary key (domain_id, ref_name, seq)
+);
+```
+
+### 7.2 Materialized heads
+
+```sql
+create table mat_schema (              -- compiled schema per branch head
+  domain_id text, branch text, schema_hash bytea, compiled jsonb,
+  primary key (domain_id, branch)
+);
+
+create table mat_records (
+  domain_id text not null, branch text not null,
+  kind_id text not null, key text not null,
+  values jsonb not null,               -- {attribute_id: value}
+  derived jsonb not null default '{}', -- Derivation outputs
+  title text,
+  search tsvector,
+  object_hash bytea not null,
+  lineage jsonb not null,              -- {attribute_id: provenance_id}
+  updated_revision bytea not null,
+  updated_at timestamptz not null,
+  primary key (domain_id, branch, kind_id, key)
+) partition by hash (domain_id);
+create index on mat_records using gin (search);
+create index on mat_records using gin (values jsonb_path_ops);
+create index on mat_records using gin (title gin_trgm_ops);
+-- per indexed Attribute, created by the schema materializer:
+-- create index ... on mat_records (domain_id, branch, ((values->>'att_x')::numeric))
+--   where kind_id = 'knd_y';
+-- per unique Attribute: the same as a unique partial index.
+
+create table mat_links (
+  domain_id text not null, branch text not null,
+  relation_id text not null, from_key text not null, to_key text not null,
+  values jsonb not null default '{}',
+  object_hash bytea not null,
+  lineage jsonb not null,
+  primary key (domain_id, branch, relation_id, from_key, to_key)
+) partition by hash (domain_id);
+create index on mat_links (domain_id, branch, relation_id, to_key);
+
+create table mat_history (             -- per branch, per element change log
+  domain_id text, branch text, partition text, element_key text,
+  revision_id bytea, at timestamptz, old_hash bytea, new_hash bytea,
+  provenance jsonb,
+  primary key (domain_id, branch, partition, element_key, revision_id)
+);
+
+create table embeddings (              -- content-addressed, shared by all branches
+  domain_id text not null, object_hash bytea not null,
+  model text not null, dims int not null,
+  embedding vector not null,
+  primary key (domain_id, object_hash, model)
+);
+-- per configured model: create index ... using hnsw ((embedding::vector(1024)) vector_cosine_ops)
+--   where model = '<model>';
+```
+
+### 7.3 Proposals and merges
+
+```sql
+create table proposals (
+  domain_id text, id text, title text, description text,
+  source_ref text, target_ref text,
+  origin text,                         -- manual | source_sync | extraction | operation
+  status text,                         -- open | merged | closed
+  author text, created_at timestamptz, merged_revision bytea,
+  checks jsonb, policies jsonb,
+  primary key (domain_id, id)
+);
+create table proposal_reviews (domain_id, proposal_id, reviewer, verdict, comment, at);
+create table proposal_items (          -- per-item decisions for extraction Proposals
+  domain_id, proposal_id, item_id, partition, element_key, attribute_id,
+  evidence jsonb, confidence real, decision text, decided_by text, decided_at timestamptz
+);
+create table merge_attempts (domain_id, id, proposal_id, base bytea, ours bytea, theirs bytea,
+  status text, created_at timestamptz);
+create table conflicts (domain_id, attempt_id, id, code text, fingerprint bytea,
+  partition text, element_key text, attribute_id text, payload jsonb,
+  member_count int, resolution jsonb, resolved_by text, resolved_at timestamptz);
+create table conflict_resolutions (domain_id, proposal_id, fingerprint bytea, resolution jsonb,
+  resolved_by text, at timestamptz);
+```
+
+### 7.4 Governance, ingestion, platform
+
+```sql
+create table principals (id, type /* user | service | api_key */, display_name, external_subject, created_at);
+create table groups (id, display_name, external_group);
+create table group_members (group_id, principal_id);
+create table grants (id, domain_id, subject /* principal or group */, role, scope_type /* domain|kind|operation|branch */,
+  scope_ref, created_by, created_at);
+create table api_keys (id, principal_id, prefix, hash bytea, scopes jsonb, expires_at, last_used_at, revoked_at);
+create table operation_invocations (domain_id, id, operation_id, principal, params jsonb, status,
+  revision_id bytea, proposal_id text, idempotency_key text, created_at, duration_ms);
+create unique index on operation_invocations (domain_id, principal, idempotency_key)
+  where idempotency_key is not null;
+create table audit_log (seq bigserial, domain_id, at, actor, action, target, details jsonb,
+  prev_hash bytea, entry_hash bytea);
+create table outbox (id, domain_id, event_type, payload jsonb, created_at, delivered_at, attempts);
+create table jobs (id, type, domain_id, payload jsonb, status, priority, run_after, attempts,
+  locked_by, locked_at, result jsonb, created_at);
+create table source_runs (domain_id, id, source_id, status, started_at, finished_at, stats jsonb,
+  revision_id bytea, proposal_id text, error jsonb);
+create table documents (domain_id, id, filename, media_type, sha256 bytea, size bigint,
+  blob_ref text, text_hash bytea, metadata jsonb, created_at, created_by);
+create table document_chunks (domain_id, document_id, seq int, start_offset int, end_offset int,
+  text text, chunk_hash bytea);
+create table extraction_jobs (domain_id, id, documents jsonb, schema_hash bytea, model text,
+  prompt_version text, status, budget jsonb, usage jsonb, proposal_id text, created_at);
+create table extraction_cache (cache_key bytea primary key, model text, output jsonb, usage jsonb, created_at);
+create table vault (domain_id, id, value_ciphertext bytea, key_id text, created_at, erased_at);
+```
+
+---
+
+## 8. Read path and search
+
+### 8.1 Principles
+
+- Reads hit the materialized head of a branch (default: the Domain's default branch) and never call an LLM.
+- Every response carries the Revision it was served from (`revision` field and `Lorebase-Revision` header). Clients may pass `min_revision` to require freshness when reading from replicas; Keeper waits up to a configured bound, then returns `409`.
+- Responses use api names; the query compiler resolves them to ids through the cached compiled schema for the branch head.
+- Field-level masking for sensitive Attributes is applied by the query compiler based on the caller's grants.
+- Every query has a server-side `statement_timeout` and row caps from configuration.
+
+### 8.2 Query model
+
+A JSON query DSL compiled to SQL. It is deliberately smaller than a graph query language: it covers what agents and Explorer need and compiles to predictable plans.
+
+```json
+{
+  "kind": "Part",
+  "where": {"and": [
+    {"attr": "category", "op": "eq", "value": "bearing"},
+    {"via": "supplied_by", "where": {"attr": "country", "op": "in", "value": ["IT", "DE"]}},
+    {"derived": "single_sourced", "op": "eq", "value": true}
+  ]},
+  "select": ["key", "title", "category", "lead_time_days"],
+  "include": {"supplied_by": {"select": ["key", "title", "tier"], "limit": 5}},
+  "order_by": [{"attr": "lead_time_days", "dir": "desc"}],
+  "limit": 50,
+  "cursor": null
+}
+```
+
+Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (arrays), `prefix`, `exists`, `match` (full-text on the Record), `near` (geo). `via` compiles to `EXISTS` over `mat_links` joined to `mat_records`; maximum `via` depth is configurable (default 3). Targeting a Trait (`"trait": "Located"`) expands to the implementing Kinds with mapped Attributes. Pagination is keyset-based on `(order key, key)`.
+
+### 8.3 Traversal and neighborhoods
+
+- `traverse`: from one Record along a path of Relations (forward or inverse), with per-hop filters and limits.
+- `neighborhood`: from seed Records, breadth-first up to depth `d` with node and edge caps, used by Canvas and by agents that need local context. Implemented as an iterative set-based expansion (one query per hop), not a recursive CTE, to enforce caps per hop.
+
+### 8.4 Search
+
+- **Lexical.** `tsvector` per Record built from title (weight A) and searchable Attributes (configured weights) using the Domain's text search configuration. Ranking by `ts_rank_cd`, plus trigram similarity on titles for typo tolerance (`pg_trgm`).
+- **Semantic (optional).** Embeddings are computed offline by Scribe from a per-Kind template over the Record content, keyed by `object_hash` so all branches and Revisions sharing the same content share the vector. Vectors live in pgvector with HNSW indexes per configured model.
+- **Query vectors.** Semantic and hybrid search take a `query_vector` supplied by the caller (agents already hold an embedding client). Keeper can optionally call a configured embedding endpoint for text queries, with a strict timeout and a cache; this is an embedding model, not a generative model, and it is disabled by default. **[Architect call AC-17]**
+- **Hybrid.** Reciprocal rank fusion of lexical and vector candidate lists, computed in SQL, with filters applied before fusion.
+- Search results return `{kind, key, title, snippet, score, revision}`; snippets come from `ts_headline` on searchable Attributes.
+
+### 8.5 Caching
+
+- Compiled schema, CEL programs and query plans cached in-process by schema hash.
+- Tree nodes cached by hash (immutable).
+- HTTP `ETag` on Record reads = hash of `(object_hash, derived hash, mask profile)`; conditional requests return `304`.
+- No external cache is required. A shared cache may be added later behind an interface.
+
+---
+
+## 9. Ingestion: Sources, extraction, Proposals
+
+All ingestion runs in Scribe workers, which pull jobs from the Postgres `jobs` table with `SELECT ... FOR UPDATE SKIP LOCKED`. No external broker. **[Architect call AC-18]** Scribe writes through the same commit pipeline as Keeper, under a service principal, so every ingested change has a Revision, Lineage and an audit entry.
+
+### 9.1 Structured Sources
+
+**Connectors** (M2): Postgres (table or read-only query, via asyncpg with a read-only role), CSV (dialect detection, encoding), Parquet (via `pyarrow`). Each connector implements:
+
+```python
+class SourceConnector(Protocol):
+    async def describe(self) -> SourceDescription      # columns, types, keys, foreign keys, row estimate
+    async def sample(self, n: int) -> list[Row]
+    async def read(self, since: Watermark | None) -> AsyncIterator[RowBatch]
+```
+
+**Schema inference** (`lorebase source infer`, Modeler wizard):
+- Column types map to Attribute types with a fixed table (for example `numeric(p,s)` to `decimal`, `varchar` to `string`, `text` to `text`, `timestamptz` to `timestamp`); CSV types are inferred from a sample with confidence and shown for confirmation.
+- Primary keys come from constraints or unique non-null columns.
+- Foreign keys become Relations with cardinality from uniqueness (`many_to_one`) and join tables with two foreign keys become `many_to_many` Relations with link Attributes.
+- Display names are humanized; descriptions come from column comments when present.
+- Output: a schema change set on a new branch and a Proposal. Inference never writes to `main`.
+
+**Sync run:**
+1. Read source batches; apply mapping and transforms; build canonical Record and Link objects.
+2. Look up current hashes for the batch keys on the Source branch (indexed reads on the materialized head).
+3. Emit changes only for differing hashes. For `snapshot` mode, keys owned by this Source (by Lineage and scope) and not seen in the run become deletions.
+4. Commit in batches (configurable, default 5k changes per Revision) on the Source branch.
+5. Open or update the Source's Proposal into the target branch; apply the merge policy (`auto_when_clean`, `proposal`, `auto_with_authority`).
+Provenance per changed Attribute: `source_sync` with Source id, run id and row locator.
+
+### 9.2 Unstructured extraction
+
+Documents are untrusted input. The LLM proposes; the schema, validators, entity resolution and reviewers decide.
+
+**Pipeline** (Scribe job `extraction`):
+
+1. **Intake.** Document stored through the blob store interface (default backend: Postgres `bytea`; optional S3-compatible backend). SHA-256 recorded; duplicates detected.
+2. **Parse.** Parser plugins convert to text with structure (headings, pages, tables) and stable character offsets. Default parsers: PDF via `pypdf`, DOCX via `python-docx`, HTML via `beautifulsoup4`, Markdown and plain text natively. OCR is out of scope; scanned PDFs are flagged.
+3. **Chunk.** Structure-aware chunks with overlap, each with `(start_offset, end_offset, chunk_hash)`.
+4. **Prompt.** For each chunk, the extraction prompt includes the target Domain schema subset (Kinds, Attributes, Relations with descriptions) as a JSON Schema for structured output, plus instructions to return only facts present in the text with verbatim evidence quotes. The model has no tools.
+5. **Model call.** Through the `ExtractionModel` interface. Default implementation: OpenAI-compatible Chat Completions with JSON schema response format; endpoint, API key reference, model name, temperature, max tokens and concurrency from configuration. Works with any compatible server (hosted APIs, vLLM, Ollama, LiteLLM proxies).
+6. **Cache.** Output cached by `sha256(model, prompt_version, schema_hash, chunk_hash)`. Re-runs on unchanged inputs are free and reproducible.
+7. **Validate.** JSON Schema validation, type casting, constraint checks. **Evidence verification**: each extracted value must cite a quote that appears in the chunk (normalized whitespace match); items without verifiable evidence are discarded and counted.
+8. **Resolve entities.** Match candidates to existing Records: exact key, normalized title equality, trigram similarity, optional embedding similarity, plus Attribute agreement scoring. Outcomes: `matched` (update proposal), `new` (create proposal), `ambiguous` (top candidates kept for the reviewer). Thresholds configurable per Kind.
+9. **Schema discovery (optional mode).** When the model reports facts that do not fit the schema, they are aggregated into schema suggestions (new Attribute, new Kind, new Relation) with frequency and examples.
+10. **Propose.** Changes are committed to branch `extract/{job_id}` and a Proposal is opened with one **Proposal item** per proposed Record, Attribute value, Link or schema suggestion, each with evidence (document, page, offsets, quote), confidence and match details.
+11. **Review.** Reviewers accept or reject items individually, in bulk, or by threshold. Rejecting an item commits a revert change on the extraction branch. Merging follows the normal merge algorithm; Conflicts with concurrent changes are resolved as usual.
+
+**Budgets and safety.** Per-job limits on tokens, cost estimate, documents and concurrency; jobs stop cleanly when a limit is reached. Prompt injection inside documents can only influence proposed values, which are validated, evidence-checked and reviewed; it cannot trigger actions because the model has no tools and no write access. **[Architect call AC-19]**
+
+**Provenance.** `extraction` with job id, document id, offsets, quote hash, model and prompt version.
+
+### 9.3 Embedding jobs
+
+Scribe computes embeddings for Records whose `object_hash` has no vector for the configured model, through an `EmbeddingModel` interface (OpenAI-compatible embeddings endpoint by default). Triggered by commits on materialized branches (outbox event) and by backfill commands.
+
+---
+
+## 10. Operations and governance
+
+### 10.1 Execution pipeline
+
+```
+request -> authenticate -> resolve principal and grants
+        -> authorize (Domain role, Operation grant, Kind scope, branch rules)
+        -> idempotency check (principal, key)
+        -> validate parameters (types, references exist and are readable)
+        -> evaluate preconditions (CEL)
+        -> compute edits (steps)
+        -> validate edits (schema, constraints, uniqueness, cardinality, Traits)
+        -> dry_run? return edits and violations
+        -> review_policy? open Proposal on branch op/{invocation} with the edits
+        -> else commit pipeline on the target branch
+        -> audit entry, outbox events, invocation record
+```
+
+Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run`), the computed edits, violations if any, and the Revision or Proposal id.
+
+### 10.2 RBAC
+
+**Roles** (per Domain; custom roles may be composed from permissions):
+
+| Role | Permissions |
+|------|-------------|
+| `viewer` | read schema and data (subject to sensitivity masking) |
+| `explorer` | viewer plus saved views |
+| `editor` | execute built-in Operations on unprotected branches; create branches |
+| `operator` | execute granted custom Operations on any branch allowed by policy |
+| `modeler` | schema change sets on branches; Source mappings |
+| `reviewer` | review Proposals, resolve Conflicts |
+| `maintainer` | merge Proposals into protected branches; manage Sources and jobs |
+| `admin` | grants, API keys, Domain settings |
+| `agent-reader` | viewer for service principals, no saved views |
+
+**Scopes.** Grants apply at `domain`, `kind` (read or write limited to some Kinds), `operation` (execute a specific Operation), or `branch` pattern (`agent/*`). Deny by default.
+
+**Sensitivity.** Attributes tagged `pii`, `confidential` or `restricted` require a matching clearance permission; otherwise values are masked (`"***"`) or omitted per configuration, in REST, MCP, search snippets, exports and embeddings (sensitive Attributes are excluded from embedding templates unless explicitly allowed).
+
+**Groups** map from OIDC claims (configurable claim name). Service principals for agents are created by admins and receive API keys.
+
+### 10.3 Proposals as governance
+
+- Proposal checks: schema validity, merge preview (Conflicts count), size, required reviewers, CI-like custom checks (CEL predicates over the diff, for example "no deletion of more than 1% of Suppliers").
+- Branch protection rules per protected branch: required approvals count, required roles, allowed merge origins.
+- Self-approval is configurable and off by default for protected branches.
+
+### 10.4 Audit
+
+- Every authenticated mutation, merge, grant change, key creation, export and denied attempt is written to `audit_log`.
+- Entries are hash-chained (`entry_hash = sha256(prev_hash || canonical entry)`) for tamper evidence; `lorebase admin audit verify` checks the chain.
+- Audit is distinct from application logs and is exportable (JSON lines, OpenTelemetry log export).
+
+### 10.5 Side effects
+
+Operations declare named events. Events are written to the `outbox` in the commit transaction and delivered asynchronously by Scribe to configured webhook targets (HMAC-signed payloads, retries with backoff, dead-letter state). Lorebase does not call external systems synchronously during a commit.
+
+---
+
+## 11. Agent interface: REST and MCP
+
+### 11.1 REST (Keeper)
+
+Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC 9457 problem details. Pagination by opaque cursor. Every read accepts `branch` (default: Domain default branch) and, where supported, `at` (Revision id or tag).
+
+| Area | Method and path | Notes |
+|------|-----------------|-------|
+| Domains | `GET /domains`, `POST /domains`, `GET /domains/{d}` | |
+| Branches | `GET /domains/{d}/branches`, `POST .../branches`, `GET .../branches/{b}`, `DELETE .../branches/{b}` | branch names URL-encoded |
+| Revisions | `GET .../branches/{b}/log`, `GET .../revisions/{rev}`, `GET .../diff?from=&to=&kinds=` | |
+| Tags | `GET/POST .../tags` | |
+| Schema | `GET .../schema?branch=`, `GET .../schema/kinds/{kind}`, `.../relations/{rel}`, `.../traits/{t}`, `.../operations/{op}`, `.../derivations/{drv}`, `.../sources/{src}` | |
+| Schema changes | `POST .../branches/{b}/schema/changes` | batch of change commands; `dry_run` supported |
+| Records | `GET .../kinds/{kind}/records?where=&order_by=&limit=&cursor=`, `GET .../kinds/{kind}/records/{key}` | `where` accepts the DSL as JSON |
+| Links | `GET .../kinds/{kind}/records/{key}/links/{relation}` | forward or inverse api name |
+| Lineage and history | `GET .../records/{key}/lineage`, `GET .../records/{key}/history` | |
+| Query | `POST .../query` | full DSL (8.2) |
+| Traverse | `POST .../traverse` | |
+| Neighborhood | `POST .../neighborhood` | |
+| Search | `POST .../search` | `{q, kinds, where, mode, query_vector, limit}` |
+| Operations | `POST .../operations/{op}/execute` | `{parameters, branch, dry_run, idempotency_key}` |
+| Proposals | `GET/POST .../proposals`, `GET .../proposals/{p}`, `GET .../proposals/{p}/diff`, `POST .../proposals/{p}/reviews`, `POST .../proposals/{p}/merge`, `POST .../proposals/{p}/close` | |
+| Proposal items | `GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide` | bulk accept/reject |
+| Conflicts | `GET .../proposals/{p}/conflicts`, `POST .../proposals/{p}/conflicts/{c}/resolution`, `POST .../proposals/{p}/conflicts:resolve` | bulk |
+| Sources | `GET/POST .../sources`, `POST .../sources/{s}/runs`, `GET .../sources/{s}/runs/{run}`, `POST /sources:infer` | |
+| Documents and extraction | `POST .../documents`, `GET .../documents/{doc}`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | |
+| Admin | `GET .../audit`, `GET/POST /principals`, `POST /api-keys`, `GET/POST .../grants` | |
+| Health | `GET /healthz`, `GET /readyz` | |
+
+### 11.2 MCP (Herald)
+
+Herald is a separate stateless process built on the official Python MCP SDK. It exposes tools, resources and prompts over stdio and Streamable HTTP. It calls Keeper's REST API through the typed `lorebase-client` package with the agent's credentials, so authorization, masking, audit and rate limits are enforced in one place. **[Architect call AC-20]**
+
+Design rules for tools:
+- Few, composable tools with precise descriptions; names prefixed `lorebase_` to avoid collisions in multi-server agents.
+- Inputs use api names and `Kind/key` references.
+- Outputs are compact JSON with stable shapes, always including `revision`, and truncation markers with `next_cursor` instead of silent truncation.
+- Errors are returned as tool errors with a machine-readable `code` and a short human message.
+- The Domain and default branch can be fixed by Herald configuration per deployment or passed per call.
+
+**Tools**
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `lorebase_describe_domain` | `{domain?, branch?, kinds?: [str], detail?: "summary" or "full"}` | `{domain, branch, revision, kinds: [{name, description, key, attributes: [{name, type, description, required}], relations: [{name, target, cardinality, inverse}], traits}], traits: [...], operations: [{name, description}]}` |
+| `lorebase_search` | `{query, kinds?, where?, mode?: "lexical" or "hybrid" or "semantic", query_vector?: [float], limit?: int}` | `{revision, results: [{ref, kind, title, snippet, score}], next_cursor?}` |
+| `lorebase_get_record` | `{ref, select?: [str], include_links?: [str], link_limit?: int}` | `{revision, record: {ref, kind, title, attributes: {...}, derived: {...}}, links: {relation: [{ref, title}]}, truncated?: {...}}` |
+| `lorebase_query` | `{kind or trait, where?, select?, include?, order_by?, limit?, cursor?}` | `{revision, rows: [...], next_cursor?}` |
+| `lorebase_traverse` | `{from: ref, path: [{relation, where?, limit?}], select?}` | `{revision, records: [...], paths?: [[ref, ...]]}` |
+| `lorebase_neighborhood` | `{seeds: [ref], depth: 1-3, relations?, kinds?, max_nodes?}` | `{revision, nodes: [{ref, kind, title}], edges: [{from, to, relation}], truncated}` |
+| `lorebase_lineage` | `{ref, attributes?: [str]}` | `{revision, lineage: [{attribute, value, origin_type, origin, actor, at, revision}]}` |
+| `lorebase_history` | `{ref, limit?}` | `{entries: [{revision, at, actor, message, changed_attributes}]}` |
+| `lorebase_list_operations` | `{kind?}` | `{operations: [{name, description, parameters: [...], review_policy: "never" or "always" or "conditional"}]}` |
+| `lorebase_execute_operation` | `{operation, parameters, branch?, dry_run?: bool, idempotency_key?: str}` | `{status, edits: [...], violations: [...], revision?, proposal?}` |
+| `lorebase_create_branch` | `{name, from?}` | `{branch, head}` (allowed only for permitted branch patterns) |
+| `lorebase_open_proposal` | `{branch, title, description}` | `{proposal, url, checks}` |
+| `lorebase_diff` | `{from, to, kinds?, limit?}` | `{summary: {kind: {added, modified, removed}}, changes: [...], next_cursor?}` |
+
+**Resources.** `lorebase://{domain}/schema`, `lorebase://{domain}/kinds/{kind}`, `lorebase://{domain}/records/{kind}/{key}`, `lorebase://{domain}/operations/{op}`. Clients that support resources can attach the schema to context once instead of calling `describe_domain`.
+
+**Prompts.** `explore_domain` (orientation over schema), `investigate_record` (a structured walkthrough of a Record, its links and Lineage). Prompts are templates; they contain no model calls.
+
+**Authentication.** Streamable HTTP: `Authorization: Bearer <api key>` or an OIDC access token; stdio: API key from environment. Herald forwards the credential to Keeper.
+
+### 11.3 Clients
+
+- `lorebase-client` (Python, typed, sync and async) built on the OpenAPI document, used by CLI and Herald.
+- TypeScript client produced from OpenAPI at build time, used by the web app.
+
+---
+
+## 12. User interface
+
+### 12.1 Principles
+
+- Branch and Revision context is always visible; switching branch changes every view.
+- Everything navigable has a URL (TanStack Router state in the URL): a Record, a Canvas view, a diff, a Conflict.
+- The UI uses only the public REST API.
+- Accessible (keyboard navigation, contrast), responsive down to tablet; Canvas is desktop-first.
+- Data fetching through TanStack Query with Revision-aware cache keys.
+
+### 12.2 Shell
+
+- Top bar: Domain switcher, branch switcher with head Revision badge and "behind main by N", global search (Cmd/Ctrl-K), user menu.
+- Left navigation: Explorer, Canvas, Modeler, Review, Sources, History, Admin.
+
+### 12.3 Screen inventory
+
+| Area | Screen | Content and actions |
+|------|--------|---------------------|
+| Explorer | Domain home | Kinds with counts and descriptions, recent Revisions, open Proposals, Source health |
+| Explorer | Search results | Mixed-Kind results, facets by Kind and indexed Attributes, snippets |
+| Explorer | Kind table | Columns picker, filters builder (DSL), sort, saved views, CSV export (permission-gated) |
+| Explorer | Record page | Attributes with type-aware rendering, derived values marked, linked Records grouped by Relation with counts, Lineage popover per value, history timeline, "Run Operation" panel with forms built from parameters, open in Canvas |
+| Explorer | Trait view | Records across implementing Kinds |
+| Canvas | Graph explorer | Start from Records or search; expand neighbors by Relation; filter by Kind and Relation; ForceAtlas2 layout in a web worker; node size by degree, color by Kind; selection panel; path between two Records; caps with progressive loading |
+| Canvas | Schema graph | Kinds as nodes, Relations as edges with cardinality, Traits as groups; click through to Modeler |
+| Canvas | Diff overlay | Compare two refs: added, removed and modified nodes and edges colored; filter to changes only |
+| Modeler | Schema overview | Kinds, Relations, Traits, Operations, Derivations, Sources lists; validation panel |
+| Modeler | Kind editor | Attributes table (type, required, unique, constraints, sensitivity, indexed, searchable), primary key and title, Traits, search and embedding template, built-in Operations toggles |
+| Modeler | Relation editor | Endpoints, cardinality, required, link Attributes, delete behavior |
+| Modeler | Trait editor | Attributes and implementing Kinds with mappings |
+| Modeler | Operation editor | Parameters, preconditions, steps, review policy, permissions; YAML and form views kept in sync; test bench with dry run against the current branch |
+| Modeler | Derivation editor | Expression or aggregate definition, preview on sample Records |
+| Modeler | Source mapping editor | Connection reference, inferred columns, column-to-Attribute mapping with transforms, live preview of sample rows mapped to Records, sync settings |
+| Modeler | Change set summary | Pending schema changes on the branch, data migrations they imply (casts, defaults), "Open Proposal" |
+| Review | Proposal list | Filters: open, assigned to me, origin (manual, Source, extraction, Operation), status of checks |
+| Review | Proposal detail | Summary, checks, reviewers, schema diff, data diff by Kind with counts, Record-level side-by-side diff, comments, merge button |
+| Review | Extraction items | Item list with confidence, match status and evidence; document viewer with highlighted spans; accept or reject per item, bulk by threshold or filter; ambiguous match picker |
+| Review | Conflict resolver | Conflict list by code; base, ours, theirs panes; choices and custom value editor; grouped Conflicts with bulk actions; policy application; progress; re-validation status |
+| Sources | Source list and detail | Status, schedule, last runs, stats, errors, mapping link, run now |
+| Sources | Documents and extraction jobs | Library, upload, jobs with progress, token usage and cost estimate, link to Proposal |
+| History | Log and compare | Branch log, Revision detail with diff, compare any two refs, tags |
+| Admin | Members and roles | Users, groups, grants by scope |
+| Admin | API keys and service principals | Create, scope, expire, revoke; last used |
+| Admin | Audit log | Filterable, exportable, chain verification status |
+| Admin | Domain settings | Default branch, protection rules, materialization, search language, extraction defaults |
+
+---
+
+## 13. Security and multi-tenancy
+
+### 13.1 Tenancy model
+
+One Lorebase installation serves one organization. Domains are the isolation boundary inside it: separate grants, separate object scopes, separate audit filters. Hosting multiple organizations is done with separate installations (separate databases). Shared multi-organization SaaS is a non-goal for v1. **[Architect call AC-21]**
+
+### 13.2 Authentication
+
+- **Users:** OIDC authorization code flow with PKCE against any compliant provider. Keeper acts as a backend-for-frontend: it holds tokens server-side and issues an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie to the web app; CSRF protection on state-changing requests. Group claims map to Lorebase groups.
+- **Agents and automation:** API keys bound to a service principal, with Domain scopes, roles, expiry and optional IP allowlist. Format `lbk_{prefix}_{secret}`; only an HMAC-SHA256 of the secret with a server-side pepper is stored. Keys are shown once.
+- **Bootstrap:** the first admin is created by `lorebase admin bootstrap` from the CLI with access to the database; no default credentials exist.
+
+### 13.3 Authorization enforcement
+
+- Enforced in Keeper's service layer for every request (REST and, through Keeper, MCP).
+- Postgres row-level security on `domain_id` using a transaction-local setting as a second line of defense against query bugs.
+- The query compiler applies Kind-level read scopes and sensitivity masking; denied Kinds are invisible (not just empty) to the caller.
+
+### 13.4 Secrets
+
+- Configuration references secrets (`secret://env/NAME`, `secret://file/path`); secret values never enter the database, logs or traces.
+- Source credentials use read-only database roles by convention, checked at registration with a warning when write privileges are detected.
+
+### 13.5 Personal data and erasure
+
+- Attributes tagged `pii` can use vault storage: the canonical value in the Record object is a vault reference; the value is encrypted (AES-256-GCM, key from configuration with key ids for rotation) in the `vault` table.
+- Erasure (`lorebase admin erase`) deletes the vault value and marks it erased; all Revisions keep their hashes and structure, and reads return `erased`. **[Architect call AC-22]**
+- Vault storage costs one extra lookup per sensitive value read; it is opt-in per Attribute.
+
+### 13.6 Threats and mitigations
+
+| Threat | Mitigation |
+|--------|------------|
+| Agent exfiltrates restricted data | Kind scopes, sensitivity masking, rate limits, audit of all reads by service principals (configurable sampling) |
+| Agent performs harmful writes | Only granted Operations, preconditions, review policies, dry run, idempotency, per-principal rate limits |
+| Prompt injection via documents | Extraction model has no tools; outputs validated and evidence-checked; Proposals require review |
+| SSRF via Sources or webhooks | Allowlists for hosts and networks in configuration; private ranges blocked by default for HTTP targets |
+| Query abuse (expensive queries) | DSL limits (depth, caps), statement timeouts, per-principal concurrency limits |
+| Tampering with history | Content addressing, immutable Revisions, hash-chained audit log |
+| Supply chain | Pinned dependencies with lockfiles, dependency review in CI, SBOM per image, signed images, minimal base images, non-root containers |
+| Credential leakage | Hashed API keys, secret references, log redaction filters |
+
+---
+
+## 14. Observability
+
+- **Traces.** OpenTelemetry SDK in Keeper, Scribe and Herald. Spans: HTTP request, authn, authz, query compile, SQL (SQLAlchemy and asyncpg instrumentation), commit pipeline phases (validate, hash, tree, materialize, cas), merge phases (base, diff, schema merge, data merge, checks), Operation execution, extraction steps (parse, prompt, model call, validate, resolve). Herald propagates trace context from MCP calls to Keeper.
+- **Metrics.** Request latency histograms by route and status; read path latency by query shape; commit duration and changes per commit; merge duration, Conflicts by code; materialization rows written; job queue depth, age and failures; extraction tokens, cost estimate, cache hit ratio, evidence rejection rate; search latency by mode; DB pool usage.
+- **Logs.** Structured JSON to stdout with `trace_id`, `span_id`, `domain`, `principal` (id only), `request_id`; redaction filters for secrets and sensitive values.
+- **Health.** `/healthz` (process) and `/readyz` (database reachable, migrations at expected version).
+- **Dashboards.** Example Grafana dashboards and alert rules shipped in `deploy/observability`.
+- OTLP endpoint and sampling are configuration; no vendor-specific exporter in code.
+
+---
+
+## 15. Deployment
+
+### 15.1 Artifacts
+
+- `ghcr.io/aantenore/lorebase`: one Python image with entrypoints `keeper`, `scribe`, `herald`, `migrate`, `cli`. One codebase, one image, different commands. **[Architect call AC-23]**
+- `ghcr.io/aantenore/lorebase-web`: static web app served by an unprivileged web server; can also be served by Keeper for single-container setups.
+- Python packages on PyPI: `lorebase-client`, `lorebase-cli`.
+
+### 15.2 Local and small installs
+
+docker compose with: `postgres` (Postgres 16 with pgvector), `migrate` (one-shot Alembic upgrade), `keeper`, `scribe`, `herald`, `web`, and an optional `observability` profile (OpenTelemetry Collector, Prometheus, Grafana, Jaeger). Configuration via `.env` and a mounted `lorebase.yaml`.
+
+### 15.3 Production
+
+- Helm chart (M5): Keeper and Herald as Deployments with HPA, Scribe as Deployment scaled by queue depth, migrations as a pre-upgrade Job, external Postgres (managed or operator-based).
+- Postgres: primary plus optional read replicas. Keeper can route reads to replicas with the `min_revision` freshness check.
+- Backup: standard Postgres backup and PITR (pgBackRest, WAL-G or managed). The whole system state is in Postgres, plus the optional blob store.
+- Upgrades: Alembic migrations are forward-only and online-safe (expand, migrate, contract over releases).
+
+---
+
+## 16. Configuration
+
+- Layered: defaults in code (non-functional values only, such as page sizes), then `lorebase.yaml`, then environment variables (`LOREBASE__SECTION__KEY`), validated by Pydantic Settings at startup; invalid configuration fails fast with a clear message.
+- No business values, endpoints, model names, limits or credentials hardcoded. Examples in `config/lorebase.example.yaml`.
+
+```yaml
+database:
+  dsn: secret://env/LOREBASE_DB_DSN
+  pool_size: 20
+  statement_timeout_ms: 2000
+auth:
+  oidc:
+    issuer: https://idp.example.com
+    client_id: lorebase
+    client_secret: secret://env/OIDC_CLIENT_SECRET
+    groups_claim: groups
+  api_keys:
+    pepper: secret://env/LOREBASE_KEY_PEPPER
+read:
+  max_limit: 500
+  max_via_depth: 3
+  neighborhood_max_nodes: 2000
+search:
+  language: simple
+  query_embedding:
+    enabled: false
+materialization:
+  max_full_branches_per_domain: 20
+extraction:
+  provider: openai_compatible
+  base_url: https://llm.example.com/v1
+  api_key: secret://env/EXTRACTION_API_KEY
+  model: your-extraction-model
+  temperature: 0
+  max_concurrency: 4
+  budget:
+    max_tokens_per_job: 5000000
+embeddings:
+  provider: openai_compatible
+  base_url: https://llm.example.com/v1
+  api_key: secret://env/EMBEDDING_API_KEY
+  models:
+    - name: your-embedding-model
+      dims: 1024
+telemetry:
+  otlp_endpoint: http://otel-collector:4317
+  service_namespace: lorebase
+  sample_ratio: 0.1
+webhooks:
+  targets:
+    risk_flag_raised:
+      url: https://hooks.example.com/risk
+      secret: secret://env/RISK_HOOK_SECRET
+network:
+  allow_private_targets: false
+```
+
+---
+
+## 17. Repository layout
+
+```
+lorebase/
+  pyproject.toml              # uv workspace root, shared tooling config
+  uv.lock
+  packages/
+    core/                     # lorebase_core: pure domain logic, no I/O
+      src/lorebase_core/
+        model/                # Domain, Kind, Attribute, Relation, Trait, Operation, Derivation, Source
+        types/                # type system, casts, canonical value encoding
+        canonical/            # RFC 8785 canonical JSON, hashing
+        tree/                 # HAMT, NodeStore protocol, diff
+        revision/             # Revision objects, ancestry, merge base
+        merge/                # three-way merge, consistency rules, Conflicts
+        validate/             # schema and data validation
+        expr/                 # CEL integration and function library
+        query/                # query DSL model and validation
+    platform/                 # lorebase_platform: settings, logging, telemetry, secrets resolution
+    store/                    # lorebase_store: SQLAlchemy models, repositories, migrations, materializer, jobs
+      migrations/             # Alembic
+    keeper/                   # lorebase_keeper: FastAPI app, auth, services, REST routes
+    scribe/                   # lorebase_scribe: job runner, connectors, extraction, embeddings, GC
+    herald/                   # lorebase_herald: MCP server
+    client/                   # lorebase_client: typed HTTP client
+    cli/                      # lorebase_cli: Typer CLI
+  apps/
+    web/                      # React 19, TypeScript, Vite, TanStack Query and Router, Sigma.js, Tailwind
+  config/
+    lorebase.example.yaml
+  deploy/
+    compose/                  # docker-compose.yaml, profiles
+    docker/                   # Dockerfiles
+    observability/            # collector config, dashboards, alerts
+    helm/                     # M5
+  examples/
+    supply/                   # demo Domain: schema YAML, CSV and Parquet data, sample documents
+  tests/
+    integration/              # cross-package tests with Postgres
+    perf/                     # benchmarks and data seeders
+  docs/
+  .github/workflows/
+```
+
+Dependency direction: `core` depends on nothing internal; `store` on `core` and `platform`; `keeper` and `scribe` on `store`; `client` on nothing internal; `cli` and `herald` on `client`. Enforced with import-linter in CI.
+
+---
+
+## 18. Roadmap
+
+### M1: Engine and API
+
+Scope: canonical JSON and hashing; HAMT trees; Revisions, branches, tags; commit pipeline; full materialization; diff; three-way merge with the full Conflict taxonomy and API-level resolution; schema change sets; built-in Operations; query DSL (without `via` on Traits), record reads, links, full-text search; Lineage for Operations and imports; history; API keys and Domain-level roles; audit log; Keeper REST; CLI; docker compose; CI. Detailed plan: [plan/m1.md](plan/m1.md).
+
+Acceptance:
+- A Domain defined in YAML can be applied, filled by CLI import of 1M Records, branched, changed on two branches, merged with Conflicts resolved via API, and diffed, all via REST and CLI.
+- Property tests prove: same content gives the same root hash regardless of insertion order; merge of non-overlapping changes is commutative; diff(A, B) applied to A yields B.
+- `admin verify` passes after every integration test.
+- Read targets of 6.14 met for key lookup, filtered list and one-hop traversal on the 1M fixture.
+- `docker compose up` brings the stack up from clean in under 2 minutes; CI green on lint, types, unit and integration tests.
+
+### M2: Structured ingestion and exploration
+
+Scope: Scribe job runner; Postgres, CSV and Parquet Sources; schema inference; Source branches and merge policies; Lineage for syncs; OIDC login and BFF sessions; web app shell; Explorer (home, search, Kind table, Record page, history); Canvas (graph explorer, schema graph); Review basics (Proposal list and detail, schema and data diff, merge).
+
+Acceptance:
+- Days 1 and 2 of the proof scenario run end to end on the `examples/supply` dataset.
+- Inference on the example ERP schema proposes the expected Kinds and Relations (golden test).
+- Incremental sync of 100k changed rows completes under 2 minutes; a no-change sync writes no Revision.
+- Canvas renders 5k nodes and 10k edges with smooth interaction on a reference laptop.
+
+### M3: Governance and agents
+
+Scope: custom Operations with CEL, review policies, outbox and webhooks; full RBAC with scopes, groups and sensitivity masking; branch protection and Proposal checks; Herald MCP server (all tools, resources, prompts); Python client; Modeler (all editors); Review conflict resolver UI; Traits in queries.
+
+Acceptance:
+- Day 5 of the proof scenario runs with an external agent connected through MCP over stdio and Streamable HTTP.
+- Authorization test matrix (role by scope by endpoint) passes, including MCP paths.
+- Operation execution p95 under 75 ms; MCP tool overhead over REST under 5 ms p95.
+- Every Conflict code can be produced and resolved from the UI.
+
+### M4: Documents, extraction and semantic search
+
+Scope: documents and blob store interface; parsers; extraction pipeline with cache, evidence verification, entity resolution, schema discovery; extraction Proposal items and evidence Review UI; embeddings jobs and hybrid search; Derivations (expression, aggregate, path).
+
+Acceptance:
+- Day 3 of the proof scenario runs on the sample contracts; zero items without verified evidence reach a Proposal.
+- Re-running an unchanged job makes zero model calls (cache).
+- Extraction precision and recall measured on a labeled sample set in `examples/supply`, reported in CI as a tracked metric (no fixed threshold gate in M4).
+- Hybrid search p95 under 80 ms at 1M Records with caller-supplied vectors.
+
+### M5: Enterprise hardening and 1.0
+
+Scope: overlay branch materialization; vault storage and erasure; Helm chart; read replica routing; GC; performance at 10M Records; backup and restore guide; signed images and SBOM; audit chain verification; HTTP JSON Source; LinkML schema import and export; documentation site; API stability guarantees for `/api/v1`.
+
+Acceptance:
+- All targets in 6.14 met at 10M Records on reference hardware, published with the benchmark harness.
+- Full proof scenario (days 1 to 5) passes as an automated end-to-end test.
+- Security review checklist completed; threat model published.
+- Upgrade from M4 data with zero downtime migrations.
+
+---
+
+## 19. Risks
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Custom versioning engine is hard to get right | Data loss or wrong merges | Pure `core` package with in-memory store; property-based tests (hypothesis) for canonicity, diff, merge laws; `admin verify`; conservative first release; tree format versioned |
+| Postgres storage growth (objects, nodes, changesets) | Cost, vacuum pressure | Content dedup, lz4 TOAST, hash partitioning, GC, retention windows, measured in perf suite |
+| Generic JSONB materialization slower than typed tables | Missed read targets | Partial expression indexes per indexed Attribute, query shapes limited by DSL, benchmarks from M1; fallback option of per-Kind typed tables behind the same materializer interface |
+| Many full-materialized branches | Storage and write amplification | Cap per Domain; overlay mode in M5; agents encouraged to use dry run instead of branches |
+| CEL library maturity in Python | Bugs or performance limits in Operations | Isolate behind `expr` module interface; compile and cache programs; conformance tests; alternative implementation possible without changing definitions |
+| Extraction quality varies by model | Low acceptance rates, reviewer fatigue | Evidence verification, confidence thresholds, entity resolution, labeled evaluation set, cache, configurable models |
+| Canvas performance on large graphs | Poor UX | Caps, progressive loading, WebGL rendering, layout in worker, aggregation by Kind |
+| MCP specification changes | Herald breakage | Use official SDK, thin Herald over REST, contract tests per MCP version |
+| Scope creep toward a full data platform | Delay | Non-goals in section 2; Sources map, they do not transform |
+| Name collision or trademark issue with "Lorebase" | Rename cost | Trademark and package name search before first public release |
+
+---
+
+## 20. Architect calls (settled decisions)
+
+| ID | Decision | Rationale | Revisit when |
+|----|----------|-----------|--------------|
+| AC-01 | Schema elements identified by stable ids; api names are renamable properties | Renames merge cleanly; hashes stable | Never for v1 |
+| AC-02 | Record identity is `(kind_id, key)`; natural key or minted ULID | Deterministic identity across branches and Sources | Composite identity across Kinds needed |
+| AC-03 | No parallel Links for the same Relation and endpoints | Simple identity, clear cardinality | Real need for multigraph semantics |
+| AC-04 | No cross-Domain Relations in v1 | Domain is the isolation and permission boundary | Strong demand with a federation design |
+| AC-05 | No nested struct types; arrays of scalars only | Attribute-level merge stays meaningful | Clear demand with merge semantics defined |
+| AC-06 | CEL for preconditions, steps and policies | Safe, specified, typed, portable | Library quality blocks M3 |
+| AC-07 | Derived values excluded from content and merge | No derived conflicts; recompute from inputs | Expensive Derivations need caching across Revisions |
+| AC-08 | Provenance attached to changes, not content | Identical values do not diff; Lineage still exact per change | Need for multi-origin per value in content |
+| AC-09 | RFC 8785 canonical JSON with Lorebase value rules; integers and decimals as strings in canonical form | Deterministic hashing across languages | Hash scheme version bump |
+| AC-10 | Objects scoped per Domain | Isolation, simple deletion | Storage pressure from cross-Domain duplicates |
+| AC-11 | Partitioned canonical HAMT (256-way, leaf threshold 512) plus first-parent changesets | Canonical roots, cheap diff, structural sharing, O(changes) incremental work | Benchmarks show prolly trees materially better |
+| AC-12 | Single writer per branch via advisory lock | Correctness and simplicity | Write throughput per branch insufficient after batching |
+| AC-13 | Recursive virtual merge base for criss-cross histories | Correct three-way results | Never |
+| AC-14 | No rebase; append-only history | Immutable audit trail | Never for protected branches |
+| AC-15 | Materialized values keyed by Attribute id, generic JSONB tables with partial indexes | No DDL churn on schema change; rename-safe | Read targets missed; switch materializer to typed tables |
+| AC-16 | Full materialization in M1 to M4; overlay mode in M5; cap per Domain | Ship correctness first | Branch count grows faster than expected |
+| AC-17 | No generative model in the read path; semantic search uses caller vectors or an optional embedding endpoint | Milliseconds and determinism | Never for generative models |
+| AC-18 | Postgres-backed job queue with SKIP LOCKED | No extra infrastructure | Job throughput beyond Postgres comfort |
+| AC-19 | Extraction model has no tools; outputs only as Proposal items with verified evidence | Safety against injection and invented facts | Never |
+| AC-20 | Herald calls Keeper over REST | One enforcement point; Herald needs no DB credentials | MCP latency overhead exceeds budget |
+| AC-21 | One organization per installation; Domains as isolation inside | Simpler security model | Managed multi-tenant offering |
+| AC-22 | PII vault indirection for erasure without rewriting history | Erasure compatible with immutability | Never |
+| AC-23 | One backend image with multiple entrypoints | Simpler release and versioning | Image size or dependency conflicts between roles |
+| AC-24 | Postgres 16 is the only required store; blob store optional with Postgres default | Operational simplicity | Document volume requires object storage by default |

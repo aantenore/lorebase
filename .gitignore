@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.python-eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+*.prof
+
+# Node
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+!.yarn/releases
+.pnp.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vite/
+*.tsbuildinfo
+apps/web/dist/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Docker
+docker-compose.override.yaml
+docker-compose.override.yml
+.docker/
+
+# Data and local artifacts
+*.sqlite
+*.db
+/tmp/
+/data/
+tests/perf/results/
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.code-workspace
+.history/
