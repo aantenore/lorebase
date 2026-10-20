@@ -1,0 +1,21 @@
+name: Question
+description: Ask how something works or how to use it
+title: "question: "
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the README, docs/design.md and docs/glossary.md first. Open-ended discussion fits
+        better in Discussions, when enabled.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What you have tried
+      description: Commands, configuration or documents you looked at.
