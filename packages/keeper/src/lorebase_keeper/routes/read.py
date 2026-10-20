@@ -16,10 +16,9 @@ from pydantic import ValidationError
 
 from lorebase_core.query import Query as DslQuery
 from lorebase_core.query import QueryError, QueryPlan, resolve_query
-from lorebase_keeper.auth.deps import Access, require
-from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, records, search
+from lorebase_keeper.reading.access import ReadAccess, read_access
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, resolve_point
 from lorebase_keeper.reading.problems import invalid, query_problem, request_problem
@@ -46,13 +45,16 @@ router = APIRouter(tags=["read"])
 
 BASE = "/domains/{domain_id}"
 _ERRORS: dict[int | str, dict[str, Any]] = {
-    403: {"model": Problem, "description": "The caller lacks data.read in the Domain."},
+    403: {
+        "model": Problem,
+        "description": "The caller lacks data.read for the branch or Revision read.",
+    },
     404: {"model": Problem, "description": "Domain, branch, Revision, Kind or Record not found."},
     422: {"model": ValidationProblem, "description": "Invalid request or query."},
 }
 
-DataRead = Annotated[Access, Depends(require(Permission.DATA_READ))]
-KindRead = Annotated[Access, Depends(require(Permission.DATA_READ, kind_param="kind"))]
+DataRead = Annotated[ReadAccess, Depends(read_access())]
+KindRead = Annotated[ReadAccess, Depends(read_access(kind_param="kind"))]
 Branch = Annotated[
     str | None, Query(description="Branch to read; default: the Domain's default branch.")
 ]
@@ -94,7 +96,7 @@ def _shape(query: DslQuery) -> str:
 async def list_records(
     domain_id: str,
     kind: str,
-    _access: KindRead,
+    access: KindRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
@@ -111,7 +113,7 @@ async def list_records(
     cursor: Cursor = None,
 ) -> RecordPage:
     """Records of a Kind filtered with the DSL, ordered and paginated by keyset."""
-    point = await resolve_point(session, runtime, domain_id, branch=branch, at=at)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     records.require_kind(point, kind)
     document: dict[str, Any] = {"kind": kind, "limit": _limit(runtime, limit), "cursor": cursor}
     if where:
@@ -149,7 +151,7 @@ async def list_record_links(
     kind: str,
     key: str,
     relation: str,
-    _access: KindRead,
+    access: KindRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
@@ -159,7 +161,7 @@ async def list_record_links(
     cursor: Cursor = None,
 ) -> LinkPage:
     """Links of the Record along `relation`, a forward or inverse api name, by far key."""
-    point = await resolve_point(session, runtime, domain_id, branch=branch, at=at)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
     page = await records.record_links(
         session,
@@ -185,7 +187,7 @@ async def get_record(
     domain_id: str,
     kind: str,
     key: str,
-    _access: KindRead,
+    access: KindRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
@@ -196,7 +198,7 @@ async def get_record(
     if_none_match: Annotated[str | None, Header()] = None,
 ) -> Any:
     """One Record, optionally with its Link counts and the lineage of its values."""
-    point = await resolve_point(session, runtime, domain_id, branch=branch, at=at)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
     record, fetched = await records.get_record(
         session, runtime, point, found, key, links=links, lineage=lineage
@@ -217,7 +219,7 @@ async def get_record(
 async def list_relation_links(
     domain_id: str,
     relation: str,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
@@ -229,7 +231,7 @@ async def list_relation_links(
     cursor: Cursor = None,
 ) -> LinkPage:
     """Links of a Relation (either api name) ordered by `(from_key, to_key)`."""
-    point = await resolve_point(session, runtime, domain_id, branch=branch, at=at)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     page = await records.relation_links(
         session,
         runtime,
@@ -252,13 +254,13 @@ async def list_relation_links(
 async def query_records(
     domain_id: str,
     body: QueryRequest,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
 ) -> QueryResponse:
     """Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates."""
-    point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=body.at)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     query = DslQuery.model_validate(body.model_dump(by_alias=True, exclude={"branch", "at"}))
     plan = _plan(query, point, runtime, "/body")
     page = await records.run_query(
@@ -274,13 +276,13 @@ async def query_records(
 async def traverse(
     domain_id: str,
     body: TraverseRequest,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
 ) -> TraverseResponse:
     """Follow a path of Relations, with a filter and a cap per hop (design 8.3)."""
-    point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await graph.traverse(session, runtime, point, body)
     _mark(response, point)
     return result
@@ -290,13 +292,13 @@ async def traverse(
 async def neighborhood(
     domain_id: str,
     body: NeighborhoodRequest,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
 ) -> NeighborhoodResponse:
     """Breadth-first expansion from seed Records within depth, node and edge caps."""
-    point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await graph.neighborhood(session, runtime, point, body)
     _mark(response, point)
     return result
@@ -306,13 +308,13 @@ async def neighborhood(
 async def search_records(
     domain_id: str,
     body: SearchRequest,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
 ) -> SearchResponse:
     """Lexical, semantic (caller-supplied vector) or hybrid search (design 8.4)."""
-    point = await resolve_point(session, runtime, domain_id, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await search.search(session, runtime, point, body)
     _mark(response, point)
     return result

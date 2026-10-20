@@ -56,6 +56,17 @@ class PaginationSettings(SectionModel):
         return self
 
 
+class ReadsSettings(SectionModel):
+    """Authorization of reads that name a Revision by id or tag."""
+
+    reachability_max_depth: int = Field(
+        default=10_000,
+        ge=1,
+        description="Parent steps walked to find whether a Revision belongs to the branch a "
+        "branch-narrowed grant covers; deeper Revisions are refused to such callers.",
+    )
+
+
 class ReadinessSettings(SectionModel):
     """How `/readyz` finds and probes the database."""
 
@@ -100,6 +111,7 @@ class KeeperSettings(SectionModel):
     cors: CorsSettings = Field(default_factory=CorsSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
+    reads: ReadsSettings = Field(default_factory=ReadsSettings)
     readiness: ReadinessSettings = Field(default_factory=ReadinessSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     openapi: OpenApiSettings = Field(default_factory=OpenApiSettings)

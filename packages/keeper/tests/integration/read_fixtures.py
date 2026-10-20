@@ -95,9 +95,11 @@ def seeded_database(server_url: str, seed: Any) -> Iterator[Seeded]:
 
 
 @asynccontextmanager
-async def keeper(app_url: str, **sections: Any) -> AsyncIterator[httpx.AsyncClient]:
-    """A Keeper application on `app_url` (auth mode none) and an HTTP client for it."""
-    settings = Settings(keeper={}, database={"dsn": app_url}, **sections)
+async def keeper(
+    app_url: str, keeper_section: dict[str, Any] | None = None, **sections: Any
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A Keeper application on `app_url` (default auth mode none) and an HTTP client for it."""
+    settings = Settings(keeper=keeper_section or {}, database={"dsn": app_url}, **sections)
     app: FastAPI = create_app(settings)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with (

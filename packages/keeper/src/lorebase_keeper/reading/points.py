@@ -3,7 +3,8 @@
 Every read names a branch (default: the Domain's default branch) and may name `at`, a Revision
 id or a tag. Without `at`, or when `at` is the branch head, the read hits the materialized
 head of the branch. Otherwise it is served from the Revision tree (design 6.12): key reads and
-Kind listings only, slower, and marked `served_from: tree` in responses.
+Kind listings only, slower, and marked `served_from: tree` in responses. Every step is
+authorized against what it reads (`reading.access`).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA
 from lorebase_keeper.errors import NOT_FOUND, ProblemError
+from lorebase_keeper.reading.access import ReadAccess
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.rebuild import load_schema
@@ -67,53 +69,85 @@ def not_found(what: str) -> ProblemError:
     return ProblemError(NOT_FOUND, f"{what} not found.")
 
 
-async def require_domain(session: AsyncSession, domain_id: str) -> DomainRow:
-    """The Domain, with the transaction scoped to it; 404 when it does not exist."""
-    await scope_to_domain(session, domain_id)
-    domain = await DomainRepository(session).get(domain_id)
+async def open_domain(session: AsyncSession, access: ReadAccess) -> DomainRow:
+    """The Domain of the request, with the transaction scoped to it (403 or 404 when absent)."""
+    await scope_to_domain(session, access.domain_id)
+    domain = await DomainRepository(session).get(access.domain_id)
     if domain is None:
-        raise not_found(f"Domain {domain_id}")
+        if not await access.allows(None):
+            raise access.denied(None)
+        raise not_found(f"Domain {access.domain_id}")
     return domain
 
 
-async def resolve_revision(session: AsyncSession, domain_id: str, ref: str) -> RevisionRow:
-    """A Revision named by its id, a tag or a branch (its head); 404 when unknown."""
-    revisions = RevisionRepository(session, domain_id)
-    if _REVISION_ID.match(ref):
-        found = await revisions.get(bytes.fromhex(ref))
-        if found is not None:
-            return found
-    named = await RefRepository(session, domain_id).get(ref)
-    if named is None:
-        raise not_found(f"Revision {ref}")
-    return await revisions.require(named.head)
-
-
-async def require_branch(session: AsyncSession, domain: DomainRow, branch: str | None) -> RefRow:
-    """The branch (default: the Domain's default branch); 404 for unknown names and tags."""
+async def open_branch(
+    session: AsyncSession, access: ReadAccess, domain: DomainRow, branch: str | None
+) -> RefRow:
+    """The branch read (default: the Domain's default branch), authorized for the caller."""
     name = branch or domain.default_branch
+    await access.require(name)
     ref = await RefRepository(session, domain.id).get(name)
     if ref is None or ref.kind is not RefKind.BRANCH:
         raise not_found(f"Branch {name}")
     return ref
 
 
+async def find_revision(
+    session: AsyncSession, domain_id: str, token: str
+) -> tuple[RevisionRow, RefRow | None] | None:
+    """The Revision named by an id, a tag or a branch (its head), and the ref used if any."""
+    revisions = RevisionRepository(session, domain_id)
+    if _REVISION_ID.match(token):
+        found = await revisions.get(bytes.fromhex(token))
+        if found is not None:
+            return found, None
+    named = await RefRepository(session, domain_id).get(token)
+    if named is None:
+        return None
+    return await revisions.require(named.head), named
+
+
+async def open_revision(
+    session: AsyncSession,
+    access: ReadAccess,
+    domain_id: str,
+    token: str,
+    *,
+    anchor: RefRow | None,
+) -> RevisionRow:
+    """The Revision named by `token`, authorized against what it is (see `reading.access`)."""
+    found = await find_revision(session, domain_id, token)
+    if found is None:
+        if not await access.may_read_any(None if anchor is None else anchor.name):
+            raise access.denied(None)
+        raise not_found(f"Revision {token}")
+    revision, named = found
+    await access.require_revision(session, revision, named=named, anchor=anchor)
+    return revision
+
+
+async def open_anchor(
+    session: AsyncSession, access: ReadAccess, domain: DomainRow, branch: str | None
+) -> RefRow | None:
+    """The optional `branch` that Revisions named by id or tag are checked against."""
+    return None if branch is None else await open_branch(session, access, domain, branch)
+
+
 async def resolve_point(
     session: AsyncSession,
     runtime: ReadRuntime,
-    domain_id: str,
+    access: ReadAccess,
     *,
     branch: str | None,
     at: str | None,
 ) -> ReadPoint:
-    """Resolve the read point of a request (see module doc)."""
-    domain = await require_domain(session, domain_id)
-    ref = await require_branch(session, domain, branch)
-    revisions = RevisionRepository(session, domain.id)
+    """Resolve and authorize the read point of a request (see module doc)."""
+    domain = await open_domain(session, access)
+    ref = await open_branch(session, access, domain, branch)
     revision = (
-        await revisions.require(ref.head)
+        await RevisionRepository(session, domain.id).require(ref.head)
         if at is None
-        else await resolve_revision(session, domain.id, at)
+        else await open_revision(session, access, domain.id, at, anchor=ref)
     )
     if revision.id == ref.head:
         materialized = await MaterializedRepository(

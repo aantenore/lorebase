@@ -1,9 +1,10 @@
 """Revisions, log and diff API (design 6.3, 6.4, 6.7, 11.1).
 
-Revisions are named by id (hex), tag or branch (its head). `GET .../diff` pages through the
-changes between two Revisions (`format=ndjson` streams all of them as JSON lines, after a
-summary line); changes are expanded to Attribute level for Records and Links and to property
-level for schema elements.
+Revisions are named by id (hex), tag or branch (its head); `branch` anchors Revisions named
+by id or tag for callers whose grants are narrowed to branches (`reading.access`).
+`GET .../diff` pages through the changes between two Revisions (`format=ndjson` streams all of
+them as JSON lines, after a summary line); changes are expanded to Attribute level for Records
+and Links and to property level for schema elements.
 """
 
 from __future__ import annotations
@@ -18,9 +19,8 @@ from pydantic import BaseModel, Field
 
 from lorebase_core.model import Schema
 from lorebase_core.tree import kind_partition, relation_partition
-from lorebase_keeper.auth.deps import Access, require
-from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import Problem, ValidationProblem
+from lorebase_keeper.reading.access import ReadAccess, read_access
 from lorebase_keeper.reading.cursors import fingerprint, invalid_cursor, issue, position_of
 from lorebase_keeper.reading.diff import (
     ChangeOut,
@@ -40,9 +40,10 @@ from lorebase_keeper.reading.history import (
 )
 from lorebase_keeper.reading.points import (
     REVISION_HEADER,
-    require_branch,
-    require_domain,
-    resolve_revision,
+    open_anchor,
+    open_branch,
+    open_domain,
+    open_revision,
     schema_at,
 )
 from lorebase_keeper.reading.problems import invalid
@@ -60,12 +61,22 @@ router = APIRouter(tags=["revisions"])
 BASE = "/domains/{domain_id}"
 NDJSON = "application/x-ndjson"
 _ERRORS: dict[int | str, dict[str, Any]] = {
-    403: {"model": Problem, "description": "The caller lacks data.read in the Domain."},
+    403: {
+        "model": Problem,
+        "description": "The caller lacks data.read for the branch or Revision read.",
+    },
     404: {"model": Problem, "description": "Domain, branch or Revision not found."},
     422: {"model": ValidationProblem, "description": "Invalid request."},
 }
 
-DataRead = Annotated[Access, Depends(require(Permission.DATA_READ))]
+DataRead = Annotated[ReadAccess, Depends(read_access())]
+Anchor = Annotated[
+    str | None,
+    Query(
+        description="Branch the named Revisions belong to; lets grants narrowed to "
+        "branches read Revisions reachable from that branch."
+    ),
+]
 Limit = Annotated[int | None, Query(ge=1, description="Page size.")]
 Cursor = Annotated[str | None, Query(max_length=4096, description="Opaque page cursor.")]
 
@@ -106,7 +117,7 @@ def _bounded(limit: int | None, default: int, maximum: int) -> int:
 async def branch_log(
     domain_id: str,
     branch: str,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
@@ -119,8 +130,8 @@ async def branch_log(
     cursor: Cursor = None,
 ) -> LogPage:
     """Revisions of a branch, newest first (first parents by default)."""
-    domain = await require_domain(session, domain_id)
-    ref = await require_branch(session, domain, branch)
+    domain = await open_domain(session, access)
+    ref = await open_branch(session, access, domain, branch)
     bounds = runtime.read.log
     effective = _bounded(limit, bounds.default_limit, bounds.max_limit)
     shape = fingerprint("log", branch, all_parents, origin_type, author)
@@ -150,13 +161,15 @@ async def branch_log(
 async def get_revision(
     domain_id: str,
     revision: str,
-    _access: DataRead,
+    access: DataRead,
     session: ReadSessionDep,
     response: Response,
+    branch: Anchor = None,
 ) -> RevisionOut:
     """A Revision by id, tag or branch name."""
-    await require_domain(session, domain_id)
-    found = await resolve_revision(session, domain_id, revision)
+    domain = await open_domain(session, access)
+    anchor = await open_anchor(session, access, domain, branch)
+    found = await open_revision(session, access, domain_id, revision, anchor=anchor)
     response.headers[REVISION_HEADER] = found.id.hex()
     return revision_out(found)
 
@@ -169,14 +182,16 @@ async def get_revision(
 async def revision_counts(
     domain_id: str,
     revision: str,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
+    branch: Anchor = None,
 ) -> CountsResponse:
     """Schema elements, Records per Kind and Links per Relation at a Revision."""
-    await require_domain(session, domain_id)
-    found = await resolve_revision(session, domain_id, revision)
+    domain = await open_domain(session, access)
+    anchor = await open_anchor(session, access, domain, branch)
+    found = await open_revision(session, access, domain_id, revision, anchor=anchor)
     schema = await schema_at(session, runtime, domain_id, found)
     response.headers[REVISION_HEADER] = found.id.hex()
     return CountsResponse(
@@ -193,16 +208,18 @@ async def revision_counts(
 async def revision_changeset(
     domain_id: str,
     revision: str,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
+    branch: Anchor = None,
     limit: Limit = None,
     cursor: Cursor = None,
 ) -> ChangesPage:
     """The stored changeset (design 6.3), with provenance per changed Attribute."""
-    await require_domain(session, domain_id)
-    found = await resolve_revision(session, domain_id, revision)
+    domain = await open_domain(session, access)
+    anchor = await open_anchor(session, access, domain, branch)
+    found = await open_revision(session, access, domain_id, revision, anchor=anchor)
     entries = await ChangesetRepository(
         session, domain_id, writes=runtime.store_settings.writes
     ).entries(found.id)
@@ -241,12 +258,13 @@ async def revision_changeset(
 )
 async def diff(
     domain_id: str,
-    _access: DataRead,
+    access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
     response: Response,
     from_: Annotated[str, Query(alias="from", description="Revision id, tag or branch.")],
     to: Annotated[str, Query(description="Revision id, tag or branch.")],
+    branch: Anchor = None,
     kinds: Annotated[
         list[str] | None, Query(description="Kind api names (repeated or comma-separated).")
     ] = None,
@@ -262,9 +280,10 @@ async def diff(
     cursor: Cursor = None,
 ) -> Any:
     """Element changes from `from` to `to`, with a per-partition summary."""
-    await require_domain(session, domain_id)
-    old = await resolve_revision(session, domain_id, from_)
-    new = await resolve_revision(session, domain_id, to)
+    domain = await open_domain(session, access)
+    anchor = await open_anchor(session, access, domain, branch)
+    old = await open_revision(session, access, domain_id, from_, anchor=anchor)
+    new = await open_revision(session, access, domain_id, to, anchor=anchor)
     old_schema = await schema_at(session, runtime, domain_id, old)
     new_schema = await schema_at(session, runtime, domain_id, new)
     partitions = _partitions((new_schema, old_schema), _names(kinds), _names(relations), schema)

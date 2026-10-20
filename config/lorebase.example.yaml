@@ -45,6 +45,9 @@ keeper:
   pagination:
     default_limit: 50
     max_limit: 500
+  reads:
+    reachability_max_depth: 10000   # parent steps walked when a branch-narrowed grant reads
+                                    # a Revision by id or tag; deeper ones are refused
   readiness:
     timeout_s: 2                 # time budget of each /readyz check
     database_section: database   # settings section with the connection string; if absent the
