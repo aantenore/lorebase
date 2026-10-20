@@ -5,7 +5,7 @@ PY_PATHS := packages scripts tests
 STRICT_SRC := packages/core/src packages/store/src packages/keeper/src
 OTHER_SRC := packages/platform/src packages/inference/src packages/client/src packages/cli/src
 
-.PHONY: help sync fmt lint type test-unit test-int test-changed
+.PHONY: help sync fmt lint type openapi test-unit test-int test-changed
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -25,6 +25,9 @@ lint: ## Ruff (check and format check) and import-linter contracts
 type: ## mypy: strict for core, store and keeper; default settings for the rest
 	$(UV) run mypy --strict $(STRICT_SRC)
 	$(UV) run mypy $(OTHER_SRC)
+
+openapi: ## Regenerate docs/openapi.json from the Keeper application
+	$(UV) run python scripts/export_openapi.py
 
 test-unit: ## Unit tests of all packages and repository tooling (no external services)
 	$(UV) run pytest packages tests/tooling -m "not integration"
