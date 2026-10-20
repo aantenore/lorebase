@@ -1,0 +1,203 @@
+"""Schema element models, Records, Links and Lineage entries (design 5)."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from lorebase_core.model.attribute import Attribute, SearchWeight, Sensitivity
+from lorebase_core.model.base import (
+    ElementStatus,
+    Model,
+    NameStyle,
+    SchemaElement,
+    is_valid_api_name,
+    snake_case,
+)
+from lorebase_core.model.derivation import (
+    AggregateDerivation,
+    AggregateFunction,
+    Derivation,
+    DerivationDefinition,
+    ExpressionDerivation,
+    PathDerivation,
+    PathStep,
+)
+from lorebase_core.model.domain import Domain, DomainSlug
+from lorebase_core.model.ids import (
+    AttributeId,
+    DerivationId,
+    IdPrefix,
+    KindId,
+    OperationId,
+    ProvenanceId,
+    RelationId,
+    SourceId,
+    TraitId,
+    id_prefix,
+    is_ulid,
+    new_id,
+    new_ulid,
+)
+from lorebase_core.model.kind import BuiltinOperation, Kind, KindSearch, TraitImplementation
+from lorebase_core.model.lineage import (
+    ExtractionOrigin,
+    ImportOrigin,
+    LineageMap,
+    MergeResolutionOrigin,
+    OperationOrigin,
+    Origin,
+    OriginType,
+    ProvenanceEntry,
+    SchemaMigrationOrigin,
+    SourceSyncOrigin,
+)
+from lorebase_core.model.operation import (
+    CreateLinkStep,
+    CreateRecordStep,
+    DeleteLinkStep,
+    DeleteRecordStep,
+    Expression,
+    Operation,
+    OperationParameter,
+    OperationStep,
+    Precondition,
+    RateLimit,
+    ReviewMode,
+    ReviewPolicy,
+    UpdateRecordStep,
+    builtin_link_operation_names,
+    builtin_operation_names,
+)
+from lorebase_core.model.record import (
+    Link,
+    LinkIdentity,
+    Record,
+    RecordIdentity,
+    format_ref,
+    parse_ref,
+    record_key,
+    render_key,
+)
+from lorebase_core.model.relation import (
+    Cardinality,
+    LinkDirection,
+    OnDelete,
+    Relation,
+    RelationBacking,
+)
+from lorebase_core.model.schema import Schema
+from lorebase_core.model.source import (
+    SECRET_REFERENCE_PREFIX,
+    AttributeMapping,
+    MergePolicy,
+    RelationMapping,
+    Source,
+    SourceType,
+    SyncMode,
+    TargetBranchPolicy,
+    Transform,
+    TransformName,
+)
+from lorebase_core.model.trait import Trait, TraitAttribute
+
+if TYPE_CHECKING:
+    from lorebase_core.validate.issues import Issue
+    from lorebase_core.validate.schema_rules import SchemaRules
+
+
+def validate_schema(schema: Schema, rules: SchemaRules | None = None) -> list[Issue]:
+    """Static validation of a Schema; see ``lorebase_core.validate.schema_rules``."""
+    from lorebase_core.validate.schema_rules import validate_schema as _validate_schema
+
+    return _validate_schema(schema, rules)
+
+
+__all__ = [
+    "SECRET_REFERENCE_PREFIX",
+    "AggregateDerivation",
+    "AggregateFunction",
+    "Attribute",
+    "AttributeId",
+    "AttributeMapping",
+    "BuiltinOperation",
+    "Cardinality",
+    "CreateLinkStep",
+    "CreateRecordStep",
+    "DeleteLinkStep",
+    "DeleteRecordStep",
+    "Derivation",
+    "DerivationDefinition",
+    "DerivationId",
+    "Domain",
+    "DomainSlug",
+    "ElementStatus",
+    "Expression",
+    "ExpressionDerivation",
+    "ExtractionOrigin",
+    "IdPrefix",
+    "ImportOrigin",
+    "Kind",
+    "KindId",
+    "KindSearch",
+    "LineageMap",
+    "Link",
+    "LinkDirection",
+    "LinkIdentity",
+    "MergePolicy",
+    "MergeResolutionOrigin",
+    "Model",
+    "NameStyle",
+    "OnDelete",
+    "Operation",
+    "OperationId",
+    "OperationOrigin",
+    "OperationParameter",
+    "OperationStep",
+    "Origin",
+    "OriginType",
+    "PathDerivation",
+    "PathStep",
+    "Precondition",
+    "ProvenanceEntry",
+    "ProvenanceId",
+    "RateLimit",
+    "Record",
+    "RecordIdentity",
+    "Relation",
+    "RelationBacking",
+    "RelationId",
+    "RelationMapping",
+    "ReviewMode",
+    "ReviewPolicy",
+    "Schema",
+    "SchemaElement",
+    "SchemaMigrationOrigin",
+    "SearchWeight",
+    "Sensitivity",
+    "Source",
+    "SourceId",
+    "SourceSyncOrigin",
+    "SourceType",
+    "SyncMode",
+    "TargetBranchPolicy",
+    "Trait",
+    "TraitAttribute",
+    "TraitId",
+    "TraitImplementation",
+    "Transform",
+    "TransformName",
+    "UpdateRecordStep",
+    "builtin_link_operation_names",
+    "builtin_operation_names",
+    "format_ref",
+    "id_prefix",
+    "is_ulid",
+    "is_valid_api_name",
+    "new_id",
+    "new_ulid",
+    "parse_ref",
+    "record_key",
+    "render_key",
+    "snake_case",
+    "validate_schema",
+]
