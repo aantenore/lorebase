@@ -14,6 +14,7 @@ members = [
     "lorebase-cli",
     "lorebase-client",
     "lorebase-core",
+    "lorebase-herald",
     "lorebase-inference",
     "lorebase-keeper",
     "lorebase-platform",
@@ -797,6 +798,19 @@ wheels = [
 ]
 
 [[package]]
+name = "httpcore2"
+version = "2.15.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "h11" },
+    { name = "truststore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c2/a9/11bc39967bb9dfaab0981ab4d49f519818acbee662a7e76d06813319c838/httpcore2-2.15.1.tar.gz", hash = "sha256:a94b6b3e6260e1a3f035915408d3dcd7dc8e844c2b544b642e227cf98a747af0", size = 69859, upload-time = "2026-10-19T20:14:23.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/9b/e2b556e26fbc67716ab1dfc18832eb6fe196d88363f7094cb1da3d7c0d3e/httpcore2-2.15.1-py3-none-any.whl", hash = "sha256:730f603058c260a3288378217b464713350c23e3b8fe8bba753701054032d98a", size = 85055, upload-time = "2026-10-19T20:14:21.363Z" },
+]
+
+[[package]]
 name = "httpx"
 version = "0.28.1"
 source = { registry = "https://pypi.org/simple" }
@@ -809,6 +823,32 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
+]
+
+[[package]]
+name = "httpx2"
+version = "2.15.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio", marker = "sys_platform != 'emscripten'" },
+    { name = "httpcore2", marker = "sys_platform != 'emscripten'" },
+    { name = "httpx2-jsfetch", marker = "sys_platform == 'emscripten'" },
+    { name = "idna" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/85/07978f4afd168d6b408fa75c1dc13e3010653a81e182aa1b6d89ab94d9c6/httpx2-2.15.1.tar.gz", hash = "sha256:ff75485308fbe441e75b1218546e4e78d884df41e1a9741c1f79335ed8fcfef7", size = 101673, upload-time = "2026-10-19T20:14:24.587Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/bf/56068f774620330c8330e4b4915fae889a5b2d4b52667b3b7c8f66c4a9ad/httpx2-2.15.1-py3-none-any.whl", hash = "sha256:75841cd83d16b417f7d6da8f2089ce8120806efdbf96af37d46c5129c49015be", size = 96411, upload-time = "2026-10-19T20:14:22.789Z" },
+]
+
+[[package]]
+name = "httpx2-jsfetch"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/c4/0e5636363151a2a1795e0a77617168b9ca438e1748ec05fc9b5687f93d64/httpx2_jsfetch-1.0.tar.gz", hash = "sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60", size = 6872, upload-time = "2026-08-07T00:13:07.492Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/43/832f631d32e4f1211caa2ba368317739fe71f0b8530e4c9d15dc454bac2a/httpx2_jsfetch-1.0-py3-none-any.whl", hash = "sha256:cb916b707601e69a07721aabc8f3f6659be3a6893bc1ff5c6f9e02241df2da32", size = 6382, upload-time = "2026-08-07T00:13:06.567Z" },
 ]
 
 [[package]]
@@ -1065,6 +1105,7 @@ dependencies = [
     { name = "lorebase-cli" },
     { name = "lorebase-client" },
     { name = "lorebase-core" },
+    { name = "lorebase-herald" },
     { name = "lorebase-inference" },
     { name = "lorebase-keeper" },
     { name = "lorebase-platform" },
@@ -1090,6 +1131,7 @@ requires-dist = [
     { name = "lorebase-cli", editable = "packages/cli" },
     { name = "lorebase-client", editable = "packages/client" },
     { name = "lorebase-core", editable = "packages/core" },
+    { name = "lorebase-herald", editable = "packages/herald" },
     { name = "lorebase-inference", editable = "packages/inference" },
     { name = "lorebase-keeper", editable = "packages/keeper" },
     { name = "lorebase-platform", editable = "packages/platform" },
@@ -1139,6 +1181,25 @@ dependencies = [
 requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0" },
+]
+
+[[package]]
+name = "lorebase-herald"
+version = "0.1.0"
+source = { editable = "packages/herald" }
+dependencies = [
+    { name = "httpx" },
+    { name = "lorebase-platform" },
+    { name = "mcp" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "lorebase-platform", editable = "packages/platform" },
+    { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pydantic", specifier = ">=2.7" },
 ]
 
 [[package]]
@@ -1370,6 +1431,44 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/81/99/157e10966b033b363aeda5263e82596ee232a0b1d082fdbf90aa417ff083/markupsafe-3.0.4-cp315-cp315t-win32.whl", hash = "sha256:e49fb0d1ce92cfa0cb198cc5b1b11cdf9d0638658e2a2db2687e39db7c87fc78", size = 14300, upload-time = "2026-10-02T23:06:53.241Z" },
     { url = "https://files.pythonhosted.org/packages/33/05/55884815414c9706a23deca150b72c25a62109e65b0b6ce232077802c719/markupsafe-3.0.4-cp315-cp315t-win_amd64.whl", hash = "sha256:4f6e0852a0283b1b1fd776eeb7b766a5f440b3e2bd31ab51af3b400585f3965c", size = 14522, upload-time = "2026-10-02T23:06:54.729Z" },
     { url = "https://files.pythonhosted.org/packages/92/f9/ecbde7149e95b8a0f18e16d5d747f7dc06049d5da2e4f77f6f5e4a1f46a8/markupsafe-3.0.4-cp315-cp315t-win_arm64.whl", hash = "sha256:39dbacefc411633db5b4378b066a9aca70a3d7e2922c9e578d825f844026eeba", size = 14417, upload-time = "2026-10-02T23:06:56.246Z" },
+]
+
+[[package]]
+name = "mcp"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx2" },
+    { name = "jsonschema" },
+    { name = "mcp-types" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "python-multipart" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/8d/e0d339616f4810e9051d4aba6887afab289ab1f81875fe908b606cdfd0e3/mcp-2.3.0.tar.gz", hash = "sha256:8b147a50441cf059dc88c684e0aeed3687f0aa0f39c6cde7b90330effd2b34d8", size = 4171955, upload-time = "2026-10-02T22:06:56.091Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/d7/4a2878f128df729db3ca04e71bfce26405cc2e0c9ebe19c592feeb4c61b9/mcp-2.3.0-py3-none-any.whl", hash = "sha256:dd0c44c089d16453e8ae31a3877a0054d7a2314caaa81f5e0541b9b1734b2377", size = 368664, upload-time = "2026-10-02T22:06:52.119Z" },
+]
+
+[[package]]
+name = "mcp-types"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9e/2d/7c251e34207f6c51000312fc8839111ac45cfe02023f90b44e7f1051dd8e/mcp_types-2.3.0.tar.gz", hash = "sha256:d1e46549edb35ee19a94940fcee6d1addd7e589ab7ea92dda83f5d84781fc362", size = 65898, upload-time = "2026-10-02T22:06:57.863Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/48/32583066b155bb5d4507e7887dc88ee23118cc4de8e2a12870c49719e2a8/mcp_types-2.3.0-py3-none-any.whl", hash = "sha256:968efdbdaedfab06adae40d378a34395f1090c5921d4be3c9cde283aaf76d91d", size = 69108, upload-time = "2026-10-02T22:06:54.099Z" },
 ]
 
 [[package]]
@@ -1842,6 +1941,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
+]
+
+[[package]]
 name = "pywin32"
 version = "312"
 source = { registry = "https://pypi.org/simple" }
@@ -2168,6 +2276,19 @@ asyncio = [
 ]
 
 [[package]]
+name = "sse-starlette"
+version = "3.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/be/0123026f719d1a7936f214a88b553bb5701e04ff2511147c1dab0c5035eb/sse_starlette-3.5.0.tar.gz", hash = "sha256:75de713aa8a9441513cc283220826da079d982770965b951e9437720e8bafdb2", size = 36794, upload-time = "2026-09-28T17:48:14.7Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/e4/cdda14023c316d71493bc54fdffc3dd006631b88866145c9d3cc33e0f1df/sse_starlette-3.5.0-py3-none-any.whl", hash = "sha256:3e6e1070df3f0f5d9cea81496de92dbb72f6721871d99748ece67441dd8b7997", size = 17407, upload-time = "2026-09-28T17:48:13.228Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2194,6 +2315,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4b/13/2cc466bddf26d0085f30a2b2bd56b7f8708b54a54db833eec97c5c69129b/testcontainers-4.15.0.tar.gz", hash = "sha256:085cde086337632e19002719460b7b80bbab2bdd51bb3ea04f77d0de96504706", size = 95340, upload-time = "2026-07-24T23:08:01.731Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/00/7e/424aac8b355597835deb333e757a0e94b5ccf38ad00f07fe6ed1f4e17c88/testcontainers-4.15.0-py3-none-any.whl", hash = "sha256:8796c14e76604031ad39cf0ed3b8e9806283a1fbf5270965c2b1c594caa31b74", size = 160771, upload-time = "2026-07-24T23:08:00.13Z" },
+]
+
+[[package]]
+name = "truststore"
+version = "0.10.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/9f/c5201d42a484c061e528825fc8e2d565f5abd50a4ced6fb7d29c4ec99b2b/truststore-0.10.5.tar.gz", hash = "sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd", size = 28091, upload-time = "2026-10-12T22:27:31.808Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl", hash = "sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c", size = 19017, upload-time = "2026-10-12T22:27:30.377Z" },
 ]
 
 [[package]]

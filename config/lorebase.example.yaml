@@ -282,3 +282,54 @@ search:
     rrf_k: 60
     lexical_weight: 1.0
     semantic_weight: 1.0
+
+# Herald, the MCP server (design 11.2; docs/mcp.md). Short variables set by MCP host
+# configurations: LOREBASE_URL (keeper.base_url), LOREBASE_API_KEY (keeper.api_key),
+# LOREBASE_DOMAIN (domain), LOREBASE_BRANCH (branch).
+herald:
+  transport: stdio               # stdio or streamable_http
+  server_name: lorebase
+  domain: null                   # Domain used when a call names none
+  branch: null                   # null: the Domain's default branch
+  log_level: WARNING             # log level of the MCP SDK
+  keeper:
+    base_url: http://127.0.0.1:8080
+    api_prefix: /api/v1
+    api_key: null                # stdio only: the agent's key, e.g. secret://env/AGENT_API_KEY
+    timeout_s: 30
+    verify_tls: true
+    user_agent: lorebase-herald
+  http:                          # streamable_http: each caller sends its own key
+    host: 127.0.0.1
+    port: 8090
+    path: /mcp
+    stateless: true
+    json_response: true
+    allowed_hosts: []            # e.g. [herald.example.com]; empty: SDK default for the host
+    allowed_origins: []
+    credential_header: Authorization
+  output:
+    default_format: text         # text (compact) or json
+    max_chars: 12000             # longer outputs are cut with a [truncated ...] marker
+    max_items: 50
+    max_value_chars: 240
+    max_issues: 20
+  context:                       # lorebase_context packs
+    token_budget: 3000
+    max_token_budget: 20000
+    chars_per_token: 4.0
+    depth: 1
+    max_nodes: 40
+    max_edges: 80
+    max_seeds: 5
+    search_seeds: 3
+  neighborhood:
+    default_depth: 1
+    max_depth: 3
+    default_max_nodes: 50
+    max_nodes: 500
+    max_edges: 1000
+    max_seeds: 20
+  changes:
+    page_size: 50
+    max_pages: 10
