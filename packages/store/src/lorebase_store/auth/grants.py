@@ -14,7 +14,7 @@ from sqlalchemy import delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.auth.scope import new_id, rls_scope
-from lorebase_store.models import Grant
+from lorebase_store.models import Domain, Grant
 from lorebase_store.models.enums import GrantScope
 
 ID_PREFIX = "grt"
@@ -126,6 +126,11 @@ class GrantRepository:
                 .order_by(Grant.created_at, Grant.id)
             )
             return [_record(row) for row in rows.scalars()]
+
+    async def domain_exists(self, domain_id: str) -> bool:
+        """Whether a Domain with this id exists (Domains are not under row-level security)."""
+        found = await self._session.execute(select(Domain.id).where(Domain.id == domain_id))
+        return found.scalar_one_or_none() is not None
 
     async def for_subjects_anywhere(self, subjects: Collection[str]) -> list[GrantRecord]:
         """Every grant held by any of `subjects`, across Domains (system scope)."""

@@ -22,9 +22,9 @@ from fastapi.security import HTTPBearer
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
-from lorebase_keeper.auth.rbac import NO_CONTEXT, AccessContext
+from lorebase_keeper.auth.rbac import NO_CONTEXT, AccessContext, Authorizer
 from lorebase_keeper.auth.runtime import AuthRuntime
-from lorebase_keeper.errors import FORBIDDEN, UNAVAILABLE, ProblemError
+from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, UNAVAILABLE, ProblemError
 
 _PRINCIPAL_KEY = "principal"
 _bearer_scheme = HTTPBearer(auto_error=False, description="API key (lbk_...) or OIDC access token.")
@@ -110,8 +110,18 @@ async def authorize(
     Operation named in the body). Answers 403 naming the missing permission."""
     annotate(request, domain_id=domain_id, permission=permission.value)
     if not await auth.authorizer.allows(principal, permission, domain_id, context):
-        raise missing_permission(permission, domain_id)
+        raise await refusal(auth.authorizer, principal, permission, domain_id)
     return Access(principal=principal, domain_id=domain_id, permission=permission)
+
+
+async def refusal(
+    authorizer: Authorizer, principal: Principal, permission: Permission, domain_id: str
+) -> ProblemError:
+    """The problem for a caller who lacks `permission` in a Domain: 404 when the Domain does not
+    exist and the caller may be told so (see `Authorizer.reveals_missing_domain`), else 403."""
+    if await authorizer.reveals_missing_domain(principal, domain_id):
+        return ProblemError(NOT_FOUND, f"Domain {domain_id!r} not found.")
+    return missing_permission(permission, domain_id)
 
 
 def missing_permission(permission: Permission, domain_id: str) -> ProblemError:

@@ -97,6 +97,8 @@ class RevisionParent(Base):
         ForeignKeyConstraint(
             ["domain_id", "parent_id"],
             ["revisions.domain_id", "revisions.id"],
+            deferrable=True,
+            initially="DEFERRED",
         ),
         Index(None, "domain_id", "parent_id"),
     )
@@ -147,7 +149,12 @@ class Ref(Base):
 
     __tablename__ = "refs"
     __table_args__ = (
-        ForeignKeyConstraint(["domain_id", "head"], ["revisions.domain_id", "revisions.id"]),
+        ForeignKeyConstraint(
+            ["domain_id", "head"],
+            ["revisions.domain_id", "revisions.id"],
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         domain_fk(),
     )
 
