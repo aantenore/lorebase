@@ -2,7 +2,7 @@
 
 Every node starts with a header::
 
-    format version (u8) | node type (u8) | depth (u8) | entry count (varint) | subtree count (varint)
+    version (u8) | node type (u8) | depth (u8) | entry count (varint) | subtree count (varint)
 
 followed by a type-specific body:
 

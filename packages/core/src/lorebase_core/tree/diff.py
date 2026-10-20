@@ -19,7 +19,10 @@ __all__ = ["DiffEntry", "tree_diff"]
 
 
 class DiffEntry(NamedTuple):
-    """One differing key: ``hash_a`` is its value in tree A, ``hash_b`` in tree B (``None`` = absent)."""
+    """One differing key: ``hash_a`` is its value in tree A, ``hash_b`` in tree B.
+
+    ``None`` means the key is absent from that tree.
+    """
 
     partition: str
     key: str

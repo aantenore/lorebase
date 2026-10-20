@@ -139,7 +139,8 @@ class TestSmallLeafBoundaries:
         root = tree_apply(store, None, [(P, k, value(k)) for k in keys], self.params)
         node = read_node(store, _partition_root(store, root))
         assert isinstance(node, LeafNode)
-        assert node.depth == 0 and node.count == 4
+        assert node.depth == 0
+        assert node.count == 4
 
     def test_split_when_threshold_exceeded(self) -> None:
         store = InMemoryNodeStore()
@@ -147,10 +148,12 @@ class TestSmallLeafBoundaries:
         root = tree_apply(store, None, [(P, k, value(k)) for k in keys], self.params)
         node = read_node(store, _partition_root(store, root))
         assert isinstance(node, BranchNode)
-        assert node.depth == 0 and node.count == 5
+        assert node.depth == 0
+        assert node.count == 5
         for _, child in node.children:
             child_node = read_node(store, child)
-            assert isinstance(child_node, LeafNode) and child_node.depth == 1
+            assert isinstance(child_node, LeafNode)
+            assert child_node.depth == 1
 
     def test_merge_back_when_below_threshold(self) -> None:
         store = InMemoryNodeStore()
@@ -172,12 +175,16 @@ class TestSmallLeafBoundaries:
         assert isinstance(top, BranchNode)
         assert [index for index, _ in top.children] == [0xAB]
         inner = read_node(store, top.children[0][1])
-        assert isinstance(inner, BranchNode) and inner.depth == 1 and inner.count == 5
+        assert isinstance(inner, BranchNode)
+        assert inner.depth == 1
+        assert inner.count == 5
         for k in keys:
             assert tree_get(store, root, P, k) == value(k)
         collapsed = tree_apply(store, root, [(P, keys[0], None)], self.params)
         leaf = read_node(store, _partition_root(store, collapsed))
-        assert isinstance(leaf, LeafNode) and leaf.depth == 0 and leaf.count == 4
+        assert isinstance(leaf, LeafNode)
+        assert leaf.depth == 0
+        assert leaf.count == 4
 
     def test_deep_branch_collapse_keeps_unchanged_children(self) -> None:
         store = InMemoryNodeStore()

@@ -136,7 +136,7 @@ def test_generation_numbers() -> None:
 
 def test_timestamp_format() -> None:
     assert format_timestamp(datetime(5, 1, 2, 3, 4, 5, tzinfo=UTC)) == "0005-01-02T03:04:05.000000Z"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="time zone"):
         format_timestamp(datetime(2026, 1, 1))
 
 
@@ -156,9 +156,9 @@ def test_changeset_round_trip() -> None:
 
 
 def test_changeset_entry_validation() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="must change"):
         ChangesetEntry("k:a", "1", None, None)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bytes"):
         ChangesetEntry("k:a", "1", None, b"short")
     entry = ChangesetEntry("k:a", "1", None, bytes(32), {"att_1": "prv_1"})
     assert entry == ChangesetEntry("k:a", "1", None, bytes(32))

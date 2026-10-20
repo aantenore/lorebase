@@ -38,7 +38,8 @@ def jcs_bytes(value: object) -> bytes:
     """Serialize a JSON-compatible value to RFC 8785 canonical UTF-8 bytes.
 
     Accepted types: ``None``, ``bool``, ``int`` (only if its decimal text is
-    the canonical text of an IEEE 754 double), ``float`` (finite), ``str``, mappings with ``str`` keys, lists and tuples.
+    the canonical text of an IEEE 754 double), ``float`` (finite), ``str``, mappings with ``str``
+    keys, lists and tuples.
     """
     parts: list[str] = []
     _write(value, parts)

@@ -84,9 +84,9 @@ def test_keys_colliding_after_nfc_rejected() -> None:
 def test_hex_round_trip() -> None:
     h = object_hash("link", {"relation": "r", "from": "a", "to": "b"})
     assert from_hex(hex(h)) == h
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="lowercase hex"):
         from_hex(hex(h).upper())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="lowercase hex"):
         from_hex("ab")
 
 

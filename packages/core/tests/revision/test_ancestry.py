@@ -61,7 +61,7 @@ def test_unknown_revisions_rejected() -> None:
         h.add("B", "missing")
     with pytest.raises(UnknownRevisionError):
         merge_base(h.graph, rid("A"), rid("missing"))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="different parents"):
         h.graph.add(rid("A"), [rid("A")])
 
 
@@ -79,9 +79,11 @@ def test_linear_history() -> None:
     h.add("B", "A")
     c = h.add("C", "B")
     behind = merge_base(h.graph, c, a)
-    assert behind.status is MergeStatus.UP_TO_DATE and behind.base == a
+    assert behind.status is MergeStatus.UP_TO_DATE
+    assert behind.base == a
     ahead = merge_base(h.graph, a, c)
-    assert ahead.status is MergeStatus.FAST_FORWARD and ahead.base == a
+    assert ahead.status is MergeStatus.FAST_FORWARD
+    assert ahead.base == a
     assert ahead.common_ancestors == (a,)
 
 
@@ -107,7 +109,8 @@ def test_after_a_merge_the_base_moves() -> None:
     b3 = h.add("B3", "B2")
     c2 = h.add("C2", "C1")
     result = merge_base(h.graph, b3, c2)
-    assert result.status is MergeStatus.MERGE and result.base == c1
+    assert result.status is MergeStatus.MERGE
+    assert result.base == c1
 
 
 def test_unrelated_histories() -> None:
@@ -116,7 +119,8 @@ def test_unrelated_histories() -> None:
     b = h.add("B")
     result = merge_base(h.graph, a, b)
     assert result.status is MergeStatus.UNRELATED
-    assert result.base is None and result.common_ancestors == ()
+    assert result.base is None
+    assert result.common_ancestors == ()
 
 
 def _criss_cross(h: History) -> tuple[bytes, bytes]:
