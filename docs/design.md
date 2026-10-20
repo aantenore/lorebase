@@ -349,6 +349,47 @@ Lineage answers "where did this value come from". It is attached to changes, not
 - **I5. Data changes only through Operations.** Schema changes only through schema change sets on a branch. Protected branches change only through Proposal merges and Operations whose policy allows direct commit.
 - **I6. Derived values are never stored in content objects.**
 
+### 5.13 Schema as code
+
+A Domain schema is also a YAML document, read and written by `lorebase_core.model.yaml_schema` (`load_schema`, `dump_schema`). The document is the human-facing form of the same `Schema` (goal G1). The demo Domain is [examples/supply/schema.yaml](../examples/supply/schema.yaml).
+
+- **Format marker.** `format: lorebase.schema/v1` is optional on load and written on every dump.
+- **Sections.** `domain` (required), then `kinds`, `relations`, `traits`, `operations`, `derivations`, `sources`, each optional. An unknown section or key, a duplicate key and an unknown reference are reported as problems with a path into the document (`SchemaYamlError.problems`); the loader reports everything it finds, not only the first.
+- **Keys are api names.** Elements are keyed by api name (a relation by its forward name, a source by its dotted name such as `erp.vendors`) and refer to each other by api name: `primary_key`, `from_kind`, `authority`, trait `attribute_map`, Derivation and Source targets. Model fields keep their model names, except `derivation` and `trait`, which hold api names instead of the ids of `derivation_id` and `trait_id`. Defaults are omitted from dumps. Expressions are CEL source strings.
+- **Ids.** Every element and Attribute has a stable `id` (5.1). On load, an explicit `id` wins; an element without one reuses the id of the element with the same api name in the optional `base` schema; otherwise a new id is minted. Dumps always write ids.
+- **Rename rule.** Renaming is changing the key and keeping the `id`. A renamed key without an `id` is a new element (new id) unless the `base` schema has that api name, so keep the `id` when renaming. This is what lets a rename on one branch merge cleanly with an edit on another (AC-01).
+- **Type syntax.** Scalars by name (`string`, `integer`, `date`); parameters in parentheses (`decimal(12,2)`, `ref(Supplier)`); `array<string>`; and a one-key mapping for enums and for arrays of complex types: `{enum: [low, high]}`, `{array: {enum: [a, b]}}`.
+
+Excerpt of `examples/supply/schema.yaml`:
+
+```yaml
+kinds:
+  Supplier:
+    id: knd_01KEZF7C007ZDX8SK1DZP7MXFF
+    description: A company that supplies parts to Corvane Industries.
+    primary_key: [supplier_code]
+    title_attribute: legal_name
+    icon: factory
+    color: "#2a6f97"
+    attributes:
+      supplier_code:
+        id: att_01KEZF7C00HDZZHMNS4181SKMX
+        description: Supplier code as issued by the ERP, for example S-1001.
+        type: string
+        required: true
+        constraints:
+          pattern: '^S-[0-9]{4,}$'
+      legal_name:
+        id: att_01KEZF7C00H73NVMMGX4KPCH9W
+        description: Registered legal name including the legal form.
+        type: string
+        required: true
+        searchable: true
+        search_weight: A
+        authority: approved.suppliers
+      # ...
+```
+
 ---
 
 ## 6. Versioning engine
@@ -588,6 +629,71 @@ Engineering notes:
 - Bulk paths use `COPY` into staging tables and set-based SQL.
 - Long merges run as Scribe jobs and stream through partitions; memory is bounded by batch size.
 - Hot `objects` table is hash-partitioned by `domain_id`.
+
+### 6.15 Implementation notes
+
+Decisions taken in `lorebase_core` (`canonical`, `tree`, `revision`, `merge`) while implementing 6.1 to 6.10. They refine the text above; where a detail differs, this section describes the code. The engine is pure: it reads and writes through the `NodeStore`, `ObjectStore` and `RevisionGraph` protocols, and persisting merge attempts or committing a merged tree belongs to the commit pipeline and the store, which are not implemented yet.
+
+**Canonical form**
+- `null` inside an array is kept, because positions are significant. `null` as an object member is omitted (null and absent are the same).
+- The canonical serializer accepts an integer only when its decimal text equals the RFC 8785 text of its double. Every other integer must be passed as a string, which is what 6.1 already requires for `integer` and `decimal` values; there is no silent rounding.
+
+**Trees**
+- The root node stores, for each partition, the partition id, the partition root hash and the entry count. Per-partition and per-Kind counts are therefore read from the root without descending.
+- Node header: format version (`u8`, currently 1), node type (`u8`: leaf 1, branch 2, root 3), depth (`u8`), entry count and subtree count (unsigned LEB128 varints). Leaf entries are sorted by `sha256(key)`, root partitions by the UTF-8 bytes of their id. The decoder accepts only the canonical encoding, so a node has exactly one byte representation and one hash.
+
+**Revisions and ancestry**
+- The generation number is not part of the Revision content and does not enter the Revision id. It is derived from the parents (`1 + max(parent generations)`) and kept next to the Revision.
+- Merge base: if there are several lowest common ancestors and no virtual base builder is supplied, `merge_base` raises `MergeBaseError`; it never picks one silently. Histories with no common ancestor merge against an empty base.
+
+**Merge**
+- Virtual base (AC-13): `merge` builds it with the same pipeline, run without an index view. In that run consistency checks and Conflict reporting are skipped, policies are not applied, and a change that conflicts keeps the value of its own merge base, so both sides of the outer merge see it as a change. The virtual Revision is never committed; its id is `sha256("lb1\x00virtual-base\x00" || base || ours || theirs || root)` and its root lives in memory for the duration of the merge.
+- Merge resolutions: `apply_resolutions` needs a resolution for every Conflict of the attempt and checks each choice against the kinds table below. It then re-runs the whole merge with the resolutions as directives (schema overrides, ignored side changes, data overrides) and repeats until no new directives appear; rounds are bounded by the number of resolutions. A resolution can therefore surface new Conflicts, for example a custom value that breaks uniqueness. Resolutions passed in `MergeInput` are matched to Conflicts by fingerprint, which is how a stale attempt is recomputed against a moved target (6.10).
+- Fingerprints: `sha256` over the canonical JSON array `[code, partition, key, attribute, base_hash, ours_hash, theirs_hash]` (hex, `null` when absent), followed for grouped Conflicts by the sorted member keys. A group that gains or loses a member is a different Conflict and does not inherit an earlier resolution.
+- Open Conflicts: while a Conflict is open, its location takes the base value as placeholder in the working merge and is excluded from consistency checks. An open schema Conflict on a Kind or Relation suppresses cross-cutting Conflicts in that element's partition, and an open schema delete/modify Conflict (`SC2`) also suppresses data Conflicts there. This keeps one root cause from being reported many times.
+- Automatic resolutions are returned with the outcome (`AutoResolution`, for Lineage and review) with resolver `policy:prefer`, `policy:cascade_dangling` or `policy:default`.
+
+**Conflict codes.** `ConflictKind` in `merge/conflicts.py`; the code is stable and is part of the fingerprint. "Row" refers to 6.8 step 4 or 6.9.
+
+| Code | `ConflictKind` | Design row | Choices accepted | Grouped |
+|------|----------------|-----------|------------------|---------|
+| `DV1` | `ATTRIBUTE_VALUE` | Attribute value | ours, theirs, base, custom | no |
+| `DV2` | `DELETE_MODIFY` | Delete/modify (data) | ours, theirs, base, custom | no |
+| `DV3` | `ADD_ADD` | Add/add | ours, theirs, base, custom | no |
+| `SC1` | `SCHEMA_PROPERTY` | Schema property | ours, theirs, base, custom | no |
+| `SC2` | `SCHEMA_DELETE_MODIFY` | Delete/modify (schema) | ours, theirs, base, custom | no |
+| `SC3` | `NAMING` | Naming collision | custom | no |
+| `XS1` | `ORPHANED_DATA` | Orphaned data | drop, restore | yes |
+| `XS2` | `ORPHANED_VALUE` | Removed Attribute with new values | drop, restore | yes |
+| `XS3` | `TYPE_COERCION` | Type change | custom, drop, restore | yes |
+| `XS4` | `MISSING_VALUE` | New required Attribute | custom, relax | yes |
+| `XS5` | `CONSTRAINT` | Constraint tightened | custom, relax | yes |
+| `XS6` | `CARDINALITY` | Cardinality | custom, relax | yes |
+| `XS7` | `REQUIRED_RELATION` | Required relation | custom, drop, relax | yes |
+| `XS8` | `UNIQUENESS` | Uniqueness | custom, relax | yes |
+| `XS9` | `DANGLING_LINK` | Dangling Link | drop, restore | yes |
+| `XS10` | `TRAIT_CONFORMANCE` | Trait conformance | custom, relax | no |
+| `XS11` | `BROKEN_REFERENCE` | Broken reference | custom, restore | no |
+
+Choice meanings: `ours`, `theirs`, `base` take that side's value, element or state (for `DV2` and `SC2`, `ours` or `theirs` decides whether the deleted or the modified version wins); `custom` takes the resolver's value, per member for grouped Conflicts; `drop` removes the data that breaks the merged schema; `restore` brings back what the other side removed or retyped; `relax` weakens the schema rule the data breaks.
+
+**`MergePolicy` defaults.** The policy is a frozen options object of one merge.
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `fast_forward` | `true` | Move the target to theirs when ours is an ancestor |
+| `allow_checked_casts` | `true` | Cast values written under a changed type with `checked` rules; failures are `XS3`. When `false`, every such value is `XS3` |
+| `cascade_dangling` | `true` | Drop a Link to a deleted Record when its Relation has `on_delete = cascade` |
+| `apply_defaults` | `true` | A newly required Attribute takes its default when it has one |
+| `prefer`, `prefer_elements`, `prefer_attributes` | none | Resolve `DV1` to `DV3`, `SC1`, `SC2` for `ours` or `theirs`; the most specific wins (Attribute, then Kind or Relation id, then global) |
+| `sample_size` | `10` | Member keys listed in a grouped Conflict |
+| `atomic_properties` | `type`, `default`, `definition` | Schema properties merged as whole values instead of entry by entry |
+
+**Not implemented yet**
+- The `authority` merge policy: `Attribute.authority` is stored and validated as a Source reference, but the merge does not consult it.
+- The `newest_wins` merge policy.
+- Per-Attribute cast rules in merge policies: cast rules are defined per type pair (5.4) and `allow_checked_casts` is global.
+- Persistence of merge attempts and resolutions, and the commit of a merged tree (commit pipeline, 6.6).
 
 ---
 
@@ -1296,6 +1402,8 @@ network:
   allow_private_targets: false
 ```
 
+**Implemented so far.** `lorebase_platform.settings` provides the layering above (`LOREBASE_CONFIG` names the YAML file; `LOREBASE__SECTION__KEY` overrides it) and `secret://env/NAME` and `secret://file//path` references. Packages declare their own sections with `register_section`, so a section is validated only where it is used. The sections `logging`, `telemetry`, `keeper`, `inference`, `database` and `store` exist in `config/lorebase.example.yaml`; `database.statement_timeout_ms` defaults to 30000 (bulk commits) rather than the 2000 shown above, which is a read-heavy tuning. `store` holds schema-shape values read once by the initial migration (`layout.hash_partitions`, `embeddings.dims`; see [store-schema-notes.md](store-schema-notes.md)). The sections `auth`, `read`, `search`, `materialization`, `extraction` and `webhooks` arrive with the milestones that use them.
+
 ---
 
 ## 17. Repository layout
@@ -1460,3 +1568,28 @@ Acceptance:
 | AC-28 | Local by default: compose ships an Ollama profile; small open models are first-class; the full demo needs zero API keys | Free to try, private by default | Never |
 | AC-29 | Deterministic fake provider for all model interfaces; tests and CI run without network | Reproducible, free, fast tests | Never |
 | AC-30 | Read path model-free by construction: Keeper and Herald cannot import the inference package | Enforced by the build, not by convention | Never |
+
+### Implementation status
+
+Architect calls with code in the repository (M1 in progress). Paths are under `packages/core/src/lorebase_core/` unless noted. Calls not listed are not implemented yet, or are policies with nothing to build (AC-04, AC-14).
+
+| ID | Status | Implemented in |
+|----|--------|----------------|
+| AC-01 | Implemented | `model/ids.py` (prefixed ULIDs), `model/base.py` (`id` plus renamable `api_name`); YAML rename rule in `model/yaml_schema.py` (5.13) |
+| AC-02 | Implemented | `model/record.py` (`(kind, key)`, natural key or minted ULID), `validate/data_rules.py` |
+| AC-03 | Implemented | `model/record.py` and `tree/root.py` (`link_key`: one Link per Relation and endpoint pair), `validate/changeset.py` |
+| AC-05 | Implemented | `types/types.py` (scalar types, arrays of scalars only), `types/casts.py` |
+| AC-06 | Partial | Expressions are held as CEL source strings in `model/operation.py`; the `expr` module (evaluation and type checking) is not implemented |
+| AC-07 | Implemented in the model | `model/derivation.py`; `validate/data_rules.py` rejects stored derived values. Recomputation belongs to the materializer, not implemented |
+| AC-08 | Implemented in the engine | `model/lineage.py`, `revision/changeset.py` (provenance on changes, outside hashes); the merge engine carries provenance through `ProvenanceLoader` |
+| AC-09 | Implemented | `canonical/jcs.py`, `canonical/hashing.py`, `types/encoding.py` (6.15) |
+| AC-10 | Schema only | `objects` and `tree_nodes` are keyed per Domain in `packages/store` (revision `0001`); no repository code yet |
+| AC-11 | Implemented | `tree/` (`node.py`, `hamt.py`, `diff.py`, `root.py`), `revision/changeset.py` (6.15) |
+| AC-13 | Implemented | `revision/ancestry.py` (lowest common ancestors, `merge_base`), `merge/engine.py` (virtual base) |
+| AC-15, AC-16 | Schema only | `mat_records` and `mat_links` tables in `packages/store`; the materializer is not implemented |
+| AC-12, AC-18 | Schema only | Ref compare-and-swap and `SKIP LOCKED` claim contracts are documented in [store-schema-notes.md](store-schema-notes.md); no commit pipeline or job runner yet |
+| AC-30 | Partial | `.importlinter` forbids `keeper` from importing `inference`; the contract for `herald` joins when that package is created |
+| AC-25, AC-29 | Partial | `packages/inference`: interfaces, settings, registry and the deterministic fake provider; no HTTP provider yet |
+
+Merge (6.8 to 6.10) is implemented in `merge/` on top of AC-09, AC-11 and AC-13; its decisions are in 6.15.
+
