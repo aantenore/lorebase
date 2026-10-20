@@ -160,7 +160,8 @@ per section. When the pack is over budget, sections are trimmed in the order of
 
 Seed Records are never trimmed; when they alone exceed the budget the pack says
 `over_budget: true`. `capped: true` means the graph caps (`agents.context.max_neighbors`,
-`max_links`, `read.traverse`) cut the neighborhood before any trimming. Ask for a smaller
+`max_links`, `read.traverse`, `store.traverse`, whose `max_fanout` also bounds the Links
+followed from one Record per hop) cut the neighborhood before any trimming. Ask for a smaller
 `depth`, fewer `relations` or a larger budget accordingly.
 
 ### Caching
