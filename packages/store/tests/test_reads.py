@@ -329,7 +329,8 @@ async def test_key_and_link_paths_keep_index_plans_under_row_level_security(
     engine: AsyncEngine, bulk: Sessions, runtime: StoreRuntime
 ) -> None:
     """Under RLS only leakproof operators become index conditions (text equality and order
-    are); key, page, Link and neighborhood reads use nothing else."""
+    are). Key, page and stored-Link conditions stay index conditions; inbound foreign-key
+    Links still read through their partial index, but as a filter (design 8.6)."""
     role = f"lorebase_reader_{uuid.uuid4().hex[:8]}"
     async with engine.connect() as connection:
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")

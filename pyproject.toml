@@ -82,6 +82,9 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["packages", "tests"]
 addopts = "-ra --strict-markers --import-mode=importlib"
-markers = ["integration: needs external services such as Postgres"]
+markers = [
+  "integration: needs external services such as Postgres",
+  "perf: performance baseline; needs Postgres, runs only with -m perf",
+]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
