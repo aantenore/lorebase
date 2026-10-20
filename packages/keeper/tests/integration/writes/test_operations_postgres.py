@@ -25,12 +25,8 @@ ROWS = 5
 
 
 def supply_yaml() -> str:
-    """The example schema without the elements that need expressions (not enabled yet)."""
-    document: dict[str, Any] = yaml.safe_load((EXAMPLE / "schema.yaml").read_text())
-    del document["operations"]
-    del document["derivations"]["single_sourced"]
-    del document["kinds"]["Part"]["attributes"]["single_sourced"]
-    return yaml.safe_dump(document, sort_keys=False)
+    """The example schema, CEL Operations and Derivations included."""
+    return (EXAMPLE / "schema.yaml").read_text()
 
 
 def csv_rows(name: str, limit: int = ROWS) -> list[dict[str, Any]]:
@@ -214,14 +210,16 @@ async def test_operations_end_to_end(
         assert review.json()["code"] == "review-required"
         assert review.json()["proposals"] == f"{DOMAIN}/proposals"
 
-        # removing a Relation that holds Links needs cascade (its Derivation goes too)
+        # removing a Relation that holds Links needs cascade (its Derivations go too)
         part = yaml.safe_load(supply_yaml())["kinds"]["Part"]
         del part["attributes"]["supplier_count"]
+        del part["attributes"]["single_sourced"]
         removal = {
             "patch": {"kinds": {"Part": part}},
             "remove": [
                 {"section": "relations", "name": "supplied_by"},
                 {"section": "derivations", "name": "supplier_count"},
+                {"section": "derivations", "name": "single_sourced"},
             ],
         }
         blocked = await http.post(

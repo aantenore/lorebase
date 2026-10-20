@@ -5,7 +5,9 @@ Built-in Operations need `operation.execute` (role `editor`), stored ones
 of the principals or groups named there. Grants narrowed to a Kind, Operation or branch
 pattern apply. The response carries `status` (`committed` or `dry_run`), the computed `edits`,
 `violations` and the new Revision(s); rejected executions are 422 problems with the same
-members, and executions that need review are 409 problems pointing to Proposals.
+members (`precondition-failed` when a CEL precondition does not hold), and executions that
+need review (on a protected branch, or when a review policy expression is true) are 409
+problems pointing to Proposals.
 """
 
 from __future__ import annotations
@@ -41,8 +43,9 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     },
     422: {
         "model": Problem,
-        "description": "Invalid parameters or violations (`issues`, `edits`), or expressions "
-        "not enabled (`expressions-not-enabled`).",
+        "description": "Invalid parameters or violations (`issues`, `edits`), a precondition "
+        "that does not hold (`precondition-failed`, with the expression and its position), or "
+        "expressions not enabled (`expressions-not-enabled`).",
     },
     503: {"model": Problem, "description": "The branch is locked by another writer."},
 }
