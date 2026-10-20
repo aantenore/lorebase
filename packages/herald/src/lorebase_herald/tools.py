@@ -2,19 +2,30 @@
 
 The functions here know nothing about MCP; `server.py` registers them as tools with their
 schemas and descriptions. Read tools only read Keeper's REST API: no tool calls a model.
+
+`lorebase_context` and `lorebase_explain` use Keeper's agent endpoints (`POST .../context`,
+`GET .../records/{key}/explain`). Against a Keeper without them (the route itself is missing)
+they fall back to composing the answer from the read endpoints.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Mapping, Sequence
+import json
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from lorebase_herald import views
 from lorebase_herald.context_pack import ContextPack
 from lorebase_herald.errors import invalid_input, tool_error
-from lorebase_herald.keeper_http import KeeperError, KeeperHttp, KeeperUnavailableError, segment
+from lorebase_herald.keeper_http import (
+    KeeperError,
+    KeeperHttp,
+    KeeperUnavailableError,
+    route_missing,
+    segment,
+)
 from lorebase_herald.render import render
 from lorebase_herald.settings import HeraldSettings
 
@@ -72,6 +83,17 @@ class LorebaseTools:
         try:
             return await request
         except (KeeperError, KeeperUnavailableError) as error:
+            raise tool_error(error, max_issues=self.output.max_issues) from None
+
+    async def newer(self, request: Callable[[], Awaitable[T]]) -> T | None:
+        """`request()` to an endpoint older Keepers lack; None when this Keeper lacks it."""
+        try:
+            return await request()
+        except KeeperError as error:
+            if route_missing(error):
+                return None
+            raise tool_error(error, max_issues=self.output.max_issues) from None
+        except KeeperUnavailableError as error:
             raise tool_error(error, max_issues=self.output.max_issues) from None
 
     def path(self, domain: str, *parts: str) -> str:
@@ -291,6 +313,60 @@ class LorebaseTools:
                     "next: try other words with lorebase_search, or read lorebase_schema"
                 )
         seeds = seeds[: settings.max_seeds]
+        budget = min(token_budget or settings.token_budget, settings.max_token_budget)
+        as_json = self.fmt(fmt) == "json"
+        request: dict[str, Any] = {
+            "refs": [f"{s.kind}/{s.key}" for s in seeds],
+            "depth": depth or settings.depth,
+            "budget_tokens": budget,
+            "format": "json" if as_json else "markdown",
+        }
+        if relations:
+            request["relations"] = list(relations)
+        if branch:
+            request["branch"] = branch
+        pack = await self.newer(
+            lambda: self.keeper.post_text(
+                self.path(name, "context"), credential=credential, body=request
+            )
+        )
+        if pack is None:
+            return await self._composed_context(
+                credential,
+                name,
+                branch,
+                seeds,
+                depth=depth,
+                relations=relations,
+                budget=budget,
+                found_by=found_by,
+                question=question,
+                as_json=as_json,
+            )
+        if found_by is None:
+            return pack
+        if as_json:
+            document = json.loads(pack)
+            document.update(found_by=found_by, question=question)
+            return json.dumps(document, separators=(",", ":"), ensure_ascii=False)
+        return f"seeds found by {found_by} for {question!r}\n{pack}"
+
+    async def _composed_context(
+        self,
+        credential: str | None,
+        name: str,
+        branch: str | None,
+        seeds: Sequence[RecordRef],
+        *,
+        depth: int | None,
+        relations: Sequence[str] | None,
+        budget: int,
+        found_by: str | None,
+        question: str | None,
+        as_json: bool,
+    ) -> str:
+        """A context pack built here from the read endpoints, for Keepers without `/context`."""
+        settings = self.settings.context
         hood: dict[str, Any] = {
             "seeds": [s.address() for s in seeds],
             "depth": depth or settings.depth,
@@ -308,7 +384,6 @@ class LorebaseTools:
                 *(self.fetch_record(credential, name, s, branch=branch, links=True) for s in seeds),
             )
         )
-        budget = min(token_budget or settings.token_budget, settings.max_token_budget)
         pack = ContextPack(
             schema=schema,
             neighborhood=neighborhood,
@@ -318,7 +393,7 @@ class LorebaseTools:
             output=self.output,
         )
         max_chars = int(budget * settings.chars_per_token)
-        if self.fmt(fmt) == "json":
+        if as_json:
             return pack.json(max_chars)
         return pack.text(max_chars)
 
@@ -333,10 +408,22 @@ class LorebaseTools:
         fmt: str | None,
     ) -> str:
         target = RecordRef.parse(record)
-        body = await self.call(
-            self.fetch_record(
-                credential, self.domain(domain), target, branch=self.branch(branch), lineage=True
+        name, branch = self.domain(domain), self.branch(branch)
+        explained = await self.newer(
+            lambda: self.keeper.get(
+                self.path(
+                    name, "kinds", segment(target.kind), "records", segment(target.key), "explain"
+                ),
+                credential=credential,
+                params={"branch": branch, "format": "json"},
             )
+        )
+        if explained is not None:
+            view = views.explain_view(explained, attributes, self.output)
+            text = views.explain_text(view, self.output)
+            return render(view, text, self.fmt(fmt), self.output)
+        body = await self.call(
+            self.fetch_record(credential, name, target, branch=branch, lineage=True)
         )
         view = views.lineage_view(body, attributes, self.output)
         return render(view, views.lineage_text(view, self.output), self.fmt(fmt), self.output)

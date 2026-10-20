@@ -72,6 +72,12 @@ def _problem(response: httpx.Response) -> KeeperError:
     )
 
 
+def route_missing(error: KeeperError) -> bool:
+    """Whether Keeper answered that the route itself does not exist (an older Keeper), as
+    opposed to a missing resource, whose problem always names it in `detail`."""
+    return error.status in (404, 405) and error.detail is None
+
+
 def segment(value: str) -> str:
     """One URL path segment; `/` in branch names and keys is encoded."""
     return quote(value, safe="")
@@ -133,6 +139,16 @@ class KeeperHttp:
     ) -> Any:
         return await self._send("POST", path, credential, body=body)
 
+    async def post_text(
+        self,
+        path: str,
+        *,
+        credential: str | None,
+        body: Mapping[str, Any],
+    ) -> str:
+        """The answer body as text, for endpoints that render documents (markdown or JSON)."""
+        return str(await self._send("POST", path, credential, body=body, text=True))
+
     async def _send(
         self,
         method: str,
@@ -141,6 +157,7 @@ class KeeperHttp:
         *,
         params: Mapping[str, QueryValue] | None = None,
         body: Mapping[str, Any] | None = None,
+        text: bool = False,
     ) -> Any:
         headers = {} if credential is None else {"Authorization": authorization(credential)}
         query = {k: _query_value(v) for k, v in (params or {}).items() if v is not None}
@@ -156,7 +173,7 @@ class KeeperHttp:
             ) from None
         if response.status_code >= 400:
             raise _problem(response)
-        return response.json()
+        return response.text if text else response.json()
 
 
 def authorization(credential: str) -> str:

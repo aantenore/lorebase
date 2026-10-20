@@ -9,6 +9,7 @@ limits are enforced in one place. Herald has no database credentials and never c
 - Transports: stdio (one Herald process per agent, started by the host) and Streamable HTTP
   (one shared Herald; each caller sends its own key).
 - Built on the official Python MCP SDK (`mcp`).
+- The REST endpoints behind the tools, for agents that call Keeper directly: [agents](agents.md).
 
 ## Run it
 
@@ -147,13 +148,13 @@ example `Supplier/S-1001`.
 
 | Tool | Input (besides domain, branch, format) | Output | Keeper calls |
 |------|-----------------------------------------|--------|--------------|
-| `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `token_budget?` | seed Records, their Links with neighbor titles, schema of the Kinds involved, neighbor values; trimmed to the budget | `GET .../schema`, `GET .../records/{key}?links`, `POST .../neighborhood` (`POST .../search` for a question) |
+| `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `token_budget?` | Keeper's context pack: seed Records, neighbors, Links, schema of the Kinds present, recent changes and lineage, trimmed to the budget (markdown for `text`) | `POST .../context` (`POST .../search` first for a question) |
 | `lorebase_schema` | `kinds?`, `detail?: summary or full` | Kinds with attribute types (`!` = required), key, title, built-in Operations; Relations; custom Operations with parameters and review policy | `GET .../schema` |
 | `lorebase_get` | `ref`, `links?`, `at?` | values and Link counts per Relation | `GET .../kinds/{kind}/records/{key}` |
 | `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate, `next_cursor` | `POST .../query` |
 | `lorebase_search` | `query?`, `kinds?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given | `POST .../search` |
 | `lorebase_neighborhood` | `seeds: [ref]`, `depth`, `relations?`, `max_nodes?`, `max_edges?`, `values?` | nodes and edges, `truncated` when Keeper caps were reached | `POST .../neighborhood` |
-| `lorebase_explain` | `ref`, `attributes?` | per attribute: value, origin type, actor, time, provenance id | `GET .../records/{key}?lineage=true` |
+| `lorebase_explain` | `ref`, `attributes?` | how the Record was created; per attribute: value, origin type, actor, time and Revision of its last change; without `attributes`, its Links and the Proposals that changed it | `GET .../records/{key}/explain` |
 | `lorebase_changes` | `since?`, `limit?`, `author?`, `origin_type?`, `cursor?` | Revisions newest first back to `since` (id or 8+ char prefix) | `GET .../branches/{b}/log` |
 | `lorebase_diff` | `from_revision`, `to_revision`, `kinds?`, `relations?`, `limit?`, `cursor?` | counts per Kind and Relation, then `+`/`~`/`-` elements with old -> new values | `GET .../diff` |
 | `lorebase_execute` | `operation`, `parameters`, `dry_run` (default true), `expected_head?`, `idempotency_key?`, `message?` | status, edits, violations, warnings, new Revision, and the next step | `POST .../operations/{op}/execute` |
@@ -171,8 +172,8 @@ model calls.
 
 Outputs are cut at `herald.output.max_chars`, lists at `max_items`, single values at
 `max_value_chars`. Every cut is marked (`... N more`, `[truncated: ...]`, `next_cursor: ...`),
-never silent. `lorebase_context` counts its budget as `token_budget * chars_per_token`
-characters and ends with `[context trimmed to budget: ...]` when sections were left out.
+never silent. `lorebase_context` passes `token_budget` to Keeper, which trims the pack to it
+and lists what it trimmed (`agents.context`, see [agents](agents.md)).
 
 ### Errors
 
@@ -207,10 +208,11 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
 
 - Herald calls Keeper through `lorebase_herald/keeper_http.py`, a thin client over `httpx`;
   it is replaced by the typed `lorebase_client` package once that is published.
-- Keeper has no context or explain endpoint yet: `lorebase_context` composes its pack from
-  schema, Record and neighborhood reads, and `lorebase_explain` summarizes the lineage that
-  `GET .../records/{key}?lineage=true` returns. Tool names stay stable when those endpoints
-  arrive.
+- `lorebase_context` and `lorebase_explain` call Keeper's agent endpoints, described in
+  [agents](agents.md). Against an older Keeper that lacks them (the route itself answers 404
+  or 405), they fall back to composing the pack from schema, Record and neighborhood reads
+  (counting the budget as `token_budget * chars_per_token` characters) and to the lineage of
+  `GET .../records/{key}?lineage=true`.
 - `lorebase_changes` pages through the branch log until it reaches `since`, bounded by
   `herald.changes.max_pages`.
 - Import contracts: `lorebase_herald` may import `lorebase_platform` only; it never imports

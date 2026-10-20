@@ -466,6 +466,86 @@ def lineage_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
+def explain_view(
+    body: Mapping[str, Any], attributes: Sequence[str] | None, output: OutputSettings
+) -> View:
+    """Keeper's explanation of a Record (`.../explain`), its lists capped; with `attributes`,
+    only those attributes and no Links or Proposals."""
+    record = body["record"]
+    rows: list[Mapping[str, Any]] = list(body.get("attributes") or [])
+    if attributes:
+        wanted = set(attributes)
+        rows = [row for row in rows if row.get("name") in wanted]
+    shown, omitted = capped(rows, output.max_items)
+    view: View = {
+        "revision": body.get("revision"),
+        "branch": body.get("branch"),
+        "ref": record["ref"],
+        "title": record.get("title"),
+        "updated_revision": record.get("updated_revision"),
+        "history": body.get("history"),
+        "created": body.get("created"),
+        "attributes": shown,
+    }
+    if omitted:
+        view["omitted"] = omitted
+    if not attributes:
+        links, more_links = capped(body.get("links") or [], output.max_items)
+        view["links"] = links
+        view["links_omitted"] = more_links
+        view["links_truncated"] = bool(body.get("links_truncated"))
+        view["proposals"] = list(body.get("proposals") or [])
+    return view
+
+
+def _origin_text(entry: Mapping[str, Any]) -> str:
+    if entry.get("revision") is None and entry.get("origin_type") is None:
+        return "no recorded origin"
+    message = entry.get("message")
+    return (
+        f"{entry.get('origin_type') or '?'} by {entry.get('actor') or '?'} at "
+        f"{entry.get('at') or '?'} in {entry.get('revision') or '?'}"
+        + (f": {message}" if message else "")
+    )
+
+
+def explain_text(view: Mapping[str, Any], output: OutputSettings) -> str:
+    history = view.get("history") or {}
+    lines = [
+        f"{titled(view['ref'], view.get('title'))} rev {view['revision']} on {view['branch']} "
+        f"({history.get('changes', '?')} changes, last in {view.get('updated_revision')})"
+    ]
+    if created := view.get("created"):
+        lines.append(f"created <- {_origin_text(created)}")
+    for entry in view["attributes"]:
+        value = value_text(entry.get("value"), output.max_value_chars)
+        lines.append(f"{entry['name']} = {value} <- {_origin_text(entry)}")
+    lines.extend(more_line(view.get("omitted", 0), "name `attributes`"))
+    links = view.get("links") or []
+    if links:
+        lines.append("LINKS:")
+    for link in links:
+        values = link.get("values")
+        extra = f" ({values_text(values, output.max_value_chars)})" if values else ""
+        lines.append(
+            f"{link['relation']} -> {titled(link['ref'], link.get('title'))}{extra} "
+            f"<- {_origin_text(link)}"
+        )
+    lines.extend(more_line(view.get("links_omitted", 0)))
+    if view.get("links_truncated"):
+        lines.append("... more Links than Keeper lists (agents.explain.max_links)")
+    proposals = view.get("proposals") or []
+    if proposals:
+        lines.append("PROPOSALS:")
+    for proposal in proposals:
+        merged = proposal.get("merged_revision")
+        lines.append(
+            f'{proposal["id"]} "{proposal.get("title", "")}" {proposal.get("status", "?")}'
+            + (f" in {merged}" if merged else "")
+        )
+    return "\n".join(lines)
+
+
 # History, diff, branches ---------------------------------------------------------------------
 
 

@@ -275,8 +275,8 @@ def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
     @server.tool(
         name="lorebase_context",
         description="Start here. A context pack for a task: the seed Records (given, or found "
-        "by searching `question`), their Links and neighbors, and the schema of the Kinds "
-        "involved, trimmed to `token_budget`.",
+        "by searching `question`), their Links and neighbors, the schema of the Kinds "
+        "involved, recent changes and lineage, trimmed to `token_budget`.",
         annotations=READ,
         structured_output=False,
     )
@@ -317,8 +317,9 @@ def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
 
     @server.tool(
         name="lorebase_explain",
-        description="Where a Record's values come from: for each attribute, the origin "
-        "(import, operation, extraction, ...), actor and time of its last change.",
+        description="Why a Record is what it is: how it was created, and for each attribute "
+        "the origin (import, operation, extraction, ...), actor, time and Revision of its last "
+        "change; without `attributes`, also its Links and the Proposals that changed it.",
         annotations=READ,
         structured_output=False,
     )

@@ -187,11 +187,14 @@ async def test_tools_over_mcp_against_keeper(
             pack = _text(
                 await call("lorebase_context", {"records": ["Part/P-10001"], "token_budget": 800})
             )
-            assert 'SEEDS:\nPart/P-10001 "Tapered roller bearing 6305"' in pack
-            assert "-supplied_by-> Supplier/S-1005" in pack
+            # Keeper's own pack (`POST .../context`), within the budget
+            assert pack.startswith("# Context: supply/main")
+            assert "### Part/P-10001: Tapered roller bearing 6305" in pack
+            assert "- Part/P-10001 -> Supplier/S-1005" in pack
 
             lineage = _text(await call("lorebase_explain", {"ref": "Supplier/S-1001"}))
             assert "legal_name = Kavsen Alloys Sp. z o.o. <- import by usr_loader" in lineage
+            assert "LINKS:" in lineage
 
             changes = _text(await call("lorebase_changes", {"since": revs["schema"]}))
             assert f"{revs['data']} " in changes

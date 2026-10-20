@@ -18,15 +18,23 @@ OLDER = "ef" * 32
 Answer = dict[str, Any] | httpx.Response | Callable[[httpx.Request], httpx.Response]
 
 
-def problem(status: int, code: str, detail: str, **extensions: Any) -> httpx.Response:
-    body = {"type": f"https://lorebase.dev/problems/{code}", "title": code, "status": status}
-    body.update(code=code, detail=detail, **extensions)
+def problem(status: int, code: str, detail: str | None, **extensions: Any) -> httpx.Response:
+    body: dict[str, Any] = {
+        "type": f"https://lorebase.dev/problems/{code}",
+        "title": code,
+        "status": status,
+        "code": code,
+    }
+    if detail is not None:
+        body["detail"] = detail
+    body.update(extensions)
     return httpx.Response(status, json=body, headers={"content-type": "application/problem+json"})
 
 
 @dataclass
 class FakeKeeper:
-    """Routes keyed by `METHOD /decoded/path`; unknown routes answer 404 problems."""
+    """Routes keyed by `METHOD /decoded/path`; unknown routes answer 404 problems without a
+    `detail`, as Keeper does for a route it does not have."""
 
     routes: dict[str, Answer] = field(default_factory=dict)
     requests: list[httpx.Request] = field(default_factory=list)
@@ -38,7 +46,7 @@ class FakeKeeper:
         self.requests.append(request)
         answer = self.routes.get(f"{request.method} {unquote(request.url.path)}")
         if answer is None:
-            return problem(404, "not-found", "No such route in the fake.")
+            return problem(404, "not-found", None)
         if callable(answer):
             return answer(request)
         if isinstance(answer, httpx.Response):
