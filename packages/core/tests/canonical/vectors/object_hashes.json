@@ -1,0 +1,121 @@
+{
+  "scheme": "lb1",
+  "vectors": [
+    {
+      "object_type": "schema.kind",
+      "value": {
+        "id": "knd_01JB8Z0000000000000000000A",
+        "api_name": "Supplier",
+        "primary_key": [
+          "att_01JB8Z0000000000000000000B"
+        ]
+      },
+      "canonical": "{\"api_name\":\"Supplier\",\"id\":\"knd_01JB8Z0000000000000000000A\",\"primary_key\":[\"att_01JB8Z0000000000000000000B\"]}",
+      "hash": "4ef9b9512447b501fd67c23aae7f59087f929f05993e4b33d78f49546ac4647f"
+    },
+    {
+      "object_type": "schema.relation",
+      "value": {
+        "id": "rel_01JB8Z0000000000000000000C",
+        "cardinality": "many_to_many"
+      },
+      "canonical": "{\"cardinality\":\"many_to_many\",\"id\":\"rel_01JB8Z0000000000000000000C\"}",
+      "hash": "5fe613885ef0cb055c824623628e7938b249cc7b2fecce9d3a34d3d8e0af5541"
+    },
+    {
+      "object_type": "schema.trait",
+      "value": {
+        "id": "trt_01JB8Z0000000000000000000D",
+        "api_name": "Located"
+      },
+      "canonical": "{\"api_name\":\"Located\",\"id\":\"trt_01JB8Z0000000000000000000D\"}",
+      "hash": "11b06e14174dbdff4214c11aeabb137896aa475c6286003f7fc7c6d0a54bd292"
+    },
+    {
+      "object_type": "schema.operation",
+      "value": {
+        "id": "opr_01JB8Z0000000000000000000E",
+        "steps": []
+      },
+      "canonical": "{\"id\":\"opr_01JB8Z0000000000000000000E\",\"steps\":[]}",
+      "hash": "18c43e8a9f9b7021297fdcd2edb7c4cd0945472253ac2fe15287aca6626ab82c"
+    },
+    {
+      "object_type": "schema.derivation",
+      "value": {
+        "id": "drv_01JB8Z0000000000000000000F",
+        "variant": "expression"
+      },
+      "canonical": "{\"id\":\"drv_01JB8Z0000000000000000000F\",\"variant\":\"expression\"}",
+      "hash": "29c14bd998f5a612cc4f22564c8b67677a45a384c8abfa6adefe1bd00fe7f8e8"
+    },
+    {
+      "object_type": "schema.source",
+      "value": {
+        "id": "src_01JB8Z0000000000000000000G",
+        "type": "csv"
+      },
+      "canonical": "{\"id\":\"src_01JB8Z0000000000000000000G\",\"type\":\"csv\"}",
+      "hash": "3ca2c23a45518533098a97d243e4cf2340af3c40fa432a33e89093a797d6c1f4"
+    },
+    {
+      "object_type": "schema.domain",
+      "value": {
+        "id": "supply",
+        "default_branch": "main"
+      },
+      "canonical": "{\"default_branch\":\"main\",\"id\":\"supply\"}",
+      "hash": "ea06dfa85e1d6ac01a6cf8fcaaa8b067b89d5a7db6233e7e52a9ea2c8432f018"
+    },
+    {
+      "object_type": "record",
+      "value": {
+        "kind": "knd_01JB8Z0000000000000000000A",
+        "key": "S-1001",
+        "values": {
+          "att_x": "Brevik Bearings S.p.A.",
+          "att_y": "42",
+          "att_z": null
+        }
+      },
+      "canonical": "{\"key\":\"S-1001\",\"kind\":\"knd_01JB8Z0000000000000000000A\",\"values\":{\"att_x\":\"Brevik Bearings S.p.A.\",\"att_y\":\"42\"}}",
+      "hash": "82ea20c27c63259cac6fc9e226edd10d3bbfc4e8438691976ee901314cbbb725"
+    },
+    {
+      "object_type": "link",
+      "value": {
+        "relation": "rel_01JB8Z0000000000000000000C",
+        "from": "P-77812",
+        "to": "S-1001",
+        "values": {
+          "att_p": true
+        }
+      },
+      "canonical": "{\"from\":\"P-77812\",\"relation\":\"rel_01JB8Z0000000000000000000C\",\"to\":\"S-1001\",\"values\":{\"att_p\":true}}",
+      "hash": "29b6d4cc187b7a31b5d82ee31e9076df6d4f605d09ba426dd8f9e40e3ad64173"
+    },
+    {
+      "object_type": "revision",
+      "value": {
+        "parents": [],
+        "root": "0000000000000000000000000000000000000000000000000000000000000000",
+        "domain": "supply",
+        "author": {
+          "principal": "usr_1",
+          "on_behalf_of": null
+        },
+        "message": "init",
+        "origin": {
+          "type": "import"
+        },
+        "created_at": "2026-10-20T09:12:44.123456Z",
+        "stats": {
+          "partitions_changed": 0,
+          "changes": 0
+        }
+      },
+      "canonical": "{\"author\":{\"principal\":\"usr_1\"},\"created_at\":\"2026-10-20T09:12:44.123456Z\",\"domain\":\"supply\",\"message\":\"init\",\"origin\":{\"type\":\"import\"},\"parents\":[],\"root\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"stats\":{\"changes\":0,\"partitions_changed\":0}}",
+      "hash": "7d1d9bce1f7f09b6db64cfb018e8711579b3854936d49a315e1206587ef6a6c4"
+    }
+  ]
+}
