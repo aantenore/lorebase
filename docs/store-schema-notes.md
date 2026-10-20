@@ -1,8 +1,8 @@
 # Store schema notes
 
-Decisions taken where [design.md](design.md) section 7 leaves the Postgres schema open. Revision
-`0001` in `packages/store/migrations` is the source of truth; the models in
-`lorebase_store.models` match it (an integration test checks that schema comparison finds no
+Decisions taken where [design.md](design.md) section 7 leaves the Postgres schema open. The
+revisions in `packages/store/migrations` are the source of truth; the models in
+`lorebase_store.models` match them (an integration test checks that schema comparison finds no
 difference).
 
 ## Configuration
@@ -85,6 +85,26 @@ difference).
   name = :n AND head = :expected AND version = :v`; zero rows means the ref moved.
 - Job claim: `SELECT ... FROM jobs WHERE status = 'queued' AND run_after <= now() ORDER BY
   priority DESC, run_after LIMIT :n FOR UPDATE SKIP LOCKED`, served by `ix_jobs_claimable`.
+
+## Proposals and merge attempts
+
+Revision `0002` adds what the merge API needs (design 6.10, 11.1):
+
+- `proposals.idempotency_key` (unique per Domain and author when set) and `updated_at`.
+- `merge_attempts.base` is nullable: heads without a common ancestor, or a virtual base
+  (`virtual_base` true, AC-13), have no stored base Revision. New columns: `result`
+  (`conflicts`, `merged`, `fast_forward`, `up_to_date`), `policy` (the merge policy options
+  that differ from the defaults), `created_by`, `outcome` (automatic resolutions, resolutions
+  that matched no Conflict, Conflict counts, change stats), `revision` (the target head after a
+  committed merge) and `idempotency_key` (of the merge request that committed it).
+- `conflicts.id` is the hex fingerprint, the public Conflict id; `payload` holds the core
+  Conflict document plus the full member keys of grouped Conflicts; `resolution`,
+  `resolved_by` and `resolved_at` are set when the attempt applied a resolution to the
+  Conflict (resolved). Queries test `resolved_by`, which is SQL null while the Conflict is
+  open (`resolution` may hold JSON `null`).
+- Every merge run stores a new attempt; the previous open attempt becomes `stale` (or
+  `abandoned` when the Proposal is closed). Attempts beyond `keeper.proposals.attempt_retention`
+  are deleted, merged attempts excepted.
 
 ## Audit chain
 

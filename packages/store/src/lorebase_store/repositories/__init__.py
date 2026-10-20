@@ -21,6 +21,21 @@ from lorebase_store.repositories.materialized import (
     RecordRow,
     SchemaRow,
 )
+from lorebase_store.repositories.merges import (
+    ConflictRepository,
+    ConflictRow,
+    MergeAttemptRepository,
+    MergeAttemptRow,
+    ResolutionRepository,
+    ResolutionRow,
+)
+from lorebase_store.repositories.proposals import (
+    ProposalFilter,
+    ProposalRepository,
+    ProposalRow,
+    ReviewRepository,
+    ReviewRow,
+)
 from lorebase_store.repositories.provenance import ProvenanceRepository, ProvenanceRow
 from lorebase_store.repositories.refs import (
     LockTimeoutError,
@@ -40,6 +55,8 @@ from lorebase_store.repositories.scope import scope_to_domain
 
 __all__ = [
     "ChangesetRepository",
+    "ConflictRepository",
+    "ConflictRow",
     "DomainNotFoundError",
     "DomainRepository",
     "DomainRow",
@@ -52,8 +69,13 @@ __all__ = [
     "LockTimeoutError",
     "MaterializedIndexView",
     "MaterializedRepository",
+    "MergeAttemptRepository",
+    "MergeAttemptRow",
     "OutboxRepository",
     "PgRevisionGraph",
+    "ProposalFilter",
+    "ProposalRepository",
+    "ProposalRow",
     "ProvenanceRepository",
     "ProvenanceRow",
     "RecordRow",
@@ -63,6 +85,10 @@ __all__ = [
     "RefNotFoundError",
     "RefRepository",
     "RefRow",
+    "ResolutionRepository",
+    "ResolutionRow",
+    "ReviewRepository",
+    "ReviewRow",
     "RevisionRepository",
     "RevisionRow",
     "SchemaRow",

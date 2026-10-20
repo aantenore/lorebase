@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import REAL, ForeignKeyConstraint, Index, Integer, UniqueConstraint
+from sqlalchemy import REAL, ForeignKeyConstraint, Index, Integer, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lorebase_store.models.base import H32, Base, DomainKey, domain_fk
@@ -38,6 +38,14 @@ class Proposal(Base):
     __table_args__ = (
         domain_fk(),
         Index(None, "domain_id", "target_ref", "status"),
+        Index(
+            "uq_proposals_idempotency",
+            "domain_id",
+            "author",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     domain_id: Mapped[DomainKey]
@@ -53,6 +61,8 @@ class Proposal(Base):
     merged_revision: Mapped[H32 | None]
     checks: Mapped[dict[str, Any] | None]
     policies: Mapped[dict[str, Any] | None]
+    idempotency_key: Mapped[str | None]
+    updated_at: Mapped[datetime | None]
 
 
 class ProposalReview(Base):
@@ -98,11 +108,22 @@ class MergeAttempt(Base):
     domain_id: Mapped[DomainKey]
     id: Mapped[str] = mapped_column(primary_key=True)
     proposal_id: Mapped[str]
-    base: Mapped[H32]
+    #: Merge base; null when the heads share no ancestor or the base is virtual (AC-13).
+    base: Mapped[H32 | None]
     ours: Mapped[H32]
     theirs: Mapped[H32]
     status: Mapped[MergeAttemptStatus] = mapped_column(MERGE_ATTEMPT_STATUS)
     created_at: Mapped[datetime]
+    virtual_base: Mapped[bool] = mapped_column(server_default=text("false"))
+    #: `conflicts`, `merged`, `fast_forward` or `up_to_date`.
+    result: Mapped[str | None]
+    policy: Mapped[dict[str, Any] | None]
+    created_by: Mapped[str | None]
+    #: Automatic resolutions, resolutions that matched no Conflict, Conflict counts.
+    outcome: Mapped[dict[str, Any] | None]
+    #: The Revision the target moved to when the attempt was committed.
+    revision: Mapped[H32 | None]
+    idempotency_key: Mapped[str | None]
 
 
 class Conflict(Base):
