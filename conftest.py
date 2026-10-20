@@ -11,6 +11,9 @@ from typing import Any, NoReturn
 
 import pytest
 
+# Fixtures that run a real Keeper on Postgres (client and CLI integration tests).
+pytest_plugins = ["keeper_harness"]
+
 
 class NetworkAccessError(RuntimeError):
     """Raised when a test tries to open a network connection."""

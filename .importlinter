@@ -12,9 +12,9 @@ include_external_packages = False
 
 # Dependency direction (design 17): core depends on nothing internal; store on core and
 # platform; inference on core and platform; keeper on store; client on nothing internal;
-# cli on client; herald on platform (and client once published), never on inference. Scribe
-# joins these contracts when its package is created (M2): it may depend on store and
-# inference. Nothing depends on herald.
+# cli on client; herald on platform and client, never on inference. Scribe joins these
+# contracts when its package is created (M2): it may depend on store and inference. Nothing
+# depends on herald.
 
 [importlinter:contract:core-is-pure]
 name = core has no internal dependencies
@@ -107,7 +107,7 @@ forbidden_modules =
     lorebase_herald
 
 [importlinter:contract:herald-layer]
-name = herald depends on platform only and never on inference
+name = herald depends on platform and client only and never on inference
 type = forbidden
 source_modules =
     lorebase_herald
@@ -116,5 +116,4 @@ forbidden_modules =
     lorebase_inference
     lorebase_store
     lorebase_keeper
-    lorebase_client
     lorebase_cli

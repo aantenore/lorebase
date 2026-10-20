@@ -3,7 +3,18 @@ name = "lorebase-cli"
 version = "0.1.0"
 description = "Lorebase CLI"
 requires-python = ">=3.12"
-dependencies = ["lorebase-client"]
+dependencies = [
+  "lorebase-client",
+  # Command line framework with shell completion.
+  "typer>=0.27",
+]
+
+[project.optional-dependencies]
+# Parquet imports (`lorebase import records data.parquet`).
+parquet = ["pyarrow>=15"]
+
+[project.scripts]
+lorebase = "lorebase_cli.main:main"
 
 [build-system]
 requires = ["hatchling"]
