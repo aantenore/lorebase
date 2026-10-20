@@ -193,3 +193,56 @@ store:
     text_search_config: simple   # Postgres text search configuration of Record search vectors
     read_batch_rows: 5000        # rows or object bodies per query in rebuild and verification
     verify_max_divergences: 1000 # divergences listed by a verification report
+
+# Read path of Keeper (design 8). Reads hit the materialized head of a branch; `at=<revision>`
+# reads go through the Revision tree.
+read:
+  records:                       # pages of Records and Links
+    default_limit: 50
+    max_limit: 500
+  log:                           # pages of a branch log
+    default_limit: 50
+    max_limit: 500
+  statement_timeout_ms: 2000     # statement_timeout of read transactions; 0 disables
+  schema_cache_entries: 64       # compiled schemas kept in memory, by schema hash
+  query:                         # limits of the query DSL
+    max_via_depth: 3             # nesting of via and count predicates
+    max_predicates: 64
+    max_in_values: 1000
+    max_order_terms: 4
+    max_includes: 5              # Relations in `include`
+    include_default_limit: 10    # neighbors per Record in `include`
+    include_max_limit: 50
+    max_aggregate_groups: 1000   # groups returned by `aggregate`; more are cut
+  traverse:                      # POST /traverse and POST /neighborhood
+    max_hops: 5
+    max_nodes_per_hop: 1000
+    max_seeds: 100
+    max_depth: 3
+    max_nodes: 2000
+    max_edges: 5000
+  time_travel:
+    max_scan_entries: 100000     # largest Kind or Relation partition listed at a Revision
+  diff:
+    max_changes: 100000          # larger diffs are refused; narrow them with kinds/relations
+    page:
+      default_limit: 100
+      max_limit: 1000
+
+# Search (design 8.4). Keeper never computes embeddings: semantic and hybrid search take the
+# caller's query_vector. The text search configuration is store.materialize.text_search_config
+# and the vector dimension store.embeddings.dims.
+search:
+  results:
+    default_limit: 20
+    max_limit: 100
+  candidates: 200                # rows of each ranked list before fusion and paging
+  trigram_threshold: 0.3         # least title similarity for a typo-tolerant hit
+  trigram_weight: 0.5            # weight of title similarity added to ts_rank_cd
+  headline_options: "MaxWords=30, MinWords=10, MaxFragments=2"   # ts_headline of snippets
+  semantic:
+    model: BAAI/bge-small-en-v1.5   # embedding model searched; equals inference.embeddings.model
+  hybrid:                        # reciprocal rank fusion: w / (rrf_k + rank) per list
+    rrf_k: 60
+    lexical_weight: 1.0
+    semantic_weight: 1.0
