@@ -3,12 +3,12 @@
 **Git for company knowledge: an open-source ontology platform that gives AI agents a versioned, governed knowledge graph they can read in milliseconds.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Status: design](https://img.shields.io/badge/status-design%20%2F%20pre--alpha-orange)
-![CI](https://img.shields.io/badge/CI-coming%20in%20M1-lightgrey)
+![Status: M1 in progress](https://img.shields.io/badge/status-M1%20in%20progress%20%2F%20pre--alpha-orange)
+[![CI](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml/badge.svg)](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 ![MCP](https://img.shields.io/badge/MCP-native-6f42c1)
 
-> Status: Lorebase is in the design phase. The founding design is in [docs/design.md](docs/design.md) and the first milestone plan in [docs/plan/m1.md](docs/plan/m1.md). Commands below describe the M1 experience and are marked accordingly.
+> Status: pre-alpha, M1 in progress. The founding design is in [docs/design.md](docs/design.md) and the first milestone plan in [docs/plan/m1.md](docs/plan/m1.md). The feature lists below describe the target product; see [Status](#status) for what exists today.
 
 ## What is Lorebase
 
@@ -48,32 +48,38 @@ Agents live outside Lorebase, in any framework or language. Lorebase is their kn
 | Governance | OIDC single sign-on, API keys for agents, RBAC per Domain, Kind and Operation, sensitivity masking, hash-chained audit log |
 | Operations | OpenTelemetry traces and metrics, structured JSON logs, Docker images, docker compose, Helm chart (planned) |
 
-## 60-second quickstart
+## Quickstart
 
-> Coming in M1. Images and the CLI are not published yet; the commands show the intended experience.
+Lorebase is pre-alpha. Today you can build and test the engine, bring up Postgres with migrations and the Keeper skeleton, and run the web shell against a mock API. The REST API, CLI and MCP server do not exist yet, so there is no end-to-end flow to try; see [Status](#status).
+
+Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), Docker with compose, and Node.js 24 with pnpm for the web app.
 
 ```bash
 git clone https://github.com/aantenore/lorebase.git
 cd lorebase
-cp deploy/compose/.env.example deploy/compose/.env
-docker compose -f deploy/compose/docker-compose.yaml up -d
 
-# create an admin API key (printed once)
-docker compose -f deploy/compose/docker-compose.yaml run --rm cli admin bootstrap --name admin
+# Python workspace: install, then lint, type-check and run the unit tests
+uv sync --all-packages
+make lint type test-unit
 
-# load the demo Domain: schema, data and a first Revision
-docker compose -f deploy/compose/docker-compose.yaml run --rm cli domain create supply
-docker compose -f deploy/compose/docker-compose.yaml run --rm cli schema apply supply examples/supply/schema.yaml
-docker compose -f deploy/compose/docker-compose.yaml run --rm cli records import supply examples/supply/data/
+# Postgres, migrations and Keeper (builds the backend image on first run)
+cp .env.example .env     # set POSTGRES_PASSWORD and review the other values
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml up postgres migrate keeper
 
-# branch, change, diff, merge
-lorebase branch create supply cleanup/tiers
-lorebase op run supply update_supplier --branch cleanup/tiers --param ref=Supplier/S-1001 --param tier=1
-lorebase diff supply main cleanup/tiers
-lorebase proposal open supply cleanup/tiers --title "Tier cleanup"
+# in a second terminal
+curl http://localhost:8080/readyz
 ```
 
-Then open the API docs at `http://localhost:8080/api/v1/docs`. The web UI (`http://localhost:3000`) and the MCP server (`http://localhost:8090/mcp`) arrive in M2 and M3. Model-backed features (document extraction, embeddings) arrive in M4 and run locally with `docker compose --profile local-models up`: Postgres plus Ollama on a laptop, no API keys.
+Web app, in mock mode (no backend needed):
+
+```bash
+cd apps/web
+cp .env.example .env     # VITE_API_MODE=mock
+pnpm install
+pnpm dev                 # http://localhost:5173
+```
+
+Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app. See [apps/web/README.md](apps/web/README.md) for the web variables and the mock API.
 
 ## Architecture
 
@@ -129,6 +135,22 @@ Lorebase sits between proprietary operational ontology platforms, versioned data
 | | Typed ontology | Branch and merge schema plus data | Reviewed extraction | MCP | LLM-free reads | Open source, Postgres only |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | Lorebase | yes | yes | yes | yes | yes | yes |
+
+## Status
+
+M1 (engine and API) is in progress. Nothing is released and interfaces may change.
+
+Done:
+
+- **Core engine** (`lorebase_core`): canonical JSON and hashing, type system, schema element models with static validation, data validation, canonical HAMT trees, tree diff, Revisions, changesets and ancestry.
+- **Three-way merge**: schema merge, attribute-level data merge, consistency rules under the merged schema, the full Conflict taxonomy, resolutions and merge policies (`prefer`, cascade of dangling Links, defaults). The `authority` and `newest_wins` policies are not implemented yet. Implementation notes: [docs/design.md](docs/design.md#615-implementation-notes).
+- **Schema as code**: load and dump a Domain schema as YAML, with the demo Domain in [examples/supply](examples/supply).
+- **Postgres schema**: Alembic migrations for the versioned store, materialized heads, governance tables and row-level security ([notes](docs/store-schema-notes.md)).
+- **Keeper skeleton**: settings, structured logging and telemetry, error format, liveness and readiness endpoints.
+- **Web shell**: Explorer, Canvas, schema overview and Review screens over a mock API.
+- Inference interfaces with a deterministic fake provider, docker compose for Postgres, migrations and Keeper, and CI.
+
+Next: the commit pipeline and materializer, the REST API, then the CLI. The MCP server (Herald) follows in M3. Ingestion, extraction and semantic search are later milestones; none of them exist yet.
 
 ## Roadmap
 
