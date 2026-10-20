@@ -58,7 +58,7 @@ The web app today, running on a mock API with sample data. The [visual tour](doc
 
 ## Quickstart
 
-Lorebase is pre-alpha. Today you can run the versioning and merge engine, bring up Postgres with migrations and the Keeper REST API (Domains, branches, schema change sets, built-in Operations), and run the web shell against a mock API. The read API, Proposals and merge over REST, the CLI and the MCP server do not exist yet, so there is no end-to-end "ask a question" flow to try; see [Status](#status). The step-by-step guide, including loading the supply sample through the REST API, is [docs/quickstart.md](docs/quickstart.md).
+Lorebase is pre-alpha. Today you can run the versioning and merge engine, bring up Postgres with migrations and the Keeper REST API (Domains, branches, schema change sets, built-in Operations), and run the web shell against a mock API. The read API, Proposals and merge over REST and the CLI do not exist yet, so there is no end-to-end "ask a question" flow to try (the MCP server, Herald, is in place: [docs/mcp.md](docs/mcp.md)); see [Status](#status). The step-by-step guide, including loading the supply sample through the REST API, is [docs/quickstart.md](docs/quickstart.md).
 
 Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), Docker with compose, and Node.js 24 with pnpm for the web app.
 
@@ -158,10 +158,11 @@ Done:
 - **Schema as code**: load and dump a Domain schema as YAML, with the demo Domain in [examples/supply](examples/supply).
 - **Postgres schema**: Alembic migrations for the versioned store, materialized heads, governance tables and row-level security ([notes](docs/store-schema-notes.md)).
 - **Keeper**: settings, structured logging and telemetry, error format, liveness and readiness endpoints, authentication modes with roles and an audit log, and REST endpoints for Domains, branches and tags, the schema (read, validate, change sets) and built-in Operations such as `import_records`. Expressions (CEL) are not enabled yet.
+- **Herald**: the MCP server over Keeper's REST API, on stdio and Streamable HTTP, with context, schema, read, history and governed Operation tools, two resources and a guide prompt ([docs/mcp.md](docs/mcp.md)).
 - **Web shell**: Explorer, Canvas, schema overview and Review screens over a mock API.
 - Inference interfaces with a deterministic fake provider, docker compose for Postgres, migrations and Keeper, and CI.
 
-Next: the read API (Records, Links, query, search), Revisions and diff, Proposals with merge and Conflict resolution over REST, then the Python client and the CLI. The MCP server (Herald) follows in M3. Ingestion, extraction and semantic search are later milestones; none of them exist yet.
+Next: the read API (Records, Links, query, search), Revisions and diff, Proposals with merge and Conflict resolution over REST, then the Python client and the CLI. Ingestion, extraction and semantic search are later milestones; none of them exist yet.
 
 ## Roadmap
 
@@ -180,6 +181,7 @@ Details and acceptance criteria: [docs/design.md](docs/design.md#18-roadmap).
 - [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, UI, security, roadmap
 - [Quickstart](docs/quickstart.md): what runs today, step by step
 - [Glossary](docs/glossary.md): the Lorebase vocabulary with examples
+- [MCP server](docs/mcp.md): Herald, its tools and its configuration for MCP hosts
 - [Examples](examples/README.md): the merge demo, schema as code and the supply sample Domain
 - [Comparison](docs/comparison.md): Lorebase next to similar products
 - [M1 plan](docs/plan/m1.md): ordered implementation tasks for the first milestone
