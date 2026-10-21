@@ -51,7 +51,7 @@ Clients and operations
 - [x] Inference interfaces and a deterministic fake provider (no model calls in M1; the read path cannot import them)
 - [x] Read replica routing with a freshness guard and a `scale-out` compose profile ([deployment](deployment.md)). The design lists this under M5; it landed early. Individual read endpoints adopt it incrementally.
 - [ ] Performance baseline on the 1M-Record fixture (the harness and a 100k-Record baseline are in [performance](performance.md): every read is within budget for a role not subject to row-level security; under RLS, Links of a Record, the neighborhood and search are not)
-- [ ] M1 documentation and release checklist
+- [x] M1 documentation and release checklist ([release](release.md), [CHANGELOG](../CHANGELOG.md))
 
 Acceptance (design 18): a Domain applied from YAML, filled by CLI import of 1M Records, branched, merged with Conflicts resolved through the API and diffed, with property tests for hashing, merge and diff laws, and the read targets met on the 1M fixture. Not met yet.
 
@@ -101,12 +101,12 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] Helm chart ([kubernetes](kubernetes.md)); landed early, validated by lint, template and kubeconform, not yet on a live cluster
 - [x] Garbage collection of unreachable objects ([operations](operations.md)); landed early
 - [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
-- [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md))
+- [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md); the release workflow signs the images with cosign, [release](release.md))
 - [ ] HTTP JSON Source
 - [ ] LinkML schema import and export
 - [ ] Documentation site and API stability guarantees for `/api/v1`
-- [ ] Threat model published and the security review checklist completed
-- [ ] Full proof scenario (days 1 to 5) as an automated end-to-end test
+- [ ] Threat model published and the security review checklist completed (the review of the trust boundaries is done, with nine findings fixed and twelve open: [security review](security-review.md))
+- [ ] Full proof scenario (days 1 to 5) as an automated end-to-end test (`make demo` runs the scenario against a real stack, [demo](demo.md); it is not part of CI)
 
 ## Not on the roadmap
 
