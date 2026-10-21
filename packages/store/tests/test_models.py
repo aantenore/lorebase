@@ -94,5 +94,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_api_key_usage_migration() -> None:
-    assert head_revisions() == ("0006",)
+def test_head_revision_is_the_definer_argument_checks_migration() -> None:
+    assert head_revisions() == ("0007",)

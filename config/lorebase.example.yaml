@@ -367,9 +367,11 @@ database:
                                  # worker for per-Attribute index DDL queued by roles that do not
                                  # own it. Alias LOREBASE_DB_MAINTENANCE_DSN. null: such roles skip
                                  # index management (`python -m lorebase_store.indexes plan`)
-  application_role: null         # role the services connect as; revision 0005 grants it EXECUTE
-                                 # on the security definer read functions (store schema notes).
-                                 # null grants nothing; the role must exist before migrating
+  application_role: null         # role the services connect as; revisions 0005 and 0007 grant it
+                                 # EXECUTE on the security definer read functions (store schema
+                                 # notes), and 0007 refuses to run while it may CREATE in the
+                                 # schema of the tables or of pg_trgm. null grants nothing; the
+                                 # role must exist before migrating
   read_dsn: []                   # read replicas (docs/deployment.md): one URL, a comma-separated
                                  # string or a list; literals or secret references, e.g.
                                  # [secret://env/LOREBASE_DB_READ_DSN]. Alias LOREBASE_DB_READ_DSN.
@@ -452,6 +454,16 @@ store:
     use_definer_functions: true  # search, incoming Links, neighborhoods and attribute queries
                                  # through the security definer functions, whose index plans
                                  # survive row-level security; false: the same SQL, plain
+    definer_ceilings:            # largest counts the definer functions accept (NULL and values
+                                 # outside 1..ceiling are refused). Read when revision 0007 runs,
+                                 # later changes have no effect; each must be at least the cap
+                                 # above (traverse below) that the read primitives pass
+      limit: 10000               # rows of a page or search: >= max_page_rows, max_search_rows
+      candidates: 100000         # search candidates: >= search_candidates
+      depth: 10                  # neighborhood hops: >= traverse.max_depth
+      fanout: 10000              # Links per Record and hop: >= traverse.max_fanout
+      max_steps: 1000000         # Links walked plus seeds: >= traverse.max_links + max_seeds
+      max_nodes: 100000          # Records of a neighborhood: >= traverse.max_nodes
   traverse:                      # neighborhood caps
     max_depth: 3                 # hops
     max_seeds: 50                # seed Records
