@@ -35,6 +35,9 @@ GC_JOB = "gc"
 SOURCE_SYNC_JOB = "source_sync"
 """Job type of a Source synchronization run by Scribe; payload `{"source": id, "dry_run"}`."""
 
+EXTRACTION_JOB = "extraction"
+"""Job type of a document extraction run by Scribe; payload from `extraction_payload`."""
+
 INDEX_JOB = "store.index"
 """Job type of a per-Attribute index build or drop (see `lorebase_store.indexes`)."""
 
@@ -129,6 +132,18 @@ def source_sync_payload(source_id: str, *, dry_run: bool = False) -> dict[str, A
     """Payload of a `source_sync` job. Everything that queues one (Keeper's trigger, Scribe's
     scheduler) builds it here, so identical requests are recognized by `enqueue_job(unique)`."""
     return {"source": source_id, "dry_run": dry_run}
+
+
+def extraction_payload(
+    document_ids: Sequence[str], *, tiers: Sequence[int] | None = None, requested_by: str | None
+) -> dict[str, Any]:
+    """Payload of an `extraction` job: the documents, the tiers (`None`: Scribe's
+    `scribe.extraction.tiers`) and who asked, recorded on the extraction job."""
+    return {
+        "documents": list(document_ids),
+        "tiers": None if tiers is None else sorted(set(tiers)),
+        "requested_by": requested_by,
+    }
 
 
 def default_worker_id() -> str:

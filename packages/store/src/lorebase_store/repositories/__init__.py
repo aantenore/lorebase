@@ -5,6 +5,15 @@ the caller's transaction; row-level security is set with `scope_to_domain`.
 """
 
 from lorebase_store.repositories.changesets import ChangesetRepository
+from lorebase_store.repositories.documents import (
+    ChunkRepository,
+    ChunkRow,
+    DocumentRepository,
+    DocumentRow,
+    ExtractionCacheRepository,
+    ExtractionJobRepository,
+    ExtractionJobRow,
+)
 from lorebase_store.repositories.domains import DomainNotFoundError, DomainRepository, DomainRow
 from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.repositories.index_view import (
@@ -30,6 +39,11 @@ from lorebase_store.repositories.merges import (
     PartitionFilter,
     ResolutionRepository,
     ResolutionRow,
+)
+from lorebase_store.repositories.proposal_items import (
+    ItemFilter,
+    ItemRow,
+    ProposalItemRepository,
 )
 from lorebase_store.repositories.proposals import (
     ProposalFilter,
@@ -59,15 +73,24 @@ from lorebase_store.repositories.source_runs import SourceRunRepository, SourceR
 __all__ = [
     "EVERY_PARTITION",
     "ChangesetRepository",
+    "ChunkRepository",
+    "ChunkRow",
     "ConflictRepository",
     "ConflictRow",
+    "DocumentRepository",
+    "DocumentRow",
     "DomainNotFoundError",
     "DomainRepository",
     "DomainRow",
+    "ExtractionCacheRepository",
+    "ExtractionJobRepository",
+    "ExtractionJobRow",
     "HistoryRow",
     "HistoryStep",
     "InvocationRepository",
     "InvocationRow",
+    "ItemFilter",
+    "ItemRow",
     "LinkRow",
     "LinkState",
     "LockTimeoutError",
@@ -79,6 +102,7 @@ __all__ = [
     "PartitionFilter",
     "PgRevisionGraph",
     "ProposalFilter",
+    "ProposalItemRepository",
     "ProposalRepository",
     "ProposalRow",
     "ProvenanceRepository",

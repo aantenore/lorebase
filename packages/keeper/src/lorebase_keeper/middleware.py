@@ -10,6 +10,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from opentelemetry import metrics, propagate, trace
@@ -156,24 +157,40 @@ class BodyLimitMiddleware:
     """Reject request bodies above the configured size with 413.
 
     A declared `Content-Length` over the limit is refused before the handler runs; chunked
-    bodies are counted as they are read.
+    bodies are counted as they are read. `overrides` give other limits to the requests whose
+    method and path match (for example document uploads); the first match wins.
     """
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int, renderer: ProblemRenderer) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_bytes: int,
+        renderer: ProblemRenderer,
+        overrides: Sequence[tuple[str, re.Pattern[str], int]] = (),
+    ) -> None:
         self.app = app
         self._max_bytes = max_bytes
         self._renderer = renderer
+        self._overrides = tuple(overrides)
+
+    def _limit(self, scope: Scope) -> int:
+        for method, path, limit in self._overrides:
+            if scope.get("method") == method and path.fullmatch(scope["path"]):
+                return limit
+        return self._max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
+        limit = self._limit(scope)
         declared = Headers(scope=scope).get("content-length")
-        if declared is not None and declared.isdecimal() and int(declared) > self._max_bytes:
+        if declared is not None and declared.isdecimal() and int(declared) > limit:
             response = self._renderer.response(
                 PAYLOAD_TOO_LARGE,
-                detail=self._detail(),
+                detail=self._detail(limit),
                 instance=scope["path"],
                 request_id=request_id_of(scope.get("state")),
             )
@@ -187,11 +204,11 @@ class BodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self._max_bytes:
-                    raise ProblemError(PAYLOAD_TOO_LARGE, self._detail())
+                if received > limit:
+                    raise ProblemError(PAYLOAD_TOO_LARGE, self._detail(limit))
             return message
 
         await self.app(scope, counted_receive, send)
 
-    def _detail(self) -> str:
-        return f"The request body exceeds {self._max_bytes} bytes."
+    def _detail(self, limit: int) -> str:
+        return f"The request body exceeds {limit} bytes."

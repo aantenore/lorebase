@@ -87,10 +87,10 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
 Goal: day 3 of the proof scenario, on the sample contracts.
 
-- [ ] Document store interface and parsers
-- [ ] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions
+- [x] Document store interface and parsers (Postgres blob backend; Markdown, text, PDF, DOCX)
+- [ ] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions (all but schema suggestions done, [docs/extraction.md](extraction.md))
 - [ ] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles for local models and a LiteLLM proxy
-- [ ] Extraction Proposal items and evidence Review UI
+- [ ] Extraction Proposal items and evidence Review UI (items and the review API are done; the UI is not)
 - [ ] Embedding jobs and hybrid search (the read path already ranks stored vectors by caller-supplied query vectors; nothing computes embeddings)
 - [ ] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path is not)
 

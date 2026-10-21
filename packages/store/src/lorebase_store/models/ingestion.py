@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, ForeignKeyConstraint, Index, Integer, text
+from sqlalchemy import BigInteger, ForeignKeyConstraint, Index, Integer, LargeBinary, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,10 +32,15 @@ class SourceRun(Base):
 
 
 class Document(Base):
-    """Uploaded document; the bytes live in the blob store at `blob_ref`."""
+    """Uploaded document; the bytes live in the blob store at `blob_ref`. One row per Domain
+    and content hash."""
 
     __tablename__ = "documents"
-    __table_args__ = (h32_check("sha256"), domain_fk(), Index(None, "domain_id", "sha256"))
+    __table_args__ = (
+        h32_check("sha256"),
+        domain_fk(),
+        Index(None, "domain_id", "sha256", unique=True),
+    )
 
     domain_id: Mapped[DomainKey]
     id: Mapped[str] = mapped_column(primary_key=True)
@@ -50,6 +55,19 @@ class Document(Base):
     )
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
     created_by: Mapped[str]
+
+
+class DocumentBlob(Base):
+    """Document bytes of the Postgres blob store backend, addressed by SHA-256 per Domain."""
+
+    __tablename__ = "document_blobs"
+    __table_args__ = (h32_check("sha256"), domain_fk())
+
+    domain_id: Mapped[DomainKey]
+    sha256: Mapped[H32] = mapped_column(primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    size: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
 
 class DocumentChunk(Base):
@@ -77,7 +95,7 @@ class ExtractionJob(Base):
     """Extraction over documents producing a Proposal."""
 
     __tablename__ = "extraction_jobs"
-    __table_args__ = (domain_fk(),)
+    __table_args__ = (domain_fk(), Index(None, "documents", postgresql_using="gin"))
 
     domain_id: Mapped[DomainKey]
     id: Mapped[str] = mapped_column(primary_key=True)
@@ -90,6 +108,13 @@ class ExtractionJob(Base):
     usage: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
     proposal_id: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    created_by: Mapped[str | None]
+    #: The extraction branch (`extract/<job id>`).
+    branch: Mapped[str | None]
+    started_at: Mapped[datetime | None]
+    finished_at: Mapped[datetime | None]
+    stats: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    error: Mapped[dict[str, Any] | None]
 
 
 class ExtractionCacheEntry(Base):

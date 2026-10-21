@@ -15,6 +15,7 @@ from lorebase_cli.commands import (
     admin,
     agents,
     data,
+    documents,
     domains,
     history,
     proposals,
@@ -134,6 +135,7 @@ app.add_typer(history.revision_app, name="revision")
 app.add_typer(admin.apikey_app, name="apikey")
 app.add_typer(proposals.proposal_app, name="proposal")
 app.add_typer(sources.sources_app, name="sources")
+app.add_typer(documents.documents_app, name="documents")
 app.command("whoami")(domains.whoami)
 app.command("query")(data.query_command)
 app.command("search")(data.search_command)
