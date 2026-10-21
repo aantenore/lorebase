@@ -20,6 +20,7 @@ from lorebase_core.expr import ExprLimits
 from lorebase_core.model import Schema
 from lorebase_core.revision import ChangesetEntry
 from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
+from lorebase_store.materialize.overlay import check_overlay, promote
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
@@ -35,6 +36,8 @@ from lorebase_store.repositories.materialized import (
     RecordRow,
     SchemaRow,
 )
+from lorebase_store.repositories.revisions import RevisionRepository
+from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 
 
@@ -59,6 +62,7 @@ async def apply_changeset(
     refresh_kinds: Sequence[str] = (),
     settings: StoreSettings,
     expression_limits: ExprLimits | None = None,
+    runtime: StoreRuntime | None = None,
 ) -> None:
     """Apply a Revision's changeset to the materialized head of `branch`.
 
@@ -66,8 +70,26 @@ async def apply_changeset(
     the schema changed. `refresh_kinds` lists Kinds whose title or search settings changed:
     their title and search vectors are recomputed for every Record. `expression_limits`
     bound the evaluation of Derivations (`schema.expression_limits`).
+
+    The caller holds the branch lock. An overlay branch is promoted to a full copy first when
+    the schema changes, and afterwards when it is over its limits (`materialize.overlay`);
+    overlays based on the branch get the previous state of the rows it changes.
     """
-    repository = MaterializedRepository(session, domain_id, branch, writes=settings.writes)
+    runtime = runtime or StoreRuntime.from_settings(settings)
+    generation = (await RevisionRepository(session, domain_id).generations([revision_id]))[
+        revision_id
+    ]
+    repository = MaterializedRepository(
+        session,
+        domain_id,
+        branch,
+        writes=settings.writes,
+        generation=generation,
+        lock_timeout_ms=settings.commit.lock_timeout_ms,
+    )
+    if schema_hash is not None and (await repository.layout()).overlay:
+        await promote(session, domain_id, branch, runtime=runtime, locked=True)
+        repository.forget_layout()
     await repository.insert_history(
         [
             HistoryRow(
@@ -143,6 +165,7 @@ async def apply_changeset(
             )
     for kind_id in refresh_kinds:
         await refresh_kind(repository, schema, kind_id, settings=settings)
+    await check_overlay(repository, generation=generation, runtime=runtime)
 
 
 async def refresh_kind(

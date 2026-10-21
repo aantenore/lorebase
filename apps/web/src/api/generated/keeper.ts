@@ -1145,7 +1145,8 @@ export interface paths {
         put?: never;
         /**
          * Create a branch
-         * @description Create a fully materialized branch from a branch, tag or Revision.
+         * @description Create a materialized branch (a copy, or an overlay on its source) from a branch, tag
+         *     or Revision.
          *
          *     With an `Idempotency-Key`, retrying a create that succeeded returns the branch with status
          *     200 and `Idempotent-Replayed: true`.
@@ -1593,6 +1594,8 @@ export interface components {
              * @description Revision id to start at; default: the head of `source`.
              */
             revision?: string | null;
+            /** @description `copy`: the branch gets its own materialized rows. `overlay`: it stores only the rows it changes and reads the rest from `source` as of its head (only when starting at the head of a fully materialized branch; otherwise a copy). Default: `store.materialize.branch_mode`, overlay for names with an overlay prefix. */
+            mode?: components["schemas"]["BranchMode"] | null;
         };
         /**
          * BranchDetail
@@ -1628,6 +1631,12 @@ export interface components {
              */
             behind: number;
         };
+        /**
+         * BranchMode
+         * @description The materialization a caller asks for when creating a branch.
+         * @enum {string}
+         */
+        BranchMode: "copy" | "overlay";
         /**
          * BranchOut
          * @description A branch.

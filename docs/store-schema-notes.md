@@ -22,12 +22,12 @@ difference).
   `dsn`.
 - `store.layout.hash_partitions` and `store.embeddings.dims` are read when revision `0001` runs.
   Changing them later needs a new migration.
-- `application_role` (optional) is read when revisions `0005` and `0008` run: the role the
-  services connect as gets EXECUTE on the security definer read functions (see Row-level
-  security). `0008` refuses to run while the role may create objects in the schema of the
-  tables or of `pg_trgm`.
-- `store.reads.definer_ceilings` is read when revision `0008` runs: the largest count each read
-  function accepts. Changing it later has no effect; the settings refuse read and traverse caps
+- `application_role` (optional) is read when revisions `0005`, `0008` and `0010` run: the
+  role the services connect as gets EXECUTE on the security definer read functions (see
+  Row-level security). `0008` and `0010` refuse to run while the role may create objects in the
+  schema of the tables or of `pg_trgm`.
+- `store.reads.definer_ceilings` is read when revisions `0008` and `0010` run: the largest
+  count each read function accepts. Changing it later has no effect; the settings refuse read and traverse caps
   above it.
 
 ## Types and keys
@@ -185,6 +185,92 @@ Why this keeps Domains isolated:
 The functions build their statements per call with the Domain, branch and Kind as literals, so
 each call is planned with them and matches the partial index predicates; the planning time is
 part of the measured latency ([performance.md](performance.md)).
+
+## Overlay branches
+
+Design 6.11 mode `overlay` (AC-16), revision `0010`. An overlay branch stores only the rows it
+changed; every other row is read from its base branch as it was at the fork point.
+
+- **Ref.** `refs.base_branch`, `base_revision` (the base head when the overlay was forked) and
+  `base_generation` (its generation) are set exactly when `materialization = 'overlay'`
+  (check `ck_refs_overlay_base`). Both references are deferred foreign keys, like `refs.head`:
+  a base cannot be deleted while an overlay names it, and deleting a Domain cascades in any
+  order. The base is a full branch; an overlay of an overlay is created as a copy.
+- **Rows.** `mat_records` and `mat_links` carry `revision_generation` (generation of the
+  Revision that last wrote the row; `0` for rows older than revision `0010`) and `deleted`
+  (a tombstone; only overlays hold them). `mat_schema` has a row per overlay (copied at
+  creation, so schema reads are unchanged); `mat_history` holds the overlay's own entries.
+- **Reads.** The rows of an overlay `O` on base `B` forked at generation `g` are
+
+  ```
+  rows of O that are not tombstones
+  UNION ALL
+  rows of B with revision_generation <= g that O does not shadow (any row of O, tombstone or not)
+  ```
+
+  rendered once by `lorebase_store.layout.BranchLayout` (and by `lb_overlay_rows` inside the
+  read functions), with Domain, branches and generation as literals so the per-Attribute
+  partial indexes of `B` match. Every row reports `O` as its `branch`, so statements written
+  for a table work unchanged on the resolved rows: store primitives, the Keeper query
+  compiler, health scans, IndexView validation, derived recomputation, `verify`. History is
+  the overlay's entries plus `B`'s entries of Revisions up to generation `g`. The anti-join is
+  a primary-key probe per base row read (`NOT EXISTS (... OFFSET 0)`).
+- **Plans.** Postgres does not flatten a `UNION ALL` whose members have `WHERE` clauses, so
+  the two halves stay subqueries. Restriction conditions (key, Kind, attribute expressions,
+  `@@`) and lateral references are pushed into both halves and use the indexes of each
+  branch; ordering, `LIMIT` and join keys are not. The store primitives therefore repeat
+  `ORDER BY ... LIMIT` inside each half for keyset pages and attribute queries
+  (`BranchLayout.records_arms`, the `p_tail` argument of `lb_overlay_rows`), and look Records
+  and Links up by key through `LATERAL` subqueries (hydration, the neighborhood walk and its
+  final hydration). Keeper's query compiler uses the resolved rows as a table: its results
+  are the same, but on an overlay an ordered page or a join on a large Kind sorts or scans
+  that Kind's rows (a follow-up). The base half also requires the ref to still be that overlay
+  (`base_branch` and `base_generation` unchanged), so a READ COMMITTED reader that resolved
+  the layout before a promotion reads only the (now complete) overlay rows.
+- **Read functions.** `lb_search_overlay`, `lb_links_in_overlay`, `lb_neighborhood_overlay`
+  and `lb_query_by_attribute_overlay` take the arguments of the `0005` functions, read the
+  overlay's base and generation from `refs` themselves (no SQL text crosses the boundary) and
+  run the same statements over the resolved rows; on a branch that is not an overlay they
+  read its own rows. They start with the argument, scope and search_path checks of revision
+  `0008` (the same SQLSTATEs) and resolve the overlay's rows only after them. The `0005`
+  functions are unchanged and still serve full branches. `grant_read_functions` grants both
+  sets.
+- **Snapshot, not freeze (option b).** The base keeps committing. Before a base commit changes
+  or removes a row (values, title, search vector, derived values, Links), it copies the
+  previous row into every overlay of the base that does not hold that key yet
+  (`INSERT ... SELECT ... ON CONFLICT DO NOTHING`, one statement per batch for all overlays),
+  and it stamps the rows it writes with its generation, which hides rows it inserts from the
+  overlays. The base rows an overlay reads therefore never changed after its fork. A base
+  commit first takes the branch locks of its overlays (base lock, then overlay locks in name
+  order; overlay commits take only their own lock), so no overlay commit or promotion runs
+  meanwhile. `store.materialize.overlay_max_per_branch` caps the overlays of one base, which
+  bounds that copy work; further branches are created as copies.
+- **Writes on an overlay.** A row about to change is first copied up from the base (so it
+  keeps its derived values and search vector), then changed; a delete leaves a tombstone; an
+  upsert of a tombstoned key starts like a new row. Per-Attribute indexes are not built for
+  overlays (their own rows are few); the base's indexes serve the base half.
+- **Promotion.** `materialize.promote` turns an overlay into a full copy: it copies the base
+  rows it reads and the base history up to the fork, drops its tombstones, sets
+  `materialization = 'full'` (head and ref version unchanged) and builds the per-Attribute
+  indexes. It happens when a commit leaves the overlay with more than
+  `overlay_max_rows` rows of its own; when the base is more than
+  `overlay_max_base_lag_revisions` generations past the fork (checked by the overlay's commits;
+  a base commit that crosses the limit queues a `store.materialize` job); before a commit or
+  merge that changes the overlay's schema; before its base is rebuilt or deleted
+  (`promote_overlays_of`, called by Keeper's branch delete).
+- **Re-fork.** After an overlay was merged into its base (its head is an ancestor of the base
+  head), `materialize.refork` fast-forwards it to the base head (ref log reason
+  `branch.refork`), drops its rows and records the new fork point: as cheap as creating it.
+- **Creation mode.** `create_branch(mode="overlay" | "copy")`; without a mode,
+  `store.materialize.branch_mode` (default `copy`) decides, except names starting with one of
+  `overlay_branch_prefixes` (default `agent/`, `extract/`, `source/`), which default to
+  overlays. An overlay needs to start at the head of a full source branch; otherwise the branch
+  is a copy (or rebuilt from the tree). Keeper's `POST /branches` takes `mode`; overlays do not
+  count against `keeper.branches.max_materialized_per_domain`.
+- **Garbage collection.** Fork points (`refs.base_revision`) are marking roots; materialized
+  rows are never swept, so the copies an overlay holds go with its ref.
+- **Bundles.** Export records `overlay`; import restores every branch as a full copy (heads
+  are rebuilt from trees).
 
 ## Concurrency contracts
 

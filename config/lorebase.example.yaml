@@ -422,11 +422,11 @@ database:
                                  # worker for per-Attribute index DDL queued by roles that do not
                                  # own it. Alias LOREBASE_DB_MAINTENANCE_DSN. null: such roles skip
                                  # index management (`python -m lorebase_store.indexes plan`)
-  application_role: null         # role the services connect as; revisions 0005 and 0007 grant it
-                                 # EXECUTE on the security definer read functions (store schema
-                                 # notes), and 0007 refuses to run while it may CREATE in the
-                                 # schema of the tables or of pg_trgm. null grants nothing; the
-                                 # role must exist before migrating
+  application_role: null         # role the services connect as; revisions 0005, 0008 and 0010
+                                 # grant it EXECUTE on the security definer read functions (store
+                                 # schema notes); 0008 and 0010 refuse to run while it may
+                                 # CREATE in the schema of the tables or of pg_trgm. null grants
+                                 # nothing; the role must exist before migrating
   read_dsn: []                   # read replicas (docs/deployment.md): one URL, a comma-separated
                                  # string or a list; literals or secret references, e.g.
                                  # [secret://env/LOREBASE_DB_READ_DSN]. Alias LOREBASE_DB_READ_DSN.
@@ -462,6 +462,13 @@ store:
                                  # commit, merge and rebuild (derived column, not the tree)
     derivation_max_incremental_records: 10000   # Records one Derivation recomputes per
                                  # commit; above, every Record of its Kind
+    branch_mode: copy            # default mode of new branches: copy (full rows) or overlay
+                                 # (only changed rows over the base, docs/store-schema-notes.md)
+    overlay_branch_prefixes: [agent/, extract/, source/]   # these default to overlay
+    overlay_max_rows: 50000      # an overlay holding more rows is promoted to a full copy
+    overlay_max_base_lag_revisions: 1000   # generations the base may move past the fork
+                                 # point before the overlay is promoted
+    overlay_max_per_branch: 32   # open overlays per base branch; further branches are copies
   gc:                            # garbage collection (docs/operations.md)
     grace_seconds: 3600          # Revisions younger than this are kept with all they reach
     mark_batch: 1000             # tree node hashes per query while marking
@@ -514,7 +521,7 @@ store:
                                  # through the security definer functions, whose index plans
                                  # survive row-level security; false: the same SQL, plain
     definer_ceilings:            # largest counts the definer functions accept (NULL and values
-                                 # outside 1..ceiling are refused). Read when revision 0007 runs,
+                                 # outside 1..ceiling are refused). Read when revisions 0008, 0010 run,
                                  # later changes have no effect; each must be at least the cap
                                  # above (traverse below) that the read primitives pass
       limit: 10000               # rows of a page or search: >= max_page_rows, max_search_rows

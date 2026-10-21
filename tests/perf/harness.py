@@ -36,7 +36,8 @@ from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.definer import grant_read_functions
 from lorebase_store.indexes import BranchIndexes, run_index_jobs
-from lorebase_store.materialize import create_branch
+from lorebase_store.layout import BranchLayout, load_layout
+from lorebase_store.materialize import BranchMode, MaterializationMode, create_branch
 from lorebase_store.reads import (
     Comparison,
     TitleSimilarity,
@@ -302,9 +303,13 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
 
 
 async def _analyze(engine: AsyncEngine) -> None:
+    """Without parallel index vacuuming, whose shared memory exceeds a container's default
+    `/dev/shm` once the indexes of several branches are large."""
     async with engine.connect() as connection:
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
-        await auto.exec_driver_sql("VACUUM ANALYZE mat_records, mat_links, refs, mat_schema")
+        await auto.exec_driver_sql(
+            "VACUUM (PARALLEL 0, ANALYZE) mat_records, mat_links, refs, mat_schema"
+        )
 
 
 async def create_reader(engine: AsyncEngine) -> None:
@@ -378,7 +383,10 @@ async def workload(engine: AsyncEngine, runtime: StoreRuntime) -> Workload:
     return Workload(schema, parts, suppliers, words, supplier.id, part.id)
 
 
-def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operation]:
+def read_operations(
+    work: Workload, runtime: StoreRuntime, branch: str | BranchLayout = "main"
+) -> dict[str, Operation]:
+    """The timed reads on `branch`; a layout, as Keeper passes it, spares the ref lookup."""
     schema = work.schema
     supplier = schema.kinds[work.supplier_kind]
     risk = next(a for a in supplier.attributes.values() if a.api_name == "risk_score")
@@ -386,13 +394,13 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
     assert risk_index is not None
 
     async def get(session: AsyncSession, rng: random.Random) -> Any:
-        return await get_record(session, DOMAIN, "main", work.part_kind, rng.choice(work.parts))
+        return await get_record(session, DOMAIN, branch, work.part_kind, rng.choice(work.parts))
 
     async def page(session: AsyncSession, rng: random.Random) -> Any:
         return await list_records(
             session,
             DOMAIN,
-            "main",
+            branch,
             work.part_kind,
             limit=50,
             after=rng.choice(work.parts),
@@ -403,7 +411,7 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
         return await links_of_record(
             session,
             DOMAIN,
-            "main",
+            branch,
             schema,
             work.supplier_kind,
             rng.choice(work.suppliers),
@@ -415,7 +423,7 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
         return await neighborhood(
             session,
             DOMAIN,
-            "main",
+            branch,
             schema,
             [(work.part_kind, rng.choice(work.parts))],
             depth=2,
@@ -426,7 +434,7 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
         return await query_by_attribute(
             session,
             DOMAIN,
-            "main",
+            branch,
             risk_index,
             Comparison.EQ,
             str(rng.randrange(0, 100)),
@@ -436,14 +444,14 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
 
     async def search(session: AsyncSession, rng: random.Random) -> Any:
         return await search_records(
-            session, DOMAIN, "main", rng.choice(work.words), limit=20, runtime=runtime
+            session, DOMAIN, branch, rng.choice(work.words), limit=20, runtime=runtime
         )
 
     async def search_titles(session: AsyncSession, rng: random.Random) -> Any:
         return await search_records(
             session,
             DOMAIN,
-            "main",
+            branch,
             rng.choice(work.words),
             limit=20,
             titles=TITLE_SIMILARITY,
@@ -507,6 +515,104 @@ async def measure_branch_copy(
             await BranchIndexes(session, DOMAIN, name, settings=runtime.settings.indexes).drop_all()
         await run_index_jobs(engine, runtime.settings.indexes)
     return measurement
+
+
+OVERLAY_BRANCH = "agent/perf"
+COPY_BRANCH = "perf-copy"
+
+
+async def measure_branch_overlay(
+    engine: AsyncEngine, runtime: StoreRuntime, *, iterations: int
+) -> Measurement:
+    """Create an overlay branch of `main`, then delete it."""
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    measurement = Measurement("branch creation (overlay)")
+    for index in range(iterations):
+        name = f"agent/perf-{index}"
+        started = time.perf_counter()
+        async with sessions() as session:
+            created = await create_branch(
+                session,
+                DOMAIN,
+                name,
+                created_by="usr_perf",
+                mode=BranchMode.OVERLAY,
+                runtime=runtime,
+            )
+        measurement.samples_ms.append((time.perf_counter() - started) * 1000)
+        assert created.mode is MaterializationMode.OVERLAY
+        async with sessions() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            await RefRepository(session, DOMAIN).delete(name)
+    return measurement
+
+
+@dataclass(frozen=True, slots=True)
+class OverlayPair:
+    """An overlay and a full copy of `main` with the same commits, `main` moved since."""
+
+    overlay: BranchLayout
+    copy: BranchLayout
+    overlay_rows: int
+    copy_rows: int
+
+
+async def overlay_pair(
+    engine: AsyncEngine, runtime: StoreRuntime, work: Workload, *, changes: int
+) -> OverlayPair:
+    """Fork an overlay and a copy from `main`; commit `changes` Part updates to both, then
+    `changes` other Part updates to `main` (copied into the overlay before they land)."""
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    for name, mode in ((OVERLAY_BRANCH, BranchMode.OVERLAY), (COPY_BRANCH, BranchMode.COPY)):
+        async with sessions() as session:
+            await create_branch(
+                session, DOMAIN, name, created_by="usr_perf", mode=mode, runtime=runtime
+            )
+    part = work.schema.kinds[work.part_kind]
+    cost = next(a for a in part.attributes.values() if a.api_name == "unit_cost")
+    rng = random.Random(17)
+    keys = rng.sample(work.parts, 2 * changes)
+    plan = ((keys[:changes], (OVERLAY_BRANCH, COPY_BRANCH)), (keys[changes:], ("main",)))
+    for round_keys, branches in plan:
+        async with sessions() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            rows = await _records(session, work.part_kind, round_keys)
+        updates = [
+            RecordUpsert(
+                record=Record(
+                    kind=work.part_kind,
+                    key=key,
+                    values={**rows[key], cost.id: f"7.{rng.randrange(10, 99)}"},
+                )
+            )
+            for key in round_keys
+        ]
+        for branch in branches:
+            async with sessions() as session:
+                await commit(
+                    session,
+                    DOMAIN,
+                    branch,
+                    updates,
+                    author=AUTHOR,
+                    message="perf overlay",
+                    origin=ORIGIN,
+                    runtime=runtime,
+                )
+    await run_index_jobs(engine, runtime.settings.indexes)
+    await _analyze(engine)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        overlay = await load_layout(session, DOMAIN, OVERLAY_BRANCH)
+        copy = await load_layout(session, DOMAIN, COPY_BRANCH)
+        own = text(
+            "SELECT (SELECT count(*) FROM mat_records WHERE domain_id = :d AND branch = :b) "
+            "+ (SELECT count(*) FROM mat_links WHERE domain_id = :d AND branch = :b)"
+        )
+        overlay_rows = (await session.execute(own, {"d": DOMAIN, "b": OVERLAY_BRANCH})).scalar()
+        copy_rows = (await session.execute(own, {"d": DOMAIN, "b": COPY_BRANCH})).scalar()
+    assert overlay.overlay, "the overlay must not have been promoted"
+    return OverlayPair(overlay, copy, int(overlay_rows or 0), int(copy_rows or 0))
 
 
 async def measure_commits(

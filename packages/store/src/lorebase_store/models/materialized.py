@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Integer, text
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKeyConstraint, Index, Integer, text
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,7 +37,11 @@ class MatSchema(Base):
 
 
 class MatRecord(Base):
-    """One Record at a branch head; `values` is keyed by Attribute id."""
+    """One Record at a branch head; `values` is keyed by Attribute id.
+
+    `revision_generation` is the generation of the Revision that last wrote the row and
+    `deleted` marks a tombstone, which only overlay branches hold (store schema notes).
+    """
 
     __tablename__ = "mat_records"
     __table_args__ = (
@@ -70,6 +74,8 @@ class MatRecord(Base):
     lineage: Mapped[dict[str, Any]]
     updated_revision: Mapped[H32]
     updated_at: Mapped[datetime]
+    revision_generation: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    deleted: Mapped[bool] = mapped_column(server_default=text("false"))
 
 
 class MatLink(Base):
@@ -90,6 +96,8 @@ class MatLink(Base):
     values: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
     object_hash: Mapped[H32]
     lineage: Mapped[dict[str, Any]]
+    revision_generation: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    deleted: Mapped[bool] = mapped_column(server_default=text("false"))
 
 
 class MatHistory(Base):

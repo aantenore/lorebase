@@ -15,6 +15,7 @@ from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_store.layout import BranchLayout, layout_from
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
 
@@ -79,6 +80,20 @@ class RefRow:
     version: int
     created_at: datetime
     created_by: str
+    base_branch: str | None = None
+    base_revision: bytes | None = None
+    base_generation: int | None = None
+
+    @property
+    def layout(self) -> BranchLayout:
+        """Where the branch's materialized rows live (its own, or an overlay on a base)."""
+        return layout_from(
+            self.domain_id,
+            self.name,
+            self.materialization,
+            self.base_branch,
+            self.base_generation,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,8 +187,11 @@ class RefRepository:
         materialization: Materialization = Materialization.FULL,
         protected: bool = False,
         reason: str = "create",
+        base_branch: str | None = None,
+        base_revision: bytes | None = None,
+        base_generation: int | None = None,
     ) -> RefRow:
-        """Insert a ref at version 1 and log its creation."""
+        """Insert a ref at version 1 and log its creation (overlays name their base)."""
         row = RefRow(
             domain_id=self._domain,
             name=name,
@@ -184,6 +202,9 @@ class RefRepository:
             version=1,
             created_at=created_at,
             created_by=created_by,
+            base_branch=base_branch,
+            base_revision=base_revision,
+            base_generation=base_generation,
         )
         await self._session.execute(
             insert(REFS).values(
@@ -196,10 +217,48 @@ class RefRepository:
                 version=row.version,
                 created_at=row.created_at,
                 created_by=row.created_by,
+                base_branch=row.base_branch,
+                base_revision=row.base_revision,
+                base_generation=row.base_generation,
             )
         )
         await self._append_log(name, None, head, reason=reason, actor=created_by, at=created_at)
         return row
+
+    async def overlays_of(self, base: str) -> list[RefRow]:
+        """Overlay branches whose base is `base`, by name."""
+        result = await self._session.execute(
+            select(REFS)
+            .where(
+                REFS.c.domain_id == self._domain,
+                REFS.c.base_branch == base,
+                REFS.c.materialization == Materialization.OVERLAY,
+            )
+            .order_by(REFS.c.name)
+        )
+        return [RefRow(**row) for row in result.mappings()]
+
+    async def set_materialization(
+        self,
+        name: str,
+        materialization: Materialization,
+        *,
+        base_branch: str | None = None,
+        base_revision: bytes | None = None,
+        base_generation: int | None = None,
+    ) -> None:
+        """Change how a branch is materialized (promotion of an overlay, re-fork). The head
+        and version stay: commits in flight on the branch keep their compare-and-swap."""
+        await self._session.execute(
+            update(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.name == name)
+            .values(
+                materialization=materialization,
+                base_branch=base_branch,
+                base_revision=base_revision,
+                base_generation=base_generation,
+            )
+        )
 
     async def lock(self, name: str, *, timeout_ms: int) -> None:
         """Take the transaction-scoped advisory lock of a ref, waiting at most `timeout_ms`.

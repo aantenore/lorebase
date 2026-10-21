@@ -142,7 +142,9 @@ count between 1 and its ceiling (`store.reads.definer_ceilings`, NULL refused, S
 the Domain given (22023) and in the transaction scope or with the bypass on (42501), and
 `search_path` equal to the path fixed by the migration (55000). The upgrade refuses to run while
 `database.application_role` may create objects in the schema of the tables or of `pg_trgm`.
-Test: `packages/store/tests/test_definer_checks.py` (run as a non-owner role).
+Revision `0010` (overlay branches) creates the four `_overlay` variants with the same checks,
+run before the overlay's rows are resolved, and the same refusal.
+Test: `packages/store/tests/test_definer_checks.py` (run as a non-owner role, both sets).
 
 **F14. Bundle import is bounded** (`packages/store/src/lorebase_store/bundle.py`). Per-file and
 total size caps counted on the bytes read, an entry count cap and a bounded line length

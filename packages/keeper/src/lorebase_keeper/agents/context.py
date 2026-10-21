@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Table, select, tuple_
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind, LinkDirection, Relation, Schema
@@ -53,13 +53,10 @@ from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.search import search
 from lorebase_keeper.reading.views import RecordOut, link_values, named_values, record_out
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY, PartitionType, parse_partition
-from lorebase_store.models import metadata
 from lorebase_store.reads import Direction
 from lorebase_store.repositories import ProvenanceRepository
-from lorebase_store.repositories.materialized import MAT_RECORDS
 from lorebase_store.traverse import TraversalLimitError, neighborhood
 
-MAT_HISTORY: Table = metadata.tables["mat_history"]
 MARKDOWN = "text/markdown; charset=utf-8"
 JSON = "application/json"
 
@@ -148,7 +145,7 @@ async def fetch_rows(
     by_kind: dict[str, list[str]] = defaultdict(list)
     for kind, key in addresses:
         by_kind[kind.id].append(key)
-    r = MAT_RECORDS
+    r = point.layout.records()
     rows: dict[tuple[str, str], Mapping[Any, Any]] = {}
     for kind_id, keys in by_kind.items():
         result = await session.execute(
@@ -213,7 +210,7 @@ async def surroundings(
         found = await neighborhood(
             session,
             point.domain.id,
-            point.branch,
+            point.layout,
             point.schema,
             [(require_kind(point, s.kind).id, s.key) for s in seeds],
             depth=depth,
@@ -339,7 +336,7 @@ async def recent_changes(
         )
     if not elements:
         return ()
-    h, r = MAT_HISTORY, REVISIONS
+    h, r = point.layout.history(), REVISIONS
     query = (
         select(
             h.c.partition,

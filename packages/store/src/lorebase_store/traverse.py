@@ -12,7 +12,9 @@ the Links walked between them: one round trip.
 Inbound foreign-key hops compare a JSON value, which row-level security keeps from being an
 index condition; with `store.reads.use_definer_functions` the statement runs inside the
 security definer function `lb_neighborhood` (revision 0005), which builds the same statement
-from the Domain, branch and Relations it is given.
+from the Domain, branch and Relations it is given. On an overlay branch the walk reads the
+resolved rows (`lorebase_store.layout`) and the function is `lb_neighborhood_overlay`
+(revision 0010).
 """
 
 from __future__ import annotations
@@ -28,12 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Relation, Schema
 from lorebase_store.indexes import predicate_sql, sql_literal, values_text
+from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
 from lorebase_store.reads import (
     MAT_RECORDS,
     RECORD_NAMES,
     Direction,
     LinkRef,
-    escape_colons,
     foreign_key_relations,
     stored_relation_ids,
 )
@@ -138,30 +140,42 @@ def plan_hops(
     )
 
 
-def _branches(hops: Hops, domain_id: str, branch: str) -> list[str]:
+def _branches(hops: Hops, layout: BranchLayout) -> list[str]:
     """Lateral sources of one hop from the frontier Record `w`."""
-    links = (
-        "JOIN mat_links l ON l.domain_id = :domain AND l.branch = :branch "
-        "AND l.relation_id = r.relation_id"
-    )
+
+    def links(near: str) -> str:
+        scope = (
+            "l.domain_id = :domain AND l.branch = :branch AND l.relation_id = r.relation_id "
+            f"AND l.{near} = w.key"
+        )
+        if layout.overlay:
+            # Lateral, so that the Relation and the frontier key reach both halves of the
+            # overlay's Links as index conditions (OFFSET 0 keeps it a subquery).
+            return (
+                f"CROSS JOIN LATERAL (SELECT * FROM {layout.links_from('l')} WHERE {scope} "
+                "OFFSET 0) AS l"
+            )
+        return f"JOIN mat_links l ON {scope}"
+
     parts: list[str] = []
     if hops.stored_out:
         parts.append(
             "SELECT r.to_kind, l.to_key, l.relation_id, r.from_kind, l.from_key, r.to_kind, "
-            f'l.to_key, l."values", l.object_hash FROM out_rels r {links} '
-            "AND l.from_key = w.key WHERE r.from_kind = w.kind_id LIMIT :fanout"
+            f'l.to_key, l."values", l.object_hash FROM out_rels r {links("from_key")} '
+            "WHERE r.from_kind = w.kind_id LIMIT :fanout"
         )
     if hops.stored_in:
         parts.append(
             "SELECT r.from_kind, l.from_key, l.relation_id, r.from_kind, l.from_key, r.to_kind, "
-            f'l.to_key, l."values", l.object_hash FROM in_rels r {links} '
-            "AND l.to_key = w.key WHERE r.to_kind = w.kind_id LIMIT :fanout"
+            f'l.to_key, l."values", l.object_hash FROM in_rels r {links("to_key")} '
+            "WHERE r.to_kind = w.kind_id LIMIT :fanout"
         )
     if hops.foreign_out:
         parts.append(
             'SELECT f.to_kind, m."values" ->> f.attribute, f.relation_id, f.from_kind, m.key, '
             "f.to_kind, m.\"values\" ->> f.attribute, CAST('{}' AS jsonb), CAST(NULL AS bytea) "
-            "FROM fk_rels f JOIN mat_records m ON m.domain_id = :domain AND m.branch = :branch "
+            f"FROM fk_rels f JOIN {layout.records_from('m')} ON m.domain_id = :domain "
+            "AND m.branch = :branch "
             "AND m.kind_id = w.kind_id AND m.key = w.key "
             'WHERE f.from_kind = w.kind_id AND m."values" ->> f.attribute IS NOT NULL '
             "LIMIT :fanout"
@@ -170,12 +184,12 @@ def _branches(hops: Hops, domain_id: str, branch: str) -> list[str]:
         assert relation.foreign_key_attribute is not None
         from_kind = sql_literal(relation.from_kind)
         to_kind = sql_literal(relation.to_kind)
+        predicate = predicate_sql(layout.domain_id, layout.branch, relation.from_kind)
         parts.append(
             f"SELECT CAST({from_kind} AS text), key, CAST({sql_literal(relation.id)} AS text), "
             f"CAST({from_kind} AS text), key, CAST({to_kind} AS text), w.key, "
-            "CAST('{}' AS jsonb), CAST(NULL AS bytea) FROM mat_records "
-            f"WHERE w.kind_id = {to_kind} "
-            f"AND {escape_colons(predicate_sql(domain_id, branch, relation.from_kind))} "
+            f"CAST('{{}}' AS jsonb), CAST(NULL AS bytea) FROM {layout.records_from()} "
+            f"WHERE w.kind_id = {to_kind} AND {escape_colons(predicate)} "
             f"AND {values_text(relation.foreign_key_attribute)} = w.key LIMIT :fanout"
         )
     return parts
@@ -184,7 +198,7 @@ def _branches(hops: Hops, domain_id: str, branch: str) -> list[str]:
 def neighborhood_sql(
     schema: Schema,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     direction: Direction,
     relation_ids: Sequence[str] | None,
     *,
@@ -197,8 +211,9 @@ def neighborhood_sql(
 
     Other parameters: `:domain`, `:branch`, `:seed_kinds`, `:seed_keys`, `:depth`,
     `:fanout`, `:max_steps` (Links walked plus seeds) and `:max_nodes`. `lb_neighborhood`
-    builds the same statement.
+    builds the same statement. A branch given by name is read as a full branch.
     """
+    layout = branch if isinstance(branch, BranchLayout) else BranchLayout(domain_id, branch)
     hops = plan_hops(schema, direction, relation_ids, follow=follow)
     params: dict[str, Any] = {
         "out_ids": [r.id for r in hops.stored_out],
@@ -212,7 +227,7 @@ def neighborhood_sql(
         "fk_to": [r.to_kind for r in hops.foreign_out],
         "fk_attributes": [r.foreign_key_attribute for r in hops.foreign_out],
     }
-    parts = _branches(hops, domain_id, branch)
+    parts = _branches(hops, layout)
     step = (
         "SELECT w.depth + 1, w.kind_id, w.key, n.* FROM walk w CROSS JOIN LATERAL "
         "(SELECT * FROM ("
@@ -223,6 +238,16 @@ def neighborhood_sql(
         "FROM walk w WHERE false"
     )
     record_columns = ", ".join(f'm."{c}"' for c in RECORD_NAMES)
+    found = (
+        "m.domain_id = :domain AND m.branch = :branch AND m.kind_id = n.kind_id AND m.key = n.key"
+    )
+    hydrate = (
+        # A lateral lookup per node: the join keys reach both halves of an overlay's rows.
+        # (LIMIT 1 keeps it a per-node subquery instead of a join with every row).
+        f"CROSS JOIN LATERAL (SELECT * FROM {layout.records_from('m')} WHERE {found} LIMIT 1) AS m"
+        if layout.overlay
+        else f"JOIN mat_records m ON {found}"
+    )
     sql = f"""
     WITH RECURSIVE
     out_rels(relation_id, from_kind, to_kind) AS (
@@ -255,8 +280,7 @@ def neighborhood_sql(
            NULL AS relation_id, NULL AS from_key, NULL AS to_key,
            CAST(NULL AS jsonb) AS link_values, CAST(NULL AS bytea) AS link_hash
     FROM nodes n
-    JOIN mat_records m ON m.domain_id = :domain AND m.branch = :branch
-                      AND m.kind_id = n.kind_id AND m.key = n.key
+    {hydrate}
     UNION ALL
     SELECT 'link', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
            relation_id, from_key, to_key, link_values, link_hash
@@ -284,17 +308,20 @@ _RESULT_COLUMNS: tuple[ColumnElement[Any], ...] = (
     column("link_values", JSONB),
     column("link_hash", LargeBinary),
 )
-_DEFINER = text(
-    "SELECT * FROM lb_neighborhood(:domain, :branch, CAST(:seeds AS jsonb), "
-    "CAST(:depth AS integer), CAST(:relations AS jsonb), CAST(:fanout AS integer), "
-    "CAST(:max_steps AS integer), CAST(:max_nodes AS integer))"
-).columns(*_RESULT_COLUMNS)
+_DEFINER = {
+    function: text(
+        f"SELECT * FROM {function}(:domain, :branch, CAST(:seeds AS jsonb), "
+        "CAST(:depth AS integer), CAST(:relations AS jsonb), CAST(:fanout AS integer), "
+        "CAST(:max_steps AS integer), CAST(:max_nodes AS integer))"
+    ).columns(*_RESULT_COLUMNS)
+    for function in ("lb_neighborhood", "lb_neighborhood_overlay")
+}
 
 
 async def neighborhood(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     schema: Schema,
     seeds: Sequence[tuple[str, str]],
     *,
@@ -315,13 +342,14 @@ async def neighborhood(
     """
     settings = (runtime or default_runtime()).settings
     caps = settings.traverse
+    layout = await resolve_layout(session, domain_id, branch)
     seeds = list(dict.fromkeys(seeds))
     _within("seed count", len(seeds), caps.max_seeds)
     nodes_cap = _within("max_nodes", max_nodes or caps.max_nodes, caps.max_nodes)
     links_cap = _within("max_links", max_links or caps.max_links, caps.max_links)
     bounds: dict[str, Any] = {
         "domain": domain_id,
-        "branch": branch,
+        "branch": layout.branch,
         "depth": _within("depth", depth, caps.max_depth),
         "fanout": _within("fanout", fanout or caps.max_fanout, caps.max_fanout),
         "max_steps": links_cap + len(seeds),
@@ -334,10 +362,10 @@ async def neighborhood(
             "seeds": json.dumps([list(seed) for seed in seeds]),
             "relations": hops.as_json(),
         }
-        statement = _DEFINER
+        statement = _DEFINER["lb_neighborhood_overlay" if layout.overlay else "lb_neighborhood"]
     else:
         sql, params = neighborhood_sql(
-            schema, domain_id, branch, direction, relation_ids, follow=follow
+            schema, domain_id, layout, direction, relation_ids, follow=follow
         )
         params.update(
             bounds,

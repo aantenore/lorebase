@@ -209,9 +209,10 @@ class Branches(_Resource):
         *,
         source: str | None = None,
         revision: str | None = None,
+        mode: m.BranchMode | None = None,
         idempotency_key: str | None = None,
     ) -> m.Branch:
-        body = m.BranchCreate(name=name, source=source, revision=revision)
+        body = m.BranchCreate(name=name, source=source, revision=revision, mode=mode)
         return await self._c.send(ep.create_branch(domain, body, idempotency_key=idempotency_key))
 
     async def get(self, domain: str, name: str) -> m.BranchDetail:

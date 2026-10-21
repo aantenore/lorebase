@@ -141,7 +141,7 @@ async def neighborhood(
     follow = _follow(point, _followed(point, request.relations))
     seeds = [(require_kind(point, seed.kind).id, seed.key) for seed in request.seeds]
     found = await hydrate_records(
-        session, point.domain.id, point.branch, seeds, runtime=runtime.store
+        session, point.domain.id, point.layout, seeds, runtime=runtime.store
     )
     for kind_id, key in seeds:
         if (kind_id, key) not in found:
@@ -150,7 +150,7 @@ async def neighborhood(
     walked = await walk_neighborhood(
         session,
         point.domain.id,
-        point.branch,
+        point.layout,
         point.schema,
         seeds,
         depth=request.depth,

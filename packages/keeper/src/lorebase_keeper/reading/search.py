@@ -51,7 +51,6 @@ from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.views import SearchHit, SearchResponse, kind_name, served
 from lorebase_store.models import metadata
 from lorebase_store.reads import TitleSimilarity, search_records
-from lorebase_store.repositories.materialized import MAT_RECORDS
 
 EMBEDDINGS: Table = metadata.tables["embeddings"]
 
@@ -164,7 +163,7 @@ async def search(
         )
     ranked = lists[0][0].subquery("ranked") if len(lists) == 1 else _fused(lists, runtime)
 
-    final = MAT_RECORDS.alias("hit")
+    final = point.layout.records("hit")
     snippet: ColumnElement[Any] = literal(None)
     if request.q is not None:
         snippet = func.ts_headline(
@@ -219,7 +218,7 @@ async def _lexical_page(
     hits = await search_records(
         session,
         point.domain.id,
-        point.branch,
+        point.layout,
         q,
         limit=limit,
         kind_ids=list(target.kind_ids),
@@ -228,7 +227,7 @@ async def _lexical_page(
     )
     snippets: dict[tuple[str, str], str | None] = {}
     if hits:
-        hit = MAT_RECORDS.alias("hit")
+        hit = point.layout.records("hit")
         headline = func.ts_headline(
             compiler.regconfig(),
             func.concat_ws(" ", hit.c.title, *_searchable_text(hit, target)),

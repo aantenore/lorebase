@@ -7864,7 +7864,7 @@
           "branches"
         ],
         "summary": "Create a branch",
-        "description": "Create a fully materialized branch from a branch, tag or Revision.\n\nWith an `Idempotency-Key`, retrying a create that succeeded returns the branch with status\n200 and `Idempotent-Replayed: true`.",
+        "description": "Create a materialized branch (a copy, or an overlay on its source) from a branch, tag\nor Revision.\n\nWith an `Idempotency-Key`, retrying a create that succeeded returns the branch with status\n200 and `Idempotent-Replayed: true`.",
         "operationId": "create_branch_api_v1_domains__domain_id__branches_post",
         "security": [
           {
@@ -9552,6 +9552,17 @@
             ],
             "title": "Revision",
             "description": "Revision id to start at; default: the head of `source`."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`copy`: the branch gets its own materialized rows. `overlay`: it stores only the rows it changes and reads the rest from `source` as of its head (only when starting at the head of a fully materialized branch; otherwise a copy). Default: `store.materialize.branch_mode`, overlay for names with an overlay prefix."
           }
         },
         "type": "object",
@@ -9621,6 +9632,15 @@
         ],
         "title": "BranchDetail",
         "description": "A branch with its distance to the default branch."
+      },
+      "BranchMode": {
+        "type": "string",
+        "enum": [
+          "copy",
+          "overlay"
+        ],
+        "title": "BranchMode",
+        "description": "The materialization a caller asks for when creating a branch."
       },
       "BranchOut": {
         "properties": {
