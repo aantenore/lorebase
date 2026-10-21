@@ -1,4 +1,4 @@
-"""Keeper responses turned into compact views (the `json` format) and their text form.
+"""Typed Keeper answers turned into compact views (the `json` format) and their text form.
 
 Views keep api names and `Kind/key` refs, drop internal ids, and always carry the Revision a
 response was served from. Lists are capped at `output.max_items` with an explicit count of what
@@ -11,10 +11,12 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from lorebase_client import models as m
 from lorebase_herald.render import (
     capped,
     more_line,
     ref,
+    timestamp,
     titled,
     value_text,
     values_text,
@@ -74,9 +76,9 @@ def _attributes(attributes: Mapping[str, Any], names: Mapping[str, str], full: b
     return out
 
 
-def schema_view(document: Mapping[str, Any], *, kinds: Sequence[str] | None, detail: str) -> View:
+def schema_view(document: m.SchemaDocument, *, kinds: Sequence[str] | None, detail: str) -> View:
     """Kinds, Relations and Operations of a schema document (`GET .../schema`)."""
-    content: Mapping[str, Any] = document.get("schema") or {}
+    content: Mapping[str, Any] = document.schema_
     full = detail == "full"
     names = {
         element_id: element["api_name"]
@@ -151,9 +153,9 @@ def schema_view(document: Mapping[str, Any], *, kinds: Sequence[str] | None, det
             view["review_when"] = operation["review_policy"]["expression"]
         operation_views.append(view)
     return {
-        "domain": document.get("domain"),
-        "branch": document.get("branch"),
-        "revision": document.get("revision"),
+        "domain": document.domain,
+        "branch": document.branch,
+        "revision": document.revision,
         "kinds": kind_views,
         "relations": relation_views,
         "operations": operation_views,
@@ -222,43 +224,29 @@ def schema_text(view: Mapping[str, Any], *, detail: str, output: OutputSettings)
     return "\n".join(lines)
 
 
-def involved_schema_lines(view: Mapping[str, Any]) -> list[str]:
-    """One line per Kind and Relation, for context packs."""
-    lines = [
-        f"{k['name']}: " + " · ".join(_attribute_line(a) for a in k["attributes"])
-        for k in view["kinds"]
-    ]
-    lines.extend(
-        f"{r['name']}: {r['from']} -> {r['to']} ({r['cardinality']}; inverse {r['inverse']})"
-        for r in view["relations"]
-    )
-    return lines
-
-
 # Records -------------------------------------------------------------------------------------
 
 
-def record_view(record: Mapping[str, Any]) -> View:
+def record_view(record: m.RecordItem) -> View:
     """A Record as `{ref, title, values, ...}`."""
     view: View = {
-        "ref": ref(record["kind"], record["key"]),
-        "title": record.get("title"),
-        "values": record.get("values") or {},
+        "ref": ref(record.kind, record.key),
+        "title": record.title,
+        "values": record.values,
     }
-    if record.get("updated_revision"):
-        view["updated_revision"] = record["updated_revision"]
-    if record.get("updated_at"):
-        view["updated_at"] = record["updated_at"]
-    if record.get("links") is not None:
+    if record.updated_revision:
+        view["updated_revision"] = record.updated_revision
+    if record.updated_at:
+        view["updated_at"] = timestamp(record.updated_at)
+    if record.links is not None:
         view["links"] = [
-            {"relation": c["relation"], "direction": c["direction"], "count": c["count"]}
-            for c in record["links"]
+            {"relation": c.relation, "direction": c.direction, "count": c.count}
+            for c in record.links
         ]
-    included = record.get("included")
-    if included:
+    if record.included:
         view["included"] = {
-            relation: [{"ref": ref(r["kind"], r["key"]), "title": r.get("title")} for r in rows]
-            for relation, rows in included.items()
+            relation: [{"ref": ref(r.kind, r.key), "title": r.title} for r in rows]
+            for relation, rows in record.included.items()
         }
     return view
 
@@ -290,16 +278,16 @@ def rows_text(items: Iterable[Mapping[str, Any]], output: OutputSettings) -> lis
     return lines
 
 
-def page_view(body: Mapping[str, Any], output: OutputSettings) -> View:
+def page_view(body: m.QueryResult, output: OutputSettings) -> View:
     """A page of Records (`/query`)."""
-    items, omitted = capped([record_view(r) for r in body.get("items") or []], output.max_items)
-    view: View = {"revision": body.get("revision"), "items": items}
+    items, omitted = capped([record_view(r) for r in body.items], output.max_items)
+    view: View = {"revision": body.revision, "items": items}
     if omitted:
         view["omitted"] = omitted
-    if body.get("next_cursor"):
-        view["next_cursor"] = body["next_cursor"]
-    if body.get("aggregate"):
-        view["aggregate"] = body["aggregate"]
+    if body.next_cursor:
+        view["next_cursor"] = body.next_cursor
+    if body.aggregate is not None:
+        view["aggregate"] = body.aggregate.model_dump(mode="json", exclude_unset=True)
     return view
 
 
@@ -324,21 +312,20 @@ def page_text(view: Mapping[str, Any], output: OutputSettings) -> str:
 # Graph and search ----------------------------------------------------------------------------
 
 
-def edge_view(edge: Mapping[str, Any]) -> View:
-    source, target = edge["from"], edge["to"]
+def edge_view(edge: m.Edge) -> View:
     view: View = {
-        "from": ref(source["kind"], source["key"]),
-        "relation": edge["relation"],
-        "to": ref(target["kind"], target["key"]),
+        "from": ref(edge.source.kind, edge.source.key),
+        "relation": edge.relation,
+        "to": ref(edge.to.kind, edge.to.key),
     }
-    if edge.get("values"):
-        view["values"] = edge["values"]
+    if edge.values:
+        view["values"] = edge.values
     return view
 
 
-def neighborhood_view(body: Mapping[str, Any], output: OutputSettings, *, values: bool) -> View:
+def neighborhood_view(body: m.NeighborhoodResult, output: OutputSettings, *, values: bool) -> View:
     nodes = []
-    for node in body.get("nodes") or []:
+    for node in body.nodes:
         item = record_view(node)
         if not values:
             item.pop("values", None)
@@ -346,25 +333,16 @@ def neighborhood_view(body: Mapping[str, Any], output: OutputSettings, *, values
         item.pop("updated_at", None)
         nodes.append(item)
     shown_nodes, nodes_omitted = capped(nodes, output.max_items)
-    edges, edges_omitted = capped([edge_view(e) for e in body.get("edges") or []], output.max_items)
+    edges, edges_omitted = capped([edge_view(e) for e in body.edges], output.max_items)
     view: View = {
-        "revision": body.get("revision"),
+        "revision": body.revision,
         "nodes": shown_nodes,
         "edges": edges,
-        "truncated": bool(body.get("truncated")),
+        "truncated": body.truncated,
     }
     if nodes_omitted or edges_omitted:
         view["omitted"] = {"nodes": nodes_omitted, "edges": edges_omitted}
     return view
-
-
-def edge_line(edge: Mapping[str, Any], titles: Mapping[str, str | None], max_chars: int) -> str:
-    values = edge.get("values")
-    suffix = f" {{{values_text(values, max_chars)}}}" if values else ""
-    return (
-        f"{titled(edge['from'], titles.get(edge['from']))} -{edge['relation']}-> "
-        f"{titled(edge['to'], titles.get(edge['to']))}{suffix}"
-    )
 
 
 def neighborhood_text(view: Mapping[str, Any], output: OutputSettings) -> str:
@@ -383,20 +361,20 @@ def neighborhood_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
-def search_view(body: Mapping[str, Any], output: OutputSettings) -> View:
+def search_view(body: m.SearchResult, output: OutputSettings) -> View:
     items, omitted = capped(
         [
             {
-                "ref": ref(hit["kind"], hit["key"]),
-                "title": hit.get("title"),
-                "snippet": hit.get("snippet"),
-                "score": round(float(hit.get("score") or 0), 4),
+                "ref": ref(hit.kind, hit.key),
+                "title": hit.title,
+                "snippet": hit.snippet,
+                "score": round(hit.score, 4),
             }
-            for hit in body.get("items") or []
+            for hit in body.items
         ],
         output.max_items,
     )
-    view: View = {"revision": body.get("revision"), "mode": body.get("mode"), "items": items}
+    view: View = {"revision": body.revision, "mode": body.mode, "items": items}
     if omitted:
         view["omitted"] = omitted
     return view
@@ -412,89 +390,36 @@ def search_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
-# Lineage ------------------------------------------------------------------------------------
+# Explanation ----------------------------------------------------------------------------------
 
 
-def lineage_view(
-    body: Mapping[str, Any], attributes: Sequence[str] | None, output: OutputSettings
-) -> View:
-    record = body["record"]
-    values: Mapping[str, Any] = record.get("values") or {}
-    lineage: Mapping[str, Any] = record.get("lineage") or {}
-    wanted = list(attributes) if attributes else list(values)
-    entries = []
-    for name in wanted:
-        entry = lineage.get(name) or {}
-        entries.append(
-            {
-                "attribute": name,
-                "value": values.get(name),
-                "origin_type": entry.get("origin_type"),
-                "actor": entry.get("actor"),
-                "at": entry.get("at"),
-                "provenance": entry.get("provenance_id"),
-            }
-        )
-    shown, omitted = capped(entries, output.max_items)
-    view: View = {
-        "revision": body.get("revision"),
-        "ref": ref(record["kind"], record["key"]),
-        "title": record.get("title"),
-        "updated_revision": record.get("updated_revision"),
-        "lineage": shown,
-    }
-    if omitted:
-        view["omitted"] = omitted
-    return view
-
-
-def lineage_text(view: Mapping[str, Any], output: OutputSettings) -> str:
-    lines = [
-        f"{titled(view['ref'], view.get('title'))} rev {view['revision']} "
-        f"(last changed in {view.get('updated_revision')})"
-    ]
-    for entry in view["lineage"]:
-        value = value_text(entry["value"], output.max_value_chars)
-        if entry["provenance"] is None:
-            lines.append(f"{entry['attribute']} = {value} <- no recorded origin")
-            continue
-        lines.append(
-            f"{entry['attribute']} = {value} <- {entry['origin_type'] or '?'} by "
-            f"{entry['actor'] or '?'} at {entry['at'] or '?'} ({entry['provenance']})"
-        )
-    lines.extend(more_line(view.get("omitted", 0), "name `attributes`"))
-    return "\n".join(lines)
-
-
-def explain_view(
-    body: Mapping[str, Any], attributes: Sequence[str] | None, output: OutputSettings
-) -> View:
+def explain_view(body: m.Explain, attributes: Sequence[str] | None, output: OutputSettings) -> View:
     """Keeper's explanation of a Record (`.../explain`), its lists capped; with `attributes`,
     only those attributes and no Links or Proposals."""
-    record = body["record"]
-    rows: list[Mapping[str, Any]] = list(body.get("attributes") or [])
+    record = body.record
+    rows = list(body.attributes)
     if attributes:
         wanted = set(attributes)
         rows = [row for row in rows if row.get("name") in wanted]
     shown, omitted = capped(rows, output.max_items)
     view: View = {
-        "revision": body.get("revision"),
-        "branch": body.get("branch"),
+        "revision": body.revision,
+        "branch": body.branch,
         "ref": record["ref"],
         "title": record.get("title"),
         "updated_revision": record.get("updated_revision"),
-        "history": body.get("history"),
-        "created": body.get("created"),
+        "history": body.history,
+        "created": body.created,
         "attributes": shown,
     }
     if omitted:
         view["omitted"] = omitted
     if not attributes:
-        links, more_links = capped(body.get("links") or [], output.max_items)
+        links, more_links = capped(body.links, output.max_items)
         view["links"] = links
         view["links_omitted"] = more_links
-        view["links_truncated"] = bool(body.get("links_truncated"))
-        view["proposals"] = list(body.get("proposals") or [])
+        view["links_truncated"] = body.links_truncated
+        view["proposals"] = list(body.proposals)
     return view
 
 
@@ -549,15 +474,14 @@ def explain_text(view: Mapping[str, Any], output: OutputSettings) -> str:
 # History, diff, branches ---------------------------------------------------------------------
 
 
-def log_entry(item: Mapping[str, Any]) -> View:
-    origin = item.get("origin") or {}
+def log_entry(item: m.Revision) -> View:
     return {
-        "revision": item["id"],
-        "at": item.get("created_at"),
-        "author": item.get("author"),
-        "origin": origin.get("type"),
-        "message": item.get("message") or "",
-        "stats": item.get("stats") or {},
+        "revision": item.id,
+        "at": timestamp(item.created_at),
+        "author": item.author,
+        "origin": item.origin.get("type"),
+        "message": item.message,
+        "stats": item.stats,
     }
 
 
@@ -581,46 +505,43 @@ def changes_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
-def _change_subject(change: Mapping[str, Any]) -> str:
-    if change.get("kind") and change.get("key"):
-        return ref(change["kind"], change["key"])
-    if change.get("relation"):
-        return f"{change['relation']} {change.get('from_key')} -> {change.get('to_key')}"
-    label = change.get("api_name") or change.get("key") or change.get("partition")
-    return f"{change.get('element_type') or change.get('element')} {label}"
+def _change_subject(change: m.Change) -> str:
+    if change.kind and change.key:
+        return ref(change.kind, change.key)
+    if change.relation:
+        return f"{change.relation} {change.from_key} -> {change.to_key}"
+    label = change.api_name or change.key or change.partition
+    return f"{change.element_type or change.element} {label}"
 
 
-def diff_view(body: Mapping[str, Any], output: OutputSettings) -> View:
+def diff_view(body: m.ChangesPage, output: OutputSettings) -> View:
     changes = []
-    for change in body.get("items") or []:
-        item: View = {"change": change["change"], "subject": _change_subject(change)}
-        if change.get("changes"):
-            item["values"] = [
-                {"name": c["name"], "old": c.get("old"), "new": c.get("new")}
-                for c in change["changes"]
-            ]
+    for change in body.items:
+        item: View = {"change": change.change, "subject": _change_subject(change)}
+        if change.changes:
+            item["values"] = [{"name": c.name, "old": c.old, "new": c.new} for c in change.changes]
         changes.append(item)
     shown, omitted = capped(changes, output.max_items)
     view: View = {
-        "from": body.get("from_revision"),
-        "to": body.get("to_revision"),
-        "total": body.get("total"),
+        "from": body.from_revision,
+        "to": body.to_revision,
+        "total": body.total,
         "summary": [
             {
-                "name": s["name"],
-                "element": s["element"],
-                "added": s["added"],
-                "modified": s["modified"],
-                "removed": s["removed"],
+                "name": s.name,
+                "element": s.element,
+                "added": s.added,
+                "modified": s.modified,
+                "removed": s.removed,
             }
-            for s in body.get("summary") or []
+            for s in body.summary
         ],
         "changes": shown,
     }
     if omitted:
         view["omitted"] = omitted
-    if body.get("next_cursor"):
-        view["next_cursor"] = body["next_cursor"]
+    if body.next_cursor:
+        view["next_cursor"] = body.next_cursor
     return view
 
 
@@ -647,24 +568,19 @@ def diff_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
-def branches_view(body: Mapping[str, Any], output: OutputSettings) -> View:
+def branches_view(body: m.Page[m.Branch], output: OutputSettings) -> View:
     items, omitted = capped(
         [
-            {
-                "name": b["name"],
-                "head": b["head"],
-                "default": b.get("default", False),
-                "protected": b.get("protected", False),
-            }
-            for b in body.get("items") or []
+            {"name": b.name, "head": b.head, "default": b.default, "protected": b.protected}
+            for b in body.items
         ],
         output.max_items,
     )
     view: View = {"items": items}
     if omitted:
         view["omitted"] = omitted
-    if body.get("next_cursor"):
-        view["next_cursor"] = body["next_cursor"]
+    if body.next_cursor:
+        view["next_cursor"] = body.next_cursor
     return view
 
 
@@ -683,25 +599,24 @@ def branches_text(view: Mapping[str, Any]) -> str:
 # Operations ----------------------------------------------------------------------------------
 
 
-def execution_view(body: Mapping[str, Any], output: OutputSettings) -> View:
-    edits, _ = capped(body.get("edits") or [], output.max_items)
-    edit_count = int(body.get("edit_count", len(body.get("edits") or [])))
-    violations, _ = capped(body.get("violations") or [], output.max_issues)
-    warnings, _ = capped(body.get("warnings") or [], output.max_issues)
+def execution_view(body: m.Execution, output: OutputSettings) -> View:
+    edits, _ = capped(body.edits, output.max_items)
+    violations, _ = capped(body.violations, output.max_issues)
+    warnings, _ = capped(body.warnings, output.max_issues)
     return {
-        "status": body.get("status"),
-        "operation": body.get("operation"),
-        "branch": body.get("branch"),
-        "head": body.get("head"),
-        "revision": body.get("revision"),
-        "review_required": bool(body.get("review_required")),
-        "edit_count": edit_count,
+        "status": body.status,
+        "operation": body.operation,
+        "branch": body.branch,
+        "head": body.head,
+        "revision": body.revision,
+        "review_required": body.review_required,
+        "edit_count": body.edit_count,
         "edits": edits,
-        "edits_omitted": max(0, edit_count - len(edits)),
-        "violation_count": body.get("violation_count", len(violations)),
+        "edits_omitted": max(0, body.edit_count - len(edits)),
+        "violation_count": body.violation_count,
         "violations": violations,
         "warnings": warnings,
-        "replayed": bool(body.get("replayed")),
+        "replayed": body.replayed,
     }
 
 

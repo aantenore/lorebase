@@ -48,6 +48,15 @@ class KeeperConnection(SectionModel):
         "only (alias LOREBASE_API_KEY). Streamable HTTP forwards each caller's own key.",
     )
     timeout_s: float = Field(default=30, gt=0, description="Timeout of one Keeper request.")
+    max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Times a request is sent again when Keeper answers 429 or 503, or could not "
+        "be reached; 0 turns retries off.",
+    )
+    retry_max_wait_s: float = Field(
+        default=5, gt=0, description="Longest pause before a retry; Retry-After is capped to it."
+    )
     verify_tls: bool = Field(default=True, description="Verify Keeper's TLS certificate.")
     user_agent: str = Field(default="lorebase-herald", min_length=1)
 

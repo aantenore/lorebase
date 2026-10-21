@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from mcp import Client
 
-from lorebase_herald.keeper_http import KeeperHttp
+from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.server import create_server
 from lorebase_herald.settings import ENV_ALIASES, HeraldSettings
 from lorebase_platform import secrets, settings
@@ -41,7 +41,7 @@ def fake() -> FakeKeeper:
 def herald_settings(**overrides: Any) -> HeraldSettings:
     values: dict[str, Any] = {
         "domain": "supply",
-        "keeper": {"base_url": "http://keeper.test", "api_key": AGENT_KEY},
+        "keeper": {"base_url": "http://keeper.test", "api_key": AGENT_KEY, "max_retries": 0},
     }
     values.update(overrides)
     return HeraldSettings.model_validate(values)
@@ -54,11 +54,8 @@ def connect(fake: FakeKeeper) -> Connect:
     @asynccontextmanager
     async def open_client(**overrides: Any) -> AsyncIterator[Client]:
         configured = herald_settings(**overrides)
-        keeper = KeeperHttp(configured.keeper, transport=fake.transport())
-        try:
-            async with Client(create_server(configured, keeper)) as client:
-                yield client
-        finally:
-            await keeper.aclose()
+        clients = KeeperClients(configured.keeper, transport=fake.transport())
+        async with Client(create_server(configured, clients)) as client:
+            yield client
 
     return open_client

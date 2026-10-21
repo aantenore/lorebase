@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
+
+from pydantic import TypeAdapter
 
 from lorebase_herald.settings import OutputSettings
 
 ELLIPSIS = "…"
+_TIMESTAMP = TypeAdapter(datetime)
 
 
 def ref(kind: str, key: str) -> str:
@@ -24,6 +28,11 @@ def ref(kind: str, key: str) -> str:
 def as_json(value: Any) -> str:
     """Compact JSON (no spaces, UTF-8 kept)."""
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def timestamp(value: datetime) -> str:
+    """A timestamp as the API writes it: RFC 3339, `Z` for UTC."""
+    return str(_TIMESTAMP.dump_python(value, mode="json"))
 
 
 def value_text(value: Any, max_chars: int) -> str:
