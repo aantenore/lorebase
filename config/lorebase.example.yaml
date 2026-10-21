@@ -703,8 +703,9 @@ scribe:
       allowed_roots: []          # directories local CSV files may be read from; empty: none
       allowed_hosts: []          # hosts CSV URLs may point at; empty: none
       allowed_schemes: [https]
-      max_bytes: 104857600       # larger files or downloads are refused (100 MiB)
-      timeout_s: 60.0            # time budget of one download
+      allow_private_targets: false   # true: URL hosts may resolve to private/loopback addresses
+      max_bytes: 104857600       # larger files or downloads are refused (100 MiB); reads stop here
+      timeout_s: 60.0            # time budget of one download, lookup included
       encodings: [utf-8-sig, cp1252]   # tried in order
       delimiters: ",;\t|"        # delimiters the sniffer may pick; .tsv files use a tab
       sniff_bytes: 65536

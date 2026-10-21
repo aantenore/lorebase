@@ -129,6 +129,15 @@ never the value behind it.
   stop at `max_bytes`. Both lists are empty by default, which refuses every CSV location. The
   delimiter is sniffed, the first encoding of `encodings` that decodes the file wins and the
   first row is the header.
+- A local path is resolved, links included, before the roots check, so links inside a root
+  that point inside a root still work. The file is then opened from the root one component at
+  a time without following links: a component replaced by a link after the check is refused.
+  It must be a regular file (not a directory, FIFO or device) and is read from that descriptor,
+  at most `max_bytes`.
+- A URL host must resolve to global unicast addresses only, checked as for webhook targets;
+  the download connects to those addresses, never to a second lookup, and `timeout_s` bounds
+  it from lookup to last byte. Hosts on private networks need `allow_private_targets: true`
+  (off by default; earlier versions did not check addresses).
 - Postgres Sources are read in one `READ ONLY` transaction with
   `scribe.sources.postgres.statement_timeout_ms`, `fetch_rows` rows per round trip. The table
   name is checked as an identifier and quoted; `scope_filter` and `query` are SQL written by

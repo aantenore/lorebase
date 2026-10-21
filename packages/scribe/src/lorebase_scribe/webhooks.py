@@ -22,6 +22,17 @@ from typing import Any
 import httpx
 
 
+def pin(url: httpx.URL, address: str) -> tuple[httpx.URL, dict[str, str], dict[str, Any]]:
+    """`url` rewritten to connect to the checked `address`, with the `Host` header and request
+    extensions that keep the host name for the server and for TLS (SNI and certificate
+    verification)."""
+    return (
+        url.copy_with(host=address.split("%", 1)[0]),
+        {"Host": url.netloc.decode("ascii")},
+        {"sni_hostname": url.host} if url.scheme == "https" else {},
+    )
+
+
 class HttpxSender:
     """`Sender` over an `httpx.AsyncClient`."""
 
@@ -39,18 +50,11 @@ class HttpxSender:
         target = httpx.URL(url)
         if not addresses:
             return await self._post(target, body, dict(headers), timeout_s, {})
-        pinned = {**headers, "Host": target.netloc.decode("ascii")}
-        extensions = {"sni_hostname": target.host} if target.scheme == "https" else {}
         failure: httpx.TransportError | None = None
         for address in addresses:
+            pinned, host, extensions = pin(target, address)
             try:
-                return await self._post(
-                    target.copy_with(host=address.split("%", 1)[0]),
-                    body,
-                    pinned,
-                    timeout_s,
-                    extensions,
-                )
+                return await self._post(pinned, body, {**headers, **host}, timeout_s, extensions)
             except (httpx.ConnectError, httpx.ConnectTimeout) as error:
                 failure = error  # the next checked address, never a new lookup
         assert failure is not None

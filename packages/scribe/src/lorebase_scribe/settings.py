@@ -108,10 +108,19 @@ class CsvSourceSettings(SectionModel):
     allowed_schemes: tuple[str, ...] = Field(
         default=("https",), min_length=1, description="URL schemes CSV URLs may use."
     )
-    max_bytes: int = Field(
-        default=100 * 1024 * 1024, ge=1, description="Larger files or downloads are refused."
+    allow_private_targets: bool = Field(
+        default=False,
+        description="Allow CSV URL hosts that resolve to loopback, private or link-local "
+        "addresses. Off by default: every resolved address must be global unicast.",
     )
-    timeout_s: float = Field(default=60.0, gt=0, description="Time budget of one download.")
+    max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        ge=1,
+        description="Larger files or downloads are refused; reads stop after this many bytes.",
+    )
+    timeout_s: float = Field(
+        default=60.0, gt=0, description="Time budget of one download, from lookup to last byte."
+    )
     encodings: tuple[str, ...] = Field(
         default=("utf-8-sig", "cp1252"),
         min_length=1,
