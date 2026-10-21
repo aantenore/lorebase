@@ -141,6 +141,12 @@ class ReadGuard:
         """Whether the grants cover every Revision (none of them is narrowed to branches)."""
         return await self.may(None)
 
+    async def require_wide(self) -> None:
+        """403 unless the grants cover the whole Domain: for Domain-wide reads (Source runs)
+        that grants narrowed to a Kind or a branch must not see."""
+        if not await self.wide():
+            raise self.denied()
+
     async def granted_kinds(self) -> frozenset[str]:
         """Kinds the caller may read through grants narrowed to a Kind: every Revision, those
         Kinds only."""

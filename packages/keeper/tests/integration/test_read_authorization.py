@@ -336,3 +336,13 @@ async def test_kind_grant_keeps_agent_reads_to_its_kind(seeded: Seeded) -> None:
         assert await _status(http, key, "/branches/main/changes") == 403
         assert await _status(http, key, "/branches/main/events") == 403
         assert await _status(http, key, "/branches/main/log") == 403
+
+
+async def test_source_runs_need_a_domain_wide_grant(seeded: Seeded) -> None:
+    runs = "/sources/approved.suppliers/runs"
+    async with keeper(seeded.app_url, _auth_section()) as http:
+        assert await _status(http, seeded.facts["domain_key"], runs) == 200
+        assert await _status(http, seeded.facts["branch_key"], runs) == 403
+        assert await _status(http, seeded.facts["kind_key"], runs) == 403
+        # Narrowed callers are not told whether a Source exists either.
+        assert await _status(http, seeded.facts["kind_key"], "/sources/nowhere/runs") == 403

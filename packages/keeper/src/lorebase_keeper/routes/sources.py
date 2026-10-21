@@ -7,7 +7,11 @@ named by id or api name and looked up in the schema of the Domain's default bran
 trigger is audited (`source.sync`).
 
 `GET /domains/{d}/sources/{s}/runs` lists the runs recorded by Scribe, newest first, with their
-counts, Revision, Proposal and error (Domain-wide `data.read`: run errors quote row values).
+counts, Revision, Proposal and error. It needs `data.read` through a Domain-wide grant: run
+stats cover every Kind the Source writes and errors quote row values, so callers whose grants
+are narrowed to a Kind or a branch get 403, as for unknown Domains they may not be told about.
+The trigger needs a Domain-wide `source.sync` grant and answers with the job only, never run
+data.
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.context import StoreDep, require_domain
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
+from lorebase_keeper.reading.points import open_domain, read_guard
+from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import SOURCE_SYNC_JOB, enqueue_job, source_sync_payload
 from lorebase_store.repositories import (
@@ -44,7 +50,7 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 }
 
 Sync = Annotated[Access, Depends(require(Permission.SOURCE_SYNC))]
-ReadRuns = Annotated[Access, Depends(require(Permission.DATA_READ))]
+ReadRuns = Annotated[ReadGuard, Depends(read_guard())]
 
 
 class SyncRequest(BaseModel):
@@ -75,11 +81,11 @@ class SourceRunOut(BaseModel):
 
 
 async def _source(
-    session: AsyncSession, domain_id: str, reference: str, runtime: StoreRuntime
+    session: AsyncSession, domain_id: str, branch: str, reference: str, runtime: StoreRuntime
 ) -> Source:
-    domain = await require_domain(session, domain_id)
+    """The Source named by id or api name in the schema of `branch`."""
     compiled = await MaterializedRepository(
-        session, domain_id, domain.default_branch, writes=runtime.settings.writes
+        session, domain_id, branch, writes=runtime.settings.writes
     ).schema()
     schema = None if compiled is None else load_compiled(compiled.compiled)
     found = None
@@ -123,7 +129,8 @@ async def sync_source(
     """Queue a synchronization of the Source for Scribe."""
     dry_run = body is not None and body.dry_run
     async with store.sessions() as session, session.begin():
-        found = await _source(session, domain_id, source, store.runtime)
+        domain = await require_domain(session, domain_id)
+        found = await _source(session, domain_id, domain.default_branch, source, store.runtime)
         job_id = await enqueue_job(
             session,
             SOURCE_SYNC_JOB,
@@ -151,7 +158,9 @@ async def list_source_runs(
         except (KeyError, ValueError):
             raise ProblemError(VALIDATION_FAILED, "The cursor is not a run cursor.") from None
     async with store.sessions() as session, session.begin():
-        found = await _source(session, domain_id, source, store.runtime)
+        domain = await open_domain(session, access)
+        await access.require_wide()
+        found = await _source(session, domain.id, domain.default_branch, source, store.runtime)
         rows = await SourceRunRepository(session, domain_id).page(
             found.id, limit=params.limit + 1, after=after
         )
