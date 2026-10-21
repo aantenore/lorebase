@@ -43,20 +43,23 @@ async def test_fake_provider_is_selected_by_configuration_alone() -> None:
     assert (await chat.complete_json([Message("user", "hi")], {"type": "string"})).data == "hi"
 
 
+def test_compatible_endpoint_providers_are_wired() -> None:
+    chat = InferenceSettings.model_validate({"llm": {"provider": "openai_compatible"}})
+    assert type(create_chat_model(chat)).__name__ == "EndpointChatModel"
+    embeddings = InferenceSettings.model_validate(
+        {"embeddings": {"provider": "openai_compatible", "base_url": "http://e/v1"}}
+    )
+    assert type(create_embedding_model(embeddings)).__name__ == "EndpointEmbeddingModel"
+
+
 @pytest.mark.parametrize(
     ("factory", "section", "name"),
     [
-        (create_chat_model, {"llm": {"provider": "openai_compatible"}}, "openai_compatible"),
         (create_embedding_model, {"embeddings": {"provider": "fastembed"}}, "fastembed"),
-        (
-            create_embedding_model,
-            {"embeddings": {"provider": "openai_compatible", "base_url": "http://e/v1"}},
-            "openai_compatible",
-        ),
         (create_span_extractor, {"local_extractors": {"provider": "gliner"}}, "gliner"),
     ],
 )
-def test_real_providers_are_reserved_for_m4(factory, section, name) -> None:
+def test_local_models_are_reserved_for_m4(factory, section, name) -> None:
     with pytest.raises(NotImplementedError) as caught:
         factory(InferenceSettings.model_validate(section))
     assert "available in M4" in str(caught.value)

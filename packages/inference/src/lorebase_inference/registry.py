@@ -10,8 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import NoReturn
 
+from lorebase_inference.chat import EndpointChatModel
 from lorebase_inference.fake import FakeChatModel, FakeEmbeddingModel, FakeSpanExtractor
 from lorebase_inference.interfaces import ChatModel, EmbeddingModel, SpanExtractor
+from lorebase_inference.remote_embeddings import EndpointEmbeddingModel
 from lorebase_inference.settings import InferenceSettings, LlmSettings
 
 ChatFactory = Callable[[InferenceSettings, LlmSettings], ChatModel]
@@ -52,7 +54,7 @@ class ProviderRegistry:
 
     def create_chat_model(self, settings: InferenceSettings, task: str | None = None) -> ChatModel:
         """Chat model for `task` (per-task overrides applied), or the default one."""
-        llm = settings.llm.for_task(task)
+        llm = settings.llm.for_task(task) if task else settings.llm
         return _lookup(self._chat, "chat", llm.provider)(settings, llm)
 
     def create_embedding_model(self, settings: InferenceSettings) -> EmbeddingModel:
@@ -85,13 +87,13 @@ def _unavailable(kind: str, name: str) -> Callable[..., NoReturn]:
 
 
 def build_default_registry() -> ProviderRegistry:
-    """Registry with the fake provider implemented and real providers reserved for M4."""
+    """Registry with the fake and compatible-endpoint providers; local models come later."""
     registry = ProviderRegistry()
     registry.register_chat("fake", lambda s, llm: FakeChatModel(llm, s.fake))
-    registry.register_chat("openai_compatible", _unavailable("chat", "openai_compatible"))
+    registry.register_chat("openai_compatible", lambda _s, llm: EndpointChatModel(llm))
     registry.register_embedding("fake", lambda s: FakeEmbeddingModel(s.embeddings))
     registry.register_embedding("fastembed", _unavailable("embedding", "fastembed"))
-    registry.register_embedding("openai_compatible", _unavailable("embedding", "openai_compatible"))
+    registry.register_embedding("openai_compatible", lambda s: EndpointEmbeddingModel(s.embeddings))
     registry.register_span_extractor("fake", lambda s: FakeSpanExtractor(s.fake.dictionary))
     registry.register_span_extractor("gliner", _unavailable("span extractor", "gliner"))
     return registry

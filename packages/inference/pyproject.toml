@@ -1,9 +1,13 @@
 [project]
 name = "lorebase-inference"
 version = "0.1.0"
-description = "Lorebase inference: model-agnostic chat, embedding and span extraction interfaces"
+description = "Lorebase inference: model-agnostic chat, embedding and span extraction providers"
 requires-python = ">=3.12"
-dependencies = ["lorebase-platform"]
+dependencies = [
+  "lorebase-platform",
+  "httpx>=0.27",  # HTTP client of the compatible-endpoint providers; no vendor SDK
+  "jsonschema>=4.22",  # local validation of model answers against the requested schema
+]
 
 [build-system]
 requires = ["hatchling"]

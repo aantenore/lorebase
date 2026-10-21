@@ -27,6 +27,18 @@ EmbeddingProvider = Literal["fastembed", "openai_compatible", "fake"]
 SpanProvider = Literal["gliner", "fake"]
 
 
+class RetrySettings(SectionModel):
+    """Retries of HTTP calls on 429, 5xx and connection errors, with exponential backoff.
+
+    A `Retry-After` header is honored (capped at `backoff_max_s`); otherwise the wait before
+    retry `n` (from 0) is `min(backoff_max_s, backoff_base_s * 2**n)` with full jitter.
+    """
+
+    max_retries: int = Field(default=3, ge=0, description="Retries after the first attempt.")
+    backoff_base_s: float = Field(default=0.5, gt=0)
+    backoff_max_s: float = Field(default=30, gt=0)
+
+
 class Price(SectionModel):
     """Price per million tokens in the operator's currency; zero for local models."""
 
@@ -70,11 +82,22 @@ class LlmSettings(SectionModel):
         description="Literal or secret reference; omitted for local servers (alias LLM_API_KEY).",
     )
     structured_output: Literal["json_schema", "json_mode"] = Field(
-        default="json_schema", description="How the endpoint is asked for schema-valid JSON."
+        default="json_schema",
+        description="How the endpoint is asked for schema-valid JSON. json_schema sends the "
+        "schema as response_format and steps down to json_mode when the server rejects it; "
+        "json_mode asks for a JSON object with the schema in the prompt. Answers are always "
+        "validated against the schema, with up to `repair_attempts` repair retries.",
+    )
+    repair_attempts: int = Field(
+        default=1, ge=0, le=3, description="Repair retries after an invalid answer."
     )
     temperature: float = Field(default=0, ge=0)
+    max_tokens: int | None = Field(
+        default=None, ge=1, description="Completion token cap; unset leaves it to the server."
+    )
     max_concurrency: int = Field(default=2, ge=1, description="Parallel requests per process.")
     timeout_s: float = Field(default=120, gt=0)
+    retry: RetrySettings = Field(default_factory=RetrySettings)
     price_per_million_tokens: Price = Field(default_factory=Price)
     tasks: dict[str, LlmTaskOverride] = Field(
         default_factory=dict,
@@ -105,9 +128,14 @@ class EmbeddingSettings(SectionModel):
     model: str = Field(default="BAAI/bge-small-en-v1.5", min_length=1)
     dims: int = Field(default=384, ge=1, description="Vector dimension produced by the model.")
     base_url: str | None = Field(
-        default=None, description="Endpoint for openai_compatible embeddings (Ollama or hosted)."
+        default=None,
+        description="Endpoint for openai_compatible embeddings (Ollama or hosted); "
+        "for example http://localhost:11434/v1.",
     )
     api_key: SecretValue | None = None
+    batch_size: int = Field(default=32, ge=1, description="Texts per model call or request.")
+    timeout_s: float = Field(default=60, gt=0, description="openai_compatible request timeout.")
+    retry: RetrySettings = Field(default_factory=RetrySettings)
 
     @model_validator(mode="after")
     def _endpoint_required(self) -> Self:
