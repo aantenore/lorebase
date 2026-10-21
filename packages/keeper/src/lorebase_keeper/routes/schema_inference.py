@@ -1,12 +1,13 @@
 """Schema inference (design 9.1, 11.1): `POST /domains/{d}/schema:infer`, permission
 `schema.write`.
 
-The body is either `multipart/form-data` with CSV or TSV files in `files` (and optionally an
-`options` field holding a JSON object of `InferenceOptions` overrides), or JSON naming an allowed
-Postgres source: `{"postgres": {"dsn": "secret://env/ERP_DSN", "schema": "public", "tables":
-[...]}, "options": {...}}`. The answer is the proposal: the schema (JSON and YAML), the evidence
-of every element and the issues to settle; with `Accept: text/yaml` or `format=yaml`, only the
-YAML document. Nothing is committed.
+The body is either `multipart/form-data` with files in `files` (CSV or TSV text, JSON documents,
+JSON Lines or Parquet, read by suffix; and optionally an `options` field holding a JSON object
+of `InferenceOptions` overrides), or JSON naming an allowed Postgres source: `{"postgres":
+{"dsn": "secret://env/ERP_DSN", "schema": "public", "tables": [...]}, "options": {...}}`. The
+answer is the proposal: the schema (JSON and YAML), the evidence of every element and the
+issues to settle; with `Accept: text/yaml` or `format=yaml`, only the YAML document. Nothing is
+committed.
 """
 
 from __future__ import annotations
@@ -53,7 +54,8 @@ _BODY = {
                         "files": {
                             "type": "array",
                             "items": {"type": "string", "format": "binary"},
-                            "description": "CSV or TSV files; the file name is the table name.",
+                            "description": "CSV, TSV, JSON, JSON Lines or Parquet files, read "
+                            "by suffix; the file name is the table name.",
                         },
                         "options": {
                             "type": "string",
@@ -187,7 +189,7 @@ def _render(proposal: SchemaProposal, domain_id: str, yaml_only: bool, limit: in
 
 @router.post(
     "/domains/{domain_id}/schema:infer",
-    summary="Propose a schema from tables or CSV files",
+    summary="Propose a schema from tables or data files",
     responses={**_ERRORS, 200: {"model": ProposalOut, "content": {"text/yaml": {}}}},
     response_model=ProposalOut,
     openapi_extra=_BODY,
@@ -200,8 +202,9 @@ async def infer(
     keeper: KeeperSettingsDep,
     format_: Annotated[Literal["json", "yaml"] | None, Query(alias="format")] = None,
 ) -> Response:
-    """Profile the uploaded files or the Postgres tables and propose Kinds, typed Attributes,
-    keys and Relations with evidence. Deterministic and model-free; nothing is written."""
+    """Profile the uploaded files (CSV, TSV, JSON, JSON Lines, Parquet) or the Postgres tables
+    and propose Kinds, typed Attributes, keys and Relations with evidence. Deterministic and
+    model-free; nothing is written."""
     config = keeper.schema_inference
     profiling = store_settings(settings).profiling
     rules = schema_settings(settings).rules()
@@ -212,9 +215,9 @@ async def infer(
         files, overrides = await _uploads(request, config.max_files + 1, config.max_file_bytes)
         options = service.merged_options(config, overrides, "/body/options")
         proposal = await service.infer_from_files(
-            domain_id, files, config, profiling.csv, options, rules
+            domain_id, files, config, profiling, options, rules
         )
-        source = "csv"
+        source = ",".join(sorted({config.format_of(upload.name) for upload in files}))
     else:
         body = await _json_source(request)
         options = service.merged_options(config, body.options, "/body/options")

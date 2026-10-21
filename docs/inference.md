@@ -1,7 +1,7 @@
-# Schema inference from tables and CSV files
+# Schema inference from tables and data files
 
-Point Lorebase at the tables of a client, as CSV files or as a Postgres schema, and get a
-proposed ontology to review: Kinds, typed Attributes with constraints, primary keys and
+Point Lorebase at the tables of a client, as CSV, JSON, JSON Lines or Parquet files or as a
+Postgres schema, and get a proposed ontology to review: Kinds, typed Attributes with constraints, primary keys and
 Relations with cardinality. Inference is extraction tier 0 ([design 9.1 and 9.2](design.md#91-structured-sources)):
 rules only, deterministic, no model call. It never commits anything: the proposal is a draft
 that a modeler edits and applies as a schema change set on a branch.
@@ -10,20 +10,39 @@ that a modeler edits and applies as a schema change set on a branch.
 |-------|-------|
 | Inference rules (pure, no I/O) | `lorebase_core.infer`: `infer_schema(tables, domain, options)` |
 | CSV/TSV and Postgres profilers | `lorebase_store.profiling`: `profile_file`, `profile_bytes`, `profile_postgres` |
+| Uploaded JSON, JSON Lines and Parquet files | `lorebase_store.profiling`: `profile_json_bytes`, `profile_jsonl_bytes`, `profile_parquet_bytes` |
 | Record profiler (JSON, JSON Lines, Parquet, APIs) | `lorebase_store.profiling.profile_records`; any Scribe Source through its connector: `lorebase_scribe.sources.profile_source` |
 | REST endpoint | `POST /api/v1/domains/{d}/schema:infer` (permission `schema.write`, audited as `schema.infer`) |
 | Settings | `keeper.schema_inference` and `store.profiling` in [config/lorebase.example.yaml](../config/lorebase.example.yaml) |
 
 ## Using it
 
-Upload CSV or TSV files (the file name is the table name):
+Upload files (the file name without its suffix is the table name):
 
 ```bash
 curl -X POST "$LOREBASE/api/v1/domains/supply/schema:infer" \
   -H "Authorization: Bearer $LOREBASE_KEY" \
-  -F files=@supplier.csv -F files=@purchase_order.csv -F files=@supplied_by.csv \
+  -F files=@supplier.csv -F files=@purchase_order.jsonl -F files=@supplied_by.parquet \
   -F 'options={"enum_max_cardinality": 20}'
 ```
+
+The suffix decides how a file is read (`keeper.schema_inference.file_formats`; only
+`file_suffixes` are accepted):
+
+| Suffix | Read as |
+|--------|---------|
+| `.csv`, `.tsv`, `.txt` | CSV or TSV text: the first row is the header, values stay text (`store.profiling.csv`) |
+| `.json` | A UTF-8 JSON document holding an array of objects; a document that is not an array is refused |
+| `.jsonl`, `.ndjson` | JSON Lines: one UTF-8 object per line, blank lines skipped |
+| `.parquet` | A Parquet file, decoded `store.profiling.records.batch_rows` rows at a time; needs pyarrow, installed with `lorebase-keeper[parquet]`, and is refused with a 422 naming the extra without it |
+
+JSON, JSON Lines and Parquet rows are profiled like the rows of a Source
+(`store.profiling.records`): the columns are every key seen, in first-seen order (Parquet: the
+file schema), a key missing from a row is null there, and values keep their types (numbers,
+booleans, dates from Parquet, nested objects and arrays as `json` values). Every upload obeys
+`max_files`, `max_file_bytes` and `max_total_bytes` (413 above the sizes) and
+`keeper.limits.max_request_body_bytes`; a file that cannot be read is refused with a 422
+pointing at it (`/body/files/<index>`).
 
 Or name a Postgres source. The connection is a secret reference that an administrator listed in
 `keeper.schema_inference.allowed_sources`; callers never send connection strings, and the
@@ -184,8 +203,9 @@ patterned strings) and all seven Relations with their cardinality; see
   referenced keys; declared constraints are the only certainty.
 - Tell apart day-month and month-day dates (`date_formats` is explicit), or values that are
   coincidentally unique in small tables.
-- Take JSON, JSON Lines or Parquet uploads through the endpoint: those are profiled as Sources
-  through Scribe (`profile_source`; Parquet needs `lorebase-scribe[parquet]`). Spreadsheets
-  other than CSV/TSV exports are not read.
+- Read records nested inside a JSON upload (`{"data": [...]}`) or flatten nested objects into
+  columns: upload the array itself, or profile the file as a Source with `records_path` and
+  `flatten_separator` through Scribe (`profile_source`). Spreadsheets other than CSV/TSV
+  exports are not read.
 - Produce Source mappings: the proposal is a schema; mapping the tables as Sources is a later
   step.

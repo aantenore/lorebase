@@ -1,4 +1,8 @@
-"""Schema inference from uploaded CSV files or a Postgres source (design 9.1, extraction tier 0).
+"""Schema inference from uploaded files or a Postgres source (design 9.1, extraction tier 0).
+
+Uploads are read by suffix (`keeper.schema_inference.file_formats`): CSV or TSV text, JSON
+documents holding an array of objects, JSON Lines, or Parquet files when pyarrow is installed
+(the `lorebase-keeper[parquet]` extra; without it a Parquet upload is refused with a 422).
 
 Nothing is committed: the proposal is returned for review, and a modeler applies it (edited)
 through a schema change set on a branch. CPU-bound profiling and inference run in a worker
@@ -25,23 +29,30 @@ from lorebase_core.infer import InferenceOptions, SchemaProposal, TableProfile, 
 from lorebase_core.model import SECRET_REFERENCE_PREFIX, Domain
 from lorebase_core.validate import SchemaRules
 from lorebase_keeper.errors import PAYLOAD_TOO_LARGE, UNAVAILABLE, VALIDATION_FAILED, ProblemError
-from lorebase_keeper.services.config import SchemaInferenceSettings
+from lorebase_keeper.services.config import SchemaInferenceSettings, UploadFormat
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_store.db import create_engine
 from lorebase_store.profiling import (
     CsvProfileError,
+    ParquetUnavailableError,
     PostgresProfileError,
+    RecordProfileError,
     profile_bytes,
+    profile_json_bytes,
+    profile_jsonl_bytes,
+    profile_parquet_bytes,
     profile_postgres,
     table_name,
 )
 from lorebase_store.settings import (
-    CsvProfilingSettings,
     DatabaseSettings,
     PostgresProfilingSettings,
+    ProfilingSettings,
 )
 
 logger = logging.getLogger("lorebase.keeper.schema_inference")
+
+PARQUET_EXTRA = "lorebase-keeper[parquet]"
 
 
 @dataclass(frozen=True)
@@ -90,7 +101,7 @@ def merged_options(
 def check_upload_sizes(files: Sequence[UploadedFile], settings: SchemaInferenceSettings) -> None:
     """Refuse requests over the file count, size or suffix limits."""
     if not files:
-        raise invalid("/body/files", "upload at least one CSV file")
+        raise invalid("/body/files", "upload at least one file")
     if len(files) > settings.max_files:
         raise invalid("/body/files", f"at most {settings.max_files} files are accepted")
     names: set[str] = set()
@@ -114,12 +125,32 @@ def check_upload_sizes(files: Sequence[UploadedFile], settings: SchemaInferenceS
         )
 
 
-def _profile_files(files: Sequence[UploadedFile], csv: CsvProfilingSettings) -> list[TableProfile]:
+def _profile_file(
+    upload: UploadedFile, upload_format: UploadFormat, profiling: ProfilingSettings
+) -> TableProfile:
+    match upload_format:
+        case "json":
+            return profile_json_bytes(upload.data, upload.name, profiling.records)
+        case "jsonl":
+            return profile_jsonl_bytes(upload.data, upload.name, profiling.records)
+        case "parquet":
+            return profile_parquet_bytes(upload.data, upload.name, profiling.records)
+        case _:
+            return profile_bytes(upload.data, upload.name, profiling.csv)
+
+
+def _profile_files(
+    files: Sequence[UploadedFile], settings: SchemaInferenceSettings, profiling: ProfilingSettings
+) -> list[TableProfile]:
     profiles = []
     for index, upload in enumerate(files):
         try:
-            profiles.append(profile_bytes(upload.data, upload.name, csv))
-        except CsvProfileError as error:
+            profiles.append(_profile_file(upload, settings.format_of(upload.name), profiling))
+        except ParquetUnavailableError as error:
+            raise invalid(
+                f"/body/files/{index}", f"{error}; this server needs {PARQUET_EXTRA}"
+            ) from None
+        except (CsvProfileError, RecordProfileError) as error:
             raise invalid(f"/body/files/{index}", str(error)) from None
     return profiles
 
@@ -128,16 +159,16 @@ async def infer_from_files(
     domain_id: str,
     files: Sequence[UploadedFile],
     settings: SchemaInferenceSettings,
-    csv: CsvProfilingSettings,
+    profiling: ProfilingSettings,
     options: InferenceOptions,
     rules: SchemaRules | None = None,
 ) -> SchemaProposal:
-    """Profile uploaded CSV/TSV files and propose a schema (validated with `rules`)."""
+    """Profile uploaded files and propose a schema (validated with `rules`)."""
     domain = domain_of(domain_id)
     check_upload_sizes(files, settings)
 
     def run() -> SchemaProposal:
-        return infer_schema(_profile_files(files, csv), domain, options, rules)
+        return infer_schema(_profile_files(files, settings, profiling), domain, options, rules)
 
     return await run_in_threadpool(run)
 

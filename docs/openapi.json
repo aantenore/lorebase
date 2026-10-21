@@ -2113,8 +2113,8 @@
         "tags": [
           "schema"
         ],
-        "summary": "Propose a schema from tables or CSV files",
-        "description": "Profile the uploaded files or the Postgres tables and propose Kinds, typed Attributes,\nkeys and Relations with evidence. Deterministic and model-free; nothing is written.",
+        "summary": "Propose a schema from tables or data files",
+        "description": "Profile the uploaded files (CSV, TSV, JSON, JSON Lines, Parquet) or the Postgres tables\nand propose Kinds, typed Attributes, keys and Relations with evidence. Deterministic and\nmodel-free; nothing is written.",
         "operationId": "infer_api_v1_domains__domain_id__schema_infer_post",
         "security": [
           {
@@ -2228,7 +2228,7 @@
                       "type": "string",
                       "format": "binary"
                     },
-                    "description": "CSV or TSV files; the file name is the table name."
+                    "description": "CSV, TSV, JSON, JSON Lines or Parquet files, read by suffix; the file name is the table name."
                   },
                   "options": {
                     "type": "string",

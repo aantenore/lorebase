@@ -262,10 +262,11 @@ POST /domains/{d}/schema:infer (docs/inference.md)
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `keeper.schema_inference.max_files` | `50` | CSV/TSV files per request |
+| `keeper.schema_inference.max_files` | `50` | files per request |
 | `keeper.schema_inference.max_file_bytes` | `1048576` | per file (413 above); uploads also obey limits.max_request_body_bytes |
 | `keeper.schema_inference.max_total_bytes` | `1048576` | all files together (413 above) |
-| `keeper.schema_inference.file_suffixes` | `[.csv, .tsv, .txt]` |  |
+| `keeper.schema_inference.file_suffixes` | `[.csv, .tsv, .txt, .json, .jsonl, .ndjson, .parquet]` |  |
+| `keeper.schema_inference.file_formats` | `{.json: json, .jsonl: jsonl, .ndjson: jsonl, .parquet: parquet}` | how a suffix is read: json (array of objects), jsonl (one object per line), parquet (needs lorebase-keeper[parquet]); other accepted suffixes are CSV/TSV text |
 | `keeper.schema_inference.allowed_sources` | `[]` | secret references of Postgres URLs callers may name, e.g. secret://env/ERP_DSN; empty disables Postgres inference; the default of every Domain not in domain_sources |
 | `keeper.schema_inference.domain_sources` | `{}` | per-Domain lists replacing allowed_sources for that Domain, e.g. {supply: [secret://env/ERP_DSN], hr: []}; [] = none |
 | `keeper.schema_inference.max_issues` | `500` | issues listed in one response |
@@ -673,6 +674,7 @@ Rows read as records: JSON, JSON Lines, Parquet, HTTP JSON
 | `store.profiling.records.sampling` | `reservoir` | head (first rows) \| reservoir (uniform, seeded, read order) |
 | `store.profiling.records.seed` | `0` |  |
 | `store.profiling.records.max_columns` | `500` | tables with more distinct columns are refused |
+| `store.profiling.records.batch_rows` | `10000` | rows decoded per batch of an uploaded Parquet file |
 
 #### `store.profiling.postgres`
 

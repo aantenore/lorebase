@@ -190,10 +190,14 @@ keeper:
     max_issues: 200              # issues listed in one response
     max_listed_changes: 1000     # element changes listed in one response
   schema_inference:              # POST /domains/{d}/schema:infer (docs/inference.md)
-    max_files: 50                # CSV/TSV files per request
+    max_files: 50                # files per request
     max_file_bytes: 1048576      # per file (413 above); uploads also obey limits.max_request_body_bytes
     max_total_bytes: 1048576     # all files together (413 above)
-    file_suffixes: [.csv, .tsv, .txt]
+    file_suffixes: [.csv, .tsv, .txt, .json, .jsonl, .ndjson, .parquet]
+    file_formats: {.json: json, .jsonl: jsonl, .ndjson: jsonl, .parquet: parquet}   # how a
+                                 # suffix is read: json (array of objects), jsonl (one object
+                                 # per line), parquet (needs lorebase-keeper[parquet]); other
+                                 # accepted suffixes are CSV/TSV text
     allowed_sources: []          # secret references of Postgres URLs callers may name, e.g.
                                  # secret://env/ERP_DSN; empty disables Postgres inference;
                                  # the default of every Domain not in domain_sources
@@ -509,6 +513,7 @@ store:
       sampling: reservoir        # head (first rows) | reservoir (uniform, seeded, read order)
       seed: 0
       max_columns: 500           # tables with more distinct columns are refused
+      batch_rows: 10000          # rows decoded per batch of an uploaded Parquet file
     postgres:
       sample_rows: 10000         # rows read per table (LIMIT), in a read-only transaction
       max_tables: 200            # tables profiled per request

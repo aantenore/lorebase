@@ -16,6 +16,15 @@ from lorebase_core.tree import DEFAULT_LEAF_SIZE
 from lorebase_platform.settings import SectionModel
 from lorebase_store.models.enums import PrincipalType
 
+#: How an uploaded file is read for schema inference.
+UploadFormat = Literal["csv", "json", "jsonl", "parquet"]
+DEFAULT_UPLOAD_FORMATS: dict[str, UploadFormat] = {
+    ".json": "json",
+    ".jsonl": "jsonl",
+    ".ndjson": "jsonl",
+    ".parquet": "parquet",
+}
+
 DEFAULT_REF_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
 
 
@@ -165,9 +174,11 @@ class ProposalSettings(SectionModel):
 
 
 class SchemaInferenceSettings(SectionModel):
-    """Schema inference from uploaded CSV files or Postgres tables (design 9.1, tier 0).
+    """Schema inference from uploaded files or Postgres tables (design 9.1, tier 0).
 
-    Uploads are also bounded by `keeper.limits.max_request_body_bytes`.
+    Uploads are CSV or TSV text, JSON documents, JSON Lines or Parquet files (Parquet needs the
+    `lorebase-keeper[parquet]` extra); they are also bounded by
+    `keeper.limits.max_request_body_bytes`.
     """
 
     max_files: int = Field(default=50, ge=1, description="Files accepted by one request.")
@@ -178,7 +189,15 @@ class SchemaInferenceSettings(SectionModel):
         default=1_048_576, ge=1, description="Largest sum of file sizes, in bytes (413 above)."
     )
     file_suffixes: tuple[str, ...] = Field(
-        default=(".csv", ".tsv", ".txt"), min_length=1, description="Accepted file name suffixes."
+        default=(".csv", ".tsv", ".txt", ".json", ".jsonl", ".ndjson", ".parquet"),
+        min_length=1,
+        description="Accepted file name suffixes.",
+    )
+    file_formats: dict[str, UploadFormat] = Field(
+        default_factory=DEFAULT_UPLOAD_FORMATS.copy,
+        description="How files are read, by lowercase name suffix: json (an array of objects), "
+        "jsonl (one object per line) or parquet; any other accepted suffix is read as CSV or "
+        "TSV text (csv).",
     )
     allowed_sources: tuple[str, ...] = Field(
         default=(),
@@ -197,6 +216,17 @@ class SchemaInferenceSettings(SectionModel):
         default_factory=InferenceOptions,
         description="Thresholds and naming rules; a request may override some of them.",
     )
+
+    @field_validator("file_formats")
+    @classmethod
+    def _lowercase_suffixes(cls, value: dict[str, UploadFormat]) -> dict[str, UploadFormat]:
+        return {suffix.lower(): fmt for suffix, fmt in value.items()}
+
+    def format_of(self, file_name: str) -> UploadFormat:
+        """How a file is read: by the longest matching suffix of `file_formats`, else csv."""
+        name = file_name.lower()
+        matches = [suffix for suffix in self.file_formats if name.endswith(suffix)]
+        return self.file_formats[max(matches, key=len)] if matches else "csv"
 
     @field_validator("domain_sources")
     @classmethod
