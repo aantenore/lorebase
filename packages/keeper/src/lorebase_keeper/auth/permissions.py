@@ -12,6 +12,10 @@ Role semantics where the design table leaves room:
 - `editor` and `modeler` open Proposals (`proposal.create`) from the branches they change;
   `editor` (and so `maintainer`) also triggers Source synchronizations (`source.sync`), whose
   outcome goes through the Source's merge policy;
+  `editor` uploads documents for extraction (`document.write`) and reads them
+  (`document.read`); `reviewer` reads documents too, since extraction items quote them;
+  documents are raw, unmasked input, so `viewer`, `explorer` and `agent-reader` do not read
+  them;
   `reviewer` reviews them and resolves Conflicts; merging needs `proposal.merge`
   (`maintainer`), into protected and unprotected branches alike;
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
@@ -43,6 +47,8 @@ class Permission(StrEnum):
     PROPOSAL_MERGE = "proposal.merge"
     SOURCE_MANAGE = "source.manage"
     SOURCE_SYNC = "source.sync"
+    DOCUMENT_READ = "document.read"
+    DOCUMENT_WRITE = "document.write"
     JOB_MANAGE = "job.manage"
     GRANT_MANAGE = "grant.manage"
     APIKEY_MANAGE = "apikey.manage"
@@ -63,8 +69,14 @@ _EDITOR = _VIEWER | {
     Permission.OPERATION_EXECUTE,
     Permission.PROPOSAL_CREATE,
     Permission.SOURCE_SYNC,
+    Permission.DOCUMENT_READ,
+    Permission.DOCUMENT_WRITE,
 }
-_REVIEWER = _VIEWER | {Permission.PROPOSAL_REVIEW, Permission.CONFLICT_RESOLVE}
+_REVIEWER = _VIEWER | {
+    Permission.PROPOSAL_REVIEW,
+    Permission.CONFLICT_RESOLVE,
+    Permission.DOCUMENT_READ,
+}
 
 BUILTIN_ROLES: Mapping[str, frozenset[Permission]] = MappingProxyType(
     {

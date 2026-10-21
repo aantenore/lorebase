@@ -13,6 +13,7 @@ from fastapi import APIRouter
 from lorebase_keeper.routes import (
     agents,
     branches,
+    documents,
     domains,
     events,
     operations,
@@ -37,6 +38,7 @@ def domain_routers() -> list[APIRouter]:
         agents.router,
         webhooks.router,
         sources.router,
+        documents.router,
         events.router,  # `/branches/{branch:path}/events` and `/changes` before the catch-all
         proposals.router,
         revisions.router,  # `/branches/{branch:path}/log` before the branch catch-all

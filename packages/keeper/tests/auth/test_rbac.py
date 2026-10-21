@@ -20,17 +20,21 @@ from lorebase_store.models.enums import GrantScope, PrincipalType
 P = Permission
 ALL = frozenset(Permission)
 READ = {P.SCHEMA_READ, P.DATA_READ}
+DOCUMENTS = {P.DOCUMENT_READ, P.DOCUMENT_WRITE}
 
 # The matrix of design 10.2, written out independently of the implementation.
 EXPECTED: dict[str, set[Permission]] = {
     "viewer": READ,
     "explorer": READ | {P.VIEWS_WRITE},
-    "editor": READ | {P.BRANCH_CREATE, P.OPERATION_EXECUTE, P.PROPOSAL_CREATE, P.SOURCE_SYNC},
+    "editor": READ
+    | {P.BRANCH_CREATE, P.OPERATION_EXECUTE, P.PROPOSAL_CREATE, P.SOURCE_SYNC}
+    | DOCUMENTS,
     "operator": READ | {P.OPERATION_EXECUTE_CUSTOM},
     "modeler": READ | {P.SCHEMA_WRITE, P.SOURCE_MAP, P.PROPOSAL_CREATE},
-    "reviewer": READ | {P.PROPOSAL_REVIEW, P.CONFLICT_RESOLVE},
+    "reviewer": READ | {P.PROPOSAL_REVIEW, P.CONFLICT_RESOLVE, P.DOCUMENT_READ},
     "maintainer": READ
     | {P.BRANCH_CREATE, P.OPERATION_EXECUTE, P.PROPOSAL_CREATE, P.SOURCE_SYNC}
+    | DOCUMENTS
     | {P.PROPOSAL_REVIEW, P.CONFLICT_RESOLVE}
     | {P.PROPOSAL_MERGE, P.SOURCE_MANAGE, P.JOB_MANAGE},
     "admin": set(ALL),

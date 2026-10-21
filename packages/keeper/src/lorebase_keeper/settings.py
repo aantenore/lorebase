@@ -14,6 +14,7 @@ from pydantic import Field, field_validator, model_validator
 from lorebase_keeper.auth.config import AuthSettings
 from lorebase_keeper.services.config import (
     BranchSettings,
+    DocumentSettings,
     DomainSettings,
     OperationSettings,
     ProposalSettings,
@@ -162,6 +163,7 @@ class KeeperSettings(SectionModel):
     schema_inference: SchemaInferenceSettings = Field(default_factory=SchemaInferenceSettings)
     operations: OperationSettings = Field(default_factory=OperationSettings)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
+    documents: DocumentSettings = Field(default_factory=DocumentSettings)
 
     @field_validator("api_prefix")
     @classmethod

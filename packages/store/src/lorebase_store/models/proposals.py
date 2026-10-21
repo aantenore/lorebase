@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import REAL, ForeignKeyConstraint, Index, Integer, UniqueConstraint, text
+from sqlalchemy import (
+    REAL,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    SmallInteger,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lorebase_store.models.base import H32, Base, DomainKey, domain_fk
@@ -81,10 +90,15 @@ class ProposalReview(Base):
 
 
 class ProposalItem(Base):
-    """Per-item decision for extraction Proposals."""
+    """One extraction Proposal item: a proposed Record, Attribute value or Link with its
+    evidence, confidence and decision."""
 
     __tablename__ = "proposal_items"
-    __table_args__ = (_proposal_fk(),)
+    __table_args__ = (
+        _proposal_fk(),
+        CheckConstraint("item_type IN ('record', 'value', 'link')", name="item_type"),
+        Index(None, "domain_id", "proposal_id", "seq"),
+    )
 
     domain_id: Mapped[DomainKey]
     proposal_id: Mapped[str] = mapped_column(primary_key=True)
@@ -97,6 +111,19 @@ class ProposalItem(Base):
     decision: Mapped[ItemDecision] = mapped_column(ITEM_DECISION)
     decided_by: Mapped[str | None]
     decided_at: Mapped[datetime | None]
+    #: `record` (new Record), `value` (Attribute value of an existing Record) or `link`.
+    item_type: Mapped[str] = mapped_column(server_default=text("'record'"))
+    seq: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    job_id: Mapped[str | None]
+    #: What the item proposes: Kind and key with values, or Relation and endpoints.
+    subject: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    #: Entity resolution outcome: status, method, candidates.
+    match: Mapped[dict[str, Any] | None]
+    tier: Mapped[int | None] = mapped_column(SmallInteger)
+    model: Mapped[str | None]
+    #: Reviewer edits applied over `subject` values when the item is accepted.
+    edits: Mapped[dict[str, Any] | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
 
 class MergeAttempt(Base):
