@@ -120,11 +120,16 @@ provider library.
 
 ```bash
 # .env
-LITELLM_MASTER_KEY=<strong secret>
+LITELLM_MASTER_KEY=sk-<48 hex characters>     # printf 'sk-%s\n' "$(openssl rand -hex 24)"
 LITELLM_UPSTREAM_MODEL=<provider>/<model>      # LiteLLM notation
 LITELLM_UPSTREAM_API_KEY=<provider key>
 docker compose --profile litellm up -d litellm
 ```
+
+The proxy does not start while `LITELLM_MASTER_KEY` is empty, still `change-me` or shorter
+than 16 characters: the one-shot `litellm-secrets` exits with the reason
+(`docker compose logs litellm-secrets`). Grafana of the `observability` profile has the same
+guard for `GRAFANA_ADMIN_PASSWORD` (`grafana-secrets`).
 
 ```yaml
 inference:
