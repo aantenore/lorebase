@@ -10,7 +10,8 @@ STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/
 	packages/client/src packages/cli/src packages/scribe/src
 OTHER_SRC := packages/platform/src packages/inference/src
 
-.PHONY: help sync fmt lint type openapi test-unit test-int test-changed test-perf security demo demo-down
+.PHONY: help sync fmt lint type openapi docs docs-serve test-unit test-int test-changed \
+	test-perf security demo demo-down
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -33,6 +34,12 @@ type: ## mypy: strict for core, store, keeper, herald, client, cli and scribe; d
 
 openapi: ## Regenerate docs/openapi.json from the Keeper application
 	$(UV) run python scripts/export_openapi.py
+
+docs: ## Build the documentation site into build/site (strict: a warning fails)
+	$(UV) run --group docs mkdocs build --strict
+
+docs-serve: ## Serve the documentation site at http://127.0.0.1:8000 with live reload
+	$(UV) run --group docs mkdocs serve
 
 test-unit: ## Unit tests of all packages and repository tooling (no external services)
 	$(UV) run pytest packages tests/tooling -m "not integration"

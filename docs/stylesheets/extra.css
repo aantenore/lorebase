@@ -1,0 +1,13 @@
+/* The API reference is a Redoc page in a frame: give it the height of the window. */
+.api-frame {
+  width: 100%;
+  height: 80vh;
+  min-height: 32rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+}
+
+/* Wide settings tables (configuration reference) scroll inside the page instead of squeezing. */
+.md-typeset table:not([class]) code {
+  word-break: break-word;
+}
