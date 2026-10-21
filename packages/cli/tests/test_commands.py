@@ -1424,3 +1424,106 @@ def test_explain_of_a_missing_record_exits_one(http: respx.MockRouter) -> None:
         return_value=problem(404, "not-found", "No such Record.")
     )
     assert run("explain", "Part", "P-9", "-d", "supply").exit_code == 1
+
+
+def health_summary(**changes: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "kinds": 1,
+        "records": 30,
+        "links": 12,
+        "invalid_records": 2,
+        "orphan_links": 3,
+        "required_relation_gaps": 1,
+        "duplicate_groups": 4,
+        "stale_kinds": 1,
+        "sampled_kinds": 0,
+        **changes,
+    }
+
+
+KIND_HEALTH = {
+    "kind": "Part",
+    "records": 30,
+    "last_change": {"revision": REV, "at": NOW},
+    "violations": {
+        "checked": 30,
+        "sampled": False,
+        "invalid_records": 2,
+        "issues": [],
+        "issues_truncated": False,
+    },
+    "duplicates": {"attributes": ["name"], "groups": [], "total_groups": 4},
+    "derived": {"attributes": ["supplier_count"], "records_missing_value": 30, "stale": True},
+}
+RELATION_HEALTH = {
+    "relation": "supplied_by",
+    "from_kind": "Part",
+    "to_kind": "Supplier",
+    "backing": "explicit",
+    "links": 12,
+    "orphan_links": {"count": 3, "missing_from": 0, "missing_to": 3, "examples": []},
+    "required": True,
+    "required_gaps": {"missing": 1, "examples": ["P-9"]},
+}
+HEALTH_HEAD = {"revision": REV, "served_from": "materialized", "domain": "supply", "branch": "main"}
+
+
+def test_health_prints_the_domain_report_json_or_markdown(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/health")
+    document = {
+        **HEALTH_HEAD,
+        "summary": health_summary(),
+        "kinds": [KIND_HEALTH],
+        "relations": [RELATION_HEALTH],
+    }
+    route.side_effect = [
+        httpx.Response(200, json=document),
+        httpx.Response(200, json=document),
+        httpx.Response(200, text="# Health\n", headers={"content-type": "text/markdown"}),
+    ]
+    result = run("health", "-d", "supply", "-b", "main")
+    assert result.exit_code == 0
+    assert "needs attention" in result.stdout
+    assert "invalid records" in result.stdout
+    assert "Part" in result.stdout
+    assert "stale" in result.stdout
+    assert "supplied_by" in result.stdout
+    assert (
+        json.loads(run("health", "-d", "supply", "--json").stdout)["summary"]["orphan_links"] == 3
+    )
+    assert run("health", "-d", "supply", "--markdown").stdout == "# Health\n"
+    assert [dict(c.request.url.params) for c in route.calls] == [
+        {"branch": "main", "format": "json"},
+        {"format": "json"},
+        {"format": "markdown"},
+    ]
+
+
+def test_health_of_one_kind(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/kinds/Part/health")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                **HEALTH_HEAD,
+                "summary": health_summary(ok=True),
+                "health": KIND_HEALTH,
+                "relations": [{**RELATION_HEALTH, "direction": "outgoing"}],
+            },
+        ),
+        httpx.Response(200, text="# Health of Part\n", headers={"content-type": "text/markdown"}),
+    ]
+    result = run("health", "Part", "-d", "supply")
+    assert result.exit_code == 0
+    assert "status" in result.stdout
+    assert "ok" in result.stdout
+    assert "supplied_by" in result.stdout
+    assert run("health", "Part", "-d", "supply", "--markdown").stdout == "# Health of Part\n"
+
+
+def test_health_of_an_unreadable_kind_exits_three(http: respx.MockRouter) -> None:
+    http.get("/domains/supply/kinds/Plant/health").mock(
+        return_value=problem(403, "forbidden", "Missing permission on Kind Plant.")
+    )
+    assert run("health", "Plant", "-d", "supply").exit_code == 3

@@ -981,3 +981,65 @@ async def test_async_proposals_agents_and_webhooks(http: respx.MockRouter, sleep
     assert json.loads(context.calls.last.request.content)["format"] == "json"
     assert empty.items == []
     assert hooks.called
+
+
+SUMMARY = {
+    "ok": False,
+    "kinds": 1,
+    "records": 3,
+    "links": 2,
+    "invalid_records": 1,
+    "orphan_links": 0,
+    "required_relation_gaps": 0,
+    "duplicate_groups": 0,
+    "stale_kinds": 0,
+    "sampled_kinds": 0,
+}
+
+
+def test_health_reports_json_and_markdown(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    domain = http.get("/domains/supply/health")
+    kind = http.get("/domains/supply/kinds/Part/health")
+    head = {"revision": "aa", "served_from": "materialized", "domain": "supply", "branch": "work"}
+    markdown = httpx.Response(200, text="# Health\n", headers={"content-type": "text/markdown"})
+    domain.side_effect = [
+        httpx.Response(
+            200, json={**head, "summary": SUMMARY, "kinds": [{"kind": "Part"}], "relations": []}
+        ),
+        markdown,
+    ]
+    kind.side_effect = [
+        httpx.Response(
+            200, json={**head, "summary": SUMMARY, "health": {"kind": "Part"}, "relations": []}
+        ),
+        markdown,
+    ]
+    with make(sleeps) as client:
+        report = client.agents.health("supply", branch="work")
+        text = client.agents.health_markdown("supply", branch="work")
+        one = client.agents.kind_health("supply", "Part", branch="work")
+        one_text = client.agents.kind_health_markdown("supply", "Part", branch="work")
+    assert not report.summary.ok
+    assert report.summary.invalid_records == 1
+    assert report.kinds[0]["kind"] == "Part"
+    assert one.health["kind"] == "Part"
+    assert text.startswith("# Health")
+    assert one_text.startswith("# Health")
+    assert [dict(c.request.url.params) for c in domain.calls] == [
+        {"branch": "work", "format": "json"},
+        {"branch": "work", "format": "markdown"},
+    ]
+    assert [dict(c.request.url.params) for c in kind.calls] == [
+        {"branch": "work", "format": "json"},
+        {"branch": "work", "format": "markdown"},
+    ]
+
+
+async def test_async_health_report(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    head = {"revision": "aa", "served_from": "materialized", "domain": "supply", "branch": "main"}
+    http.get("/domains/supply/kinds/Part/health").respond(
+        200, json={**head, "summary": SUMMARY, "health": {"kind": "Part"}, "relations": []}
+    )
+    async with amake(sleeps) as client:
+        report = await client.agents.kind_health("supply", "Part")
+    assert report.summary.records == 3

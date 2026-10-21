@@ -181,6 +181,7 @@ keyed by Revision, so commits never serve a stale pack.
 | the graph around some Records | `POST /neighborhood` |
 | Records by text or vector | `POST /search` |
 | what changed between two Revisions | `GET /diff?from=&to=` |
+| whether the data is sound | `GET /health`, `GET /kinds/{kind}/health` (section 6) |
 
 ## 3. Explain a Record
 
@@ -294,9 +295,64 @@ internal service; redirects are never followed. Give the sender an `httpx.AsyncC
 with `trust_env=False`, so no proxy from the environment sits in between. `GET /webhooks` lists them (never the
 secret) and `DELETE /webhooks/{id}` removes one with its pending deliveries.
 
+## 6. Check the health of the data
+
+`GET /health?branch=` and `GET /kinds/{kind}/health?branch=` (add `format=markdown` for text
+to paste into a prompt) say how sound the head of a branch is before you build on it. They are
+computed when asked, from the materialized rows, and cached under the Revision they describe.
+Per Kind:
+
+- **records** and the **last change** (the latest Revision that touched the Kind);
+- **violations**: Records re-validated against the current schema (types, canonical form,
+  constraints, required values, keys, Trait conformance), grouped by rule and Attribute with
+  example keys. Past `read.health.max_records_validated` a fixed, evenly spread sample is
+  checked and `sampled` is true;
+- **duplicates**: Records whose unique or title Attribute is equal once case and spacing are
+  ignored. A duplicate on a unique Attribute is a violation (`unique: true`); on a title it is
+  a candidate for a merge. Values of Attributes with sensitivity tags are not printed;
+- **derived**: derived Attributes whose materialized value is missing (`stale`).
+
+Per Relation: stored **links** (for a foreign-key backed Relation, the references), **orphan
+links** whose `from` or `to` Record does not exist, and for a Relation with `required_from`
+the Records **missing** the required Link. `summary.ok` is false when there are violations,
+orphans, gaps or duplicates of unique Attributes; duplicate titles and stale derived values
+are reported without failing it. A grant narrowed to Kinds gets the report for those Kinds and
+for Relations between them only. The CLI prints the same with `lorebase health [KIND]`
+(`--markdown`, `--json`). An excerpt of the Markdown report for a damaged copy of the example:
+
+```markdown
+# Health of supply on broken
+revision 97ce9a2ce272
+
+needs attention: 6 kinds, 184 records, 289 links
+- invalid records: 3; orphan links: 10; required-relation gaps: 2; duplicate groups: 12; kinds with stale derived values: 1
+
+## Kinds
+| kind | records | invalid | duplicate groups | derived | last change |
+| --- | --- | --- | --- | --- | --- |
+| Part | 40 | 0 | 4 | stale | 97ce9a2ce272 |
+| PurchaseOrder | 50 | 1 | 0 |  | 97ce9a2ce272 |
+| Supplier | 30 | 2 | 2 |  | 97ce9a2ce272 |
+
+### Supplier: violations (30 of 30 Records checked)
+- value.pattern on country: 1 (e.g. S-1003)
+- value.required on legal_name: 1 (e.g. S-1004)
+### Supplier: duplicates (2 groups)
+- vat_number [unique]: S-1002, S-1006 (2)
+
+## Relations
+| relation | ends | links | orphans | gaps | side |
+| --- | --- | --- | --- | --- | --- |
+| for_part | PurchaseOrder -> Part | 49 | 0 | 1 |  |
+| stocked_at | Part -> Plant | 48 | 3 |  |  |
+- for_part required, missing for: PO-200001
+- stocked_at orphans: P-10003->PL-01, P-10029->PL-01, P-10032->PL-01
+```
+
 ## Settings
 
 All limits are configuration (`config/lorebase.example.yaml`): `agents.context` (budgets,
 estimator, caps, trim order), `agents.explain` (listed Links and Proposals), `agents.feed`
-(poll interval, heartbeat, connection time, page sizes, scan depth) and `webhooks` (targets,
+(poll interval, heartbeat, connection time, page sizes, scan depth), `read.health` (records
+validated, examples, duplicate and orphan caps, statement timeout) and `webhooks` (targets,
 headers, timeouts, retries, retention).

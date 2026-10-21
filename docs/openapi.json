@@ -3525,6 +3525,287 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health of a Domain",
+        "description": "Per Kind: Records, Links by Relation, constraint violations against the current schema,\nrequired-relation gaps, orphan Links, duplicates on unique and title Attributes, stale\nderived values and the last change; for the Kinds the caller may read.",
+        "operationId": "domain_health_api_v1_domains__domain_id__health_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Branch to examine; default: the Domain's default branch.",
+              "title": "Branch"
+            },
+            "description": "Branch to examine; default: the Domain's default branch."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "type": "string",
+              "description": "`markdown` renders the report as text.",
+              "default": "json",
+              "title": "Format"
+            },
+            "description": "`markdown` renders the report as text."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report in JSON, or markdown with `format=markdown`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainHealthOut"
+                }
+              },
+              "text/markdown; charset=utf-8": {}
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Kind not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The branch has no materialized head.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The scan exceeded its statement timeout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/kinds/{kind}/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health of a Kind",
+        "description": "The checks of the Domain report for one Kind, with the Relations it takes part in.",
+        "operationId": "kind_health_api_v1_domains__domain_id__kinds__kind__health_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Branch to examine; default: the Domain's default branch.",
+              "title": "Branch"
+            },
+            "description": "Branch to examine; default: the Domain's default branch."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "type": "string",
+              "description": "`markdown` renders the report as text.",
+              "default": "json",
+              "title": "Format"
+            },
+            "description": "`markdown` renders the report as text."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report in JSON, or markdown with `format=markdown`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KindHealthOut"
+                }
+              },
+              "text/markdown; charset=utf-8": {}
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Kind not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The branch has no materialized head.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The scan exceeded its statement timeout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/context": {
       "post": {
         "tags": [
@@ -9249,6 +9530,33 @@
         "title": "DerivedCondition",
         "description": "Compare a derived Attribute with a value."
       },
+      "DerivedReport": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attributes"
+          },
+          "records_missing_value": {
+            "type": "integer",
+            "title": "Records Missing Value"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributes",
+          "records_missing_value",
+          "stale"
+        ],
+        "title": "DerivedReport",
+        "description": "Derived Attributes whose materialized value is missing, so reads cannot serve it."
+      },
       "DomainCreate": {
         "properties": {
           "id": {
@@ -9292,6 +9600,55 @@
         ],
         "title": "DomainCreate",
         "description": "A new Domain."
+      },
+      "DomainHealthOut": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision the response was served from (hex)."
+          },
+          "served_from": {
+            "$ref": "#/components/schemas/ServedFrom"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/HealthSummary"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/KindHealth"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/RelationHealth"
+            },
+            "type": "array",
+            "title": "Relations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "served_from",
+          "domain",
+          "branch",
+          "summary",
+          "kinds",
+          "relations"
+        ],
+        "title": "DomainHealthOut",
+        "description": "Health of a Domain at the head of a branch, for the Kinds the caller may read."
       },
       "DomainOut": {
         "properties": {
@@ -9390,6 +9747,98 @@
         "type": "object",
         "title": "DomainUpdate",
         "description": "Display metadata; omitted members are left unchanged."
+      },
+      "DuplicateGroup": {
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "title": "Attribute"
+          },
+          "unique": {
+            "type": "boolean",
+            "title": "Unique",
+            "description": "The Attribute is unique: this is a violation, not a hint."
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "The normalized value; null for Attributes with sensitivity tags."
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attribute",
+          "unique",
+          "value",
+          "count",
+          "keys"
+        ],
+        "title": "DuplicateGroup",
+        "description": "Records whose value of one Attribute is the same once case and spacing are ignored."
+      },
+      "DuplicateReport": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attributes",
+            "description": "Attributes checked."
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateGroup"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "total_groups": {
+            "type": "integer",
+            "title": "Total Groups"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "too_many_records",
+                  "disabled"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributes",
+          "groups",
+          "total_groups"
+        ],
+        "title": "DuplicateReport",
+        "description": "Normalized exact duplicates on unique and title Attributes."
       },
       "Edge": {
         "properties": {
@@ -9932,6 +10381,67 @@
         "title": "GrantScope",
         "description": "What a grant applies to (design 10.2)."
       },
+      "HealthSummary": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "description": "No violations, orphan Links, required-relation gaps or duplicates of unique Attributes found. Duplicate candidates on title Attributes and stale derived values are reported but do not make a report not ok."
+          },
+          "kinds": {
+            "type": "integer",
+            "title": "Kinds"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          },
+          "links": {
+            "type": "integer",
+            "title": "Links"
+          },
+          "invalid_records": {
+            "type": "integer",
+            "title": "Invalid Records"
+          },
+          "orphan_links": {
+            "type": "integer",
+            "title": "Orphan Links"
+          },
+          "required_relation_gaps": {
+            "type": "integer",
+            "title": "Required Relation Gaps"
+          },
+          "duplicate_groups": {
+            "type": "integer",
+            "title": "Duplicate Groups"
+          },
+          "stale_kinds": {
+            "type": "integer",
+            "title": "Stale Kinds",
+            "description": "Kinds with derived values missing."
+          },
+          "sampled_kinds": {
+            "type": "integer",
+            "title": "Sampled Kinds",
+            "description": "Kinds re-validated on a sample only."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "kinds",
+          "records",
+          "links",
+          "invalid_records",
+          "orphan_links",
+          "required_relation_gaps",
+          "duplicate_groups",
+          "stale_kinds",
+          "sampled_kinds"
+        ],
+        "title": "HealthSummary"
+      },
       "HistoryOut": {
         "properties": {
           "changes": {
@@ -10037,7 +10547,160 @@
         "title": "Include",
         "description": "Neighbors to return with each Record, through one Relation."
       },
+      "IssueGroup": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Validation issue code, e.g. value.required or value.pattern."
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Attribute api name, when one."
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Examples",
+            "description": "Keys of some of the Records."
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "count",
+          "examples"
+        ],
+        "title": "IssueGroup",
+        "description": "Records failing the same rule of the current schema."
+      },
       "JsonValue": {},
+      "KindHealth": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          },
+          "last_change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "violations": {
+            "$ref": "#/components/schemas/ViolationReport"
+          },
+          "duplicates": {
+            "$ref": "#/components/schemas/DuplicateReport"
+          },
+          "derived": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DerivedReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present for Kinds with derived Attributes."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "records",
+          "violations",
+          "duplicates"
+        ],
+        "title": "KindHealth"
+      },
+      "KindHealthOut": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision the response was served from (hex)."
+          },
+          "served_from": {
+            "$ref": "#/components/schemas/ServedFrom"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/HealthSummary"
+          },
+          "health": {
+            "$ref": "#/components/schemas/KindHealth"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/RelationHealth"
+            },
+            "type": "array",
+            "title": "Relations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "served_from",
+          "domain",
+          "branch",
+          "summary",
+          "health",
+          "relations"
+        ],
+        "title": "KindHealthOut",
+        "description": "Health of one Kind, with the Relations it takes part in."
+      },
+      "LastChange": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "at"
+        ],
+        "title": "LastChange",
+        "description": "The latest Revision on the branch that changed a Record of the Kind."
+      },
       "LineageOut": {
         "properties": {
           "provenance_id": {
@@ -10320,6 +10983,24 @@
           "items"
         ],
         "title": "LinkPage"
+      },
+      "LinkRef": {
+        "properties": {
+          "from_key": {
+            "type": "string",
+            "title": "From Key"
+          },
+          "to_key": {
+            "type": "string",
+            "title": "To Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_key",
+          "to_key"
+        ],
+        "title": "LinkRef"
       },
       "Liveness": {
         "properties": {
@@ -10657,6 +11338,40 @@
         ],
         "title": "OrderBy",
         "description": "One ordering term: an Attribute, `key` or `title`. Absent values sort last."
+      },
+      "OrphanLinks": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "missing_from": {
+            "type": "integer",
+            "title": "Missing From",
+            "description": "Links whose `from` Record is missing."
+          },
+          "missing_to": {
+            "type": "integer",
+            "title": "Missing To",
+            "description": "Links whose `to` Record is missing."
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/LinkRef"
+            },
+            "type": "array",
+            "title": "Examples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "missing_from",
+          "missing_to",
+          "examples"
+        ],
+        "title": "OrphanLinks",
+        "description": "Links, or foreign keys, whose endpoint Record does not exist."
       },
       "PackChangeOut": {
         "properties": {
@@ -12159,6 +12874,108 @@
         ],
         "title": "RecordResponse"
       },
+      "RelationBacking": {
+        "type": "string",
+        "enum": [
+          "explicit",
+          "foreign_key"
+        ],
+        "title": "RelationBacking",
+        "description": "``explicit``: Links are stored. ``foreign_key``: Links derive from a ``ref`` Attribute."
+      },
+      "RelationHealth": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation",
+            "description": "Relation api name, forward direction."
+          },
+          "from_kind": {
+            "type": "string",
+            "title": "From Kind"
+          },
+          "to_kind": {
+            "type": "string",
+            "title": "To Kind"
+          },
+          "backing": {
+            "$ref": "#/components/schemas/RelationBacking"
+          },
+          "links": {
+            "type": "integer",
+            "title": "Links"
+          },
+          "orphan_links": {
+            "$ref": "#/components/schemas/OrphanLinks"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "required_gaps": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequiredGaps"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present for Relations with `required_from`."
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "outgoing",
+                  "incoming",
+                  "self"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction",
+            "description": "In a Kind report: the side the Kind is on."
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "from_kind",
+          "to_kind",
+          "backing",
+          "links",
+          "orphan_links",
+          "required"
+        ],
+        "title": "RelationHealth"
+      },
+      "RequiredGaps": {
+        "properties": {
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Examples",
+            "description": "Keys of some of the Records."
+          }
+        },
+        "type": "object",
+        "required": [
+          "missing",
+          "examples"
+        ],
+        "title": "RequiredGaps",
+        "description": "Records of the `from` Kind without the Link a required Relation demands."
+      },
       "ResolutionIn": {
         "properties": {
           "choice": {
@@ -13645,6 +14462,46 @@
         ],
         "title": "ViaCondition",
         "description": "A Link of `via` exists, to a Record matching `where` when given."
+      },
+      "ViolationReport": {
+        "properties": {
+          "checked": {
+            "type": "integer",
+            "title": "Checked",
+            "description": "Records re-validated."
+          },
+          "sampled": {
+            "type": "boolean",
+            "title": "Sampled",
+            "description": "Only a subset of the Kind's Records was re-validated."
+          },
+          "invalid_records": {
+            "type": "integer",
+            "title": "Invalid Records",
+            "description": "Re-validated Records with at least one issue."
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/IssueGroup"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "issues_truncated": {
+            "type": "boolean",
+            "title": "Issues Truncated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "checked",
+          "sampled",
+          "invalid_records",
+          "issues"
+        ],
+        "title": "ViolationReport",
+        "description": "Result of re-validating Records with the schema of the branch head."
       },
       "WebhookCreated": {
         "properties": {
