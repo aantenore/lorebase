@@ -79,14 +79,14 @@ class RateLimiter:
 
     def failure_keys(self, address: IPAddress | None, key_prefix: str | None) -> tuple[str, ...]:
         """The failed-authentication buckets of a request: its client address (an IPv6
-        address by its network) and its API key prefix, each when known."""
+        address by its network) and, unless turned off, its API key prefix, each when known."""
         keys: list[str] = []
         if isinstance(address, ipaddress.IPv6Address):
             length = self._settings.auth_failures.ipv6_prefix_length
             keys.append(f"addr:{ipaddress.ip_network(f'{address}/{length}', strict=False)}")
         elif address is not None:
             keys.append(f"addr:{address}")
-        if key_prefix is not None:
+        if key_prefix is not None and self._settings.auth_failures.per_key_prefix_enabled:
             keys.append(f"prefix:{key_prefix}")
         return tuple(f"{AUTH_FAILURES}|{key}" for key in keys)
 

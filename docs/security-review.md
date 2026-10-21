@@ -197,7 +197,9 @@ credential takes a token from both; while either is empty the request gets 429 w
 `Retry-After` before the prefix lookup, the HMAC or the token validation, stays out of the audit
 log and is logged at DEBUG. Successes take nothing. Trade-off, documented in
 [operations.md](operations.md): whoever knows a key prefix (it is not secret) can keep that key
-throttled, and clients behind one address share its bucket. Tests:
+throttled, and clients behind one address share its bucket. Operators who cannot accept that set
+`auth_failures.per_key_prefix_enabled: false`: only the per-address bucket (always on) is kept.
+Tests:
 `packages/keeper/tests/auth/test_auth_failure_limits.py`,
 `packages/keeper/tests/ratelimit/test_rate_limit_buckets.py`.
 
@@ -222,7 +224,8 @@ grant changed through another Keeper is seen within the interval plus
 `keeper.auth.authz.grants_cache_ttl_s`. Test:
 `packages/keeper/tests/integration/test_read_authorization.py`.
 
-Remaining limits: the per-prefix bucket of F20 can be used to throttle a known key; the Helm
+Remaining limits: the per-prefix bucket of F20 can be used to throttle a known key
+(`per_key_prefix_enabled: false` removes it); the Helm
 chart has one DSN for the migration and the services (F6); bundle headers of pax and GNU long
 names are bounded by the archive size only (F14); the `O_NOFOLLOW` walk of CSV and bundle files
 is POSIX only (F14, F18); schema inference sources are bound to Domains but not to schemas or
