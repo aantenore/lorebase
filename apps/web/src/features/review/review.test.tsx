@@ -40,6 +40,29 @@ describe('Review', () => {
   });
 });
 
+describe('Review form', () => {
+  it('adds a review and shows it with the approval state', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/review/42');
+    expect(
+      await screen.findByRole('heading', { name: /Contracts batch October/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('No reviews yet.')).toBeInTheDocument();
+    expect(screen.getByText('The target Branch needs no approval.')).toBeInTheDocument();
+
+    const form = screen.getByRole('form', { name: 'Add a review' });
+    await user.selectOptions(within(form).getByLabelText('Verdict'), 'request_changes');
+    await user.type(within(form).getByLabelText('Comment'), 'Quote the page, please.');
+    await user.click(within(form).getByRole('button', { name: 'Submit review' }));
+
+    expect(await screen.findByText('Review added.')).toBeInTheDocument();
+    const review = await screen.findByText('Quote the page, please.');
+    expect(review.closest('li')).toHaveTextContent('request_changes');
+    expect(review.closest('li')).toHaveTextContent('usr_mock');
+    expect(within(form).getByLabelText('Comment')).toHaveValue('');
+  });
+});
+
 const options = () =>
   within(screen.getByRole('listbox', { name: 'Conflicts' })).getAllByRole('option');
 const group = (code: string) => screen.getByRole('group', { name: new RegExp(`^${code} `) });

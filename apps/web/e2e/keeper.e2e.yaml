@@ -1,0 +1,11 @@
+# Keeper settings of the end-to-end stack (mounted by e2e/stack.ts instead of the example
+# configuration). Everything not named here keeps its code default; the connection to Postgres
+# comes from the compose environment.
+keeper:
+  host: 0.0.0.0
+  auth:
+    mode: none # every request is the same administrator; development only
+  proposals:
+    # With authentication off the author, the reviewer and the merger are one principal, so the
+    # flows that review and merge a Proposal need this.
+    allow_self_approval: true

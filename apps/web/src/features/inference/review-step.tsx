@@ -1,8 +1,9 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import type { SchemaProposalDraft } from '@/api/inference-types';
 import type { Schema } from '@/api/types';
 import { useConfig } from '@/config/context';
 import { ChangeSetPanel } from '@/features/modeler/change-set-panel';
+import { schemaToDocument } from '@/features/modeler/document';
 import { useChangeCheck } from '@/features/modeler/use-change-check';
 import { Button } from '@/ui/button';
 import { Section } from '@/ui/layout';
@@ -33,11 +34,12 @@ export function ReviewStep({ proposal, base, onRestart }: ReviewStepProps) {
   const config = useConfig();
   const [percent, setPercent] = useState(Math.round(config.inference.acceptThreshold * 100));
   const draft = useProposalDraft(proposal, base);
+  const document = useMemo(() => schemaToDocument(draft.next), [draft.next]);
   const {
     check,
     remote,
     blocked: checkBlocked,
-  } = useChangeCheck(draft.changes, draft.issues.length === 0);
+  } = useChangeCheck(draft.changes, document, draft.issues.length === 0);
 
   const blocked = draft.issues.length > 0 ? 'Fix the schema problems first.' : checkBlocked;
   const problems = [...draft.issues, ...remote];
@@ -88,6 +90,7 @@ export function ReviewStep({ proposal, base, onRestart }: ReviewStepProps) {
           base={base}
           next={draft.next}
           changes={draft.changes}
+          document={document}
           blocked={blocked}
           check={{ pending: check.isFetching, result: check.data }}
           defaultMessage={MESSAGE}

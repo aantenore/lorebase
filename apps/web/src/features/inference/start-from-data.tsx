@@ -21,6 +21,8 @@ export function StartFromData({ base }: { base: Schema }) {
   const infer = useMutation({
     mutationFn: (request: InferRequest) => api.inference.infer(scope.domain, request),
     onSuccess: setProposal,
+    // The source step shows the failure next to the form.
+    meta: { inlineError: true },
   });
 
   if (proposal !== null) {

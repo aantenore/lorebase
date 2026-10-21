@@ -411,24 +411,34 @@ curl -s -X POST http://localhost:8080/api/v1/domains/supply/operations/approve_c
   -d '{"branch": "work", "parameters": {"contract": "C-3015"}}'
 ```
 
-## 8. Web app in mock mode
+## 8. Web app
 
 The web app talks to a `KeeperApi` interface with two adapters. In `mock` mode it serves
 its own sample Domains from memory and needs no backend; the `supply` Domain you created above
-is not shown there. `live` mode points at Keeper; the read endpoints it needs exist now, but the
-screens have not been verified against a running Keeper, including Review against the Proposal
-endpoints. Use mock mode for now.
+is not shown there. In `live` mode it talks to Keeper, and the flows of the app (Explorer, the
+Canvas, the Modeler through a Proposal, Review with Conflicts, Settings) are tested against a
+real Keeper on every change.
 
 ```bash
 cd apps/web
-cp .env.example .env     # VITE_API_MODE=mock
 pnpm install
-pnpm dev                 # http://localhost:5173
+cp .env.example .env     # VITE_API_MODE=mock
+pnpm dev                 # http://localhost:5173, sample data
 ```
 
-Explorer, Canvas, the schema overview and Review (Proposals and Conflicts, including a seeded
-merge of `model/risk` into `main`) are all driven by the mock. See
-[apps/web/README.md](../apps/web/README.md) for the variables and what the mock emulates.
+To see the Domain of the steps above instead, point the dev server at Keeper. The proxy makes
+the browser talk to the app's own origin, so Keeper needs no CORS setting:
+
+```bash
+printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
+LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
+```
+
+Pick the `supply` Domain and the `work` or `main` Branch in the top bar. `main` is protected, so
+a schema change there goes through a Branch and a Proposal, and merging it needs an approval
+(`keeper.proposals.allow_self_approval: true` for a trial with authentication off). See
+[apps/web/README.md](../apps/web/README.md#live-mode) for the variables, the API token and the
+limits against Keeper, and for the end-to-end suite (`pnpm e2e`).
 
 ## 9. Stop and clean up
 

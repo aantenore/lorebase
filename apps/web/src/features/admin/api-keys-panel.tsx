@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { isApiError } from '@/api';
 import type { ApiKey, ApiKeyCreated } from '@/api/admin-types';
 import { useKeeperApi } from '@/api/provider';
 import { useApiKeys } from '@/api/queries';
@@ -53,7 +52,6 @@ function NewKeyNotice({ created, onDone }: { created: ApiKeyCreated; onDone: () 
 function CreateKeyForm({ onCreated }: { onCreated: (key: ApiKeyCreated) => void }) {
   const api = useKeeperApi();
   const scope = useScope();
-  const toast = useToast();
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [role, setRole] = useState<string>(DEFAULT_KEY_ROLE);
@@ -73,9 +71,6 @@ function CreateKeyForm({ onCreated }: { onCreated: (key: ApiKeyCreated) => void 
       for (const key of ['api-keys', 'principals', 'grants', 'audit']) {
         await queryClient.invalidateQueries({ queryKey: ['keeper', key] });
       }
-    },
-    onError: (error) => {
-      toast.notify(isApiError(error) ? error.message : 'The key was not created.', 'error');
     },
   });
 
@@ -159,9 +154,6 @@ export function ApiKeysPanel() {
       setRevoking(null);
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'api-keys'] });
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'audit'] });
-    },
-    onError: (error) => {
-      toast.notify(isApiError(error) ? error.message : 'The key was not revoked.', 'error');
     },
   });
 

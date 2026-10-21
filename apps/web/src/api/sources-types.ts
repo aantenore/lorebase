@@ -1,4 +1,5 @@
 /** Source runs (design 9.1), as the Sources screen shows them. */
+import type { components } from './generated/keeper';
 
 export type SourceRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -32,12 +33,8 @@ export interface SourceRunListParams {
   cursor?: string | null;
 }
 
-/** Answer of `POST .../sources/{source}/sync`: the queued job, run by Scribe. */
-export interface SourceSyncQueued {
-  /** Id of the queued job, or of the identical job already pending. */
-  job_id: number;
-  /** Id of the Source. */
-  source: string;
-  api_name: string;
-  dry_run: boolean;
-}
+/**
+ * Answer of `POST .../sources/{source}/sync`: the queued job, run by Scribe. `job_id` is the
+ * queued job, or the identical job already pending; `source` is the id of the Source.
+ */
+export type SourceSyncQueued = components['schemas']['SyncQueued'];

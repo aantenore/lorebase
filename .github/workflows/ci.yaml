@@ -193,11 +193,90 @@ jobs:
             -schema-location default -schema-location "$CRD_SCHEMAS" \
             /manifests
 
+
+  web-e2e:
+    name: Web end-to-end (Keeper from the repository, Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Postgres is a service container and Keeper is started from the checkout: no Docker inside
+    # the job, and no image build. The suite brings up its own web server (vite preview).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: lorebase
+          POSTGRES_PASSWORD: lorebase-ci
+          POSTGRES_DB: lorebase_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lorebase -d lorebase_e2e"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
+      LOREBASE_DB_DSN: postgresql+asyncpg://lorebase:lorebase-ci@localhost:5432/lorebase_e2e
+      LOREBASE__KEEPER__HOST: 127.0.0.1
+      LOREBASE__KEEPER__PORT: "8080"
+      # Authentication is off, so the author of a Proposal is also its reviewer.
+      LOREBASE__KEEPER__PROPOSALS__ALLOW_SELF_APPROVAL: "true"
+      LOREBASE__LOGGING__LEVEL: WARNING
+      LOREBASE_E2E_URL: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages
+      - name: Migrate the database
+        working-directory: packages/store
+        run: uv run alembic upgrade head
+      - name: Start Keeper
+        run: |
+          nohup uv run python -m lorebase_keeper > "$RUNNER_TEMP/keeper.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS "$LOREBASE_E2E_URL/readyz" > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/keeper.log"
+          exit 1
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          package_json_file: apps/web/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install the web app and Chromium
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Playwright flows against Keeper
+        working-directory: apps/web
+        run: pnpm run e2e
+      - name: Keeper log
+        if: failure()
+        run: cat "$RUNNER_TEMP/keeper.log"
+      - name: Keep the Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-e2e-report
+          path: |
+            apps/web/node_modules/.cache/e2e/report
+            apps/web/node_modules/.cache/e2e/results
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Single required check for branch protection: fails when any job above failed or was cancelled.
   ci:
     name: CI
     if: always()
-    needs: [lint, types, unit, integration, web, helm]
+    needs: [lint, types, unit, integration, web, web-e2e, helm]
     runs-on: ubuntu-latest
     env:
       RESULTS: ${{ join(needs.*.result, ' ') }}

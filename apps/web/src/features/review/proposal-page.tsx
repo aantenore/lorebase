@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { isApiError } from '@/api';
 import { useKeeperApi } from '@/api/provider';
 import { useProposal, useProposalDiff } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
@@ -16,6 +15,7 @@ import {
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { useToast } from '@/ui/toast';
 import { MergeAttemptSection } from './merge-attempt';
+import { ReviewForm } from './review-form';
 import { unresolvedOf } from './conflict-state';
 import { STATUS_TONE } from './review-page';
 
@@ -76,9 +76,6 @@ export function ProposalPage({
   const proposal = useProposal(scope.domain, proposalId);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['keeper'] });
-  const onError = (error: Error) => {
-    toast.notify(isApiError(error) ? error.message : 'The request failed.', 'error');
-  };
   const merge = useMutation({
     mutationFn: () => api.proposals.merge(scope.domain, proposalId),
     onSuccess: (outcome) => {
@@ -93,7 +90,6 @@ export function ProposalPage({
       }
       return refresh();
     },
-    onError,
   });
   const close = useMutation({
     mutationFn: () => api.proposals.close(scope.domain, proposalId),
@@ -101,7 +97,6 @@ export function ProposalPage({
       toast.notify(`Proposal #${proposalId} closed.`);
       return refresh();
     },
-    onError,
   });
 
   return (
@@ -110,7 +105,7 @@ export function ProposalPage({
         <>
           <PageHeader
             title={`#${detail.id} ${detail.title}`}
-            description={detail.description}
+            description={detail.description ?? undefined}
             actions={
               <div className="flex items-center gap-2">
                 <Badge tone={STATUS_TONE[detail.status]}>{detail.status}</Badge>
@@ -160,7 +155,7 @@ export function ProposalPage({
                   <li key={check.name} className="flex flex-wrap items-center gap-2 px-3 py-2">
                     <Badge tone={CHECK_TONE[check.status]}>{check.status}</Badge>
                     <span>{check.name}</span>
-                    {check.message !== undefined && (
+                    {typeof check.message === 'string' && (
                       <span className="text-muted">{check.message}</span>
                     )}
                   </li>
@@ -175,7 +170,7 @@ export function ProposalPage({
             ) : (
               <ul className="divide-y divide-line rounded-md border border-line bg-surface">
                 {detail.reviews.map((review) => (
-                  <li key={`${review.reviewer}-${review.at}`} className="px-3 py-2">
+                  <li key={review.id} className="px-3 py-2">
                     <Badge>{review.verdict}</Badge>{' '}
                     <span className="font-medium">{review.reviewer}</span>{' '}
                     <span className="text-muted">{review.comment}</span>
@@ -183,6 +178,9 @@ export function ProposalPage({
                 ))}
               </ul>
             )}
+            <div className="mt-3">
+              <ReviewForm domain={scope.domain} proposal={detail} />
+            </div>
           </Section>
 
           <MergeAttemptSection

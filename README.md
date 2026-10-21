@@ -85,7 +85,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Ingestion | CSV and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done; Parquet planned | M2 |
 | Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
 | Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
-| Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver, Sources, Admin basics | Done on the mock API; live adapter not yet verified | M2, M3 |
+| Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver, Sources, Admin basics | Done; runs on the mock API or on Keeper, with end-to-end tests against a real Keeper for browsing, Branches, schema changes, Review and Settings | M2, M3 |
 | Operations | Helm chart: Keeper, migration hook, optional Scribe, Herald, web app, Ollama, Ingress, HPA, read replica DSNs ([docs/kubernetes.md](docs/kubernetes.md)) | Done, checked by lint, template and kubeconform; not yet run on a live cluster | M5, landed early |
 | Scale | Overlay branches, PII vault, 10M-Record performance | Planned | M5 |
 
@@ -109,7 +109,7 @@ Under row-level security Postgres cannot use non-leakproof operators (`->>`, cas
 
 ## See it
 
-Screens of the web app, running on a mock API with sample data. The [visual tour](docs/tour.md) says what is mock and what is live.
+Screens of the web app, running on a real Keeper with the supply sample loaded. The [visual tour](docs/tour.md) says what is live and what is not served yet.
 
 | Explorer | Canvas | Conflict resolver |
 |----------|--------|-------------------|

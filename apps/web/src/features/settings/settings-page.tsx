@@ -5,6 +5,7 @@ import { useScope, useScopeSearch } from '@/app/scope';
 import { AccessPanel } from '@/features/admin/access-panel';
 import { ApiKeysPanel } from '@/features/admin/api-keys-panel';
 import { AuditPanel } from '@/features/admin/audit-panel';
+import { ConnectionSection } from './connection-section';
 import { PlannedScreens } from '@/features/planned-screens';
 import { Select } from '@/ui/field';
 import { PageHeader, Section } from '@/ui/layout';
@@ -31,6 +32,11 @@ function Row({ name, value }: { name: string; value: string | number }) {
   );
 }
 
+const searchLanguage = (settings: Record<string, unknown>): string => {
+  const language = settings['search_language'];
+  return typeof language === 'string' ? language : 'default';
+};
+
 function General() {
   const scope = useScope();
   const config = useConfig();
@@ -56,6 +62,8 @@ function General() {
         </div>
       </Section>
 
+      <ConnectionSection />
+
       <Section title="Domain">
         <Table caption="Domain settings">
           <THead>
@@ -68,7 +76,7 @@ function General() {
             <Row name="Domain id" value={domainInfo.id} />
             <Row name="Default Branch" value={domainInfo.default_branch} />
             <Row name="Created by" value={domainInfo.created_by} />
-            <Row name="Search language" value={domainInfo.settings.search_language ?? 'default'} />
+            <Row name="Search language" value={searchLanguage(domainInfo.settings)} />
           </TBody>
         </Table>
       </Section>
@@ -83,7 +91,14 @@ function General() {
           </THead>
           <TBody>
             <Row name="Data source" value={config.apiMode} />
-            <Row name="Keeper base URL" value={config.keeperBaseUrl ?? 'not used in mock mode'} />
+            <Row
+              name="Keeper base URL"
+              value={
+                config.keeperBaseUrl === ''
+                  ? 'this origin'
+                  : (config.keeperBaseUrl ?? 'not used in mock mode')
+              }
+            />
             <Row name="Page size" value={config.pageSize} />
             <Row name="Search limit" value={config.searchLimit} />
             <Row name="Canvas depth" value={config.canvas.depth} />

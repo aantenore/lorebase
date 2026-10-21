@@ -13,10 +13,15 @@ import { dumpSchemaYaml, parseSchemaYaml, type SyntaxIssue } from './yaml';
 
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-/** A new element id: the prefix and 26 characters from a secure random source. */
+/**
+ * A new element id: the prefix and a 26 character ULID from a secure random source. The first
+ * character is 0 to 7, as Keeper requires (a ULID timestamp has 48 bits, which leaves 3 in the
+ * first of the 26 base 32 digits).
+ */
 export function mintId(prefix: string): string {
   const bytes = crypto.getRandomValues(new Uint8Array(26));
-  return `${prefix}_${Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join('')}`;
+  const digits = Array.from(bytes, (b, index) => ALPHABET[b % (index === 0 ? 8 : ALPHABET.length)]);
+  return `${prefix}_${digits.join('')}`;
 }
 
 /** Ids that stay the same for the same element while it is being edited. */

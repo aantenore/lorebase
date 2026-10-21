@@ -71,6 +71,44 @@ function validDate(text: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text;
 }
 
+const INTEGER_TEXT = /^[+-]?\d+$/;
+const DECIMAL_TEXT = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
+
+/**
+ * The number an integer or decimal value stands for, or `null`. Keeper writes integers and
+ * decimals as JSON strings (`"32"`, `"24.01"`, design 6.1) so that no digit is lost; the
+ * sample data of the mock uses numbers. Both are accepted.
+ */
+export function numberOf(value: JsonValue | undefined, integer: boolean): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  if (!(integer ? INTEGER_TEXT : DECIMAL_TEXT).test(value)) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * The canonical text Keeper stores for a number typed into a field: an integer without
+ * leading zeros or plus sign, a decimal padded to the scale of its type. Text that is not a
+ * number of that type comes back unchanged, for validation to refuse.
+ */
+export function canonicalNumber(text: string, type: ParsedType): string {
+  const trimmed = text.trim();
+  if (type.base === 'integer') {
+    return INTEGER_TEXT.test(trimmed) ? BigInt(trimmed).toString() : trimmed;
+  }
+  if (type.base !== 'decimal' || type.scale === undefined || !DECIMAL_TEXT.test(trimmed)) {
+    return trimmed;
+  }
+  const negative = trimmed.startsWith('-');
+  const [whole = '', fraction = ''] = trimmed.replace(/^[+-]/, '').split('.');
+  if (fraction.length > type.scale) return trimmed;
+  const digits = whole.replace(/^0+(?=\d)/, '') || '0';
+  const padded = fraction.padEnd(type.scale, '0');
+  const body = padded === '' ? digits : `${digits}.${padded}`;
+  return negative && /[1-9]/.test(body) ? `-${body}` : body;
+}
+
 function inRange(value: number, constraints: AttributeConstraints): string | null {
   if (constraints.min !== undefined && value < constraints.min) {
     return `Must be at least ${constraints.min}.`;
@@ -112,15 +150,17 @@ function checkScalar(
     case 'uri':
       if (typeof value !== 'string') return 'Must be text.';
       return URL.canParse(value) ? checkText(value, constraints) : 'Must be a valid URI.';
-    case 'integer':
-      return typeof value === 'number' && Number.isInteger(value)
-        ? inRange(value, constraints)
+    case 'integer': {
+      const whole = numberOf(value, true);
+      return whole !== null && Number.isInteger(whole)
+        ? inRange(whole, constraints)
         : 'Must be a whole number.';
+    }
     case 'decimal':
-    case 'float':
-      return typeof value === 'number' && Number.isFinite(value)
-        ? inRange(value, constraints)
-        : 'Must be a number.';
+    case 'float': {
+      const number = base === 'float' && typeof value === 'string' ? null : numberOf(value, false);
+      return number === null ? 'Must be a number.' : inRange(number, constraints);
+    }
     case 'boolean':
       return typeof value === 'boolean' ? null : 'Must be true or false.';
     case 'date':

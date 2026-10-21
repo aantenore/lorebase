@@ -1,0 +1,562 @@
+format: lorebase.schema/v1
+domain:
+  id: supply
+  display_name: Supply chain
+  description: Suppliers, parts, plants, purchase orders and supplier contracts.
+  settings:
+    search_language: english
+kinds:
+  Part:
+    id: knd_01KEZF7C00WBDCAD84MRED7WQV
+    description: A component bought from suppliers and held in stock.
+    primary_key: [part_number]
+    title_attribute: name
+    attributes:
+      hazardous:
+        id: att_01KEZF7C006G1G3TGKRKJW1ZB6
+        description: True when shipping the part needs dangerous goods handling.
+        type: boolean
+        default: false
+      supplier_count:
+        id: att_01KEZF7C008N7SZ6W62PVEXNPQ
+        description: Number of suppliers that can supply the part. Derived.
+        type: integer
+        derivation: supplier_count
+      category:
+        id: att_01KEZF7C00DFFAK6XAMCQEDBDJ
+        description: Commodity group of the part.
+        type:
+          enum: [bearing, fastener, seal, gasket, valve, filter, sensor, motor, hose]
+        required: true
+        indexed: true
+      summary:
+        id: att_01KEZF7C00E3M1JDMAG6KQJH02
+        description: One sentence on what the part is used for.
+        type: text
+        searchable: true
+        search_weight: B
+      name:
+        id: att_01KEZF7C00J7TH66AHX4NEB2AP
+        description: Short catalogue name including the main size or rating.
+        type: string
+        required: true
+        searchable: true
+        search_weight: A
+      lifecycle:
+        id: att_01KEZF7C00JFDYDNGH9ZXPWFB6
+        description: Lifecycle stage of the part.
+        type:
+          enum: [active, phase_out, obsolete]
+        default: active
+        indexed: true
+      unit_cost:
+        id: att_01KEZF7C00JHNXEZYX47QP6TY8
+        description: Standard unit cost in euro.
+        type: decimal(10,2)
+        constraints:
+          min: 0
+      part_number:
+        id: att_01KEZF7C00V0MZ56VTARJ76YAC
+        description: Part number, for example P-10001.
+        type: string
+        required: true
+        constraints:
+          pattern: ^P-[0-9]{5,}$
+      weight_kg:
+        id: att_01KEZF7C00ZEX82XM0N3DGHD4Q
+        description: Unit weight in kilograms.
+        type: decimal(8,3)
+        constraints:
+          min: 0
+    icon: cog
+    color: '#6a994e'
+  PurchaseOrder:
+    id: knd_01KEZF7C00M11T0RH8CAVBW897
+    description: An order placed with a supplier for one part, delivered to one plant.
+    primary_key: [po_number]
+    title_attribute: po_number
+    attributes:
+      unit_price:
+        id: att_01KEZF7C000WEBH0WCJQB4RVDY
+        description: Agreed unit price in the order currency.
+        type: decimal(10,2)
+        constraints:
+          min: 0
+        authority: erp.purchase_orders
+      quantity:
+        id: att_01KEZF7C002MCFVSZ1DAVJF0GX
+        description: Ordered quantity in units.
+        type: integer
+        required: true
+        constraints:
+          min: 1
+        authority: erp.purchase_orders
+      due_on:
+        id: att_01KEZF7C00537ZFFD1EAF7VVNY
+        description: Date the goods are due at the plant.
+        type: date
+        indexed: true
+        authority: erp.purchase_orders
+      supplier:
+        id: att_01KEZF7C007AC0DF84HCQRX9ZT
+        description: Key of the supplier the order is issued to. Backs the Relation issued_to.
+        type: ref(Supplier)
+        required: true
+        indexed: true
+        authority: erp.purchase_orders
+      po_number:
+        id: att_01KEZF7C00A7ZA9X9YZ121SJ3M
+        description: Purchase order number, for example PO-200001.
+        type: string
+        required: true
+        constraints:
+          pattern: ^PO-[0-9]{6,}$
+      status:
+        id: att_01KEZF7C00FJSCTF8SM9V93CCN
+        description: Order lifecycle stage.
+        type:
+          enum: [draft, issued, shipped, received, cancelled]
+        required: true
+        default: draft
+        indexed: true
+        authority: erp.purchase_orders
+      ordered_on:
+        id: att_01KEZF7C00G50HMR04NHDPXS30
+        description: Date the order was placed.
+        type: date
+        required: true
+        authority: erp.purchase_orders
+      currency:
+        id: att_01KEZF7C00J5R88XKX6ADBZZNB
+        description: ISO 4217 currency code of the order.
+        type:
+          enum: [EUR, USD, GBP, PLN, CZK, SEK]
+        default: EUR
+        authority: erp.purchase_orders
+    icon: file-text
+    color: '#f2a541'
+  Plant:
+    id: knd_01KEZF7C00PHQ0PFYPZECGNE96
+    description: A Corvane production or distribution site that stocks and consumes parts.
+    primary_key: [plant_code]
+    title_attribute: name
+    attributes:
+      plant_code:
+        id: att_01KEZF7C009JW6DCQJZM00STP8
+        description: Plant code, for example PL-01.
+        type: string
+        required: true
+        constraints:
+          pattern: ^PL-[0-9]{2,}$
+      country:
+        id: att_01KEZF7C00EPAKJ5RH34T1XBB0
+        description: ISO 3166-1 alpha-2 country code of the site.
+        type: string
+        required: true
+        constraints:
+          pattern: ^[A-Z]{2}$
+      name:
+        id: att_01KEZF7C00F94YAC49PH6QGNMH
+        description: Site name.
+        type: string
+        required: true
+        searchable: true
+        search_weight: A
+      city:
+        id: att_01KEZF7C00H48J07NBG96J0Q2S
+        description: City of the site.
+        type: string
+      plant_type:
+        id: att_01KEZF7C00YDQ4EA8M0WV3KJ8T
+        description: Main activity of the site.
+        type:
+          enum: [assembly, machining, distribution_hub, warehouse]
+        required: true
+        indexed: true
+      capacity_per_month:
+        id: att_01KEZF7C00ZF1HB73ZWGJ6CRPF
+        description: Handling capacity in units per month.
+        type: integer
+        constraints:
+          min: 0
+    traits:
+      - trait: Located
+        attribute_map:
+          country: country
+          city: city
+    icon: warehouse
+    color: '#bc4749'
+  Supplier:
+    id: knd_01KEZF7C007ZDX8SK1DZP7MXFF
+    description: A company that supplies parts to Corvane Industries.
+    primary_key: [supplier_code]
+    title_attribute: legal_name
+    attributes:
+      status:
+        id: att_01KEZF7C002QQWMATS9QHMWRAF
+        description: Commercial status of the supplier relationship.
+        type:
+          enum: [active, on_hold, terminated]
+        default: active
+        indexed: true
+      tier:
+        id: att_01KEZF7C008DMTQHN3YMSQJH1N
+        description: Sourcing tier, 1 strategic, 2 preferred, 3 transactional.
+        type:
+          enum: ['1', '2', '3']
+        default: '3'
+        indexed: true
+      city:
+        id: att_01KEZF7C009AT17WTRXEX9MT8Y
+        description: City of the registered office.
+        type: string
+        authority: approved.suppliers
+      legal_name:
+        id: att_01KEZF7C00H73NVMMGX4KPCH9W
+        description: Registered legal name including the legal form.
+        type: string
+        required: true
+        searchable: true
+        search_weight: A
+        authority: approved.suppliers
+      supplier_code:
+        id: att_01KEZF7C00HDZZHMNS4181SKMX
+        description: Supplier code as issued by the ERP, for example S-1001.
+        type: string
+        required: true
+        constraints:
+          pattern: ^S-[0-9]{4,}$
+      onboarded_on:
+        id: att_01KEZF7C00N37SV7HXQT83TCAG
+        description: Date the supplier was approved for purchasing.
+        type: date
+      vat_number:
+        id: att_01KEZF7C00NAFHVPJ4YPMXSH3H
+        description: VAT registration number.
+        type: string
+        unique: true
+        sensitivity: [confidential]
+      risk_score:
+        id: att_01KEZF7C00NK9JAYQ84CSTKF4C
+        description: Supplier risk score from 0 (safe) to 100 (critical), maintained by risk analysts.
+        type: integer
+        constraints:
+          min: 0
+          max: 100
+        indexed: true
+      country:
+        id: att_01KEZF7C00Z60FEN5RNWEENNX2
+        description: ISO 3166-1 alpha-2 country code of the registered office.
+        type: string
+        required: true
+        constraints:
+          pattern: ^[A-Z]{2}$
+        indexed: true
+        authority: approved.suppliers
+    traits:
+      - trait: Located
+        attribute_map:
+          country: country
+          city: city
+    icon: factory
+    color: '#2a6f97'
+  RiskFlag:
+    id: knd_01KEZF7C0063DPT7NYQNXBHB1M
+    description: A risk raised on a supplier. Keys are minted when the flag is created.
+    title_attribute: reason
+    attributes:
+      reason:
+        id: att_01KEZF7C0034YSH4VMTCR4FJ7H
+        description: Evidence-based reason for the flag.
+        type: text
+        required: true
+        searchable: true
+        search_weight: B
+      raised_by:
+        id: att_01KEZF7C00B79MRF0NBF18SAA0
+        description: Principal that raised the flag.
+        type: string
+        required: true
+      severity:
+        id: att_01KEZF7C00E1JP033T92691HJE
+        description: How serious the risk is.
+        type:
+          enum: [low, medium, high, critical]
+        required: true
+        indexed: true
+      raised_at:
+        id: att_01KEZF7C00YF1GG38RVRAS4KAG
+        description: When the flag was raised.
+        type: timestamp
+        required: true
+    icon: flag
+    color: '#d00000'
+  Contract:
+    id: knd_01KEZF7C009ABD2QEAXC8GGK0S
+    description: A framework supply agreement with a supplier.
+    primary_key: [contract_number]
+    title_attribute: title
+    attributes:
+      contract_number:
+        id: att_01KEZF7C003FE2Q3EQFW24DZEH
+        description: Contract number, for example C-3001.
+        type: string
+        required: true
+        constraints:
+          pattern: ^C-[0-9]{4,}$
+      payment_terms_days:
+        id: att_01KEZF7C003X199DJHX5644F1Z
+        description: Days from invoice to payment.
+        type: integer
+        constraints:
+          min: 0
+          max: 180
+      auto_renew:
+        id: att_01KEZF7C005PHCTDV9BNJ7WX24
+        description: True when the contract renews unless a party gives notice.
+        type: boolean
+        default: false
+      start_date:
+        id: att_01KEZF7C007VD02SKT2KXJ9PCG
+        description: First day of validity.
+        type: date
+        required: true
+      title:
+        id: att_01KEZF7C00CFZFWA9G1XT79MPS
+        description: Contract title.
+        type: string
+        required: true
+        searchable: true
+        search_weight: A
+      end_date:
+        id: att_01KEZF7C00CR3SH2H824DWQR0F
+        description: Last day of validity.
+        type: date
+        indexed: true
+      currency:
+        id: att_01KEZF7C00CS1T7RWHANT46NE1
+        description: ISO 4217 currency code of the contract.
+        type:
+          enum: [EUR, USD, GBP, PLN, CZK, SEK]
+        default: EUR
+      annual_value:
+        id: att_01KEZF7C00NTAVMNCH8895162V
+        description: Expected yearly spend in the contract currency.
+        type: decimal(12,2)
+        constraints:
+          min: 0
+      approved_by:
+        id: att_01KEZF7C00WNHWFARKGZ8W29BW
+        description: Principal that approved the contract.
+        type: string
+      approved_at:
+        id: att_01KEZF7C00WYPD04ZX3X2PZ1DG
+        description: When the contract was approved.
+        type: timestamp
+      status:
+        id: att_01KEZF7C00YD0EG06JDWR08E41
+        description: Contract lifecycle stage.
+        type:
+          enum: [draft, active, expired, terminated]
+        default: draft
+        indexed: true
+      incoterm:
+        id: att_01KEZF7C00ZFG9PEEA1M6HFMBJ
+        description: Delivery terms (Incoterms 2020).
+        type:
+          enum: [EXW, FCA, DAP, DDP]
+    icon: file-signature
+    color: '#7b2cbf'
+relations:
+  flags:
+    id: rel_01KEZF7C00QJBDQPR4Z2R5BEJP
+    description: The supplier a risk flag is raised on.
+    inverse_api_name: risk_flags
+    from_kind: RiskFlag
+    to_kind: Supplier
+    cardinality: many_to_one
+    required_from: true
+  stocked_at:
+    id: rel_01KEZF7C00Q2XMMMZWZ79AQCME
+    description: A plant keeps the part in stock.
+    inverse_api_name: stocks
+    from_kind: Part
+    to_kind: Plant
+    attributes:
+      quantity:
+        id: att_01KEZF7C00H9KNFH2WET35SM5Q
+        description: Units on hand.
+        type: integer
+        required: true
+        constraints:
+          min: 0
+  delivered_to:
+    id: rel_01KEZF7C007EYQRE3Q2ADNS3FF
+    description: The plant an order is delivered to.
+    inverse_api_name: receives
+    from_kind: PurchaseOrder
+    to_kind: Plant
+    cardinality: many_to_one
+  issued_to:
+    id: rel_01KEZF7C0046ZA6Z11PH3MARM5
+    description: The supplier an order is issued to; derived from PurchaseOrder.supplier.
+    inverse_api_name: purchase_orders
+    from_kind: PurchaseOrder
+    to_kind: Supplier
+    cardinality: many_to_one
+    required_from: true
+    on_delete: restrict
+    backing: foreign_key
+    foreign_key_attribute: supplier
+  with_supplier:
+    id: rel_01KEZF7C00BJEFSY9EWW9CM2SA
+    description: The supplier party to a contract.
+    inverse_api_name: contracts
+    from_kind: Contract
+    to_kind: Supplier
+    cardinality: many_to_one
+    required_from: true
+    on_delete: restrict
+  supplied_by:
+    id: rel_01KEZF7C00F4CJ0YEKSMQT6PC0
+    description: A supplier can supply the part.
+    inverse_api_name: supplies
+    from_kind: Part
+    to_kind: Supplier
+    attributes:
+      is_primary:
+        id: att_01KEZF7C006T6ZF8E6CK1PE4XY
+        description: True for the preferred supplier of the part.
+        type: boolean
+        default: false
+      lead_time_days:
+        id: att_01KEZF7C00A7JKVNZEGB5RZ5R1
+        description: Typical days from order to delivery.
+        type: integer
+        constraints:
+          min: 0
+  for_part:
+    id: rel_01KEZF7C00C8CSM7KQZ0J1EY0T
+    description: The part an order buys.
+    inverse_api_name: ordered_in
+    from_kind: PurchaseOrder
+    to_kind: Part
+    cardinality: many_to_one
+    required_from: true
+    on_delete: restrict
+traits:
+  Located:
+    id: trt_01KEZF7C00E1SNG0SW6QRM5904
+    description: Something with a physical location.
+    attributes:
+      country:
+        id: att_01KEZF7C001DBRJSZYG5XGV125
+        description: ISO 3166-1 alpha-2 country code.
+        type: string
+        required: true
+      city:
+        id: att_01KEZF7C00ZT5A7MS0JQBKHA0Y
+        description: City.
+        type: string
+derivations:
+  supplier_count:
+    id: drv_01KEZF7C00MMX6MTB4YG6XW54X
+    description: Count of suppliers linked to a part through supplied_by.
+    definition:
+      variant: aggregate
+      kind: Part
+      attribute: supplier_count
+      relation: supplied_by
+      function: count
+sources:
+  approved.suppliers:
+    id: src_01KEZF7C00EDDEFRGSAXSHCWJ2
+    description: CSV list of approved suppliers maintained by procurement.
+    type: csv
+    connection: secret://env/SUPPLY_APPROVED_SUPPLIERS_CSV
+    target_kind: Supplier
+    key_mapping: [supplier_code]
+    attribute_mapping:
+      tier:
+        column: tier
+      city:
+        column: city
+        transforms:
+          - name: trim
+      legal_name:
+        column: legal_name
+        transforms:
+          - name: trim
+      onboarded_on:
+        column: onboarded_on
+        transforms:
+          - name: parse_date
+            args:
+              format: '%Y-%m-%d'
+      risk_score:
+        column: risk_score
+        transforms:
+          - name: cast
+            args:
+              to: integer
+      country:
+        column: country
+        transforms:
+          - name: trim
+          - name: upper
+    target_branch_policy:
+      merge_policy: auto_when_clean
+  erp.purchase_orders:
+    id: src_01KEZF7C00PMKRJJ98PAYYB4SX
+    description: Purchase orders in the ERP table purchase_orders.
+    type: postgres_table
+    connection: secret://env/ERP_DSN
+    target_kind: PurchaseOrder
+    key_mapping: [po_no]
+    attribute_mapping:
+      unit_price:
+        column: price
+        transforms:
+          - name: cast
+            args:
+              to: decimal
+      quantity:
+        column: qty
+        transforms:
+          - name: cast
+            args:
+              to: integer
+      due_on:
+        column: due
+        transforms:
+          - name: parse_date
+            args:
+              format: '%Y-%m-%d'
+      supplier:
+        column: vendor_id
+      status:
+        column: state
+        transforms:
+          - name: lower
+      ordered_on:
+        column: ordered
+        transforms:
+          - name: parse_date
+            args:
+              format: '%Y-%m-%d'
+      currency:
+        column: currency
+        transforms:
+          - name: upper
+    scope_filter: state <> 'archived'
+    sync_mode: incremental
+    watermark_column: updated_at
+    tombstone_column: deleted_at
+    schedule: 0 2 * * *
+    target_branch_policy:
+      merge_policy: auto_with_authority
+    relation_mapping:
+      - relation: for_part
+        columns: [part_no]
+      - relation: delivered_to
+        columns: [plant_code]

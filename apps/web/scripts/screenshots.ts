@@ -7,6 +7,14 @@
  * Run with `pnpm screenshots` (Node 24 runs this file directly). Needs the Chromium build of
  * Playwright: `pnpm exec playwright install chromium`.
  *
+ * `pnpm screenshots --live --keeper http://127.0.0.1:8080` takes the same pictures from the app
+ * in live mode against a running Keeper (the option falls back to LOREBASE_E2E_URL). It loads
+ * the supply sample under a Domain of its own through the REST API (the loader of the
+ * end-to-end tests), prepares a Proposal with Conflicts, and drops the Domain afterwards unless
+ * `--keep` is given. The app is served with a same-origin proxy to Keeper, so Keeper needs no
+ * CORS settings. Keeper must accept the setup's own review and merge of one Proposal, so run it
+ * with `keeper.proposals.allow_self_approval: true` (authentication off, as in development).
+ *
  * `pnpm screenshots flow` records a short walk through the app instead (Explorer, Canvas, the
  * Review resolver) and writes docs/images/tour.gif. It encodes the video with ffmpeg when it is
  * installed, otherwise it stitches PNG frames with Pillow (`uv run --with pillow`).
@@ -18,6 +26,8 @@ import { createServer } from 'node:net';
 import { relative, resolve } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { build, preview, type PreviewServer } from 'vite';
+import { createKeeper, waitForKeeper } from '../e2e/keeper.ts';
+import { dropDomain, loadSupply, prepareConflicts } from '../e2e/supply.ts';
 
 type Theme = 'light' | 'dark';
 
@@ -43,7 +53,8 @@ interface Shot {
   needsWebGL?: boolean;
 }
 
-const DOMAIN = 'supply';
+/** The sample Domain of the mock; a live run uses a Domain it loads itself. */
+const MOCK_DOMAIN = 'supply';
 
 const CONFIG = {
   viewport: { width: 1440, height: 900 },
@@ -55,6 +66,8 @@ const CONFIG = {
   /** CSV files the "Start from data" shot uploads: the demo Domain of examples/supply. */
   sampleDataDir: resolve(import.meta.dirname, '../../../examples/supply/data'),
   buildDir: resolve(import.meta.dirname, '../node_modules/.cache/screenshots-dist'),
+  /** Live builds bake in other variables, so they get their own folder. */
+  liveBuildDir: resolve(import.meta.dirname, '../node_modules/.cache/screenshots-dist-live'),
   readyTimeoutMs: 15_000,
   /** Pause after the page is ready, so layout (ForceAtlas2) and fonts have settled. */
   settleMs: 600,
@@ -69,47 +82,47 @@ const CONFIG = {
   maxImageBytes: 400 * 1024,
 };
 
-const SHOTS: Shot[] = [
+const MOCK_SHOTS = (domain: string): Shot[] => [
   {
     name: 'explorer-home',
-    path: `/${DOMAIN}/explorer`,
+    path: `/${domain}/explorer`,
     ready: 'text=Recent Revisions',
   },
   {
     name: 'explorer-kind',
-    path: `/${DOMAIN}/explorer/Supplier`,
+    path: `/${domain}/explorer/Supplier`,
     ready: 'text=S-1001',
   },
   {
     name: 'explorer-record',
-    path: `/${DOMAIN}/explorer/Supplier/S-1001`,
+    path: `/${domain}/explorer/Supplier/S-1001`,
     ready: 'text=Brevik Bearings',
   },
   {
     name: 'canvas-graph',
-    path: `/${DOMAIN}/canvas`,
+    path: `/${domain}/canvas`,
     ready: '[role=img][aria-label^="Records graph"]',
     needsWebGL: true,
   },
   {
     name: 'canvas-schema',
-    path: `/${DOMAIN}/canvas?view=schema`,
+    path: `/${domain}/canvas?view=schema`,
     ready: '[role=img][aria-label^="Schema graph"]',
     needsWebGL: true,
   },
   {
     name: 'modeler-list',
-    path: `/${DOMAIN}/modeler`,
+    path: `/${domain}/modeler`,
     ready: 'text=Supplier',
   },
   {
     name: 'modeler-edit',
-    path: `/${DOMAIN}/modeler?view=edit`,
+    path: `/${domain}/modeler?view=edit`,
     ready: '.cm-content',
   },
   {
     name: 'modeler-start',
-    path: `/${DOMAIN}/modeler?view=start`,
+    path: `/${domain}/modeler?view=start`,
     ready: 'button:has-text("Run inference")',
     steps: [
       {
@@ -138,18 +151,18 @@ const SHOTS: Shot[] = [
   },
   {
     name: 'sources',
-    path: `/${DOMAIN}/sources`,
+    path: `/${domain}/sources`,
     ready: 'text=run_7',
     steps: [{ waitFor: 'text=Run history' }],
   },
   {
     name: 'review-list',
-    path: `/${DOMAIN}/review`,
+    path: `/${domain}/review`,
     ready: 'text=Risk model',
   },
   {
     name: 'review-conflict',
-    path: `/${DOMAIN}/review/41`,
+    path: `/${domain}/review/41`,
     ready: '[role=listbox][aria-label="Conflicts"] [role=option]',
     steps: [
       { click: '[role=listbox][aria-label="Conflicts"] [role=option]' },
@@ -159,12 +172,59 @@ const SHOTS: Shot[] = [
   },
   {
     name: 'settings',
-    path: `/${DOMAIN}/settings`,
+    path: `/${domain}/settings`,
     ready: 'text=Appearance',
   },
   {
     name: 'explorer-home-dark',
-    path: `/${DOMAIN}/explorer`,
+    path: `/${domain}/explorer`,
+    ready: 'text=Recent Revisions',
+    theme: 'dark',
+  },
+];
+
+/**
+ * The same pictures from a live run: the Supplier and Record of the loaded sample, and the
+ * Proposal the setup left open with two Conflicts. Content differs from the mock where the
+ * sample data does (names, Revisions); the screens are the same.
+ */
+const LIVE_SHOTS = (domain: string, open: string): Shot[] => [
+  { name: 'explorer-home', path: `/${domain}/explorer`, ready: 'text=Recent Revisions' },
+  { name: 'explorer-kind', path: `/${domain}/explorer/Supplier`, ready: 'text=S-1001' },
+  {
+    name: 'explorer-record',
+    path: `/${domain}/explorer/Supplier/S-1001`,
+    ready: 'text=Kavsen Alloys',
+  },
+  {
+    name: 'canvas-graph',
+    path: `/${domain}/canvas?seed=Supplier%2FS-1001`,
+    ready: '[role=img][aria-label^="Records graph"]',
+    needsWebGL: true,
+  },
+  {
+    name: 'canvas-schema',
+    path: `/${domain}/canvas?view=schema`,
+    ready: '[role=img][aria-label^="Schema graph"]',
+    needsWebGL: true,
+  },
+  { name: 'modeler-list', path: `/${domain}/modeler`, ready: 'text=Supplier' },
+  { name: 'modeler-edit', path: `/${domain}/modeler?view=edit`, ready: '.cm-content' },
+  { name: 'review-list', path: `/${domain}/review`, ready: 'text=ERP sync' },
+  {
+    name: 'review-conflict',
+    path: `/${domain}/review/${open}`,
+    ready: '[role=listbox][aria-label="Conflicts"] [role=option]',
+    steps: [
+      { click: '[role=listbox][aria-label="Conflicts"] [role=option]' },
+      { wait: 400 },
+      { scrollToTop: 'text=Merge attempt', offset: 80 },
+    ],
+  },
+  { name: 'settings', path: `/${domain}/settings`, ready: 'text=Appearance' },
+  {
+    name: 'explorer-home-dark',
+    path: `/${domain}/explorer`,
     ready: 'text=Recent Revisions',
     theme: 'dark',
   },
@@ -184,21 +244,31 @@ function freePort(): Promise<number> {
   });
 }
 
-async function startServer(): Promise<{ server: PreviewServer; origin: string }> {
+/** `keeper` set: the app in live mode, with a same-origin proxy to that Keeper. */
+async function startServer(
+  keeper: string | null,
+): Promise<{ server: PreviewServer; origin: string }> {
   const root = resolve(import.meta.dirname, '..');
+  const outDir = keeper === null ? CONFIG.buildDir : CONFIG.liveBuildDir;
   // Vite gives process variables precedence over .env files.
-  process.env['VITE_API_MODE'] = CONFIG.apiMode;
+  process.env['VITE_API_MODE'] = keeper === null ? CONFIG.apiMode : 'live';
+  if (keeper !== null) process.env['VITE_KEEPER_BASE_URL'] = '/';
   await build({
     root,
     logLevel: 'warn',
-    build: { outDir: CONFIG.buildDir, emptyOutDir: true },
+    build: { outDir, emptyOutDir: true },
   });
   const port = await freePort();
   const server = await preview({
     root,
     logLevel: 'warn',
-    build: { outDir: CONFIG.buildDir },
-    preview: { host: '127.0.0.1', port, strictPort: true },
+    build: { outDir },
+    preview: {
+      host: '127.0.0.1',
+      port,
+      strictPort: true,
+      ...(keeper === null ? {} : { proxy: { '/api': { target: keeper } } }),
+    },
   });
   return { server, origin: `http://127.0.0.1:${port.toString()}` };
 }
@@ -286,7 +356,7 @@ async function capture(browser: Browser, origin: string, shot: Shot): Promise<st
  * resolver on Proposal 41. Every step reads like a user action; waits let the picture settle.
  */
 const FLOW = {
-  start: `/${DOMAIN}/explorer`,
+  start: `/${MOCK_DOMAIN}/explorer`,
   ready: 'text=Recent Revisions',
   viewport: { width: 1280, height: 800 },
   output: resolve(import.meta.dirname, '../../../docs/images/tour.gif'),
@@ -435,21 +505,70 @@ async function recordFlow(browser: Browser, origin: string): Promise<void> {
   );
 }
 
+/** `--name value` or `--name=value` from the command line, or `undefined`. */
+function option(name: string): string | undefined {
+  const args = process.argv.slice(2);
+  const index = args.findIndex((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`));
+  const arg = args[index];
+  if (arg === undefined) return undefined;
+  return arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[index + 1];
+}
+
+const flag = (name: string) => process.argv.slice(2).includes(`--${name}`);
+
+interface Target {
+  /** Keeper to proxy to, `null` for the mock. */
+  keeper: string | null;
+  shots: Shot[];
+  /** Runs after the pictures, to clean up what the target loaded. */
+  done: () => Promise<void>;
+}
+
+/** The mock needs nothing; a live run loads its Domain and Proposals into the Keeper first. */
+async function target(): Promise<Target> {
+  if (!flag('live')) {
+    return { keeper: null, shots: MOCK_SHOTS(MOCK_DOMAIN), done: () => Promise.resolve() };
+  }
+  const url = option('keeper') ?? process.env['LOREBASE_E2E_URL'];
+  if (url === undefined || url === '') {
+    throw new Error(
+      '--live needs a running Keeper: --keeper http://127.0.0.1:8080 (or LOREBASE_E2E_URL).',
+    );
+  }
+  await waitForKeeper(url, 30_000);
+  const keeper = createKeeper(url);
+  const domain = `tour-${Date.now().toString(36)}`;
+  await loadSupply(keeper, domain);
+  const { open } = await prepareConflicts(keeper, domain);
+  console.log(`live: Domain ${domain} loaded into ${url}`);
+  return {
+    keeper: url.replace(/\/+$/, ''),
+    shots: LIVE_SHOTS(domain, open),
+    done: () => (flag('keep') ? Promise.resolve() : dropDomain(keeper, domain)),
+  };
+}
+
 async function main(): Promise<void> {
+  const flow = process.argv[2] === 'flow';
+  if (flow && flag('live')) {
+    throw new Error('The walk behind tour.gif is recorded in mock mode; drop --live.');
+  }
   await mkdir(CONFIG.outputDir, { recursive: true });
-  const { server, origin } = await startServer();
+  const { keeper, shots, done } = await target();
+  const { server, origin } = await startServer(keeper);
   const browser = await chromium.launch({ args: CONFIG.browserArgs });
   try {
-    if (process.argv[2] === 'flow') {
+    if (flow) {
       await recordFlow(browser, origin);
     } else {
-      for (const shot of SHOTS) {
+      for (const shot of shots) {
         console.log(`${shot.name}: ${await capture(browser, origin, shot)}`);
       }
     }
   } finally {
     await browser.close();
     await server.close();
+    await done();
   }
 }
 

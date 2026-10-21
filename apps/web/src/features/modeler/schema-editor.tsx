@@ -29,7 +29,7 @@ export function SchemaEditor({ base }: { base: Schema }) {
     check,
     remote,
     blocked: checkBlocked,
-  } = useChangeCheck(editor.changes, documentIsValid && hasChanges);
+  } = useChangeCheck(editor.changes, editor.document, documentIsValid && hasChanges);
 
   let blocked = checkBlocked;
   if (editor.syntaxIssues.length > 0) blocked = 'Fix the YAML syntax errors first.';
@@ -90,6 +90,7 @@ export function SchemaEditor({ base }: { base: Schema }) {
         base={base}
         next={editor.schema}
         changes={editor.changes}
+        document={editor.document}
         blocked={blocked}
         check={{ pending: check.isFetching, result: check.data }}
       />

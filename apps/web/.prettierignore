@@ -3,3 +3,4 @@ node_modules
 pnpm-lock.yaml
 src/routeTree.gen.ts
 src/api/mock/sample/inference-supply.json
+src/api/generated/keeper.ts
