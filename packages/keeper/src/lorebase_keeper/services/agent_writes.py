@@ -5,8 +5,8 @@ refused with `review-required` (see `services.operations`). A caller that names 
 gets this instead:
 
     review-required (protected branch or review policy)
-    -> branch `{branch_prefix}/{principal}/{task}` (created from the target head, reused
-       when it exists and belongs to the caller)
+    -> branch `{branch_prefix}/{principal}/{task}` (created from the target head as
+       `branch_mode`, an overlay by default; reused when it exists and belongs to the caller)
     -> dry run (validation: violations are refused as usual, nothing is created)
     -> the Operation on the task branch (`reviewed_by_proposal`: the Proposal is the review)
     -> a Proposal task branch -> target, created or updated (one open Proposal per branch and
@@ -60,6 +60,7 @@ from lorebase_keeper.services.operations import (
 )
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import StaleHeadError
+from lorebase_store.materialize import BranchMode
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, RefKind
 from lorebase_store.repositories import (
     InvocationRepository,
@@ -751,6 +752,7 @@ async def run(
                     source=target,
                     revision=None,
                     idempotency_key=None,
+                    mode=BranchMode(settings.branch_mode),
                 )
                 created_branch = True
                 await emit("branch.create", name, source=target, purpose="agent-task")

@@ -256,6 +256,12 @@ class AgentWriteSettings(SectionModel):
         pattern=DEFAULT_REF_NAME_PATTERN,
         description="First part of task branch names.",
     )
+    branch_mode: Literal["copy", "overlay"] = Field(
+        default="overlay",
+        description="How task branches are materialized: overlay (only the rows the task "
+        "changes, reading the target as of the fork point; a copy when the target is not "
+        "fully materialized) or copy (full rows).",
+    )
     delete_branch_on_merge: bool = Field(
         default=True,
         description="Delete a task branch when its Proposal merged or was closed and no other "
