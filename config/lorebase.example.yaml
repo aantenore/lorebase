@@ -68,6 +68,10 @@ keeper:
       admin:                     # routes tagged `admin`: keys, principals, grants, audit
         requests_per_minute: 120
         burst: 30
+      auth_failures:             # 401s to requests carrying a credential, per client address
+        requests_per_minute: 30  # and per API key prefix; when either is spent, requests are
+        burst: 30                # answered 429 before the credential is checked
+        ipv6_prefix_length: 64   # IPv6 clients are counted by network of this length
       domains: {}                # per-Domain buckets by Domain id, any of the classes above, e.g.
                                  #   supply: {writes: {requests_per_minute: 60, burst: 10}}
       routes:                    # how requests are sorted into classes

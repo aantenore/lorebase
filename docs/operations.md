@@ -128,8 +128,17 @@ use a bucket of their own.
   and `RateLimit-Reset` (seconds until the bucket is full again).
 - A refused request is `429` with the problem type `rate-limited`, `Retry-After` (seconds) and
   the members `class` and `retry_after_s`. A refused request takes no token.
-- `/healthz` and `/readyz` are exempt (`exempt_paths`), and so are requests without a valid
-  credential: they are answered `401` before any bucket is touched.
+- `/healthz` and `/readyz` are exempt (`exempt_paths`). Requests without a valid credential
+  take no token from these buckets: they are answered `401`.
+- **Failed authentications** have buckets of their own (`auth_failures`, default 30 per minute,
+  burst 30): one per client address (IPv6 by its `/64`, `ipv6_prefix_length`) and one per
+  presented API key prefix. Each `401` to a request that carried a credential takes a token from
+  both; a success takes nothing. While either bucket is empty, requests from that address or
+  with that prefix, valid ones included, are answered `429` (class `auth_failures`,
+  `Retry-After`) before any key lookup or token validation, and are logged at DEBUG only. An
+  attacker who knows a key's prefix can therefore hold that key off for as long as the attack
+  lasts; raise `burst` if that matters more than the database load. Client addresses come from
+  `keeper.trusted_proxies` (see below).
 - The limit counts `lorebase.http.rate_limited{class}` (OpenTelemetry) per refusal.
 - A principal refused `throttle_audit.threshold` times within `window_s` produces one audit
   entry `rate_limit.throttled` (actor, Domain, API key as target, `refusals`, `reason`); the

@@ -118,6 +118,27 @@ class Authenticator:
             raise _unauthorized("Bearer tokens are not accepted.", presented=True)
         return await self._with_token(token)
 
+    def presents_credentials(self, headers: Mapping[str, str]) -> bool:
+        """Whether the request carries a credential to check (lower-case header names)."""
+        if self._settings.mode == "none":
+            return False
+        return bool(
+            headers.get("authorization") or headers.get(self._settings.api_keys.header.lower())
+        )
+
+    def key_prefix(self, headers: Mapping[str, str]) -> str | None:
+        """The public prefix of the API key the request presents, when it is shaped like one.
+        Nothing is looked up."""
+        if self._codec is None:
+            return None
+        try:
+            bearer, api_key = self._credentials(headers)
+        except ProblemError:
+            return None
+        token = api_key or bearer
+        parsed = self._codec.parse(token) if token else None
+        return parsed.prefix if parsed else None
+
     def _credentials(self, headers: Mapping[str, str]) -> tuple[str | None, str | None]:
         bearer: str | None = None
         authorization = headers.get("authorization")

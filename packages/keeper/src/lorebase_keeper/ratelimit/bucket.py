@@ -86,6 +86,10 @@ class RateStore(Protocol):
 
     async def take(self, key: str, spec: BucketSpec, cost: float = 1.0) -> Decision: ...
 
+    async def peek(self, key: str, spec: BucketSpec, cost: float = 1.0) -> Decision:
+        """Whether `take` would allow `cost` now, without taking anything."""
+        ...
+
 
 class InMemoryRateStore:
     """Buckets in this process, the least recently used dropped beyond `max_buckets`.
@@ -107,4 +111,8 @@ class InMemoryRateStore:
         self._buckets.move_to_end(key)
         while len(self._buckets) > self._max:
             self._buckets.popitem(last=False)
+        return decision
+
+    async def peek(self, key: str, spec: BucketSpec, cost: float = 1.0) -> Decision:
+        _, decision = take(self._buckets.get(key), spec, self._clock(), cost)
         return decision
