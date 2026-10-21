@@ -70,9 +70,14 @@ class BranchLayout:
 
     # SQL text -----------------------------------------------------------------------
 
-    def records_sql(self) -> str:
-        """The resolved Record rows as one statement (all `mat_records` columns)."""
-        return self._resolved("mat_records", RECORD_COLUMNS, ("kind_id", "key"))
+    def records_sql(self, *, probe: bool = True) -> str:
+        """The resolved Record rows as one statement (all `mat_records` columns).
+
+        `probe` keeps the anti-join a primary-key probe of the overlay per base row read,
+        right for lookups by key and short pages; false lets the planner hash the overlay's
+        keys instead, which reads that match many base rows (search) prefer.
+        """
+        return self._resolved("mat_records", RECORD_COLUMNS, ("kind_id", "key"), probe=probe)
 
     def links_sql(self) -> str:
         """The resolved Link rows as one statement (all `mat_links` columns)."""
@@ -95,9 +100,10 @@ class BranchLayout:
             f"AND {self._guard()}"
         )
 
-    def records_from(self, alias: str | None = None) -> str:
-        """A FROM item for text statements: `mat_records [alias]` or the resolved rows."""
-        return self._from_item("mat_records", alias, self.records_sql)
+    def records_from(self, alias: str | None = None, *, probe: bool = True) -> str:
+        """A FROM item for text statements: `mat_records [alias]` or the resolved rows
+        (`probe` as in `records_sql`)."""
+        return self._from_item("mat_records", alias, lambda: self.records_sql(probe=probe))
 
     def links_from(self, alias: str | None = None) -> str:
         return self._from_item("mat_links", alias, self.links_sql)
@@ -126,12 +132,21 @@ class BranchLayout:
 
     # Rendering ----------------------------------------------------------------------
 
-    def _resolved(self, table: str, columns: tuple[str, ...], key: tuple[str, ...]) -> str:
-        own, base = self._halves(table, columns, key, own="o", base="s")
+    def _resolved(
+        self, table: str, columns: tuple[str, ...], key: tuple[str, ...], *, probe: bool = True
+    ) -> str:
+        own, base = self._halves(table, columns, key, own="o", base="s", probe=probe)
         return f"{own} UNION ALL {base}"
 
     def _halves(
-        self, table: str, columns: tuple[str, ...], key: tuple[str, ...], *, own: str, base: str
+        self,
+        table: str,
+        columns: tuple[str, ...],
+        key: tuple[str, ...],
+        *,
+        own: str,
+        base: str,
+        probe: bool = True,
     ) -> tuple[str, str]:
         """The overlay half and the base half of the resolved rows."""
         domain, branch = _literal(self.domain_id), _literal(self.branch)
@@ -143,7 +158,7 @@ class BranchLayout:
         # Postgres does not flatten a UNION ALL whose members have WHERE clauses: the halves
         # stay subqueries; restriction quals and lateral references are pushed into each,
         # ordering and LIMIT are not (`records_arms` repeats them per half). OFFSET 0 keeps
-        # the anti-join a primary-key probe per base row read.
+        # the anti-join a primary-key probe per base row read (`probe`).
         return (
             f"SELECT {own_columns} FROM {table} {own} WHERE {own}.domain_id = {domain} "
             f"AND {own}.branch = {branch} AND NOT {own}.deleted",
@@ -151,7 +166,7 @@ class BranchLayout:
             f"AND {base}.branch = {_literal(self._base())} "
             f"AND {base}.revision_generation <= {self._generation()} AND {self._guard()} "
             f"AND NOT EXISTS (SELECT 1 FROM {table} x WHERE x.domain_id = {domain} "
-            f"AND x.branch = {branch} AND {shadow} OFFSET 0)",
+            f"AND x.branch = {branch} AND {shadow}{' OFFSET 0' if probe else ''})",
         )
 
     def records_arms(self, tail: str, alias: str = "m") -> str:
