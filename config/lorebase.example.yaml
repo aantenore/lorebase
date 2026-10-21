@@ -34,6 +34,10 @@ keeper:
   api_prefix: /api/v1            # version prefix of every API route; OpenAPI at <prefix>/openapi.json
   request_id_header: X-Request-ID          # accepted from clients when well formed, echoed back
   problem_type_base: "urn:lorebase:problem:"   # error `type` URI = this prefix + error code
+  trusted_proxies: []            # networks of reverse proxies in front of Keeper, e.g. [10.0.0.0/8].
+                                 # Only from these peers is X-Forwarded-For read (right to left,
+                                 # trusted hops skipped) to find the client address used by API
+                                 # key allowlists; empty: the socket peer is the client
   cors:
     allow_origins: []            # browser origins allowed to call the API; empty disables CORS
     allow_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
@@ -64,6 +68,10 @@ keeper:
       admin:                     # routes tagged `admin`: keys, principals, grants, audit
         requests_per_minute: 120
         burst: 30
+      auth_failures:             # 401s to requests carrying a credential, per client address
+        requests_per_minute: 30  # and per API key prefix; when either is spent, requests are
+        burst: 30                # answered 429 before the credential is checked
+        ipv6_prefix_length: 64   # IPv6 clients are counted by network of this length
       domains: {}                # per-Domain buckets by Domain id, any of the classes above, e.g.
                                  #   supply: {writes: {requests_per_minute: 60, burst: 10}}
       routes:                    # how requests are sorted into classes
@@ -123,6 +131,7 @@ keeper:
       default_ttl_days: 365      # lifetime of new keys; null: no expiry
       max_ttl_days: null         # longest lifetime an admin may request; null: no limit
       last_used_interval_s: 60   # a key's last-used time is written at most this often
+      max_allowed_networks: 32   # most client networks a key's allowed_networks may list
     oidc:                        # bearer tokens of any OpenID Connect provider
       issuer: null               # REQUIRED with oidc modes: expected `iss`, base of discovery
       audience: []               # REQUIRED with oidc modes: accepted `aud` values
@@ -138,6 +147,8 @@ keeper:
       auto_provision: true       # create the user on the first valid token
       principal_cache_ttl_s: 60  # reuse of a subject's principal and groups
       principal_cache_max_entries: 4096
+      allow_insecure: false      # true: accept http issuer and jwks_uri (configured or
+                                 # discovered) off loopback; https is required otherwise
     authz:
       grants_cache_ttl_s: 15     # grants are cached this long; other processes see changes after
                                  # at most this; 0 disables
@@ -181,7 +192,10 @@ keeper:
     max_total_bytes: 1048576     # all files together (413 above)
     file_suffixes: [.csv, .tsv, .txt]
     allowed_sources: []          # secret references of Postgres URLs callers may name, e.g.
-                                 # secret://env/ERP_DSN; empty disables Postgres inference
+                                 # secret://env/ERP_DSN; empty disables Postgres inference;
+                                 # the default of every Domain not in domain_sources
+    domain_sources: {}           # per-Domain lists replacing allowed_sources for that Domain,
+                                 # e.g. {supply: [secret://env/ERP_DSN], hr: []}; [] = none
     max_issues: 500              # issues listed in one response
     options:                     # thresholds and naming rules; a request may override them
       sample_size: 10000         # values read per column
@@ -328,6 +342,7 @@ inference:
     max_tokens: null             # completion cap; null leaves it to the server
     max_concurrency: 2
     timeout_s: 120
+    trust_env: false             # false: proxy variables ignored; true: HTTP(S)_PROXY, NO_PROXY honored
     retry:                       # 429, 5xx and connection errors; Retry-After is honored
       max_retries: 3
       backoff_base_s: 0.5        # wait before retry n: min(backoff_max_s, base * 2**n), jittered
@@ -364,6 +379,7 @@ inference:
     base_url: null               # required for openai_compatible, e.g. http://localhost:11434/v1
     api_key: null
     timeout_s: 60                # openai_compatible request timeout
+    trust_env: false             # false: proxy variables ignored; true: HTTP(S)_PROXY, NO_PROXY honored
     retry: {max_retries: 3, backoff_base_s: 0.5, backoff_max_s: 30}
     # Ollama embeddings instead of fastembed:
     #   provider: openai_compatible
@@ -405,9 +421,11 @@ database:
                                  # worker for per-Attribute index DDL queued by roles that do not
                                  # own it. Alias LOREBASE_DB_MAINTENANCE_DSN. null: such roles skip
                                  # index management (`python -m lorebase_store.indexes plan`)
-  application_role: null         # role the services connect as; revision 0005 grants it EXECUTE
-                                 # on the security definer read functions (store schema notes).
-                                 # null grants nothing; the role must exist before migrating
+  application_role: null         # role the services connect as; revisions 0005 and 0007 grant it
+                                 # EXECUTE on the security definer read functions (store schema
+                                 # notes), and 0007 refuses to run while it may CREATE in the
+                                 # schema of the tables or of pg_trgm. null grants nothing; the
+                                 # role must exist before migrating
   read_dsn: []                   # read replicas (docs/deployment.md): one URL, a comma-separated
                                  # string or a list; literals or secret references, e.g.
                                  # [secret://env/LOREBASE_DB_READ_DSN]. Alias LOREBASE_DB_READ_DSN.
@@ -460,6 +478,10 @@ store:
     compression: gzip            # gzip | none, applied to the .jsonl files
     compression_level: 6         # gzip level 1-9
     verify_after_import: true    # verify rebuilt branches against their trees
+    max_member_bytes: 17179869184   # import: largest file, counted as read after gzip (16 GiB)
+    max_total_bytes: 68719476736    # import: largest sum of file sizes (64 GiB)
+    max_entries: 100000          # import: most files and directories in a bundle
+    max_line_bytes: 67108864     # import: longest .jsonl record and largest .json file (64 MiB)
   profiling:                     # profilers feeding schema inference (docs/inference.md)
     csv:
       sample_rows: 10000         # rows kept per file; every row is still counted
@@ -490,6 +512,16 @@ store:
     use_definer_functions: true  # search, incoming Links, neighborhoods and attribute queries
                                  # through the security definer functions, whose index plans
                                  # survive row-level security; false: the same SQL, plain
+    definer_ceilings:            # largest counts the definer functions accept (NULL and values
+                                 # outside 1..ceiling are refused). Read when revision 0007 runs,
+                                 # later changes have no effect; each must be at least the cap
+                                 # above (traverse below) that the read primitives pass
+      limit: 10000               # rows of a page or search: >= max_page_rows, max_search_rows
+      candidates: 100000         # search candidates: >= search_candidates
+      depth: 10                  # neighborhood hops: >= traverse.max_depth
+      fanout: 10000              # Links per Record and hop: >= traverse.max_fanout
+      max_steps: 1000000         # Links walked plus seeds: >= traverse.max_links + max_seeds
+      max_nodes: 100000          # Records of a neighborhood: >= traverse.max_nodes
   traverse:                      # neighborhood caps
     max_depth: 3                 # hops
     max_seeds: 50                # seed Records
@@ -605,6 +637,8 @@ agents:
     poll_interval_s: 1.0         # how often an open stream looks for new events
     heartbeat_s: 15.0            # comment line after this much silence
     max_connection_s: 300.0      # streams close after this long; clients resume with Last-Event-ID
+    reauthorize_interval_s: 60.0 # open streams check credential and grants again this often and
+                                 # close when refused (grants seen after keeper.auth.authz cache)
     retry_ms: 3000               # reconnection delay advised to clients
     batch_events: 100            # events read per poll
     changed_keys_max: 100        # changed Record keys listed per event
@@ -650,6 +684,7 @@ herald:
     max_retries: 2               # resends after 429, 503 or no connection; 0 turns retries off
     retry_max_wait_s: 5          # longest pause before a retry; Retry-After is capped to it
     verify_tls: true
+    trust_env: false             # false: proxy variables ignored; true: HTTP(S)_PROXY, NO_PROXY honored
     user_agent: lorebase-herald
   http:                          # streamable_http: each caller sends its own key
     host: 127.0.0.1
@@ -715,8 +750,9 @@ scribe:
       allowed_roots: []          # directories local CSV files may be read from; empty: none
       allowed_hosts: []          # hosts CSV URLs may point at; empty: none
       allowed_schemes: [https]
-      max_bytes: 104857600       # larger files or downloads are refused (100 MiB)
-      timeout_s: 60.0            # time budget of one download
+      allow_private_targets: false   # true: URL hosts may resolve to private/loopback addresses
+      max_bytes: 104857600       # larger files or downloads are refused (100 MiB); reads stop here
+      timeout_s: 60.0            # time budget of one download, lookup included
       encodings: [utf-8-sig, cp1252]   # tried in order
       delimiters: ",;\t|"        # delimiters the sniffer may pick; .tsv files use a tab
       sniff_bytes: 65536

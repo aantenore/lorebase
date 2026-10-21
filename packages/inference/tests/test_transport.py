@@ -122,3 +122,66 @@ async def test_non_json_answer_is_an_endpoint_error(scripted) -> None:
 def test_base_url_must_be_http() -> None:
     with pytest.raises(ValueError, match="http"):
         EndpointClient(base_url="localhost:11434", api_key=None, timeout_s=1, retry=RetrySettings())
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_credential_errors_carry_no_server_text(scripted, status) -> None:
+    endpoint = scripted(
+        scripted.api_error(status, "Incorrect API key provided: sk-proj-****wxyz; account Acme")
+    )
+    async with make_client(endpoint, key="sk-proj-real-key-wxyz") as client:
+        with pytest.raises(EndpointError, match=f"HTTP {status}") as caught:
+            await client.post("/x", {})
+    assert caught.value.status == status
+    assert caught.value.detail == ""
+    for leaked in ("Incorrect", "sk-proj", "wxyz", "Acme"):
+        assert leaked not in str(caught.value)
+
+
+async def test_credentials_in_error_text_are_scrubbed(scripted) -> None:
+    configured = "custom.Configured-Key!42"
+    base64_run = "QWxhZGRpbjpvcGVuIHNlc2FtZQ0K3hYp9Zt1Lk7wRb2NcVa8"
+    text = (
+        f"bad request for key {configured}: header Authorization: Bearer abc.def-ghi, "
+        f"other key sk-live_0123456789abcdef, masked sk-****1234, token {base64_run}, "
+        "hex 0123456789abcdef0123456789abcdef01; response_format is not supported"
+    )
+    endpoint = scripted(scripted.api_error(400, text))
+    async with make_client(endpoint, key=configured) as client:
+        with pytest.raises(EndpointError, match="HTTP 400") as caught:
+            await client.post("/x", {})
+    message = str(caught.value)
+    for leaked in (configured, "abc.def", "sk-live", "sk-****", base64_run, "0123456789abcdef"):
+        assert leaked not in message
+        assert leaked not in caught.value.detail
+    assert "[redacted]" in caught.value.detail
+    assert "response_format is not supported" in caught.value.detail
+
+
+async def test_error_text_stays_a_bounded_excerpt(scripted) -> None:
+    endpoint = scripted(scripted.api_error(400, "word " * 1000))
+    async with make_client(endpoint) as client:
+        with pytest.raises(EndpointError) as caught:
+            await client.post("/x", {})
+    assert 0 < len(caught.value.detail) <= 300
+
+
+async def test_proxy_environment_is_ignored_by_default(scripted, client_options) -> None:
+    endpoint = scripted(httpx.Response(200, json={}))
+    async with make_client(endpoint) as client:
+        await client.post("/x", {})
+    assert [options["trust_env"] for options in client_options] == [False]
+
+
+async def test_trust_env_lets_httpx_read_the_proxy_environment(scripted, client_options) -> None:
+    endpoint = scripted(httpx.Response(200, json={}))
+    async with EndpointClient(
+        base_url="http://llm.test/v1",
+        api_key=None,
+        timeout_s=5,
+        retry=RetrySettings(),
+        trust_env=True,
+        transport=endpoint.transport,
+    ) as client:
+        await client.post("/x", {})
+    assert [options["trust_env"] for options in client_options] == [True]

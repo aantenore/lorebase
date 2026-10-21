@@ -139,7 +139,7 @@ uv sync --all-packages
 uv run python examples/merge_demo.py
 
 # Postgres, migrations and Keeper (builds the backend image on first run)
-cp .env.example .env     # set POSTGRES_PASSWORD
+cp .env.example .env     # set POSTGRES_PASSWORD and LOREBASE_APP_PASSWORD
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postgres migrate keeper
 curl http://localhost:8080/readyz
 ```

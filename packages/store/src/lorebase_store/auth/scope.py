@@ -31,6 +31,19 @@ _RESTORE = text(
 )
 
 
+def checked_domain_id(domain_id: str) -> str:
+    """`domain_id` when it fits the comma-separated `lorebase.domain_ids` setting.
+
+    Raises `ValueError` for an empty id or one holding a comma, either of which would change
+    which Domains the setting names.
+    """
+    if not domain_id:
+        raise ValueError("Domain ids cannot be empty")
+    if "," in domain_id:
+        raise ValueError("Domain ids cannot contain commas")
+    return domain_id
+
+
 @asynccontextmanager
 async def rls_scope(
     session: AsyncSession, *, domain_ids: Sequence[str] = (), bypass: bool = False
@@ -38,12 +51,14 @@ async def rls_scope(
     """Make rows of `domain_ids` (or every row with `bypass`) visible inside the block.
 
     The settings are transaction-local. When the block raises, they are left as they are:
-    the transaction is expected to roll back.
+    the transaction is expected to roll back. An empty Domain id or one holding a comma raises
+    `ValueError` before anything is set.
     """
+    domains = ",".join(checked_domain_id(domain_id) for domain_id in domain_ids)
     names = {"domains_name": DOMAIN_IDS_SETTING, "bypass_name": BYPASS_SETTING}
     row = (
         await session.execute(
-            _SWAP, {**names, "domains": ",".join(domain_ids), "bypass": "on" if bypass else ""}
+            _SWAP, {**names, "domains": domains, "bypass": "on" if bypass else ""}
         )
     ).one()
     yield

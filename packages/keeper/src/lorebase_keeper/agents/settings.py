@@ -71,6 +71,13 @@ class FeedSettings(SectionModel):
         gt=0,
         description="A stream is closed after this long; clients reconnect with Last-Event-ID.",
     )
+    reauthorize_interval_s: float = Field(
+        default=60.0,
+        gt=0,
+        description="An open stream authenticates the caller and checks its grants again this "
+        "often, through the same caches as a request, and closes once that fails: a revoked "
+        "grant ends it within this interval plus `keeper.auth.authz.grants_cache_ttl_s`.",
+    )
     retry_ms: int = Field(default=3000, ge=0, description="Reconnection delay advised to clients.")
     batch_events: int = Field(default=100, ge=1, description="Events read per poll.")
     changed_keys_max: int = Field(

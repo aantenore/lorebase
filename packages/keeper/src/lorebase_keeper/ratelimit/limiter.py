@@ -3,19 +3,27 @@
 A principal has one bucket per class (`reads`, `writes`, `searches`, `context`, `admin`), keyed
 by the API key id or, for users, the principal id. A Domain that overrides the bucket of a
 class gets a bucket of its own for it.
+
+Failed authentications have buckets of their own (`auth_failures`), in a separate store so
+that unauthenticated traffic cannot push principals' buckets out: one per client address (IPv6
+by network) and one per presented API key prefix.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 
 from opentelemetry import metrics
 from opentelemetry.metrics import MeterProvider
 
-from lorebase_keeper.ratelimit.bucket import BucketSpec, Decision, RateStore
+from lorebase_keeper.client_address import IPAddress
+from lorebase_keeper.ratelimit.bucket import BucketSpec, Decision, InMemoryRateStore, RateStore
 from lorebase_keeper.ratelimit.config import RateLimitSettings, RouteClass
+
+AUTH_FAILURES = "auth_failures"
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -28,10 +36,13 @@ class RateLimiter:
         settings: RateLimitSettings,
         store: RateStore,
         *,
+        failure_store: RateStore | None = None,
         meter_provider: MeterProvider | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
+        self._failure_store = failure_store or InMemoryRateStore(settings.max_buckets)
+        self._failure_spec = BucketSpec.from_settings(settings.auth_failures)
         meter = (meter_provider or metrics.get_meter_provider()).get_meter("lorebase.keeper")
         self._limited = meter.create_counter(
             "lorebase.http.rate_limited",
@@ -65,6 +76,38 @@ class RateLimiter:
         if not decision.allowed:
             self._limited.add(1, {"class": route_class.value})
         return decision
+
+    def failure_keys(self, address: IPAddress | None, key_prefix: str | None) -> tuple[str, ...]:
+        """The failed-authentication buckets of a request: its client address (an IPv6
+        address by its network) and its API key prefix, each when known."""
+        keys: list[str] = []
+        if isinstance(address, ipaddress.IPv6Address):
+            length = self._settings.auth_failures.ipv6_prefix_length
+            keys.append(f"addr:{ipaddress.ip_network(f'{address}/{length}', strict=False)}")
+        elif address is not None:
+            keys.append(f"addr:{address}")
+        if key_prefix is not None:
+            keys.append(f"prefix:{key_prefix}")
+        return tuple(f"{AUTH_FAILURES}|{key}" for key in keys)
+
+    async def failures_exhausted(self, keys: Sequence[str]) -> Decision | None:
+        """The refusal (the longest wait) when one of the buckets has no failure left, else
+        None. Takes nothing."""
+        refused: Decision | None = None
+        for key in keys:
+            decision = await self._failure_store.peek(key, self._failure_spec)
+            if not decision.allowed and (
+                refused is None or decision.retry_after_s > refused.retry_after_s
+            ):
+                refused = decision
+        if refused is not None:
+            self._limited.add(1, {"class": AUTH_FAILURES})
+        return refused
+
+    async def record_failure(self, keys: Sequence[str]) -> None:
+        """Take one token from each bucket for a failed authentication."""
+        for key in keys:
+            await self._failure_store.take(key, self._failure_spec)
 
 
 class ThrottleWatch:

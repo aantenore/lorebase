@@ -6,8 +6,10 @@ Every value has a documented default; deployments override it in the YAML file o
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 
@@ -26,6 +28,30 @@ a provider's keys are public, so accepting HS* would let anyone sign a token."""
 MIN_PEPPER_LENGTH = 32
 _TOKEN_PREFIX = re.compile(r"^[a-z][a-z0-9]{1,15}$")
 _ROLE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
+def is_loopback(host: str) -> bool:
+    """Whether a host name or address only reaches this machine."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def insecure_url_problem(url: str, allow_insecure: bool) -> str | None:
+    """Why `url` may not be used to reach an identity provider, or None when it may.
+
+    Signing keys fetched over plain HTTP can be replaced in transit, so provider URLs must use
+    https; http is accepted for loopback hosts or when `allow_insecure` is set.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return "must be an absolute https URL"
+    if parts.scheme == "http" and not allow_insecure and not is_loopback(parts.hostname):
+        return "must use https (http is accepted for loopback hosts or with oidc.allow_insecure)"
+    return None
 
 
 class ApiKeySettings(SectionModel):
@@ -68,6 +94,11 @@ class ApiKeySettings(SectionModel):
         default=60,
         ge=0,
         description="A key's last-used time is written at most this often; 0 writes on every use.",
+    )
+    max_allowed_networks: int = Field(
+        default=32,
+        ge=1,
+        description="Most networks an administrator may list in a key's `allowed_networks`.",
     )
 
     @field_validator("token_prefix")
@@ -134,6 +165,12 @@ class OidcSettings(SectionModel):
         default=60, ge=0, description="How long a token subject's principal and groups are reused."
     )
     principal_cache_max_entries: int = Field(default=4096, ge=1)
+    allow_insecure: bool = Field(
+        default=False,
+        description="Accept http `issuer` and `jwks_uri` values (configured or discovered) for "
+        "hosts other than loopback. Signing keys fetched over http can be replaced in transit; "
+        "for development only.",
+    )
 
     @field_validator("audience", mode="before")
     @classmethod
@@ -150,6 +187,14 @@ class OidcSettings(SectionModel):
                 f"{', '.join(sorted(ASYMMETRIC_ALGORITHMS))}"
             )
         return value
+
+    @model_validator(mode="after")
+    def _secure_provider_urls(self) -> Self:
+        for name, url in (("issuer", self.issuer), ("jwks_uri", self.jwks_uri)):
+            problem = None if url is None else insecure_url_problem(url, self.allow_insecure)
+            if problem:
+                raise ValueError(f"oidc.{name} {url!r} {problem}")
+        return self
 
 
 class AuthzSettings(SectionModel):

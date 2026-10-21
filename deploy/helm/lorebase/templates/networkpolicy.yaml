@@ -1,9 +1,32 @@
+{{- /* Egress policy of one workload: `rules` is a list of NetworkPolicyEgressRule. */}}
+{{- define "lorebase.egressPolicy" -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lorebase.componentName" (dict "ctx" .ctx "component" (printf "%s-egress" .component)) }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" .ctx "component" .component) | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" .ctx | nindent 2 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "lorebase.selectorLabels" (dict "ctx" .ctx "component" .component) | nindent 6 }}
+  policyTypes:
+    - Egress
+  {{- if .rules }}
+  egress:
+    {{- toYaml .rules | nindent 4 }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end -}}
 {{- if .Values.networkPolicy.enabled }}
 {{- $ctx := . }}
 {{- $np := .Values.networkPolicy }}
+{{- $eg := $np.egress }}
 {{- $release := dict "ctx" . "component" "release" }}
 {{- $releasePods := dict "app.kubernetes.io/name" (include "lorebase.name" .) "app.kubernetes.io/instance" .Release.Name }}
-{{- /* Everything in the release starts closed. */}}
+{{- /* Everything in the release starts closed: ingress always, egress when it is restricted. */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -17,6 +40,9 @@ spec:
       {{- toYaml $releasePods | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if $eg.enabled }}
+    - Egress
+    {{- end }}
 {{- /* Keeper: the other pods of the release and the configured peers. */}}
 ---
 apiVersion: networking.k8s.io/v1
@@ -93,15 +119,75 @@ spec:
         - protocol: TCP
           port: {{ .Values.ollama.port }}
 {{- end }}
-{{- if $np.egress.enabled }}
+{{- if $eg.enabled }}
+{{- /* Building blocks: each is a list of egress rules, empty when it does not apply. */}}
+{{- $dnsPeer := dict "namespaceSelector" $eg.dnsNamespaceSelector }}
+{{- if not (kindIs "invalid" $eg.dnsPodSelector) }}
+{{- $_ := set $dnsPeer "podSelector" $eg.dnsPodSelector }}
+{{- end }}
+{{- $dns := list (dict "to" (list $dnsPeer) "ports" $eg.dnsPorts) }}
+{{- $dbTo := $eg.database.to }}
+{{- if .Values.postgresql.enabled }}
+{{- $dbTo = list (dict "podSelector" (dict "matchLabels" (dict "cnpg.io/cluster" (include "lorebase.pgClusterName" .)))) }}
+{{- end }}
+{{- if not $dbTo }}
+{{- fail "networkPolicy.egress.database.to is empty: set the address ranges (ipBlock) or selectors of the Postgres, or postgresql.enabled=true" }}
+{{- end }}
+{{- $database := list (dict "to" $dbTo "ports" $eg.database.ports) }}
+{{- $telemetry := list }}
+{{- if and .Values.telemetry.otlpEndpoint $eg.telemetry.to }}
+{{- $telemetry = list (dict "to" $eg.telemetry.to "ports" $eg.telemetry.ports) }}
+{{- end }}
+{{- $model := list }}
+{{- if .Values.ollama.enabled }}
+{{- $ollamaPods := include "lorebase.selectorLabels" (dict "ctx" . "component" "ollama") | fromYaml }}
+{{- $model = append $model (dict "to" (list (dict "podSelector" (dict "matchLabels" $ollamaPods))) "ports" (list (dict "protocol" "TCP" "port" .Values.ollama.port))) }}
+{{- end }}
+{{- if $eg.model.to }}
+{{- $model = append $model (dict "to" $eg.model.to "ports" $eg.model.ports) }}
+{{- end }}
+{{- $webhooks := list }}
+{{- if $eg.webhooks.to }}
+{{- $webhooks = list (dict "to" $eg.webhooks.to "ports" $eg.webhooks.ports) }}
+{{- end }}
+{{- $keeperPods := include "lorebase.selectorLabels" (dict "ctx" . "component" "keeper") | fromYaml }}
+{{- $keeper := list (dict "to" (list (dict "podSelector" (dict "matchLabels" $keeperPods))) "ports" (list (dict "protocol" "TCP" "port" .Values.keeper.port))) }}
+{{- $extra := $eg.extra }}
+{{- /* Workload -> rules. A workload that is not deployed gets no policy. */}}
+{{- $workloads := dict "keeper" (concat $dns $database $telemetry (default list $extra.keeper)) }}
+{{- if .Values.scribe.enabled }}
+{{- $_ := set $workloads "scribe" (concat $dns $database $telemetry $model $webhooks (default list $extra.scribe)) }}
+{{- end }}
+{{- if .Values.herald.enabled }}
+{{- $_ := set $workloads "herald" (concat $dns $keeper (default list $extra.herald)) }}
+{{- end }}
+{{- if .Values.web.enabled }}
+{{- /* nginx serves static files only: no egress unless configured. */}}
+{{- $_ := set $workloads "web" (default list $extra.web) }}
+{{- end }}
+{{- if .Values.ollama.enabled }}
+{{- $_ := set $workloads "ollama" (concat $dns (default list $extra.ollama)) }}
+{{- end }}
+{{- if .Values.migrate.enabled }}
+{{- $_ := set $workloads "migrate" (concat $dns $database (default list $extra.migrate)) }}
+{{- end }}
+{{- if .Values.tests.enabled }}
+{{- $_ := set $workloads "test" (concat $dns $keeper) }}
+{{- end }}
+{{- range $component := keys $workloads | sortAlpha }}
+---
+{{ include "lorebase.egressPolicy" (dict "ctx" $ctx "component" $component "rules" (get $workloads $component)) }}
+{{- end }}
+{{- with $eg.rules }}
+{{- /* Rules added to every pod of the release. */}}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "lorebase.fullname" . }}-egress
+  name: {{ include "lorebase.fullname" $ctx }}-egress
   labels:
     {{- include "lorebase.labels" $release | nindent 4 }}
-  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+  {{- include "lorebase.commonAnnotations" $ctx | nindent 2 }}
 spec:
   podSelector:
     matchLabels:
@@ -109,20 +195,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    - to:
-        - namespaceSelector:
-            {{- toYaml $np.egress.dnsNamespaceSelector | nindent 12 }}
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- toYaml $releasePods | nindent 14 }}
-    {{- with $np.egress.rules }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}

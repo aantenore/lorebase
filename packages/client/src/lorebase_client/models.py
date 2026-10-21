@@ -643,6 +643,7 @@ class CreateApiKey(RequestModel):
     role: str | None = None
     ttl_days: int | None = Field(default=None, ge=1)
     principal_id: str | None = None
+    allowed_networks: list[str] | None = None
 
 
 class ApiKey(Model):
@@ -656,6 +657,7 @@ class ApiKey(Model):
     last_used_at: datetime | None = None
     revoked_at: datetime | None = None
     created_at: datetime
+    allowed_networks: list[str] = Field(default_factory=list)
 
 
 class ApiKeyCreated(ApiKey):

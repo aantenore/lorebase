@@ -107,3 +107,14 @@ def test_registry_builds_the_remote_provider_from_configuration() -> None:
         {"embeddings": {"provider": "openai_compatible", "base_url": "http://e/v1"}}
     )
     assert isinstance(create_embedding_model(settings), EndpointEmbeddingModel)
+
+
+@pytest.mark.parametrize(("configured", "expected"), [({}, False), ({"trust_env": True}, True)])
+async def test_remote_embeddings_trust_env_follows_the_settings(
+    scripted, client_options, configured, expected
+) -> None:
+    endpoint = scripted(embeddings_answer([[1, 0, 0]]))
+    model = remote(endpoint, **configured)
+    await model.embed(["alpha"])
+    await model.aclose()
+    assert [options["trust_env"] for options in client_options] == [expected]

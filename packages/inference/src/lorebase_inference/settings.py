@@ -58,6 +58,7 @@ class LlmTaskOverride(SectionModel):
     temperature: float | None = Field(default=None, ge=0)
     max_concurrency: int | None = Field(default=None, ge=1)
     timeout_s: float | None = Field(default=None, gt=0)
+    trust_env: bool | None = None
     price_per_million_tokens: Price | None = None
 
 
@@ -98,6 +99,11 @@ class LlmSettings(SectionModel):
     )
     max_concurrency: int = Field(default=2, ge=1, description="Parallel requests per process.")
     timeout_s: float = Field(default=120, gt=0)
+    trust_env: bool = Field(
+        default=False,
+        description="Honor HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and other httpx environment "
+        "settings) for this endpoint; false ignores them and connects directly.",
+    )
     retry: RetrySettings = Field(default_factory=RetrySettings)
     price_per_million_tokens: Price = Field(default_factory=Price)
     tasks: dict[str, LlmTaskOverride] = Field(
@@ -148,6 +154,11 @@ class EmbeddingSettings(SectionModel):
         default=None, ge=1, description="fastembed: CPU threads; unset: library default."
     )
     timeout_s: float = Field(default=60, gt=0, description="openai_compatible request timeout.")
+    trust_env: bool = Field(
+        default=False,
+        description="Honor HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and other httpx environment "
+        "settings) for the openai_compatible endpoint; false ignores them and connects directly.",
+    )
     retry: RetrySettings = Field(default_factory=RetrySettings)
 
     @model_validator(mode="after")

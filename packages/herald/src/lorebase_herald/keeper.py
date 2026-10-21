@@ -54,6 +54,7 @@ class KeeperClients:
             ),
             headers={"User-Agent": connection.user_agent},
             transport=self._transport_for_request(),
+            trust_env=connection.trust_env,
             env={},
         ) as client:
             yield client

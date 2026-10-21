@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Brings the compose stack of the five-day demo up and down.
 #
-#   stack.sh up        build the image, start postgres, migrate, keeper and scribe, create the
-#                      admin key with `python -m lorebase_keeper bootstrap` (idempotent: a running
+#   stack.sh up        build the image, start postgres, db-roles, migrate, keeper and scribe
+#                      (Keeper and Scribe connect as the application role, subject to row-level
+#                      security; the owner role migrates and bootstraps), create the admin key with `python -m lorebase_keeper bootstrap` (idempotent: a running
 #                      stack is left alone)
 #   stack.sh down      stop the stack and delete its data
 #   stack.sh env       print the variables run.sh needs (eval "$(stack.sh env)")
@@ -51,6 +52,8 @@ write_env() {
 LOREBASE_IMAGE=lorebase-demo
 LOREBASE_TAG=local
 POSTGRES_PASSWORD=$(secret postgres.password)
+LOREBASE_APP_USER=lorebase_app
+LOREBASE_APP_PASSWORD=$(secret app.password)
 POSTGRES_HOST_PORT=$POSTGRES_PORT
 KEEPER_HOST_PORT=$KEEPER_PORT
 LOREBASE_CONFIG_FILE=$HERE/lorebase.demo.yaml
@@ -74,7 +77,7 @@ up() {
   mkdir -p "$STATE"
   write_env
   say "starting project $PROJECT (Keeper on 127.0.0.1:$KEEPER_PORT)"
-  compose up -d --build postgres migrate keeper scribe >&2
+  compose up -d --build postgres db-roles migrate keeper scribe >&2
   local waited=0
   until keeper_ready; do
     waited=$((waited + 2))
@@ -102,7 +105,7 @@ down() {
   if [ -s "$STATE/stack.env" ]; then
     say "stopping project $PROJECT and deleting its data"
     compose down -v --remove-orphans >&2
-    rm -f "$STATE/admin.key" "$STATE/postgres.password" "$STATE/pepper"
+    rm -f "$STATE/admin.key" "$STATE/postgres.password" "$STATE/app.password" "$STATE/pepper"
   else
     say "nothing to stop (no $STATE/stack.env)"
   fi

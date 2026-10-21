@@ -311,7 +311,11 @@ def _spec(kind: Kind, attribute: Attribute, reasons: tuple[IndexReason, ...]) ->
 
 
 def sql_literal(value: str) -> str:
-    """A standard SQL string literal (quotes doubled; NUL rejected)."""
+    """A standard SQL string literal (quotes doubled; NUL rejected).
+
+    Backslashes are left as they are, which is safe only with `standard_conforming_strings`
+    on: the Postgres default, and pinned by `db.create_engine` on every connection.
+    """
     if "\x00" in value:
         raise ValueError("SQL literals cannot contain NUL")
     return "'" + value.replace("'", "''") + "'"

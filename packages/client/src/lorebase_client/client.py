@@ -48,7 +48,8 @@ class LorebaseClient:
     cache for GET reads (an integer sets its size). `auto_idempotency_keys=True` gives every
     create and Operation execution a key, which also makes them safe to retry after a lost
     answer. `transport` replaces the network (tests, in-process servers); `sleep` replaces the
-    wait between retries.
+    wait between retries. `trust_env=False` makes `httpx` ignore proxy variables
+    (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) and other environment settings.
     """
 
     def __init__(
@@ -64,6 +65,7 @@ class LorebaseClient:
         cache: bool | int = False,
         headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
+        trust_env: bool = True,
         env: Mapping[str, str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -81,7 +83,9 @@ class LorebaseClient:
         )
         self._core = RequestCore(self.config)
         self._sleep = sleep
-        self._http = httpx.Client(timeout=self.config.timeout_s, transport=transport)
+        self._http = httpx.Client(
+            timeout=self.config.timeout_s, transport=transport, trust_env=trust_env
+        )
         self.domains = Domains(self)
         self.branches = Branches(self)
         self.tags = Tags(self)
@@ -782,9 +786,19 @@ class ApiKeys(_Resource):
         role: str | None = None,
         ttl_days: int | None = None,
         principal_id: str | None = None,
+        allowed_networks: Sequence[str] | None = None,
     ) -> m.ApiKeyCreated:
-        """Create a key; the secret is in `key` of the answer and is not shown again."""
-        body = m.CreateApiKey(name=name, role=role, ttl_days=ttl_days, principal_id=principal_id)
+        """Create a key; the secret is in `key` of the answer and is not shown again.
+
+        `allowed_networks` (CIDR) limits the client addresses the key works from.
+        """
+        body = m.CreateApiKey(
+            name=name,
+            role=role,
+            ttl_days=ttl_days,
+            principal_id=principal_id,
+            allowed_networks=list(allowed_networks) if allowed_networks else None,
+        )
         return self._c.send(ep.create_api_key(domain, body))
 
     def list(

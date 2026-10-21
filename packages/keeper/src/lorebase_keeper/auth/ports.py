@@ -72,6 +72,7 @@ class ApiKeysPort(Protocol):
         key_hash: bytes,
         scopes: Sequence[str] = (),
         expires_at: datetime | None = None,
+        allowed_networks: Sequence[str] = (),
     ) -> ApiKeyRecord: ...
 
     async def get(self, key_id: str) -> ApiKeyRecord | None: ...

@@ -5,6 +5,10 @@ Speaks JSON over plain HTTP with `httpx`; no vendor library is involved. Calls a
 A `Retry-After` header (seconds or HTTP date) sets the wait, capped at `retry.backoff_max_s`;
 otherwise the wait is exponential backoff with full jitter. Request and response bodies are
 never logged: they hold prompts and documents.
+
+Error text sent by the server is kept in `EndpointError` only after anything that looks like a
+credential is removed, and not at all for 401 and 403, where providers often echo the key.
+Proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) are ignored unless `trust_env` is set.
 """
 
 from __future__ import annotations
@@ -13,8 +17,9 @@ import asyncio
 import logging
 import math
 import random
+import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from types import TracebackType
@@ -30,6 +35,18 @@ logger = logging.getLogger("lorebase.inference")
 
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _DETAIL_LIMIT = 300
+_SCRUB_WINDOW = _DETAIL_LIMIT * 4
+CREDENTIAL_STATUS = frozenset({401, 403})
+REDACTED = "[redacted]"
+_MIN_SECRET_CHARS = 8
+_CREDENTIAL = re.compile(
+    r"\bbearer\s+[^\s\"',;]+"  # an echoed Authorization value
+    r"|(?<![A-Za-z0-9])(?:sk|pk|rk)[-_][A-Za-z0-9_\-*.]{6,}"  # sk-..., sk_live_..., masked too
+    # long base64, base64url or hex runs holding both letters and digits
+    r"|(?<![A-Za-z0-9+/_\-])(?=[A-Za-z0-9+/_\-]*\d)(?=[A-Za-z0-9+/_\-]*[A-Za-z])"
+    r"[A-Za-z0-9+/_\-]{32,}={0,2}",
+    re.IGNORECASE,
+)
 _CONNECT_TIMEOUT_S = 10.0
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -55,8 +72,20 @@ def parse_retry_after(
     return None if math.isnan(seconds) else max(seconds, 0.0)
 
 
-def error_detail(response: httpx.Response) -> str:
-    """Error text of a failed response: the API error message when present, else the body."""
+def scrub_credentials(text: str, *, secrets: Iterable[str] = ()) -> str:
+    """`text` with the given secrets and anything shaped like a credential replaced."""
+    for secret in secrets:
+        if len(secret) >= _MIN_SECRET_CHARS:
+            text = text.replace(secret, REDACTED)
+    return _CREDENTIAL.sub(REDACTED, text)
+
+
+def error_detail(response: httpx.Response, *, secrets: Iterable[str] = ()) -> str:
+    """Error text of a failed response: the API error message when present, else the body.
+
+    Whitespace is collapsed, credentials are scrubbed (see `scrub_credentials`) and the result
+    is cut to a bounded excerpt.
+    """
     try:
         body = response.json()
     except ValueError:
@@ -69,7 +98,8 @@ def error_detail(response: httpx.Response) -> str:
             text = str(error)
         else:
             text = str(body)
-    return " ".join(text.split())[:_DETAIL_LIMIT]
+    excerpt = " ".join(text[: _SCRUB_WINDOW * 4].split())[:_SCRUB_WINDOW]
+    return scrub_credentials(excerpt, secrets=secrets)[:_DETAIL_LIMIT]
 
 
 class EndpointClient:
@@ -83,6 +113,7 @@ class EndpointClient:
         timeout_s: float,
         retry: RetrySettings,
         max_concurrency: int = 4,
+        trust_env: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Sleep | None = None,
         jitter: Callable[[], float] = random.random,
@@ -94,6 +125,7 @@ class EndpointClient:
         self._timeout = httpx.Timeout(timeout_s, connect=min(_CONNECT_TIMEOUT_S, timeout_s))
         self._retry = retry
         self._slots = asyncio.Semaphore(max_concurrency)
+        self._trust_env = trust_env
         self._transport = transport
         self._sleep: Sleep = sleep or asyncio.sleep
         self._jitter = jitter
@@ -128,12 +160,7 @@ class EndpointClient:
                     if response.status_code < 400:
                         return _json_object(path, response)
                     reason = f"HTTP {response.status_code}"
-                    detail = error_detail(response)
-                    failure = EndpointError(
-                        f"{path}: HTTP {response.status_code}: {detail}",
-                        status=response.status_code,
-                        detail=detail,
-                    )
+                    failure = self._failure(path, response)
                     if response.status_code not in RETRYABLE_STATUS:
                         raise failure
                     retry_after = parse_retry_after(response.headers.get("Retry-After"))
@@ -151,6 +178,16 @@ class EndpointClient:
                 await self._sleep(delay)
                 attempt += 1
 
+    def _failure(self, path: str, response: httpx.Response) -> EndpointError:
+        status = response.status_code
+        if status in CREDENTIAL_STATUS:
+            return EndpointError(
+                f"{path}: HTTP {status}: credentials refused (server text omitted)", status=status
+            )
+        secrets = [self._key.get_secret_value()] if self._key is not None else []
+        detail = error_detail(response, secrets=secrets)
+        return EndpointError(f"{path}: HTTP {status}: {detail}", status=status, detail=detail)
+
     def _delay(self, attempt: int, retry_after: float | None) -> float:
         cap = self._retry.backoff_max_s
         if retry_after is not None:
@@ -159,7 +196,9 @@ class EndpointClient:
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout, transport=self._transport)
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport, trust_env=self._trust_env
+            )
         return self._client
 
     async def aclose(self) -> None:

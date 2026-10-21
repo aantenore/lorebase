@@ -41,6 +41,8 @@ import importlib.metadata
 import itertools
 import json
 import logging
+import os
+import stat
 import sys
 import tarfile
 import tempfile
@@ -49,8 +51,8 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Protocol
+from pathlib import Path, PurePosixPath
+from typing import IO, Any, BinaryIO, Protocol
 from urllib.parse import quote
 
 from sqlalchemy import ARRAY, LargeBinary, bindparam, text
@@ -83,6 +85,7 @@ from lorebase_store.repositories.refs import REF_LOG, REFS, RefRepository
 from lorebase_store.repositories.revisions import REVISION_PARENTS, REVISIONS, RevisionRepository
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
+from lorebase_store.settings import BundleSettings
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +98,9 @@ TAR_SUFFIX = ".tar"
 _JSONL = ("revisions", "changesets", "provenance", "ref_log", "nodes", "objects")
 _PLAIN = ("domain.json", "refs.json")
 _HASH_CHUNK = 1 << 20
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 class BundleError(Exception):
@@ -205,17 +211,35 @@ class _LineWriter:
         self.records += 1
 
 
-def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
-    opener = gzip.open if path.name.endswith(".gz") else open
-    with opener(path, "rb") as handle:
-        for number, line in enumerate(handle, 1):
-            try:
-                value = json.loads(line)
-            except ValueError as error:
-                raise BundleError(f"{path.name} line {number}: not JSON") from error
-            if not isinstance(value, dict):
-                raise BundleError(f"{path.name} line {number}: not an object")
-            yield value
+def _read_jsonl(root: Path, name: str, limits: BundleSettings) -> Iterator[dict[str, Any]]:
+    """The records of a `.jsonl` file, read line by line within the store.bundle limits."""
+    with _open_file(root, name) as raw:
+        handle: gzip.GzipFile | BinaryIO = (
+            gzip.GzipFile(fileobj=raw, mode="rb") if name.endswith(".gz") else raw
+        )
+        size = 0
+        number = 0
+        try:
+            while line := handle.readline(limits.max_line_bytes + 1):
+                number += 1
+                size += len(line)
+                _check_size(name, size, 0, limits)
+                if len(line) > limits.max_line_bytes and not line.endswith(b"\n"):
+                    raise BundleError(
+                        f"{name} line {number} is longer than store.bundle.max_line_bytes "
+                        f"({limits.max_line_bytes})"
+                    )
+                try:
+                    value = json.loads(line)
+                except ValueError as error:
+                    raise BundleError(f"{name} line {number}: not JSON") from error
+                if not isinstance(value, dict):
+                    raise BundleError(f"{name} line {number}: not an object")
+                yield value
+        except (OSError, EOFError) as error:
+            raise BundleError(f"{name} cannot be read: {error}") from error
+        finally:
+            handle.close()
 
 
 def _batches[T](items: Iterable[T], size: int) -> Iterator[tuple[T, ...]]:
@@ -333,10 +357,6 @@ def _pack(work: Path, target: Path) -> None:
             if path.is_file():
                 archive.add(path, arcname=path.relative_to(work).as_posix())
     partial.rename(target)
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_bytes())
 
 
 async def _export(
@@ -610,44 +630,191 @@ async def _export_schemas(
 # Import
 
 
-def _extract(tarball: Path, into: Path) -> None:
-    """Unpack a bundle tarball, accepting only plain files with the bundle's names."""
-    with tarfile.open(tarball, "r") as archive:
-        members = archive.getmembers()
-        for member in members:
-            parts = Path(member.name).parts
-            if (
-                not member.isfile()
-                or member.name.startswith("/")
-                or ".." in parts
-                or len(parts) > 2
-                or (len(parts) == 2 and parts[0] != SCHEMAS_DIR)
-            ):
-                raise BundleError(f"unexpected entry {member.name!r} in {tarball.name}")
-        archive.extractall(into, members=members, filter="data")
+def _check_size(name: str, size: int, total: int, limits: BundleSettings) -> None:
+    if size > limits.max_member_bytes:
+        raise BundleError(
+            f"{name} is larger than store.bundle.max_member_bytes ({limits.max_member_bytes})"
+        )
+    if total > limits.max_total_bytes:
+        raise BundleError(
+            f"the bundle exceeds store.bundle.max_total_bytes ({limits.max_total_bytes}) at {name}"
+        )
+
+
+def _check_entries(name: str, entries: int, limits: BundleSettings) -> None:
+    if entries > limits.max_entries:
+        raise BundleError(
+            f"the bundle has more entries than store.bundle.max_entries ({limits.max_entries}) "
+            f"at {name}"
+        )
+
+
+class _Meter:
+    """Bytes read from the files of one bundle, checked against the size limits as they come."""
+
+    def __init__(self, limits: BundleSettings) -> None:
+        self.limits = limits
+        self.total = 0
+
+    def chunks(self, name: str, source: IO[bytes]) -> Iterator[bytes]:
+        size = 0
+        while chunk := source.read(_HASH_CHUNK):
+            size += len(chunk)
+            self.total += len(chunk)
+            _check_size(name, size, self.total, self.limits)
+            yield chunk
+
+
+def _open_file(root: Path, name: str) -> BinaryIO:
+    """Open a regular file of a bundle directory without following a link at any level."""
+    parts = PurePosixPath(name).parts
+    try:
+        folder = os.open(root, os.O_RDONLY | _DIRECTORY)
+        try:
+            for part in parts[:-1]:
+                inner = os.open(
+                    part, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _NONBLOCK, dir_fd=folder
+                )
+                os.close(folder)
+                folder = inner
+            descriptor = os.open(parts[-1], os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=folder)
+        finally:
+            os.close(folder)
+    except OSError as error:
+        raise BundleError(
+            f"{name} cannot be opened (links are not followed): {error.strerror}"
+        ) from error
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise BundleError(f"{name} is not a regular file")
+    return os.fdopen(descriptor, "rb")
+
+
+def _read_document(root: Path, name: str, limits: BundleSettings) -> Any:
+    """A whole `.json` file of a bundle, at most `store.bundle.max_line_bytes` long."""
+    with _open_file(root, name) as handle:
+        data = handle.read(limits.max_line_bytes + 1)
+    if len(data) > limits.max_line_bytes:
+        raise BundleError(
+            f"{name} is larger than store.bundle.max_line_bytes ({limits.max_line_bytes})"
+        )
+    try:
+        return json.loads(data)
+    except ValueError as error:
+        raise BundleError(f"{name} is not valid JSON") from error
+
+
+def _member_parts(member: tarfile.TarInfo, archive: str) -> tuple[str, ...]:
+    """The path of a tarball member, refused unless it is a file or directory of the layout."""
+    label = f"{member.name!r} in {archive}"
+    if member.issym():
+        raise BundleError(f"{label} is a symbolic link")
+    if member.islnk():
+        raise BundleError(f"{label} is a hard link")
+    if not (member.isreg() or member.isdir()):
+        raise BundleError(f"{label} is not a regular file or directory")
+    path = PurePosixPath(member.name)
+    if path.is_absolute():
+        raise BundleError(f"{label} has an absolute path")
+    if ".." in path.parts:
+        raise BundleError(f"{label} leaves the bundle directory")
+    parts = path.parts
+    expected = (
+        parts == (SCHEMAS_DIR,)
+        if member.isdir()
+        else len(parts) == 1 or (len(parts) == 2 and parts[0] == SCHEMAS_DIR)
+    )
+    if not expected:
+        raise BundleError(f"unexpected entry {label}")
+    return parts
+
+
+def _extract(tarball: Path, into: Path, limits: BundleSettings) -> None:
+    """Unpack a bundle tarball: only files and directories with the bundle's names, within
+    the store.bundle entry and size limits, counting the bytes actually read."""
+    meter = _Meter(limits)
+    entries = 0
+    declared = 0
+    try:
+        with tarfile.open(tarball, "r:") as archive:
+            for member in archive:
+                entries += 1
+                label = f"{member.name!r} in {tarball.name}"
+                _check_entries(label, entries, limits)
+                parts = _member_parts(member, tarball.name)
+                target = into.joinpath(*parts)
+                if member.isdir():
+                    target.mkdir(exist_ok=True)
+                    continue
+                declared += member.size
+                _check_size(label, member.size, declared, limits)
+                source = archive.extractfile(member)
+                if source is None:
+                    raise BundleError(f"{label} cannot be read")
+                target.parent.mkdir(exist_ok=True)
+                try:
+                    descriptor = os.open(
+                        target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600
+                    )
+                except FileExistsError as error:
+                    raise BundleError(f"{label} appears twice") from error
+                with source, os.fdopen(descriptor, "wb") as sink:
+                    for chunk in meter.chunks(label, source):
+                        sink.write(chunk)
+    except tarfile.TarError as error:
+        raise BundleError(f"{tarball.name} is not a readable tar file: {error}") from error
+    except OSError as error:
+        raise BundleError(f"{tarball.name} cannot be unpacked: {error.strerror}") from error
+
+
+def _scan(root: Path, limits: BundleSettings) -> set[str]:
+    """The files of a bundle directory. Links and special files are refused, never followed."""
+    files: set[str] = set()
+    entries = 0
+    total = 0
+    pending = [PurePosixPath()]
+    while pending:
+        folder = pending.pop()
+        with os.scandir(root.joinpath(*folder.parts)) as listing:
+            for entry in listing:
+                relative = folder / entry.name
+                name = relative.as_posix()
+                entries += 1
+                _check_entries(name, entries, limits)
+                if entry.is_symlink():
+                    raise BundleError(f"{name} is a symbolic link")
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(relative)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    raise BundleError(f"{name} is not a regular file or directory")
+                size = entry.stat(follow_symlinks=False).st_size
+                total += size
+                _check_size(name, size, total, limits)
+                files.add(name)
+    return files
 
 
 @contextmanager
-def _opened(source: Path) -> Iterator[Path]:
+def _opened(source: Path, limits: BundleSettings) -> Iterator[Path]:
     if source.is_dir():
         yield source
     elif source.is_file() and source.suffix == TAR_SUFFIX:
         with tempfile.TemporaryDirectory(prefix="lorebase-bundle-") as work:
-            _extract(source, Path(work))
+            _extract(source, Path(work), limits)
             yield Path(work)
     else:
         raise BundleError(f"{source} is neither a bundle directory nor a {TAR_SUFFIX} file")
 
 
-def read_manifest(root: Path) -> dict[str, Any]:
+def read_manifest(root: Path, limits: BundleSettings | None = None) -> dict[str, Any]:
     """The manifest of an opened bundle directory, checked for format and version."""
-    path = root / MANIFEST
-    if not path.is_file():
+    limits = limits or BundleSettings()
+    if not os.path.lexists(root / MANIFEST):
         raise BundleError(f"{MANIFEST} not found")
-    try:
-        manifest = json.loads(path.read_bytes())
-    except ValueError as error:
-        raise BundleError(f"{MANIFEST} is not valid JSON") from error
+    manifest = _read_document(root, MANIFEST, limits)
+    if not isinstance(manifest, dict):
+        raise BundleError(f"{MANIFEST} is not a JSON object")
     if manifest.get("format") != FORMAT:
         raise BundleError(f"not a Lorebase Domain bundle (format {manifest.get('format')!r})")
     version = manifest.get("format_version")
@@ -659,25 +826,27 @@ def read_manifest(root: Path) -> dict[str, Any]:
     for key in ("domain_id", "compression", "counts", "files", "heads"):
         if key not in manifest:
             raise BundleError(f"{MANIFEST} lacks {key!r}")
-    return manifest  # type: ignore[no-any-return]
+    return manifest
 
 
-def _verify_files(root: Path, manifest: Mapping[str, Any]) -> None:
+def _verify_files(root: Path, manifest: Mapping[str, Any], limits: BundleSettings) -> None:
     files: Mapping[str, Mapping[str, Any]] = manifest["files"]
-    present = {
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_file() and path.name != MANIFEST
-    }
+    present = _scan(root, limits) - {MANIFEST}
     expected = set(files)
     if present != expected:
         raise BundleError(
             f"files differ from the manifest: missing {sorted(expected - present)}, "
             f"unexpected {sorted(present - expected)}"
         )
+    meter = _Meter(limits)
     for name, entry in files.items():
-        digest, size = _sha256(root / name)
-        if digest != entry["sha256"] or size != entry["bytes"]:
+        digest = hashlib.sha256()
+        size = 0
+        with _open_file(root, name) as handle:
+            for chunk in meter.chunks(name, handle):
+                digest.update(chunk)
+                size += len(chunk)
+        if digest.hexdigest() != entry["sha256"] or size != entry["bytes"]:
             raise BundleError(f"{name} does not match its sha256 in the manifest")
 
 
@@ -692,7 +861,11 @@ class _Import:
     report: BundleReport
 
     def lines(self, base: str) -> Iterator[dict[str, Any]]:
-        return _read_jsonl(self.root / _jsonl_name(base, self.manifest["compression"]))
+        name = _jsonl_name(base, self.manifest["compression"])
+        return _read_jsonl(self.root, name, self.runtime.settings.bundle)
+
+    def document(self, name: str) -> Any:
+        return _read_document(self.root, name, self.runtime.settings.bundle)
 
     def expect(self, name: str, got: int) -> None:
         want = self.manifest["counts"][name]
@@ -715,19 +888,24 @@ async def import_bundle(
     rebuilt for the refs that had one, and with `verify_heads` (default
     `store.bundle.verify_after_import`) each rebuilt branch is checked against its tree. All
     in one transaction. Raises `BundleError` (the transaction is rolled back).
+
+    Reading is bounded by the `store.bundle` limits (entries, file and total sizes, line
+    length); links and special files are refused. The content itself is trusted: authors,
+    provenance, the ref log, changesets and Domain settings are imported as written.
     """
     runtime = runtime or default_runtime()
+    limits = runtime.settings.bundle
     started = time.monotonic()
     path = Path(source)
-    with _opened(path) as root:
-        manifest = read_manifest(root)
+    with _opened(path, limits) as root:
+        manifest = read_manifest(root, limits)
         target = domain_id or manifest["domain_id"]
         if target != manifest["domain_id"]:
             raise BundleError(
                 f"the bundle is of Domain {manifest['domain_id']!r}; Revision ids include the "
                 f"Domain id, so it cannot be imported as {target!r}"
             )
-        _verify_files(root, manifest)
+        _verify_files(root, manifest, limits)
         settings = runtime.settings
         report = BundleReport(target, str(path))
         sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -756,7 +934,7 @@ async def import_bundle(
 
 async def _prepare_domain(c: _Import) -> None:
     domains = DomainRepository(c.session)
-    data = _read_json(c.root / "domain.json")
+    data = c.document("domain.json")
     if data["id"] != c.domain_id:
         raise BundleError("domain.json names a different Domain than the manifest")
     if await domains.get(c.domain_id) is not None:
@@ -957,7 +1135,7 @@ async def _import_provenance(c: _Import) -> None:
 
 
 async def _import_refs(c: _Import) -> list[dict[str, Any]]:
-    refs: list[dict[str, Any]] = _read_json(c.root / "refs.json")
+    refs: list[dict[str, Any]] = c.document("refs.json")
     heads = c.manifest["heads"]
     rows = []
     for ref in refs:

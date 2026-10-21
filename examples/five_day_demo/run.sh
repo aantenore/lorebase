@@ -135,20 +135,22 @@ store() { # run a command in the backend container
 }
 
 # The restore database lives in the same Postgres server as the live one. The container sees the
-# live connection string in LOREBASE_DB_DSN; the restore commands swap the database name in it.
+# owner role's connection string in LOREBASE_DB_MAINTENANCE_DSN (the services connect as the
+# application role, which may not create tables); the restore commands swap the database name in
+# it.
 create_empty_database() {
   show psql -c "CREATE DATABASE $RESTORE_DB" "(in the postgres container)"
   # shellcheck disable=SC2016 # expanded inside the container
   $POSTGRES_EXEC sh -c 'psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP DATABASE IF EXISTS '"$RESTORE_DB"'" -c "CREATE DATABASE '"$RESTORE_DB"'"'
   show alembic upgrade head "(on $RESTORE_DB)"
   # shellcheck disable=SC2016
-  $STORE_EXEC sh -c 'cd /opt/lorebase/store && LOREBASE_DB_DSN="${LOREBASE_DB_DSN%/*}/'"$RESTORE_DB"'" alembic upgrade head' 2>&1 | tail -n 1
+  $STORE_EXEC sh -c 'cd /opt/lorebase/store && LOREBASE_DB_DSN="${LOREBASE_DB_MAINTENANCE_DSN%/*}/'"$RESTORE_DB"'" alembic upgrade head' 2>&1 | tail -n 1
 }
 
 restore_to_second_database() {
   show docker compose exec keeper python -m lorebase_store.bundle import --in /tmp/demo-bundle.tar "(on $RESTORE_DB)"
   # shellcheck disable=SC2016
-  $STORE_EXEC sh -c 'LOREBASE_DB_DSN="${LOREBASE_DB_DSN%/*}/'"$RESTORE_DB"'" python -m lorebase_store.bundle import --in /tmp/demo-bundle.tar'
+  $STORE_EXEC sh -c 'LOREBASE_DB_DSN="${LOREBASE_DB_MAINTENANCE_DSN%/*}/'"$RESTORE_DB"'" python -m lorebase_store.bundle import --in /tmp/demo-bundle.tar'
 }
 
 db_summary() { # DATABASE ('$POSTGRES_DB' for the live one): head of main, Revisions, Records

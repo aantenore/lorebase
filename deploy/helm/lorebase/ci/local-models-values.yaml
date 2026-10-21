@@ -15,3 +15,11 @@ ollama:
   model: qwen2.5:7b-instruct
   persistence:
     size: 30Gi
+networkPolicy:
+  egress:
+    extra:
+      # The registry Ollama pulls the model from (placeholder documentation range: replace it,
+      # or put the model on the volume beforehand and drop this rule).
+      ollama:
+        - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+          ports: [{protocol: TCP, port: 443}]

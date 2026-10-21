@@ -42,6 +42,14 @@ def test_example_file_matches_code_defaults(monkeypatch: pytest.MonkeyPatch) -> 
         ({"pagination": {"default_limit": 600, "max_limit": 500}}, "keeper.pagination"),
         ({"limits": {"max_request_body_bytes": 0}}, "keeper.limits.max_request_body_bytes"),
         ({"unknown": 1}, "keeper.unknown"),
+        (
+            {"schema_inference": {"domain_sources": {"Bad Id": []}}},
+            "keeper.schema_inference.domain_sources",
+        ),
+        (
+            {"schema_inference": {"domain_sources": {"supply": ["postgresql://u@db/erp"]}}},
+            "keeper.schema_inference.domain_sources",
+        ),
     ],
 )
 def test_invalid_values_name_the_key(section: dict[str, object], needle: str) -> None:
@@ -79,3 +87,20 @@ def test_authenticated_modes_may_bind_anywhere() -> None:
         )
     )
     assert keeper.auth.mode == "api_key"
+
+
+def test_domain_sources_override_the_default_per_domain() -> None:
+    keeper = keeper_settings(
+        Settings(
+            keeper={
+                "schema_inference": {
+                    "allowed_sources": ["secret://env/A"],
+                    "domain_sources": {"supply": ["secret://env/B"], "hr": []},
+                }
+            }
+        )
+    )
+    inference = keeper.schema_inference
+    assert inference.sources_for("supply") == ("secret://env/B",)
+    assert inference.sources_for("hr") == ()
+    assert inference.sources_for("sales") == ("secret://env/A",)

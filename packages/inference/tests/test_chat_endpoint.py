@@ -293,3 +293,14 @@ def test_parse_json_text_is_tolerant(text, expected) -> None:
 def test_parse_json_text_rejects_prose() -> None:
     with pytest.raises(ValueError, match="no JSON"):
         parse_json_text("I cannot do that.")
+
+
+@pytest.mark.parametrize(("configured", "expected"), [({}, False), ({"trust_env": True}, True)])
+async def test_trust_env_follows_the_settings(
+    scripted, client_options, configured, expected
+) -> None:
+    endpoint = scripted(scripted.completion(GOOD))
+    model = make_model(endpoint, **configured)
+    await model.complete_json(MESSAGES, SCHEMA)
+    await model.aclose()
+    assert [options["trust_env"] for options in client_options] == [expected]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
@@ -198,3 +199,84 @@ def test_authenticated_modes_need_a_database(make_app: Callable[..., FastAPI]) -
 
     with pytest.raises(ConfigError, match=r"keeper\.auth\.mode.*database"):
         make_app({"auth": API_KEYS})
+
+
+def from_peer(app: FastAPI, peer: str) -> httpx.AsyncClient:
+    """A client whose requests arrive from the socket address `peer`."""
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False, client=(peer, 4000))
+    return httpx.AsyncClient(transport=transport, base_url="http://keeper.test")
+
+
+ALLOWED = ["203.0.113.0/24", "2001:db8:1::/48"]
+
+
+async def test_a_key_with_an_allowlist_works_from_inside_it(
+    auth_app: Callable[..., FastAPI], store: Any, codec: ApiKeyCodec, agent: str
+) -> None:
+    token, _ = store.add_key(codec, agent, allowed_networks=ALLOWED)
+    app = auth_app(API_KEYS)
+    for peer in ("203.0.113.40", "2001:db8:1::99"):
+        async with from_peer(app, peer) as http:
+            assert (await http.get(PROBE, headers=bearer(token))).status_code == 200
+
+
+async def test_a_key_with_an_allowlist_is_refused_from_outside_like_an_invalid_key(
+    auth_app: Callable[..., FastAPI],
+    store: Any,
+    codec: ApiKeyCodec,
+    agent: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    token, key = store.add_key(codec, agent, allowed_networks=ALLOWED)
+    app = auth_app(API_KEYS)
+    caplog.set_level(logging.INFO, logger="lorebase.keeper.auth")
+    async with from_peer(app, "198.51.100.7") as http:
+        refused = await http.get(PROBE, headers=bearer(token))
+        invalid = await http.get(PROBE, headers=bearer(codec.generate().token))
+    assert refused.status_code == invalid.status_code == 401
+    assert refused.json()["detail"] == invalid.json()["detail"]
+    assert refused.headers["www-authenticate"] == invalid.headers["www-authenticate"]
+    assert store.touches == 0
+    record = next(
+        r for r in caplog.records if getattr(r, "reason", "") == "client address not allowed"
+    )
+    assert record.levelno == logging.INFO
+    assert getattr(record, "key_prefix", None) == key.prefix
+    assert getattr(record, "client_address", None) == "198.51.100.7"
+
+
+async def test_a_forwarded_address_from_an_untrusted_peer_is_ignored(
+    auth_app: Callable[..., FastAPI], store: Any, codec: ApiKeyCodec, agent: str
+) -> None:
+    token, _ = store.add_key(codec, agent, allowed_networks=ALLOWED)
+    app = auth_app(API_KEYS)
+    spoofed = {**bearer(token), "X-Forwarded-For": "203.0.113.40"}
+    async with from_peer(app, "198.51.100.7") as http:
+        assert (await http.get(PROBE, headers=spoofed)).status_code == 401
+
+
+async def test_a_trusted_proxy_forwards_the_client_address(
+    make_app: Callable[..., FastAPI],
+    store: Any,
+    codec: ApiKeyCodec,
+    agent: str,
+    clock: Any,
+) -> None:
+    token, _ = store.add_key(codec, agent, allowed_networks=ALLOWED)
+    app = make_app(
+        {"auth": API_KEYS, "trusted_proxies": ["10.0.0.0/8"]}, auth_store=store, clock=clock
+    )
+    inside = {**bearer(token), "X-Forwarded-For": "198.51.100.7, 203.0.113.40"}
+    outside = {**bearer(token), "X-Forwarded-For": "203.0.113.40, 198.51.100.7"}
+    async with from_peer(app, "10.0.0.2") as http:
+        assert (await http.get(PROBE, headers=inside)).status_code == 200
+        assert (await http.get(PROBE, headers=outside)).status_code == 401
+        assert (await http.get(PROBE, headers=bearer(token))).status_code == 401
+
+
+async def test_a_key_without_an_allowlist_works_from_any_address(
+    auth_app: Callable[..., FastAPI], store: Any, codec: ApiKeyCodec, agent: str
+) -> None:
+    token, _ = store.add_key(codec, agent)
+    async with from_peer(auth_app(API_KEYS), "198.51.100.7") as http:
+        assert (await http.get(PROBE, headers=bearer(token))).status_code == 200

@@ -22,8 +22,13 @@ difference).
   `dsn`.
 - `store.layout.hash_partitions` and `store.embeddings.dims` are read when revision `0001` runs.
   Changing them later needs a new migration.
-- `application_role` (optional) is read when revision `0005` runs: the role the services
-  connect as gets EXECUTE on the security definer read functions (see Row-level security).
+- `application_role` (optional) is read when revisions `0005` and `0008` run: the role the
+  services connect as gets EXECUTE on the security definer read functions (see Row-level
+  security). `0008` refuses to run while the role may create objects in the schema of the
+  tables or of `pg_trgm`.
+- `store.reads.definer_ceilings` is read when revision `0008` runs: the largest count each read
+  function accepts. Changing it later has no effect; the settings refuse read and traverse caps
+  above it.
 
 ## Types and keys
 
@@ -88,8 +93,10 @@ difference).
   with a warning and `python -m lorebase_store.indexes plan --domain <id> [--branch <name>]`
   prints the pending DDL (`CREATE INDEX CONCURRENTLY`, `COMMENT ON INDEX`, `DROP INDEX
   CONCURRENTLY`, one statement per line) for an administrator to run outside a transaction.
-- The dev compose stack sets `LOREBASE_DB_MAINTENANCE_DSN` to its Postgres superuser; that
-  is for development only.
+- The compose stack runs Keeper and Scribe as an application role subject to row-level
+  security and sets `LOREBASE_DB_MAINTENANCE_DSN` to the owner role that runs the migrations,
+  its Postgres superuser ([deployment.md](deployment.md#database-roles)); production uses a
+  dedicated owner role instead of a superuser.
 - Extensions `pg_trgm` and `vector` are created if missing and never dropped on downgrade. Where
   the migration role cannot create extensions, an administrator creates them first.
 
@@ -108,6 +115,8 @@ difference).
   (revision `0006`) holds one row per API key and UTC day with the requests served and the
   context-pack tokens delivered, the counters of the daily quotas (`docs/operations.md`); rows go
   with their key.
+- `api_keys.allowed_networks` (revision `0009`, `cidr[]`) lists the client networks a key may be
+  used from; null, the value of keys created before it, allows any address.
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
 
@@ -116,9 +125,10 @@ difference).
 Postgres applies the `domain_isolation` policy before any condition built from functions it
 does not mark leakproof (`->>`, casts, `@@`, `%`), so under row-level security those conditions
 cannot be index conditions (design 8.7). Revision `0005` adds four functions for exactly the
-read paths that depend on them; `lorebase_store.reads` and `lorebase_store.traverse` call them
-when `store.reads.use_definer_functions` is true (the default) and run the same statements as
-plain SQL otherwise:
+read paths that depend on them, and revision `0008` replaces them with the checks below;
+`lorebase_store.reads` and `lorebase_store.traverse` call them when
+`store.reads.use_definer_functions` is true (the default) and run the same statements as plain
+SQL otherwise:
 
 | Function | Read path |
 |----------|-----------|
@@ -138,15 +148,26 @@ Why this keeps Domains isolated:
   `mat_links`), joins included. The statement text is fixed: arguments reach it as `%L`
   literals or `EXECUTE ... USING` parameters, keywords (comparison, cast type) come from
   whitelists, and malformed arguments raise. A query bug in a caller cannot widen the Domain.
-- **No ambient scope.** The functions never read `lorebase.domain_ids`: their result depends
-  on their arguments only. The callers are store primitives that receive a Domain their
-  caller has already authorized and also scope the transaction to it with `scope_to_domain`.
+- **Bounded arguments.** Every count (`limit`, `candidates`, `depth`, `fanout`, `max_steps`,
+  `max_nodes`) must be between 1 and its ceiling in `store.reads.definer_ceilings`; NULL is
+  refused, so no call runs `LIMIT NULL` (SQLSTATE 22023).
+- **Scope checked, not widened.** Rows come only from the Domain argument, which must also be
+  visible in the transaction under the condition of the `domain_isolation` policies: listed in
+  `lorebase.domain_ids`, or `lorebase.bypass_rls` on. A missing Domain raises 22023, one outside
+  the scope 42501. The callers are store primitives that receive a Domain their caller has
+  already authorized and scope the transaction to it with `scope_to_domain` first; a wider
+  scope (several Domains, or the bypass) still returns rows of the argument only.
 - **Least privilege.** `SECURITY DEFINER`, `STABLE` (read only), a fixed `search_path`
-  (`pg_catalog`, the schema of the tables, the schema of `pg_trgm`, `pg_temp` last). EXECUTE
-  is revoked from PUBLIC and granted to `database.application_role` by the migration (an
-  error if the role does not exist), or later with `lorebase_store.definer.grant_read_functions`.
-  The schema of the tables must not be writable by the application role (the default since
-  Postgres 15).
+  (`pg_catalog`, the schema of the tables, the schema of `pg_trgm`, `pg_temp` last), which each
+  function compares with the current one before anything else: after `ALTER FUNCTION ... SET`
+  or `RESET search_path` every call raises 55000. EXECUTE is revoked from PUBLIC and granted to
+  `database.application_role` by the migrations (an error if the role does not exist), or
+  later with `lorebase_store.definer.grant_read_functions`; `CREATE OR REPLACE` in `0008` keeps
+  owner and grants. The schemas of the path must not be writable by the application role (the
+  default for `public` since Postgres 15): revision `0008` refuses to run when
+  `has_schema_privilege(role, schema, 'CREATE')` holds for the schema of the tables or of
+  `pg_trgm`, since such a role could shadow an operator and run code as the owner. Granting
+  CREATE later reopens that; keep it revoked.
 - **Owner.** A function skips the policies only when its owner does: a superuser or a role
   with `BYPASSRLS`. The owner is the migration role, which never serves requests; no login
   role used for reads bypasses RLS. If the migration role is subject to RLS, the migration logs
@@ -154,8 +175,10 @@ Why this keeps Domains isolated:
   slower plans. `ALTER FUNCTION ... OWNER TO` a `NOLOGIN` role with `BYPASSRLS` is the
   alternative where the migration role must not have it.
 - **Tests.** `test_read_functions_read_only_the_domain_they_are_given` reads one Domain while
-  the transaction is scoped to another and checks that no row of the other comes back, and
-  that a role without the grant is refused. `test_definer_functions_keep_index_plans_under_row_level_security`
+  the transaction is scoped to two and checks that no row of the other comes back, that a
+  Domain outside the scope is refused, and that a role without the grant is refused;
+  `test_definer_checks.py` covers the argument, scope and `search_path` checks as the
+  application role, and the refused upgrade. `test_definer_functions_keep_index_plans_under_row_level_security`
   checks with `auto_explain` that the statements run inside the functions, by a role subject
   to RLS, are index scans.
 
