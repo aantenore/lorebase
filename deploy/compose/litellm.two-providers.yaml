@@ -1,0 +1,35 @@
+# LiteLLM proxy with two upstream providers: a primary and a fallback.
+#
+# Select it in the environment file:   LITELLM_CONFIG_FILE=./litellm.two-providers.yaml
+# and set the four values below (never commit them):
+#   LITELLM_UPSTREAM_MODEL / LITELLM_UPSTREAM_API_KEY     primary,  "<provider>/<model>"
+#   LITELLM_SECONDARY_MODEL / LITELLM_SECONDARY_API_KEY   fallback, "<provider>/<model>"
+# The two providers can differ freely (a hosted OpenAI-compatible endpoint, Anthropic, Google,
+# Amazon Bedrock, Mistral, ...). The model strings use LiteLLM's notation; see its provider
+# list for the exact prefixes and for providers that need extra variables such as a region.
+#
+# Lorebase sees one OpenAI-compatible endpoint:
+#   inference.llm.base_url: http://litellm:4000/v1
+#   inference.llm.model:    default            (the primary alias below)
+#   inference.llm.api_key:  secret://env/LITELLM_MASTER_KEY
+# To route a task to the fallback alone, point its override at the other alias:
+#   inference.llm.tasks.schema_discovery.model: fallback
+
+model_list:
+  - model_name: default
+    litellm_params:
+      model: os.environ/LITELLM_UPSTREAM_MODEL
+      api_key: os.environ/LITELLM_UPSTREAM_API_KEY
+  - model_name: fallback
+    litellm_params:
+      model: os.environ/LITELLM_SECONDARY_MODEL
+      api_key: os.environ/LITELLM_SECONDARY_API_KEY
+
+router_settings:
+  num_retries: 2          # per upstream, before falling back
+  timeout: 120            # seconds per upstream call
+  fallbacks:
+    - default: [fallback] # when `default` keeps failing, answer from `fallback`
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

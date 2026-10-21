@@ -4,8 +4,9 @@
 #   docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d
 #
 # Optional profiles (add --profile NAME, repeatable):
-#   local-models   Ollama with the model named by LLM_MODEL pulled at start
-#   litellm        LiteLLM proxy in front of hosted providers
+#   local-models   Ollama with the model named by OLLAMA_MODEL pulled at start, and a one-shot
+#                  `inference-check` that probes it through the application's own client
+#   litellm        LiteLLM proxy in front of hosted providers (docs/inference-providers.md)
 #   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
 #   scale-out      second Keeper, Postgres streaming replica, nginx in front of the Keepers
 #                  (set LOREBASE_DB_READ_DSN and KEEPER_PREFER_REPLICA to route reads to the
@@ -20,6 +21,8 @@ x-backend: &backend
   build:
     context: ../..
     dockerfile: deploy/docker/backend.Dockerfile
+    args:
+      UV_SYNC_ARGS: ${UV_SYNC_ARGS:-}
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true
@@ -39,6 +42,15 @@ x-database: &database
   # unset and apply `python -m lorebase_store.indexes plan` (docs/store-schema-notes.md).
   LOREBASE__DATABASE__MAINTENANCE_DSN: secret://env/LOREBASE_DB_MAINTENANCE_DSN
   LOREBASE_DB_MAINTENANCE_DSN: ${LOREBASE_DB_MAINTENANCE_DSN:-postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}}
+
+# Model endpoint seen by services that call models (Scribe, inference-check). LLM_BASE_URL
+# defaults to the Ollama service of the `local-models` profile, reached by its compose service
+# name; set LLM_BASE_URL, LLM_MODEL and LLM_API_KEY in the environment file to use a hosted
+# endpoint or the LiteLLM proxy instead (design 9.4). An empty LLM_API_KEY means no key.
+x-inference: &inference
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+  LLM_MODEL: ${LLM_MODEL:-${OLLAMA_MODEL:-qwen2.5:7b-instruct}}
+  LLM_API_KEY: ${LLM_API_KEY:-}
 
 x-keeper: &keeper
   <<: *backend
@@ -122,7 +134,7 @@ services:
       - /tmp
     stop_grace_period: ${SCRIBE_STOP_GRACE:-45s}
     environment:
-      <<: *database
+      <<: [*database, *inference]
       LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
       LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
       LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
@@ -165,10 +177,33 @@ services:
     restart: "no"
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["ollama", "pull", "${LLM_MODEL:-qwen2.5:7b-instruct}"]
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:7b-instruct}"]
     depends_on:
       ollama:
         condition: service_healthy
+
+  # One-shot probe: sends a tiny prompt through lorebase_inference to LLM_BASE_URL and prints
+  # model, latency and token counts. Run it with
+  #   docker compose --profile local-models run --rm inference-check
+  # Embeddings are skipped: the default fastembed provider is an optional extra that the stock
+  # image does not contain (see docs/inference-providers.md).
+  inference-check:
+    <<: *backend
+    profiles: [local-models]
+    restart: "no"
+    command: ["python", "-m", "lorebase_inference", "check", "--no-embeddings"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      <<: *inference
+      LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
+      LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
 
   # ---- profile litellm ------------------------------------------------------------------
 
@@ -181,8 +216,11 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-change-me}
       LITELLM_UPSTREAM_MODEL: ${LITELLM_UPSTREAM_MODEL:-}
       LITELLM_UPSTREAM_API_KEY: ${LITELLM_UPSTREAM_API_KEY:-}
+      LITELLM_SECONDARY_MODEL: ${LITELLM_SECONDARY_MODEL:-}
+      LITELLM_SECONDARY_API_KEY: ${LITELLM_SECONDARY_API_KEY:-}
     volumes:
-      - ./litellm.yaml:/etc/litellm/config.yaml:ro
+      # litellm.yaml: one provider. litellm.two-providers.yaml: primary with fallback.
+      - ${LITELLM_CONFIG_FILE:-./litellm.yaml}:/etc/litellm/config.yaml:ro
     ports:
       - "${LITELLM_BIND:-127.0.0.1}:${LITELLM_HOST_PORT:-4000}:${LITELLM_PORT:-4000}"
 

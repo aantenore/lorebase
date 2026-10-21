@@ -1,9 +1,25 @@
 [project]
 name = "lorebase-inference"
 version = "0.1.0"
-description = "Lorebase inference: model-agnostic chat, embedding and span extraction interfaces"
+description = "Lorebase inference: model-agnostic chat, embedding and span extraction providers"
 requires-python = ">=3.12"
-dependencies = ["lorebase-platform"]
+dependencies = [
+  "lorebase-platform",
+  "httpx>=0.27",  # HTTP client of the compatible-endpoint providers; no vendor SDK
+  "jsonschema>=4.22",  # local validation of model answers against the requested schema
+]
+
+# Local models run in-process on CPU and are optional: the default stack also works with a
+# compatible HTTP endpoint for chat and embeddings.
+[project.optional-dependencies]
+# ONNX embeddings (default embedding provider). Pulls onnxruntime, no PyTorch.
+fastembed = ["fastembed>=0.4"]
+# Zero-shot span and relation models. Pull PyTorch and transformers (large download). Weights
+# are fetched from the model hub on first use and carry their own licenses.
+local-extractors = ["gliner>=0.2", "glirel>=1.0"]
+
+[project.scripts]
+lorebase-inference = "lorebase_inference.cli:main"
 
 [build-system]
 requires = ["hatchling"]

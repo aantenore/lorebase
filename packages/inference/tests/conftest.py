@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
+from typing import Any
 
+import httpx
 import pytest
 
 from lorebase_inference.settings import ENV_ALIASES
@@ -18,3 +21,68 @@ def clean_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
             or name in ENV_ALIASES
         ):
             monkeypatch.delenv(name)
+
+
+class ScriptedEndpoint:
+    """Stands in for an HTTP model server: answers requests from a script, records them.
+
+    Each scripted item is an `httpx.Response`, an exception to raise, or a callable taking the
+    request. The last item repeats when the script runs out.
+    """
+
+    def __init__(self, *script: Any) -> None:
+        self.script = list(script)
+        self.requests: list[httpx.Request] = []
+        self.sleeps: list[float] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        item = self.script[min(len(self.requests), len(self.script)) - 1]
+        if isinstance(item, Exception):
+            raise item
+        return item(request) if callable(item) else item
+
+    @property
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self)
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
+    def bodies(self) -> list[dict[str, Any]]:
+        return [json.loads(r.content) for r in self.requests]
+
+    @staticmethod
+    def completion(
+        content: str,
+        *,
+        prompt: int | None = 5,
+        output: int | None = 3,
+        model: str | None = "served-model",
+        finish: str = "stop",
+    ) -> httpx.Response:
+        """A chat completions answer carrying `content`."""
+        body: dict[str, Any] = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": finish,
+                }
+            ]
+        }
+        if model:
+            body["model"] = model
+        if prompt is not None and output is not None:
+            body["usage"] = {"prompt_tokens": prompt, "completion_tokens": output}
+        return httpx.Response(200, json=body)
+
+    @staticmethod
+    def api_error(status: int, message: str, **headers: str) -> httpx.Response:
+        """An error answer in the usual `{"error": {"message": ...}}` shape."""
+        return httpx.Response(status, json={"error": {"message": message}}, headers=headers)
+
+
+@pytest.fixture
+def scripted() -> type[ScriptedEndpoint]:
+    return ScriptedEndpoint
