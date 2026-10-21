@@ -4,8 +4,9 @@ Herald reaches Lorebase only through Keeper (AC-20), so authorization, masking, 
 limits are enforced in one place. Every request carries the credential of the calling agent;
 this module never falls back to another one.
 
-This module is internal and deliberately thin: it will be replaced by the typed
-`lorebase_client` package once that is published, keeping the method names used by the tools.
+This module is internal and deliberately thin: the tools build paths and read plain JSON. The
+typed `lorebase_client` package may replace it (the import contracts allow it); that means
+moving the tools and views from JSON objects to the client's models.
 """
 
 from __future__ import annotations
