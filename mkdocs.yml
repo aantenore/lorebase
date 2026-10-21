@@ -118,6 +118,9 @@ nav:
       - Performance: performance.md
       - Security review: security-review.md
   - Reference:
+      - REST API: reference/api.md
+      - Command line: reference/cli.md
+      - Configuration: reference/configuration.md
       - Store schema notes: store-schema-notes.md
   - Project:
       - Roadmap: roadmap.md
