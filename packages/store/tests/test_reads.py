@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from lorebase_core.model import Domain, Schema
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.definer import READ_FUNCTIONS, grant_read_functions
+from lorebase_store.indexes import plan_indexes, run_index_jobs
 from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.reads import (
@@ -483,7 +484,8 @@ _OVERLAY_ROWS = text(
 
 
 async def _bulk_overlay(engine: AsyncEngine, bulk: Sessions, runtime: StoreRuntime) -> None:
-    """An overlay of the bulk branch holding 500 changed Suppliers and 500 Part tombstones."""
+    """An overlay of the bulk branch holding 500 changed Suppliers and 500 Part tombstones,
+    with its per-Attribute indexes built by the queued jobs."""
     async with bulk() as session:
         await create_branch(
             session,
@@ -500,6 +502,7 @@ async def _bulk_overlay(engine: AsyncEngine, bulk: Sessions, runtime: StoreRunti
             _OVERLAY_ROWS,
             {"overlay": OVERLAY_BRANCH, "domain": DOMAIN, "bulk": BULK_BRANCH, "part": PART},
         )
+    assert await run_index_jobs(engine, runtime.settings.indexes)
     async with engine.connect() as connection:
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
         await auto.exec_driver_sql("VACUUM ANALYZE mat_records, mat_links, refs")
@@ -514,14 +517,16 @@ def _mat_scans(plan: dict[str, Any]) -> list[tuple[str, str]]:
     ]
 
 
-def _assert_overlay_plans(plans: list[dict[str, Any]]) -> None:
-    """Every statement reads both the overlay and its base, through indexes only."""
+def _assert_overlay_plans(plans: list[dict[str, Any]], overlay_indexes: set[str]) -> None:
+    """Every statement reads both the overlay and its base, through indexes only; the
+    overlay's own per-Attribute indexes serve its half."""
     reading = [found for found in (_mat_scans(plan) for plan in plans) if found]
     assert reading
     for found in reading:
         assert all(node != "Seq Scan" for node, _ in found), found
     used = {name for found in reading for _, name in found}
-    assert any(name.startswith("mat_records_attr_") for name in used), used
+    assert used & overlay_indexes, used
+    assert any(name.startswith("mat_records_attr_") for name in used - overlay_indexes), used
     assert any(name.endswith("search_idx") for name in used), used
     assert any("pkey" in name for name in used), used
 
@@ -547,8 +552,12 @@ async def test_overlay_reads_keep_index_plans(
         connection = await session.connection()
         plans = [await plan_of(connection, sql, params) for sql, params in reads]
         generic = [await plan_of(connection, sql, params, generic=True) for sql, params in reads]
-    _assert_overlay_plans(plans)
-    _assert_overlay_plans(generic)
+    own = {
+        spec.name(DOMAIN, OVERLAY_BRANCH)
+        for spec in plan_indexes(found.schema, overlay=True).indexes
+    }
+    _assert_overlay_plans(plans, own)
+    _assert_overlay_plans(generic, own)
 
     definer = reads_runtime(definer=True)
     async with reader_role(engine, functions=True) as role, bulk() as session, session.begin():
@@ -566,7 +575,7 @@ async def test_overlay_reads_keep_index_plans(
         if node.get("Function Name", "").startswith("lb_")
     }
     assert functions == {f for f in READ_FUNCTIONS if f.endswith("_overlay")}
-    _assert_overlay_plans(nested)
+    _assert_overlay_plans(nested, own)
     assert changed is not None
     assert changed.title is not None
     assert changed.title.endswith(" changed")

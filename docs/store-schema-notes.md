@@ -311,8 +311,22 @@ changed; every other row is read from its base branch as it was at the fork poin
   bounds that copy work; further branches are created as copies.
 - **Writes on an overlay.** A row about to change is first copied up from the base (so it
   keeps its derived values and search vector), then changed; a delete leaves a tombstone; an
-  upsert of a tombstoned key starts like a new row. Per-Attribute indexes are not built for
-  overlays (their own rows are few); the base's indexes serve the base half.
+  upsert of a tombstoned key starts like a new row.
+- **Per-Attribute indexes.** An overlay gets the per-Attribute indexes its schema plans, on its
+  own rows (`plan_indexes(schema, overlay=True)`): the same expressions and predicates as a
+  full branch's, with the overlay's name as the `branch` literal, so the overlay half of an
+  attribute query, an inbound foreign-key Link read or a neighborhood hop uses them as the
+  base half uses the base's. None is unique: uniqueness on an overlay holds for its resolved
+  rows and is checked by the commit (`MaterializedIndexView`), while its own rows include
+  tombstones, which keep their values. Creating or re-forking an overlay queues them as
+  `store.index` jobs in every index mode (an index on a few rows is still built by scanning
+  the partition, which the creation must not pay); until the worker builds them, the overlay
+  half scans the overlay's rows of the Kind by primary key. A promotion plans the full set: the
+  unique indexes are created and the overlay's non-unique variants of them dropped. No
+  `revision_generation` condition is needed in the plan: the overlay half reads every own row,
+  and in the base half `revision_generation <= g` is a filter on the rows the base's index
+  returns, which only drops rows the base inserted after the fork (a row it updated since is
+  shadowed by the overlay's copy anyway).
 - **Promotion.** `materialize.promote` turns an overlay into a full copy: it copies the base
   rows it reads and the base history up to the fork, drops its tombstones, sets
   `materialization = 'full'` (head and ref version unchanged) and builds the per-Attribute
