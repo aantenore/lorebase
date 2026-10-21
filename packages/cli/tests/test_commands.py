@@ -971,3 +971,429 @@ def test_module_entry_point_runs() -> None:
     )
     assert done.returncode == 0
     assert done.stdout.startswith("lorebase 0.1.0")
+
+
+# Proposals, context and explain --------------------------------------------------------------
+
+FINGERPRINT = "ef" * 32
+
+
+def proposal(**extra: Any) -> dict[str, Any]:
+    return {
+        "id": "prp_1",
+        "title": "Add suppliers",
+        "description": None,
+        "source_ref": "work",
+        "target_ref": "main",
+        "origin": "manual",
+        "status": "open",
+        "author": "usr_1",
+        "created_at": NOW,
+        "updated_at": None,
+        "merged_revision": None,
+        "policy": {},
+        "checks": [{"name": "schema", "status": "passed"}],
+        **extra,
+    }
+
+
+def proposal_detail(**extra: Any) -> dict[str, Any]:
+    return {
+        **proposal(),
+        "reviews": [],
+        "approval": {
+            "protected": True,
+            "required": 1,
+            "approvals": 0,
+            "approvers": [],
+            "changes_requested": [],
+            "satisfied": False,
+        },
+        "attempt": None,
+        **extra,
+    }
+
+
+def attempt(**extra: Any) -> dict[str, Any]:
+    return {
+        "id": "att_1",
+        "proposal": "prp_1",
+        "status": "conflicted",
+        "result": None,
+        "base": REV,
+        "ours": REV,
+        "theirs": REV2,
+        "virtual_base": False,
+        "created_at": NOW,
+        "created_by": "usr_1",
+        "revision": None,
+        "policy": {},
+        "open_conflicts": 1,
+        "resolved_conflicts": 0,
+        "counts": {},
+        "recomputed": False,
+        "stale": False,
+        "resolutions": [],
+        "unmatched_resolutions": [],
+        "auto_resolutions": [],
+        **extra,
+    }
+
+
+def conflicts_page(**extra: Any) -> dict[str, Any]:
+    conflict = {
+        "id": FINGERPRINT,
+        "status": "open",
+        "kind": "DV1",
+        "fingerprint": FINGERPRINT,
+        "partition": "Part",
+        "key": "P-1",
+        "message": "both sides changed stock",
+    }
+    return {**attempt(), "conflicts": [conflict], "next_cursor": None, **extra}
+
+
+def test_proposal_create_posts_branches_and_title(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/proposals").respond(201, json=proposal_detail())
+    result = run("proposal", "create", "work", "main", "--title", "Add suppliers", "-d", "supply")
+    assert result.exit_code == 0
+    assert request_bodies(route) == [
+        {"source_ref": "work", "target_ref": "main", "title": "Add suppliers"}
+    ]
+    assert "work -> main" in result.stdout
+    assert "approvals" in result.stdout
+    as_json = json.loads(
+        run(
+            "proposal",
+            "create",
+            "work",
+            "main",
+            "--title",
+            "T",
+            "--description",
+            "D",
+            "-d",
+            "supply",
+            "--json",
+        ).stdout
+    )
+    assert as_json["id"] == "prp_1"
+    assert request_bodies(route)[1]["description"] == "D"
+    assert run("proposal", "create", "work", "main", "-d", "supply").exit_code == 1  # no title
+
+
+def test_proposal_list_filters_and_renders(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/proposals").respond(
+        200, json={"items": [proposal(), proposal(id="prp_2")], "next_cursor": None}
+    )
+    result = run(
+        "proposal",
+        "list",
+        "--status",
+        "open",
+        "--source",
+        "work",
+        "--target",
+        "main",
+        "--author",
+        "usr_1",
+        "-d",
+        "supply",
+    )
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].split() == [
+        "id",
+        "title",
+        "source",
+        "target",
+        "status",
+        "author",
+        "created",
+    ]
+    assert "prp_2" in result.stdout
+    params = route.calls.last.request.url.params
+    assert (params["status"], params["source"], params["target"], params["author"]) == (
+        "open",
+        "work",
+        "main",
+        "usr_1",
+    )
+    as_json = json.loads(run("proposal", "list", "-d", "supply", "-n", "1", "--json").stdout)
+    assert [p["id"] for p in as_json] == ["prp_1"]
+
+
+def test_proposal_get_shows_review_state(http: respx.MockRouter) -> None:
+    http.get("/domains/supply/proposals/prp_1").respond(
+        200, json=proposal_detail(attempt=attempt())
+    )
+    result = run("proposal", "get", "prp_1", "-d", "supply")
+    assert result.exit_code == 0
+    assert "0/1" in result.stdout
+    assert "1 open, 0 resolved" in result.stdout
+    as_json = json.loads(run("proposal", "get", "prp_1", "-d", "supply", "--json").stdout)
+    assert as_json["approval"]["required"] == 1
+
+
+def test_proposal_merge_sends_a_key_and_reports_the_revision(http: respx.MockRouter) -> None:
+    merged = {
+        "status": "merged",
+        "result": "merged",
+        "revision": REV2,
+        "proposal": proposal(status="merged", merged_revision=REV2),
+        "attempt": conflicts_page(open_conflicts=0),
+        "source_deleted": False,
+        "replayed": False,
+    }
+    route = http.post("/domains/supply/proposals/prp_1/merge").respond(200, json=merged)
+    result = run("proposal", "merge", "prp_1", "-m", "Ship it", "-d", "supply")
+    assert result.exit_code == 0
+    assert REV2 in result.stdout
+    sent = route.calls.last.request
+    assert json.loads(sent.content) == {"message": "Ship it"}
+    assert sent.headers["idempotency-key"]
+    as_json = json.loads(run("proposal", "merge", "prp_1", "-d", "supply", "--json").stdout)
+    assert as_json["revision"] == REV2
+
+
+def test_proposal_merge_refused_exits_two(http: respx.MockRouter) -> None:
+    http.post("/domains/supply/proposals/prp_1/merge").mock(
+        return_value=problem(409, "unresolved-conflicts", "1 Conflict is still open.")
+    )
+    refused = run("proposal", "merge", "prp_1", "-d", "supply")
+    assert refused.exit_code == 2
+    assert "1 Conflict is still open." in refused.stderr
+    as_json = run("proposal", "merge", "prp_1", "-d", "supply", "--json")
+    assert as_json.exit_code == 2
+    assert json.loads(as_json.stderr)["error"]["status"] == 409
+    http.post("/domains/supply/proposals/prp_1/merge").mock(
+        return_value=problem(404, "not-found", "No such Proposal.")
+    )
+    assert run("proposal", "merge", "prp_1", "-d", "supply").exit_code == 1
+
+
+def test_proposal_review_and_close(http: respx.MockRouter) -> None:
+    approval = {**proposal_detail()["approval"], "approvals": 1, "approvers": ["usr_2"]}
+    approval["satisfied"] = True
+    reviewed = {
+        "review": {
+            "id": "rvw_1",
+            "reviewer": "usr_2",
+            "verdict": "approve",
+            "comment": "Looks right",
+            "at": NOW,
+        },
+        "approval": approval,
+    }
+    route = http.post("/domains/supply/proposals/prp_1/reviews").respond(201, json=reviewed)
+    result = run("proposal", "review", "prp_1", "approve", "-c", "Looks right", "-d", "supply")
+    assert result.exit_code == 0
+    assert "1/1 (satisfied)" in result.stdout
+    assert json.loads(route.calls.last.request.content) == {
+        "verdict": "approve",
+        "comment": "Looks right",
+    }
+    as_json = json.loads(
+        run("proposal", "review", "prp_1", "comment", "-d", "supply", "--json").stdout
+    )
+    assert as_json["review"]["id"] == "rvw_1"
+    unknown = run("proposal", "review", "prp_1", "maybe", "-d", "supply")
+    assert unknown.exit_code != 0
+    assert "unknown verdict" in unknown.stderr
+
+    http.post("/domains/supply/proposals/prp_1/close").respond(
+        200, json=proposal_detail(status="closed")
+    )
+    closed = run("proposal", "close", "prp_1", "-d", "supply", "--json")
+    assert closed.exit_code == 0
+    assert json.loads(closed.stdout)["status"] == "closed"
+
+
+def test_proposal_conflicts_lists_and_filters(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/proposals/prp_1/conflicts").respond(
+        200, json=conflicts_page()
+    )
+    result = run("proposal", "conflicts", "prp_1", "--status", "open", "-d", "supply")
+    assert result.exit_code == 0
+    assert "DV1" in result.stdout
+    assert FINGERPRINT[:12] in result.stdout
+    assert route.calls.last.request.url.params["status"] == "open"
+    as_json = json.loads(run("proposal", "conflicts", "prp_1", "-d", "supply", "--json").stdout)
+    assert as_json[0]["id"] == FINGERPRINT
+    assert as_json[0]["message"] == "both sides changed stock"  # members the model does not know
+
+
+def test_proposal_resolve_one_and_many(http: respx.MockRouter, tmp_path: Path) -> None:
+    resolution = {
+        "fingerprint": FINGERPRINT,
+        "choice": "custom",
+        "value": {"stock": "5"},
+        "resolver": "usr_1",
+        "at": NOW,
+    }
+    one = http.post(f"/domains/supply/proposals/prp_1/conflicts/{FINGERPRINT}/resolution").respond(
+        200, json=resolution
+    )
+    many = http.post("/domains/supply/proposals/prp_1/conflicts:resolve").respond(
+        200, json=conflicts_page(open_conflicts=0, resolved_conflicts=1, status="clean")
+    )
+    done = run(
+        "proposal",
+        "resolve",
+        "prp_1",
+        FINGERPRINT,
+        "--choice",
+        "custom",
+        "--value",
+        '{"stock": "5"}',
+        "-d",
+        "supply",
+    )
+    assert done.exit_code == 0
+    assert request_bodies(one) == [{"choice": "custom", "value": {"stock": "5"}}]
+    assert "custom" in done.stdout
+    theirs = run(
+        "proposal", "resolve", "prp_1", FINGERPRINT, "--choice", "theirs", "-d", "supply", "--json"
+    )
+    assert json.loads(theirs.stdout)["fingerprint"] == FINGERPRINT
+    assert request_bodies(one)[1] == {"choice": "theirs"}
+
+    file = tmp_path / "resolutions.json"
+    file.write_text(json.dumps([{"fingerprint": FINGERPRINT, "choice": "ours"}]))
+    bulk = run("proposal", "resolve", "prp_1", "--file", str(file), "-d", "supply")
+    assert bulk.exit_code == 0
+    assert "resolved conflicts" in bulk.stdout
+    assert request_bodies(many) == [
+        {"resolutions": [{"choice": "ours", "fingerprint": FINGERPRINT}]}
+    ]
+
+
+def test_proposal_resolve_checks_its_arguments(http: respx.MockRouter, tmp_path: Path) -> None:
+    missing = run("proposal", "resolve", "prp_1", FINGERPRINT, "-d", "supply")
+    assert missing.exit_code == 1
+    assert "--choice" in missing.stderr
+    file = tmp_path / "r.json"
+    file.write_text('{"nope": 1}')
+    bad = run("proposal", "resolve", "prp_1", "--file", str(file), "-d", "supply")
+    assert bad.exit_code == 1
+    both = run("proposal", "resolve", "prp_1", FINGERPRINT, "--file", str(file), "-d", "supply")
+    assert both.exit_code == 1
+    short = tmp_path / "s.json"
+    short.write_text('[{"fingerprint": "x", "choice": "ours"}]')
+    invalid = run("proposal", "resolve", "prp_1", "--file", str(short), "-d", "supply")
+    assert invalid.exit_code == 1
+    assert "invalid arguments" in invalid.stderr
+
+
+PACK = {
+    "domain": "supply",
+    "branch": "work",
+    "revision": REV,
+    "etag": '"e"',
+    "seeds": [{"ref": "Part/P-1", "title": "Bearing", "values": {"stock": "3"}}],
+    "neighbors": [{"ref": "Supplier/S-1", "title": "Acme", "depth": 1}],
+    "links": {},
+    "budget": {"limit_tokens": 4000, "used_tokens": 120},
+}
+
+
+def test_context_prints_a_summary_json_or_markdown(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/context")
+    route.side_effect = [
+        httpx.Response(200, json=PACK),
+        httpx.Response(200, json=PACK),
+        httpx.Response(200, text="# Context\n", headers={"content-type": "text/markdown"}),
+    ]
+    result = run(
+        "context",
+        "--ref",
+        "Part/P-1",
+        "--ref",
+        "Part/P-2",
+        "--budget",
+        "4000",
+        "--depth",
+        "1",
+        "--relation",
+        "supplied_by",
+        "-b",
+        "work",
+        "-d",
+        "supply",
+    )
+    assert result.exit_code == 0
+    assert "120/4000" in result.stdout
+    assert "Bearing" in result.stdout
+    assert "Supplier/S-1" in result.stdout
+    as_json = json.loads(run("context", "--search", "bearing", "-d", "supply", "--json").stdout)
+    assert as_json["seeds"][0]["ref"] == "Part/P-1"
+    text = run("context", "--query", '{"kind": "Part"}', "--markdown", "-d", "supply")
+    assert text.stdout == "# Context\n"
+    first, second, third = request_bodies(route)
+    assert first["refs"] == ["Part/P-1", "Part/P-2"]
+    assert (first["budget_tokens"], first["depth"], first["relations"]) == (
+        4000,
+        1,
+        ["supplied_by"],
+    )
+    assert first["branch"] == "work"
+    assert first["format"] == "json"
+    assert second["search"] == "bearing"
+    assert third["query"] == {"kind": "Part"}
+    assert third["format"] == "markdown"
+    assert run("context", "--query", "[1]", "-d", "supply").exit_code == 1
+
+
+def test_context_rejected_seeds_exit_two(http: respx.MockRouter) -> None:
+    http.post("/domains/supply/context").mock(
+        return_value=problem(422, "validation-failed", "give exactly one of refs, query or search")
+    )
+    result = run("context", "-d", "supply")
+    assert result.exit_code == 2
+    assert "exactly one" in result.stderr
+
+
+EXPLAINED = {
+    "domain": "supply",
+    "branch": "main",
+    "revision": REV,
+    "record": {"ref": "Part/P-1", "kind": "Part", "key": "P-1", "title": "Bearing", "values": {}},
+    "created": {"actor": "usr_1", "revision": REV},
+    "attributes": [
+        {"name": "stock", "value": "3", "actor": "usr_2", "origin_type": "import", "revision": REV2}
+    ],
+    "links": [],
+    "links_truncated": False,
+    "history": {"changes": 2},
+    "proposals": [{"id": "prp_1", "title": "Add", "status": "merged"}],
+}
+
+
+def test_explain_prints_lineage_json_or_markdown(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/kinds/Part/records/P-1/explain")
+    route.side_effect = [
+        httpx.Response(200, json=EXPLAINED),
+        httpx.Response(200, json=EXPLAINED),
+        httpx.Response(200, text="# Part P-1\n", headers={"content-type": "text/markdown"}),
+    ]
+    result = run("explain", "Part", "P-1", "-b", "main", "-d", "supply")
+    assert result.exit_code == 0
+    assert "Part/P-1" in result.stdout
+    assert "prp_1 (merged)" in result.stdout
+    assert "stock" in result.stdout
+    as_json = json.loads(run("explain", "Part", "P-1", "-d", "supply", "--json").stdout)
+    assert as_json["history"] == {"changes": 2}
+    text = run("explain", "Part", "P-1", "--markdown", "-d", "supply")
+    assert text.stdout == "# Part P-1\n"
+    params = [dict(c.request.url.params) for c in route.calls]
+    assert params == [
+        {"branch": "main", "format": "json"},
+        {"format": "json"},
+        {"format": "markdown"},
+    ]
+
+
+def test_explain_of_a_missing_record_exits_one(http: respx.MockRouter) -> None:
+    http.get("/domains/supply/kinds/Part/records/P-9/explain").mock(
+        return_value=problem(404, "not-found", "No such Record.")
+    )
+    assert run("explain", "Part", "P-9", "-d", "supply").exit_code == 1

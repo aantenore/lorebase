@@ -312,7 +312,7 @@ def record_list(
 ) -> None:
     """List the Records of a Kind."""
     app = app_of(ctx, json_out)
-    predicate = _json_argument(where) if where else None
+    predicate = json_argument(where) if where else None
     items, more = app.take(
         app.client().records.iterate(
             app.domain(domain),
@@ -339,7 +339,7 @@ def _print_records(app: AppContext, items: list[m.RecordItem], select: list[str]
     app.out.emit(items, human)
 
 
-def _json_argument(text: str) -> Any:
+def json_argument(text: str) -> Any:
     """JSON given inline, or `@path` to read it from a file, or `-` for standard input."""
     source = text
     if text == "-":
@@ -401,9 +401,9 @@ def query_command(
 def _query_body(text: str) -> dict[str, Any]:
     candidate = text.strip()
     if candidate.startswith("{") or candidate == "-":
-        parsed = _json_argument(candidate)
+        parsed = json_argument(candidate)
     else:
-        parsed = _json_argument("@" + candidate)
+        parsed = json_argument("@" + candidate)
     if not isinstance(parsed, dict):
         raise CliError("a query is a JSON object")
     return parsed
