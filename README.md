@@ -2,6 +2,8 @@
 
 **Git for knowledge: an open-source ontology platform where AI agents read a versioned, governed knowledge graph in milliseconds.**
 
+[Documentation](https://aantenore.github.io/lorebase/) | [Quickstart](docs/quickstart.md) | [Why Lorebase](docs/why.md) | [Comparison](docs/comparison.md) | [Roadmap](docs/roadmap.md)
+
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 [![CI](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml/badge.svg)](https://github.com/aantenore/lorebase/actions/workflows/ci.yaml)
@@ -11,7 +13,7 @@
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, documents are extracted into reviewable Proposals, and agent writes that need review become Proposals; embeddings and semantic search do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
+> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, documents are extracted into Proposals that people review item by item, and agent writes that need review become Proposals. Semantic search ranks stored vectors against a vector the caller supplies; nothing computes embeddings yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
 
 ## What it is
 
@@ -69,7 +71,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 - **Milliseconds reads for agents.** Reads are deterministic SQL over materialized branch heads, with no model in the path. This is enforced by the build: Keeper cannot import the inference package. Every response names the Revision it was served from. [Measured numbers](#read-performance) are below.
 - **Governed writes through Operations and Proposals.** Agents change knowledge only through Operations with validation, permissions, dry run, idempotency and audit. Writes to a protected branch go through a Proposal, with reviews, required approvals and Conflict resolution over REST. Both are there today.
 - **Schema as code.** The ontology is a YAML document you review in a pull request and apply as one schema change set. Attribute ids are stable, so renames merge cleanly.
-- **Runs free on a laptop, scales out when you need it.** One `docker compose`, Postgres 16, no API keys. Add Keepers behind a load balancer and Postgres read replicas with a freshness guard for read load. Model-backed ingestion will use one OpenAI-compatible abstraction, local or paid, selected by configuration; it is not built yet.
+- **Runs free on a laptop, scales out when you need it.** One `docker compose`, Postgres 16, no API keys. Add Keepers behind a load balancer and Postgres read replicas with a freshness guard for read load. Document extraction uses one OpenAI-compatible interface, local (Ollama, fastembed, GLiNER, GLiREL) or paid, selected by configuration, and only Scribe calls it.
 
 ## Features
 
@@ -82,10 +84,10 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Versioning | Proposals, reviews, required approvals, merge and Conflict resolution over REST | Done | M1 |
 | Reads | Records, Links, query DSL, traversal, neighborhood, lexical search, log and diff over REST, with ETags | Done | M1 |
 | Reads | Per-Attribute indexes, one-statement read primitives, performance harness and a 100k-Record baseline ([docs/performance.md](docs/performance.md)) | Done; the 1M-Record baseline is not | M1 |
-| Reads | Semantic and hybrid search with caller-supplied vectors | Planned (nothing computes embeddings yet) | M4 |
+| Reads | Semantic and hybrid search with caller-supplied vectors | Done; no job computes embeddings yet | M4 |
 | Governance | Built-in Operations (create, update, delete, link, unlink, bulk import) with dry run and idempotency | Done | M1 |
 | Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
-| Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies; side effects (outbox, webhooks) and masking are planned | M3 |
+| Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies; events declared by Operations and sensitivity masking are planned (signed webhooks on Revision events exist) | M3 |
 | Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
 | Operations | Observability bundle: metrics catalogue, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks, OpenTelemetry Collector to Prometheus and Jaeger or Tempo, in compose and the Helm chart ([docs/metrics.md](docs/metrics.md), [docs/operations.md](docs/operations.md#dashboards-and-alerts)) | Done | M1 |
 | Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
@@ -95,12 +97,14 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Agent access | MCP server (Herald) on stdio and Streamable HTTP ([docs/mcp.md](docs/mcp.md)) | Done | M3, landed early |
 | Agent access | Agent writes that need review run on a task branch and open a Proposal, merged automatically only for roles the Domain allows and with the required approvals ([docs/agents.md](docs/agents.md#writes-that-need-review)) | Done | M3 |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
-| Ingestion | CSV and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done; Parquet planned | M2 |
+| Ingestion | CSV and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done; Parquet, JSON Lines and HTTP JSON Sources in progress (Parquet files load through `lorebase import` today) | M2 |
 | Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
-| Ingestion | Document extraction into reviewable Proposals: intake of Markdown, text, PDF and DOCX, rules, local span and relation models, any LLM with JSON schema output, verified evidence, item review ([docs/extraction.md](docs/extraction.md)) | Done; Review UI and schema suggestions planned | M4 |
-| Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver, Sources, Admin basics | Done; runs on the mock API or on Keeper, with end-to-end tests against a real Keeper for browsing, Branches, schema changes, Review and Settings | M2, M3 |
+| Ingestion | Document extraction into reviewable Proposals: intake of Markdown, text, PDF and DOCX, rules, local span and relation models, any LLM with JSON schema output, verified evidence, item review over REST, CLI and in the web app ([docs/extraction.md](docs/extraction.md)) | Done; schema suggestions planned | M4 |
+| Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver and extraction Items, Documents, Sources, Admin basics | Done; runs on the mock API or on Keeper, with end-to-end tests against a real Keeper for browsing, Branches, schema changes, Review and Settings | M2, M3 |
 | Operations | Helm chart: Keeper, migration hook, optional Scribe, Herald, web app, Ollama, Ingress, HPA, read replica DSNs ([docs/kubernetes.md](docs/kubernetes.md)) | Done, checked by lint, template and kubeconform; not yet run on a live cluster | M5, landed early |
-| Scale | Overlay branches, PII vault, 10M-Record performance | Planned | M5 |
+| Scale | Overlay branches that store only the rows they change, created in milliseconds whatever the size of the Domain ([docs/store-schema-notes.md](docs/store-schema-notes.md#overlay-branches)) | Done | M5, landed early |
+| Project | Documentation site with generated CLI, configuration and REST API reference ([aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/)) | Done | M5, landed early |
+| Scale | PII vault, 10M-Record performance | Planned | M5 |
 
 The milestone breakdown with checkboxes is in the [roadmap](docs/roadmap.md).
 
@@ -110,23 +114,25 @@ p95 latency in milliseconds of the agent reads on a materialized head of 99,900 
 
 | Read | Budget | owner p95 | rls p95 |
 |------|-------:|----------:|--------:|
-| Record by key | 5 | 1.63 | 1.86 |
-| Page of 50 | 20 | 1.87 | 5.41 |
-| Links of a Record | 10 | 2.34 | 4.54 |
-| Neighborhood, 2 hops | 30 | 7.19 | 8.29 |
-| Query on an indexed Attribute | 25 | 3.02 | 2.40 |
-| Full-text search | 50 | 3.46 | 4.02 |
-| Full-text search, typo-tolerant titles | 50 | 28.66 | 32.10 |
+| Record by key | 5 | 1.07 | 1.25 |
+| Page of 50 | 20 | 1.57 | 1.65 |
+| Links of a Record | 10 | 1.30 | 1.58 |
+| Neighborhood, 2 hops | 30 | 5.67 | 5.11 |
+| Query on an indexed Attribute | 25 | 1.71 | 1.86 |
+| Full-text search | 50 | 2.58 | 2.75 |
+| Full-text search, typo-tolerant titles | 50 | 22.32 | 22.64 |
 
-Under row-level security Postgres cannot use non-leakproof operators (`->>`, casts, `@@`) as index conditions, so search, incoming Links, neighborhoods and attribute queries run inside security definer functions that pin the Domain they are given ([store schema notes](docs/store-schema-notes.md#security-definer-read-functions)); as plain SQL the `rls` role measured 28 ms, 137 ms and 68 ms for Links of a Record, the neighborhood and search. The 1M-Record baseline is still to do.
+Under row-level security Postgres cannot use non-leakproof operators (`->>`, casts, `@@`) as index conditions, so search, incoming Links, neighborhoods and attribute queries run inside security definer functions that pin the Domain they are given ([store schema notes](docs/store-schema-notes.md#security-definer-read-functions)), and search reads an index scoped by Domain and branch (migration `0011`). Every read of both roles is within its budget; as plain SQL the `rls` role measured 28 ms, 137 ms and 68 ms for Links of a Record, the neighborhood and search. Reads on an overlay branch stay within 30% of a full copy at p50. The 1M-Record baseline is still to do.
 
 ## See it
 
-Screens of the web app, running on a real Keeper with the supply sample loaded. The [visual tour](docs/tour.md) says what is live and what is not served yet.
+Screens of the web app. The first row runs on a real Keeper with the supply sample loaded, the second on the mock API. The [visual tour](docs/tour.md) says what is live and what is not served yet.
 
 | Explorer | Canvas | Conflict resolver |
 |----------|--------|-------------------|
 | [![Explorer: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home.png)](docs/tour.md#explorer) | [![Canvas: graph of Records coloured by Kind](docs/images/canvas-graph.png)](docs/tour.md#canvas) | [![Conflict resolver: base, ours and theirs for one Conflict of Proposal 41](docs/images/review-conflict.png)](docs/tour.md#review) |
+| **Extraction items** | **Documents** | **Sources** |
+| [![Extraction items: Records and values proposed from a document, with evidence](docs/images/review-items.png)](docs/tour.md#review) | [![Documents: library and a viewer that highlights the evidence](docs/images/documents.png)](docs/tour.md#documents) | [![Sources: Source definitions and their sync runs](docs/images/sources.png)](docs/tour.md#sources) |
 
 ## Quickstart
 
@@ -160,7 +166,7 @@ flowchart LR
   subgraph Lorebase
     H[Herald<br/>MCP server]
     K[Keeper<br/>REST API, auth, commit pipeline,<br/>merge engine, read path]
-    S[Scribe<br/>jobs, scheduler, Source syncs,<br/>document extraction; embeddings planned]
+    S[Scribe<br/>jobs, scheduler, Source syncs,<br/>document extraction, webhooks]
   end
 
   subgraph PG[Postgres 16]
@@ -179,12 +185,10 @@ flowchart LR
   K --> G
   S --> V
   S --> M
-  S -. extraction, offline only .-> L[Model endpoint]:::planned
-
-  classDef planned stroke-dasharray: 4 3
+  S -. extraction, offline only .-> L[Model endpoint<br/>local or OpenAI-compatible]
 ```
 
-Dashed boxes do not exist yet. The agent read path is `agent -> Keeper -> materialized head`, or `agent -> Herald -> Keeper -> materialized head` over MCP. It never touches a model; only Scribe, offline, will. Postgres is the only required store, with pgvector for optional semantic search. Details: [docs/design.md](docs/design.md).
+The agent read path is `agent -> Keeper -> materialized head`, or `agent -> Herald -> Keeper -> materialized head` over MCP. It never touches a model; only Scribe does, offline, to extract documents. Postgres is the only required store, with pgvector for optional semantic search. Details: [docs/design.md](docs/design.md).
 
 ## How it compares
 
@@ -212,9 +216,9 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 Pre-alpha. Version 0.1.0 is prepared ([CHANGELOG](CHANGELOG.md), [release process](docs/release.md)); before 1.0 interfaces may change in any minor version. M1 (engine and API) is nearly done: the engine, the REST API (Proposals included), the Python client and the CLI are done; lineage and history endpoints and the 1M-Record performance baseline are not.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; CEL expressions end to end (schema validation, custom Operations, derived values in the materialized head); the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; document intake and tiered extraction into Proposals with item review; agent writes that turn a refused Operation into a task branch and a Proposal; a performance harness with a 100k-Record baseline; docker compose and a Helm chart; CI with CodeQL, a release workflow with signed images and SBOMs; a security review of the trust boundaries ([docs/security-review.md](docs/security-review.md)); the five-day demo (`make demo`); the web app on the mock API or a live Keeper.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; CEL expressions end to end (schema validation, custom Operations, derived values in the materialized head); the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; document intake and tiered extraction into Proposals with item review; agent writes that turn a refused Operation into a task branch and a Proposal; overlay branches; a performance harness with a 100k-Record baseline; docker compose and a Helm chart; metrics, Grafana dashboards and Prometheus alert rules; CI with CodeQL, a release workflow with signed images and SBOMs; a security review of the trust boundaries with all 23 findings fixed ([docs/security-review.md](docs/security-review.md)); the five-day demo (`make demo`); the documentation site; the web app on the mock API or a live Keeper.
 
-Next: lineage and history endpoints and the 1M-Record baseline (finishing M1), Parquet Sources (M2), the Operation outbox (M3), schema suggestions from documents, embeddings and hybrid search (M4), the open findings of the security review and hardening to 1.0 (M5).
+Next: Source connectors for JSON Lines, Parquet and HTTP JSON (in progress), lineage and history endpoints, the 1M-Record baseline, OIDC login for the web app, then the v0.1.0 release.
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|
@@ -228,6 +232,8 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 
 ## Documentation
 
+The documentation is published at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), with the CLI, configuration and REST API reference generated from the code. The same pages are in [docs/](docs/):
+
 - [Why Lorebase](docs/why.md): the case for git-like knowledge
 - [FAQ](docs/faq.md)
 - [Quickstart](docs/quickstart.md): what runs today, step by step
@@ -238,12 +244,14 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Operations](docs/operations.md): garbage collection, backup and restore of a Domain, rate limits, dashboards and alerts
 - [Metrics](docs/metrics.md): every metric and span emitted, with labels and where it is recorded
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
+- [Document extraction](docs/extraction.md): documents in, Proposals with verified evidence out, reviewed item by item
 - [Scribe](docs/scribe.md): the worker: job types, scheduler, Source definitions, sync policies and operations
 - [Inference providers](docs/inference-providers.md): run models free and locally, switch to a paid provider by configuration, LiteLLM routing, limits
 - [Performance](docs/performance.md): read latency baseline and how to reproduce it
 - [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
 - [MCP server](docs/mcp.md): Herald, its tools and its configuration for MCP hosts
 - [Comparison](docs/comparison.md): Lorebase next to similar products
+- [Security review](docs/security-review.md): the trust boundaries examined before the first release and the 23 findings fixed
 - [Roadmap](docs/roadmap.md)
 - [Glossary](docs/glossary.md), [examples](examples/README.md), [M1 plan](docs/plan/m1.md)
 

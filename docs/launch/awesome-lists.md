@@ -26,16 +26,6 @@ List: https://github.com/dhamaniasad/awesome-postgres. Section: tools built on P
 - [Lorebase](https://github.com/aantenore/lorebase) - Versioned knowledge graph with git-like branches and three-way merge, stored entirely in Postgres 16, with pgvector for optional search.
 ```
 
-## Submit when the feature exists
-
-### awesome-mcp-servers
-
-List: https://github.com/punkpeye/awesome-mcp-servers. Section: the closest to knowledge and memory. Gate: Herald (M3) must exist and be documented. The REST API alone is not an MCP server and must not be submitted as one.
-
-```markdown
-- [aantenore/lorebase](https://github.com/aantenore/lorebase) - MCP server over a versioned, typed knowledge graph: describe, query, traverse and search, with governed write Operations.
-```
-
 ## Submit now if the rules allow
 
 ### awesome-knowledge-graph
@@ -52,6 +42,14 @@ List: https://github.com/semantalytics/awesome-semantic-web. Section: ontology t
 
 ```markdown
 - [Lorebase](https://github.com/aantenore/lorebase) - Operational ontology platform (typed Kinds, Relations and governed Operations) with branches and merges; not an OWL reasoner.
+```
+
+### awesome-mcp-servers
+
+List: https://github.com/punkpeye/awesome-mcp-servers. Section: the closest to knowledge and memory. Herald exists and is documented in [docs/mcp.md](../mcp.md); submit the MCP server, not the REST API.
+
+```markdown
+- [aantenore/lorebase](https://github.com/aantenore/lorebase) - MCP server over a versioned, typed knowledge graph: context packs, schema, query, search, neighborhood, explain and diff, with governed writes through Operations.
 ```
 
 ## Not a fit
