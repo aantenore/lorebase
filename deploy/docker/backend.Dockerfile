@@ -28,7 +28,7 @@ COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable --extra documents
 
 # ---- runtime: interpreter, virtual environment and migration scripts only ----
 FROM python:${PYTHON_TAG} AS runtime

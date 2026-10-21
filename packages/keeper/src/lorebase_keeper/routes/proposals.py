@@ -275,6 +275,19 @@ def _checks(
         checks.append(CheckOut(name="merge", status=status, message=message))
     else:
         checks.append(CheckOut(name="merge", status="pending", message="Not computed yet."))
+    extraction = (row.checks or {}).get("extraction")
+    if isinstance(extraction, dict):
+        decisions = extraction.get("decisions") or {}
+        pending = int(decisions.get("pending") or 0)
+        checks.append(
+            CheckOut(
+                name="extraction",
+                status="pending" if pending else "passed",
+                message=f"{extraction.get('items', 0)} item(s): "
+                f"{decisions.get('accepted', 0)} accepted, {pending} pending, "
+                f"{decisions.get('rejected', 0)} rejected.",
+            )
+        )
     if approval is not None and approval.protected:
         checks.append(
             CheckOut(
