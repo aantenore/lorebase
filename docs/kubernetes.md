@@ -39,12 +39,14 @@ operator-run) passed as a DSN.
 
 ## Install
 
-The chart is installed from the repository; it is not published to a chart repository yet.
+The chart is installed from the repository or from the `lorebase-0.1.0.tgz` package attached to the [GitHub release](https://github.com/aantenore/lorebase/releases/tag/v0.1.0); it is not published to a chart repository yet.
 
 ```bash
-# 1. The image. Use the published one, or build and push your own:
-docker build -f deploy/docker/backend.Dockerfile -t registry.example.com/lorebase:0.1.0 .
-docker push registry.example.com/lorebase:0.1.0
+# 1. The image. The chart runs the published ghcr.io/aantenore/lorebase at its appVersion (0.1.0).
+#    To run your own build instead, push it and add
+#    --set image.repository=registry.example.com/lorebase --set image.tag=<tag> in step 4:
+#    docker build -f deploy/docker/backend.Dockerfile -t registry.example.com/lorebase:<tag> .
+docker pull ghcr.io/aantenore/lorebase:0.1.0      # optional: check that the image is reachable
 
 # 2. The chart declares one optional dependency (CloudNativePG); fetch it once, even if unused.
 helm dependency build deploy/helm/lorebase
@@ -57,8 +59,7 @@ kubectl -n lorebase create secret generic lorebase-secrets \
 
 # 4. Install with a profile (below) and your overrides.
 helm upgrade --install lorebase deploy/helm/lorebase -n lorebase \
-  --set secrets.existingSecret=lorebase-secrets \
-  --set image.repository=registry.example.com/lorebase --set image.tag=0.1.0
+  --set secrets.existingSecret=lorebase-secrets
 
 helm -n lorebase test lorebase          # calls /readyz through the Keeper Service
 ```

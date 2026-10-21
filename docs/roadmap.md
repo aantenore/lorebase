@@ -2,14 +2,13 @@
 
 The public roadmap of Lorebase, by milestone. It is derived from [section 18 of the design](design.md#18-roadmap) and from what is on `main` today. A checked box means the item is merged on `main` and covered by tests. An unchecked box is not done, even when part of it exists; the note says what is missing. Dates are deliberately absent: the order is firm, the timing is not.
 
-Lorebase is pre-alpha. Nothing is released, no tag exists and interfaces may change.
+Lorebase is pre-alpha. [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0) is the first pre-alpha release ([CHANGELOG](../CHANGELOG.md)); interfaces may change.
 
 ## Next up
 
 1. Lineage and history endpoints (M1, T23).
 2. The performance baseline on the 1M-Record fixture (M1, T28).
 3. OIDC login with BFF sessions for the web app (M2).
-4. Release v0.1.0 ([release](release.md)).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
