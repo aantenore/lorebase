@@ -2,34 +2,43 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    ARRAY,
+    BigInteger,
     BindParameter,
     ColumnElement,
+    FromClause,
+    Select,
     Table,
     Text,
     and_,
     bindparam,
     cast,
     delete,
+    false,
     func,
     insert,
     literal,
     literal_column,
     select,
     text,
+    true,
     tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, REGCONFIG
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.bulk import OnConflict, bulk_write, chunks
+from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.models import metadata
+from lorebase_store.repositories.refs import RefRepository
 from lorebase_store.settings import WriteSettings
 
 MAT_SCHEMA: Table = metadata.tables["mat_schema"]
@@ -48,8 +57,13 @@ _RECORD_UPDATE_COLUMNS = (
     "lineage",
     "updated_revision",
     "updated_at",
+    "revision_generation",
+    "deleted",
 )
-_LINK_UPDATE_COLUMNS = ("values", "object_hash", "lineage")
+_LINK_UPDATE_COLUMNS = ("values", "object_hash", "lineage", "revision_generation", "deleted")
+
+Where = Callable[[FromClause], Sequence[ColumnElement[bool]]]
+"""Conditions on the rows (of the alias given) a write is about to change."""
 
 _REBUILD_HISTORY = text(
     """
@@ -73,9 +87,8 @@ _REBUILD_HISTORY = text(
 )
 
 
-_KEYS_WITH_ORIGIN = text(
-    """
-    SELECT r.key FROM mat_records r
+_KEYS_WITH_ORIGIN = """
+    SELECT r.key FROM {records}
     WHERE r.domain_id = :domain AND r.branch = :branch AND r.kind_id = :kind
       AND EXISTS (
         SELECT 1 FROM jsonb_each_text(r.lineage) AS l(attribute, provenance_id)
@@ -84,7 +97,6 @@ _KEYS_WITH_ORIGIN = text(
       )
     ORDER BY r.key
     """
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,22 +184,95 @@ def search_vector(config: str, weights: Sequence[tuple[str, str]]) -> ColumnElem
 
 
 class MaterializedRepository:
-    """Rows of the materialized head of one branch."""
+    """Rows of the materialized head of one branch.
+
+    Reads see the branch's rows: its own, or for an overlay the resolved rows of
+    `lorebase_store.layout`. Writes keep overlays correct on both sides:
+
+    - on an overlay, a row about to change is first copied up from the base (so it keeps its
+      derived values and search vector), and a delete leaves a tombstone;
+    - on a branch other overlays are based on, a row about to change or go is first copied
+      into each of them that does not hold it yet (copy on write). Those overlays are locked
+      first (their branch locks, after the caller's lock on this branch), so no commit or
+      promotion of theirs runs meanwhile.
+
+    `generation` is the generation of the Revision whose rows are written; it is stored in
+    `revision_generation`, which hides rows written after an overlay's fork point from it.
+    """
 
     def __init__(
-        self, session: AsyncSession, domain_id: str, branch: str, *, writes: WriteSettings
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        branch: str,
+        *,
+        writes: WriteSettings,
+        layout: BranchLayout | None = None,
+        generation: int | None = None,
+        lock_timeout_ms: int = 0,
     ) -> None:
         self._session = session
         self._domain = domain_id
         self._branch = branch
         self._writes = writes
+        self._layout = layout
+        self._generation = generation
+        self._lock_timeout_ms = lock_timeout_ms
+        self._dependents: list[tuple[str, int]] | None = None
 
     @property
     def branch(self) -> str:
         return self._branch
 
-    def _scope(self, table: Table) -> ColumnElement[bool]:
+    @property
+    def domain_id(self) -> str:
+        return self._domain
+
+    @property
+    def session(self) -> AsyncSession:
+        return self._session
+
+    async def layout(self) -> BranchLayout:
+        """Where the branch's rows live (read from its ref once)."""
+        if self._layout is None:
+            self._layout = await load_layout(self._session, self._domain, self._branch)
+        return self._layout
+
+    def forget_layout(self) -> None:
+        """Read the layout again on next use (after a promotion or a re-fork)."""
+        self._layout = None
+        self._dependents = None
+
+    async def dependents(self) -> list[tuple[str, int]]:
+        """`(name, base generation)` of the overlays based on this branch, locked."""
+        if self._dependents is not None:
+            return self._dependents
+        if (await self.layout()).overlay:
+            self._dependents = []
+            return self._dependents
+        refs = RefRepository(self._session, self._domain)
+        locked: set[str] = set()
+        while True:
+            found = await refs.overlays_of(self._branch)
+            pending = sorted(r.name for r in found if r.name not in locked)
+            if not pending:
+                break
+            for name in pending:
+                await refs.lock(name, timeout_ms=self._lock_timeout_ms)
+                locked.add(name)
+        self._dependents = [
+            (r.name, int(r.base_generation)) for r in found if r.base_generation is not None
+        ]
+        return self._dependents
+
+    def _scope(self, table: FromClause) -> ColumnElement[bool]:
         return and_(table.c.domain_id == self._domain, table.c.branch == self._branch)
+
+    async def _records(self) -> FromClause:
+        return (await self.layout()).records()
+
+    async def _links(self) -> FromClause:
+        return (await self.layout()).links()
 
     # Schema -------------------------------------------------------------------------
 
@@ -218,13 +303,12 @@ class MaterializedRepository:
     # Records --------------------------------------------------------------------------
 
     async def records(self, kind_id: str, keys: Iterable[str]) -> dict[str, RecordRow]:
+        rows = await self._records()
         found: dict[str, RecordRow] = {}
         for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
             result = await self._session.execute(
-                self._record_select().where(
-                    self._scope(MAT_RECORDS),
-                    MAT_RECORDS.c.kind_id == kind_id,
-                    MAT_RECORDS.c.key.in_(chunk),
+                _record_select(rows).where(
+                    self._scope(rows), rows.c.kind_id == kind_id, rows.c.key.in_(chunk)
                 )
             )
             for row in result.mappings():
@@ -232,6 +316,16 @@ class MaterializedRepository:
         return found
 
     async def upsert_records(self, rows: Sequence[RecordRow]) -> None:
+        if not rows:
+            return
+        overlay = (await self.layout()).overlay
+        by_kind: dict[str, list[str]] = {}
+        for row in rows:
+            by_kind.setdefault(row.kind_id, []).append(row.key)
+        for kind_id, keys in by_kind.items():
+            await self._before_record_writes(kind_id, keys)
+            if overlay:
+                await self._revive_records(kind_id, keys)
         await bulk_write(
             self._session,
             MAT_RECORDS,
@@ -242,16 +336,25 @@ class MaterializedRepository:
         )
 
     async def delete_records(self, kind_id: str, keys: Sequence[str]) -> None:
+        await self._before_record_writes(kind_id, keys)
+        overlay = (await self.layout()).overlay
         for chunk in chunks(keys, self._writes.insert_batch_rows):
-            await self._session.execute(
-                delete(MAT_RECORDS).where(
-                    self._scope(MAT_RECORDS),
-                    MAT_RECORDS.c.kind_id == kind_id,
-                    MAT_RECORDS.c.key.in_(chunk),
-                )
+            where = (
+                self._scope(MAT_RECORDS),
+                MAT_RECORDS.c.kind_id == kind_id,
+                MAT_RECORDS.c.key.in_(chunk),
             )
+            if overlay:
+                await self._session.execute(
+                    update(MAT_RECORDS)
+                    .where(*where)
+                    .values(deleted=true(), search=None, **self._stamp())
+                )
+            else:
+                await self._session.execute(delete(MAT_RECORDS).where(*where))
 
     async def update_titles(self, kind_id: str, titles: Sequence[tuple[str, str | None]]) -> None:
+        await self._before_record_writes(kind_id, [key for key, _ in titles])
         statement = (
             update(MAT_RECORDS)
             .where(
@@ -259,7 +362,7 @@ class MaterializedRepository:
                 MAT_RECORDS.c.kind_id == kind_id,
                 MAT_RECORDS.c.key == bindparam("record_key"),
             )
-            .values(title=bindparam("record_title"))
+            .values(title=bindparam("record_title"), **self._stamp())
         )
         for chunk in chunks(titles, self._writes.insert_batch_rows):
             await self._session.execute(
@@ -277,10 +380,15 @@ class MaterializedRepository:
     ) -> None:
         """Recompute search vectors of a Kind's rows (only those of `revision`, or of `keys`,
         when given)."""
+        if keys is not None:
+            await self._before_record_writes(kind_id, keys)
+        elif revision is None:
+            await self._before_writes(MAT_RECORDS, lambda s: [s.c.kind_id == kind_id])
+        # Rows of `revision` were written by it, after their previous state was preserved.
         statement = (
             update(MAT_RECORDS)
             .where(self._scope(MAT_RECORDS), MAT_RECORDS.c.kind_id == kind_id)
-            .values(search=search_vector(config, weights))
+            .values(search=search_vector(config, weights), **self._stamp())
         )
         if revision is not None:
             statement = statement.where(MAT_RECORDS.c.updated_revision == revision)
@@ -296,6 +404,7 @@ class MaterializedRepository:
         self, kind_id: str, attribute_id: str, values: Sequence[tuple[str, Any]]
     ) -> None:
         """Set one derived Attribute of Records by key; a `None` value removes it."""
+        await self._before_record_writes(kind_id, [key for key, _ in values])
         statement = (
             update(MAT_RECORDS)
             .where(
@@ -306,7 +415,8 @@ class MaterializedRepository:
             .values(
                 derived=MAT_RECORDS.c.derived.op("-")(
                     bindparam("derived_attribute", type_=Text)
-                ).op("||")(bindparam("derived_patch", type_=JSONB))
+                ).op("||")(bindparam("derived_patch", type_=JSONB)),
+                **self._stamp(),
             )
         )
         for chunk in chunks(list(values), self._writes.insert_batch_rows):
@@ -324,6 +434,9 @@ class MaterializedRepository:
 
     async def prune_derived(self, kind_id: str, keep: Sequence[str]) -> None:
         """Remove derived values of a Kind's Records except those of the `keep` Attributes."""
+        await self._before_writes(
+            MAT_RECORDS, lambda s: [s.c.kind_id == kind_id, s.c.derived != literal({}, JSONB)]
+        )
         kept = text(
             "COALESCE((SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(derived) e "
             "WHERE e.key = ANY(:keep)), '{}'::jsonb)"
@@ -335,11 +448,18 @@ class MaterializedRepository:
                 MAT_RECORDS.c.kind_id == kind_id,
                 MAT_RECORDS.c.derived != literal({}, JSONB),
             )
-            .values(derived=kept)
+            .values(derived=kept, **self._stamp())
         )
 
     async def clear_derived(self, keep_kinds: Sequence[str]) -> None:
         """Remove every derived value of Records of Kinds other than `keep_kinds`."""
+        await self._before_writes(
+            MAT_RECORDS,
+            lambda s: [
+                s.c.kind_id.not_in(list(keep_kinds)),
+                s.c.derived != literal({}, JSONB),
+            ],
+        )
         await self._session.execute(
             update(MAT_RECORDS)
             .where(
@@ -347,7 +467,7 @@ class MaterializedRepository:
                 MAT_RECORDS.c.kind_id.not_in(list(keep_kinds)),
                 MAT_RECORDS.c.derived != literal({}, JSONB),
             )
-            .values(derived=literal({}, JSONB))
+            .values(derived=literal({}, JSONB), **self._stamp())
         )
 
     async def linked_keys(
@@ -355,15 +475,16 @@ class MaterializedRepository:
     ) -> list[tuple[str, str, dict[str, Any]]]:
         """Stored Links of a Relation whose `near` end (`from_key` or `to_key`) is in `keys`:
         `(near key, far key, link values)`."""
-        near_column = MAT_LINKS.c[near]
-        far_column = MAT_LINKS.c["to_key" if near == "from_key" else "from_key"]
+        links = await self._links()
+        near_column = links.c[near]
+        far_column = links.c["to_key" if near == "from_key" else "from_key"]
         found: list[tuple[str, str, dict[str, Any]]] = []
         for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
             result = await self._session.execute(
-                select(near_column, far_column, MAT_LINKS.c["values"])
+                select(near_column, far_column, links.c["values"])
                 .where(
-                    self._scope(MAT_LINKS),
-                    MAT_LINKS.c.relation_id == relation_id,
+                    self._scope(links),
+                    links.c.relation_id == relation_id,
                     near_column.in_(chunk),
                 )
                 .order_by(near_column, far_column)
@@ -377,35 +498,37 @@ class MaterializedRepository:
         """`(from key, to key)` of a foreign-key Relation: Records of `kind_id` (the `from`
         Kind) whose key is in `keys`, or whose `attribute_id` value is in `keys` when
         `by_target`."""
-        target = MAT_RECORDS.c["values"].op("->>")(literal(attribute_id))
+        rows = await self._records()
+        target = rows.c["values"].op("->>")(literal(attribute_id))
         found: list[tuple[str, str]] = []
         for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
-            condition = target.in_(chunk) if by_target else MAT_RECORDS.c.key.in_(chunk)
+            condition = target.in_(chunk) if by_target else rows.c.key.in_(chunk)
             result = await self._session.execute(
-                select(MAT_RECORDS.c.key, target)
+                select(rows.c.key, target)
                 .where(
-                    self._scope(MAT_RECORDS),
-                    MAT_RECORDS.c.kind_id == kind_id,
+                    self._scope(rows),
+                    rows.c.kind_id == kind_id,
                     target.is_not(None),
                     condition,
                 )
-                .order_by(MAT_RECORDS.c.key)
+                .order_by(rows.c.key)
             )
             found.extend((key, value) for key, value in result)
         return found
 
     async def stream_records(self, kind_id: str, *, batch: int) -> AsyncIterator[list[RecordRow]]:
         """All Records of a Kind in key order, `batch` rows at a time."""
+        rows_from = await self._records()
         last: str | None = None
         while True:
             query = (
-                self._record_select()
-                .where(self._scope(MAT_RECORDS), MAT_RECORDS.c.kind_id == kind_id)
-                .order_by(MAT_RECORDS.c.key)
+                _record_select(rows_from)
+                .where(self._scope(rows_from), rows_from.c.kind_id == kind_id)
+                .order_by(rows_from.c.key)
                 .limit(batch)
             )
             if last is not None:
-                query = query.where(MAT_RECORDS.c.key > last)
+                query = query.where(rows_from.c.key > last)
             rows = [RecordRow(**row) for row in (await self._session.execute(query)).mappings()]
             if not rows:
                 return
@@ -416,16 +539,17 @@ class MaterializedRepository:
         self, kind_id: str, *, batch: int
     ) -> AsyncIterator[list[tuple[str, bytes]]]:
         """`(key, object_hash)` of a Kind's Records in key order."""
+        rows_from = await self._records()
         last: str | None = None
         while True:
             query = (
-                select(MAT_RECORDS.c.key, MAT_RECORDS.c.object_hash)
-                .where(self._scope(MAT_RECORDS), MAT_RECORDS.c.kind_id == kind_id)
-                .order_by(MAT_RECORDS.c.key)
+                select(rows_from.c.key, rows_from.c.object_hash)
+                .where(self._scope(rows_from), rows_from.c.kind_id == kind_id)
+                .order_by(rows_from.c.key)
                 .limit(batch)
             )
             if last is not None:
-                query = query.where(MAT_RECORDS.c.key > last)
+                query = query.where(rows_from.c.key > last)
             rows = [(key, digest) for key, digest in (await self._session.execute(query))]
             if not rows:
                 return
@@ -438,8 +562,9 @@ class MaterializedRepository:
         """Keys of a Kind's Records whose Lineage names a provenance entry of `origin_type`
         with `origin_ref[origin_field] == origin_value` (for example the Records a Source
         wrote: `source_sync`, `source_id`)."""
+        records = (await self.layout()).records_from("r")
         result = await self._session.execute(
-            _KEYS_WITH_ORIGIN,
+            text(_KEYS_WITH_ORIGIN.format(records=records)),
             {
                 "domain": self._domain,
                 "branch": self._branch,
@@ -453,10 +578,9 @@ class MaterializedRepository:
 
     async def record_counts(self) -> dict[str, int]:
         """Number of Records per Kind id."""
+        rows = await self._records()
         result = await self._session.execute(
-            select(MAT_RECORDS.c.kind_id, func.count())
-            .where(self._scope(MAT_RECORDS))
-            .group_by(MAT_RECORDS.c.kind_id)
+            select(rows.c.kind_id, func.count()).where(self._scope(rows)).group_by(rows.c.kind_id)
         )
         return {kind_id: int(count) for kind_id, count in result}
 
@@ -465,13 +589,14 @@ class MaterializedRepository:
     async def links(
         self, relation_id: str, pairs: Iterable[tuple[str, str]]
     ) -> dict[tuple[str, str], LinkRow]:
+        rows = await self._links()
         found: dict[tuple[str, str], LinkRow] = {}
         for chunk in chunks(list(dict.fromkeys(pairs)), self._writes.insert_batch_rows):
             result = await self._session.execute(
-                self._link_select().where(
-                    self._scope(MAT_LINKS),
-                    MAT_LINKS.c.relation_id == relation_id,
-                    tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key).in_(chunk),
+                _link_select(rows).where(
+                    self._scope(rows),
+                    rows.c.relation_id == relation_id,
+                    tuple_(rows.c.from_key, rows.c.to_key).in_(chunk),
                 )
             )
             for row in result.mappings():
@@ -479,6 +604,13 @@ class MaterializedRepository:
         return found
 
     async def upsert_links(self, rows: Sequence[LinkRow]) -> None:
+        if not rows:
+            return
+        by_relation: dict[str, list[tuple[str, str]]] = {}
+        for row in rows:
+            by_relation.setdefault(row.relation_id, []).append((row.from_key, row.to_key))
+        for relation_id, pairs in by_relation.items():
+            await self._before_link_writes(relation_id, pairs)
         await bulk_write(
             self._session,
             MAT_LINKS,
@@ -489,27 +621,34 @@ class MaterializedRepository:
         )
 
     async def delete_links(self, relation_id: str, pairs: Sequence[tuple[str, str]]) -> None:
+        await self._before_link_writes(relation_id, pairs)
+        overlay = (await self.layout()).overlay
         for chunk in chunks(pairs, self._writes.insert_batch_rows):
-            await self._session.execute(
-                delete(MAT_LINKS).where(
-                    self._scope(MAT_LINKS),
-                    MAT_LINKS.c.relation_id == relation_id,
-                    tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key).in_(chunk),
-                )
+            where = (
+                self._scope(MAT_LINKS),
+                MAT_LINKS.c.relation_id == relation_id,
+                tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key).in_(chunk),
             )
+            if overlay:
+                await self._session.execute(
+                    update(MAT_LINKS).where(*where).values(deleted=true(), **self._stamp())
+                )
+            else:
+                await self._session.execute(delete(MAT_LINKS).where(*where))
 
     async def stream_links(self, relation_id: str, *, batch: int) -> AsyncIterator[list[LinkRow]]:
         """All Links of a Relation in `(from_key, to_key)` order."""
+        links = await self._links()
         last: tuple[str, str] | None = None
         while True:
             query = (
-                self._link_select()
-                .where(self._scope(MAT_LINKS), MAT_LINKS.c.relation_id == relation_id)
-                .order_by(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key)
+                _link_select(links)
+                .where(self._scope(links), links.c.relation_id == relation_id)
+                .order_by(links.c.from_key, links.c.to_key)
                 .limit(batch)
             )
             if last is not None:
-                query = query.where(tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key) > last)
+                query = query.where(tuple_(links.c.from_key, links.c.to_key) > last)
             rows = [LinkRow(**row) for row in (await self._session.execute(query)).mappings()]
             if not rows:
                 return
@@ -518,10 +657,11 @@ class MaterializedRepository:
 
     async def link_counts(self) -> dict[str, int]:
         """Number of Links per Relation id."""
+        links = await self._links()
         result = await self._session.execute(
-            select(MAT_LINKS.c.relation_id, func.count())
-            .where(self._scope(MAT_LINKS))
-            .group_by(MAT_LINKS.c.relation_id)
+            select(links.c.relation_id, func.count())
+            .where(self._scope(links))
+            .group_by(links.c.relation_id)
         )
         return {relation_id: int(count) for relation_id, count in result}
 
@@ -551,27 +691,28 @@ class MaterializedRepository:
 
     async def history(self, partition: str, element_key: str) -> list[HistoryRow]:
         """Changes of one element on this branch, oldest first."""
+        history = (await self.layout()).history()
         result = await self._session.execute(
             select(
-                MAT_HISTORY.c.partition,
-                MAT_HISTORY.c.element_key,
-                MAT_HISTORY.c.revision_id,
-                MAT_HISTORY.c.at,
-                MAT_HISTORY.c.old_hash,
-                MAT_HISTORY.c.new_hash,
-                MAT_HISTORY.c.provenance,
+                history.c.partition,
+                history.c.element_key,
+                history.c.revision_id,
+                history.c.at,
+                history.c.old_hash,
+                history.c.new_hash,
+                history.c.provenance,
             )
             .join(
                 REVISIONS,
                 and_(
-                    REVISIONS.c.domain_id == MAT_HISTORY.c.domain_id,
-                    REVISIONS.c.id == MAT_HISTORY.c.revision_id,
+                    REVISIONS.c.domain_id == history.c.domain_id,
+                    REVISIONS.c.id == history.c.revision_id,
                 ),
             )
             .where(
-                self._scope(MAT_HISTORY),
-                MAT_HISTORY.c.partition == partition,
-                MAT_HISTORY.c.element_key == element_key,
+                self._scope(history),
+                history.c.partition == partition,
+                history.c.element_key == element_key,
             )
             .order_by(REVISIONS.c.generation)
         )
@@ -588,23 +729,24 @@ class MaterializedRepository:
         self, partition: str, *, batch: int
     ) -> AsyncIterator[list[HistoryStep]]:
         """History of a partition ordered by element key, then oldest change first."""
+        history = (await self.layout()).history()
         query = (
             select(
-                MAT_HISTORY.c.element_key,
-                MAT_HISTORY.c.revision_id,
-                MAT_HISTORY.c.at,
-                MAT_HISTORY.c.new_hash,
-                MAT_HISTORY.c.provenance,
+                history.c.element_key,
+                history.c.revision_id,
+                history.c.at,
+                history.c.new_hash,
+                history.c.provenance,
             )
             .join(
                 REVISIONS,
                 and_(
-                    REVISIONS.c.domain_id == MAT_HISTORY.c.domain_id,
-                    REVISIONS.c.id == MAT_HISTORY.c.revision_id,
+                    REVISIONS.c.domain_id == history.c.domain_id,
+                    REVISIONS.c.id == history.c.revision_id,
                 ),
             )
-            .where(self._scope(MAT_HISTORY), MAT_HISTORY.c.partition == partition)
-            .order_by(MAT_HISTORY.c.element_key, REVISIONS.c.generation)
+            .where(self._scope(history), history.c.partition == partition)
+            .order_by(history.c.element_key, REVISIONS.c.generation)
         )
         result = await self._session.stream(query)
         async for part in result.partitions(batch):
@@ -613,43 +755,161 @@ class MaterializedRepository:
     # Whole branch -------------------------------------------------------------------
 
     async def clear(self) -> None:
-        """Delete every materialized row of the branch."""
+        """Delete every materialized row of the branch (its own rows, for an overlay)."""
+        if await self.dependents():
+            raise RuntimeError(
+                f"branch {self._branch!r} has overlay branches; promote them before clearing it"
+            )
         for target in (MAT_RECORDS, MAT_LINKS, MAT_HISTORY, MAT_SCHEMA):
             await self._session.execute(delete(target).where(self._scope(target)))
 
-    async def copy_from(self, source_branch: str) -> None:
-        """Copy every materialized row of `source_branch` into this (empty) branch."""
-        for target in (MAT_SCHEMA, MAT_RECORDS, MAT_LINKS, MAT_HISTORY):
+    async def copy_from(self, source: str | BranchLayout) -> None:
+        """Copy every materialized row of `source` into this (empty) branch; an overlay source
+        gives its resolved rows."""
+        layout = (
+            source
+            if isinstance(source, BranchLayout)
+            else await load_layout(self._session, self._domain, source)
+        )
+        sources = (
+            (MAT_SCHEMA, MAT_SCHEMA),
+            (MAT_RECORDS, layout.records()),
+            (MAT_LINKS, layout.links()),
+            (MAT_HISTORY, layout.history()),
+        )
+        for target, rows in sources:
             names = [c.name for c in target.columns]
-            source = select(
+            selected = select(
                 *(
-                    literal(self._branch).label("branch") if name == "branch" else target.c[name]
+                    literal(self._branch).label("branch") if name == "branch" else rows.c[name]
                     for name in names
                 )
-            ).where(target.c.domain_id == self._domain, target.c.branch == source_branch)
-            await self._session.execute(insert(target).from_select(names, source))
+            ).where(rows.c.domain_id == self._domain, rows.c.branch == layout.branch)
+            await self._session.execute(insert(target).from_select(names, selected))
 
-    # Row mapping --------------------------------------------------------------------
-
-    @staticmethod
-    def _record_select() -> Any:
-        c = MAT_RECORDS.c
-        return select(
-            c.kind_id,
-            c.key,
-            c["values"],
-            c.title,
-            c.object_hash,
-            c.lineage,
-            c.updated_revision,
-            c.updated_at,
-            c.derived,
+    async def complete_overlay(self) -> None:
+        """Turn this overlay's rows into a full head: copy the base rows it reads (as of its
+        fork point), drop its tombstones and copy the base history up to the fork."""
+        layout = await self.layout()
+        if not layout.overlay:
+            return
+        for table in (MAT_RECORDS, MAT_LINKS):
+            await self._copy(table, layout, lambda _: ())
+            await self._session.execute(
+                delete(table).where(self._scope(table), table.c.deleted.is_(true()))
+            )
+        names = [c.name for c in MAT_HISTORY.columns]
+        history = layout.history()
+        await self._session.execute(
+            pg_insert(MAT_HISTORY)
+            .from_select(
+                names,
+                select(*(history.c[name] for name in names)).where(
+                    history.c.branch == self._branch,
+                    history.c.domain_id == self._domain,
+                ),
+            )
+            .on_conflict_do_nothing()
         )
 
-    @staticmethod
-    def _link_select() -> Any:
-        c = MAT_LINKS.c
-        return select(c.relation_id, c.from_key, c.to_key, c["values"], c.object_hash, c.lineage)
+    async def own_rows(self, *, limit: int) -> int:
+        """Rows (Records, Links, tombstones) stored for this branch, counted up to `limit`."""
+        total = 0
+        for table in (MAT_RECORDS, MAT_LINKS):
+            bounded: Select[Any] = (
+                select(literal_column("1")).where(self._scope(table)).limit(limit + 1)
+            )
+            total += int(
+                await self._session.scalar(select(func.count()).select_from(bounded.subquery()))
+                or 0
+            )
+        return total
+
+    # Overlay bookkeeping ------------------------------------------------------------
+
+    def _stamp(self) -> dict[str, Any]:
+        """`revision_generation` of a write, when the writing Revision is known."""
+        return {} if self._generation is None else {"revision_generation": self._generation}
+
+    async def _before_record_writes(self, kind_id: str, keys: Sequence[str]) -> None:
+        for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
+            await self._before_writes(MAT_RECORDS, _record_keys(kind_id, chunk))
+
+    async def _before_link_writes(self, relation_id: str, pairs: Sequence[tuple[str, str]]) -> None:
+        for chunk in chunks(list(dict.fromkeys(pairs)), self._writes.insert_batch_rows):
+            await self._before_writes(MAT_LINKS, _link_keys(relation_id, chunk))
+
+    async def _before_writes(self, table: Table, where: Where) -> None:
+        """Preserve the rows matching `where` before they change (see the class doc)."""
+        layout = await self.layout()
+        if layout.overlay:
+            await self._copy(table, layout, where)
+            return
+        dependents = await self.dependents()
+        if not dependents:
+            return
+        if self._generation is None:
+            raise RuntimeError(
+                f"writing branch {self._branch!r}, which has overlay branches, needs the "
+                "generation of the writing Revision"
+            )
+        source = table.alias("s")
+        targets = (
+            func.unnest(
+                bindparam("cow_names", [name for name, _ in dependents], type_=ARRAY(Text())),
+                bindparam(
+                    "cow_generations", [gen for _, gen in dependents], type_=ARRAY(BigInteger())
+                ),
+            )
+            .table_valued("name", "generation")
+            .render_derived(name="d")
+        )
+        names = [c.name for c in table.columns]
+        selected = (
+            select(*(_copied(source, name, targets.c.name) for name in names))
+            .select_from(source.join(targets, source.c.revision_generation <= targets.c.generation))
+            .where(
+                source.c.domain_id == self._domain,
+                source.c.branch == self._branch,
+                *where(source),
+            )
+        )
+        await self._session.execute(
+            pg_insert(table).from_select(names, selected).on_conflict_do_nothing()
+        )
+
+    async def _copy(self, table: Table, layout: BranchLayout, where: Where) -> None:
+        """Copy the base rows an overlay reads (those matching `where`) into it, keeping the
+        rows it already holds."""
+        assert layout.base is not None
+        assert layout.base_generation is not None
+        source = table.alias("s")
+        names = [c.name for c in table.columns]
+        selected = select(*(_copied(source, name, literal(self._branch)) for name in names)).where(
+            source.c.domain_id == self._domain,
+            source.c.branch == layout.base,
+            source.c.revision_generation <= layout.base_generation,
+            *where(source),
+        )
+        await self._session.execute(
+            pg_insert(table).from_select(names, selected).on_conflict_do_nothing()
+        )
+
+    async def _revive_records(self, kind_id: str, keys: Sequence[str]) -> None:
+        """Tombstones about to be written again start like new rows (no derived values)."""
+        for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
+            await self._session.execute(
+                update(MAT_RECORDS)
+                .where(
+                    self._scope(MAT_RECORDS),
+                    MAT_RECORDS.c.kind_id == kind_id,
+                    MAT_RECORDS.c.key.in_(chunk),
+                    MAT_RECORDS.c.deleted.is_(true()),
+                )
+                .values(derived=literal({}, JSONB), search=None)
+            )
+
+    # Row mapping --------------------------------------------------------------------
 
     def _record_values(self, row: RecordRow) -> dict[str, Any]:
         return {
@@ -663,6 +923,8 @@ class MaterializedRepository:
             "lineage": row.lineage,
             "updated_revision": row.updated_revision,
             "updated_at": row.updated_at,
+            "revision_generation": self._generation or 0,
+            "deleted": False,
         }
 
     def _link_values(self, row: LinkRow) -> dict[str, Any]:
@@ -675,4 +937,52 @@ class MaterializedRepository:
             "values": row.values,
             "object_hash": row.object_hash,
             "lineage": row.lineage,
+            "revision_generation": self._generation or 0,
+            "deleted": False,
         }
+
+
+def _record_select(rows: FromClause) -> Any:
+    c = rows.c
+    return select(
+        c.kind_id,
+        c.key,
+        c["values"],
+        c.title,
+        c.object_hash,
+        c.lineage,
+        c.updated_revision,
+        c.updated_at,
+        c.derived,
+    )
+
+
+def _link_select(rows: FromClause) -> Any:
+    c = rows.c
+    return select(c.relation_id, c.from_key, c.to_key, c["values"], c.object_hash, c.lineage)
+
+
+def _record_keys(kind_id: str, keys: Sequence[str]) -> Where:
+    def where(rows: FromClause) -> list[ColumnElement[bool]]:
+        return [rows.c.kind_id == kind_id, rows.c.key.in_(keys)]
+
+    return where
+
+
+def _link_keys(relation_id: str, pairs: Sequence[tuple[str, str]]) -> Where:
+    def where(rows: FromClause) -> list[ColumnElement[bool]]:
+        return [
+            rows.c.relation_id == relation_id,
+            tuple_(rows.c.from_key, rows.c.to_key).in_(pairs),
+        ]
+
+    return where
+
+
+def _copied(source: FromClause, name: str, branch: ColumnElement[Any]) -> ColumnElement[Any]:
+    """Column `name` of a row copied from `source` into another branch."""
+    if name == "branch":
+        return branch.label("branch")
+    if name == "deleted":
+        return false().label("deleted")
+    return source.c[name]

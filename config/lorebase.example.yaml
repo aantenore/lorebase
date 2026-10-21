@@ -403,6 +403,13 @@ store:
                                  # commit, merge and rebuild (derived column, not the tree)
     derivation_max_incremental_records: 10000   # Records one Derivation recomputes per
                                  # commit; above, every Record of its Kind
+    branch_mode: copy            # default mode of new branches: copy (full rows) or overlay
+                                 # (only changed rows over the base, docs/store-schema-notes.md)
+    overlay_branch_prefixes: [agent/, extract/, source/]   # these default to overlay
+    overlay_max_rows: 50000      # an overlay holding more rows is promoted to a full copy
+    overlay_max_base_lag_revisions: 1000   # generations the base may move past the fork
+                                 # point before the overlay is promoted
+    overlay_max_per_branch: 32   # open overlays per base branch; further branches are copies
   gc:                            # garbage collection (docs/operations.md)
     grace_seconds: 3600          # Revisions younger than this are kept with all they reach
     mark_batch: 1000             # tree node hashes per query while marking

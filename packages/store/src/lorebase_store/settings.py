@@ -218,6 +218,36 @@ class MaterializeSettings(SectionModel):
         "written plus Records whose Links or linked Records changed); above this the "
         "Derivation is recomputed for every Record of its Kind, in batches of read_batch_rows.",
     )
+    branch_mode: Literal["copy", "overlay"] = Field(
+        default="copy",
+        description="How a new branch gets its materialized head when the request names no "
+        "mode: copy (full rows, AC-16) or overlay (only the rows it changes, reading its base "
+        "as of the fork point; store schema notes).",
+    )
+    overlay_branch_prefixes: tuple[str, ...] = Field(
+        default=("agent/", "extract/", "source/"),
+        description="Branches whose name starts with one of these prefixes default to "
+        "overlay mode whatever branch_mode says.",
+    )
+    overlay_max_rows: int = Field(
+        default=50000,
+        ge=1,
+        description="Rows (Records, Links and tombstones) an overlay may hold; a commit that "
+        "leaves it with more promotes it to a full copy.",
+    )
+    overlay_max_base_lag_revisions: int = Field(
+        default=1000,
+        ge=1,
+        description="Generations the base branch may move past an overlay's fork point; "
+        "beyond, the overlay is promoted to a full copy (by its next commit, or by a "
+        "store.materialize job the base commit queues).",
+    )
+    overlay_max_per_branch: int = Field(
+        default=32,
+        ge=0,
+        description="Open overlays on one base branch (each base commit copies the rows it "
+        "changes into each of them); further branches are created as copies.",
+    )
 
 
 class GcSettings(SectionModel):

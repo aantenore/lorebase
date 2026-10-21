@@ -26,6 +26,7 @@ from lorebase_store.commit.schema import (
 )
 from lorebase_store.indexes import BranchIndexes
 from lorebase_store.materialize.derived import DerivedValues
+from lorebase_store.materialize.overlay import promote_overlays_of
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
@@ -34,6 +35,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
+from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
 from lorebase_store.repositories.materialized import (
@@ -70,10 +72,19 @@ class _Folded:
 async def rebuild(
     session: AsyncSession, domain_id: str, branch: str, *, runtime: StoreRuntime
 ) -> RebuildReport:
-    """Replace the materialized head of `branch` with one computed from its tree."""
+    """Replace the materialized head of `branch` with one computed from its tree.
+
+    Overlays based on the branch are promoted to full copies first, and an overlay branch is
+    rebuilt as a full one.
+    """
     await scope_to_domain(session, domain_id)
-    ref = await RefRepository(session, domain_id).require(branch)
+    refs = RefRepository(session, domain_id)
+    await refs.lock(branch, timeout_ms=runtime.settings.commit.lock_timeout_ms)
+    ref = await refs.require(branch)
     head = await RevisionRepository(session, domain_id).require(ref.head)
+    await promote_overlays_of(session, domain_id, branch, runtime=runtime)
+    if ref.materialization is Materialization.OVERLAY:
+        await refs.set_materialization(branch, Materialization.FULL)
     repository = MaterializedRepository(session, domain_id, branch, writes=runtime.settings.writes)
     await repository.clear()
     return await materialize_revision(session, domain_id, branch, head, runtime=runtime)
@@ -110,7 +121,9 @@ async def materialize_revision(
     """Write the materialized head of an empty branch from the tree of `head`."""
     settings = runtime.settings
     batch = settings.materialize.read_batch_rows
-    repository = MaterializedRepository(session, domain_id, branch, writes=settings.writes)
+    repository = MaterializedRepository(
+        session, domain_id, branch, writes=settings.writes, generation=head.generation
+    )
     nodes = NodeRepository(
         session, domain_id, writes=settings.writes, batch=settings.nodes.prefetch_batch
     )

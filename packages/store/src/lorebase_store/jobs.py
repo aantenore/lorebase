@@ -37,6 +37,9 @@ SOURCE_SYNC_JOB = "source_sync"
 
 INDEX_JOB = "store.index"
 """Job type of a per-Attribute index build or drop (see `lorebase_store.indexes`)."""
+MATERIALIZE_JOB = "store.materialize"
+"""Job type of an overlay promotion to a full copy; payload `{"branch": name}`
+(see `lorebase_store.materialize.overlay`)."""
 
 _COLUMNS = "id, type, domain_id, payload, priority, attempts, run_after, locked_by, created_at"
 
@@ -298,8 +301,8 @@ def _parser() -> argparse.ArgumentParser:
     work.add_argument(
         "--types",
         nargs="+",
-        default=[GC_JOB, INDEX_JOB],
-        help=f"Job types to run (default: {GC_JOB} {INDEX_JOB}).",
+        default=[GC_JOB, INDEX_JOB, MATERIALIZE_JOB],
+        help=f"Job types to run (default: {GC_JOB} {INDEX_JOB} {MATERIALIZE_JOB}).",
     )
     return parser
 
@@ -309,6 +312,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_store.db import create_engine
     from lorebase_store.gc import run_gc_job
     from lorebase_store.indexes import run_index_job
+    from lorebase_store.materialize.overlay import run_materialize_job
     from lorebase_store.runtime import StoreRuntime
     from lorebase_store.settings import database_settings
 
@@ -329,6 +333,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     known: dict[str, JobHandler] = {
         GC_JOB: lambda job: run_gc_job(engine, job, runtime=runtime),
         INDEX_JOB: lambda job: run_index_job(ddl, job),
+        MATERIALIZE_JOB: lambda job: run_materialize_job(engine, job, runtime=runtime),
     }
     unknown = [t for t in types if t not in known]
     if unknown:

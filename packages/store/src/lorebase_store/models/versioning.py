@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     ForeignKeyConstraint,
     Index,
     Integer,
@@ -145,7 +146,12 @@ class Provenance(Base):
 
 
 class Ref(Base):
-    """Branch or tag head; moved by compare-and-swap on `(head, version)`."""
+    """Branch or tag head; moved by compare-and-swap on `(head, version)`.
+
+    An overlay branch (design 6.11) names its base branch and the base head it was forked
+    from (`base_revision`, with its generation): it stores only the rows it changed and reads
+    the base rows as of that point. The three columns are set exactly for overlays.
+    """
 
     __tablename__ = "refs"
     __table_args__ = (
@@ -154,6 +160,29 @@ class Ref(Base):
             ["revisions.domain_id", "revisions.id"],
             deferrable=True,
             initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["domain_id", "base_branch"],
+            ["refs.domain_id", "refs.name"],
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["domain_id", "base_revision"],
+            ["revisions.domain_id", "revisions.id"],
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "(materialization = 'overlay') = (base_branch IS NOT NULL "
+            "AND base_revision IS NOT NULL AND base_generation IS NOT NULL)",
+            name="overlay_base",
+        ),
+        Index(
+            "ix_refs_domain_id_base_branch",
+            "domain_id",
+            "base_branch",
+            postgresql_where=text("base_branch IS NOT NULL"),
         ),
         domain_fk(),
     )
@@ -167,6 +196,9 @@ class Ref(Base):
     version: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime]
     created_by: Mapped[str]
+    base_branch: Mapped[str | None]
+    base_revision: Mapped[H32 | None]
+    base_generation: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class RefLogEntry(Base):
