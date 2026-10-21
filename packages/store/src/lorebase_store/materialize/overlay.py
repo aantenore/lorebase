@@ -1,17 +1,17 @@
 """Overlay branches (design 6.11 mode `overlay`, AC-16; store schema notes).
 
 An overlay starts with no Record or Link rows: creating it inserts its ref (base branch, fork
-Revision and generation) and a copy of the base's compiled schema row. Its commits write only
-the rows they change (`MaterializedRepository`), and reads resolve it over the base
-(`lorebase_store.layout`).
+Revision and generation) and a copy of the base's compiled schema row, and queues its
+per-Attribute indexes (`lorebase_store.indexes`). Its commits write only the rows they change
+(`MaterializedRepository`), and reads resolve it over the base (`lorebase_store.layout`).
 
 An overlay is promoted to a full copy ("materialized"):
 - when a commit leaves it with more than `store.materialize.overlay_max_rows` rows of its own,
   or when its base has moved more than `overlay_max_base_lag_revisions` generations past its
   fork point (checked by its own commits; a base commit that pushes an overlay past the lag
   queues a `store.materialize` job for it);
-- before a commit or merge that changes its schema (whole-Kind rewrites and per-Attribute
-  indexes belong to full branches);
+- before a commit or merge that changes its schema (whole-Kind rewrites and index changes
+  belong to full branches);
 - before its base is deleted or rebuilt (`promote_overlays_of`);
 - on request (`promote`).
 
@@ -202,14 +202,6 @@ async def refork(
     schema = await MaterializedRepository(session, domain_id, base_name, writes=writes).schema()
     if schema is not None:
         await MaterializedRepository(session, domain_id, branch, writes=writes).set_schema(schema)
-    if ref.materialization is Materialization.FULL:
-        await BranchIndexes(
-            session,
-            domain_id,
-            branch,
-            settings=runtime.settings.indexes,
-            maintenance=runtime.index_maintenance,
-        ).drop_all()
     if ref.head != head.id:
         try:
             await refs.compare_and_swap(
@@ -230,6 +222,17 @@ async def refork(
         base_revision=head.id,
         base_generation=head.generation,
     )
+    if schema is not None:
+        # Now an overlay: the indexes of the base's schema, none unique, queued.
+        from lorebase_store.commit.schema import load_compiled
+
+        await BranchIndexes(
+            session,
+            domain_id,
+            branch,
+            settings=runtime.settings.indexes,
+            maintenance=runtime.index_maintenance,
+        ).sync(load_compiled(schema.compiled))
     return await refs.require(branch)
 
 

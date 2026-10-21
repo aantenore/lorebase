@@ -36,7 +36,7 @@ from lorebase_store.indexes import (
     sql_literal,
 )
 from lorebase_store.jobs import INDEX_JOB, JobRow, run_jobs
-from lorebase_store.materialize import create_branch, verify
+from lorebase_store.materialize import create_branch, promote, verify
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, IndexSettings, StoreSettings
@@ -152,6 +152,31 @@ def test_plan_is_deterministic_and_names_are_per_branch() -> None:
     assert main == spec.name(DOMAIN, "main")
     assert main != spec.name(DOMAIN, "feature")
     assert main != spec.name("other", "main")
+
+
+def test_overlay_plan_keeps_expressions_and_drops_uniqueness() -> None:
+    rated = with_attributes(supplier_kind(rating=T("integer")), **{RATING: {"indexed": True}})
+    notes = attribute(NOTES_TEXT, "notes_text", T("text"), unique=True)
+    part = part_kind()
+    part = part.model_copy(update={"attributes": {**part.attributes, NOTES_TEXT: notes}})
+    schema = schema_of(rated, part)
+    full = plan_indexes(schema).by_attribute()
+    overlay = plan_indexes(schema, overlay=True).by_attribute()
+    assert set(overlay) == set(full)
+    for identity, spec in overlay.items():
+        assert not spec.unique
+        assert (spec.expression, spec.method, spec.value_type) == (
+            full[identity].expression,
+            full[identity].method,
+            full[identity].value_type,
+        )
+        assert spec.predicate_sql(DOMAIN, "agent/x") == full[identity].predicate_sql(
+            DOMAIN, "agent/x"
+        )
+        renamed = spec.name(DOMAIN, "agent/x") != full[identity].name(DOMAIN, "agent/x")
+        assert renamed == full[identity].unique
+    assert overlay[(SUPPLIER, VAT)].columns == f"(\"values\" ->> '{VAT}'), key"
+    assert overlay[(PART, NOTES_TEXT)].digest
 
 
 def test_ddl_quotes_literals_and_checks_identifiers() -> None:
@@ -341,6 +366,47 @@ async def test_branch_creation_and_deletion(
     assert [o.status for o in outcomes] == ["succeeded"]
     assert await indexes_of(sessions, "feature") == {}
     assert set(await indexes_of(sessions)) == {VAT}
+
+
+@pytestmark_integration
+async def test_overlay_indexes_are_queued_and_replaced_on_promotion(
+    engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    async with sessions() as session:
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            [supplier("S-1", "Alpha", vat="IT1")],
+            schema_changes=schema_changes(),
+            author=AUTHOR,
+            message="schema",
+            origin=ORIGIN,
+            runtime=runtime,
+        )
+    overlay = "agent/indexed"
+    async with sessions() as session:
+        await create_branch(
+            session, DOMAIN, overlay, created_by="usr_test", mode="overlay", runtime=runtime
+        )
+    assert await indexes_of(sessions, overlay) == {}, "an overlay's indexes are queued"
+    outcomes = await run_index_jobs(engine, runtime.settings.indexes)
+    assert [(o.action, o.status) for o in outcomes] == [("create", "succeeded")]
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        found = [i for i in await existing_indexes(session, DOMAIN) if i.branch == overlay]
+        assert await pending_index_plan(session, DOMAIN, branch=overlay) == []
+    assert [(i.attribute_id, i.unique, i.valid) for i in found] == [(VAT, False, True)]
+
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        assert await promote(session, DOMAIN, overlay, runtime=runtime)
+    outcomes = await run_index_jobs(engine, runtime.settings.indexes)
+    assert [(o.action, o.status) for o in outcomes] == [("drop", "succeeded")]
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        found = [i for i in await existing_indexes(session, DOMAIN) if i.branch == overlay]
+    assert [(i.attribute_id, i.unique, i.valid) for i in found] == [(VAT, True, True)]
 
 
 @pytestmark_integration

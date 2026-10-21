@@ -145,6 +145,14 @@ async def _create(
         await MaterializedRepository(
             session, domain_id, name, writes=runtime.settings.writes, layout=ref.layout
         ).set_schema(source_schema)
+        # Queued: the overlay half of its reads uses them once the job worker built them.
+        await BranchIndexes(
+            session,
+            domain_id,
+            name,
+            settings=runtime.settings.indexes,
+            maintenance=runtime.index_maintenance,
+        ).sync(load_compiled(source_schema.compiled))
         return BranchCreation(ref, MaterializationMode.OVERLAY)
     ref = await refs.create(
         name,
