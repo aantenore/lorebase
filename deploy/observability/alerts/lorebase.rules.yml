@@ -8,14 +8,11 @@
 groups:
   - name: lorebase-keeper
     rules:
-      # p95 budgets per route class, over 10 minutes. The latency histogram must have a bucket
-      # at the budget (the `le` guard): with the default OpenTelemetry boundaries, which start
-      # at 5 (seconds), a p95 below 5 s cannot be read from it and these alerts stay silent.
-      # See "Histogram buckets" in docs/metrics.md.
+      # p95 budgets per route class, over 10 minutes. The latency histogram declares a bucket
+      # boundary at every budget (see "Histogram buckets" in docs/metrics.md).
       - alert: LorebaseKeeperLatencyOverBudget
         expr: |
           histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~"GET|HEAD|OPTIONS",http_route!~".*/(healthz|readyz)"}[10m]))) > 0.1
-          and on() count(http_server_request_duration_seconds_bucket{le="0.1"}) > 0
         for: 10m
         labels:
           severity: warning
@@ -28,7 +25,6 @@ groups:
       - alert: LorebaseKeeperLatencyOverBudget
         expr: |
           histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route=~".*/(query|traverse|neighborhood)"}[10m]))) > 0.25
-          and on() count(http_server_request_duration_seconds_bucket{le="0.25"}) > 0
         for: 10m
         labels:
           severity: warning
@@ -41,7 +37,6 @@ groups:
       - alert: LorebaseKeeperLatencyOverBudget
         expr: |
           histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route=~".*/search"}[10m]))) > 0.25
-          and on() count(http_server_request_duration_seconds_bucket{le="0.25"}) > 0
         for: 10m
         labels:
           severity: warning
@@ -54,7 +49,6 @@ groups:
       - alert: LorebaseKeeperLatencyOverBudget
         expr: |
           histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route=~".*/context"}[10m]))) > 1
-          and on() count(http_server_request_duration_seconds_bucket{le="1"}) > 0
         for: 10m
         labels:
           severity: warning
@@ -67,7 +61,6 @@ groups:
       - alert: LorebaseKeeperLatencyOverBudget
         expr: |
           histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~"POST|PUT|PATCH|DELETE",http_route!~".*/(query|traverse|neighborhood|search|context)"}[10m]))) > 2.5
-          and on() count(http_server_request_duration_seconds_bucket{le="2.5"}) > 0
         for: 10m
         labels:
           severity: warning
@@ -153,43 +146,44 @@ groups:
           description: "{{ $value | humanizePercentage }} of the {{ $labels.type }} jobs finished in the last 30 minutes ended failed (all attempts used)."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobfailureratio"
 
-      # There is no queue depth series. The scheduler counts what it queues and the worker what
-      # it finishes: jobs queued with nothing finishing means the queue only grows.
+      # Rows wait in the queue (reported by the scheduler leader) and no worker claims any.
+      # Jobs waiting for a retry delay count as queued; the 15 minute window outlasts the
+      # default delay (store.jobs.retry_delay_seconds, 60 s).
       - alert: LorebaseJobQueueStalled
         expr: |
-          sum(increase(lorebase_scribe_scheduled_total[15m])) > 0
-          and (sum(increase(lorebase_scribe_jobs_total[15m])) or vector(0)) == 0
+          sum(lorebase_jobs_queue_depth{status="queued"}) > 0
+          and (sum(increase(lorebase_jobs_claimed_total[15m])) or vector(0)) == 0
         for: 15m
         labels:
           severity: critical
           component: scribe
         annotations:
-          summary: "Scribe queues jobs but no worker finishes any"
-          description: "The scheduler queued jobs in the last 15 minutes and no job run was recorded: workers are down, stuck or cannot reach the database."
+          summary: "Jobs are queued but no worker claims any"
+          description: "{{ $value | humanize }} jobs are queued and no worker claimed one in the last 15 minutes: workers are down, stuck or cannot reach the database."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobqueuestalled"
 
-      # Dead letters are rows of webhook_deliveries (status 'dead'); the metric the worker
-      # emits is per job, so this fires when the delivery job itself fails.
+      # Dead deliveries: attempts used up, or a target refused (scheme, private address).
       - alert: LorebaseWebhookDeliveryFailing
-        expr: sum(increase(lorebase_scribe_jobs_total{type="webhook_delivery",status="failed"}[1h])) > 0
+        expr: sum(increase(lorebase_webhooks_deliveries_total{outcome="dead"}[1h])) > 0
         labels:
           severity: warning
           component: scribe
         annotations:
-          summary: "The webhook delivery job failed"
-          description: "{{ $value | humanize }} webhook_delivery jobs ended failed in the last hour. Check the dead deliveries in the database."
+          summary: "Webhook deliveries are going dead"
+          description: "{{ $value | humanize }} webhook deliveries became dead in the last hour (attempts used up or target refused). Check the dead deliveries in the database."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasewebhookdeliveryfailing"
 
       # N is 3 days: the default schedule collects every day at 03:00 UTC (scribe.scheduler.gc_schedule).
+      # Dry runs do not count.
       - alert: LorebaseGcNotRun
         expr: |
-          (sum(increase(lorebase_scribe_jobs_total{type="gc",status="succeeded"}[3d])) or vector(0)) == 0
+          (sum(increase(lorebase_gc_runs_total{dry_run="false"}[3d])) or vector(0)) == 0
           and sum(increase(lorebase_scribe_scheduled_total[3d])) > 0
         for: 1h
         labels:
           severity: warning
           component: scribe
         annotations:
-          summary: "No garbage collection has succeeded in 3 days"
-          description: "Scribe is scheduling work but no gc job succeeded in the last 3 days. Unreferenced objects, tree nodes and Revisions pile up."
+          summary: "No garbage collection has completed in 3 days"
+          description: "Scribe is scheduling work but no garbage collection completed in the last 3 days. Unreferenced objects, tree nodes and Revisions pile up."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasegcnotrun"

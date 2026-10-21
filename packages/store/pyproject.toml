@@ -10,6 +10,7 @@ dependencies = [
   "asyncpg>=0.29",
   "alembic>=1.13",
   "pgvector>=0.3",
+  "opentelemetry-api>=1.25",
 ]
 
 [dependency-groups]

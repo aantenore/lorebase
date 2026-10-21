@@ -46,6 +46,7 @@ from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
 from lorebase_store.models import metadata
 from lorebase_store.repositories.materialized import RecordRow
 from lorebase_store.runtime import StoreRuntime, default_runtime
+from lorebase_store.telemetry import record_definer_call
 
 MAT_RECORDS: Table = metadata.tables["mat_records"]
 MAT_LINKS: Table = metadata.tables["mat_links"]
@@ -136,8 +137,11 @@ def _definer(runtime: StoreRuntime | None) -> bool:
 
 
 def _function(name: str, layout: BranchLayout) -> str:
-    """A security definer read function, or its overlay variant on an overlay branch."""
-    return f"{name}_overlay" if layout.overlay else name
+    """A security definer read function, or its overlay variant on an overlay branch, for a
+    statement about to call it (the call is counted)."""
+    function = f"{name}_overlay" if layout.overlay else name
+    record_definer_call(function)
+    return function
 
 
 def _cap(limit: int, maximum: int) -> int:

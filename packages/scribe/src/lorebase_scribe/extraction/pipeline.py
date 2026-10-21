@@ -74,6 +74,7 @@ from lorebase_scribe.extraction.text import (
 from lorebase_scribe.extraction.tier2 import run_tier2
 from lorebase_scribe.extraction.values import heading_title, sentence_values
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
+from lorebase_scribe.telemetry import EXTRACTION_ITEMS
 from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, BlobStore, PostgresBlobStore
 from lorebase_store.commit import ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
@@ -496,6 +497,9 @@ class ExtractionRun:
             report.count(name, count)
         items = assembled.items
         report.items = len(items)
+        for item in items:
+            tier = "none" if item.tier is None else str(item.tier)
+            EXTRACTION_ITEMS.add(1, {"tier": tier, "decision": item.decision.value})
         if not items:
             return
         await self._propose(domain, schema, documents, items, report)

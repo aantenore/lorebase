@@ -42,6 +42,7 @@ from lorebase_store.changefeed import EventRef, branch_schema, describe
 from lorebase_store.commit.pipeline import COMMITTED_EVENT
 from lorebase_store.repositories.events import OutboxRepository, OutboxRow
 from lorebase_store.settings import WriteSettings
+from lorebase_store.telemetry import WEBHOOK_OUTCOMES
 from lorebase_store.webhooks.repository import WEBHOOK_DELIVERIES, WEBHOOKS, webhook_row
 from lorebase_store.webhooks.settings import WebhookSettings
 from lorebase_store.webhooks.signing import signature
@@ -49,6 +50,8 @@ from lorebase_store.webhooks.signing import signature
 logger = logging.getLogger("lorebase.store.webhooks")
 
 PENDING, DELIVERED, DEAD = "pending", "delivered", "dead"
+_OUTCOMES = {DELIVERED: "delivered", PENDING: "retrying", DEAD: "dead"}
+"""Metric outcome of an attempt by the status it leaves the delivery in."""
 ERROR_LENGTH = 500
 """Characters of an error message kept on a delivery."""
 
@@ -411,6 +414,7 @@ async def deliver_pending(
     report.dead = sum(o.status == DEAD for o in outcomes)
     report.retrying = sum(o.status == PENDING for o in outcomes)
     for outcome in outcomes:
+        WEBHOOK_OUTCOMES.add(1, {"outcome": _OUTCOMES[outcome.status]})
         if outcome.status != DELIVERED:
             logger.warning(
                 "webhook delivery failed",

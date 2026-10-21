@@ -24,12 +24,19 @@ from threading import Lock
 from typing import Protocol
 
 from fastapi import Request, Response
+from opentelemetry import metrics
 from pydantic import BaseModel
 
 from lorebase_keeper.settings import ReadCacheSettings
 
 JSON = "application/json"
 CACHE_CONTROL = "private, must-revalidate"
+
+_LOOKUPS = metrics.get_meter("lorebase.keeper").create_counter(
+    "lorebase.keeper.cache.requests",
+    unit="{request}",
+    description="Read response cache lookups, by result (hit, miss, bypass when disabled).",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +212,8 @@ async def respond_with(
     if _matches(request, tag):
         return Response(status_code=304, headers=common)
     cached = None if cache is None else await cache.get(key)
+    result = "bypass" if cache is None else "miss" if cached is None else "hit"
+    _LOOKUPS.add(1, {"result": result})
     if cached is not None:
         return Response(
             cached.body, media_type=cached.media_type, headers={**cached.headers, **common}

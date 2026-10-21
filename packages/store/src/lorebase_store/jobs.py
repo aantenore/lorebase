@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.settings import JobSettings
+from lorebase_store.telemetry import JOBS_CLAIMED
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +110,11 @@ _STALE = text(
     UPDATE jobs SET status = 'queued', locked_by = NULL, locked_at = NULL
     WHERE status = 'running' AND locked_at < :before
     """
+)
+
+_DEPTH = text(
+    "SELECT type, status, count(*) FROM jobs WHERE status IN ('queued', 'running') "
+    "GROUP BY type, status"
 )
 
 
@@ -211,7 +217,17 @@ async def claim_jobs(
                 "limit": limit,
             },
         )
-        return [JobRow(**row) for row in result.mappings()]
+        claimed = [JobRow(**row) for row in result.mappings()]
+    for job in claimed:
+        JOBS_CLAIMED.add(1, {"type": job.type})
+    return claimed
+
+
+async def queue_depth(session: AsyncSession) -> dict[tuple[str, str], int]:
+    """Jobs waiting (`queued`) or `running`, counted by (type, status), across Domains."""
+    async with rls_scope(session, bypass=True):
+        rows = (await session.execute(_DEPTH)).all()
+    return {(job_type, status): int(count) for job_type, status, count in rows}
 
 
 async def finish_job(

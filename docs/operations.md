@@ -178,7 +178,7 @@ that is not an address ends the walk with no client address, which no allowlist 
 
 `deploy/observability` holds the whole bundle: the collector configuration, Prometheus, three Grafana
 dashboards and the alert rules. The series they use are listed in [metrics](metrics.md), which also says
-which signals the code does not record yet.
+which signals the code does not record yet (database pool usage, extraction tokens and cost).
 
 Switch telemetry on with `telemetry.otlp_endpoint` (`LOREBASE__TELEMETRY__OTLP_ENDPOINT`); without it
 nothing is exported. The services send OTLP/gRPC to the collector, which exposes metrics on `:8889` for
@@ -198,13 +198,13 @@ Prometheus and sends traces to an OTLP backend (Jaeger in the compose profile; s
 
 | Dashboard | Shows |
 |-----------|-------|
-| Lorebase Keeper | Requests per second, mean, p50 and p95 latency per route class, 4xx and 5xx, rate limited, quota exceeded, authentication failures |
-| Lorebase Store | Replica lag and reachability, reads by serving database and reason, write and merge requests, garbage collection and index jobs |
-| Lorebase Scribe | Jobs by type and status, failure ratio, retries, durations, scheduler against finished jobs, webhook delivery passes, Source sync rows and changes, extraction runs |
+| Lorebase Keeper | Requests per second, mean, p50 and p95 latency per route class, 4xx and 5xx, rate limited, quota exceeded, authentication failures by reason, read response cache hit ratio and lookups |
+| Lorebase Store | Replica lag and reachability, reads by serving database and reason, commit duration (overall and by origin), writes by status, merge attempts by result, `SECURITY DEFINER` function calls, garbage collections and bytes freed, index jobs |
+| Lorebase Scribe | Jobs by type and status, failure ratio, retries, queue depth, jobs claimed, durations, scheduler against finished jobs, webhook deliveries by outcome, Source sync rows and changes, extraction runs and items, garbage collections and bytes freed |
 
-Latency quantiles need histogram buckets in seconds, which the code does not declare yet (see
-[metrics](metrics.md#histogram-buckets)); until then the p50 and p95 panels are not meaningful and the
-latency alert stays silent. Thresholds are written into the rule expressions; edit
+The latency histograms declare bucket boundaries from 5 ms to 10 s (see
+[metrics](metrics.md#histogram-buckets)), so the p50 and p95 panels and the latency alert read real
+quantiles. Thresholds are written into the rule expressions; edit
 `deploy/observability/alerts/lorebase.rules.yml`.
 
 ### Alert runbook
@@ -235,7 +235,10 @@ scrapes it.
 #### LorebaseAuthFailuresThrottled
 
 Clients keep failing to authenticate and Keeper answers their requests 429 (class `auth_failures`, see [rate
-limits](#rate-limits-and-quotas)). Look at the `api key rejected` INFO lines for the key prefix and client address.
+limits](#rate-limits-and-quotas)). The Keeper dashboard splits the failures by `reason`
+(`lorebase_auth_failures_total`): `unknown_key` and `wrong_secret` point at guessing or a stale secret, `expired`
+and `revoked` at an integration that was not updated, `network` at a client outside the key's allowed networks.
+Look at the `api key rejected` INFO lines for the key prefix and client address.
 A valid key whose prefix is being attacked is held off too: raise `keeper.limits.rate.auth_failures.burst`, or
 block the address in front of Keeper. A misconfigured integration shows as one prefix with a steady rate.
 
@@ -261,21 +264,23 @@ exception. Fix the cause, then requeue the rows with `status = 'queued', attempt
 
 #### LorebaseJobQueueStalled
 
-The scheduler queued jobs in the last 15 minutes and no job run was recorded. Scribe workers are not running, cannot
-claim (database down), or every job hangs. Check the Scribe pods and logs, `SELECT type, status, count(*) FROM jobs
-GROUP BY 1, 2`, and rows locked for longer than `store.jobs.stale_after_seconds` (the scheduler requeues those).
+Jobs have been queued (`lorebase_jobs_queue_depth{status="queued"}`, reported by the scheduler leader) while no
+worker claimed one (`lorebase_jobs_claimed_total`) in the last 15 minutes. Scribe workers are not running, cannot
+claim (database down), or every job hangs. The Scribe dashboard shows the queue depth by type. Check the Scribe pods
+and logs, `SELECT type, status, count(*) FROM jobs GROUP BY 1, 2`, and rows locked for longer than `store.jobs.stale_after_seconds` (the scheduler requeues those).
 `python -m lorebase_store.jobs work` drains the queue from a shell.
 
 #### LorebaseWebhookDeliveryFailing
 
-The `webhook_delivery` job itself ended `failed`. Dead letters are rows of `webhook_deliveries`:
+Deliveries became dead in the last hour (`lorebase_webhooks_deliveries_total{outcome="dead"}`); the Scribe
+dashboard shows `delivered`, `retrying` and `dead` side by side. Dead letters are rows of `webhook_deliveries`:
 `SELECT webhook_id, count(*), max(last_error) FROM webhook_deliveries WHERE status = 'dead' GROUP BY 1`. A target
 refused (scheme, private address) is dead at once; others after `webhooks.max_attempts`. Fix or disable the
 webhook; the pass retries what is still pending.
 
 #### LorebaseGcNotRun
 
-No `gc` job succeeded in 3 days although Scribe is scheduling work. Check `scribe.scheduler.gc_schedule` (null
-disables the schedule; change the window in the rule if you collect less often), the `gc` rows of `jobs` and the
-Scribe logs; a collection that never ends makes the next ones fail with `GcBusyError`. Run one by hand with
+No garbage collection completed in 3 days (`lorebase_gc_runs_total`, dry runs excluded) although Scribe is
+scheduling work. Check `scribe.scheduler.gc_schedule` (null disables the schedule; change the window in the rule if
+you collect less often), the `gc` rows of `jobs` and the Scribe logs; a collection that never ends makes the next ones fail with `GcBusyError`. Run one by hand with
 `python -m lorebase_store.gc --all` ([garbage collection](#garbage-collection)).

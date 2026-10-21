@@ -18,6 +18,11 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from lorebase_platform.settings import TelemetrySettings
 
+LATENCY_BUCKETS_S: tuple[float, ...] = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
+"""Bucket boundaries, in seconds, of the duration histograms (request, job and commit
+latency). Without them the SDK defaults (0, 5, 10, 25, ...) put every sub-5-second value in
+one bucket and quantiles cannot be read."""
+
 
 @dataclass
 class Telemetry:

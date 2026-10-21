@@ -91,6 +91,7 @@ from lorebase_store.repositories.refs import (
 from lorebase_store.repositories.revisions import PgRevisionGraph, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.telemetry import MERGE_ATTEMPTS
 
 MERGE_ORIGIN = "merge"
 """Origin type of merge Revisions and of the merge's own provenance entry."""
@@ -232,7 +233,13 @@ class MergeService:
             raise BranchLockTimeoutError(str(error)) from error
         target = await _branch(refs, request.proposal.target_ref, "target")
         source = await _branch(refs, request.proposal.source_ref, "source")
-        return await self._run(request, target, source, commit=True)
+        result = await self._run(request, target, source, commit=True)
+        attempt = result.attempt
+        clean = attempt.status is not MergeAttemptStatus.CONFLICTED
+        MERGE_ATTEMPTS.add(
+            1, {"result": attempt.result if clean and attempt.result else CONFLICTS_RESULT}
+        )
+        return result
 
     async def abandon(self, proposal_id: str) -> int:
         """Mark the open attempts of a closed Proposal `abandoned`."""

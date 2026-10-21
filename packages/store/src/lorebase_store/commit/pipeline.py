@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,6 +114,7 @@ from lorebase_store.repositories.refs import LockTimeoutError, RefMovedError, Re
 from lorebase_store.repositories.revisions import RevisionRepository, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
+from lorebase_store.telemetry import COMMIT_DURATION
 
 COMMIT_ACTION = "revision.commit"
 COMMITTED_EVENT = "revision.committed"
@@ -189,10 +191,14 @@ async def commit(
         runtime=runtime or default_runtime(),
         clock=clock,
     )
+    began = perf_counter()
     if session.in_transaction():
-        return await _commit(session, request)
-    async with session.begin():
-        return await _commit(session, request)
+        result = await _commit(session, request)
+    else:
+        async with session.begin():
+            result = await _commit(session, request)
+    COMMIT_DURATION.record(perf_counter() - began, {"origin": origin.type})
+    return result
 
 
 async def create_domain(
