@@ -1,0 +1,27 @@
+apiVersion: v2
+name: lorebase
+description: Lorebase on Kubernetes - Keeper (REST API), Scribe, Herald (MCP), the web app, migrations and optional local models.
+type: application
+# Chart version: bump on every change of the chart. appVersion is the default image tag.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/aantenore/lorebase
+sources:
+  - https://github.com/aantenore/lorebase
+keywords:
+  - lorebase
+  - knowledge-graph
+  - mcp
+maintainers:
+  - name: Antonio Antenore
+    url: https://github.com/aantenore
+# Optional in-cluster Postgres: the CloudNativePG "cluster" chart (needs the CloudNativePG
+# operator in the cluster). Off by default; production uses an external Postgres by DSN.
+# `helm dependency build deploy/helm/lorebase` fetches it (pinned in Chart.lock).
+dependencies:
+  - name: cluster
+    alias: postgresql
+    version: 0.9.0
+    repository: https://cloudnative-pg.github.io/charts
+    condition: postgresql.enabled

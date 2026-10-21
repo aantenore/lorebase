@@ -1,0 +1,128 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ctx := . }}
+{{- $np := .Values.networkPolicy }}
+{{- $release := dict "ctx" . "component" "release" }}
+{{- $releasePods := dict "app.kubernetes.io/name" (include "lorebase.name" .) "app.kubernetes.io/instance" .Release.Name }}
+{{- /* Everything in the release starts closed. */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lorebase.fullname" . }}-default
+  labels:
+    {{- include "lorebase.labels" $release | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $releasePods | nindent 6 }}
+  policyTypes:
+    - Ingress
+{{- /* Keeper: the other pods of the release and the configured peers. */}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lorebase.componentName" (dict "ctx" . "component" "keeper") }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "keeper") | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "lorebase.selectorLabels" (dict "ctx" . "component" "keeper") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $releasePods | nindent 14 }}
+        {{- with $np.ingressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.keeper.port }}
+{{- range $component := list "herald" "web" }}
+{{- if get $ctx.Values $component | dig "enabled" false }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lorebase.componentName" (dict "ctx" $ctx "component" $component) }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" $ctx | nindent 2 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "lorebase.selectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- with $np.ingressFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ (get $ctx.Values $component).port }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- if $ctx.Values.ollama.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lorebase.componentName" (dict "ctx" . "component" "ollama") }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "ollama") | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "lorebase.selectorLabels" (dict "ctx" . "component" "ollama") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "lorebase.selectorLabels" (dict "ctx" . "component" "scribe") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ollama.port }}
+{{- end }}
+{{- if $np.egress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lorebase.fullname" . }}-egress
+  labels:
+    {{- include "lorebase.labels" $release | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $releasePods | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            {{- toYaml $np.egress.dnsNamespaceSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $releasePods | nindent 14 }}
+    {{- with $np.egress.rules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

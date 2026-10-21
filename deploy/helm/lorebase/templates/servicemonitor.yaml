@@ -1,0 +1,30 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- include "lorebase.validate" . }}
+{{- $sm := .Values.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "lorebase.fullname" . }}
+  namespace: {{ default .Release.Namespace $sm.namespace }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "servicemonitor") | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  selector:
+    {{- toYaml $sm.selector | nindent 4 }}
+  namespaceSelector:
+    matchNames:
+      {{- if $sm.namespaceSelector.matchNames }}
+      {{- toYaml $sm.namespaceSelector.matchNames | nindent 6 }}
+      {{- else }}
+      - {{ .Release.Namespace }}
+      {{- end }}
+  endpoints:
+    - port: {{ $sm.port }}
+      path: {{ $sm.path }}
+      interval: {{ $sm.interval }}
+      scrapeTimeout: {{ $sm.scrapeTimeout }}
+{{- end }}

@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled }}
+{{- $ctx := . }}
+{{- $enabled := dict "keeper" true "herald" .Values.herald.enabled "web" .Values.web.enabled }}
+{{- $ports := dict "keeper" .Values.keeper.service.port "herald" .Values.herald.service.port "web" .Values.web.service.port }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "lorebase.fullname" . }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "ingress") | nindent 4 }}
+  {{- if or .Values.ingress.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml (merge (deepCopy .Values.ingress.annotations) (deepCopy .Values.commonAnnotations)) | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          {{- if get $enabled .component }}
+          - path: {{ .path }}
+            pathType: {{ default "Prefix" .pathType }}
+            backend:
+              service:
+                name: {{ include "lorebase.componentName" (dict "ctx" $ctx "component" .component) }}
+                port:
+                  number: {{ get $ports .component }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

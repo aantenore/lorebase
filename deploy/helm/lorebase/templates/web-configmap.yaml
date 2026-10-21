@@ -1,0 +1,52 @@
+{{- if .Values.web.enabled }}
+{{- $browser := merge (dict "VITE_API_MODE" .Values.web.config.apiMode) (deepCopy .Values.web.config.extra) }}
+{{- if eq .Values.web.config.apiMode "live" }}
+{{- $_ := set $browser "VITE_KEEPER_BASE_URL" (include "lorebase.webKeeperUrl" .) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-web" (include "lorebase.fullname" .) }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "web") | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+data:
+  config.js: |
+    window.__LOREBASE_CONFIG__ = {{ toJson $browser }};
+  default.conf: |
+    server {
+      listen {{ .Values.web.port }};
+      server_name _;
+      server_tokens off;
+      root /usr/share/nginx/html;
+      index index.html;
+
+      location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+      }
+
+      # Runtime configuration: never cached, so a changed Keeper URL applies on the next load.
+      location = /config.js {
+        add_header Cache-Control "no-store";
+        add_header X-Content-Type-Options "nosniff";
+      }
+
+      # Built assets carry a content hash in their name.
+      location /assets/ {
+        add_header Cache-Control {{ .Values.web.assetsCacheControl | quote }};
+        add_header X-Content-Type-Options "nosniff";
+        try_files $uri =404;
+      }
+
+      # Single page application: unknown paths load the shell.
+      location / {
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options "nosniff";
+        add_header X-Frame-Options "DENY";
+        add_header Referrer-Policy "same-origin";
+        try_files $uri $uri/ /index.html;
+      }
+    }
+{{- end }}
