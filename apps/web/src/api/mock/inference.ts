@@ -113,7 +113,7 @@ function requestedTables(request: InferRequest): Set<string> {
   const known = new Set(tableNames());
   const invalid = (detail: string) => problem(422, 'Invalid request', detail, 'invalid_request');
   if ('files' in request) {
-    if (request.files.length === 0) throw invalid('Upload at least one CSV or TSV file.');
+    if (request.files.length === 0) throw invalid('Upload at least one data file.');
     const names = request.files.map((f) => tableOfFile(f.name));
     const unknown = names.filter((n) => !known.has(n));
     if (unknown.length > 0) {

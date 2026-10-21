@@ -45,7 +45,15 @@ describe('loadConfig', () => {
   it('reads the inference caps, suffixes, threshold and Postgres suggestions', () => {
     const defaults = loadConfig({ VITE_API_MODE: 'mock' }).inference;
     expect(defaults).toMatchObject({ maxFiles: 50, maxFileBytes: 1_048_576, acceptThreshold: 0.9 });
-    expect(defaults.fileSuffixes).toEqual(['.csv', '.tsv', '.txt']);
+    expect(defaults.fileSuffixes).toEqual([
+      '.csv',
+      '.tsv',
+      '.txt',
+      '.json',
+      '.jsonl',
+      '.ndjson',
+      '.parquet',
+    ]);
     expect(defaults.postgresSources).toEqual([]);
 
     const config = loadConfig({

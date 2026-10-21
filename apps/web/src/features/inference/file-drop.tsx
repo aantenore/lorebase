@@ -3,7 +3,7 @@ import { Button } from '@/ui/button';
 import { cn } from '@/ui/cn';
 import { addFiles, formatBytes, type Rejected, type UploadCaps } from './files';
 
-/** What the drop zone says; the defaults are those of the CSV upload of "Start from data". */
+/** What the drop zone says; the defaults are those of the data file upload of "Start from data". */
 export interface FileDropWording {
   /** Accessible name of the drop zone. */
   zoneLabel: string;
@@ -15,10 +15,10 @@ export interface FileDropWording {
   note: string;
 }
 
-const CSV_WORDING: FileDropWording = {
-  zoneLabel: 'Drop zone for CSV files',
-  prompt: 'Drop CSV or TSV files here, or',
-  inputLabel: 'Upload CSV or TSV files',
+const DATA_FILE_WORDING: FileDropWording = {
+  zoneLabel: 'Drop zone for data files',
+  prompt: 'Drop CSV, TSV, JSON, JSON Lines or Parquet files here, or',
+  inputLabel: 'Upload data files',
   note: 'The file name is the table name.',
 };
 
@@ -30,7 +30,7 @@ export interface FileDropProps {
 }
 
 /** Drop zone and file picker, with the caps stated and enforced. */
-export function FileDrop({ files, caps, onChange, wording = CSV_WORDING }: FileDropProps) {
+export function FileDrop({ files, caps, onChange, wording = DATA_FILE_WORDING }: FileDropProps) {
   const input = useRef<HTMLInputElement>(null);
   const hintId = useId();
   const [over, setOver] = useState(false);
