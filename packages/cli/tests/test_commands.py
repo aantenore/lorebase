@@ -342,6 +342,14 @@ def test_branch_commands(http: respx.MockRouter) -> None:
     assert "abababababab" in listing.stdout  # heads are cut to twelve characters
     assert run("branch", "create", "agent/x", "--source", "work", "-d", "supply").exit_code == 0
     assert request_bodies(create) == [{"name": "agent/x", "source": "work"}]
+    assert run("branch", "create", "ov", "--mode", "overlay", "-d", "supply").exit_code == 0
+    assert request_bodies(create)[1] == {"name": "ov", "mode": "overlay"}
+    assert run("branch", "create", "cp", "--mode", "copy", "-d", "supply").exit_code == 0
+    assert request_bodies(create)[2] == {"name": "cp", "mode": "copy"}
+    wrong = run("branch", "create", "bad", "--mode", "shallow", "-d", "supply")
+    assert wrong.exit_code == 1
+    assert "overlay" in wrong.stderr
+    assert len(request_bodies(create)) == 3  # nothing was sent for the unknown mode
     assert run("branch", "protect", "work", "-d", "supply").exit_code == 0
     assert request_bodies(protect) == [{"protected": True}]
     run("branch", "protect", "work", "--off", "-d", "supply")
