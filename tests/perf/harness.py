@@ -34,10 +34,12 @@ from lorebase_core.revision import Author, Origin
 from lorebase_core.types import AttributeType, encode_value
 from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
+from lorebase_store.definer import grant_read_functions
 from lorebase_store.indexes import BranchIndexes, run_index_jobs
 from lorebase_store.materialize import create_branch
 from lorebase_store.reads import (
     Comparison,
+    TitleSimilarity,
     get_record,
     head_schema,
     index_spec,
@@ -83,7 +85,10 @@ TARGETS_MS = {
     "2-hop neighborhood": 30.0,
     "query by indexed attribute": 25.0,
     "full-text search": 50.0,
+    "full-text search with typo-tolerant titles": 50.0,
 }
+#: Keeper's lexical search defaults (`search.trigram_threshold`, `search.trigram_weight`).
+TITLE_SIMILARITY = TitleSimilarity(threshold=0.3, weight=0.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,7 +308,8 @@ async def _analyze(engine: AsyncEngine) -> None:
 
 
 async def create_reader(engine: AsyncEngine) -> None:
-    """A role subject to row-level security, as the application role is in production."""
+    """A role subject to row-level security, as the application role is in production, with
+    EXECUTE on the security definer read functions."""
     async with engine.connect() as connection:
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
         exists = (
@@ -314,6 +320,7 @@ async def create_reader(engine: AsyncEngine) -> None:
         if exists is None:
             await auto.exec_driver_sql(f"CREATE ROLE {READER_ROLE} NOLOGIN")
         await auto.exec_driver_sql(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {READER_ROLE}")
+        await grant_read_functions(auto, READER_ROLE)
 
 
 async def drop_reader(engine: AsyncEngine) -> None:
@@ -432,6 +439,17 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
             session, DOMAIN, "main", rng.choice(work.words), limit=20, runtime=runtime
         )
 
+    async def search_titles(session: AsyncSession, rng: random.Random) -> Any:
+        return await search_records(
+            session,
+            DOMAIN,
+            "main",
+            rng.choice(work.words),
+            limit=20,
+            titles=TITLE_SIMILARITY,
+            runtime=runtime,
+        )
+
     return {
         "get by key": get,
         "list page of 50": page,
@@ -439,6 +457,7 @@ def read_operations(work: Workload, runtime: StoreRuntime) -> dict[str, Operatio
         "2-hop neighborhood": hood,
         "query by indexed attribute": by_attribute,
         "full-text search": search,
+        "full-text search with typo-tolerant titles": search_titles,
     }
 
 

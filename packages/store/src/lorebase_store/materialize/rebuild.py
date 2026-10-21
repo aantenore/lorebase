@@ -117,7 +117,9 @@ async def materialize_revision(
     objects = PgObjectStore(session, domain_id, writes=settings.writes, batch=batch)
     tree = await nodes.load_tree(head.root)
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
-    indexes = BranchIndexes(session, domain_id, branch, settings=settings.indexes)
+    indexes = BranchIndexes(
+        session, domain_id, branch, settings=settings.indexes, maintenance=runtime.index_maintenance
+    )
     await indexes.retire(schema)
     await repository.set_schema(SchemaRow(schema_hash, compile_schema(schema)))
     await repository.rebuild_history(head.id)

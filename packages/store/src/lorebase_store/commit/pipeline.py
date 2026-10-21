@@ -297,7 +297,13 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
     stored = await _store_revision(session, request.runtime, revision, prepared, provenance_rows)
     indexes = None
     if prepared.schema_hash is not None:
-        indexes = BranchIndexes(session, domain_id, branch, settings=settings.indexes)
+        indexes = BranchIndexes(
+            session,
+            domain_id,
+            branch,
+            settings=settings.indexes,
+            maintenance=request.runtime.index_maintenance,
+        )
         await indexes.retire(prepared.schema)
     await apply_changeset(
         session,

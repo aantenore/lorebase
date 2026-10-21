@@ -1,4 +1,5 @@
-"""Timings of a 10k-Record list page and of search, printed for the record (not asserted).
+"""Timings of list pages, search, Links, neighborhoods and conditional GETs over ~10k Parts,
+printed for the record (not asserted).
 
 Performance targets are asserted by the performance baseline (T28), not here.
 """
@@ -108,3 +109,36 @@ async def test_print_list_and_search_timings(seeded: Seeded) -> None:
         _report("second page by cursor", await _timed(next_page))
         _report("full-text search, 20 results", await _timed(search))
         _report("Record get by key", await _timed(get_one))
+
+
+async def test_print_link_neighborhood_and_conditional_timings(seeded: Seeded) -> None:
+    """Reads served by the store primitives (response cache off), and a conditional GET
+    answered from the head Revision."""
+    async with keeper(seeded.app_url, {"reads": {"cache": {"enabled": False}}}) as http:
+
+        async def inbound_links() -> None:
+            response = await http.get(
+                f"{BASE}/kinds/Supplier/records/S-1001/links/purchase_orders",
+                params={"limit": 50},
+            )
+            assert response.status_code == 200
+            assert response.json()["items"]
+
+        async def neighborhood() -> None:
+            response = await http.post(
+                f"{BASE}/neighborhood",
+                json={"seeds": [{"kind": "Part", "key": "P-10001"}], "depth": 2},
+            )
+            assert response.status_code == 200
+            assert response.json()["edges"]
+
+        path = f"{BASE}/kinds/Part/records/P-10001"
+        tag = (await http.get(path)).headers["ETag"]
+
+        async def conditional_get() -> None:
+            response = await http.get(path, headers={"If-None-Match": tag})
+            assert response.status_code == 304
+
+        _report("incoming foreign-key Links, page of 50", await _timed(inbound_links))
+        _report("neighborhood, depth 2", await _timed(neighborhood))
+        _report("conditional GET answered 304", await _timed(conditional_get))

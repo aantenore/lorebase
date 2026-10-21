@@ -1,8 +1,9 @@
 """Settings sections owned by the store, registered with `lorebase_platform`.
 
 - `database` (design 16): connection string, pool and timeouts, optional read replicas. The
-  environment alias `LOREBASE_DB_DSN` sets `database.dsn` and `LOREBASE_DB_READ_DSN` sets
-  `database.read_dsn`; both are handled as secrets.
+  environment alias `LOREBASE_DB_DSN` sets `database.dsn`, `LOREBASE_DB_READ_DSN` sets
+  `database.read_dsn` and `LOREBASE_DB_MAINTENANCE_DSN` sets `database.maintenance_dsn`; all
+  are handled as secrets.
 - `store`: physical layout and vector storage (read by the initial migration), bulk writes,
   tree node caching, commits, materialization, per-Attribute indexes, reads, neighborhood
   traversal and the profilers of schema inference (read at runtime).
@@ -25,7 +26,11 @@ from lorebase_platform.settings import SectionModel, Settings, register_section
 DATABASE_SECTION = "database"
 STORE_SECTION = "store"
 SCHEMA_SECTION = "schema"
-ENV_ALIASES = {"LOREBASE_DB_DSN": "dsn", "LOREBASE_DB_READ_DSN": "read_dsn"}
+ENV_ALIASES = {
+    "LOREBASE_DB_DSN": "dsn",
+    "LOREBASE_DB_READ_DSN": "read_dsn",
+    "LOREBASE_DB_MAINTENANCE_DSN": "maintenance_dsn",
+}
 DEFAULT_DSN = "postgresql+asyncpg://lorebase@localhost:5432/lorebase"
 
 PGVECTOR_HNSW_MAX_DIMS = 2000
@@ -61,6 +66,21 @@ class DatabaseSettings(SectionModel):
     )
     application_name: str = Field(
         default="lorebase", min_length=1, description="Reported in pg_stat_activity."
+    )
+    maintenance_dsn: SecretValue | None = Field(
+        default=None,
+        description="Optional URL of a role that owns mat_records (or may create indexes on "
+        "it), used only for maintenance DDL: the job worker builds and drops the per-Attribute "
+        "indexes with it. Literal or secret reference (alias LOREBASE_DB_MAINTENANCE_DSN). "
+        "Unset: only a commit role that owns mat_records manages the indexes.",
+    )
+    application_role: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Database role the services connect as (subject to row-level security). "
+        "Read by migrations only: revision 0005 grants it EXECUTE on the security definer "
+        "read functions, which are revoked from PUBLIC. Empty grants nothing (the owner role "
+        "can still call them).",
     )
     read_dsn: tuple[SecretValue, ...] = Field(
         default=(),
@@ -324,9 +344,10 @@ class IndexSettings(SectionModel):
 
     enabled: bool = Field(
         default=True,
-        description="Create and drop per-Attribute indexes when schemas change. Only a role "
-        "that owns mat_records does so; other roles skip it with a warning. False leaves index "
-        "management to an administrator.",
+        description="Create and drop per-Attribute indexes when schemas change. A role that "
+        "owns mat_records does so in the commit; other roles queue the changes for the job "
+        "worker when database.maintenance_dsn is set, and skip them with a warning otherwise. "
+        "False leaves index management to an administrator.",
     )
     inline_max_rows: int = Field(
         default=50000,
@@ -362,6 +383,12 @@ class ReadSettings(SectionModel):
     )
     max_hydrate_keys: int = Field(
         default=1000, ge=1, description="Records fetched by one batched hydration."
+    )
+    use_definer_functions: bool = Field(
+        default=True,
+        description="Run search, incoming Links, neighborhoods and attribute queries through "
+        "the security definer functions of revision 0005, whose index plans survive row-level "
+        "security; false runs the same statements as plain SQL.",
     )
 
 

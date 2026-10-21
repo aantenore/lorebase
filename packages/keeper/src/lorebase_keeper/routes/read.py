@@ -4,8 +4,9 @@ Every read takes `branch` (default: the Domain's default branch); Record and Lin
 take `at`, a Revision id or tag, served from the Revision tree. Responses carry the Revision
 they were served from in `revision` and in the `Lorebase-Revision` header, and `served_from`
 (`materialized` or `tree`). GET reads carry an `ETag` bound to that Revision, answer
-`If-None-Match` with 304 and are cached per Revision (`reading.caching`); POST reads carry
-an `ETag` too.
+`If-None-Match` with 304 and are cached per Revision (`reading.caching`); at a branch head
+the 304 is decided from the head Revision alone (`unchanged_head`), before the read point is
+resolved. POST reads carry an `ETag` too.
 """
 
 from __future__ import annotations
@@ -21,7 +22,13 @@ from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, records, search
 from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
 from lorebase_keeper.reading.cursors import fingerprint
-from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, read_guard, resolve_point
+from lorebase_keeper.reading.points import (
+    REVISION_HEADER,
+    ReadPoint,
+    read_guard,
+    resolve_point,
+    unchanged_head,
+)
 from lorebase_keeper.reading.problems import invalid, request_problem
 from lorebase_keeper.reading.requests import (
     NeighborhoodRequest,
@@ -135,6 +142,8 @@ async def list_records(
     cursor: Cursor = None,
 ) -> Response:
     """Records of a Kind filtered with the DSL, ordered and paginated by keyset."""
+    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+        return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     records.require_kind(point, kind)
     document: dict[str, Any] = {"kind": kind, "limit": _limit(runtime, limit), "cursor": cursor}
@@ -187,6 +196,8 @@ async def list_record_links(
     cursor: Cursor = None,
 ) -> Response:
     """Links of the Record along `relation`, a forward or inverse api name, by far key."""
+    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+        return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
     effective = _limit(runtime, limit)
@@ -228,6 +239,8 @@ async def get_record(
     lineage: Annotated[bool, Query(description="Add the provenance of each value.")] = False,
 ) -> Response:
     """One Record, optionally with its Link counts and the lineage of its values."""
+    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+        return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
 
@@ -261,6 +274,8 @@ async def list_relation_links(
     cursor: Cursor = None,
 ) -> Response:
     """Links of a Relation (either api name) ordered by `(from_key, to_key)`."""
+    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+        return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     effective = _limit(runtime, limit)
 

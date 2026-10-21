@@ -298,6 +298,13 @@ database:
   statement_timeout_ms: 30000    # per statement; 0 disables
   migration_statement_timeout_ms: 0   # while migrations run; 0 disables
   application_name: lorebase     # shown in pg_stat_activity
+  maintenance_dsn: null          # optional secret: a role that owns mat_records, used by the job
+                                 # worker for per-Attribute index DDL queued by roles that do not
+                                 # own it. Alias LOREBASE_DB_MAINTENANCE_DSN. null: such roles skip
+                                 # index management (`python -m lorebase_store.indexes plan`)
+  application_role: null         # role the services connect as; revision 0005 grants it EXECUTE
+                                 # on the security definer read functions (store schema notes).
+                                 # null grants nothing; the role must exist before migrating
   read_dsn: []                   # read replicas (docs/deployment.md): one URL, a comma-separated
                                  # string or a list; literals or secret references, e.g.
                                  # [secret://env/LOREBASE_DB_READ_DSN]. Alias LOREBASE_DB_READ_DSN.
@@ -366,8 +373,9 @@ store:
       exact_row_count: false     # true: count(*) per table; false: planner estimate
 
   indexes:                       # per-Attribute partial indexes on mat_records
-    enabled: true                # false: an administrator manages them; a commit role that does
-                                 # not own mat_records skips them too (warning logged)
+    enabled: true                # false: an administrator manages them. A commit role that does
+                                 # not own mat_records queues them for the job worker when
+                                 # database.maintenance_dsn is set, else skips them (warning)
     inline_max_rows: 50000       # larger Kinds get their indexes from a queued concurrent build
     job_batch: 10                # queued index jobs claimed per runner pass
   reads:
@@ -376,6 +384,9 @@ store:
     max_search_rows: 100         # largest full-text search result
     search_candidates: 1000      # matches ranked per search (bounds very common terms)
     max_hydrate_keys: 1000       # Records per batched hydration
+    use_definer_functions: true  # search, incoming Links, neighborhoods and attribute queries
+                                 # through the security definer functions, whose index plans
+                                 # survive row-level security; false: the same SQL, plain
   traverse:                      # neighborhood caps
     max_depth: 3                 # hops
     max_seeds: 50                # seed Records
@@ -419,7 +430,8 @@ read:
     include_default_limit: 10    # neighbors per Record in `include`
     include_max_limit: 50
     max_aggregate_groups: 1000   # groups returned by `aggregate`; more are cut
-  traverse:                      # POST /traverse and POST /neighborhood
+  traverse:                      # POST /traverse and POST /neighborhood; a neighborhood is also
+                                 # bounded by store.traverse (the smaller cap applies)
     max_hops: 5
     max_nodes_per_hop: 1000
     max_seeds: 100

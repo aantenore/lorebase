@@ -10,6 +10,12 @@
 
 Filters (`kinds`, `where`) apply before ranking and fusion. Snippets come from `ts_headline`
 over the title and the searchable Attributes.
+
+Lexical search without `where` goes through the store primitive `search_records` (design
+8.7): at most `store.reads.search_candidates` matches are ranked, through the security
+definer function `lb_search`, so its index plans hold under row-level security; snippets
+are computed for the returned page only. Filtered, semantic and hybrid searches are compiled
+here.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from sqlalchemy import (
     or_,
     over,
     select,
+    tuple_,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +50,7 @@ from lorebase_keeper.reading.requests import SearchMode, SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.views import SearchHit, SearchResponse, kind_name, served
 from lorebase_store.models import metadata
+from lorebase_store.reads import TitleSimilarity, search_records
 from lorebase_store.repositories.materialized import MAT_RECORDS
 
 EMBEDDINGS: Table = metadata.tables["embeddings"]
@@ -125,6 +133,9 @@ async def search(
         point.scope.require(condition_kinds(where))
 
     compiler = compiler_for(point, runtime)
+    if mode == "lexical" and where is None:
+        assert request.q is not None
+        return await _lexical_page(session, runtime, compiler, point, target, request.q, limit)
     r = compiler.records("r")
     base = [compiler.record_scope(r, target)]
     if where is not None:
@@ -191,6 +202,57 @@ async def search(
         for row in rows
     ]
     return SearchResponse(**served(point), mode=mode, items=items)
+
+
+async def _lexical_page(
+    session: AsyncSession,
+    runtime: ReadRuntime,
+    compiler: Compiler,
+    point: ReadPoint,
+    target: Target,
+    q: str,
+    limit: int,
+) -> SearchResponse:
+    """Lexical search without filters: the store primitive ranks a bounded candidate set
+    (index plans under row-level security too), then snippets for the page by key."""
+    settings = runtime.search
+    hits = await search_records(
+        session,
+        point.domain.id,
+        point.branch,
+        q,
+        limit=limit,
+        kind_ids=list(target.kind_ids),
+        titles=TitleSimilarity(settings.trigram_threshold, settings.trigram_weight),
+        runtime=runtime.store,
+    )
+    snippets: dict[tuple[str, str], str | None] = {}
+    if hits:
+        hit = MAT_RECORDS.alias("hit")
+        headline = func.ts_headline(
+            compiler.regconfig(),
+            func.concat_ws(" ", hit.c.title, *_searchable_text(hit, target)),
+            compiler.tsquery(q),
+            literal(settings.headline_options),
+        )
+        query = select(hit.c.kind_id, hit.c.key, headline.label("snippet")).where(
+            hit.c.domain_id == literal(point.domain.id),
+            hit.c.branch == literal(point.branch),
+            tuple_(hit.c.kind_id, hit.c.key).in_([(h.kind_id, h.key) for h in hits]),
+        )
+        for row in (await session.execute(query)).mappings():
+            snippets[(row["kind_id"], row["key"])] = row["snippet"]
+    items = [
+        SearchHit(
+            kind=kind_name(point.schema, h.kind_id),
+            key=h.key,
+            title=h.title,
+            snippet=snippets.get((h.kind_id, h.key)),
+            score=h.score,
+        )
+        for h in hits
+    ]
+    return SearchResponse(**served(point), mode="lexical", items=items)
 
 
 def _lexical(

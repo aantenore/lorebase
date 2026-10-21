@@ -8,16 +8,19 @@ Relation `sourced_from`.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
+import pytest
 from sqlalchemy import event
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from lorebase_core.model import Cardinality, Kind, Record, Relation, RelationBacking
 from lorebase_core.types import TypeSpec
 from lorebase_core.validate import RecordUpsert
+from lorebase_store import testing
 from lorebase_store.commit import CommitResult, SchemaUpsert, commit
 from lorebase_store.indexes import sql_literal
 from lorebase_store.runtime import StoreRuntime
@@ -79,19 +82,22 @@ def part_with(number: str, name: str, **values: Any) -> RecordUpsert:
     return RecordUpsert(record=Record(kind=PART, key=number, values=record_values))
 
 
-async def seed_graph(session: AsyncSession, runtime: StoreRuntime) -> CommitResult:
+async def seed_graph(
+    session: AsyncSession, runtime: StoreRuntime, *, domain_id: str = DOMAIN, label: str = ""
+) -> CommitResult:
+    """The graph above in `domain_id`, every title starting with `label`."""
     return await commit(
         session,
-        DOMAIN,
+        domain_id,
         "main",
         [
-            supplier("S-1", "Alpha Bearings", vat="IT1", rating="5"),
-            supplier("S-2", "Beta Seals", vat="IT2", rating="7"),
-            supplier("S-3", "Gamma Filters", vat="IT3", rating="9"),
-            part_with("P-1", "Tapered roller bearing", main_supplier="S-2"),
-            part_with("P-2", "Flat washer"),
-            part_with("P-3", "Ball bearing"),
-            part_with("P-4", "Oil seal"),
+            supplier("S-1", f"{label}Alpha Bearings", vat="IT1", rating="5"),
+            supplier("S-2", f"{label}Beta Seals", vat="IT2", rating="7"),
+            supplier("S-3", f"{label}Gamma Filters", vat="IT3", rating="9"),
+            part_with("P-1", f"{label}Tapered roller bearing", main_supplier="S-2"),
+            part_with("P-2", f"{label}Flat washer"),
+            part_with("P-3", f"{label}Ball bearing"),
+            part_with("P-4", f"{label}Oil seal"),
             supplied("P-1", "S-1"),
             supplied("P-2", "S-1"),
             supplied("P-3", "S-1"),
@@ -162,6 +168,21 @@ def _literal(value: Any) -> str:
     if isinstance(value, list):
         return "ARRAY[" + ", ".join(_literal(v) for v in value) + "]::text[]" if value else "'{}'"
     return sql_literal(str(value))
+
+
+@asynccontextmanager
+async def nested_plans(session: AsyncSession) -> AsyncIterator[list[dict[str, Any]]]:
+    """`lorebase_store.testing.nested_plans`, skipping the test where `auto_explain` cannot
+    be loaded (a server role that is not a superuser)."""
+    try:
+        context = testing.nested_plans(session)
+        plans = await context.__aenter__()
+    except DBAPIError as error:
+        pytest.skip(f"auto_explain is not available: {error.orig}")
+    try:
+        yield plans
+    finally:
+        await context.__aexit__(None, None, None)
 
 
 def plan_nodes(plan: dict[str, Any]) -> Iterator[dict[str, Any]]:

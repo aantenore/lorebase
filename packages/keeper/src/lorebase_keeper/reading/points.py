@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from fastapi import Request
+from fastapi import Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Schema
@@ -24,12 +24,14 @@ from lorebase_keeper.auth.deps import AuthDep, PrincipalDep
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, ProblemError
+from lorebase_keeper.reading.caching import not_modified
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.services.reads import ReadGuard, ReadTarget, StoreReadSource
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.rebuild import load_schema
 from lorebase_store.models.enums import RefKind
 from lorebase_store.nodestore import NodeRepository
+from lorebase_store.reads import head_revision
 from lorebase_store.repositories import (
     DomainRepository,
     DomainRow,
@@ -176,6 +178,32 @@ async def open_revision(
     )
     await guard.require(StoreReadSource(session, domain), target, wide=wide)
     return revision
+
+
+async def unchanged_head(
+    session: AsyncSession, guard: ReadGuard, request: Request, *, branch: str | None
+) -> Response | None:
+    """304 for a conditional GET at a branch head, decided from the head Revision alone.
+
+    Runs only when the request carries `If-None-Match`. The Domain and `data.read` on the
+    branch are authorized first; then `head_revision` (one primary-key read) gives the tag.
+    Callers whose grants are narrowed to Kinds, unknown branches and tags that do not match
+    go on to the full read, which answers them.
+    """
+    if "if-none-match" not in request.headers:
+        return None
+    domain = await open_domain(session, guard)
+    name = branch or domain.default_branch
+    try:
+        await guard.require_branch(name)
+    except ProblemError:
+        return None
+    head = await head_revision(session, domain.id, name)
+    if head is None:
+        return None
+    return not_modified(
+        request, domain_id=domain.id, revision=head.hex(), headers={REVISION_HEADER: head.hex()}
+    )
 
 
 async def resolve_point(
