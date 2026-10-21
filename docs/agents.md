@@ -26,7 +26,8 @@ Three properties hold on every read an agent makes:
 3. **Ask why** with `GET .../explain` before acting on a surprising value.
 4. **Write through Operations** (`POST /operations/{op}/execute`), with `dry_run` first and an
    `idempotency_key`; pass `expected_head` (the `revision` of your pack) to fail instead of
-   overwriting a newer state.
+   overwriting a newer state. When the change needs review, add a `task` and an `intent`:
+   Keeper opens the Proposal for you (section 4).
 5. **Follow changes** with the event stream (`GET /branches/{b}/events`), the polling fallback
    (`GET /branches/{b}/changes?since=`) or a webhook, and refresh only what changed.
 
@@ -223,6 +224,114 @@ Idempotency-Key: risk-review-2026-10-21-S-1001
 Repeat without `dry_run` once the edits and violations look right. A retry with the same
 idempotency key returns the original result; a moved head answers `409`.
 
+### Writes that need review
+
+An Operation needs review when its branch is protected (the default branch of a Domain is) or
+its review policy says so. Without more, that is `409 review-required` (problem details with
+`branch`, `operation`, `proposals`, `reason`, either `protected-branch` or `review-policy`, and
+`next` hints). Name a `task` and Keeper does the rest in one call:
+
+| Member | Default | Meaning |
+|--------|---------|---------|
+| `task` | none | short slug naming the piece of work; normalized to lower case (`Audit Q4` is `audit-q4`), at most `max_task_length` characters. Required for this flow |
+| `intent` | none | what you are after, in a sentence or two; the start of the Proposal description |
+| `auto_propose` | `keeper.agent_writes.auto_propose` for agent principals, `false` for others | `true` needs a `task`; `false` keeps the plain `409` |
+| `auto_merge` | `keeper.agent_writes.auto_merge` | ask for an immediate merge; honored only as described below |
+
+```http
+POST /api/v1/domains/supply/operations/flag_supplier_risk/execute
+Content-Type: application/json
+
+{"parameters": {"supplier": "S-1001", "severity": "high", "reason": "Two late deliveries"},
+ "task": "q4-audit",
+ "intent": "Flag S-1001 after the Q4 delivery audit",
+ "idempotency_key": "q4-audit-S-1001-flag",
+ "auto_merge": true}
+```
+
+```http
+HTTP/1.1 202 Accepted
+
+{"status": "proposed",
+ "operation": "flag_supplier_risk",
+ "branch": "agent/svc_01j9x4k2/q4-audit",
+ "target": "main",
+ "invocation_id": "inv_01J9X4M7",
+ "revision": "9be1…", "revisions": ["9be1…"], "edit_count": 2, "replayed": false,
+ "proposal": {"id": "prp_01J9X4M8", "title": "Agent svc_01j9x4k2: q4-audit", "status": "open",
+              "source_ref": "agent/svc_01j9x4k2/q4-audit", "target_ref": "main",
+              "url": "/api/v1/domains/supply/proposals/prp_01J9X4M8", "created": true},
+ "approval": {"required": 1, "approvals": 0, "satisfied": false},
+ "attempt": {"id": "mat_01J9X4M9", "result": "fast_forward", "open_conflicts": 0,
+             "resolved_conflicts": 0, "counts": {}},
+ "merge": {"requested": true, "allowed": true, "performed": false,
+           "blockers": ["approvals-pending"]},
+ "merged_revision": null, "branch_created": true, "branch_deleted": false, "warnings": [],
+ "next": [{"action": "await_review",
+           "detail": "Waiting for approval (0 of 1 required).",
+           "method": "POST", "href": "/api/v1/domains/supply/proposals/prp_01J9X4M8/reviews",
+           "permission": "proposal.review"},
+          {"action": "get_proposal", "detail": "Read the state of the Proposal.",
+           "method": "GET", "href": "/api/v1/domains/supply/proposals/prp_01J9X4M8"}]}
+```
+
+What Keeper does, in order, and what it refuses before any of it is created:
+
+1. The request is checked as usual (permission, Operation, expected head). A stale
+   `expected_head` is `409 stale-head`; edits that would be rejected are `422` with their
+   issues, exactly as for a direct write: a dry run happens first and creates nothing.
+2. The task branch `agent/{principal}/{task}` (`keeper.agent_writes.branch_prefix`; the
+   principal id in lower case) is created from the target head, or reused when it exists and
+   this principal created it (another creator: `409 already-exists`). A principal holds at most
+   `max_open_branches_per_principal` task branches (`409 agent-branch-limit`, listing them);
+   reusing one of them as the `task` is always possible.
+3. The Operation runs on the task branch, with your `idempotency_key`, `message` and the usual
+   provenance. Its review policy does not refuse it there: the Proposal is the review.
+4. One open Proposal per task branch and target: created with the title
+   `Agent {principal}: {task}` (`title_template`) and a description made of your `intent` and
+   the list of executions (`- flag_supplier_risk(reason="...", severity="high", ...) [inv_...]`;
+   `summary_parameter_values: false` lists names only). When it exists and you opened it, the
+   new execution is added to the list, and the `intent` replaced if you sent a new one.
+5. The merge, only when all of this holds: `auto_merge` is true (request or settings); a role
+   you hold in the Domain (a grant covering the task branch) is in
+   `allowed_roles_for_auto_merge`; the Proposal has no open Conflict; the approvals the target
+   requires are in (`required_approvals` of a protected target: an automatic merge never skips
+   them); and, when the review came from the Operation's own policy, someone approved. Merging
+   needs no `proposal.merge`: the Domain's list is the grant.
+
+`status` says where it stands: `proposed` (open, waiting), `merged` (`merged_revision` is the
+new target head and the task branch is gone) or `conflicts` (open Conflicts with the target:
+`attempt.counts` per code, details in `GET .../proposals/{p}/conflicts`). `merge.blockers`
+lists what keeps the Proposal from merging (`approvals-pending`,
+`review-policy-needs-approval`), `next` the calls that move it forward. The response carries
+`Idempotent-Replayed: true` when the execution had already been done.
+
+Send an `idempotency_key` with every such write. The steps above are separate transactions, and
+a retry with the same key finds the commit, the branch and the Proposal (even one that merged
+and lost its branch) instead of executing again. An Operation with nothing to change answers
+like a direct write (`committed`, no Revision) and creates no branch.
+
+**Permissions.** The agent needs `operation.execute` (or `operation.execute_custom` and the
+Operation's own `permissions`) and `data.read` on the target branch, and `branch.create` and
+`proposal.create` for the task branch. Grants narrowed to `agent/*` cover the task branch.
+
+**Settings** (`keeper.agent_writes`, see `config/lorebase.example.yaml`): `enabled`,
+`principal_types` (the principals that count as agents, default service principals),
+`auto_propose`, `auto_merge`, `allowed_roles_for_auto_merge` (default none),
+`max_open_branches_per_principal`, `branch_prefix`, `delete_branch_on_merge`, and the text
+limits `max_task_length`, `title_template`, `summary_parameter_values`, `summary_value_chars`
+and `max_summary_operations`. A Domain overrides any of them with its own `agent_writes`
+setting, for example `{"agent_writes": {"allowed_roles_for_auto_merge": ["editor"],
+"auto_merge": true}}` when it is created.
+
+**Cleanup.** When the Proposal of a task branch is merged or closed (by anyone), Keeper deletes
+the branch (`delete_branch_on_merge`, default on) unless another open Proposal still has it as
+its source. The Revisions stay in the history.
+
+**Audit.** Each request writes `operation.propose`; the steps write `branch.create`,
+`proposal.create` or `proposal.update`, `proposal.merge` (automatic merges) and
+`operation.invoke`. Rate limiting counts the request once, in the `writes` class.
+
 ## 5. Follow changes
 
 ### Event stream
@@ -358,6 +467,7 @@ needs attention: 6 kinds, 184 records, 289 links
 
 All limits are configuration (`config/lorebase.example.yaml`): `agents.context` (budgets,
 estimator, caps, trim order), `agents.explain` (listed Links and Proposals), `agents.feed`
-(poll interval, heartbeat, connection time, page sizes, scan depth), `read.health` (records
+(poll interval, heartbeat, connection time, page sizes, scan depth), `keeper.agent_writes`
+(task branches and automatic Proposals, section 4), `read.health` (records
 validated, examples, duplicate and orphan caps, statement timeout) and `webhooks` (targets,
 headers, timeouts, retries, retention).
