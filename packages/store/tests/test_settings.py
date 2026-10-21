@@ -91,6 +91,25 @@ def test_invalid_values_fail_at_startup(
 
 
 @pytest.mark.parametrize(
+    ("key", "value", "name"),
+    [
+        ("LOREBASE__STORE__READS__MAX_PAGE_ROWS", "10001", "reads.max_page_rows"),
+        ("LOREBASE__STORE__READS__SEARCH_CANDIDATES", "100001", "reads.search_candidates"),
+        ("LOREBASE__STORE__TRAVERSE__MAX_LINKS", "999951", "traverse.max_links"),
+        ("LOREBASE__STORE__READS__DEFINER_CEILINGS__MAX_NODES", "199", "traverse.max_nodes"),
+    ],
+)
+def test_read_caps_may_not_exceed_the_definer_ceilings(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str, name: str
+) -> None:
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ConfigError, match=rf"{name}.*exceeds its ceiling"):
+        load_settings()
+    monkeypatch.setenv("LOREBASE__STORE__READS__USE_DEFINER_FUNCTIONS", "false")
+    load_settings()
+
+
+@pytest.mark.parametrize(
     "url",
     ["postgres://u@h/db", "postgresql://u@h/db", "postgresql+asyncpg://u@h/db"],
 )
