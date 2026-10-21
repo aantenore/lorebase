@@ -13,6 +13,9 @@ Changes merged on `main` after the 0.1.0 notes below were written; there is no t
 - A metrics catalogue ([docs/metrics.md](docs/metrics.md)) with the Prometheus series, labels and source of every metric. A test fails when a dashboard or alert rule names a series that is not emitted, or when an instrument is missing from the catalogue. Latency histograms declare explicit bucket boundaries from 5 ms to 10 s, so p50 and p95 panels read real quantiles.
 - New metrics for the response cache, authentication failures, commit duration, merge attempts, security definer read calls, jobs claimed and queue depth, webhook deliveries, garbage collection runs and bytes freed, and extraction items.
 - `lorebase branch create --mode copy|overlay` chooses how a branch stores its rows; without it `store.materialize.branch_mode` applies.
+- JSON, JSON Lines, Parquet and HTTP JSON Sources in Scribe ([scribe](docs/scribe.md#sources)). Sources gain the `json` and `jsonl` types and the `records_path`, `flatten_separator` and `http` options (headers as secret references, cursor, page, offset or Link header pagination, a watermark parameter and a page cap). Files are opened under the allowed roots without following links, URLs are checked against private addresses, JSON Lines and Parquet are streamed, and an HTTP JSON run that passes `max_pages` fails instead of committing part of a snapshot. Parquet needs the `lorebase-scribe[parquet]` extra.
+- A record profiler (`lorebase_store.profiling.profile_records`, `RecordProfiler`) and `profile_source` in Scribe, so any Source can be profiled for schema inference through its connector; limits are in `store.profiling.records`.
+- `POST /domains/{d}/schema:infer` reads JSON, JSON Lines (`.jsonl`, `.ndjson`) and Parquet uploads besides CSV and TSV, chosen by suffix (`keeper.schema_inference.file_formats`), with the same file count and size limits ([inference](docs/inference.md)). Parquet uploads need the `lorebase-keeper[parquet]` extra; without it they are refused with a 422 naming it. The "Start from data" wizard of the web app accepts these files.
 - `keeper.limits.rate.auth_failures.per_key_prefix_enabled` (default `true`). Set it to `false` to count failed authentications per client address only, so that someone who knows a key prefix cannot keep that key throttled.
 
 ### Changed
@@ -25,6 +28,7 @@ Changes merged on `main` after the 0.1.0 notes below were written; there is no t
 
 ### Fixed
 
+- The web Modeler and the Sources editor no longer drop Source options they do not show when they save a schema: `table`, `query`, `records_path`, `flatten_separator`, `http` and any other key of a Source are kept unchanged.
 - CI: the Helm job validates the chart with kubeconform v0.8.0, and the web, Helm and observability jobs run the checks added with the changes above.
 
 ### Upgrade notes
@@ -97,7 +101,7 @@ Deployment ([deployment](docs/deployment.md), [kubernetes](docs/kubernetes.md))
 - Parquet and HTTP JSON Sources; embedding-based entity resolution, schema suggestions and OCR for documents; embedding jobs and hybrid search; `path` Derivations.
 - Groups, sensitivity masking, the Operation outbox and the PII vault.
 - Web app: OIDC login.
-- A documentation site, LinkML import and export, and the stability promise for `/api/v1` that comes with 1.0.
+- LinkML import and export, and the stability promise for `/api/v1` that comes with 1.0.
 
 ### Upgrade notes
 
