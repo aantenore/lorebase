@@ -14,6 +14,7 @@ import { Route as DomainRouteImport } from './routes/$domain'
 import { Route as DomainCanvasRouteImport } from './routes/$domain.canvas'
 import { Route as DomainModelerRouteImport } from './routes/$domain.modeler'
 import { Route as DomainSettingsRouteImport } from './routes/$domain.settings'
+import { Route as DomainSourcesRouteImport } from './routes/$domain.sources'
 import { Route as DomainExplorerIndexRouteImport } from './routes/$domain.explorer.index'
 import { Route as DomainReviewIndexRouteImport } from './routes/$domain.review.index'
 import { Route as DomainReviewProposalRouteImport } from './routes/$domain.review.$proposal'
@@ -43,6 +44,11 @@ const DomainModelerRoute = DomainModelerRouteImport.update({
 const DomainSettingsRoute = DomainSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => DomainRoute,
+} as any)
+const DomainSourcesRoute = DomainSourcesRouteImport.update({
+  id: '/sources',
+  path: '/sources',
   getParentRoute: () => DomainRoute,
 } as any)
 const DomainExplorerIndexRoute = DomainExplorerIndexRouteImport.update({
@@ -77,6 +83,7 @@ export interface FileRoutesByFullPath {
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
+  '/$domain/sources': typeof DomainSourcesRoute
   '/$domain/review/$proposal': typeof DomainReviewProposalRoute
   '/$domain/explorer/': typeof DomainExplorerIndexRoute
   '/$domain/review/': typeof DomainReviewIndexRoute
@@ -89,6 +96,7 @@ export interface FileRoutesByTo {
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
+  '/$domain/sources': typeof DomainSourcesRoute
   '/$domain/review/$proposal': typeof DomainReviewProposalRoute
   '/$domain/explorer': typeof DomainExplorerIndexRoute
   '/$domain/review': typeof DomainReviewIndexRoute
@@ -102,6 +110,7 @@ export interface FileRoutesById {
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
+  '/$domain/sources': typeof DomainSourcesRoute
   '/$domain/review/$proposal': typeof DomainReviewProposalRoute
   '/$domain/explorer/': typeof DomainExplorerIndexRoute
   '/$domain/review/': typeof DomainReviewIndexRoute
@@ -116,6 +125,7 @@ export interface FileRouteTypes {
     | '/$domain/canvas'
     | '/$domain/modeler'
     | '/$domain/settings'
+    | '/$domain/sources'
     | '/$domain/review/$proposal'
     | '/$domain/explorer/'
     | '/$domain/review/'
@@ -128,6 +138,7 @@ export interface FileRouteTypes {
     | '/$domain/canvas'
     | '/$domain/modeler'
     | '/$domain/settings'
+    | '/$domain/sources'
     | '/$domain/review/$proposal'
     | '/$domain/explorer'
     | '/$domain/review'
@@ -140,6 +151,7 @@ export interface FileRouteTypes {
     | '/$domain/canvas'
     | '/$domain/modeler'
     | '/$domain/settings'
+    | '/$domain/sources'
     | '/$domain/review/$proposal'
     | '/$domain/explorer/'
     | '/$domain/review/'
@@ -189,6 +201,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DomainSettingsRouteImport
       parentRoute: typeof DomainRoute
     }
+    '/$domain/sources': {
+      id: '/$domain/sources'
+      path: '/sources'
+      fullPath: '/$domain/sources'
+      preLoaderRoute: typeof DomainSourcesRouteImport
+      parentRoute: typeof DomainRoute
+    }
     '/$domain/explorer/': {
       id: '/$domain/explorer/'
       path: '/explorer'
@@ -231,6 +250,7 @@ interface DomainRouteChildren {
   DomainCanvasRoute: typeof DomainCanvasRoute
   DomainModelerRoute: typeof DomainModelerRoute
   DomainSettingsRoute: typeof DomainSettingsRoute
+  DomainSourcesRoute: typeof DomainSourcesRoute
   DomainReviewProposalRoute: typeof DomainReviewProposalRoute
   DomainExplorerIndexRoute: typeof DomainExplorerIndexRoute
   DomainReviewIndexRoute: typeof DomainReviewIndexRoute
@@ -242,6 +262,7 @@ const DomainRouteChildren: DomainRouteChildren = {
   DomainCanvasRoute: DomainCanvasRoute,
   DomainModelerRoute: DomainModelerRoute,
   DomainSettingsRoute: DomainSettingsRoute,
+  DomainSourcesRoute: DomainSourcesRoute,
   DomainReviewProposalRoute: DomainReviewProposalRoute,
   DomainExplorerIndexRoute: DomainExplorerIndexRoute,
   DomainReviewIndexRoute: DomainReviewIndexRoute,
