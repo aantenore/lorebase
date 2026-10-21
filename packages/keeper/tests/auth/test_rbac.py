@@ -74,6 +74,28 @@ async def test_deny_by_default(store: Any) -> None:
     assert not await authorizer(store).allows(user(), P.DATA_READ, "acme")
 
 
+async def test_roles_of_lists_the_roles_whose_grants_cover_the_context(store: Any) -> None:
+    store.add_grant("acme", "usr_u", "viewer")
+    store.add_grant("acme", "grp_review", "reviewer")
+    store.add_grant("acme", "usr_u", "editor", GrantScope.BRANCH, "agent/*")
+    store.add_grant("acme", "usr_u", "operator", GrantScope.OPERATION, "flag_supplier_risk")
+    store.add_grant("globex", "usr_u", "admin")
+    subject = authorizer(store)
+    caller = user("usr_u", "grp_review")
+    assert await subject.roles_of(caller, "acme") == {"viewer", "reviewer"}
+    task_branch = AccessContext(branch="agent/usr_u/audit")
+    assert await subject.roles_of(caller, "acme", task_branch) == {"viewer", "reviewer", "editor"}
+    assert await subject.roles_of(caller, "none-such") == frozenset()
+
+
+async def test_roles_of_respects_key_scopes_and_authentication_off(store: Any) -> None:
+    store.add_grant("acme", "usr_u", "editor")
+    subject = authorizer(store)
+    assert await subject.roles_of(user(key_scopes=("domain:other",)), "acme") == frozenset()
+    assert await subject.roles_of(user(key_scopes=("domain:acme",)), "acme") == {"editor"}
+    assert await subject.roles_of(anonymous_principal(), "acme") == subject.role_names
+
+
 async def test_grants_are_per_domain(store: Any) -> None:
     store.add_grant("acme", "usr_u", "admin")
     subject = authorizer(store)

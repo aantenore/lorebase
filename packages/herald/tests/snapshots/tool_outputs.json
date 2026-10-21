@@ -121,7 +121,7 @@
   },
   "protected-branch": {
     "error": true,
-    "text": "Error executing tool lorebase_execute: [protected-branch] Branch 'main' is protected.\nnext: this change needs review: run it on a work branch, then open a Proposal for that branch; do not retry here"
+    "text": "Error executing tool lorebase_execute: [protected-branch] Branch 'main' is protected.\nnext: this change needs review: call again with task and intent so that Keeper runs it on a task branch and opens the Proposal, or run it on a work branch yourself and open a Proposal for that branch; do not retry here as it is"
   },
   "query-json": {
     "error": false,
@@ -149,7 +149,7 @@
   },
   "review-required": {
     "error": true,
-    "text": "Error executing tool lorebase_execute: [review-required] Edits need review.\nnext: this change needs review: run it on a work branch, then open a Proposal for that branch (/proposals); do not retry here"
+    "text": "Error executing tool lorebase_execute: [review-required] Edits need review.\nnext: this change needs review: call again with task and intent so that Keeper runs it on a task branch and opens the Proposal, or run it on a work branch yourself and open a Proposal for that branch (/proposals); do not retry here as it is"
   },
   "schema-full-text": {
     "error": false,

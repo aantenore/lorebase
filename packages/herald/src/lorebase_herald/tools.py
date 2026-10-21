@@ -401,22 +401,43 @@ class LorebaseTools:
         expected_head: str | None,
         idempotency_key: str | None,
         message: str | None,
+        task: str | None,
+        intent: str | None,
+        auto_propose: bool | None,
+        auto_merge: bool | None,
         domain: str | None,
         branch: str | None,
         fmt: str | None,
     ) -> str:
         name = self.domain(domain)
         async with self.session(credential) as client:
-            found = await client.operations.execute(
-                name,
-                operation,
-                parameters,
-                branch=self.branch(branch),
-                dry_run=dry_run,
-                expected_head=expected_head or None,
-                message=message or None,
-                idempotency_key=idempotency_key or None,
-            )
+            found: m.Execution | m.AgentWrite
+            if task:
+                found = await client.operations.execute_as_agent(
+                    name,
+                    operation,
+                    parameters,
+                    task=task,
+                    intent=intent or None,
+                    auto_propose=auto_propose,
+                    auto_merge=auto_merge,
+                    branch=self.branch(branch),
+                    dry_run=dry_run,
+                    expected_head=expected_head or None,
+                    message=message or None,
+                    idempotency_key=idempotency_key or None,
+                )
+            else:
+                found = await client.operations.execute(
+                    name,
+                    operation,
+                    parameters,
+                    branch=self.branch(branch),
+                    dry_run=dry_run,
+                    expected_head=expected_head or None,
+                    message=message or None,
+                    idempotency_key=idempotency_key or None,
+                )
         view = views.execution_view(found, self.output)
         return render(view, views.execution_text(view, self.output), self.fmt(fmt), self.output)
 

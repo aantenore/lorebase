@@ -159,7 +159,7 @@ example `Supplier/S-1001`.
 | `lorebase_explain` | `ref`, `attributes?` | how the Record was created; per attribute: value, origin type, actor, time and Revision of its last change; without `attributes`, its Links and the Proposals that changed it | `GET .../records/{key}/explain` |
 | `lorebase_changes` | `since?`, `limit?`, `author?`, `origin_type?`, `cursor?` | Revisions newest first back to `since` (id or 8+ char prefix) | `GET .../branches/{b}/log` |
 | `lorebase_diff` | `from_revision`, `to_revision`, `kinds?`, `relations?`, `limit?`, `cursor?` | counts per Kind and Relation, then `+`/`~`/`-` elements with old -> new values | `GET .../diff` |
-| `lorebase_execute` | `operation`, `parameters`, `dry_run` (default true), `expected_head?`, `idempotency_key?`, `message?` | status, edits, violations, warnings, new Revision, and the next step | `POST .../operations/{op}/execute` |
+| `lorebase_execute` | `operation`, `parameters`, `dry_run` (default true), `expected_head?`, `idempotency_key?`, `message?`, `task?`, `intent?`, `auto_propose?`, `auto_merge?` | status, edits, violations, warnings, new Revision, and the next step; with a `task` on a write that needs review: the Proposal (id, status `proposed`, `merged` or `conflicts`) and `next` steps | `POST .../operations/{op}/execute` |
 | `lorebase_branches` | `limit?`, `cursor?` | branches with head, default and protected flags | `GET .../branches` |
 
 Read tools are annotated read-only; `lorebase_execute` is the only tool that can write.
@@ -185,7 +185,8 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
 | Code | Meaning | Next step given |
 |------|---------|-----------------|
 | `stale-head` | the branch moved since `expected_head` | the current head; re-read, then retry with it |
-| `review-required`, `protected-branch` | the change needs a Proposal | run it on a work branch and open a Proposal |
+| `review-required`, `protected-branch` | the change needs a Proposal | repeat with `task` and `intent`, or run it on a work branch and open a Proposal |
+| `agent-branch-limit`, `already-exists` | too many task branches, or the branch is someone else's | merge or close a Proposal, or use another `task` |
 | `validation-failed` | parameters or data rules failed | the issues, one per line with their path |
 | `not-found` | no such Domain, branch, Kind or Record | check refs with `lorebase_search` or `lorebase_schema` |
 | `forbidden`, `unauthorized` | the agent's key lacks the grant, or is invalid | do not retry |
@@ -202,9 +203,14 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
    up with what changed since a Revision seen earlier.
 3. **Writes through Operations.** Call `lorebase_execute` with `dry_run` (the default), check
    edits and violations, then commit with `dry_run: false` and `expected_head` set to the head
-   the dry run reported. Operations with a review policy, and protected branches, answer
-   `review-required` or `protected-branch`: run the Operation on a work branch and open a
-   Proposal for review. Keep an `idempotency_key` per intended change so retries commit once.
+   the dry run reported. Operations with a review policy, and protected branches, need a
+   Proposal: add `task` (a short slug) and `intent`. Keeper then runs the Operation on the
+   branch `agent/{agent}/{task}`, opens or updates the Proposal and answers (HTTP 202) with its
+   id and status (`proposed`, `merged` or `conflicts`) and the `next` steps. `auto_merge: true`
+   asks for an immediate merge; it only happens when the Domain allows it for the agent's role
+   and no approval or Conflict is pending, otherwise the Proposal waits for a reviewer. Without
+   a `task` the answer stays `review-required`. Keep an `idempotency_key` per intended change
+   so retries commit once (and find the same Proposal). Details in [agents](agents.md).
 
 ## Implementation notes
 
