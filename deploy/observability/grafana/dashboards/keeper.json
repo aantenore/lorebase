@@ -1,52 +1,833 @@
 {
   "uid": "lorebase-keeper",
   "title": "Lorebase Keeper",
+  "tags": [
+    "lorebase",
+    "keeper"
+  ],
   "schemaVersion": 39,
   "version": 1,
+  "editable": true,
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
   "panels": [
     {
       "id": 1,
-      "type": "timeseries",
-      "title": "Requests per second by route",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "type": "stat",
+      "title": "Requests per second",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count[5m]))",
-          "legendFormat": "{{http_route}}"
+          "expr": "sum(rate(http_server_request_duration_seconds_count[$__rate_interval]))"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "p95 latency by route (s)",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "type": "stat",
+      "title": "5xx ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "{{http_route}}"
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count[$__rate_interval]))"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
       "id": 3,
-      "type": "timeseries",
-      "title": "Server errors per second (5xx)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "type": "stat",
+      "title": "Rate limited per second",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[5m]))",
+          "expr": "sum(rate(lorebase_http_rate_limited_total[$__rate_interval]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Auth failures per second (401, 403)",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"401|403\"}[$__rate_interval]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Latency by route class",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Requests per second by route class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "description": "Classes follow the rate limit classes of Keeper (docs/metrics.md, Route classes).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_request_method=~\"GET|HEAD|OPTIONS\",http_route!~\".*/(healthz|readyz)\"}[$__rate_interval]))",
+          "legendFormat": "reads"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/(query|traverse|neighborhood)\"}[$__rate_interval]))",
+          "legendFormat": "queries"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/search\"}[$__rate_interval]))",
+          "legendFormat": "searches"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/context\"}[$__rate_interval]))",
+          "legendFormat": "context"
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval]))",
+          "legendFormat": "writes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Mean latency by route class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "description": "Exact: the sum of durations over the count of requests.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_request_duration_seconds_sum{http_request_method=~\"GET|HEAD|OPTIONS\",http_route!~\".*/(healthz|readyz)\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{http_request_method=~\"GET|HEAD|OPTIONS\",http_route!~\".*/(healthz|readyz)\"}[$__rate_interval]))",
+          "legendFormat": "reads"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(http_server_request_duration_seconds_sum{http_request_method=\"POST\",http_route=~\".*/(query|traverse|neighborhood)\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/(query|traverse|neighborhood)\"}[$__rate_interval]))",
+          "legendFormat": "queries"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(http_server_request_duration_seconds_sum{http_request_method=\"POST\",http_route=~\".*/search\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/search\"}[$__rate_interval]))",
+          "legendFormat": "searches"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(http_server_request_duration_seconds_sum{http_request_method=\"POST\",http_route=~\".*/context\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/context\"}[$__rate_interval]))",
+          "legendFormat": "context"
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(http_server_request_duration_seconds_sum{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval]))",
+          "legendFormat": "writes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "p50 latency by route class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "description": "Median. Quantiles read from the default histogram buckets are not meaningful below 5 s: see Histogram buckets in docs/metrics.md.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"GET|HEAD|OPTIONS\",http_route!~\".*/(healthz|readyz)\"}[$__rate_interval])))",
+          "legendFormat": "reads"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=\"POST\",http_route=~\".*/(query|traverse|neighborhood)\"}[$__rate_interval])))",
+          "legendFormat": "queries"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=\"POST\",http_route=~\".*/search\"}[$__rate_interval])))",
+          "legendFormat": "searches"
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=\"POST\",http_route=~\".*/context\"}[$__rate_interval])))",
+          "legendFormat": "context"
+        },
+        {
+          "refId": "E",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])))",
+          "legendFormat": "writes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "p95 latency by route class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "description": "Budgets: reads 100 ms, queries and searches 250 ms, context 1 s, writes 2.5 s. Quantiles read from the default histogram buckets are not meaningful below 5 s: see Histogram buckets in docs/metrics.md.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"GET|HEAD|OPTIONS\",http_route!~\".*/(healthz|readyz)\"}[$__rate_interval])))",
+          "legendFormat": "reads"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=\"POST\",http_route=~\".*/(query|traverse|neighborhood)\"}[$__rate_interval])))",
+          "legendFormat": "queries"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=\"POST\",http_route=~\".*/search\"}[$__rate_interval])))",
+          "legendFormat": "searches"
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=\"POST\",http_route=~\".*/context\"}[$__rate_interval])))",
+          "legendFormat": "context"
+        },
+        {
+          "refId": "E",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])))",
+          "legendFormat": "writes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Errors, refusals and authentication",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Responses per second by status class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"2..\"}[$__rate_interval]))",
+          "legendFormat": "2xx"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"3..\"}[$__rate_interval]))",
+          "legendFormat": "3xx"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"4..\"}[$__rate_interval]))",
+          "legendFormat": "4xx"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[$__rate_interval]))",
+          "legendFormat": "5xx"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "4xx per second by route",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"4..\"}[$__rate_interval]))",
           "legendFormat": "{{http_route}}"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "5xx per second by route",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[$__rate_interval]))",
+          "legendFormat": "{{http_route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Auth failures per second (401, 403)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "description": "401 and 403 answers, and the 429 answers of clients that used up the failed authentication bucket.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"401|403\"}[$__rate_interval]))",
+          "legendFormat": "{{http_response_status_code}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(lorebase_http_rate_limited_total{class=\"auth_failures\"}[$__rate_interval]))",
+          "legendFormat": "throttled (429, auth_failures)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Rate limited per second by class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (class) (rate(lorebase_http_rate_limited_total[$__rate_interval]))",
+          "legendFormat": "{{class}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Quota exceeded and audit write failures per second",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (quota) (rate(lorebase_http_quota_exceeded_total[$__rate_interval]))",
+          "legendFormat": "quota {{quota}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(lorebase_audit_write_failures_total[$__rate_interval]))",
+          "legendFormat": "audit write failures"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ]
 }

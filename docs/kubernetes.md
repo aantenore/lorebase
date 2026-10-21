@@ -280,6 +280,9 @@ end to end against a cluster. Everything else works without the web app.
 `telemetry.otlpEndpoint` sets the OTLP/gRPC collector; sampling is `telemetry.sampleRatio`. Keeper, Scribe and Herald
 export OTLP and do not serve `/metrics`, so `serviceMonitor` scrapes the Prometheus exporter of your collector
 (`deploy/observability/otel-collector.yaml`, port 8889), selected by `serviceMonitor.selector`. Logs are JSON on stdout.
+`observability.enabled=true` also renders ConfigMaps with the Grafana dashboards (labelled for the Grafana sidecar), the
+Prometheus alert rules and the collector configuration, for you to mount; see
+[operations](operations.md#dashboards-and-alerts) and the [metrics catalogue](metrics.md).
 
 ## Backup and restore
 
