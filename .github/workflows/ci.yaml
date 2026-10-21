@@ -165,7 +165,7 @@ jobs:
     env:
       CHART: deploy/helm/lorebase
       # kubeconform image and the Kubernetes version the manifests are validated against.
-      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.7.0
+      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.8.0
       KUBERNETES_VERSION: "1.30.0"
       # Schemas of the custom resources the chart can render (ServiceMonitor, CloudNativePG Cluster).
       CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json

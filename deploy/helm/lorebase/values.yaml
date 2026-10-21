@@ -176,6 +176,11 @@ postgresql:
       # Run as superuser in the new database, once.
       postInitApplicationSQL:
         - CREATE EXTENSION IF NOT EXISTS vector
+    postgresql:
+      # postgresql.conf parameters (string values). Size max_connections above
+      # Keepers x (pool_size + max_overflow), plus Scribe, migrations and admin.
+      parameters:
+        max_connections: "100"
 
 # -- Migrations ---------------------------------------------------------------------------------
 
