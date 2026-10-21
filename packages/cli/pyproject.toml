@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Lorebase CLI"
 requires-python = ">=3.12"
 dependencies = [
-  "lorebase-client",
+  "lorebase-client>=0.1,<0.2",
   # Command line framework with shell completion.
   "typer>=0.27",
 ]

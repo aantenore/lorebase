@@ -7,6 +7,8 @@
 
 The versions that must agree are the root and package `pyproject.toml` files, the
 `__version__` of each Python package, `apps/web/package.json` and `appVersion` of the Helm chart.
+The dependencies of one workspace package on another must admit the version and stop before the
+next minor (`lorebase-core>=0.1,<0.2`; for a pre-release the lower bound may be the pre-release).
 A pre-release tag such as `v0.2.0-rc.1` is the npm and Helm version `0.2.0-rc.1` and the Python
 version `0.2.0rc1`.
 """
@@ -28,6 +30,7 @@ SEMVER = re.compile(r"^\d+\.\d+\.\d+(-(?:alpha|beta|rc)\.\d+)?$")
 PREVIEW_SUFFIX = re.compile(r"-(alpha|beta|rc)\.(\d+)$")
 PYTHON_SUFFIX = {"alpha": "a", "beta": "b", "rc": "rc"}
 VERSION_ASSIGNMENT = re.compile(r'^__version__\s*=\s*"([^"]+)"', re.MULTILINE)
+INTERNAL_REQUIREMENT = re.compile(r"^(lorebase-[a-z0-9-]+)(?:\[[^\]]*\])?\s*(.*)$")
 
 
 def python_version(version: str) -> str:
@@ -55,8 +58,35 @@ def versions(root: Path = ROOT) -> dict[str, str]:
     return found
 
 
+def internal_ranges(root: Path = ROOT) -> dict[str, str]:
+    """The version range of every dependency of a package on another workspace package."""
+    found: dict[str, str] = {}
+    for path in sorted((root / "packages").glob("*/pyproject.toml")):
+        project = tomllib.loads(path.read_text("utf-8"))["project"]
+        for requirement in project.get("dependencies", []):
+            match = INTERNAL_REQUIREMENT.match(requirement.strip())
+            if match:
+                spec = match.group(2).replace(" ", "")
+                found[f"{path.relative_to(root)} {match.group(1)}"] = spec
+    return found
+
+
+def range_problems(expected: str, root: Path = ROOT) -> list[str]:
+    """Internal ranges other than `>=X.Y,<X.Y+1` (or `>=<pre-release>,<X.Y+1`)."""
+    major, minor = (int(part) for part in expected.split(".")[:2])
+    lower = {f"{major}.{minor}", python_version(expected)}
+    upper = f"{major}.{minor + 1}"
+    wanted = f">={major}.{minor},<{upper}"
+    return [
+        f"{name}: {spec or '(no range)'}, expected {wanted}"
+        for name, spec in internal_ranges(root).items()
+        if not any(spec == f">={bound},<{upper}" for bound in lower)
+    ]
+
+
 def check(tag: str | None, root: Path = ROOT) -> list[str]:
-    """Problems found: files whose version differs from the expected one."""
+    """Problems found: files whose version differs from the expected one, and internal ranges
+    that do not admit it."""
     found = versions(root)
     if tag is None:
         expected = found["pyproject.toml"]
@@ -69,7 +99,7 @@ def check(tag: str | None, root: Path = ROOT) -> list[str]:
         wanted = python_version(expected) if name.endswith((".toml", "__init__.py")) else expected
         if version != wanted:
             problems.append(f"{name}: {version}, expected {wanted}")
-    return problems
+    return problems + range_problems(expected, root)
 
 
 def notes(version: str, text: str | None = None) -> str:
@@ -102,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     for problem in problems:
         print(problem, file=sys.stderr)
     if not problems:
-        print(f"all {len(versions())} versions agree")
+        print(f"all {len(versions())} versions and {len(internal_ranges())} internal ranges agree")
     return 1 if problems else 0
 
 
