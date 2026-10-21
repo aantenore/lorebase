@@ -1,0 +1,195 @@
+# Prometheus alert rules of Lorebase. Every metric used here is listed in docs/metrics.md;
+# every alert has a runbook entry in docs/operations.md ("Dashboards and alerts").
+#
+# Thresholds are starting points. Change the numbers in the expressions to fit your traffic.
+# Route classes mirror the rate limit classes of Keeper (reads, queries, searches, context,
+# writes); the class `admin` is chosen by OpenAPI tag, which the metric does not carry.
+
+groups:
+  - name: lorebase-keeper
+    rules:
+      # p95 budgets per route class, over 10 minutes. The latency histogram must have a bucket
+      # at the budget (the `le` guard): with the default OpenTelemetry boundaries, which start
+      # at 5 (seconds), a p95 below 5 s cannot be read from it and these alerts stay silent.
+      # See "Histogram buckets" in docs/metrics.md.
+      - alert: LorebaseKeeperLatencyOverBudget
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~"GET|HEAD|OPTIONS",http_route!~".*/(healthz|readyz)"}[10m]))) > 0.1
+          and on() count(http_server_request_duration_seconds_bucket{le="0.1"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: keeper
+          route_class: reads
+        annotations:
+          summary: "Keeper read p95 above 100 ms"
+          description: "p95 of GET requests has been {{ $value | humanizeDuration }} for 10 minutes (budget 100 ms)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeeperlatencyoverbudget"
+      - alert: LorebaseKeeperLatencyOverBudget
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route=~".*/(query|traverse|neighborhood)"}[10m]))) > 0.25
+          and on() count(http_server_request_duration_seconds_bucket{le="0.25"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: keeper
+          route_class: queries
+        annotations:
+          summary: "Keeper query, traverse and neighborhood p95 above 250 ms"
+          description: "p95 of read POSTs has been {{ $value | humanizeDuration }} for 10 minutes (budget 250 ms)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeeperlatencyoverbudget"
+      - alert: LorebaseKeeperLatencyOverBudget
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route=~".*/search"}[10m]))) > 0.25
+          and on() count(http_server_request_duration_seconds_bucket{le="0.25"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: keeper
+          route_class: searches
+        annotations:
+          summary: "Keeper search p95 above 250 ms"
+          description: "p95 of search requests has been {{ $value | humanizeDuration }} for 10 minutes (budget 250 ms)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeeperlatencyoverbudget"
+      - alert: LorebaseKeeperLatencyOverBudget
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route=~".*/context"}[10m]))) > 1
+          and on() count(http_server_request_duration_seconds_bucket{le="1"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: keeper
+          route_class: context
+        annotations:
+          summary: "Keeper context pack p95 above 1 s"
+          description: "p95 of context pack requests has been {{ $value | humanizeDuration }} for 10 minutes (budget 1 s)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeeperlatencyoverbudget"
+      - alert: LorebaseKeeperLatencyOverBudget
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~"POST|PUT|PATCH|DELETE",http_route!~".*/(query|traverse|neighborhood|search|context)"}[10m]))) > 2.5
+          and on() count(http_server_request_duration_seconds_bucket{le="2.5"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: keeper
+          route_class: writes
+        annotations:
+          summary: "Keeper write p95 above 2.5 s"
+          description: "p95 of write requests has been {{ $value | humanizeDuration }} for 10 minutes (budget 2.5 s)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeeperlatencyoverbudget"
+
+      - alert: LorebaseKeeperHighErrorRatio
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+            / sum(rate(http_server_request_duration_seconds_count[5m])) > 0.05
+          and sum(rate(http_server_request_duration_seconds_count[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+          component: keeper
+        annotations:
+          summary: "More than 5% of Keeper responses are 5xx"
+          description: "{{ $value | humanizePercentage }} of responses were 5xx over the last 5 minutes."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeeperhigherrorratio"
+
+      - alert: LorebaseKeeperMetricsMissing
+        expr: absent(http_server_request_duration_seconds_count)
+        for: 15m
+        labels:
+          severity: warning
+          component: keeper
+        annotations:
+          summary: "No Keeper request metrics for 15 minutes"
+          description: "Prometheus has no http.server.request.duration series: Keeper is down, has no traffic, or does not export (telemetry.otlp_endpoint)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasekeepermetricsmissing"
+
+      - alert: LorebaseAuthFailuresThrottled
+        expr: sum(rate(lorebase_http_rate_limited_total{class="auth_failures"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: keeper
+        annotations:
+          summary: "Keeper is refusing clients that keep failing to authenticate"
+          description: "{{ $value | humanize }} requests per second are answered 429 because their address or API key prefix used up the failed authentication bucket."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebaseauthfailuresthrottled"
+
+  - name: lorebase-store
+    rules:
+      - alert: LorebaseReplicaLagHigh
+        expr: max by (replica) (lorebase_db_replica_lag_milliseconds) > 5000
+        for: 10m
+        labels:
+          severity: warning
+          component: store
+        annotations:
+          summary: "Replica {{ $labels.replica }} lags by more than 5 s"
+          description: "Replay lag of {{ $labels.replica }} is {{ $value | humanize }} ms. Keeper sends reads to the primary above database.read_max_lag_ms (default 5000)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasereplicalaghigh"
+      - alert: LorebaseReplicaDown
+        expr: min by (replica) (lorebase_db_replica_up) == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: store
+        annotations:
+          summary: "Replica {{ $labels.replica }} does not answer its probe"
+          description: "Keeper cannot reach {{ $labels.replica }}; its reads go to the primary (or fail, when database.read_fallback_to_primary is false)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasereplicadown"
+
+  - name: lorebase-scribe
+    rules:
+      - alert: LorebaseJobFailureRatio
+        expr: |
+          sum by (type) (increase(lorebase_scribe_jobs_total{status="failed"}[30m]))
+            / sum by (type) (increase(lorebase_scribe_jobs_total[30m])) > 0.2
+          and sum by (type) (increase(lorebase_scribe_jobs_total[30m])) >= 5
+        for: 15m
+        labels:
+          severity: warning
+          component: scribe
+        annotations:
+          summary: "More than 20% of {{ $labels.type }} jobs fail"
+          description: "{{ $value | humanizePercentage }} of the {{ $labels.type }} jobs finished in the last 30 minutes ended failed (all attempts used)."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobfailureratio"
+
+      # There is no queue depth series. The scheduler counts what it queues and the worker what
+      # it finishes: jobs queued with nothing finishing means the queue only grows.
+      - alert: LorebaseJobQueueStalled
+        expr: |
+          sum(increase(lorebase_scribe_scheduled_total[15m])) > 0
+          and (sum(increase(lorebase_scribe_jobs_total[15m])) or vector(0)) == 0
+        for: 15m
+        labels:
+          severity: critical
+          component: scribe
+        annotations:
+          summary: "Scribe queues jobs but no worker finishes any"
+          description: "The scheduler queued jobs in the last 15 minutes and no job run was recorded: workers are down, stuck or cannot reach the database."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobqueuestalled"
+
+      # Dead letters are rows of webhook_deliveries (status 'dead'); the metric the worker
+      # emits is per job, so this fires when the delivery job itself fails.
+      - alert: LorebaseWebhookDeliveryFailing
+        expr: sum(increase(lorebase_scribe_jobs_total{type="webhook_delivery",status="failed"}[1h])) > 0
+        labels:
+          severity: warning
+          component: scribe
+        annotations:
+          summary: "The webhook delivery job failed"
+          description: "{{ $value | humanize }} webhook_delivery jobs ended failed in the last hour. Check the dead deliveries in the database."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasewebhookdeliveryfailing"
+
+      # N is 3 days: the default schedule collects every day at 03:00 UTC (scribe.scheduler.gc_schedule).
+      - alert: LorebaseGcNotRun
+        expr: |
+          (sum(increase(lorebase_scribe_jobs_total{type="gc",status="succeeded"}[3d])) or vector(0)) == 0
+          and sum(increase(lorebase_scribe_scheduled_total[3d])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          component: scribe
+        annotations:
+          summary: "No garbage collection has succeeded in 3 days"
+          description: "Scribe is scheduling work but no gc job succeeded in the last 3 days. Unreferenced objects, tree nodes and Revisions pile up."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasegcnotrun"

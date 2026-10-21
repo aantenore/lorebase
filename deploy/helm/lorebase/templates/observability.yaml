@@ -1,0 +1,60 @@
+{{- /*
+Dashboards, alert rules and the collector configuration of deploy/observability, as ConfigMaps.
+The chart folder links to that directory (observability -> ../../observability), so the files
+have one source. Nothing here runs: your Grafana sidecar, Prometheus and collector mount them.
+*/}}
+{{- if .Values.observability.enabled }}
+{{- $o := .Values.observability }}
+{{- if $o.dashboards.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-dashboards" (include "lorebase.fullname" .) }}
+  namespace: {{ default .Release.Namespace $o.dashboards.namespace }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "dashboards") | nindent 4 }}
+    {{- with $o.dashboards.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+data:
+  {{- range $path, $_ := .Files.Glob "observability/grafana/dashboards/*.json" }}
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if $o.alertRules.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-alert-rules" (include "lorebase.fullname" .) }}
+  namespace: {{ default .Release.Namespace $o.alertRules.namespace }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "alert-rules") | nindent 4 }}
+    {{- with $o.alertRules.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+data:
+  {{- range $path, $_ := .Files.Glob "observability/alerts/*.yml" }}
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if $o.collector.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-otel-collector" (include "lorebase.fullname" .) }}
+  namespace: {{ default .Release.Namespace $o.collector.namespace }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "otel-collector") | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+data:
+  config.yaml: |-
+    {{- .Files.Get "observability/otel-collector.yaml" | nindent 4 }}
+{{- end }}
+{{- end }}

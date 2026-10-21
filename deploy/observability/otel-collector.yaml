@@ -1,6 +1,23 @@
-# Minimal OpenTelemetry Collector pipeline for the `observability` compose profile.
-# Lorebase services export OTLP/gRPC here; traces go to Jaeger, metrics are exposed for
-# Prometheus to scrape. Replace the exporters to send telemetry anywhere else.
+# OpenTelemetry Collector pipeline of the `observability` compose profile and of the Helm chart
+# (`observability.enabled`).
+#
+# Keeper and Scribe export OTLP/gRPC here (`telemetry.otlp_endpoint`). Traces go to an OTLP
+# trace backend (Jaeger by default, Grafana Tempo by changing one variable); metrics are exposed
+# on :8889 for Prometheus to scrape. Nothing in the services is specific to either backend.
+#
+# Variables (all optional):
+#   LOREBASE_TRACES_OTLP_ENDPOINT   OTLP/gRPC address of the trace backend. Default jaeger:4317.
+#                                   Tempo: tempo:4317.
+#   LOREBASE_TRACES_OTLP_INSECURE   "true" (default) for plain gRPC, "false" for TLS.
+#
+# Metric names: the Prometheus exporter turns `lorebase.scribe.jobs` into
+# `lorebase_scribe_jobs_total`, dots in attribute names into underscores, and resource
+# attributes into labels (`service_name`, `service_namespace`). docs/metrics.md lists every
+# series.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
 
 receivers:
   otlp:
@@ -11,23 +28,30 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
   batch: {}
 
 exporters:
-  otlp/jaeger:
-    endpoint: jaeger:4317
+  otlp/traces:
+    endpoint: ${env:LOREBASE_TRACES_OTLP_ENDPOINT:-jaeger:4317}
     tls:
-      insecure: true
+      insecure: ${env:LOREBASE_TRACES_OTLP_INSECURE:-true}
   prometheus:
     endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
 
 service:
+  extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
-      exporters: [otlp/jaeger]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/traces]
     metrics:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter, batch]
       exporters: [prometheus]

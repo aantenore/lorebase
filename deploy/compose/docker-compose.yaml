@@ -322,6 +322,7 @@ services:
       - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
     volumes:
       - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     ports:
       - "${PROMETHEUS_BIND:-127.0.0.1}:${PROMETHEUS_HOST_PORT:-9090}:9090"
