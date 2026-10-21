@@ -1406,6 +1406,7 @@ One Lorebase installation serves one organization. Domains are the isolation bou
 | Tampering with history | Content addressing, immutable Revisions, hash-chained audit log |
 | Supply chain | Pinned dependencies with lockfiles, dependency review in CI, SBOM per image, signed images, minimal base images, non-root containers |
 | Credential leakage | Hashed API keys, secret references, log redaction filters |
+| Credential guessing, load through bad credentials | 256-bit key secrets; failed authentications limited per client address and per key prefix, refused before any lookup |
 
 ---
 

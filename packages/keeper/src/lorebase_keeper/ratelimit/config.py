@@ -69,6 +69,26 @@ class RouteClassing(SectionModel):
     )
 
 
+class AuthFailureSettings(BucketSettings):
+    """Buckets of failed authentications: one per client address and one per API key prefix.
+
+    Only requests answered 401 after presenting a credential take a token. While either bucket
+    of a request is empty it is answered 429 before its credential is checked.
+    """
+
+    requests_per_minute: float = Field(
+        default=30, gt=0, description="Failed attempts regained per minute."
+    )
+    burst: int = Field(default=30, ge=1, description="Failed attempts allowed back to back.")
+    ipv6_prefix_length: int = Field(
+        default=64,
+        ge=1,
+        le=128,
+        description="IPv6 clients share the bucket of their network of this length, since one "
+        "client usually holds a whole /64.",
+    )
+
+
 class ThrottleAuditSettings(SectionModel):
     """Audit entry for a principal that keeps being throttled."""
 
@@ -104,6 +124,10 @@ class RateLimitSettings(SectionModel):
     searches: BucketSettings = Field(default_factory=lambda: _bucket(300, 60))
     context: BucketSettings = Field(default_factory=lambda: _bucket(120, 30))
     admin: BucketSettings = Field(default_factory=lambda: _bucket(120, 30))
+    auth_failures: AuthFailureSettings = Field(
+        default_factory=AuthFailureSettings,
+        description="Failed authentications per client address and per API key prefix.",
+    )
     domains: dict[str, ClassOverrides] = Field(
         default_factory=dict,
         description="Per-Domain overrides by Domain id; requests in these Domains use their own "

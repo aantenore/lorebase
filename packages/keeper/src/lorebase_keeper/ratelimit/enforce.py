@@ -1,11 +1,13 @@
 """Enforcement of rate limits and quotas on requests.
 
 `enforce_limits` is an application-wide dependency: for every route that is not exempt it
-authenticates the caller, takes a token from the caller's bucket for the request's class and,
-for API keys, counts the request against the daily quota. Refusals are 429 problem details with
-`Retry-After`. `RateLimitHeadersMiddleware` adds the `RateLimit-*` headers of the bucket to
-every response of a limited route, errors included. Context-pack tokens are counted by the
-route that builds the pack (`check_context_quota`, `charge_context_tokens`).
+authenticates the caller (refusing clients whose failed authentications used up their
+`auth_failures` buckets before their credential is checked), takes a token from the caller's
+bucket for the request's class and, for API keys, counts the request against the daily quota.
+Refusals are 429 problem details with `Retry-After`. `RateLimitHeadersMiddleware` adds the
+`RateLimit-*` headers of the bucket to every response of a limited route, errors included.
+Context-pack tokens are counted by the route that builds the pack (`check_context_quota`,
+`charge_context_tokens`).
 """
 
 from __future__ import annotations
@@ -24,10 +26,11 @@ from lorebase_keeper.auth.audit import suppress
 from lorebase_keeper.auth.deps import current_principal, get_auth
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.runtime import AuthRuntime
-from lorebase_keeper.errors import RATE_LIMITED, ProblemError, ProblemType
+from lorebase_keeper.client_address import client_address
+from lorebase_keeper.errors import RATE_LIMITED, UNAUTHORIZED, ProblemError, ProblemType
 from lorebase_keeper.ratelimit.bucket import Decision, InMemoryRateStore
 from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings, RouteClass
-from lorebase_keeper.ratelimit.limiter import RateLimiter, ThrottleWatch
+from lorebase_keeper.ratelimit.limiter import AUTH_FAILURES, RateLimiter, ThrottleWatch
 from lorebase_keeper.ratelimit.quotas import QuotaKind, QuotaSnapshot, QuotaTracker
 from lorebase_store.auth import NewAuditEntry
 
@@ -113,7 +116,7 @@ async def enforce_limits(request: Request) -> None:
     path = str(getattr(route, "path", request.url.path))
     if runtime.exempt(path):
         return
-    principal = await current_principal(request, get_auth(request))
+    principal = await _authenticate(request, runtime)
     if runtime.limiter is not None:
         route_class = runtime.limiter.classify(
             request.method, path, getattr(route, "tags", None) or ()
@@ -148,6 +151,38 @@ async def enforce_limits(request: Request) -> None:
                 reason=f"quota:{refused}",
                 problem=quota_problem(refused, snapshot, runtime.auth),
             )
+
+
+async def _authenticate(request: Request, runtime: LimitRuntime) -> Principal:
+    """Authenticate the request, unless its client address or API key prefix has used up its
+    failed attempts: then 429, before any lookup or signature check. A 401 takes one failed
+    attempt from both buckets; success takes nothing."""
+    auth = get_auth(request)
+    limiter = runtime.limiter
+    if limiter is None or not auth.authenticator.presents_credentials(request.headers):
+        return await current_principal(request, auth)
+    address = client_address(request)
+    prefix = auth.authenticator.key_prefix(request.headers)
+    keys = limiter.failure_keys(address, prefix)
+    refused = await limiter.failures_exhausted(keys)
+    if refused is not None:
+        suppress(request)
+        logger.debug(
+            "authentication throttled",
+            extra={"client_address": str(address) if address else None, "key_prefix": prefix},
+        )
+        raise ProblemError(
+            RATE_LIMITED,
+            f"Too many failed authentication attempts. Retry in {refused.retry_after_s} s.",
+            extensions={"class": AUTH_FAILURES, "retry_after_s": refused.retry_after_s},
+            headers={RETRY_HEADER: str(refused.retry_after_s)},
+        )
+    try:
+        return await current_principal(request, auth)
+    except ProblemError as exc:
+        if exc.problem is UNAUTHORIZED:
+            await limiter.record_failure(keys)
+        raise
 
 
 def quota_problem(kind: QuotaKind, snapshot: QuotaSnapshot, auth: AuthRuntime) -> ProblemError:
