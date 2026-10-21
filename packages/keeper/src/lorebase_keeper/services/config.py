@@ -182,3 +182,49 @@ class SchemaInferenceSettings(SectionModel):
         default_factory=InferenceOptions,
         description="Thresholds and naming rules; a request may override some of them.",
     )
+
+
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+class DocumentSettings(SectionModel):
+    """Document intake for extraction (design 9.2 step 1): uploads and allowlisted URLs.
+
+    The upload route accepts bodies up to `max_bytes` plus `multipart_overhead_bytes`,
+    whatever `keeper.limits.max_request_body_bytes` says.
+    """
+
+    max_bytes: int = Field(
+        default=20 * 1024 * 1024, ge=1, description="Largest document, in bytes (413 above)."
+    )
+    multipart_overhead_bytes: int = Field(
+        default=64 * 1024, ge=0, description="Room for multipart framing and form fields."
+    )
+    media_types: dict[str, str] = Field(
+        default_factory=lambda: {
+            ".md": "text/markdown",
+            ".markdown": "text/markdown",
+            ".txt": "text/plain",
+            ".pdf": "application/pdf",
+            ".docx": DOCX_MEDIA_TYPE,
+        },
+        min_length=1,
+        description="Accepted file name suffixes and the media type each one is stored as.",
+    )
+    url_hosts: tuple[str, ...] = Field(
+        default=(),
+        description="Host names documents may be fetched from (exact match); empty disables "
+        "URL intake. Keeper fetches them itself, without following redirects.",
+    )
+    url_schemes: tuple[str, ...] = Field(
+        default=("https",), min_length=1, description="URL schemes allowed for URL intake."
+    )
+    url_timeout_s: float = Field(default=30.0, gt=0, description="Time budget of one fetch.")
+    extract_on_upload: bool = Field(
+        default=True,
+        description="Queue an extraction job for every uploaded document unless the request "
+        "says otherwise.",
+    )
+    jobs_listed: int = Field(
+        default=20, ge=1, description="Extraction jobs listed with a document, newest first."
+    )

@@ -43,6 +43,7 @@ PAYLOAD_TOO_LARGE = ProblemType("payload-too-large", 413, "Request body too larg
 VALIDATION_FAILED = ProblemType("validation-failed", 422, "Request validation failed")
 RATE_LIMITED = ProblemType("rate-limited", 429, "Too many requests")
 INTERNAL_ERROR = ProblemType("internal-error", 500, "Internal server error")
+BAD_GATEWAY = ProblemType("bad-gateway", 502, "Bad gateway")
 UNAVAILABLE = ProblemType("unavailable", 503, "Service unavailable")
 
 _BY_STATUS = {
@@ -58,6 +59,7 @@ _BY_STATUS = {
         VALIDATION_FAILED,
         RATE_LIMITED,
         INTERNAL_ERROR,
+        BAD_GATEWAY,
         UNAVAILABLE,
     )
 }
