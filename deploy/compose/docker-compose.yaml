@@ -147,6 +147,8 @@ services:
       LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
       LOREBASE__SCRIBE__WORKER__CONCURRENCY: ${SCRIBE_CONCURRENCY:-2}
       LOREBASE__SCRIBE__SOURCES__CSV__ALLOWED_ROOTS: '["/data/sources"]'
+      # The only references a Source `connection` may name (scribe.sources.allowed_connections).
+      LOREBASE__SCRIBE__SOURCES__ALLOWED_CONNECTIONS: '["secret://env/SUPPLY_APPROVED_SUPPLIERS_CSV", "secret://env/ERP_DSN"]'
       # Secret values behind the `connection` references of the example Sources.
       SUPPLY_APPROVED_SUPPLIERS_CSV: ${SUPPLY_APPROVED_SUPPLIERS_CSV:-/data/sources/supply/supplier.csv}
       ERP_DSN: ${ERP_DSN:-}

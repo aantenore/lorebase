@@ -64,6 +64,19 @@ class Connector(Protocol):
 ConnectorFactory = Callable[[Source, SourceSettings], Connector]
 
 
+def check_connection(source: Source, settings: SourceSettings) -> None:
+    """Refuse a Source whose connection is not an allowed secret reference.
+
+    Sources come from the schema, written by API callers; resolving any reference they name
+    would let them read whatever the host can reach with it (the Lorebase database DSN
+    included). Messages here and below name the reference at most, never its value.
+    """
+    if source.connection not in settings.allowed_connections:
+        raise SourceDefinitionError(
+            f"connection {source.connection!r} is not in scribe.sources.allowed_connections"
+        )
+
+
 def _location(source: Source) -> str:
     try:
         return resolve_secret(source.connection)
@@ -99,14 +112,16 @@ class CsvConnector:
         if parts.scheme in ("http", "https"):
             return Path(parts.path).name or parts.netloc, await self._download(location)
         if parts.scheme not in ("", "file"):
-            raise SourceDefinitionError(f"unsupported CSV location scheme {parts.scheme!r}")
+            raise SourceDefinitionError("connection: unsupported CSV location scheme")
         return self._read_file(Path(parts.path if parts.scheme == "file" else location))
 
     def _read_file(self, path: Path) -> tuple[str, bytes]:
         resolved = path.resolve()
         roots = [Path(root).resolve() for root in self.settings.allowed_roots]
         if not any(resolved.is_relative_to(root) for root in roots):
-            raise SourceDefinitionError(f"{path} is outside scribe.sources.csv.allowed_roots")
+            raise SourceDefinitionError(
+                "connection: the path is outside scribe.sources.csv.allowed_roots"
+            )
         try:
             size = resolved.stat().st_size
             if size > self.settings.max_bytes:
@@ -121,11 +136,11 @@ class CsvConnector:
         parts = urlsplit(url)
         if parts.scheme not in self.settings.allowed_schemes:
             raise SourceDefinitionError(
-                f"URL scheme {parts.scheme!r} is not in scribe.sources.csv.allowed_schemes"
+                "connection: the URL scheme is not in scribe.sources.csv.allowed_schemes"
             )
         if (parts.hostname or "") not in self.settings.allowed_hosts:
             raise SourceDefinitionError(
-                f"host {parts.hostname!r} is not in scribe.sources.csv.allowed_hosts"
+                "connection: the URL host is not in scribe.sources.csv.allowed_hosts"
             )
         chunks: list[bytes] = []
         size = 0
@@ -268,7 +283,10 @@ class PostgresConnector:
 
 
 def default_connector(source: Source, settings: SourceSettings) -> Connector:
-    """The connector of a Source type; Parquet and HTTP JSON are not supported yet."""
+    """The connector of a Source type; Parquet and HTTP JSON are not supported yet.
+
+    The connection must be one of `settings.allowed_connections`."""
+    check_connection(source, settings)
     if source.type is SourceType.CSV:
         return CsvConnector(source, settings.csv)
     if source.type in (SourceType.POSTGRES_TABLE, SourceType.POSTGRES_QUERY):
