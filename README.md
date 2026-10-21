@@ -86,7 +86,8 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
 | Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
 | Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver, Sources, Admin basics | Done on the mock API; live adapter not yet verified | M2, M3 |
-| Scale | Overlay branches, PII vault, Helm chart, 10M-Record performance | Planned | M5 |
+| Operations | Helm chart: Keeper, migration hook, optional Scribe, Herald, web app, Ollama, Ingress, HPA, read replica DSNs ([docs/kubernetes.md](docs/kubernetes.md)) | Done, checked by lint, template and kubeconform; not yet run on a live cluster | M5, landed early |
+| Scale | Overlay branches, PII vault, 10M-Record performance | Planned | M5 |
 
 The milestone breakdown with checkboxes is in the [roadmap](docs/roadmap.md).
 
@@ -131,7 +132,7 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postg
 curl http://localhost:8080/readyz
 ```
 
-The [quickstart](docs/quickstart.md) continues from there: create the `supply` Domain, apply its schema, import the sample data through the REST API and run the web app in mock mode. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
+The [quickstart](docs/quickstart.md) continues from there: create the `supply` Domain, apply its schema, import the sample data through the REST API and run the web app in mock mode. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md), and the Kubernetes install in [docs/kubernetes.md](docs/kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
 
 ## Architecture
 
@@ -220,6 +221,7 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Visual tour](docs/tour.md): every screen of the web app
 - [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, security, roadmap
 - [Deployment and scale-out](docs/deployment.md): topology, read replicas, sizing
+- [Kubernetes](docs/kubernetes.md): the Helm chart, profiles, upgrades and migrations
 - [Operations](docs/operations.md): garbage collection, backup and restore of a Domain
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
 - [Scribe](docs/scribe.md): the worker: job types, scheduler, Source definitions, sync policies and operations

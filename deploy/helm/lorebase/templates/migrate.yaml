@@ -1,0 +1,157 @@
+{{- if .Values.migrate.enabled }}
+{{- include "lorebase.validate" . }}
+{{- $m := .Values.migrate }}
+{{- $scope := dict "ctx" . "component" "migrate" }}
+{{- $events := include "lorebase.hookEvents" . }}
+{{- $name := printf "%s-migrate" (include "lorebase.fullname" .) }}
+{{- /* The hook Job runs before the regular resources exist on a first install, so it brings its own
+       ConfigMap (the settings the migration reads) and, for a chart-managed DSN, its own Secret. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  lorebase.yaml: |
+    {{- include "lorebase.migrateConfig" . | nindent 4 }}
+{{- if and (not .Values.secrets.existingSecret) (not .Values.postgresql.enabled) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  {{ required "secrets.keys.dbDsn must not be empty" .Values.secrets.keys.dbDsn }}: {{ required "secrets.values.dbDsn is required" (get .Values.secrets.values "dbDsn") | quote }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: {{ $m.hookWeight | quote }}
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $m.backoffLimit }}
+  activeDeadlineSeconds: {{ $m.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "lorebase.labels" $scope | nindent 8 }}
+      {{- with $m.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.serviceAccountName }}
+      serviceAccountName: {{ . }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if $m.waitForDatabase.enabled }}
+      initContainers:
+        - name: wait-for-database
+          image: {{ include "lorebase.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os, socket, sys, time
+              from urllib.parse import urlsplit
+              target = urlsplit(os.environ["LOREBASE_DB_DSN"])
+              host, port = target.hostname, target.port or 5432
+              deadline = time.monotonic() + float(os.environ["WAIT_TIMEOUT_S"])
+              while True:
+                  try:
+                      socket.create_connection((host, port), timeout=3).close()
+                      break
+                  except OSError as error:
+                      if time.monotonic() > deadline:
+                          sys.exit("database %s:%s unreachable: %s" % (host, port, error))
+                      time.sleep(float(os.environ["WAIT_INTERVAL_S"]))
+          env:
+            - name: LOREBASE_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  {{- include "lorebase.dsnRef" (dict "ctx" . "hook" true) | nindent 18 }}
+            - name: WAIT_TIMEOUT_S
+              value: {{ $m.waitForDatabase.timeoutSeconds | quote }}
+            - name: WAIT_INTERVAL_S
+              value: {{ $m.waitForDatabase.intervalSeconds | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "lorebase.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: {{ $m.workingDir }}
+          command:
+            {{- toYaml $m.command | nindent 12 }}
+          env:
+            - name: LOREBASE_CONFIG
+              value: /etc/lorebase/lorebase.yaml
+            - name: LOREBASE__LOGGING__LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- include "lorebase.dbEnv" (dict "ctx" . "hook" true) | nindent 12 }}
+            {{- with $m.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- with $m.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: config
+              mountPath: /etc/lorebase
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ $name }}-config
+      {{- with $m.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

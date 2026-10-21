@@ -1,0 +1,71 @@
+# Production profile: secrets come from a Secret you manage, pinned image, Ingress with TLS,
+# network policy, Herald and the web app, telemetry to a collector.
+image:
+  tag: "0.1.0"
+secrets:
+  existingSecret: lorebase-secrets
+  keys:
+    dbDsn: db-dsn
+    dbReadDsn: ""
+    apiKeyPepper: api-key-pepper
+    llmApiKey: ""
+logLevel: INFO
+telemetry:
+  otlpEndpoint: http://otel-collector.observability.svc:4317
+  sampleRatio: 0.05
+config:
+  logging:
+    format: json
+  keeper:
+    auth:
+      mode: api_key+oidc
+      oidc:
+        issuer: https://login.example.com/realms/lorebase
+        audience: [lorebase]
+keeper:
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+herald:
+  enabled: true
+web:
+  enabled: true
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+    cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: lorebase.example.com
+      paths:
+        - {path: /api, pathType: Prefix, component: keeper}
+        - {path: /mcp, pathType: Prefix, component: herald}
+        - {path: /, pathType: Prefix, component: web}
+  tls:
+    - secretName: lorebase-tls
+      hosts: [lorebase.example.com]
+networkPolicy:
+  enabled: true
+  egress:
+    enabled: true
+    rules:
+      - to: [{ipBlock: {cidr: 10.0.0.0/16}}]
+        ports: [{protocol: TCP, port: 5432}]
+      - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]
+        ports: [{protocol: TCP, port: 4317}]
+      - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
+        ports: [{protocol: TCP, port: 443}]
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+  namespaceSelector:
+    matchNames: [observability]

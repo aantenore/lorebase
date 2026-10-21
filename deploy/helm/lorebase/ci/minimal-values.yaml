@@ -1,0 +1,11 @@
+# Minimal profile: one Keeper, an external Postgres, API keys. For a trial on a small cluster.
+# The secret values below are placeholders that make the chart render; replace them with
+# --set-file or an existing Secret (docs/kubernetes.md).
+keeper:
+  replicaCount: 1
+  pdb:
+    enabled: false
+secrets:
+  values:
+    dbDsn: postgresql+asyncpg://lorebase:change-me@postgres.example.internal:5432/lorebase
+    apiKeyPepper: change-me-change-me-change-me-change-me

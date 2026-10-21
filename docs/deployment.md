@@ -119,6 +119,13 @@ real replica, 40 commits each followed by a read-your-writes read always saw the
 WAL replay paused on the replica for 10 of them, 9 of those reads fell back to the primary
 (`primary/stale`) and every other read was served by the replica.
 
+## Kubernetes
+
+The Helm chart in `deploy/helm/lorebase` runs this topology on a cluster: stateless Keeper
+Deployment with HPA and PDB, Scribe workers, read replica DSNs, the migration as a hook Job and an
+Ingress in front. Install steps and the minimal, production and scale-out profiles are in
+[kubernetes.md](kubernetes.md).
+
 ## Sizing hints
 
 Starting points to measure against, not benchmarks.

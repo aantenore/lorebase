@@ -1,0 +1,32 @@
+{{- if .Values.scribe.enabled }}
+{{- include "lorebase.validate" . -}}
+{{- $scope := dict "ctx" . "component" "scribe" -}}
+{{- $env := printf "%s\n%s" (include "lorebase.appEnv" $scope) (include "lorebase.scribeEnv" .) -}}
+{{- $checksums := dict "checksum/config" (include "lorebase.appConfig" . | sha256sum) -}}
+{{- if include "lorebase.managedSecret" . }}
+{{- $_ := set $checksums "checksum/secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) }}
+{{- end }}
+{{ include "lorebase.deployment" (dict
+  "ctx" .
+  "component" "scribe"
+  "cfg" .Values.scribe
+  "image" (include "lorebase.backendImage" .)
+  "pullPolicy" .Values.image.pullPolicy
+  "command" .Values.scribe.command
+  "port" 0
+  "env" $env
+  "volumes" (include "lorebase.configVolume" .)
+  "mounts" (include "lorebase.configMount" .)
+  "podSecurity" .Values.podSecurityContext
+  "checksums" $checksums
+  "preStop" 0
+) }}
+{{- if .Values.scribe.autoscaling.enabled }}
+---
+{{ include "lorebase.hpa" (dict "ctx" . "component" "scribe" "cfg" .Values.scribe) }}
+{{- end }}
+{{- if .Values.scribe.pdb.enabled }}
+---
+{{ include "lorebase.pdb" (dict "ctx" . "component" "scribe" "cfg" .Values.scribe) }}
+{{- end }}
+{{- end }}
