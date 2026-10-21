@@ -303,6 +303,8 @@ keeper:
                                        # empty: nobody. Required approvals are never skipped
     max_open_branches_per_principal: 10   # task branches one principal may hold at a time
     branch_prefix: agent         # first part of task branch names
+    branch_mode: overlay         # task branches: overlay (only the rows the task changes, reads
+                                 # the target as of the fork) or copy (full rows)
     delete_branch_on_merge: true # delete the task branch when its Proposal merged or closed
                                  # (not while another open Proposal uses it)
     max_task_length: 60          # longest task slug (after normalization)

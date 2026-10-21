@@ -290,8 +290,9 @@ What Keeper does, in order, and what it refuses before any of it is created:
    `expected_head` is `409 stale-head`; edits that would be rejected are `422` with their
    issues, exactly as for a direct write: a dry run happens first and creates nothing.
 2. The task branch `agent/{principal}/{task}` (`keeper.agent_writes.branch_prefix`; the
-   principal id in lower case) is created from the target head, or reused when it exists and
-   this principal created it (another creator: `409 already-exists`). A principal holds at most
+   principal id in lower case) is created from the target head as an overlay branch (it
+   stores only the rows the task changes; `branch_mode: copy` for full rows), or reused when
+   it exists and this principal created it (another creator: `409 already-exists`). A principal holds at most
    `max_open_branches_per_principal` task branches (`409 agent-branch-limit`, listing them);
    reusing one of them as the `task` is always possible.
 3. The Operation runs on the task branch, with your `idempotency_key`, `message` and the usual
@@ -327,9 +328,9 @@ Operation's own `permissions`) and `data.read` on the target branch, and `branch
 **Settings** (`keeper.agent_writes`, see `config/lorebase.example.yaml`): `enabled`,
 `principal_types` (the principals that count as agents, default service principals),
 `auto_propose`, `auto_merge`, `allowed_roles_for_auto_merge` (default none),
-`max_open_branches_per_principal`, `branch_prefix`, `delete_branch_on_merge`, and the text
-limits `max_task_length`, `title_template`, `summary_parameter_values`, `summary_value_chars`
-and `max_summary_operations`. A Domain overrides any of them with its own `agent_writes`
+`max_open_branches_per_principal`, `branch_prefix`, `branch_mode`, `delete_branch_on_merge`,
+and the text limits `max_task_length`, `title_template`, `summary_parameter_values`,
+`summary_value_chars` and `max_summary_operations`. A Domain overrides any of them with its own `agent_writes`
 setting, for example `{"agent_writes": {"allowed_roles_for_auto_merge": ["editor"],
 "auto_merge": true}}` when it is created.
 
