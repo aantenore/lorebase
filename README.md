@@ -83,6 +83,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Agent access | MCP server (Herald) on stdio and Streamable HTTP ([docs/mcp.md](docs/mcp.md)) | Done | M3, landed early |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
 | Ingestion | CSV, Parquet and Postgres Sources with snapshot and incremental syncs | Planned | M2 |
+| Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
 | Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
 | Web app | Explorer, Canvas, Modeler, Review with Conflict resolver | Done on the mock API; live adapter not yet verified | M2, M3 |
 | Scale | Overlay branches, PII vault, Helm chart, 10M-Record performance | Planned | M5 |
@@ -218,6 +219,7 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Deployment and scale-out](docs/deployment.md): topology, read replicas, sizing
 - [Operations](docs/operations.md): garbage collection, backup and restore of a Domain
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
+- [Inference providers](docs/inference-providers.md): run models free and locally, switch to a paid provider by configuration, LiteLLM routing, limits
 - [Performance](docs/performance.md): read latency baseline and how to reproduce it
 - [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
 - [MCP server](docs/mcp.md): Herald, its tools and its configuration for MCP hosts

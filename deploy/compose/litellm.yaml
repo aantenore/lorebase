@@ -7,7 +7,8 @@
 #
 # The upstream provider and its key come from the environment file, so switching provider is a
 # configuration change: LITELLM_UPSTREAM_MODEL uses LiteLLM's "<provider>/<model>" notation.
-# Add more entries to route several aliases (for example one per extraction task).
+# Add more entries to route several aliases (for example one per extraction task), or use
+# litellm.two-providers.yaml (LITELLM_CONFIG_FILE) for a primary with a fallback provider.
 
 model_list:
   - model_name: default

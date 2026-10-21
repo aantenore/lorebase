@@ -13,6 +13,9 @@ ARG PYTHON_TAG=3.12-slim
 FROM python:${PYTHON_TAG} AS build
 
 ARG UV_VERSION=0.11.21
+# Extra arguments for `uv sync`, for example to bake the local models into the image:
+#   --build-arg UV_SYNC_ARGS="--all-packages --extra fastembed --extra local-extractors"
+ARG UV_SYNC_ARGS=""
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -27,7 +30,7 @@ COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable ${UV_SYNC_ARGS}
 
 # ---- runtime: interpreter, virtual environment and migration scripts only ----
 FROM python:${PYTHON_TAG} AS runtime

@@ -237,10 +237,18 @@ inference:
     base_url: http://localhost:11434/v1   # local Ollama; in docker compose: http://ollama:11434/v1
     model: qwen2.5:7b-instruct   # any model name the endpoint serves
     api_key: null                # hosted endpoints: secret://env/LLM_API_KEY
-    structured_output: json_schema        # json_schema | json_mode
+    structured_output: json_schema        # json_schema | json_mode. json_schema sends the schema
+                                 # as response_format and steps down (json_mode, then prompt
+                                 # only) when the server rejects it; answers are always validated
+    repair_attempts: 1           # repair calls after an invalid answer (0-3)
     temperature: 0
+    max_tokens: null             # completion cap; null leaves it to the server
     max_concurrency: 2
     timeout_s: 120
+    retry:                       # 429, 5xx and connection errors; Retry-After is honored
+      max_retries: 3
+      backoff_base_s: 0.5        # wait before retry n: min(backoff_max_s, base * 2**n), jittered
+      backoff_max_s: 30
     price_per_million_tokens: {input: 0, output: 0}   # zero for local models
     tasks: {}                    # per-task overrides, see the commented example below
 
@@ -267,13 +275,27 @@ inference:
     provider: fastembed          # fastembed | openai_compatible | fake
     model: BAAI/bge-small-en-v1.5
     dims: 384                    # must match the model; the vector index uses it
-    base_url: null               # required for openai_compatible (Ollama or hosted)
+    batch_size: 32               # texts per model call or request
+    cache_dir: null              # fastembed: where model files are stored (library default)
+    threads: null                # fastembed: CPU threads (library default)
+    base_url: null               # required for openai_compatible, e.g. http://localhost:11434/v1
     api_key: null
+    timeout_s: 60                # openai_compatible request timeout
+    retry: {max_retries: 3, backoff_base_s: 0.5, backoff_max_s: 30}
+    # Ollama embeddings instead of fastembed:
+    #   provider: openai_compatible
+    #   base_url: http://localhost:11434/v1
+    #   model: nomic-embed-text
+    #   dims: 768
 
-  local_extractors:              # tier 1; check each checkpoint's weight license
+  local_extractors:              # tier 1, in-process on CPU; optional extra [local-extractors]
     provider: gliner             # gliner | fake
-    gliner: {enabled: true, model: urchade/gliner_multi-v2.1, threshold: 0.5}
-    glirel: {enabled: true, model: jackboyla/glirel-large-v0, threshold: 0.5}
+    relation_provider: glirel    # glirel | cooccurrence | fake (fake when provider is fake)
+    # Check the license of each checkpoint's weights before enabling it: the libraries are
+    # Apache-2.0, the weights are separate artifacts with their own terms.
+    gliner: {enabled: true, model: urchade/gliner_multi-v2.1, threshold: 0.5, cache_dir: null, window_chars: 1500}
+    glirel: {enabled: true, model: jackboyla/glirel-large-v0, threshold: 0.5, cache_dir: null, window_chars: 1500}
+    cooccurrence: {max_pairs_per_sentence: 200}   # relation_provider: cooccurrence (no model)
     spacy: {enabled: false, pipeline: en_core_web_sm}
 
   # Deterministic provider for tests and offline runs: set `provider: fake` in llm,
