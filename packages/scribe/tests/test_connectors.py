@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
+import shutil
+import stat
+from collections.abc import AsyncIterator
+from pathlib import Path, PurePath
 from typing import Any
 
 import httpx
@@ -11,6 +15,7 @@ import pytest
 from lorebase_core.model import Schema, Source
 from lorebase_core.model.source import SourceType, SyncMode
 from lorebase_scribe.settings import CsvSourceSettings, PostgresSourceSettings
+from lorebase_scribe.sources import connectors
 from lorebase_scribe.sources.connectors import (
     CsvConnector,
     PostgresConnector,
@@ -83,14 +88,26 @@ async def test_files_outside_the_allowed_roots_are_refused(
         await collect(CsvConnector(source, small))
 
 
-def transport(status: int = 200, body: bytes = CSV, seen: list[str] | None = None) -> Any:
+def transport(status: int = 200, body: bytes = CSV, seen: list[httpx.Request] | None = None) -> Any:
     def handle(request: httpx.Request) -> httpx.Response:
         if seen is not None:
-            seen.append(str(request.url))
+            seen.append(request)
         headers = {"location": "https://elsewhere.test/x.csv"} if status == 302 else {}
         return httpx.Response(status, content=body, headers=headers)
 
     return httpx.MockTransport(handle)
+
+
+PUBLIC = "93.184.215.14"
+
+
+def resolver(*addresses: str) -> Any:
+    """A host lookup answering `addresses` for every host name."""
+
+    async def resolve(host: str) -> list[str]:
+        return list(addresses)
+
+    return resolve
 
 
 async def test_download_from_an_allowed_host(
@@ -98,26 +115,186 @@ async def test_download_from_an_allowed_host(
 ) -> None:
     source = csv_source(supply_schema, monkeypatch, "https://files.example.test/suppliers.csv")
     settings = CsvSourceSettings(allowed_hosts=("files.example.test",))
-    seen: list[str] = []
-    rows = await collect(CsvConnector(source, settings, transport(seen=seen)))
+    seen: list[httpx.Request] = []
+    connector = CsvConnector(source, settings, transport(seen=seen), resolver(PUBLIC))
+    rows = await collect(connector)
     assert [locator for locator, _ in rows] == ["suppliers.csv:2", "suppliers.csv:4"]
-    assert seen == ["https://files.example.test/suppliers.csv"]
+    # The connection goes to the checked address; the host name stays for HTTP and TLS.
+    assert [str(request.url) for request in seen] == [f"https://{PUBLIC}/suppliers.csv"]
+    assert seen[0].headers["Host"] == "files.example.test"
+    assert seen[0].extensions["sni_hostname"] == "files.example.test"
 
 
 async def test_download_refusals(supply_schema: Schema, monkeypatch: pytest.MonkeyPatch) -> None:
     allowed = CsvSourceSettings(allowed_hosts=("files.example.test",))
+    public = resolver(PUBLIC)
     other = csv_source(supply_schema, monkeypatch, "https://other.test/suppliers.csv")
     with pytest.raises(SourceDefinitionError, match="allowed_hosts"):
-        await collect(CsvConnector(other, allowed, transport()))
+        await collect(CsvConnector(other, allowed, transport(), public))
     plain = csv_source(supply_schema, monkeypatch, "http://files.example.test/suppliers.csv")
     with pytest.raises(SourceDefinitionError, match="allowed_schemes"):
-        await collect(CsvConnector(plain, allowed, transport()))
+        await collect(CsvConnector(plain, allowed, transport(), public))
     good = csv_source(supply_schema, monkeypatch, "https://files.example.test/suppliers.csv")
     with pytest.raises(SourceReadError, match="302"):
-        await collect(CsvConnector(good, allowed, transport(status=302)))
+        await collect(CsvConnector(good, allowed, transport(status=302), public))
     tiny = CsvSourceSettings(allowed_hosts=("files.example.test",), max_bytes=10)
     with pytest.raises(SourceDefinitionError, match="larger"):
-        await collect(CsvConnector(good, tiny, transport()))
+        await collect(CsvConnector(good, tiny, transport(), public))
+
+
+@pytest.mark.parametrize(
+    "addresses", [("10.0.0.5",), (PUBLIC, "169.254.169.254"), ("100.64.0.1",), ("::1",)]
+)
+async def test_url_hosts_resolving_to_private_addresses_are_refused(
+    supply_schema: Schema, monkeypatch: pytest.MonkeyPatch, addresses: tuple[str, ...]
+) -> None:
+    source = csv_source(supply_schema, monkeypatch, "https://files.example.test/suppliers.csv")
+    settings = CsvSourceSettings(allowed_hosts=("files.example.test",))
+    seen: list[httpx.Request] = []
+    connector = CsvConnector(source, settings, transport(seen=seen), resolver(*addresses))
+    with pytest.raises(SourceDefinitionError, match="allow_private_targets") as caught:
+        await collect(connector)
+    assert seen == []
+    assert "files.example.test" not in str(caught.value)
+    assert not any(address in str(caught.value) for address in addresses)
+
+
+async def test_private_url_hosts_can_be_allowed(
+    supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = csv_source(supply_schema, monkeypatch, "https://files.internal.test/suppliers.csv")
+    settings = CsvSourceSettings(allowed_hosts=("files.internal.test",), allow_private_targets=True)
+    seen: list[httpx.Request] = []
+    connector = CsvConnector(source, settings, transport(seen=seen), resolver("10.0.0.5"))
+    assert len(await collect(connector)) == 2
+    assert [str(request.url) for request in seen] == ["https://files.internal.test/suppliers.csv"]
+
+
+async def test_url_hosts_that_cannot_be_resolved_fail_the_read(
+    supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unknown(host: str) -> list[str]:
+        raise OSError(f"no such host {host}")
+
+    source = csv_source(supply_schema, monkeypatch, "https://files.example.test/suppliers.csv")
+    settings = CsvSourceSettings(allowed_hosts=("files.example.test",))
+    with pytest.raises(SourceReadError, match="cannot be resolved") as caught:
+        await collect(CsvConnector(source, settings, transport(), unknown))
+    assert "files.example.test" not in str(caught.value)
+
+
+class EndlessBody(httpx.AsyncByteStream):
+    """A response body without a length that never ends."""
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        while True:
+            yield b"x" * 4096
+
+
+async def test_an_endless_download_stops_at_max_bytes(
+    supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = csv_source(supply_schema, monkeypatch, "https://files.example.test/suppliers.csv")
+    settings = CsvSourceSettings(allowed_hosts=("files.example.test",), max_bytes=100_000)
+    endless = httpx.MockTransport(lambda request: httpx.Response(200, stream=EndlessBody()))
+    with pytest.raises(SourceDefinitionError, match="max_bytes"):
+        await collect(CsvConnector(source, settings, endless, resolver(PUBLIC)))
+
+
+# Local files: symbolic links, file types and sizes -------------------------------------------
+
+
+def local(tmp_path: Path) -> tuple[Path, Path, CsvSourceSettings]:
+    """An allowed root holding `suppliers.csv`, and a directory outside it."""
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "suppliers.csv").write_bytes(CSV)
+    (outside / "secret.csv").write_bytes(b"secret;value\nS-9;hidden\n")
+    return root, outside, CsvSourceSettings(allowed_roots=(str(root),))
+
+
+async def test_a_link_inside_a_root_pointing_outside_is_refused(
+    tmp_path: Path, supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, outside, settings = local(tmp_path)
+    (root / "link.csv").symlink_to(outside / "secret.csv")
+    (root / "dir").symlink_to(outside, target_is_directory=True)
+    for location in (root / "link.csv", root / "dir" / "secret.csv"):
+        source = csv_source(supply_schema, monkeypatch, str(location))
+        with pytest.raises(SourceDefinitionError, match="allowed_roots"):
+            await collect(CsvConnector(source, settings))
+
+
+async def test_a_link_inside_a_root_pointing_inside_it_is_read(
+    tmp_path: Path, supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Links are resolved before the roots check, so links within a root keep working.
+    root, _, settings = local(tmp_path)
+    (root / "current.csv").symlink_to(root / "suppliers.csv")
+    source = csv_source(supply_schema, monkeypatch, str(root / "current.csv"))
+    assert len(await collect(CsvConnector(source, settings))) == 2
+
+
+@pytest.mark.parametrize("swapped", ["suppliers.csv", "sub"])
+async def test_a_link_swapped_in_after_the_check_is_not_followed(
+    tmp_path: Path, supply_schema: Schema, monkeypatch: pytest.MonkeyPatch, swapped: str
+) -> None:
+    root, outside, settings = local(tmp_path)
+    (root / "sub").mkdir()
+    (root / "sub" / "secret.csv").write_bytes(CSV)
+    location = root / swapped if swapped == "suppliers.csv" else root / swapped / "secret.csv"
+    check_then_open = connectors._open_beneath
+
+    def swap_then_open(base: Path, relative: PurePath) -> int:
+        # A writer inside the root replaces a checked component with a link to elsewhere.
+        replaced = root / swapped
+        if replaced.is_dir():
+            shutil.rmtree(replaced)
+            replaced.symlink_to(outside, target_is_directory=True)
+        else:
+            replaced.unlink()
+            replaced.symlink_to(outside / "secret.csv")
+        return check_then_open(base, relative)
+
+    monkeypatch.setattr(connectors, "_open_beneath", swap_then_open)
+    source = csv_source(supply_schema, monkeypatch, str(location))
+    with pytest.raises(SourceDefinitionError, match="symbolic link"):
+        await collect(CsvConnector(source, settings))
+
+
+async def test_files_that_are_not_regular_are_refused(
+    tmp_path: Path, supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _, settings = local(tmp_path)
+    (root / "folder.csv").mkdir()
+    os.mkfifo(root / "pipe.csv")  # opening must not wait for a writer
+    for name in ("folder.csv", "pipe.csv"):
+        source = csv_source(supply_schema, monkeypatch, str(root / name))
+        with pytest.raises(SourceDefinitionError, match="not a regular file"):
+            await collect(CsvConnector(source, settings))
+    source = csv_source(supply_schema, monkeypatch, str(root))
+    with pytest.raises(SourceDefinitionError, match="allowed_roots"):
+        await collect(CsvConnector(source, settings))
+
+
+async def test_a_file_growing_after_fstat_stops_at_max_bytes(
+    tmp_path: Path, supply_schema: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _, _ = local(tmp_path)
+    settings = CsvSourceSettings(allowed_roots=(str(root),), max_bytes=len(CSV) - 1)
+    real_fstat = os.fstat
+
+    def small_fstat(descriptor: int) -> os.stat_result:
+        status = real_fstat(descriptor)
+        values = list(status)
+        values[stat.ST_SIZE] = 1  # the size when checked; the file grows afterwards
+        return os.stat_result(values)
+
+    monkeypatch.setattr(connectors.os, "fstat", small_fstat)
+    source = csv_source(supply_schema, monkeypatch, str(root / "suppliers.csv"))
+    with pytest.raises(SourceDefinitionError, match=r"scribe\.sources\.csv\.max_bytes"):
+        await collect(CsvConnector(source, settings))
 
 
 def postgres_source(schema: Schema, **changes: Any) -> Source:
