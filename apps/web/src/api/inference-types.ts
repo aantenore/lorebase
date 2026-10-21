@@ -2,6 +2,7 @@
  * Schema inference (docs/inference.md, `POST /domains/{d}/schema:infer`): a proposed schema
  * with the evidence behind each element and the issues to settle. Nothing here is committed.
  */
+import type { InferredSchema } from './types';
 
 /** Why one element was proposed. `element` is a dotted path into the schema document. */
 export interface InferenceEvidence {
@@ -37,19 +38,17 @@ export interface InferenceTable {
   values_read: number;
 }
 
-export interface SchemaProposalDraft {
-  domain: string;
-  status: 'proposed';
-  /** The schema content keyed by element id. The app reads `yaml`, which says the same. */
-  schema: Record<string, unknown>;
-  /** The proposed schema as a schema document (design 5.13). */
-  yaml: string;
+/**
+ * The generated `schema:infer` answer (`InferredSchema`) with its evidence, issues and tables
+ * typed. `schema` is the content keyed by element id; the app reads `yaml` (the schema
+ * document, design 5.13), which says the same. `issues` is capped by Keeper; `issue_count` is
+ * the real number.
+ */
+export type SchemaProposalDraft = Omit<InferredSchema, 'evidence' | 'issues' | 'tables'> & {
   evidence: InferenceEvidence[];
-  /** Capped by Keeper; `issue_count` is the real number. */
   issues: InferenceIssue[];
-  issue_count: number;
   tables: InferenceTable[];
-}
+};
 
 /** A Postgres source named by a secret reference an administrator allowlisted; never a URL. */
 export interface PostgresSourceRef {

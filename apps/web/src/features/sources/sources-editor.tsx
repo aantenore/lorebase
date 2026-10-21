@@ -4,7 +4,11 @@ import { diffSchemas } from '@/api/schema-changes';
 import { validateSchema, type SchemaIssue } from '@/api/schema-rules';
 import type { Schema } from '@/api/types';
 import { useScope } from '@/app/scope';
-import { documentToSchema, schemaToDocument } from '@/features/modeler/document';
+import {
+  documentToSchema,
+  schemaToDocument,
+  type SchemaDocument,
+} from '@/features/modeler/document';
 import { memoizedIds } from '@/features/modeler/editor-state';
 import { ChangeSetPanel } from '@/features/modeler/change-set-panel';
 import { IssuesPanel } from '@/features/modeler/issues-panel';
@@ -58,10 +62,14 @@ export function SourcesEditor({ base }: { base: Schema }) {
   const [jump, setJump] = useState<Jump | null>(null);
 
   const section = useMemo(() => readSection(text), [text]);
-  const converted = useMemo(() => {
-    const document = { ...schemaToDocument(base), sources: section.sources ?? {} };
-    return documentToSchema(document, base, ids);
-  }, [base, section, ids]);
+  const document = useMemo<SchemaDocument>(
+    () => ({
+      ...schemaToDocument(base),
+      sources: (section.sources ?? {}) as SchemaDocument['sources'],
+    }),
+    [base, section],
+  );
+  const converted = useMemo(() => documentToSchema(document, base, ids), [document, base, ids]);
   const issues = useMemo<SchemaIssue[]>(() => {
     const reported = new Set(converted.issues.map((i) => i.path));
     return [
@@ -75,7 +83,7 @@ export function SourcesEditor({ base }: { base: Schema }) {
   );
 
   const valid = section.syntax.length === 0 && issues.length === 0;
-  const { check, remote, blocked: checkBlocked } = useChangeCheck(changes, valid);
+  const { check, remote, blocked: checkBlocked } = useChangeCheck(changes, document, valid);
   let blocked = checkBlocked;
   if (section.syntax.length > 0) blocked = 'Fix the YAML errors first.';
   else if (issues.length > 0) blocked = 'Fix the validation issues first.';
@@ -120,6 +128,7 @@ export function SourcesEditor({ base }: { base: Schema }) {
         base={base}
         next={converted.schema}
         changes={changes}
+        document={document}
         blocked={blocked}
         check={{ pending: check.isFetching, result: check.data }}
         defaultMessage="Change the Sources"

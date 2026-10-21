@@ -1,9 +1,45 @@
 /**
- * Keeper REST types. Names follow docs/glossary.md and the shapes follow
- * docs/design.md sections 5 (model), 6 (versioning), 8 (queries) and 11 (REST).
- * Responses use api names for Kinds, Attributes and Relations (design 8.1);
- * schema elements also carry their stable ids (design 5.1).
+ * Keeper types. Names follow docs/glossary.md and the shapes follow docs/design.md sections
+ * 5 (model), 6 (versioning), 8 (queries) and 11 (REST).
+ *
+ * Two layers live here. The wire layer is `./generated/keeper.ts`, produced from
+ * docs/openapi.json (`pnpm types`); types that map one to one onto it are aliases of it
+ * (the "contract" block below). The rest are the UI-facing view models the screens and both
+ * adapters speak: the live adapter (`./live/`) maps Keeper responses onto them, the mock
+ * builds them directly. Responses use api names for Kinds, Attributes and Relations
+ * (design 8.1); schema elements also carry their stable ids (design 5.1).
  */
+import type { components } from './generated/keeper';
+
+type Contract = components['schemas'];
+
+// -------------------------------------------------------- contract (generated)
+
+export type ProposalOrigin = Contract['ProposalOrigin'];
+export type ProposalStatus = Contract['ProposalStatus'];
+export type ReviewVerdict = Contract['ReviewVerdict'];
+export type ProposalCheck = Contract['CheckOut'];
+export type ProposalApproval = Contract['ApprovalOut'];
+export type ProposalReview = Contract['ReviewOut'];
+export type ReviewResult = Contract['ReviewResult'];
+export type Proposal = Contract['lorebase_keeper__routes__proposals__ProposalOut'];
+export type ProposalDetail = Contract['ProposalDetailOut'];
+export type CreateProposalInput = Contract['ProposalCreate'];
+export type ReviewInput = Contract['ReviewIn'];
+export type Domain = Contract['DomainOut'];
+export type CreateDomainInput = Contract['DomainCreate'];
+export type CreateBranchInput = Contract['BranchCreate'];
+export type WhereOperator = Contract['Operator'];
+export type WhoAmI = Contract['WhoAmI'];
+export type Webhook = Contract['WebhookOut'];
+export type WebhookCreated = Contract['WebhookCreated'];
+export type CreateWebhookInput = Contract['CreateWebhook'];
+export type ContextRequest = Partial<Contract['ContextRequest']>;
+export type ContextPack = Contract['ContextPackOut'];
+export type ExplainedRecord = Contract['ExplainOut'];
+/** The schema Keeper proposes from uploaded tables (`POST .../schema:infer`). */
+export type InferredSchema =
+  components['schemas']['lorebase_keeper__routes__schema_inference__ProposalOut'];
 
 // ---------------------------------------------------------------- identity
 
@@ -41,45 +77,29 @@ export interface PageParams {
   cursor?: string | null;
 }
 
-/** RFC 9457 problem details. */
+/** RFC 9457 problem details as Keeper sends them (`application/problem+json`). */
 export interface ProblemDetails {
   type: string;
   title: string;
   status: number;
   detail?: string;
   instance?: string;
-  /** Machine-readable code, when Keeper provides one. */
+  /** Machine-readable code, the last part of `type`. */
   code?: string;
+  request_id?: string;
+  /** Members of a rejected request body, query or path (422 `validation-failed`). */
+  errors?: { pointer: string; message: string; code: string }[];
+  /** Findings of a rejected schema change set or Operation (422); `path` lists names. */
+  issues?: ProblemIssue[];
   /** The merge attempt carried by Keeper's `merge-conflicts` problem (409 of `.../merge`). */
   attempt?: MergeAttempt;
 }
 
-// ------------------------------------------------------------------ Domain
-
-export interface DomainSettings {
-  search_language?: string;
-  materialization?: Record<string, unknown>;
-  extraction_defaults?: Record<string, unknown>;
-  merge_policies?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-export interface Domain {
-  /** Slug, immutable. */
-  id: DomainId;
-  display_name: string;
-  description: string | null;
-  default_branch: BranchName;
-  settings: DomainSettings;
-  created_at: string;
-  created_by: string;
-}
-
-export interface CreateDomainInput {
-  id: DomainId;
-  display_name: string;
-  description?: string;
-  default_branch?: BranchName;
+export interface ProblemIssue {
+  code: string;
+  message: string;
+  severity?: string;
+  path?: (string | number)[];
 }
 
 // ------------------------------------------------------------ Branch, Revision
@@ -94,12 +114,6 @@ export interface Branch {
   behind_default: number;
   /** Revisions on this Branch that the default Branch does not contain yet. */
   ahead_default: number;
-}
-
-export interface CreateBranchInput {
-  name: BranchName;
-  /** Branch, tag or Revision to start from. Defaults to the default Branch. */
-  from?: string;
 }
 
 export type RevisionOriginType =
@@ -219,6 +233,8 @@ export interface Relation {
   backing: 'explicit' | 'foreign_key';
   /** Attribute of the `from` Kind that holds the target key, for `foreign_key` backing. */
   foreign_key_attribute?: ElementId | null;
+  /** Keeper: omitted means `active`. */
+  status?: ElementStatus;
 }
 
 export interface TraitAttribute {
@@ -226,6 +242,9 @@ export interface TraitAttribute {
   name: string;
   type: AttributeType;
   required: boolean;
+  /** Keeper: the document keeps these two when they are set. */
+  display_name?: string;
+  description?: string;
 }
 
 export interface Trait {
@@ -234,6 +253,8 @@ export interface Trait {
   display_name: string;
   description: string;
   attributes: TraitAttribute[];
+  /** Keeper: omitted means `active`. */
+  status?: ElementStatus;
 }
 
 export interface OperationParameter {
@@ -277,10 +298,16 @@ export interface Derivation {
   api_name: string;
   display_name: string;
   description: string;
+  /** Keeper: omitted means `active`. */
+  status?: ElementStatus;
   variant: DerivationVariant;
   /** Attribute or Relation the Derivation computes. */
   target: { type: 'attribute' | 'relation'; kind_id: ElementId; api_name: string };
-  /** Variant-specific definition (CEL expression, aggregate or path). */
+  /**
+   * Variant-specific part of the definition in the layout of the schema document, with api
+   * names for references: `expression`, or `relation`, `direction`, `function`,
+   * `source_attribute`, `filter` for an aggregate, or `steps` for a path.
+   */
   definition: Record<string, unknown>;
 }
 
@@ -288,9 +315,21 @@ export type SourceType = 'postgres_table' | 'postgres_query' | 'csv' | 'parquet'
 export type SyncMode = 'snapshot' | 'incremental';
 export type SourceMergePolicy = 'auto_when_clean' | 'proposal' | 'auto_with_authority';
 
+export interface SourceTransform {
+  /** `cast`, `trim`, `lower`, `upper`, `parse_date`, `concat`, `constant`, `map` or `null_if`. */
+  name: string;
+  args?: Record<string, unknown>;
+}
+
 export interface Source {
   id: ElementId;
   api_name: string;
+  /** Keeper: the document keeps these when they are set. */
+  display_name?: string;
+  description?: string;
+  status?: ElementStatus;
+  watermark_column?: string | null;
+  tombstone_column?: string | null;
   type: SourceType;
   /** Secret reference such as `secret://env/ERP_DSN`; never a literal. */
   connection: string;
@@ -298,14 +337,14 @@ export interface Source {
   key_mapping: string[];
   attribute_mapping: Record<
     ElementId,
-    { column?: string; expression?: string; transform?: string }
+    { column?: string; expression?: string; transforms?: SourceTransform[] }
   >;
-  relation_mapping: Record<ElementId, { column: string; target_kind: ElementId }>;
+  relation_mapping: { relation: ElementId; columns: string[] }[];
   scope_filter: string | null;
   sync_mode: SyncMode;
   /** Cron expression, or `null` for manual. */
   schedule: string | null;
-  target_branch_policy: { branch_template: string; merge_policy: SourceMergePolicy };
+  target_branch_policy: { branch_template?: string; merge_policy?: SourceMergePolicy };
 }
 
 export interface SearchCapabilities {
@@ -313,8 +352,17 @@ export interface SearchCapabilities {
   embedding: { model: string; dims: number } | null;
 }
 
+/** The `domain` block of a schema document, besides the id: kept so a save does not blank it. */
+export interface SchemaDomainInfo {
+  display_name?: string;
+  description?: string;
+  settings?: Record<string, unknown>;
+}
+
 export interface Schema {
   domain: DomainId;
+  /** Keeper: the `domain` block of the document. The mock leaves it out. */
+  domain_info?: SchemaDomainInfo;
   branch: BranchName;
   revision: RevisionId;
   kinds: Kind[];
@@ -346,10 +394,39 @@ export interface SchemaChange {
 }
 
 export interface SchemaChangeRequest {
+  /** The commands the edit adds up to; the mock applies these and the Modeler lists them. */
   changes: SchemaChange[];
+  /**
+   * The whole schema as the document the changes lead to (the layout of
+   * `lorebase_core.model.yaml_schema`). Keeper takes a change set in this form, so the live
+   * adapter sends it and ignores `changes`; the mock ignores it.
+   */
+  document?: object;
   /** Revision message; Keeper writes a default when absent. */
   message?: string;
   dry_run?: boolean;
+  /** Confirms that removing Kinds or Relations deletes their Records or Links. */
+  cascade?: boolean;
+}
+
+/** A schema document checked against the schema of a Branch or Revision; nothing is written. */
+export interface SchemaValidateRequest {
+  document: object;
+}
+
+/** One schema element a change set creates, updates or deletes. */
+export interface SchemaElementChange {
+  op: 'create' | 'update' | 'delete';
+  section: string;
+  id: ElementId;
+  api_name: string;
+}
+
+export interface SchemaValidation {
+  valid: boolean;
+  violations: Violation[];
+  /** What the document would change on the schema it was checked against. */
+  changes: SchemaElementChange[];
 }
 
 export interface SchemaMigration {
@@ -365,6 +442,10 @@ export interface SchemaChangeResult {
   violations: Violation[];
   /** Data migrations the changes imply, such as casts and defaults. */
   migrations: SchemaMigration[];
+  /** Keeper: the elements written or removed. */
+  changes?: SchemaElementChange[];
+  /** Keeper: Record and Link changes made by data migrations. */
+  data_changes?: number;
 }
 
 export interface Violation {
@@ -373,6 +454,8 @@ export interface Violation {
   ref?: RecordRef;
   /** Schema path such as `kinds/Supplier/attributes/tier`, for schema violations. */
   path?: string;
+  /** Keeper: `error` or `warning`. */
+  severity?: string;
 }
 
 // ------------------------------------------------------- Records and Links
@@ -447,21 +530,6 @@ export interface HistoryResponse {
 }
 
 // ------------------------------------------------ Query, search, traversal
-
-export type WhereOperator =
-  | 'eq'
-  | 'ne'
-  | 'lt'
-  | 'lte'
-  | 'gt'
-  | 'gte'
-  | 'in'
-  | 'between'
-  | 'contains'
-  | 'prefix'
-  | 'exists'
-  | 'match'
-  | 'near';
 
 export type Where =
   | { and: Where[] }
@@ -626,83 +694,9 @@ export interface ExecuteOperationResponse {
 
 // ---------------------------------------------------------------- Proposals
 
-export type ProposalOrigin = 'manual' | 'source_sync' | 'extraction' | 'operation';
-export type ProposalStatus = 'open' | 'merged' | 'closed';
-
-export interface ProposalCheck {
-  name: string;
-  status: 'passed' | 'failed' | 'pending';
-  message?: string;
-}
-
-export interface MergePolicy {
-  name: string;
-  /** For example `prefer: theirs` or `authority`. */
-  rule: string;
-}
-
-export interface Proposal {
-  id: string;
-  title: string;
-  description: string;
-  source_ref: BranchName;
-  target_ref: BranchName;
-  origin: ProposalOrigin;
-  status: ProposalStatus;
-  author: string;
-  created_at: string;
-  merged_revision: RevisionId | null;
-  checks: ProposalCheck[];
-  /** Mock only. Keeper returns `policy`, the merge policy options of the Proposal. */
-  policies: MergePolicy[];
-  /** Keeper: merge policy options that differ from the defaults (design 6.15). */
-  policy?: Record<string, JsonValue>;
-  updated_at?: string | null;
-}
-
-export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
-
-export interface ProposalReview {
-  /** Keeper only. */
-  id?: string;
-  reviewer: string;
-  verdict: ReviewVerdict;
-  comment: string;
-  at: string;
-}
-
-export interface ProposalDetail extends Proposal {
-  reviews: ProposalReview[];
-  /** Keeper: review state against the target branch protection. */
-  approval?: ProposalApproval;
-  /** Keeper: the latest merge attempt (without Conflicts). */
-  attempt?: MergeAttempt | null;
-}
-
-export interface ProposalApproval {
-  protected: boolean;
-  required: number;
-  approvals: number;
-  approvers: string[];
-  changes_requested: string[];
-  satisfied: boolean;
-}
-
-export interface CreateProposalInput {
-  source_ref: BranchName;
-  target_ref: BranchName;
-  title: string;
-  description?: string;
-}
-
 export interface ProposalListParams extends PageParams {
   status?: ProposalStatus;
   origin?: ProposalOrigin;
-}
-
-export interface ReviewInput {
-  verdict: ReviewVerdict;
-  comment?: string;
 }
 
 export interface ExtractionEvidence {

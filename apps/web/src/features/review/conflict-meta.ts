@@ -101,15 +101,33 @@ export function namePath(path: string, names: Names): string {
     .join('.');
 }
 
+/**
+ * The Kind or Relation a partition stands for. Keeper names a data partition `k:{kind id}` or
+ * `r:{relation id}`; a plain name (the mock) and `schema` stand for themselves.
+ */
+export function partitionName(partition: string, names: Names): string {
+  const match = /^[kr]:(.+)$/.exec(partition);
+  const id = match?.[1];
+  return id === undefined ? partition : (names.get(id) ?? id);
+}
+
+const ELEMENT_ID = /\b(?:knd|att|rel|trt|opr|drv|src)_[0-9A-Z]{26}\b/g;
+
+/** A Keeper message with the element ids it mentions replaced by their names. */
+export function messageOf(conflict: Conflict, names: Names): string {
+  return conflict.message.replace(ELEMENT_ID, (id) => names.get(id) ?? id);
+}
+
 /** One line locating a Conflict: `Supplier/S-1003 · tier` or `Supplier · attributes.risk_score.description`. */
 export function locationOf(conflict: Conflict, names: Names): string {
   const key = conflict.key === null ? null : (names.get(conflict.key) ?? conflict.key);
+  const partition = partitionName(conflict.partition, names);
   const place =
     conflict.partition === 'schema'
       ? (key ?? 'schema')
       : key === null
-        ? conflict.partition
-        : `${conflict.partition}/${key}`;
+        ? partition
+        : `${partition}/${key}`;
   return conflict.attribute === null ? place : `${place} · ${namePath(conflict.attribute, names)}`;
 }
 
@@ -130,6 +148,7 @@ export function inferSpec(values: JsonValue[]): ValueSpec {
  * for whole Records and elements. `null` when the editor should take any JSON.
  */
 export function specOf(conflict: Conflict, schema: Schema | undefined): ValueSpec | null {
+  const names = buildNames(schema);
   if (conflict.kind === 'SC3') {
     return { type: 'string', required: true, constraints: { pattern: '^[A-Za-z][A-Za-z0-9_]*$' } };
   }
@@ -137,7 +156,8 @@ export function specOf(conflict: Conflict, schema: Schema | undefined): ValueSpe
   if (conflict.kind.startsWith('SC')) {
     return inferSpec([conflict.base, conflict.ours, conflict.theirs]);
   }
-  const kind = schema?.kinds.find((k) => k.api_name === conflict.partition);
+  const partition = partitionName(conflict.partition, names);
+  const kind = schema?.kinds.find((k) => k.api_name === partition);
   const attribute = kind?.attributes[conflict.attribute ?? ''];
   if (attribute === undefined) return null;
   const spec: ValueSpec = {

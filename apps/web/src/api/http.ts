@@ -1,33 +1,54 @@
+import { stringify } from 'yaml';
 import type { KeeperApi } from './client';
-import { ApiError } from './errors';
+import { MergeConflictsError, NotFoundError, ValidationError, notSupported } from './errors';
+import { createFetcher, type Fetcher, type FetcherOptions, type QueryParams } from './fetcher';
+import type { components } from './generated/keeper';
+import { mapSchema } from './live/schema';
+import {
+  mapDiff,
+  mapHistory,
+  mapLineage,
+  mapLinks,
+  mapNeighborhood,
+  mapQuery,
+  mapRecordPage,
+  mapRecordResponse,
+  mapSearch,
+  mapTraverse,
+} from './live/data';
+import {
+  mapAttempt,
+  mapBranch,
+  mapChangeResult,
+  mapExecution,
+  mapMerge,
+  mapResolution,
+  mapRevision,
+  mapTag,
+  mapValidation,
+  refusedChange,
+  refusedExecution,
+} from './live/versioning';
+import { splitRecordRef } from './refs';
 import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
-  MergeAttempt,
-  MergeOutcome,
+  Branch,
   Page,
   PageParams,
-  ProblemDetails,
+  Proposal,
+  ProposalDetail,
   ReadScope,
   Resolution,
-  Schema,
+  SchemaChangeRequest,
 } from './types';
 
-/** Path prefix of the Keeper REST API (design 11.1). Protocol constant, not configuration. */
-export const API_BASE_PATH = '/api/v1';
+export { API_BASE_PATH } from './fetcher';
 
-/** Problem code of a merge that stopped on Conflicts (HTTP 409 with the attempt). */
-export const MERGE_CONFLICTS = 'merge-conflicts';
+type S = components['schemas'];
 
-type QueryValue = string | number | boolean | string[] | null | undefined;
-type QueryParams = Record<string, QueryValue>;
-
-export interface HttpAdapterOptions {
-  /** Keeper origin, for example the value of VITE_KEEPER_BASE_URL. */
-  baseUrl: string;
-  /** Injected for tests; defaults to the global fetch. */
-  fetch?: typeof fetch;
-  /** Extra headers per request, for example an Authorization header. */
-  headers?: () => Record<string, string>;
+export interface HttpAdapterOptions extends FetcherOptions {
+  /** A fetcher to use instead of building one from the options; used by tests. */
+  fetcher?: Fetcher;
 }
 
 const enc = encodeURIComponent;
@@ -50,58 +71,40 @@ function inferForm(files: File[], options: Record<string, unknown> | undefined):
   return form;
 }
 
-/** A Source run as Keeper returns it (`SourceRunOut`); `stats` is the Scribe sync report. */
-interface KeeperSourceRun {
-  id: string;
-  source: string;
-  status: SourceRunStatus;
-  started_at: string | null;
-  finished_at: string | null;
-  stats: {
-    branch?: string;
-    rows?: { read?: number };
-    counts?: { added?: number; changed?: number; removed?: number };
-  };
-  revision: string | null;
-  proposal_id: string | null;
-  error: { message?: string } | null;
+/** The Scribe sync report a Source run carries in `stats`, as far as the screens read it. */
+interface SourceRunStats {
+  branch?: string;
+  rows?: { read?: number };
+  counts?: { added?: number; changed?: number; removed?: number };
 }
 
 /** Keeper names the Source by id; the screens use its api name. */
-function sourceRun(run: KeeperSourceRun, apiName: string): SourceRun {
-  const counts = run.stats.counts ?? {};
+function sourceRun(run: S['SourceRunOut'], apiName: string): SourceRun {
+  const stats = run.stats as SourceRunStats;
+  const counts = stats.counts ?? {};
+  const message = run.error?.['message'];
   return {
     id: run.id,
     source: apiName,
-    status: run.status,
+    status: run.status as SourceRunStatus,
     trigger: null,
-    started_at: run.started_at,
-    finished_at: run.finished_at,
-    rows_read: run.stats.rows?.read ?? 0,
+    started_at: run.started_at ?? null,
+    finished_at: run.finished_at ?? null,
+    rows_read: stats.rows?.read ?? 0,
     changes: {
       added: counts.added ?? 0,
       updated: counts.changed ?? 0,
       deleted: counts.removed ?? 0,
     },
-    branch: run.stats.branch ?? null,
-    proposal: run.proposal_id,
-    error: run.error === null ? null : (run.error.message ?? 'The run failed.'),
+    branch: stats.branch ?? null,
+    proposal: run.proposal_id ?? null,
+    error: run.error == null ? null : typeof message === 'string' ? message : 'The run failed.',
   };
 }
 
 /** Newest first; runs not started yet (no `started_at`) come first. */
 function newestFirst(a: SourceRun, b: SourceRun): number {
   return (b.started_at ?? '\uffff').localeCompare(a.started_at ?? '\uffff');
-}
-
-function toSearch(params: QueryParams): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null) continue;
-    search.set(key, Array.isArray(value) ? value.join(',') : String(value));
-  }
-  const text = search.toString();
-  return text === '' ? '' : `?${text}`;
 }
 
 function scopeParams(scope: ReadScope): QueryParams {
@@ -112,56 +115,37 @@ function pageParams(params?: PageParams): QueryParams {
   return { limit: params?.limit, cursor: params?.cursor };
 }
 
-async function readProblem(response: Response): Promise<ProblemDetails> {
-  try {
-    const body = (await response.json()) as Partial<ProblemDetails>;
-    return {
-      type: body.type ?? 'about:blank',
-      title: body.title ?? response.statusText,
-      status: body.status ?? response.status,
-      ...(body.detail === undefined ? {} : { detail: body.detail }),
-      ...(body.instance === undefined ? {} : { instance: body.instance }),
-      ...(body.code === undefined ? {} : { code: body.code }),
-      ...(body.attempt === undefined ? {} : { attempt: body.attempt }),
-    };
-  } catch {
-    return { type: 'about:blank', title: response.statusText, status: response.status };
+/** The schema document as the YAML text Keeper's change-set routes take. */
+const documentText = (document: object) => stringify(document, { indent: 2, lineWidth: 0 });
+
+function requireDocument(request: SchemaChangeRequest): object {
+  if (request.document === undefined) {
+    throw new ValidationError({
+      type: 'about:blank',
+      title: 'Request validation failed',
+      status: 422,
+      detail: 'Keeper takes a schema change set as a document; the request carries none.',
+      code: 'validation-failed',
+    });
   }
+  return request.document;
 }
 
+/** The adapter that talks to Keeper over `/api/v1`. See `./live/` for the response mappers. */
 export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
-  const root = `${options.baseUrl.replace(/\/+$/, '')}${API_BASE_PATH}`;
-  const doFetch = options.fetch ?? ((input, init) => fetch(input, init));
-
-  async function request<T>(
-    method: 'GET' | 'POST' | 'DELETE',
-    path: string,
-    init: { query?: QueryParams; body?: unknown; form?: FormData } = {},
-  ): Promise<T> {
-    const headers: Record<string, string> = { Accept: 'application/json', ...options.headers?.() };
-    if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-
-    // A FormData body sets its own Content-Type, with the multipart boundary.
-    const payload = init.form ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
-    const response = await doFetch(`${root}${path}${toSearch(init.query ?? {})}`, {
-      method,
-      headers,
-      ...(payload === undefined ? {} : { body: payload }),
-    });
-    if (!response.ok) throw new ApiError(await readProblem(response));
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
-  }
-
+  const http = options.fetcher ?? createFetcher(options);
   const get = <T>(path: string, query?: QueryParams) =>
-    request<T>('GET', path, query === undefined ? {} : { query });
+    http.json<T>('GET', path, query === undefined ? {} : { query });
   const post = <T>(path: string, body?: unknown, query?: QueryParams) =>
-    request<T>('POST', path, {
+    http.json<T>('POST', path, {
       ...(body === undefined ? {} : { body }),
       ...(query === undefined ? {} : { query }),
     });
+  /** A create: fresh `Idempotency-Key`, and a 200 (an existing resource replayed) is a conflict. */
+  const create = <T>(path: string, body: unknown) =>
+    http.json<T>('POST', path, { body, idempotent: true, created: true });
 
-  const postForm = <T>(path: string, form: FormData) => request<T>('POST', path, { form });
+  const postForm = <T>(path: string, form: FormData) => http.json<T>('POST', path, { form });
 
   const d = (domain: string) => `/domains/${enc(domain)}`;
   const b = (domain: string, branch: string) => `${d(domain)}/branches/${enc(branch)}`;
@@ -169,120 +153,294 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
     `${d(domain)}/kinds/${enc(kind)}/records/${enc(key)}`;
   const prop = (domain: string, proposal: string) => `${d(domain)}/proposals/${enc(proposal)}`;
 
+  const branchDetail = async (domain: string, branch: string): Promise<Branch> => {
+    try {
+      return mapBranch(await get<S['BranchDetail']>(b(domain, branch)));
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+      const tags = await get<S['Page_TagOut_']>(`${d(domain)}/tags`);
+      const tag = tags.items.find((t) => t.name === branch);
+      if (tag === undefined) throw error;
+      return mapTag(tag);
+    }
+  };
+
+  const explain = async (scope: ReadScope, kind: string, key: string) => {
+    if (scope.at !== undefined) {
+      throw notSupported('Lineage and history of a Record at a past Revision');
+    }
+    return await get<S['ExplainOut']>(`${rec(scope.domain, kind, key)}/explain`, {
+      branch: scope.branch,
+    });
+  };
+
+  const revisionLog = (domain: string, branch: string, params?: PageParams) =>
+    get<S['LogPage']>(`${b(domain, branch)}/log`, pageParams(params));
+
   return {
     domains: {
-      list: () => get('/domains'),
-      create: (input) => post('/domains', input),
+      list: () => get<Page<S['DomainOut']>>('/domains'),
+      create: (input) => create('/domains', input),
       get: (domain) => get(d(domain)),
     },
 
     branches: {
-      list: (domain) => get(`${d(domain)}/branches`),
-      create: (domain, input) => post(`${d(domain)}/branches`, input),
-      get: (domain, branch) => get(b(domain, branch)),
-      delete: (domain, branch) => request('DELETE', b(domain, branch)),
+      list: async (domain) => {
+        const [branches, tags] = await Promise.all([
+          get<S['Page_BranchOut_']>(`${d(domain)}/branches`),
+          get<S['Page_TagOut_']>(`${d(domain)}/tags`),
+        ]);
+        // The listing carries no distance to the default Branch; the detail does.
+        const detailed = await Promise.all(
+          branches.items.map((branch) => branchDetail(domain, branch.name)),
+        );
+        return {
+          items: [...detailed, ...tags.items.map(mapTag)],
+          next_cursor: branches.next_cursor ?? null,
+        };
+      },
+      create: async (domain, input) => {
+        const created = await create<S['BranchOut']>(`${d(domain)}/branches`, input);
+        return branchDetail(domain, created.name);
+      },
+      get: (domain, branch) => branchDetail(domain, branch),
+      delete: (domain, branch) => http.json('DELETE', b(domain, branch)),
     },
 
     revisions: {
-      log: (domain, branch, params) => get(`${b(domain, branch)}/log`, pageParams(params)),
-      get: (domain, revision) => get(`${d(domain)}/revisions/${enc(revision)}`),
-      diff: (domain, params) =>
-        get(`${d(domain)}/diff`, {
-          from: params.from,
-          to: params.to,
-          kinds: params.kinds,
-          ...pageParams(params),
-        }),
+      log: async (domain, branch, params) => {
+        const page = await revisionLog(domain, branch, params);
+        return {
+          items: page.items.map((revision) => mapRevision(revision, domain)),
+          next_cursor: page.next_cursor ?? null,
+        };
+      },
+      get: async (domain, revision) =>
+        mapRevision(await get<S['RevisionOut']>(`${d(domain)}/revisions/${enc(revision)}`), domain),
+      diff: async (domain, params) =>
+        mapDiff(
+          await get<S['ChangesPage']>(`${d(domain)}/diff`, {
+            from: params.from,
+            to: params.to,
+            kinds: params.kinds,
+            ...pageParams(params),
+          }),
+        ),
     },
 
     schema: {
-      get: (scope) => get(`${d(scope.domain)}/schema`, scopeParams(scope)),
-      applyChanges: (domain, branch, req) => post(`${b(domain, branch)}/schema/changes`, req),
+      get: async (scope) =>
+        mapSchema(await get<S['SchemaOut']>(`${d(scope.domain)}/schema`, scopeParams(scope))),
+      validate: async (scope, request) =>
+        mapValidation(
+          await post<S['SchemaValidationOut']>(`${d(scope.domain)}/schema:validate`, {
+            yaml: documentText(request.document),
+            ...(scope.branch === undefined ? {} : { branch: scope.branch }),
+            ...(scope.at === undefined ? {} : { at: scope.at }),
+          }),
+        ),
+      applyChanges: async (domain, branch, request) => {
+        const body = {
+          yaml: documentText(requireDocument(request)),
+          ...(request.message === undefined ? {} : { message: request.message }),
+          ...(request.dry_run === undefined ? {} : { dry_run: request.dry_run }),
+          ...(request.cascade === undefined ? {} : { cascade: request.cascade }),
+        };
+        try {
+          return mapChangeResult(
+            await post<S['SchemaChangeOut']>(`${b(domain, branch)}/schema/changes`, body),
+          );
+        } catch (error) {
+          // A change set Keeper refuses is an answer with findings, not a failure.
+          if (error instanceof ValidationError && error.issues.length > 0) {
+            return refusedChange(error.issues);
+          }
+          throw error;
+        }
+      },
     },
 
     records: {
-      list: (scope, kind, params) =>
-        get(`${d(scope.domain)}/kinds/${enc(kind)}/records`, {
-          ...scopeParams(scope),
-          where: params?.where === undefined ? undefined : JSON.stringify(params.where),
-          order_by: params?.order_by === undefined ? undefined : JSON.stringify(params.order_by),
-          ...pageParams(params),
-        }),
-      get: (scope, kind, key) => get(rec(scope.domain, kind, key), scopeParams(scope)),
-      links: (scope, kind, key, relation, params) =>
-        get(`${rec(scope.domain, kind, key)}/links/${enc(relation)}`, {
-          ...scopeParams(scope),
-          ...pageParams(params),
-        }),
-      lineage: (scope, kind, key) =>
-        get(`${rec(scope.domain, kind, key)}/lineage`, scopeParams(scope)),
-      history: (scope, kind, key, params) =>
-        get(`${rec(scope.domain, kind, key)}/history`, {
-          ...scopeParams(scope),
-          ...pageParams(params),
-        }),
+      list: async (scope, kind, params) =>
+        mapRecordPage(
+          await get<S['RecordPage']>(`${d(scope.domain)}/kinds/${enc(kind)}/records`, {
+            ...scopeParams(scope),
+            where: params?.where === undefined ? undefined : JSON.stringify(params.where),
+            order_by: params?.order_by?.map((o) => `${o.attr}:${o.dir}`),
+            ...pageParams(params),
+          }),
+        ),
+      get: async (scope, kind, key) =>
+        mapRecordResponse(
+          await get<S['RecordResponse']>(rec(scope.domain, kind, key), scopeParams(scope)),
+        ),
+      links: async (scope, kind, key, relation, params) =>
+        mapLinks(
+          await get<S['LinkPage']>(`${rec(scope.domain, kind, key)}/links/${enc(relation)}`, {
+            ...scopeParams(scope),
+            ...pageParams(params),
+          }),
+          relation,
+        ),
+      lineage: async (scope, kind, key) => mapLineage(await explain(scope, kind, key)),
+      history: async (scope, kind, key) => mapHistory(await explain(scope, kind, key)),
     },
 
     query: {
-      run: (scope, query) => post(`${d(scope.domain)}/query`, query, scopeParams(scope)),
-      traverse: (scope, req) => post(`${d(scope.domain)}/traverse`, req, scopeParams(scope)),
-      neighborhood: (scope, req) =>
-        post(`${d(scope.domain)}/neighborhood`, req, scopeParams(scope)),
+      run: async (scope, query) =>
+        mapQuery(
+          await post<S['QueryResponse']>(`${d(scope.domain)}/query`, {
+            ...query,
+            ...scopeParams(scope),
+          }),
+        ),
+      traverse: async (scope, request) => {
+        const { kind, key } = splitRecordRef(request.from);
+        return mapTraverse(
+          await post<S['TraverseResponse']>(`${d(scope.domain)}/traverse`, {
+            start: { kind, key },
+            path: request.path,
+            ...(scope.branch === undefined ? {} : { branch: scope.branch }),
+          }),
+        );
+      },
+      neighborhood: async (scope, request) =>
+        mapNeighborhood(
+          await post<S['NeighborhoodResponse']>(`${d(scope.domain)}/neighborhood`, {
+            seeds: request.seeds.map(splitRecordRef),
+            depth: request.depth,
+            ...(request.relations === undefined ? {} : { relations: request.relations }),
+            ...(request.max_nodes === undefined ? {} : { max_nodes: request.max_nodes }),
+            ...(scope.branch === undefined ? {} : { branch: scope.branch }),
+          }),
+        ),
     },
 
     search: {
-      run: (scope, req) => post(`${d(scope.domain)}/search`, req, scopeParams(scope)),
+      run: async (scope, request) =>
+        mapSearch(
+          await post<S['SearchResponse']>(`${d(scope.domain)}/search`, {
+            ...request,
+            ...(scope.branch === undefined ? {} : { branch: scope.branch }),
+          }),
+        ),
     },
 
     operations: {
-      execute: (domain, operation, req) =>
-        post(`${d(domain)}/operations/${enc(operation)}/execute`, req),
+      execute: async (domain, operation, request) => {
+        // The key travels as the header; sending it in the body as well would have to match.
+        const { idempotency_key: key, ...rest } = request;
+        try {
+          return mapExecution(
+            await http.json<S['ExecutionOut']>(
+              'POST',
+              `${d(domain)}/operations/${enc(operation)}/execute`,
+              {
+                body: rest,
+                idempotent: key === undefined,
+                ...(key === undefined ? {} : { headers: { 'Idempotency-Key': key } }),
+              },
+            ),
+          );
+        } catch (error) {
+          if (error instanceof ValidationError && error.issues.length > 0) {
+            const { edits } = error.problem as { edits?: Record<string, unknown>[] };
+            return refusedExecution(edits, error.issues);
+          }
+          throw error;
+        }
+      },
     },
 
     proposals: {
       list: (domain, params) =>
-        get(`${d(domain)}/proposals`, {
+        get<Page<Proposal>>(`${d(domain)}/proposals`, {
           status: params?.status,
           origin: params?.origin,
           ...pageParams(params),
         }),
-      create: (domain, input) => post(`${d(domain)}/proposals`, input),
-      get: (domain, proposal) => get(prop(domain, proposal)),
-      diff: (domain, proposal, params) => get(`${prop(domain, proposal)}/diff`, pageParams(params)),
+      create: (domain, input) => create<ProposalDetail>(`${d(domain)}/proposals`, input),
+      get: (domain, proposal) => get<ProposalDetail>(prop(domain, proposal)),
+      diff: async (domain, proposal, params) => {
+        // What the source changed since the two Branches parted, not the distance between heads.
+        const detail = await get<ProposalDetail>(prop(domain, proposal));
+        const from = detail.attempt?.base ?? detail.target_ref;
+        return mapDiff(
+          await get<S['ChangesPage']>(`${d(domain)}/diff`, {
+            from,
+            to: detail.source_ref,
+            ...pageParams(params),
+          }),
+        );
+      },
       review: (domain, proposal, input) => post(`${prop(domain, proposal)}/reviews`, input),
-      merge: async (domain, proposal): Promise<MergeOutcome> => {
+      merge: async (domain, proposal) => {
         try {
-          return await post<MergeOutcome>(`${prop(domain, proposal)}/merge`);
+          return mapMerge(
+            await http.json<S['MergeOut']>('POST', `${prop(domain, proposal)}/merge`, {
+              idempotent: true,
+            }),
+          );
         } catch (error) {
-          const attempt: MergeAttempt | undefined =
-            error instanceof ApiError && error.code === MERGE_CONFLICTS
-              ? error.problem.attempt
-              : undefined;
-          if (attempt === undefined) throw error;
-          return { status: 'conflicts', attempt };
+          if (error instanceof MergeConflictsError && error.attempt !== undefined) {
+            return {
+              status: 'conflicts',
+              attempt: mapAttempt(error.attempt as unknown as S['ConflictsOut']),
+            };
+          }
+          throw error;
         }
       },
       close: (domain, proposal) => post(`${prop(domain, proposal)}/close`),
-      items: (domain, proposal, params) =>
-        get(`${prop(domain, proposal)}/items`, pageParams(params)),
-      decideItems: (domain, proposal, input) =>
-        post(`${prop(domain, proposal)}/items:decide`, input),
+      // Keeper has no extraction items yet: every Proposal lists none.
+      items: () => Promise.resolve({ items: [], next_cursor: null }),
+      decideItems: () => Promise.reject(notSupported('Deciding extraction items')),
     },
 
     conflicts: {
-      list: (domain, proposal, params) =>
-        get(`${prop(domain, proposal)}/conflicts`, {
-          kind: params?.kind,
-          status: params?.status,
-          ...pageParams(params),
-        }),
-      resolve: (domain, proposal, resolution) =>
-        post(
-          `${prop(domain, proposal)}/conflicts/${enc(resolution.fingerprint)}/resolution`,
-          resolutionBody(resolution),
+      list: async (domain, proposal, params) =>
+        mapAttempt(
+          await get<S['ConflictsOut']>(`${prop(domain, proposal)}/conflicts`, {
+            kind: params?.kind,
+            status: params?.status,
+            ...pageParams(params),
+          }),
         ),
-      resolveMany: (domain, proposal, input) =>
-        post(`${prop(domain, proposal)}/conflicts:resolve`, input),
+      resolve: async (domain, proposal, resolution) =>
+        mapResolution(
+          await post<S['ResolutionOut']>(
+            `${prop(domain, proposal)}/conflicts/${enc(resolution.fingerprint)}/resolution`,
+            resolutionBody(resolution),
+          ),
+        ),
+      resolveMany: async (domain, proposal, input) =>
+        mapAttempt(
+          await post<S['ConflictsOut']>(`${prop(domain, proposal)}/conflicts:resolve`, {
+            resolutions: input.resolutions.map((r) => ({
+              fingerprint: r.fingerprint,
+              ...resolutionBody(r),
+            })),
+          }),
+        ),
+    },
+
+    auth: {
+      whoami: () => get('/auth/whoami'),
+    },
+
+    agents: {
+      context: (scope, request) =>
+        post(`${d(scope.domain)}/context`, {
+          ...(scope.branch === undefined ? {} : { branch: scope.branch }),
+          ...request,
+        }),
+      explain: (scope, kind, key) => explain(scope, kind, key),
+    },
+
+    webhooks: {
+      list: async (domain) => (await get<S['WebhookList']>(`${d(domain)}/webhooks`)).items,
+      create: (domain, input) => post(`${d(domain)}/webhooks`, input),
+      delete: (domain, webhook) => http.json('DELETE', `${d(domain)}/webhooks/${enc(webhook)}`),
     },
 
     inference: {
@@ -298,18 +456,18 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
     sources: {
       runs: async (domain, params) => {
         const runsOf = async (apiName: string, cursor?: string | null) => {
-          const page = await get<Page<KeeperSourceRun>>(
+          const page = await get<S['Page_SourceRunOut_']>(
             `${d(domain)}/sources/${enc(apiName)}/runs`,
             { limit: params?.limit, cursor },
           );
           return {
             items: page.items.map((run) => sourceRun(run, apiName)),
-            next_cursor: page.next_cursor,
+            next_cursor: page.next_cursor ?? null,
           };
         };
         if (params?.source !== undefined) return runsOf(params.source, params.cursor);
         // Keeper lists runs per Source: merge the first page of each Source of the schema.
-        const schema = await get<Schema>(`${d(domain)}/schema`);
+        const schema = mapSchema(await get<S['SchemaOut']>(`${d(domain)}/schema`));
         const pages = await Promise.all(schema.sources.map((source) => runsOf(source.api_name)));
         const items = pages.flatMap((page) => page.items).sort(newestFirst);
         return {
@@ -324,7 +482,7 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
       apiKeys: {
         list: (domain, params) => get(`${d(domain)}/api-keys`, pageParams(params)),
         create: (domain, input) => post(`${d(domain)}/api-keys`, input),
-        revoke: (domain, keyId) => request('DELETE', `${d(domain)}/api-keys/${enc(keyId)}`),
+        revoke: (domain, keyId) => http.json('DELETE', `${d(domain)}/api-keys/${enc(keyId)}`),
       },
       principals: {
         list: (params) => get('/principals', { type: params?.type, ...pageParams(params) }),

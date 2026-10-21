@@ -96,7 +96,7 @@ export function createAdminMock(
         const scope = of(domain);
         counter += 1;
         const now = new Date();
-        let principalId = input.principal_id;
+        let principalId = input.principal_id ?? undefined;
         if (principalId === undefined) {
           principalId = `svc_${counter.toString()}`;
           principals.push({
@@ -110,7 +110,7 @@ export function createAdminMock(
             id: `grt_${counter.toString()}`,
             domain_id: domain,
             subject: principalId,
-            role: input.role ?? 'agent-reader',
+            role: input.role,
             scope_type: 'domain',
             scope_ref: null,
             created_by: 'usr_mock',
@@ -126,7 +126,7 @@ export function createAdminMock(
           prefix,
           scopes: [`domain:${domain}`],
           expires_at:
-            input.ttl_days === undefined
+            input.ttl_days == null
               ? null
               : new Date(now.getTime() + input.ttl_days * 86_400_000).toISOString(),
           last_used_at: null,

@@ -4,6 +4,7 @@ import type {
   JsonValue,
   Operation,
   ProposalDetail,
+  ReviewVerdict,
   ProposalItem,
 } from '../../types';
 import {
@@ -251,7 +252,7 @@ const mainSchema: SchemaBody = {
         [eid('att', 'supplier_country')]: { column: 'country_iso' },
         [eid('att', 'supplier_tier')]: { column: 'tier' },
       },
-      relation_mapping: {},
+      relation_mapping: [],
       scope_filter: null,
       sync_mode: 'snapshot',
       schedule: '0 2 * * *',
@@ -675,11 +676,30 @@ const autoResolved: AutoResolution[] = [
   },
 ];
 
-function proposal(
-  detail: Omit<ProposalDetail, 'merged_revision' | 'reviews' | 'policies'> &
-    Partial<ProposalDetail>,
-): ProposalDetail {
-  return { merged_revision: null, reviews: [], policies: [], ...detail };
+type ProposalInput = Omit<
+  ProposalDetail,
+  'merged_revision' | 'reviews' | 'policy' | 'approval' | 'attempt' | 'updated_at'
+> & {
+  reviews?: { reviewer: string; verdict: ReviewVerdict; comment: string; at: string }[];
+} & Partial<Pick<ProposalDetail, 'merged_revision'>>;
+
+function proposal({ reviews = [], ...detail }: ProposalInput): ProposalDetail {
+  return {
+    merged_revision: null,
+    updated_at: null,
+    policy: {},
+    approval: {
+      protected: false,
+      required: 0,
+      approvals: reviews.filter((r) => r.verdict === 'approve').length,
+      approvers: [],
+      changes_requested: [],
+      satisfied: true,
+    },
+    attempt: null,
+    ...detail,
+    reviews: reviews.map((review, index) => ({ id: `rev_${index + 1}`, ...review })),
+  };
 }
 
 function proposals(): Map<string, ProposalState> {
@@ -743,7 +763,6 @@ function proposals(): Map<string, ProposalState> {
         status: 'open',
         author: 'usr_marco',
         created_at: '2026-10-17T10:30:00Z',
-        policies: [{ name: 'erp-authority', rule: 'authority' }],
         checks: [
           { name: 'Schema validation', status: 'passed' },
           {
@@ -799,7 +818,6 @@ function proposals(): Map<string, ProposalState> {
         status: 'open',
         author: 'usr_sofia',
         created_at: '2026-10-18T09:50:00Z',
-        policies: [{ name: 'erp-authority', rule: 'authority' }],
         checks: [{ name: 'Schema validation', status: 'passed' }],
       }),
       conflicts: [
@@ -854,6 +872,7 @@ export function buildSupplyDomain(): DomainData {
       settings: { search_language: 'simple' },
       created_at: '2026-10-05T09:00:00Z',
       created_by: 'usr_marco',
+      head: null,
     },
     branches: new Map([
       ['main', main],

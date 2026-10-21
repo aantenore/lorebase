@@ -3,7 +3,7 @@ import { useRevision } from '@/api/queries';
 import type { MergeAttempt, RevisionId } from '@/api/types';
 import { Badge, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
-import { CODE_LABEL, locationOf, type Names } from './conflict-meta';
+import { CODE_LABEL, locationOf, partitionName, type Names } from './conflict-meta';
 import { countByChoice } from './conflict-state';
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -102,7 +102,7 @@ export function MergedSummary({
                   {auto.kind} {CODE_LABEL[auto.kind]}
                 </TD>
                 <TD className="font-mono text-xs">
-                  {auto.partition}
+                  {partitionName(auto.partition, names)}
                   {auto.key === null ? '' : `/${auto.key}`}
                 </TD>
                 <TD>{auto.choice}</TD>

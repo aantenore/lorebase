@@ -177,8 +177,9 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                     <TBody>
                       {Object.values(definition?.attributes ?? {}).map((attribute) => {
                         const derived = attribute.derivation_id !== null;
+                        // Keeper serves a derived value, when it has one, with the stored ones.
                         const value = derived
-                          ? row.derived[attribute.api_name]
+                          ? (row.derived[attribute.api_name] ?? row.attributes[attribute.api_name])
                           : row.attributes[attribute.api_name];
                         return (
                           <TR key={attribute.id}>

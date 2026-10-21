@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { isApiError } from '@/api';
 import { useKeeperApi } from '@/api/provider';
 import { useSchema, useSourceRuns } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
@@ -33,9 +32,6 @@ export function SourcesPage() {
       );
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'source-runs'] });
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'audit'] });
-    },
-    onError: (error) => {
-      toast.notify(isApiError(error) ? error.message : 'The sync failed.', 'error');
     },
   });
 

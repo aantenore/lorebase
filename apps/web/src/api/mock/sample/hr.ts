@@ -64,6 +64,7 @@ export function buildHrDomain(): DomainData {
       settings: {},
       created_at: '2026-09-20T08:00:00Z',
       created_by: 'usr_luca',
+      head: null,
     },
     branches: new Map([
       [
