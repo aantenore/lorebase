@@ -178,7 +178,8 @@ async def test_worker_runs_a_source_sync_job(
         payload=source_sync_payload("approved.suppliers"),
     )
     worker = worker_for(dataclasses.replace(context, settings=settings, clock=clock), sessions)
-    assert await worker.run_once() == 1
+    # only the sync: it queues the index builds of its overlay proposal branch as further jobs
+    assert await worker.run_once(limit=1) == 1
     status, attempts, result = await job_state(sessions, job_id)
     assert (status, attempts) == ("succeeded", 1)
     assert result["counts"]["added"] == 30
