@@ -278,7 +278,7 @@ function LibraryRow({ domain, document }: { domain: string; document: DocumentIn
           <Link
             to="/$domain/review/$proposal"
             params={{ domain, proposal: job.proposal_id }}
-            search={scopeSearch}
+            search={{ ...scopeSearch, tab: 'items' }}
             className="text-accent hover:underline"
           >
             Proposal #{job.proposal_id}

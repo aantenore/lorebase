@@ -119,7 +119,7 @@ export function ReviewPage({ status }: { status: StatusFilter }) {
       <div className="mt-6">
         <PlannedScreens
           area="Review"
-          built={['Proposal list', 'Proposal detail', 'Conflict resolver']}
+          built={['Proposal list', 'Proposal detail', 'Extraction items', 'Conflict resolver']}
         />
       </div>
     </>

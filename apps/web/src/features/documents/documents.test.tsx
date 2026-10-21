@@ -29,7 +29,7 @@ describe('Documents: library', () => {
     expect(await within(contract).findByText('succeeded')).toBeInTheDocument();
     expect(
       within(contract).getByRole('link', { name: 'Proposal #44' }).getAttribute('href'),
-    ).toContain('/supply/review/44');
+    ).toContain('/supply/review/44?');
 
     const scan = rows.find((r) => /scan-contract/.test(r.textContent ?? ''));
     if (scan === undefined) throw new Error('no row');

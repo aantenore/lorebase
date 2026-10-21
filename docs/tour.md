@@ -2,7 +2,7 @@
 
 Screenshots of the Lorebase web app (`apps/web`), taken at 1440x900 in the light theme.
 
-**Live and mock.** The pictures below come from the app in live mode against a running Keeper: Postgres and Keeper from `deploy/compose`, the `examples/supply` sample loaded through the REST API (30 Suppliers, 40 Parts, 20 Plants and their Links), and a Proposal with two Conflicts left open. They were taken with `pnpm screenshots --live`. The same screens run on an in-memory mock of the Keeper API when `VITE_API_MODE=mock` (two sample Domains, no backend), which is what the unit tests and `pnpm screenshots` without `--live` use. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change; see [Status](../README.md#status-and-roadmap) for what is still planned. Not everything is served yet: Keeper has no per-Record history list (the Record page lists the writes `explain` knows), no derived values and no extraction items, and the screens say so where it matters. The Start from data and Sources pictures (sample runs) and the animation below were recorded in mock mode.
+**Live and mock.** Except `documents.png` and `review-items.png`, which come from the mock (a live run does not load documents into Keeper), the pictures below come from the app in live mode against a running Keeper: Postgres and Keeper from `deploy/compose`, the `examples/supply` sample loaded through the REST API (30 Suppliers, 40 Parts, 20 Plants and their Links), and a Proposal with two Conflicts left open. They were taken with `pnpm screenshots --live`. The same screens run on an in-memory mock of the Keeper API when `VITE_API_MODE=mock` (two sample Domains, no backend), which is what the unit tests and `pnpm screenshots` without `--live` use. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change; see [Status](../README.md#status-and-roadmap) for what is still planned. Not everything is served yet: Keeper has no per-Record history list (the Record page lists the writes `explain` knows), no derived values and no extraction items, and the screens say so where it matters. The Start from data and Sources pictures (sample runs) and the animation below were recorded in mock mode.
 
 ![Explorer, a Record, the Canvas and the Review resolver in one pass](images/tour.gif)
 
@@ -68,13 +68,25 @@ The wizard for a Domain that starts from tables, not from a blank schema. Upload
 
 The Sources of the schema with their connection reference, mapping summary, sync mode and merge policy, schedule, last run and its counts, a "Sync now" button, the run history with the error of a failed run and a link to the Proposal a run opened (run 6 opened Proposal 40), and the `sources` section of the schema as a YAML editor with validation and a change set. Mock: runs are sample data and a manual sync finds nothing new. Live: runs come from Keeper's Source routes and "Sync now" queues a job for Scribe. The mapping editor is planned.
 
+## Documents
+
+![Documents](images/documents.png)
+
+Where contracts, notices and reports enter a Domain to be read into Proposals (`docs/extraction.md`). A drop zone and a picker take the files, with the caps of the configuration (documents per drop, bytes per document, suffixes) stated and enforced, a switch for "Extract after storing" and the extraction tiers, and a form takes a URL for the hosts Keeper allows. The library lists each document with its type, size, who added it, the status of its latest extraction job (the picture shows four succeeded jobs that opened Proposal 44, one that opened Proposal 42, and a scanned PDF whose job failed) and a link to the Proposal; it follows a queued or running job until it ends. A document opens in a viewer with its jobs (model, prompt version, tokens, cost) and its parsed text, with the evidence of the Proposal's items highlighted and a list of those items beside it. Mock: the four documents are the texts of `examples/supply/documents`; a new upload is stored but extracts nothing. Live: the Keeper has no route for the parsed text yet, so the viewer shows the evidence passages instead.
+
 ## Review
 
 ### Proposal list
 
 ![Review, Proposal list](images/review-list.png)
 
-The Proposals of the Domain with origin (manual or extraction), the Branches they merge, status and the number of unresolved Conflicts, filterable by status. The Proposal page also has the checks Keeper runs, the reviews with where the approvals stand (a protected target wants approvals before it takes a merge) and a form to add one. The extraction items screen is planned.
+The Proposals of the Domain with origin (manual or extraction), the Branches they merge, status and the number of unresolved Conflicts, filterable by status. The Proposal page also has the checks Keeper runs, the reviews with where the approvals stand (a protected target wants approvals before it takes a merge) and a form to add one.
+
+### Extraction items
+
+![Review, extraction items](images/review-items.png)
+
+The Items tab of an extraction Proposal. Proposal 44 holds 13 items from the four supply documents: new Records, Attribute values and Links, grouped by type, each with a confidence bar, how it matched the Records of `main` (`matched`, `new`, `ambiguous`), its quote and a link to the quote in the document viewer. Filters narrow the table by status, Kind or Relation, type and confidence range; accept, reject and back to pending are staged per item (buttons or `a`, `r`, `u`, with arrow keys or `j` and `k` to move) or in bulk for what the filter shows or for the pending items above or below a threshold, and "Apply decisions" sends them in one request. Keeper checks the accepted set as a whole: accepting the Contract C-3025 without its `with_supplier` Link is a 422 whose findings are shown next to the staged decisions, and accepting both rebuilds the extraction Branch with exactly the accepted items, reporting the changes, the Revision and the accepted items that could not be applied. The selected item (right) shows its evidence, a picker for the candidates of an ambiguous match (here the Dresden plant, chosen between two) and inline edits of its values or Link ends, checked against the schema. The picture has the Contract and its Link staged and the ambiguous Link selected.
 
 ### Merge attempt and Conflict resolver
 
