@@ -195,6 +195,9 @@ def resolve(schema: Schema, name: str) -> _Resolved:
     return _Resolved(name, None, builtin)
 
 
+EXPRESSIONS_DISABLED = "expressions are disabled by configuration (schema.expressions_enabled)"
+
+
 def expressions_gate(operation: Operation, settings: OperationSettings) -> list[Finding]:
     """Refuse what needs CEL unless expressions are enabled; returns warnings for skipped
     preconditions."""
@@ -206,14 +209,13 @@ def expressions_gate(operation: Operation, settings: OperationSettings) -> list[
             raise ProblemError(
                 EXPRESSIONS_NOT_ENABLED,
                 f"Operation {operation.api_name!r} has preconditions written in CEL, and "
-                "expressions are not enabled yet: nothing was evaluated or executed.",
+                f"{EXPRESSIONS_DISABLED}: nothing was evaluated or executed.",
                 extensions={"operation": operation.api_name},
             )
         warnings.append(
             Finding(
                 PRECONDITIONS_SKIPPED,
-                f"{len(operation.preconditions)} precondition(s) skipped: expressions are "
-                "not enabled",
+                f"{len(operation.preconditions)} precondition(s) skipped: {EXPRESSIONS_DISABLED}",
                 ("preconditions",),
                 severity="warning",
             )
@@ -222,7 +224,7 @@ def expressions_gate(operation: Operation, settings: OperationSettings) -> list[
         raise ProblemError(
             EXPRESSIONS_NOT_ENABLED,
             f"Operation {operation.api_name!r} computes its edits or review policy with CEL, "
-            "and expressions are not enabled yet: nothing was executed.",
+            f"and {EXPRESSIONS_DISABLED}: nothing was executed.",
             extensions={"operation": operation.api_name},
         )
     return warnings
