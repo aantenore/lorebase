@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Annotated, Any
+from typing import Annotated, Any, cast, get_args
 
 import typer
 
@@ -11,7 +11,7 @@ from lorebase_cli.context import AppContext, app_of
 from lorebase_cli.failures import CliError
 from lorebase_cli.options import AllOpt, DomainOpt, JsonOpt, LimitOpt, complete_domain
 from lorebase_cli.output import Column, short_id
-from lorebase_client.models import Domain
+from lorebase_client.models import BranchMode, Domain
 
 domain_app = typer.Typer(help="Create, inspect and delete Domains.", no_args_is_help=True)
 branch_app = typer.Typer(help="List, create, protect and delete branches.", no_args_is_help=True)
@@ -208,13 +208,20 @@ def branch_create(
     revision: Annotated[
         str | None, typer.Option("--revision", help="Revision id to start at.")
     ] = None,
+    mode: Annotated[
+        str | None,
+        typer.Option("--mode", help="copy (own rows) or overlay (only its changes)."),
+    ] = None,
     domain: DomainOpt = None,
     json_out: JsonOpt = False,
 ) -> None:
     """Create a branch from a branch, a tag or a Revision."""
     app = app_of(ctx, json_out)
+    allowed = get_args(BranchMode)
+    if mode is not None and mode not in allowed:
+        raise CliError(f"--mode: unknown {mode!r}, use {', '.join(allowed)}")
     created = app.client().branches.create(
-        app.domain(domain), name, source=source, revision=revision
+        app.domain(domain), name, source=source, revision=revision, mode=cast(BranchMode, mode)
     )
     app.out.emit(created, lambda: app.out.table([created.model_dump()], BRANCH_COLUMNS))
 
