@@ -791,6 +791,10 @@ async def _run_job(
         spec = next((s for s in planned if s.name(domain_id, branch) == name), None)
     statements: list[str] = []
     if action is IndexAction.DROP:
+        # Jobs are queued by the application role and run by the maintenance role: only a
+        # per-Attribute index of this Domain may be dropped, whatever name the job carries.
+        if name not in existing:
+            return JobStatus.CANCELLED, "not a per-Attribute index of this Domain"
         # Forced: an index that would reject the rows of a pending schema change, whose
         # commit cannot land (and change the plan) while the index exists.
         forced = bool(payload.get("force"))
