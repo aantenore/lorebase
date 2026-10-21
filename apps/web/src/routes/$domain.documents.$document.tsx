@@ -1,6 +1,5 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, lazyRouteComponent } from '@tanstack/react-router';
 import { readText } from '@/app/scope';
-import { DocumentPage } from '@/features/documents/document-page';
 
 /** A character offset in the URL: a whole number from 0, or absent. */
 function offset(value: unknown): number | undefined {
@@ -18,11 +17,8 @@ export const Route = createFileRoute('/$domain/documents/$document')({
     start: offset(raw['start']),
     end: offset(raw['end']),
   }),
-  component: DocumentRoute,
+  component: lazyRouteComponent(
+    () => import('@/features/documents/document-route'),
+    'DocumentRoute',
+  ),
 });
-
-function DocumentRoute() {
-  const { document } = Route.useParams();
-  const { item, start, end } = Route.useSearch();
-  return <DocumentPage documentId={document} item={item ?? null} start={start} end={end} />;
-}

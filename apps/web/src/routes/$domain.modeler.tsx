@@ -1,5 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { ModelerPage } from '@/features/modeler/modeler-page';
+import { createFileRoute, lazyRouteComponent } from '@tanstack/react-router';
 import {
   isModelerTab,
   isModelerView,
@@ -14,10 +13,5 @@ export const Route = createFileRoute('/$domain/modeler')({
     tab: isModelerTab(raw['tab']) ? raw['tab'] : undefined,
     view: isModelerView(raw['view']) ? raw['view'] : undefined,
   }),
-  component: ModelerRoute,
+  component: lazyRouteComponent(() => import('@/features/modeler/modeler-route'), 'ModelerRoute'),
 });
-
-function ModelerRoute() {
-  const { tab, view } = Route.useSearch();
-  return <ModelerPage tab={tab ?? 'kinds'} view={view ?? 'overview'} />;
-}

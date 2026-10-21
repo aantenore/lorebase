@@ -1,9 +1,12 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
 // Tests that opt into the node environment (`@vitest-environment node`) have no DOM to patch.
 if (typeof window !== 'undefined') {
+  // Screens load their code on demand, and the first load of a route is a cold dynamic import.
+  configure({ asyncUtilTimeout: 5000 });
+
   // jsdom does not implement scrolling; the router calls it on navigation.
   window.scrollTo = () => {};
 

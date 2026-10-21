@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button } from './button';
 import { Dialog } from './dialog';
 import { Input, Select } from './field';
+import { RouteFallback } from './route-fallback';
 import { Table, TBody, TD, TH, THead, TR } from './table';
 import { Tabs } from './tabs';
 import { ToastProvider, useToast } from './toast';
@@ -151,5 +152,12 @@ describe('ui primitives', () => {
       screen.getAllByRole('button', { name: 'Dismiss notification' })[0] as HTMLElement,
     );
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+  });
+});
+
+describe('RouteFallback', () => {
+  it('announces that a screen is loading', () => {
+    render(<RouteFallback />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading screen...');
   });
 });

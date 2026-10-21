@@ -15,22 +15,30 @@ cp .env.example .env     # mock mode by default
 pnpm dev                 # http://localhost:5173
 ```
 
-| Script                    | What it does                                   |
-| ------------------------- | ---------------------------------------------- |
-| `pnpm dev`                | Vite dev server with HMR                       |
-| `pnpm build`              | Type-check, then production build into `dist/` |
-| `pnpm preview`            | Serve the production build locally             |
-| `pnpm test`               | Unit and component tests (Vitest, jsdom)       |
-| `pnpm typecheck`          | `tsc --noEmit`                                 |
-| `pnpm lint`               | ESLint (type-aware) and Prettier check         |
-| `pnpm format`             | Prettier write                                 |
-| `pnpm types`              | Regenerate `src/api/generated/keeper.ts`       |
-| `pnpm e2e`                | Playwright flows against a real Keeper         |
-| `pnpm screenshots`        | Regenerate the PNGs in `docs/images/` (mock)   |
-| `pnpm screenshots flow`   | Record `docs/images/tour.gif` (mock)           |
-| `pnpm screenshots --live` | The same PNGs from a running Keeper            |
+| Script                    | What it does                                                          |
+| ------------------------- | --------------------------------------------------------------------- |
+| `pnpm dev`                | Vite dev server with HMR                                              |
+| `pnpm build`              | Type-check, build into `dist/`, check the bundle budget               |
+| `pnpm bundle:check`       | Check `dist/` against `bundle-budget.json`                            |
+| `pnpm analyze`            | Build with a size treemap in `node_modules/.cache/analyze/stats.html` |
+| `pnpm preview`            | Serve the production build locally                                    |
+| `pnpm test`               | Unit and component tests (Vitest, jsdom)                              |
+| `pnpm typecheck`          | `tsc --noEmit`                                                        |
+| `pnpm lint`               | ESLint (type-aware) and Prettier check                                |
+| `pnpm format`             | Prettier write                                                        |
+| `pnpm types`              | Regenerate `src/api/generated/keeper.ts`                              |
+| `pnpm e2e`                | Playwright flows against a real Keeper                                |
+| `pnpm screenshots`        | Regenerate the PNGs in `docs/images/` (mock)                          |
+| `pnpm screenshots flow`   | Record `docs/images/tour.gif` (mock)                                  |
+| `pnpm screenshots --live` | The same PNGs from a running Keeper                                   |
 
 While iterating, run only the tests that cover what you changed, for example `pnpm test src/features/review`.
+
+## Bundle size
+
+Every screen is a lazy route (`lazyRouteComponent` in `src/routes/`, the screen and its URL binding in `src/features/<area>/*-route.tsx`), and `vite.config.ts` puts the vendor libraries in chunks of their own (`react`, `tanstack`, `graph` for Sigma and graphology, `codemirror`, `yaml`). The Canvas library and the YAML editor load only on the screens that use them. `RouteFallback` shows while a screen loads.
+
+`bundle-budget.json` caps the main chunk (the entry named by `index.html`) and the whole first load (the entry plus its preloaded chunks), raw and gzipped, in kB of 1000 bytes. `pnpm build` fails when a limit is exceeded; raise a limit only on purpose, in the same change that grows the bundle. `pnpm analyze` builds into `node_modules/.cache/analyze/` and writes `stats.html` there to see what a chunk holds.
 
 ## Screenshots
 
