@@ -267,6 +267,24 @@ async def test_each_request_opens_a_client_with_its_own_credential(
     assert fake.last().headers["user-agent"] == "lorebase-herald"
 
 
+@pytest.mark.parametrize(("configured", "expected"), [({}, False), ({"trust_env": True}, True)])
+async def test_keeper_clients_ignore_proxy_variables_unless_trust_env(
+    monkeypatch: pytest.MonkeyPatch, configured: dict[str, Any], expected: bool
+) -> None:
+    built: list[dict[str, Any]] = []
+    real = httpx.AsyncClient
+
+    def recording(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        built.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording)
+    keeper = make_settings().keeper.model_copy(update=configured)
+    async with KeeperClients(keeper).open(None):
+        pass
+    assert [options["trust_env"] for options in built] == [expected]
+
+
 # Configuration -------------------------------------------------------------------------------
 
 

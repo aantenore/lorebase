@@ -304,6 +304,7 @@ inference:
     max_tokens: null             # completion cap; null leaves it to the server
     max_concurrency: 2
     timeout_s: 120
+    trust_env: false             # false: proxy variables ignored; true: HTTP(S)_PROXY, NO_PROXY honored
     retry:                       # 429, 5xx and connection errors; Retry-After is honored
       max_retries: 3
       backoff_base_s: 0.5        # wait before retry n: min(backoff_max_s, base * 2**n), jittered
@@ -340,6 +341,7 @@ inference:
     base_url: null               # required for openai_compatible, e.g. http://localhost:11434/v1
     api_key: null
     timeout_s: 60                # openai_compatible request timeout
+    trust_env: false             # false: proxy variables ignored; true: HTTP(S)_PROXY, NO_PROXY honored
     retry: {max_retries: 3, backoff_base_s: 0.5, backoff_max_s: 30}
     # Ollama embeddings instead of fastembed:
     #   provider: openai_compatible
@@ -642,6 +644,7 @@ herald:
     max_retries: 2               # resends after 429, 503 or no connection; 0 turns retries off
     retry_max_wait_s: 5          # longest pause before a retry; Retry-After is capped to it
     verify_tls: true
+    trust_env: false             # false: proxy variables ignored; true: HTTP(S)_PROXY, NO_PROXY honored
     user_agent: lorebase-herald
   http:                          # streamable_http: each caller sends its own key
     host: 127.0.0.1

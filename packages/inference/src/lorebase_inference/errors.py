@@ -12,7 +12,8 @@ class InferenceError(Exception):
 class EndpointError(InferenceError):
     """An HTTP model endpoint failed or answered with something unusable.
 
-    The message holds the status and the error text sent by the server (truncated); it never
+    The message holds the status and the error text sent by the server, truncated and with
+    credential-like strings removed; for 401 and 403 it holds no server text at all. It never
     holds prompts or credentials.
     """
 
@@ -20,7 +21,8 @@ class EndpointError(InferenceError):
         super().__init__(message)
         self.status = status
         self.detail = detail
-        """Error text sent by the server, truncated; used to recognize unsupported options."""
+        """Error text sent by the server, truncated and scrubbed (empty for 401 and 403); used
+        to recognize unsupported options."""
 
 
 class InvalidOutputError(InferenceError):
