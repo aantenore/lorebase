@@ -1,8 +1,16 @@
 /**
- * Runtime configuration. Values come from Vite environment variables (see `.env.example`).
+ * Runtime configuration. Values come from Vite environment variables (see `.env.example`),
+ * overlaid at start by `window.__LOREBASE_CONFIG__` (served as `/config.js`).
  * Only non-functional tunables (page sizes, cache lifetimes) have defaults in code;
  * the data source and the Keeper endpoint must be provided by the environment.
  */
+
+declare global {
+  interface Window {
+    /** Set by `/config.js` before the app starts; validated by `withRuntimeConfig`. */
+    __LOREBASE_CONFIG__?: unknown;
+  }
+}
 
 export type ApiMode = 'mock' | 'live';
 
@@ -118,10 +126,46 @@ function parseBaseUrl(value: string): string {
   return url.origin + url.pathname.replace(/\/+$/, '');
 }
 
+/** Friendly runtime keys and the variable each one stands for. */
+const RUNTIME_ALIASES: Readonly<Record<string, string>> = {
+  apiMode: 'VITE_API_MODE',
+  keeperBaseUrl: 'VITE_KEEPER_BASE_URL',
+  apiToken: 'VITE_API_TOKEN',
+  token: 'VITE_API_TOKEN',
+};
+const RUNTIME_VARIABLE = /^VITE_[A-Z0-9_]+$/;
+
+/**
+ * The build environment overlaid with the runtime object of `/config.js`. Runtime wins; only
+ * non-empty strings and finite numbers count, everything else leaves the build value in place.
+ */
+export function withRuntimeConfig(buildEnv: RawEnv, runtime: unknown): RawEnv {
+  if (typeof runtime !== 'object' || runtime === null || Array.isArray(runtime)) return buildEnv;
+  const merged: Record<string, string | boolean | undefined> = { ...buildEnv };
+  for (const [key, value] of Object.entries(runtime)) {
+    const name = Object.hasOwn(RUNTIME_ALIASES, key)
+      ? RUNTIME_ALIASES[key]
+      : RUNTIME_VARIABLE.test(key)
+        ? key
+        : undefined;
+    if (name === undefined) continue;
+    const str =
+      typeof value === 'string'
+        ? value.trim()
+        : typeof value === 'number' && Number.isFinite(value)
+          ? String(value)
+          : '';
+    if (str !== '') merged[name] = str;
+  }
+  return merged;
+}
+
 export function loadConfig(raw: RawEnv): AppConfig {
   const mode = text(raw, 'VITE_API_MODE');
   if (mode !== 'mock' && mode !== 'live') {
-    throw new ConfigError('VITE_API_MODE must be "mock" or "live". See .env.example.');
+    throw new ConfigError(
+      'VITE_API_MODE (apiMode in /config.js) must be "mock" or "live". See .env.example.',
+    );
   }
 
   let keeperBaseUrl: string | null = null;

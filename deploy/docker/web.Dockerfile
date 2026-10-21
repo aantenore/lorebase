@@ -5,17 +5,22 @@
 #   docker build -f deploy/docker/web.Dockerfile -t lorebase-web .
 #   docker run --rm -p 8080:8080 lorebase-web
 #
-# Configuration. The app reads its settings from Vite variables when it is built (VITE_API_MODE,
-# VITE_KEEPER_BASE_URL, ...), so they are build arguments here:
+# Configuration. The app reads /config.js (window.__LOREBASE_CONFIG__) when it starts, over the
+# Vite variables baked in at build time, so one image works against any Keeper:
+#
+#   docker run --rm -p 8080:8080 -e VITE_API_MODE=live \
+#     -e VITE_KEEPER_BASE_URL=https://keeper.example.com lorebase-web
+#
+# The entrypoint script writes /config.js from the VITE_* variables of the container environment;
+# a mounted config.js (as the Helm chart does) works too.
+#
+# The build arguments only set the defaults used when /config.js says nothing:
 #
 #   docker build -f deploy/docker/web.Dockerfile -t lorebase-web \
 #     --build-arg VITE_API_MODE=live --build-arg VITE_KEEPER_BASE_URL=https://keeper.example.com .
 #
 # The default is the mock API (sample Domains in memory), the only mode that starts without a
-# Keeper. The image also serves /config.js, written at start from the VITE_* variables of the
-# container environment (or mounted over it, as the Helm chart does), so that one image can work
-# against any Keeper. apps/web does not read window.__LOREBASE_CONFIG__ yet: until it does, the
-# file is served but has no effect (docs/release.md, "Known gaps").
+# Keeper.
 #
 # The build context is the repository root; web.Dockerfile.dockerignore keeps it to apps/web and
 # deploy/docker/web.
@@ -55,7 +60,6 @@ LABEL org.opencontainers.image.title="lorebase-web" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build --chown=101:101 /src/dist /usr/share/nginx/html
-COPY --chown=101:101 deploy/docker/web/config.js /usr/share/nginx/html/config.js
 COPY deploy/docker/web/default.conf /etc/nginx/conf.d/default.conf
 COPY --chmod=755 deploy/docker/web/40-lorebase-config.sh /docker-entrypoint.d/40-lorebase-config.sh
 
