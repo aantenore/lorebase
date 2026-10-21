@@ -77,6 +77,13 @@ python -m lorebase_store.bundle import --in /backups/supply.tar [--domain supply
   node and object reachable from the refs is present. It runs in one transaction and rebuilds
   the materialized head of each branch that had one, verifying it against its tree
   (`store.bundle.verify_after_import`). A failing import leaves nothing behind.
+- Import reads within `store.bundle.max_entries`, `max_member_bytes` (per file, counted as read,
+  after gzip), `max_total_bytes` and `max_line_bytes` (per `.jsonl` record and per `.json`
+  file), and refuses links, special files, absolute paths and `..` in a tarball or directory;
+  links are never followed. Tarballs must be uncompressed `.tar`, as export writes them.
+- Bundles are trusted input: hashes prove integrity, not origin. Authors, provenance, the ref
+  log, changesets and Domain settings are imported as written, so import only bundles from
+  trusted sources.
 - The target Domain must not exist, or must have no Revisions and no refs. Revision ids include
   the Domain id, so a bundle can only be restored under the id it was exported with.
 - Unreachable data (collected or not yet collected garbage) is not exported, so restoring a

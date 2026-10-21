@@ -292,6 +292,26 @@ class BundleSettings(SectionModel):
         default=True,
         description="Verify every rebuilt branch against its tree after an import.",
     )
+    max_member_bytes: int = Field(
+        default=17_179_869_184,
+        ge=1,
+        description="Largest file of a bundle being imported, counted as read (after gzip).",
+    )
+    max_total_bytes: int = Field(
+        default=68_719_476_736,
+        ge=1,
+        description="Largest sum of the file sizes of a bundle being imported.",
+    )
+    max_entries: int = Field(
+        default=100_000,
+        ge=1,
+        description="Most files and directories a bundle being imported may hold.",
+    )
+    max_line_bytes: int = Field(
+        default=67_108_864,
+        ge=1,
+        description="Longest .jsonl record, and largest .json file, read into memory on import.",
+    )
 
 
 class CsvProfilingSettings(SectionModel):

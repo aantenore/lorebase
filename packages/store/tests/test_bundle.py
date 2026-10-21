@@ -357,6 +357,31 @@ def refresh_manifest(root: Path, counts: dict[str, int] | None = None) -> None:
     (root / "manifest.json").write_text(json.dumps(manifest))
 
 
+async def test_overlong_line_fails_the_import_and_leaves_nothing(
+    engine: AsyncEngine,
+    target: AsyncEngine,
+    sessions: Sessions,
+    store: StoreSettings,
+    tmp_path: Path,
+) -> None:
+    runtime = StoreRuntime.from_settings(
+        store.model_copy(
+            update={"bundle": BundleSettings(compression="none", max_line_bytes=50_000)}
+        )
+    )
+    await populate(sessions, runtime)
+    bundle = await exported_copy(engine, runtime, tmp_path, "long")
+    lines = (bundle / "objects.jsonl").read_text().splitlines()
+    record = json.loads(lines[0])
+    record["padding"] = "x" * 60_000
+    lines[0] = json.dumps(record)
+    (bundle / "objects.jsonl").write_text("\n".join(lines) + "\n")
+    refresh_manifest(bundle)
+    with pytest.raises(BundleError, match=r"objects\.jsonl line 1 is longer than .*max_line_bytes"):
+        await import_bundle(target, bundle, runtime=runtime)
+    assert await domain_rows(target) == 0
+
+
 async def test_export_of_unknown_domain_fails(engine: AsyncEngine, tmp_path: Path) -> None:
     with pytest.raises(DomainNotFoundError):
         await export_domain(engine, "nope", tmp_path / "x")
