@@ -181,7 +181,10 @@ keeper:
     max_total_bytes: 1048576     # all files together (413 above)
     file_suffixes: [.csv, .tsv, .txt]
     allowed_sources: []          # secret references of Postgres URLs callers may name, e.g.
-                                 # secret://env/ERP_DSN; empty disables Postgres inference
+                                 # secret://env/ERP_DSN; empty disables Postgres inference;
+                                 # the default of every Domain not in domain_sources
+    domain_sources: {}           # per-Domain lists replacing allowed_sources for that Domain,
+                                 # e.g. {supply: [secret://env/ERP_DSN], hr: []}; [] = none
     max_issues: 500              # issues listed in one response
     options:                     # thresholds and naming rules; a request may override them
       sample_size: 10000         # values read per column

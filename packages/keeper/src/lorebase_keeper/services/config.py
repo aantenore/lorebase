@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from lorebase_core.expr import ExprLimits
 from lorebase_core.infer import InferenceOptions
+from lorebase_core.model import SECRET_REFERENCE_PREFIX, DomainSlug
 from lorebase_core.tree import DEFAULT_LEAF_SIZE
 from lorebase_platform.settings import SectionModel
 
@@ -175,10 +176,33 @@ class SchemaInferenceSettings(SectionModel):
     allowed_sources: tuple[str, ...] = Field(
         default=(),
         description="Secret references (secret://env/NAME, secret://file/PATH) holding Postgres "
-        "URLs that callers may name as sources. Empty: Postgres inference is disabled.",
+        "URLs that callers may name as sources. The default of every Domain not listed in "
+        "`domain_sources`. Empty: Postgres inference is disabled for those Domains.",
+    )
+    domain_sources: dict[DomainSlug, tuple[str, ...]] = Field(
+        default_factory=dict,
+        description="Per-Domain source lists keyed by Domain id. A listed Domain may name only "
+        "its own secret references (an empty list disables Postgres inference for it); "
+        "`allowed_sources` does not apply to it.",
     )
     max_issues: int = Field(default=500, ge=1, description="Issues listed in one response.")
     options: InferenceOptions = Field(
         default_factory=InferenceOptions,
         description="Thresholds and naming rules; a request may override some of them.",
     )
+
+    @field_validator("domain_sources")
+    @classmethod
+    def _secret_references(cls, value: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        for domain_id, sources in value.items():
+            for source in sources:
+                if not source.startswith(SECRET_REFERENCE_PREFIX):
+                    raise ValueError(
+                        f"sources of Domain {domain_id!r} must be secret references "
+                        f"such as {SECRET_REFERENCE_PREFIX}env/NAME"
+                    )
+        return value
+
+    def sources_for(self, domain_id: str) -> tuple[str, ...]:
+        """The secret references a Domain may name: its own list, or the default."""
+        return self.domain_sources.get(domain_id, self.allowed_sources)

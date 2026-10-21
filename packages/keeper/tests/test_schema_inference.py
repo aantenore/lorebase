@@ -182,3 +182,63 @@ async def test_postgres_source_gives_a_proposal(
     assert seen == {"schema": "erp", "tables": ("supplier",)}
     kinds = {k["api_name"] for k in response.json()["schema"]["kinds"].values()}
     assert kinds == {"Contract", "Supplier"}
+
+
+# Per-Domain sources ------------------------------------------------------------------------
+
+OTHER_SOURCE = "secret://env/TEST_OTHER_DSN"
+OTHER_URL = "/api/v1/domains/other/schema:infer"
+
+
+def _domain_sources_app(make_app: Callable[..., FastAPI], supply: list[str]) -> FastAPI:
+    return make_app(
+        {"schema_inference": {"allowed_sources": [SOURCE], "domain_sources": {"supply": supply}}}
+    )
+
+
+@pytest.fixture
+def fake_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_ERP_DSN", "postgresql://reader@db.example.test/erp")
+    monkeypatch.setenv("TEST_OTHER_DSN", "postgresql://reader@other.example.test/erp")
+
+    async def profile(
+        engine: object, settings: object, *, schema: str, tables: Any
+    ) -> list[TableProfile]:
+        return [profile_file(SUPPLY_DATA / "supplier.csv", CsvProfilingSettings())]
+
+    monkeypatch.setattr(schema_inference, "profile_postgres", profile)
+
+
+@pytest.mark.usefixtures("fake_profile")
+async def test_a_domain_override_allows_only_its_own_sources(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    async with client_for(_domain_sources_app(make_app, [OTHER_SOURCE])) as http:
+        own = await http.post(URL, json={"postgres": {"dsn": OTHER_SOURCE}})
+        default = await http.post(URL, json={"postgres": {"dsn": SOURCE}})
+    assert own.status_code == 200, own.text
+    assert default.status_code == 422, default.text
+    assert default.json()["errors"][0]["pointer"] == "/body/postgres/dsn"
+    assert "TEST_OTHER_DSN" not in default.text
+
+
+@pytest.mark.usefixtures("fake_profile")
+async def test_a_domain_without_override_uses_the_default(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    async with client_for(_domain_sources_app(make_app, [OTHER_SOURCE])) as http:
+        default = await http.post(OTHER_URL, json={"postgres": {"dsn": SOURCE}})
+        foreign = await http.post(OTHER_URL, json={"postgres": {"dsn": OTHER_SOURCE}})
+    assert default.status_code == 200, default.text
+    assert foreign.status_code == 422, foreign.text
+    assert "TEST_ERP_DSN" not in foreign.text
+
+
+@pytest.mark.usefixtures("fake_profile")
+async def test_an_empty_domain_override_refuses_every_source(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    async with client_for(_domain_sources_app(make_app, [])) as http:
+        response = await http.post(URL, json={"postgres": {"dsn": SOURCE}})
+    assert response.status_code == 422, response.text
+    assert response.json()["errors"][0]["pointer"] == "/body/postgres/dsn"
