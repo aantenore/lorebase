@@ -8,7 +8,7 @@ Environment aliases override the YAML values of the default chat model:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -25,6 +25,7 @@ ENV_ALIASES = {
 ChatProvider = Literal["openai_compatible", "fake"]
 EmbeddingProvider = Literal["fastembed", "openai_compatible", "fake"]
 SpanProvider = Literal["gliner", "fake"]
+RelationProvider = Literal["glirel", "cooccurrence", "fake"]
 
 
 class RetrySettings(SectionModel):
@@ -134,6 +135,12 @@ class EmbeddingSettings(SectionModel):
     )
     api_key: SecretValue | None = None
     batch_size: int = Field(default=32, ge=1, description="Texts per model call or request.")
+    cache_dir: Path | None = Field(
+        default=None, description="fastembed: where model files are stored; unset: library default."
+    )
+    threads: int | None = Field(
+        default=None, ge=1, description="fastembed: CPU threads; unset: library default."
+    )
     timeout_s: float = Field(default=60, gt=0, description="openai_compatible request timeout.")
     retry: RetrySettings = Field(default_factory=RetrySettings)
 
@@ -148,8 +155,17 @@ class ExtractorSettings(SectionModel):
     """One tier-1 local extractor."""
 
     enabled: bool = True
-    model: str = Field(min_length=1)
+    model: str = Field(min_length=1, description="Checkpoint name; see the weight license note.")
     threshold: float = Field(default=0.5, ge=0, le=1)
+    cache_dir: Path | None = Field(
+        default=None, description="Where checkpoints are stored; unset: library default."
+    )
+    window_chars: int = Field(
+        default=1500,
+        ge=100,
+        description="Longer texts are cut at whitespace into windows of at most this size, "
+        "because the models read a few hundred tokens at a time.",
+    )
 
 
 class SpacySettings(SectionModel):
@@ -159,13 +175,36 @@ class SpacySettings(SectionModel):
     pipeline: str = Field(default="en_core_web_sm", min_length=1)
 
 
+class CooccurrenceSettings(SectionModel):
+    """Limits of the deterministic relation fallback (`relation_provider: cooccurrence`)."""
+
+    max_pairs_per_sentence: int = Field(
+        default=200, ge=1, description="Candidate pairs kept per sentence, nearest first."
+    )
+
+
 class LocalExtractorSettings(SectionModel):
     """Tier-1 extractors; check each checkpoint's weight license before enabling."""
 
     provider: SpanProvider = Field(default="gliner", description="gliner or fake (tests).")
+    relation_provider: RelationProvider = Field(
+        default="glirel",
+        description="glirel, or cooccurrence (deterministic pairing of spans that share a "
+        "sentence, no model), or fake (same as cooccurrence, for tests; the default when "
+        "`provider` is fake).",
+    )
     gliner: ExtractorSettings = ExtractorSettings(model="urchade/gliner_multi-v2.1")
     glirel: ExtractorSettings = ExtractorSettings(model="jackboyla/glirel-large-v0")
+    cooccurrence: CooccurrenceSettings = Field(default_factory=CooccurrenceSettings)
     spacy: SpacySettings = Field(default_factory=SpacySettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fake_provider_implies_fake_relations(cls, data: Any) -> Any:
+        """`provider: fake` selects the offline relation provider too, unless one is named."""
+        if isinstance(data, dict) and data.get("provider") == "fake":
+            return {"relation_provider": "fake", **data}
+        return data
 
 
 class FakeSettings(SectionModel):
