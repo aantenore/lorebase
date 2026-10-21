@@ -1,4 +1,4 @@
-import { ConfigError, loadConfig } from './env';
+import { ConfigError, loadConfig, withRuntimeConfig } from './env';
 
 describe('loadConfig', () => {
   it('requires an explicit API mode', () => {
@@ -71,5 +71,73 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ VITE_API_MODE: 'mock', VITE_INFER_MAX_FILES: '0' })).toThrow(
       ConfigError,
     );
+  });
+});
+
+describe('withRuntimeConfig', () => {
+  const build = { VITE_API_MODE: 'mock', VITE_KEEPER_BASE_URL: 'http://build.test', MODE: 'x' };
+
+  it('maps the friendly aliases onto the VITE_ names', () => {
+    const merged = withRuntimeConfig(build, {
+      apiMode: 'live',
+      keeperBaseUrl: 'https://keeper.example.test',
+      apiToken: 'lbk_a',
+    });
+    expect(merged).toMatchObject({
+      VITE_API_MODE: 'live',
+      VITE_KEEPER_BASE_URL: 'https://keeper.example.test',
+      VITE_API_TOKEN: 'lbk_a',
+    });
+    expect(withRuntimeConfig({}, { token: ' lbk_b ' })['VITE_API_TOKEN']).toBe('lbk_b');
+  });
+
+  it('passes VITE_ names through, stringifying plain numbers', () => {
+    const merged = withRuntimeConfig(build, { VITE_PAGE_SIZE: 25, VITE_TOAST_MS: '7000' });
+    expect(merged['VITE_PAGE_SIZE']).toBe('25');
+    expect(merged['VITE_TOAST_MS']).toBe('7000');
+  });
+
+  it('lets the runtime win over the build and keeps the other build values', () => {
+    const merged = withRuntimeConfig(build, { VITE_KEEPER_BASE_URL: 'http://runtime.test' });
+    expect(merged['VITE_KEEPER_BASE_URL']).toBe('http://runtime.test');
+    expect(merged['VITE_API_MODE']).toBe('mock');
+    expect(merged['MODE']).toBe('x');
+  });
+
+  it('ignores empty, blank and invalid values and unknown keys', () => {
+    const merged = withRuntimeConfig(build, {
+      apiMode: '',
+      keeperBaseUrl: '   ',
+      VITE_PAGE_SIZE: null,
+      VITE_TOAST_MS: Number.NaN,
+      VITE_SEARCH_LIMIT: { a: 1 },
+      VITE_CANVAS_DEPTH: ['2'],
+      VITE_MOCK_LATENCY_MS: true,
+      unknown: 'x',
+      vite_lower: 'x',
+      VITE_BAD$: 'x',
+      __proto__: 'x',
+      constructor: 'x',
+    });
+    expect(merged).toEqual(build);
+  });
+
+  it('ignores a runtime that is not a plain object', () => {
+    for (const runtime of [undefined, null, 'live', 3, true, ['VITE_API_MODE']]) {
+      expect(withRuntimeConfig(build, runtime)).toBe(build);
+    }
+  });
+
+  it('switches a mock build to live mode from the runtime', () => {
+    const config = loadConfig(
+      withRuntimeConfig(build, { apiMode: 'live', keeperBaseUrl: 'https://keeper.example.test/' }),
+    );
+    expect(config.apiMode).toBe('live');
+    expect(config.keeperBaseUrl).toBe('https://keeper.example.test');
+    expect(loadConfig(withRuntimeConfig(build, {})).apiMode).toBe('mock');
+  });
+
+  it('still reports a missing mode when neither side sets one', () => {
+    expect(() => loadConfig(withRuntimeConfig({}, { apiMode: '' }))).toThrow(/mock" or "live/);
   });
 });

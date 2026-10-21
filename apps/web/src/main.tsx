@@ -2,13 +2,13 @@ import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppProviders } from '@/app/providers';
-import { ConfigError, loadConfig, type AppConfig } from '@/config/env';
+import { ConfigError, loadConfig, withRuntimeConfig, type AppConfig } from '@/config/env';
 import { createAppRouter } from './router';
 import './styles.css';
 
 function bootConfig(): AppConfig | ConfigError {
   try {
-    return loadConfig(import.meta.env);
+    return loadConfig(withRuntimeConfig(import.meta.env, window.__LOREBASE_CONFIG__));
   } catch (error) {
     if (error instanceof ConfigError) return error;
     throw error;

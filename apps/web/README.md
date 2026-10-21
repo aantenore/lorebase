@@ -49,7 +49,7 @@ The routes, viewport, theme and the browser flags live in the `MOCK_SHOTS`, `LIV
 
 ## Configuration
 
-Everything comes from Vite environment variables. No URL, endpoint or limit is written in the code; the only default for the Keeper URL lives in `.env.example`.
+Everything comes from Vite environment variables, read at build time, overlaid when the page loads by the runtime configuration (see [Runtime configuration](#runtime-configuration)). No URL, endpoint or limit is written in the code; the only default for the Keeper URL lives in `.env.example`.
 
 | Variable                        | Required              | Meaning                                                                                                              |
 | ------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -73,6 +73,23 @@ Everything comes from Vite environment variables. No URL, endpoint or limit is w
 | `VITE_INFER_POSTGRES_SOURCES`   | no (empty)            | Comma separated secret references offered for Postgres inference                                                     |
 
 `LOREBASE_KEEPER_PROXY` is not a `VITE_` variable and never reaches the bundle: it is read by `vite.config.ts` for `pnpm dev` and `pnpm preview` and makes them proxy `/api` to that Keeper (see [Live mode](#live-mode)). The optional values are non-functional tunables with defaults in `src/config/env.ts`. A missing or invalid required value stops the app at start with a message on screen. `src/config/env.ts` is the only place that reads the environment; components get the validated config from `useConfig()`.
+
+### Runtime configuration
+
+`index.html` loads `/config.js` before the app. The file sets `window.__LOREBASE_CONFIG__`, an object that `withRuntimeConfig` in `src/config/env.ts` overlays on the build environment before validation. The runtime value wins; a key that is missing, empty, of another type or unknown leaves the build value in place. A file that does not set the object, or sets something other than a plain object, is ignored.
+
+Accepted keys:
+
+| Key                                 | Same as                                         |
+| ----------------------------------- | ----------------------------------------------- |
+| `apiMode`                           | `VITE_API_MODE`                                 |
+| `keeperBaseUrl`                     | `VITE_KEEPER_BASE_URL`                          |
+| `apiToken`, `token`                 | `VITE_API_TOKEN`                                |
+| any name matching `VITE_[A-Z0-9_]+` | that variable (the tunables in the table above) |
+
+`public/config.js` is an empty object, so `pnpm dev`, `pnpm preview` and the build all serve the file. The `lorebase-web` image is built in mock mode and switches to live mode at run time, either with `docker run -e VITE_API_MODE=live -e VITE_KEEPER_BASE_URL=https://keeper.example.com ...` (its entrypoint writes `/config.js` from the `VITE_*` environment) or with a mounted `config.js`, as the Helm chart does.
+
+A token in `config.js` is readable by anyone who can load the page. Use it for development or a trusted network only; prefer the token typed in Settings, or no token behind a proxy that adds it.
 
 ## Mock mode
 

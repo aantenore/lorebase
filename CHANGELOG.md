@@ -41,7 +41,7 @@ Agents and access ([MCP](docs/mcp.md), [operations](docs/operations.md))
 Clients and web app ([web app](apps/web/README.md), [tour](docs/tour.md))
 
 - The `lorebase` command line and a Python client, sync and async, checked against the committed OpenAPI document ([docs/openapi.json](docs/openapi.json)). Exit codes are documented: 0 success, 1 usage or not found, 2 validation or conflict, 3 authentication or permission, 4 server error.
-- A web app with Explorer, Canvas, Modeler (including a Start from data wizard over schema inference), Review with a Conflict resolver, Sources and Admin screens. It runs on a mock API; against a live Keeper it is not verified.
+- A web app with Explorer, Canvas, Modeler (including a Start from data wizard over schema inference), Review with a Conflict resolver, Sources and Admin screens. It runs on a mock API; against a live Keeper it is not verified. It reads `/config.js` (`window.__LOREBASE_CONFIG__`: `apiMode`, `keeperBaseUrl`, an optional `apiToken` or any `VITE_*` name) over its build values, so the `lorebase-web` image switches to live mode at run time, from `VITE_*` variables of the container or the chart's `web.config`.
 - The five-day demo: `make demo` brings up a dedicated compose stack and runs the proof scenario of [design 3.2](docs/design.md#32-the-5-day-proof-scenario) with the CLI, in under a minute once the image is built ([docs/demo.md](docs/demo.md)).
 
 Deployment ([deployment](docs/deployment.md), [kubernetes](docs/kubernetes.md))
@@ -57,7 +57,7 @@ Deployment ([deployment](docs/deployment.md), [kubernetes](docs/kubernetes.md))
 - Merge policies `authority` and `newest_wins`.
 - Parquet and HTTP JSON Sources; document upload, parsing and tiered extraction; embedding jobs and hybrid search; `path` Derivations.
 - Groups, sensitivity masking, the Operation outbox, overlay branches and the PII vault.
-- Web app: OIDC login, a verified live mode, and reading its configuration at run time. The `lorebase-web` image is built in mock mode; the chart's `web.config` is written to `/config.js` but the app does not read it yet.
+- Web app: OIDC login and a verified live mode.
 - A documentation site, LinkML import and export, and the stability promise for `/api/v1` that comes with 1.0.
 
 ### Upgrade notes
