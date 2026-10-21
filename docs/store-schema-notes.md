@@ -357,6 +357,30 @@ changed; every other row is read from its base branch as it was at the fork poin
   overlays. An overlay needs to start at the head of a full source branch; otherwise the branch
   is a copy (or rebuilt from the tree). Keeper's `POST /branches` takes `mode`; overlays do not
   count against `keeper.branches.max_materialized_per_domain`.
+- **Index jobs of short-lived branches.** Proposal branches are overlays that are merged and
+  deleted soon after creation, often before the worker has built their indexes.
+  - Deleting a branch (`RefRepository.delete`, the one path of Keeper's branch delete and of
+    the task-branch release after a merge or close) cancels, in the same transaction, the
+    branch's `queued` `store.index` builds (`status = 'cancelled'`, result detail `branch
+    deleted`). Queued drops stay: they clean up indexes the branch left. A job a worker
+    already claimed (`running`) is not touched; its handler decides.
+  - A build whose branch is gone when it runs (claimed before the delete, or queued by hand)
+    completes as a no-op: no DDL, result `{"status": "cancelled", "detail": "the branch no
+    longer exists"}`, a `debug` log, and the job ends `succeeded` on the first attempt, so it
+    neither fails nor retries. The `lorebase.scribe.jobs` counter records it as `succeeded`;
+    none of its `status` values distinguishes a no-op, so no label was added. A build still
+    running when its branch is deleted drops the index it just made and ends the same way
+    (`the branch was deleted during the build`).
+  - Coalescing: a queued or running job per (Domain, index name, action) is reused instead of
+    queued again (`BranchIndexes._insert_job`), and the index name pins branch, Kind and
+    Attribute, so re-forking or re-syncing an overlay before its builds ran adds no jobs. A
+    coarser unit (one job per branch and Kind) was not adopted: jobs build one index each, so
+    it would need a job format that carries several and partial-failure handling for them, to
+    save a few rows of a queue that merge and delete cleanup already empties. Deferring the
+    builds of branches under a minimum age was not adopted either: it delays the indexes of
+    branches that live long, and the cancellation above removes the wasted work. The
+    existence check is not atomic with the insert, so two concurrent syncs can queue the same
+    build twice; the second finds the index built (`already built`) and does nothing.
 - **Garbage collection.** Fork points (`refs.base_revision`) are marking roots; materialized
   rows are never swept, so the copies an overlay holds go with its ref.
 - **Bundles.** Export records `overlay`; import restores every branch as a full copy (heads

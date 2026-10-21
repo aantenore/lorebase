@@ -757,6 +757,7 @@ _FINISH = text("UPDATE jobs SET status = :status, result = CAST(:result AS jsonb
 _BRANCH_SCHEMA = text(
     "SELECT compiled FROM mat_schema WHERE domain_id = :domain AND branch = :branch"
 )
+_BRANCH_EXISTS = text("SELECT 1 FROM refs WHERE domain_id = :domain AND name = :branch")
 _BYPASS = text("SELECT set_config('lorebase.bypass_rls', 'on', true)")
 
 
@@ -809,9 +810,18 @@ async def _run_job(
     branch: str = payload["branch"]
     async with engine.begin() as connection, AsyncSession(bind=connection) as session:
         await scope_to_domain(session, domain_id)
-        compiled = (
-            await session.execute(_BRANCH_SCHEMA, {"domain": domain_id, "branch": branch})
-        ).scalar_one_or_none()
+        found = {"domain": domain_id, "branch": branch}
+        if action is IndexAction.CREATE and not await _branch_exists(session, found):
+            # Merged and deleted since the job was queued (the branch cleanup cancels the
+            # queued ones; this covers a job already claimed or a deletion that raced it).
+            log.debug(
+                "index job %s: branch %r of Domain %s is gone; nothing to build",
+                name,
+                branch,
+                domain_id,
+            )
+            return JobStatus.CANCELLED, "the branch no longer exists"
+        compiled = (await session.execute(_BRANCH_SCHEMA, found)).scalar_one_or_none()
         partition = await partition_of(session, domain_id)
         existing = {i.name: i for i in await existing_indexes(session, domain_id)}
         overlay = (await load_layout(session, domain_id, branch)).overlay
@@ -844,7 +854,29 @@ async def _run_job(
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
         for statement in statements:
             await auto.exec_driver_sql(statement)
+        if action is IndexAction.CREATE and not await _branch_still_exists(
+            engine, domain_id, branch
+        ):
+            # Deleted while the (long) concurrent build ran: do not leave the index behind.
+            await auto.exec_driver_sql(drop_index_sql(name, concurrently=True))
+            log.debug(
+                "index job %s: branch %r of Domain %s was deleted during the build; dropped",
+                name,
+                branch,
+                domain_id,
+            )
+            return JobStatus.CANCELLED, "the branch was deleted during the build"
     return JobStatus.SUCCEEDED, action.value
+
+
+async def _branch_exists(session: AsyncSession, params: Mapping[str, str]) -> bool:
+    return (await session.execute(_BRANCH_EXISTS, params)).first() is not None
+
+
+async def _branch_still_exists(engine: AsyncEngine, domain_id: str, branch: str) -> bool:
+    async with engine.begin() as connection, AsyncSession(bind=connection) as session:
+        await scope_to_domain(session, domain_id)
+        return await _branch_exists(session, {"domain": domain_id, "branch": branch})
 
 
 async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:

@@ -71,6 +71,14 @@ _ENQUEUE = text(
     """
 )
 
+_CANCEL_QUEUED = text(
+    """
+    UPDATE jobs SET status = 'cancelled', result = CAST(:result AS jsonb)
+    WHERE status = 'queued' AND type = :type AND domain_id = :domain
+      AND payload @> CAST(:match AS jsonb)
+    """
+)
+
 _PENDING = text(
     """
     SELECT id FROM jobs
@@ -196,6 +204,29 @@ async def enqueue_job(
             },
         )
         return int(result.scalar_one())
+
+
+async def cancel_queued_jobs(
+    session: AsyncSession,
+    job_type: str,
+    *,
+    domain_id: str,
+    match: Mapping[str, Any],
+    reason: str,
+) -> int:
+    """Cancel the `queued` jobs of `job_type` in `domain_id` whose payload contains `match`;
+    returns how many. Runs in the caller's transaction, in the Domain's row-level security
+    scope. A job a worker has claimed is `running` and untouched: its handler decides."""
+    result = await session.execute(
+        _CANCEL_QUEUED,
+        {
+            "type": job_type,
+            "domain": domain_id,
+            "match": json.dumps(dict(match), sort_keys=True),
+            "result": json.dumps({"detail": reason}),
+        },
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def claim_jobs(
