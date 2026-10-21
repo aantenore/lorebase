@@ -11,7 +11,7 @@ from typer.core import TyperGroup
 
 import lorebase_client
 from lorebase_cli import __version__
-from lorebase_cli.commands import admin, data, domains, history, schema
+from lorebase_cli.commands import admin, agents, data, domains, history, proposals, schema
 from lorebase_cli.context import AppContext
 from lorebase_cli.failures import EXIT_USAGE, CliError, render_failure
 from lorebase_cli.settings import ENV_CONFIG, ENV_PROFILE, load_settings
@@ -123,11 +123,14 @@ app.add_typer(data.import_app, name="import")
 app.add_typer(data.record_app, name="record")
 app.add_typer(history.revision_app, name="revision")
 app.add_typer(admin.apikey_app, name="apikey")
+app.add_typer(proposals.proposal_app, name="proposal")
 app.command("whoami")(domains.whoami)
 app.command("query")(data.query_command)
 app.command("search")(data.search_command)
 app.command("log")(history.log_command)
 app.command("diff")(history.diff_command)
+app.command("context")(agents.context_command)
+app.command("explain")(agents.explain_command)
 
 
 def main() -> None:
