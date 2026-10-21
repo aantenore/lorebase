@@ -607,6 +607,8 @@ herald:
     api_prefix: /api/v1
     api_key: null                # stdio only: the agent's key, e.g. secret://env/AGENT_API_KEY
     timeout_s: 30
+    max_retries: 2               # resends after 429, 503 or no connection; 0 turns retries off
+    retry_max_wait_s: 5          # longest pause before a retry; Retry-After is capped to it
     verify_tls: true
     user_agent: lorebase-herald
   http:                          # streamable_http: each caller sends its own key
@@ -627,10 +629,7 @@ herald:
   context:                       # lorebase_context packs
     token_budget: 3000
     max_token_budget: 20000
-    chars_per_token: 4.0
     depth: 1
-    max_nodes: 40
-    max_edges: 80
     max_seeds: 5
     search_seeds: 3
   neighborhood:

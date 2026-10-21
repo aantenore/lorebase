@@ -115,12 +115,7 @@ class ContextSettings(SectionModel):
 
     token_budget: int = Field(default=3_000, ge=200, description="Default budget in tokens.")
     max_token_budget: int = Field(default=20_000, ge=200, description="Largest budget allowed.")
-    chars_per_token: float = Field(
-        default=4.0, gt=0, description="Characters counted as one token when trimming."
-    )
     depth: int = Field(default=1, ge=1, description="Neighborhood depth around the seeds.")
-    max_nodes: int = Field(default=40, ge=1, description="Neighborhood node cap.")
-    max_edges: int = Field(default=80, ge=1, description="Neighborhood edge cap.")
     max_seeds: int = Field(default=5, ge=1, description="Seed Records per pack.")
     search_seeds: int = Field(
         default=3, ge=1, description="Seeds taken from search when only a question is given."

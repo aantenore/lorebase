@@ -49,6 +49,8 @@ usually set only the short variables:
 | `LOREBASE__HERALD__TRANSPORT` | `herald.transport` | `stdio` (default) or `streamable_http` |
 | `LOREBASE__HERALD__HTTP__PORT` | `herald.http.port` | default `8090`; also `host`, `path`, `allowed_hosts` |
 | `LOREBASE__HERALD__OUTPUT__MAX_CHARS` | `herald.output.max_chars` | longest tool output, default 12000 |
+| `LOREBASE__HERALD__KEEPER__MAX_RETRIES` | `herald.keeper.max_retries` | resends after 429, 503 or an unreachable Keeper, default `2`; `0` turns retries off |
+| `LOREBASE__HERALD__KEEPER__RETRY_MAX_WAIT_S` | `herald.keeper.retry_max_wait_s` | longest pause before a retry, default `5`; `Retry-After` is capped to it |
 
 Credentials: with stdio, every Keeper call carries `herald.keeper.api_key`. With Streamable
 HTTP, every call forwards the caller's `Authorization: Bearer <api key>` header unchanged and
@@ -206,13 +208,10 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
 
 ## Implementation notes
 
-- Herald calls Keeper through `lorebase_herald/keeper_http.py`, a thin client over `httpx`;
-  it is replaced by the typed `lorebase_client` package once that is published.
+- Herald calls Keeper through the typed `lorebase_client` package.
 - `lorebase_context` and `lorebase_explain` call Keeper's agent endpoints, described in
-  [agents](agents.md). Against an older Keeper that lacks them (the route itself answers 404
-  or 405), they fall back to composing the pack from schema, Record and neighborhood reads
-  (counting the budget as `token_budget * chars_per_token` characters) and to the lineage of
-  `GET .../records/{key}?lineage=true`.
+  [agents](agents.md); the pack is trimmed by Keeper to `token_budget`
+  (`agents.context.chars_per_token` there sets the token estimate).
 - `lorebase_changes` pages through the branch log until it reaches `since`, bounded by
   `herald.changes.max_pages`.
 - Import contracts: `lorebase_herald` may import `lorebase_platform` only; it never imports
