@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-config" (include "lorebase.fullname" .) }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "config") | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+data:
+  lorebase.yaml: |
+    {{- include "lorebase.appConfig" . | nindent 4 }}

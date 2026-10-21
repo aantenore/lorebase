@@ -1,0 +1,179 @@
+{{- if .Values.ollama.enabled }}
+{{- include "lorebase.validate" . }}
+{{- $o := .Values.ollama }}
+{{- $scope := dict "ctx" . "component" "ollama" }}
+{{- $name := include "lorebase.componentName" $scope }}
+{{- $image := include "lorebase.image" (dict "ctx" . "image" $o.image) }}
+{{- $home := "/data/home" }}
+{{- if and $o.persistence.enabled (not $o.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  accessModes:
+    {{- toYaml $o.persistence.accessModes | nindent 4 }}
+  {{- with $o.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $o.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  replicas: 1
+  # One pod and, usually, a ReadWriteOnce volume: stop the old pod before starting the new one.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "lorebase.selectorLabels" $scope | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "lorebase.labels" $scope | nindent 8 }}
+      {{- with $o.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "lorebase.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      securityContext:
+        {{- toYaml $o.podSecurityContext | nindent 8 }}
+      {{- with $o.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      containers:
+        - name: ollama
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $o.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: {{ $o.port }}
+              protocol: TCP
+          env:
+            - name: HOME
+              value: {{ $home }}
+            - name: OLLAMA_HOST
+              value: {{ printf "0.0.0.0:%v" $o.port | quote }}
+            - name: OLLAMA_MODELS
+              value: /data/models
+            {{- with $o.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 20
+            failureThreshold: 6
+          {{- with $o.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+        # Pulls the model once the server answers, then idles. The pod is Ready only when the
+        # model is listed, so Scribe never sees an Ollama without it.
+        - name: model-puller
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $o.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              until ollama list >/dev/null 2>&1; do sleep 2; done
+              ollama pull "$MODEL"
+              exec sleep infinity
+          env:
+            - name: HOME
+              value: {{ $home }}
+            - name: OLLAMA_HOST
+              value: {{ printf "http://127.0.0.1:%v" $o.port | quote }}
+            - name: MODEL
+              value: {{ $o.model | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "ollama list | grep -q -F \"$MODEL\""]
+            periodSeconds: 10
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          {{- if $o.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default $name $o.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with $o.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $o.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $o.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  {{- if or $o.service.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml (merge (deepCopy $o.service.annotations) (deepCopy .Values.commonAnnotations)) | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $o.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "lorebase.selectorLabels" $scope | nindent 4 }}
+{{- end }}

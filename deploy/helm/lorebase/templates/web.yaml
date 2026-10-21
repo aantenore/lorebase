@@ -1,0 +1,28 @@
+{{- if .Values.web.enabled }}
+{{- $checksums := dict "checksum/web-config" (include (print $.Template.BasePath "/web-configmap.yaml") . | sha256sum) -}}
+{{ include "lorebase.deployment" (dict
+  "ctx" .
+  "component" "web"
+  "cfg" .Values.web
+  "image" (include "lorebase.image" (dict "ctx" . "image" .Values.web.image))
+  "pullPolicy" .Values.web.image.pullPolicy
+  "command" (list)
+  "port" .Values.web.port
+  "env" ""
+  "volumes" (include "lorebase.webVolumes" .)
+  "mounts" (include "lorebase.webMounts" .)
+  "podSecurity" .Values.web.podSecurityContext
+  "checksums" $checksums
+  "preStop" 0
+) }}
+---
+{{ include "lorebase.service" (dict "ctx" . "component" "web" "cfg" .Values.web) }}
+{{- if .Values.web.autoscaling.enabled }}
+---
+{{ include "lorebase.hpa" (dict "ctx" . "component" "web" "cfg" .Values.web) }}
+{{- end }}
+{{- if .Values.web.pdb.enabled }}
+---
+{{ include "lorebase.pdb" (dict "ctx" . "component" "web" "cfg" .Values.web) }}
+{{- end }}
+{{- end }}

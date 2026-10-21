@@ -1,0 +1,17 @@
+# Local models profile: Ollama in the cluster and Scribe pointed at it, with the in-cluster
+# Postgres (CloudNativePG operator required). Placeholders only; see docs/kubernetes.md.
+secrets:
+  values:
+    apiKeyPepper: change-me-change-me-change-me-change-me
+postgresql:
+  enabled: true
+  cluster:
+    instances: 1
+    imageName: registry.example.com/postgres-pgvector:16
+scribe:
+  enabled: true
+ollama:
+  enabled: true
+  model: qwen2.5:7b-instruct
+  persistence:
+    size: 30Gi
