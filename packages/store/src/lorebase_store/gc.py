@@ -1,7 +1,9 @@
 """Garbage collection of one Domain: mark and sweep (design 6.13).
 
-Marking. Roots are the heads of all refs (branches and tags), the Revisions and merge attempts
-of open Proposals, and every Revision younger than `gc.grace_seconds`. Ancestors of a root are
+Marking. Roots are the heads of all refs (branches and tags), the fork points of overlay
+branches, the Revisions and merge attempts of open Proposals, and every Revision younger than
+`gc.grace_seconds`. Materialized rows are not swept: an overlay's copies of base rows go with
+its ref, and the base history it reads stays because its fork point does. Ancestors of a root are
 reachable; so are the tree nodes of every reachable Revision root and the objects at the leaves
 of those nodes. Marks live in temporary tables of the collecting connection, so memory stays
 bounded by one tree level while shared subtrees are visited once (a node that is already marked
@@ -120,9 +122,13 @@ _CREATE_MARK_TABLES = (
 )
 
 _ROOTS_REFS = text(
-    "INSERT INTO lb_gc_roots (id) SELECT DISTINCT head FROM refs WHERE domain_id = :d "
+    "INSERT INTO lb_gc_roots (id) SELECT head FROM refs WHERE domain_id = :d "
+    "UNION SELECT base_revision FROM refs WHERE domain_id = :d AND base_revision IS NOT NULL "
     "ON CONFLICT DO NOTHING"
 )
+"""Ref heads, and the fork points of overlay branches: the base rows an overlay reads are
+those of its fork point (an ancestor of its head, kept anyway; named here so the guarantee
+does not rest on that)."""
 _ROOTS_YOUNG = text(
     "INSERT INTO lb_gc_roots (id) SELECT id FROM revisions "
     "WHERE domain_id = :d AND created_at >= :cutoff ON CONFLICT DO NOTHING"
