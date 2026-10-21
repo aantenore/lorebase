@@ -98,6 +98,7 @@ Token buckets per principal (API key id or user) and request class; refusals are
 | `keeper.limits.rate.auth_failures.requests_per_minute` | `30` | and per API key prefix; when either is spent, requests are |
 | `keeper.limits.rate.auth_failures.burst` | `30` | answered 429 before the credential is checked |
 | `keeper.limits.rate.auth_failures.ipv6_prefix_length` | `64` | IPv6 clients are counted by network of this length |
+| `keeper.limits.rate.auth_failures.per_key_prefix_enabled` | `true` | false: count by address only (key prefixes are not secret, so with a bucket per prefix whoever knows one can keep that key throttled); the per-address bucket is always on |
 | `keeper.limits.rate.domains` | `{}` | per-Domain buckets by Domain id, any of the classes above, e.g. supply: {writes: {requests_per_minute: 60, burst: 10}} |
 | `keeper.limits.rate.routes` |  | how requests are sorted into classes |
 | `keeper.limits.rate.routes.admin_tags` | `[admin]` |  |

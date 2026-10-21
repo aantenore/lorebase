@@ -70,7 +70,8 @@ class RouteClassing(SectionModel):
 
 
 class AuthFailureSettings(BucketSettings):
-    """Buckets of failed authentications: one per client address and one per API key prefix.
+    """Buckets of failed authentications: one per client address and, unless
+    `per_key_prefix_enabled` is off, one per API key prefix.
 
     Only requests answered 401 after presenting a credential take a token. While either bucket
     of a request is empty it is answered 429 before its credential is checked.
@@ -86,6 +87,12 @@ class AuthFailureSettings(BucketSettings):
         le=128,
         description="IPv6 clients share the bucket of their network of this length, since one "
         "client usually holds a whole /64.",
+    )
+    per_key_prefix_enabled: bool = Field(
+        default=True,
+        description="Keep a bucket per presented API key prefix. Prefixes are not secret, so "
+        "whoever knows one can keep that key throttled; turn this off to count failures by "
+        "client address only (the per-address bucket is always on).",
     )
 
 

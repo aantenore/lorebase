@@ -412,12 +412,12 @@ class LorebaseTools:
         name = self.domain(domain)
         async with self.session(credential) as client:
             found: m.Execution | m.AgentWrite
-            if task:
+            if task or intent or auto_propose is not None or auto_merge is not None:
                 found = await client.operations.execute_as_agent(
                     name,
                     operation,
                     parameters,
-                    task=task,
+                    task=task or None,
                     intent=intent or None,
                     auto_propose=auto_propose,
                     auto_merge=auto_merge,

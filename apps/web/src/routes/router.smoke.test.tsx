@@ -2,6 +2,9 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '@/test/render';
 
+/** Bounded wait for a screen to settle on a loaded machine (the default is one second). */
+const SLOW_RENDER_MS = 5000;
+
 const heading = (name: string) => screen.findByRole('heading', { name, level: 1 });
 
 describe('router smoke', () => {
@@ -46,6 +49,14 @@ describe('router smoke', () => {
 
   it('reports an unknown Branch instead of rendering the screen', async () => {
     renderApp('/supply/explorer?branch=nope');
-    expect(await screen.findByText(/Branch nope does not exist/)).toBeInTheDocument();
+    // The failed query is reported twice: by the screen (a paragraph) and, later, by a toast.
+    // Only the paragraph is awaited, so the assertion does not depend on the toast's timing.
+    const report = await screen.findByText(
+      /Branch nope does not exist/,
+      { selector: 'p' },
+      { timeout: SLOW_RENDER_MS },
+    );
+    expect(report).toHaveAttribute('role', 'alert');
+    expect(screen.queryByRole('heading', { name: 'Explorer', level: 1 })).not.toBeInTheDocument();
   });
 });

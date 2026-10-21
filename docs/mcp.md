@@ -210,7 +210,9 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
    id and status (`proposed`, `merged` or `conflicts`) and the `next` steps. `auto_merge: true`
    asks for an immediate merge; it only happens when the Domain allows it for the agent's role
    and no approval or Conflict is pending, otherwise the Proposal waits for a reviewer. Without
-   a `task` the answer stays `review-required`. Keep an `idempotency_key` per intended change
+   a `task` the answer stays `review-required`, and `auto_propose: true` is refused as
+   `validation-failed`; `intent`, `auto_propose` and `auto_merge` are always passed on and
+   Keeper's problem text is returned unchanged. Keep an `idempotency_key` per intended change
    so retries commit once (and find the same Proposal). Details in [agents](agents.md).
 
 ## Implementation notes

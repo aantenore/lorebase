@@ -425,6 +425,7 @@ $ lorebase branch create [OPTIONS] {NAME}
 
 * `--source <str>`: Branch or tag to start from (default branch).
 * `--revision <str>`: Revision id to start at.
+* `--mode <str>`: copy (own rows) or overlay (only its changes).
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
