@@ -24,6 +24,8 @@ from lorebase_keeper.auth.oidc import (
     OidcVerifier,
     ProviderUnavailableError,
 )
+from lorebase_keeper.settings import keeper_settings
+from lorebase_platform.settings import ConfigError, Settings
 from lorebase_store.models.enums import PrincipalType
 
 ISSUER = "https://idp.example.test"
@@ -337,3 +339,60 @@ async def test_discovery_must_name_the_configured_issuer(provider: Any) -> None:
 def test_symmetric_algorithms_cannot_be_enabled() -> None:
     with pytest.raises(ValueError, match="asymmetric"):
         OidcSettings(issuer=ISSUER, audience=(AUDIENCE,), algorithms=("HS256",))
+
+
+# Provider URLs must use https --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("overrides", "needle"),
+    [
+        ({"issuer": "http://idp.example.test"}, "oidc.issuer"),
+        ({"jwks_uri": "http://idp.example.test/keys"}, "oidc.jwks_uri"),
+        ({"jwks_uri": "ftp://idp.example.test/keys"}, "oidc.jwks_uri"),
+    ],
+)
+def test_plain_http_provider_urls_are_refused(overrides: dict[str, str], needle: str) -> None:
+    section = {"auth": oidc_auth(**overrides)}
+    with pytest.raises(ConfigError) as caught:
+        keeper_settings(Settings(keeper=section))
+    assert needle in str(caught.value)
+    assert "https" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "issuer",
+    ["http://localhost:8180/realms/dev", "http://127.0.0.1:8180", "http://[::1]:8180"],
+)
+def test_plain_http_is_accepted_for_loopback_providers(issuer: str) -> None:
+    settings = OidcSettings(issuer=issuer, audience=(AUDIENCE,), jwks_uri=f"{issuer}/keys")
+    assert settings.issuer == issuer
+
+
+def test_plain_http_needs_the_explicit_opt_out() -> None:
+    settings = OidcSettings(
+        issuer="http://idp.example.test",
+        audience=(AUDIENCE,),
+        jwks_uri="http://idp.example.test/keys",
+        allow_insecure=True,
+    )
+    assert settings.allow_insecure
+
+
+async def test_a_discovered_plain_http_jwks_uri_is_refused(provider: Any) -> None:
+    fetched: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        fetched.append(request.url.path)
+        if request.url.path == "/.well-known/openid-configuration":
+            return httpx.Response(
+                200, json={"issuer": ISSUER, "jwks_uri": "http://idp.example.test/keys"}
+            )
+        return httpx.Response(200, json={"keys": [provider.jwk()]})
+
+    settings = OidcSettings(issuer=ISSUER, audience=(AUDIENCE,))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        subject = OidcVerifier(settings, JwksCache(settings, http))
+        with pytest.raises(ProviderUnavailableError):
+            await subject.verify(provider.token())
+    assert "/keys" not in fetched
