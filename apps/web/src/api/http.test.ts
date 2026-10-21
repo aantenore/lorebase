@@ -157,4 +157,84 @@ describe('http adapter', () => {
     );
     expect(JSON.parse(bodyOf(calls[0]?.init))).toMatchObject({ dry_run: true });
   });
+
+  it('uploads the CSV files of schema:infer as multipart with the options as JSON text', async () => {
+    const { calls, fetchStub } = stubFetch(json({ domain: 'supply', yaml: '' }));
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await api.inference.infer('supply', {
+      files: [new File(['a\n1\n'], 'supplier.csv'), new File(['b\n2\n'], 'part.csv')],
+      options: { enum_max_cardinality: 20 },
+    });
+    expect(calls[0]?.url).toBe('https://keeper.example.test/api/v1/domains/supply/schema:infer');
+    expect(calls[0]?.init?.method).toBe('POST');
+    const form = calls[0]?.init?.body;
+    expect(form).toBeInstanceOf(FormData);
+    if (!(form instanceof FormData)) return;
+    expect(form.getAll('files').map((f) => (f instanceof File ? f.name : f))).toEqual([
+      'supplier.csv',
+      'part.csv',
+    ]);
+    expect(form.get('options')).toBe('{"enum_max_cardinality":20}');
+    // The browser sets the multipart boundary; the adapter must not set a Content-Type.
+    expect(calls[0]?.init?.headers).not.toHaveProperty('Content-Type');
+  });
+
+  it('posts a Postgres source reference to schema:infer as JSON', async () => {
+    const { calls, fetchStub } = stubFetch(json({ domain: 'supply', yaml: '' }));
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await api.inference.infer('supply', {
+      postgres: { dsn: 'secret://env/ERP_DSN', schema: 'public', tables: ['vendors'] },
+    });
+    expect(JSON.parse(bodyOf(calls[0]?.init))).toEqual({
+      postgres: { dsn: 'secret://env/ERP_DSN', schema: 'public', tables: ['vendors'] },
+    });
+  });
+
+  it('calls the admin routes of a Domain', async () => {
+    const { calls, fetchStub } = stubFetch(json({ items: [], next_cursor: null }));
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await api.admin.apiKeys.list('supply', { limit: 5 });
+    await api.admin.apiKeys.create('supply', { name: 'agent', role: 'agent-reader', ttl_days: 30 });
+    await api.admin.grants.list('supply');
+    await api.admin.audit.list('supply', { limit: 20, cursor: 'c1' });
+    await api.admin.principals.list({ type: 'service' });
+    expect(
+      calls.map(
+        (c) =>
+          `${c.init?.method ?? 'GET'} ${c.url.replace('https://keeper.example.test/api/v1', '')}`,
+      ),
+    ).toEqual([
+      'GET /domains/supply/api-keys?limit=5',
+      'POST /domains/supply/api-keys',
+      'GET /domains/supply/grants',
+      'GET /domains/supply/audit?limit=20&cursor=c1',
+      'GET /principals?type=service',
+    ]);
+    expect(JSON.parse(bodyOf(calls[1]?.init))).toEqual({
+      name: 'agent',
+      role: 'agent-reader',
+      ttl_days: 30,
+    });
+  });
+
+  it('revokes an API key with DELETE and accepts the empty answer', async () => {
+    const { calls, fetchStub } = stubFetch(new Response(null, { status: 204 }));
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await expect(api.admin.apiKeys.revoke('supply', 'key 1')).resolves.toBeUndefined();
+    expect(calls[0]?.init?.method).toBe('DELETE');
+    expect(calls[0]?.url).toBe(
+      'https://keeper.example.test/api/v1/domains/supply/api-keys/key%201',
+    );
+  });
+
+  it('does not call Keeper for Source runs, which it does not publish yet', async () => {
+    const { calls, fetchStub } = stubFetch(json({}));
+    const api = createHttpApi({ baseUrl: 'https://keeper.example.test', fetch: fetchStub });
+    await expect(api.sources.runs('supply')).rejects.toMatchObject({
+      status: 501,
+      code: 'not_supported',
+    });
+    await expect(api.sources.sync('supply', 'erp.vendors')).rejects.toBeInstanceOf(ApiError);
+    expect(calls).toHaveLength(0);
+  });
 });

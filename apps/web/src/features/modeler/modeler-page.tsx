@@ -2,6 +2,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useSchema } from '@/api/queries';
 import type { Schema } from '@/api/types';
 import { useScope, useScopeSearch } from '@/app/scope';
+import { StartFromData } from '@/features/inference/start-from-data';
 import { PlannedScreens } from '@/features/planned-screens';
 import { Badge, EmptyState, PageHeader, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
@@ -355,6 +356,11 @@ export function ModelerPage({ tab, view }: { tab: ModelerTab; view: ModelerView 
                 id: 'edit',
                 label: 'Edit schema',
                 content: <SchemaEditor key={data.revision} base={data} />,
+              },
+              {
+                id: 'start',
+                label: 'Start from data',
+                content: <StartFromData key={data.revision} base={data} />,
               },
             ]}
           />

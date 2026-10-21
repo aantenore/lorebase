@@ -24,7 +24,10 @@ import {
   runSearch,
   toRow,
 } from './engine';
+import { createAdminMock } from './admin';
+import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
+import { createSourcesMock } from './sources';
 import { evaluateSchemaChanges } from './schema-changes';
 import { buildHrDomain } from './sample/hr';
 import { buildSupplyDomain } from './sample/supply';
@@ -158,6 +161,33 @@ export function createMockApi(options: MockOptions): KeeperApi {
       branchOf(domain, state.detail.target_ref),
       branchOf(domain, state.detail.source_ref),
     );
+
+  const admin = createAdminMock((id) => domains.has(id));
+  const inference = createInferenceMock(
+    (id) => domains.has(id),
+    (domain, source, tables, issues) => {
+      admin.audit(domain, {
+        actor: 'usr_mock',
+        action: 'schema.infer',
+        target: source,
+        details: { source, tables, issues },
+      });
+    },
+  );
+  const sources = createSourcesMock(
+    (id) => {
+      const domain = domainOf(id);
+      return branchOf(domain, domain.domain.default_branch).schema.sources.map((s) => s.api_name);
+    },
+    (domain, run) => {
+      admin.audit(domain, {
+        actor: 'usr_mock',
+        action: 'source.sync',
+        target: run.source,
+        details: { run: run.id, changes: 0 },
+      });
+    },
+  );
 
   const requireOperation = (data: BranchData, name: string) => {
     const operation = data.schema.operations.find((o) => o.api_name === name);
@@ -592,6 +622,10 @@ export function createMockApi(options: MockOptions): KeeperApi {
         return Promise.resolve(attemptFor(domain, proposal, state));
       },
     },
+
+    inference: inference.api,
+    sources: sources.api,
+    admin: admin.api,
   };
 }
 

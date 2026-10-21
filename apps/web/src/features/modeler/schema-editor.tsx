@@ -1,7 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useState } from 'react';
-import { useKeeperApi } from '@/api/provider';
-import type { SchemaIssue } from '@/api/schema-rules';
 import type { Schema } from '@/api/types';
 import { useScope } from '@/app/scope';
 import { Button } from '@/ui/button';
@@ -10,6 +7,7 @@ import { ChangeSetPanel } from './change-set-panel';
 import { useSchemaEditor } from './editor-state';
 import { FormEditor } from './form-editor';
 import { IssuesPanel } from './issues-panel';
+import { useChangeCheck } from './use-change-check';
 import type { Position } from './yaml';
 import type { Jump } from './yaml-editor';
 
@@ -22,30 +20,20 @@ const YamlEditor = lazy(() => import('./yaml-editor'));
  */
 export function SchemaEditor({ base }: { base: Schema }) {
   const scope = useScope();
-  const api = useKeeperApi();
   const editor = useSchemaEditor(base);
   const [jump, setJump] = useState<Jump | null>(null);
 
   const documentIsValid = editor.syntaxIssues.length === 0 && editor.issues.length === 0;
   const hasChanges = editor.changes.length > 0;
-  const check = useQuery({
-    queryKey: ['keeper', scope.domain, 'schema-check', scope.branch, scope.head, editor.changes],
-    queryFn: () =>
-      api.schema.applyChanges(scope.domain, scope.branch, {
-        changes: editor.changes,
-        dry_run: true,
-      }),
-    enabled: documentIsValid && hasChanges,
-  });
+  const {
+    check,
+    remote,
+    blocked: checkBlocked,
+  } = useChangeCheck(editor.changes, documentIsValid && hasChanges);
 
-  const remote: SchemaIssue[] =
-    check.data?.violations.map((v) => ({ path: v.path ?? '', code: v.code, message: v.message })) ??
-    [];
-  let blocked: string | null = null;
+  let blocked = checkBlocked;
   if (editor.syntaxIssues.length > 0) blocked = 'Fix the YAML syntax errors first.';
   else if (editor.issues.length > 0) blocked = 'Fix the validation issues first.';
-  else if (check.isError) blocked = check.error.message;
-  else if (check.data?.valid === false) blocked = `${scope.branch} reports violations.`;
 
   const goTo = (position: Position) => {
     setJump((previous) => ({ ...position, nonce: (previous?.nonce ?? 0) + 1 }));

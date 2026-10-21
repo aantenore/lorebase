@@ -14,7 +14,7 @@ export function isModelerTab(value: unknown): value is ModelerTab {
   return MODELER_TABS.some((tab) => tab === value);
 }
 
-export const MODELER_VIEWS = ['overview', 'edit'] as const;
+export const MODELER_VIEWS = ['overview', 'edit', 'start'] as const;
 
 export type ModelerView = (typeof MODELER_VIEWS)[number];
 

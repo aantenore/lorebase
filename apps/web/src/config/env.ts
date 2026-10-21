@@ -18,6 +18,23 @@ export interface AppConfig {
   mockLatencyMs: number;
   /** Prefix of the Branch the Modeler creates to carry schema changes of a protected Branch. */
   schemaBranchPrefix: string;
+  /** "Start from data" in the Modeler: upload caps, accepted suffixes and the review defaults. */
+  inference: InferenceConfig;
+}
+
+export interface InferenceConfig {
+  /** Files per request; Keeper's `keeper.schema_inference.max_files`. */
+  maxFiles: number;
+  /** Bytes per file; Keeper's `max_file_bytes`. */
+  maxFileBytes: number;
+  /** Bytes for all files together; Keeper's `max_total_bytes`. */
+  maxTotalBytes: number;
+  /** Lower-case file suffixes the upload accepts, with the dot. */
+  fileSuffixes: string[];
+  /** Confidence (0 to 1) from which "Accept all above" accepts an element. */
+  acceptThreshold: number;
+  /** Secret references offered as suggestions for Postgres sources (Keeper's allowlist). */
+  postgresSources: string[];
 }
 
 export type RawEnv = Readonly<Record<string, string | boolean | undefined>>;
@@ -39,6 +56,12 @@ const NON_FUNCTIONAL_DEFAULTS = {
   toastMs: 5000,
   mockLatencyMs: 0,
   schemaBranchPrefix: 'schema/',
+  // The caps repeat the defaults of keeper.schema_inference so a stock Keeper and a stock app agree.
+  inferMaxFiles: 50,
+  inferMaxFileBytes: 1_048_576,
+  inferMaxTotalBytes: 1_048_576,
+  inferFileSuffixes: ['.csv', '.tsv', '.txt'],
+  inferAcceptThreshold: 0.9,
 } as const;
 
 function text(raw: RawEnv, key: string): string | undefined {
@@ -52,6 +75,25 @@ function positiveInt(raw: RawEnv, key: string, fallback: number, min = 1): numbe
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < min) {
     throw new ConfigError(`${key} must be an integer >= ${min}, got "${value}".`);
+  }
+  return parsed;
+}
+
+function list(raw: RawEnv, key: string): string[] | undefined {
+  const value = text(raw, key);
+  if (value === undefined) return undefined;
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+}
+
+function fraction(raw: RawEnv, key: string, fallback: number): number {
+  const value = text(raw, key);
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new ConfigError(`${key} must be a number between 0 and 1, got "${value}".`);
   }
   return parsed;
 }
@@ -108,6 +150,28 @@ export function loadConfig(raw: RawEnv): AppConfig {
     ),
     schemaBranchPrefix:
       text(raw, 'VITE_SCHEMA_BRANCH_PREFIX') ?? NON_FUNCTIONAL_DEFAULTS.schemaBranchPrefix,
+    inference: {
+      maxFiles: positiveInt(raw, 'VITE_INFER_MAX_FILES', NON_FUNCTIONAL_DEFAULTS.inferMaxFiles),
+      maxFileBytes: positiveInt(
+        raw,
+        'VITE_INFER_MAX_FILE_BYTES',
+        NON_FUNCTIONAL_DEFAULTS.inferMaxFileBytes,
+      ),
+      maxTotalBytes: positiveInt(
+        raw,
+        'VITE_INFER_MAX_TOTAL_BYTES',
+        NON_FUNCTIONAL_DEFAULTS.inferMaxTotalBytes,
+      ),
+      fileSuffixes: (
+        list(raw, 'VITE_INFER_FILE_SUFFIXES') ?? [...NON_FUNCTIONAL_DEFAULTS.inferFileSuffixes]
+      ).map((suffix) => suffix.toLowerCase()),
+      acceptThreshold: fraction(
+        raw,
+        'VITE_INFER_ACCEPT_THRESHOLD',
+        NON_FUNCTIONAL_DEFAULTS.inferAcceptThreshold,
+      ),
+      postgresSources: list(raw, 'VITE_INFER_POSTGRES_SOURCES') ?? [],
+    },
   };
 }
 
