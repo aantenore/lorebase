@@ -377,7 +377,7 @@ class Operations(_Resource):
         operation: str,
         parameters: JsonObject | None = None,
         *,
-        task: str,
+        task: str | None = None,
         intent: str | None = None,
         auto_propose: bool | None = None,
         auto_merge: bool | None = None,
@@ -389,7 +389,8 @@ class Operations(_Resource):
     ) -> m.Execution | m.AgentWrite:
         """Execute an Operation that may need review. When it does (protected branch, review
         policy) it runs on the branch `agent/{principal}/{task}` and the answer is an
-        `AgentWrite` naming the Proposal; otherwise it is the usual `Execution`."""
+        `AgentWrite` naming the Proposal; otherwise it is the usual `Execution`. Without a `task`
+        Keeper refuses `auto_propose` and answers 409 `review-required` when review is needed."""
         body = m.ExecuteRequest(
             parameters=dict(parameters or {}),
             branch=branch,

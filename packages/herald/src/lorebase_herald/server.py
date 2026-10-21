@@ -416,10 +416,10 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         "lorebase_schema). Keeper checks permissions, preconditions and validation. dry_run "
         "defaults to true and writes nothing: check edits and violations, then commit with "
         "dry_run=false, expected_head and idempotency_key. Operations that need review "
-        "(review policy, protected branch): pass task (short slug) and intent; Keeper runs "
-        "them on branch agent/{you}/{task} and answers with the Proposal id and status "
-        "(proposed, merged, conflicts) and next steps. auto_merge only works if the Domain "
-        "allows it for your role.",
+        "(review policy, protected branch): pass task (short slug; required for the proposal "
+        "flow) and intent; Keeper runs them on branch agent/{you}/{task} and answers with the "
+        "Proposal id and status and next steps. Without a task Keeper refuses (auto_propose "
+        "included) and its problem text is returned. auto_merge only if the Domain allows it.",
         annotations=WRITE,
         structured_output=False,
     )
@@ -451,7 +451,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
                 min_length=1,
                 max_length=200,
                 description="Short slug naming the piece of work. Needed to get a Proposal "
-                "when the Operation needs review; Keeper uses the branch agent/{you}/{task}.",
+                "when the Operation needs review (required for auto_propose); Keeper uses the "
+                "branch agent/{you}/{task}.",
             ),
         ] = None,
         intent: Annotated[
