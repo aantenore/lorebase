@@ -143,6 +143,8 @@ keeper:
       auto_provision: true       # create the user on the first valid token
       principal_cache_ttl_s: 60  # reuse of a subject's principal and groups
       principal_cache_max_entries: 4096
+      allow_insecure: false      # true: accept http issuer and jwks_uri (configured or
+                                 # discovered) off loopback; https is required otherwise
     authz:
       grants_cache_ttl_s: 15     # grants are cached this long; other processes see changes after
                                  # at most this; 0 disables

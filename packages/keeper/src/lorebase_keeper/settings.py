@@ -7,12 +7,11 @@ Every value has a code default for local runs; deployments override them through
 
 from __future__ import annotations
 
-import ipaddress
 from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 
-from lorebase_keeper.auth.config import AuthSettings
+from lorebase_keeper.auth.config import AuthSettings, is_loopback
 from lorebase_keeper.client_address import normalize_networks
 from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings
 from lorebase_keeper.services.config import (
@@ -196,16 +195,6 @@ class KeeperSettings(SectionModel):
                 "127.0.0.1, or set auth.allow_insecure to true"
             )
         return self
-
-
-def is_loopback(host: str) -> bool:
-    """Whether a bind address only accepts connections from this machine."""
-    if host.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
-    except ValueError:
-        return False
 
 
 register_section(SECTION, KeeperSettings)
