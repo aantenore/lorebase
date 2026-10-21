@@ -217,9 +217,11 @@ design 15.1). The chart serves `/config.js` from a ConfigMap, setting `window.__
 names of the Vite variables (`VITE_API_MODE`, `VITE_KEEPER_BASE_URL`, plus `web.config.extra`), so one image works
 against any Keeper; `keeperBaseUrl` defaults to the first Ingress host.
 
-Status: `apps/web` reads its configuration at build time (`import.meta.env`) and the repository has no Dockerfile
-for the web image yet, so the web app needs that image, built to read `window.__LOREBASE_CONFIG__`, before
-this component is usable. Everything else works without it.
+Status: `deploy/docker/web.Dockerfile` builds the image, and the release workflow publishes it. `apps/web` reads its
+configuration at build time (`import.meta.env`) and does not read `window.__LOREBASE_CONFIG__` yet, so the published image
+runs on the mock API and the `/config.js` that the chart mounts has no effect until the app reads it. For a live Keeper,
+build the image with `--build-arg VITE_API_MODE=live --build-arg VITE_KEEPER_BASE_URL=...` and set `web.image` to it
+([release](release.md#known-gaps)). Everything else works without the web app.
 
 ## Observability
 

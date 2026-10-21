@@ -1,0 +1,12 @@
+# Compose overlay of the five-day demo, added by stack.sh after deploy/compose/docker-compose.yaml.
+# It hands the API key pepper to the services and lets Scribe reach the webhook receiver that
+# demo.py starts on the host.
+services:
+  keeper:
+    environment:
+      LOREBASE_API_KEY_PEPPER: ${DEMO_API_KEY_PEPPER:?set by stack.sh}
+  scribe:
+    environment:
+      LOREBASE_API_KEY_PEPPER: ${DEMO_API_KEY_PEPPER:?set by stack.sh}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
