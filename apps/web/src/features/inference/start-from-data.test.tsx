@@ -11,7 +11,7 @@ const HR = '/hr/modeler?view=start';
 async function infer(path: string, tables: string[], config: AppConfig = testConfig()) {
   const user = userEvent.setup();
   renderApp(path, config);
-  const input = await screen.findByLabelText('Upload CSV or TSV files');
+  const input = await screen.findByLabelText('Upload data files');
   await user.upload(
     input,
     tables.map((t) => csv(`${t}.csv`)),
@@ -236,7 +236,7 @@ describe('Start from data: choosing the data', () => {
     // A file picker would filter by suffix itself; a drop does not.
     const user = userEvent.setup({ applyAccept: false });
     renderApp(HR, config);
-    const input = await screen.findByLabelText('Upload CSV or TSV files');
+    const input = await screen.findByLabelText('Upload data files');
     await user.upload(input, [
       csv('big.csv', 'a,b,c,d\n1,2,3,4\n'),
       csv('notes.pdf', 'x'),
@@ -259,7 +259,7 @@ describe('Start from data: choosing the data', () => {
   it('shows the error of the inference when the files are not tables it knows', async () => {
     const user = userEvent.setup();
     renderApp(HR);
-    const input = await screen.findByLabelText('Upload CSV or TSV files');
+    const input = await screen.findByLabelText('Upload data files');
     await user.upload(input, csv('vendors.csv'));
     await user.click(screen.getByRole('button', { name: 'Run inference' }));
     expect(await screen.findByText(/unknown: vendors/)).toBeInTheDocument();
@@ -290,6 +290,6 @@ describe('Start from data: choosing the data', () => {
   it('goes back to the source step with Start over', async () => {
     const user = await infer(HR, ['plant']);
     await user.click(screen.getByRole('button', { name: 'Start over' }));
-    expect(await screen.findByLabelText('Upload CSV or TSV files')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Upload data files')).toBeInTheDocument();
   });
 });

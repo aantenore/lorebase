@@ -1,3 +1,4 @@
+import { loadConfig } from '@/config/env';
 import { addFiles, formatBytes, type UploadCaps } from './files';
 
 const caps: UploadCaps = {
@@ -10,6 +11,18 @@ const caps: UploadCaps = {
 const file = (name: string, size: number) => new File(['x'.repeat(size)], name);
 
 describe('addFiles', () => {
+  it('takes the JSON, JSON Lines and Parquet files of the default suffixes', () => {
+    const defaults = loadConfig({ VITE_API_MODE: 'mock' }).inference;
+    const names = ['a.json', 'b.JSONL', 'c.ndjson', 'd.parquet'];
+    const result = addFiles(
+      [],
+      names.map((name) => file(name, 10)),
+      { ...defaults, maxTotalBytes: 100 },
+    );
+    expect(result.files.map((f) => f.name)).toEqual(names);
+    expect(result.rejected).toEqual([]);
+  });
+
   it('takes files within the caps', () => {
     const result = addFiles([], [file('a.csv', 10), file('B.TSV', 10)], caps);
     expect(result.files.map((f) => f.name)).toEqual(['a.csv', 'B.TSV']);

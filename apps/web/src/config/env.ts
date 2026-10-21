@@ -101,7 +101,7 @@ const NON_FUNCTIONAL_DEFAULTS = {
   inferMaxFiles: 50,
   inferMaxFileBytes: 1_048_576,
   inferMaxTotalBytes: 1_048_576,
-  inferFileSuffixes: ['.csv', '.tsv', '.txt'],
+  inferFileSuffixes: ['.csv', '.tsv', '.txt', '.json', '.jsonl', '.ndjson', '.parquet'],
   inferAcceptThreshold: 0.9,
   // The document caps repeat the defaults of keeper.documents.
   documentsMaxFiles: 20,

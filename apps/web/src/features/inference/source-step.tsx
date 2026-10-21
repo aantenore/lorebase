@@ -14,7 +14,7 @@ export interface SourceStepProps {
   onRun: (request: InferRequest) => void;
 }
 
-function CsvSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'onRun'>) {
+function FileSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'onRun'>) {
   const { inference } = useConfig();
   const [files, setFiles] = useState<File[]>([]);
   return (
@@ -102,7 +102,7 @@ function PostgresSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'o
   );
 }
 
-/** First step: where the data is (CSV files or a Postgres source) and the run button. */
+/** First step: where the data is (data files or a Postgres source) and the run button. */
 export function SourceStep({ pending, error, onRun }: SourceStepProps) {
   const [source, setSource] = useState('csv');
   return (
@@ -119,8 +119,8 @@ export function SourceStep({ pending, error, onRun }: SourceStepProps) {
         tabs={[
           {
             id: 'csv',
-            label: 'CSV files',
-            content: <CsvSource pending={pending} onRun={onRun} />,
+            label: 'Files',
+            content: <FileSource pending={pending} onRun={onRun} />,
           },
           {
             id: 'postgres',
