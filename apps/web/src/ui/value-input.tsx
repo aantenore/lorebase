@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { JsonValue } from '@/api/types';
-import { parseAttributeType, type ValueSpec } from '@/api/values';
+import { canonicalNumber, parseAttributeType, type ParsedType, type ValueSpec } from '@/api/values';
 import { Input, Select, Textarea } from './field';
 
 export interface ValueInputProps {
@@ -70,6 +70,33 @@ function JsonField({ label, value, onChange, error, hideLabel, disabled }: Value
   );
 }
 
+/**
+ * A number field. Integers and decimals leave it as the canonical text Keeper stores (`"55"`,
+ * `"9.50"`), floats as numbers; what the person typed stays on screen while they type.
+ */
+function NumberField(props: ValueInputProps & { type: ParsedType }) {
+  const { label, value, onChange, error, hideLabel, disabled, type } = props;
+  const [text, setText] = useState(() => toText(value, false));
+  return (
+    <Input
+      label={label}
+      hideLabel={hideLabel === true}
+      disabled={disabled === true}
+      aria-invalid={error !== null && error !== undefined}
+      type="number"
+      step={type.base === 'integer' ? 1 : 'any'}
+      value={text}
+      onChange={(event) => {
+        const next = event.target.value;
+        setText(next);
+        if (next === EMPTY) onChange(null, null);
+        else if (type.base === 'float') onChange(Number(next), null);
+        else onChange(canonicalNumber(next, type), null);
+      }}
+    />
+  );
+}
+
 function ScalarField(props: ValueInputProps) {
   const { label, spec, value, onChange, error, hideLabel, disabled } = props;
   const base = spec === null ? null : parseAttributeType(spec.type)?.base;
@@ -114,18 +141,7 @@ function ScalarField(props: ValueInputProps) {
       />
     );
   } else if (base === 'integer' || base === 'decimal' || base === 'float') {
-    field = (
-      <Input
-        {...common}
-        type="number"
-        step={base === 'integer' ? 1 : 'any'}
-        value={typeof value === 'number' ? String(value) : EMPTY}
-        onChange={(event) => {
-          const next = event.target.value;
-          onChange(next === EMPTY ? null : Number(next), null);
-        }}
-      />
-    );
+    field = <NumberField {...props} type={parseAttributeType(spec?.type ?? '') as ParsedType} />;
   } else if (base === 'text') {
     field = (
       <Textarea

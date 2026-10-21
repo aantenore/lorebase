@@ -10,6 +10,11 @@ export interface AppConfig {
   apiMode: ApiMode;
   /** Keeper origin without the API path. `null` in mock mode. */
   keeperBaseUrl: string | null;
+  /**
+   * Token sent as `Authorization: Bearer` in live mode, from `VITE_API_TOKEN`. Anything in a
+   * `VITE_` variable is readable in the bundle: development only.
+   */
+  apiToken: string | null;
   pageSize: number;
   searchLimit: number;
   canvas: { depth: number; maxNodes: number; layoutIterations: number };
@@ -57,11 +62,13 @@ function positiveInt(raw: RawEnv, key: string, fallback: number, min = 1): numbe
 }
 
 function parseBaseUrl(value: string): string {
+  // A path on the app's own origin, for a deployment that proxies /api/v1 to Keeper.
+  if (value.startsWith('/')) return value.replace(/\/+$/, '');
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new ConfigError(`VITE_KEEPER_BASE_URL is not a valid URL: "${value}".`);
+    throw new ConfigError(`VITE_KEEPER_BASE_URL is not a valid URL or path: "${value}".`);
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new ConfigError('VITE_KEEPER_BASE_URL must use http or https.');
@@ -87,6 +94,7 @@ export function loadConfig(raw: RawEnv): AppConfig {
   return {
     apiMode: mode,
     keeperBaseUrl,
+    apiToken: mode === 'live' ? (text(raw, 'VITE_API_TOKEN') ?? null) : null,
     pageSize: positiveInt(raw, 'VITE_PAGE_SIZE', NON_FUNCTIONAL_DEFAULTS.pageSize),
     searchLimit: positiveInt(raw, 'VITE_SEARCH_LIMIT', NON_FUNCTIONAL_DEFAULTS.searchLimit),
     canvas: {

@@ -1,0 +1,190 @@
+import { urlOf } from '@/test/fetch';
+import {
+  ApprovalsRequiredError,
+  ConflictError,
+  ForbiddenError,
+  MergeConflictsError,
+  NetworkError,
+  NotFoundError,
+  ProtectedBranchError,
+  UnauthorizedError,
+  ValidationError,
+  describeError,
+} from './errors';
+import { createFetcher } from './fetcher';
+
+interface Call {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: BodyInit | null | undefined;
+}
+
+function scripted(...responses: (Response | Error)[]) {
+  const calls: Call[] = [];
+  const queue = [...responses];
+  const fetchStub = ((input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({
+      url: urlOf(input),
+      method: init?.method ?? 'GET',
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      body: init?.body,
+    });
+    const next = queue.shift() ?? new Response('{}', { status: 200 });
+    return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+  }) as typeof fetch;
+  return { calls, fetchStub };
+}
+
+const json = (body: unknown, init: ResponseInit = {}) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', ...init.headers },
+    ...init,
+  });
+
+const problem = (status: number, code: string, extra: Record<string, unknown> = {}) =>
+  new Response(
+    JSON.stringify({ type: `urn:lorebase:problem:${code}`, title: 'T', status, code, ...extra }),
+    { status, headers: { 'Content-Type': 'application/problem+json' } },
+  );
+
+describe('fetcher', () => {
+  it('prefixes the API path, encodes the query and drops empty values', async () => {
+    const { calls, fetchStub } = scripted(json({ ok: true }));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test/', fetch: fetchStub });
+    await fetcher.json('GET', '/domains', {
+      query: { limit: 5, cursor: null, kinds: ['A', 'B'], branch: undefined, flag: false },
+    });
+    expect(calls[0]?.url).toBe('https://keeper.test/api/v1/domains?limit=5&kinds=A%2CB&flag=false');
+  });
+
+  it('sends the headers of the moment, the JSON body and an Idempotency-Key on creates', async () => {
+    const { calls, fetchStub } = scripted(json({}), json({}));
+    let token = 'one';
+    const fetcher = createFetcher({
+      baseUrl: 'https://keeper.test',
+      fetch: fetchStub,
+      headers: () => ({ Authorization: `Bearer ${token}` }),
+      idempotencyKey: (() => {
+        let n = 0;
+        return () => `key-${++n}`;
+      })(),
+    });
+    await fetcher.json('POST', '/domains', { body: { id: 'x' }, idempotent: true });
+    token = 'two';
+    await fetcher.json('POST', '/domains/x/proposals', { body: { title: 't' } });
+    expect(calls[0]?.headers).toMatchObject({
+      Authorization: 'Bearer one',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'key-1',
+    });
+    expect(calls[0]?.body).toBe('{"id":"x"}');
+    expect(calls[1]?.headers['Authorization']).toBe('Bearer two');
+    expect(calls[1]?.headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('revalidates a read with If-None-Match and serves the kept body on 304', async () => {
+    const { calls, fetchStub } = scripted(
+      json({ n: 1 }, { headers: { ETag: '"r1"' } }),
+      new Response(null, { status: 304, headers: { ETag: '"r1"' } }),
+      json({ n: 2 }, { headers: { ETag: '"r2"' } }),
+    );
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    expect(await fetcher.json('GET', '/domains/a')).toEqual({ n: 1 });
+    expect(calls[0]?.headers['If-None-Match']).toBeUndefined();
+    const second = await fetcher.full('GET', '/domains/a');
+    expect(second.data).toEqual({ n: 1 });
+    expect(second.revalidated).toBe(true);
+    expect(calls[1]?.headers['If-None-Match']).toBe('"r1"');
+    expect(await fetcher.json('GET', '/domains/a')).toEqual({ n: 2 });
+    expect(calls[2]?.headers['If-None-Match']).toBe('"r1"');
+  });
+
+  it('keeps answers apart per credential and never revalidates a write', async () => {
+    const { calls, fetchStub } = scripted(
+      json({ who: 'a' }, { headers: { ETag: '"x"' } }),
+      json({ who: 'b' }, { headers: { ETag: '"y"' } }),
+      json({}),
+    );
+    let token = 'a';
+    const fetcher = createFetcher({
+      baseUrl: 'https://keeper.test',
+      fetch: fetchStub,
+      headers: () => ({ Authorization: `Bearer ${token}` }),
+    });
+    await fetcher.json('GET', '/auth/whoami');
+    token = 'b';
+    await fetcher.json('GET', '/auth/whoami');
+    expect(calls[1]?.headers['If-None-Match']).toBeUndefined();
+    await fetcher.json('POST', '/domains/a/query', { body: {} });
+    expect(calls[2]?.headers['If-None-Match']).toBeUndefined();
+  });
+
+  it('does not keep answers when the browser hides the ETag', async () => {
+    const { calls, fetchStub } = scripted(json({ n: 1 }), json({ n: 2 }));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    await fetcher.json('GET', '/domains');
+    await fetcher.json('GET', '/domains');
+    expect(calls[1]?.headers['If-None-Match']).toBeUndefined();
+  });
+
+  it('returns undefined for 204', async () => {
+    const { fetchStub } = scripted(new Response(null, { status: 204 }));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    expect(await fetcher.json('DELETE', '/domains/a/branches/b')).toBeUndefined();
+  });
+
+  it.each([
+    [401, 'unauthorized', UnauthorizedError],
+    [403, 'forbidden', ForbiddenError],
+    [404, 'not-found', NotFoundError],
+    [409, 'conflict', ConflictError],
+    [409, 'protected-branch', ProtectedBranchError],
+    [409, 'approvals-required', ApprovalsRequiredError],
+    [409, 'merge-conflicts', MergeConflictsError],
+    [422, 'validation-failed', ValidationError],
+  ])('maps %i %s to its typed error', async (status, code, type) => {
+    const { fetchStub } = scripted(problem(status, code, { detail: 'why' }));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    const error: unknown = await fetcher.json('GET', '/x').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(type);
+    expect((error as Error).message).toBe('why');
+  });
+
+  it('reports a request that got no answer as a NetworkError', async () => {
+    const { fetchStub } = scripted(new TypeError('Failed to fetch'));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    const error: unknown = await fetcher.json('GET', '/x').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(describeError(error)).toContain('unreachable');
+  });
+
+  it('survives an error body that is not a problem', async () => {
+    const { fetchStub } = scripted(new Response('<html>bad gateway</html>', { status: 502 }));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    const error: unknown = await fetcher.json('GET', '/x').catch((e: unknown) => e);
+    expect((error as { status: number }).status).toBe(502);
+  });
+});
+
+describe('describeError', () => {
+  it('names the first finding of a refused request and hints at the token on 401', async () => {
+    const { fetchStub } = scripted(
+      problem(422, 'validation-failed', {
+        detail: '1 validation issue(s); nothing was written.',
+        issues: [{ code: 'x', message: 'Attribute tier is not defined.' }],
+      }),
+      problem(401, 'unauthorized', { detail: 'No credential.' }),
+    );
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    const refused: unknown = await fetcher.json('POST', '/x').catch((e: unknown) => e);
+    expect(describeError(refused)).toBe(
+      '1 validation issue(s); nothing was written. Attribute tier is not defined.',
+    );
+    const anonymous: unknown = await fetcher.json('GET', '/x').catch((e: unknown) => e);
+    expect(describeError(anonymous)).toContain('API token in Settings');
+    expect(describeError(new Error('boom'))).toBe('boom');
+    expect(describeError('x')).toBe('The request failed.');
+  });
+});

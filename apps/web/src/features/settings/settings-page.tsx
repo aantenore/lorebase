@@ -1,5 +1,6 @@
 import { useConfig } from '@/config/context';
 import { useScope } from '@/app/scope';
+import { ConnectionSection } from './connection-section';
 import { PlannedScreens } from '@/features/planned-screens';
 import { Select } from '@/ui/field';
 import { PageHeader, Section } from '@/ui/layout';
@@ -53,6 +54,8 @@ export function SettingsPage() {
         </div>
       </Section>
 
+      <ConnectionSection />
+
       <Section title="Domain">
         <Table caption="Domain settings">
           <THead>
@@ -80,7 +83,14 @@ export function SettingsPage() {
           </THead>
           <TBody>
             <Row name="Data source" value={config.apiMode} />
-            <Row name="Keeper base URL" value={config.keeperBaseUrl ?? 'not used in mock mode'} />
+            <Row
+              name="Keeper base URL"
+              value={
+                config.keeperBaseUrl === ''
+                  ? 'this origin'
+                  : (config.keeperBaseUrl ?? 'not used in mock mode')
+              }
+            />
             <Row name="Page size" value={config.pageSize} />
             <Row name="Search limit" value={config.searchLimit} />
             <Row name="Canvas depth" value={config.canvas.depth} />

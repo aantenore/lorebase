@@ -290,6 +290,11 @@ export function createMockApi(options: MockOptions): KeeperApi {
         };
         return Promise.resolve(schema);
       },
+      validate: (scope) => {
+        // The mock checks change sets as commands (`applyChanges`); a document is accepted.
+        scoped(scope);
+        return Promise.resolve({ valid: true, violations: [], changes: [] });
+      },
       applyChanges: (id, name, request) => {
         const domain = domainOf(id);
         const data = branchOf(domain, name);
@@ -612,6 +617,34 @@ export function createMockApi(options: MockOptions): KeeperApi {
         for (const resolution of input.resolutions) storeResolution(state, resolution);
         return Promise.resolve(attemptFor(domain, proposal, state));
       },
+    },
+
+    auth: {
+      whoami: () =>
+        Promise.resolve({
+          id: 'usr_mock',
+          type: 'user' as const,
+          display_name: 'Mock user',
+          method: 'mock',
+          subjects: ['usr_mock'],
+          key_scopes: [],
+          installation_admin: true,
+        }),
+    },
+
+    agents: {
+      context: () => Promise.reject(notSupported('Context packs')),
+      explain: () => Promise.reject(notSupported('Record explanations')),
+    },
+
+    inference: {
+      upload: () => Promise.reject(notSupported('Schema inference')),
+    },
+
+    webhooks: {
+      list: () => Promise.resolve([]),
+      create: () => Promise.reject(notSupported('Webhooks')),
+      delete: () => Promise.reject(notSupported('Webhooks')),
     },
   };
 }

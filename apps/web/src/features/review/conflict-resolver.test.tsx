@@ -135,7 +135,7 @@ describe('ConflictResolver choices', () => {
     await user.clear(field);
     await user.type(field, '55');
     await user.click(screen.getByRole('button', { name: 'Save resolution' }));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ choice: 'custom', value: 55 }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ choice: 'custom', value: '55' }));
   });
 
   it('keeps JSON text that does not parse from being saved', async () => {

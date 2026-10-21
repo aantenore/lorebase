@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '@/test/render';
 
@@ -52,5 +52,36 @@ describe('app shell', () => {
       expect(router.state.location.pathname).toBe('/supply/explorer');
     });
     expect(router.state.location.search).toMatchObject({ q: 'Brevik' });
+  });
+
+  it('creates a Branch from the Branch on screen and switches to it', async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp('/supply/explorer?branch=model%2Frisk');
+    await screen.findByLabelText('Branch');
+    await user.click(screen.getByRole('button', { name: 'New Branch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New Branch' });
+    expect(dialog).toHaveTextContent('starts at the head of model/risk');
+    await user.type(within(dialog).getByLabelText('Branch name'), 'work/ui');
+    await user.click(within(dialog).getByRole('button', { name: 'Create Branch' }));
+
+    expect(await screen.findByText('Branch work/ui created from model/risk.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(router.state.location.search).toMatchObject({ branch: 'work/ui' });
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('Branch')).toHaveValue('work/ui');
+  });
+
+  it('shows a refused create as a toast and keeps the dialog open', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/explorer');
+    await screen.findByLabelText('Branch');
+    await user.click(screen.getByRole('button', { name: 'New Branch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New Branch' });
+    await user.type(within(dialog).getByLabelText('Branch name'), 'model/risk');
+    await user.click(within(dialog).getByRole('button', { name: 'Create Branch' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Branch model/risk exists.');
+    expect(screen.getByRole('dialog', { name: 'New Branch' })).toBeInTheDocument();
   });
 });

@@ -2,9 +2,12 @@ import type {
   Branch,
   BranchName,
   ConflictListParams,
+  ContextPack,
+  ContextRequest,
   CreateBranchInput,
   CreateDomainInput,
   CreateProposalInput,
+  CreateWebhookInput,
   DecideItemsInput,
   DiffParams,
   DiffResponse,
@@ -12,7 +15,9 @@ import type {
   DomainId,
   ExecuteOperationRequest,
   ExecuteOperationResponse,
+  ExplainedRecord,
   HistoryResponse,
+  InferredSchema,
   LineageResponse,
   LinksResponse,
   MergeAttempt,
@@ -40,10 +45,15 @@ import type {
   Schema,
   SchemaChangeRequest,
   SchemaChangeResult,
+  SchemaValidateRequest,
+  SchemaValidation,
   SearchRequest,
   SearchResponse,
   TraverseRequest,
   TraverseResponse,
+  Webhook,
+  WebhookCreated,
+  WhoAmI,
 } from './types';
 
 /**
@@ -73,6 +83,12 @@ export interface KeeperApi {
 
   readonly schema: {
     get(scope: ReadScope): Promise<Schema>;
+    /** Checks a schema document against the schema of the scope; nothing is written. */
+    validate(scope: ReadScope, request: SchemaValidateRequest): Promise<SchemaValidation>;
+    /**
+     * Commits a schema change set as one Revision, or dry-runs it. An invalid change set is
+     * an answer (`valid: false` with the violations), not an error.
+     */
     applyChanges(
       domain: DomainId,
       branch: BranchName,
@@ -147,5 +163,29 @@ export interface KeeperApi {
     resolve(domain: DomainId, proposal: string, resolution: Resolution): Promise<Resolution>;
     /** Stores several Resolutions at once; answers with the updated attempt. */
     resolveMany(domain: DomainId, proposal: string, input: ResolveManyInput): Promise<MergeAttempt>;
+  };
+
+  readonly auth: {
+    /** Who the credential of this connection belongs to. */
+    whoami(): Promise<WhoAmI>;
+  };
+
+  readonly agents: {
+    /** Seed Records, their neighborhood, schema, recent changes and lineage within a budget. */
+    context(scope: ReadScope, request: ContextRequest): Promise<ContextPack>;
+    /** Creation, per-Attribute lineage, Links with their origin and Proposals of a Record. */
+    explain(scope: ReadScope, kind: string, key: string): Promise<ExplainedRecord>;
+  };
+
+  readonly inference: {
+    /** Profiles CSV or TSV files and proposes a schema; nothing is committed. */
+    upload(domain: DomainId, files: readonly File[]): Promise<InferredSchema>;
+  };
+
+  readonly webhooks: {
+    list(domain: DomainId): Promise<Webhook[]>;
+    /** The signing secret is in the answer once and cannot be read again. */
+    create(domain: DomainId, input: CreateWebhookInput): Promise<WebhookCreated>;
+    delete(domain: DomainId, webhook: string): Promise<void>;
   };
 }
