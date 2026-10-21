@@ -369,6 +369,22 @@ class CsvProfilingSettings(SectionModel):
     max_columns: int = Field(default=500, ge=1, description="Wider files are refused.")
 
 
+class RecordProfilingSettings(SectionModel):
+    """Profiling rows read as records (JSON, JSON Lines, Parquet and API Sources)."""
+
+    sample_rows: int = Field(
+        default=10000, ge=1, description="Rows kept per table; every row is still counted."
+    )
+    sampling: Literal["head", "reservoir"] = Field(
+        default="reservoir",
+        description="head keeps the first rows; reservoir keeps a uniform, seeded sample.",
+    )
+    seed: int = Field(default=0, description="Seed of reservoir sampling (same rows, same sample).")
+    max_columns: int = Field(
+        default=500, ge=1, description="Tables with more distinct columns are refused."
+    )
+
+
 class PostgresProfilingSettings(SectionModel):
     """Reading Postgres tables for schema inference: catalog reflection plus sampled SELECTs."""
 
@@ -387,6 +403,7 @@ class ProfilingSettings(SectionModel):
     """Profilers that feed schema inference (design 9.1)."""
 
     csv: CsvProfilingSettings = Field(default_factory=CsvProfilingSettings)
+    records: RecordProfilingSettings = Field(default_factory=RecordProfilingSettings)
     postgres: PostgresProfilingSettings = Field(default_factory=PostgresProfilingSettings)
 
 

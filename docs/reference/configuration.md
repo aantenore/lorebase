@@ -663,6 +663,17 @@ Profilers feeding schema inference (docs/inference.md)
 | `store.profiling.csv.delimiters` | `",;\t\|"` | delimiters the sniffer may pick; .tsv files use a tab |
 | `store.profiling.csv.max_columns` | `500` | wider files are refused |
 
+#### `store.profiling.records`
+
+Rows read as records: JSON, JSON Lines, Parquet, HTTP JSON
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.profiling.records.sample_rows` | `10000` | rows kept per table; every row is still counted |
+| `store.profiling.records.sampling` | `reservoir` | head (first rows) \| reservoir (uniform, seeded, read order) |
+| `store.profiling.records.seed` | `0` |  |
+| `store.profiling.records.max_columns` | `500` | tables with more distinct columns are refused |
+
 #### `store.profiling.postgres`
 
 | Setting | Default | Description |
@@ -1068,7 +1079,7 @@ Source synchronization (design 9.1)
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `scribe.sources.allowed_connections` | `[]` | secret references a Source `connection` may name, e.g. secret://env/ERP_DSN; empty: no Source can be synchronized |
+| `scribe.sources.allowed_connections` | `[]` | secret references a Source `connection` (or an http_json header value) may name, e.g. secret://env/ERP_DSN; empty: no Source can be synchronized |
 | `scribe.sources.commit_batch` | `5000` | changes per Revision; one row's changes are never split |
 | `scribe.sources.max_row_errors` | `100` | skipped rows tolerated; more fail the run without committing |
 | `scribe.sources.error_samples` | `20` | row errors kept in the run record |
@@ -1087,6 +1098,43 @@ Source synchronization (design 9.1)
 | `scribe.sources.csv.encodings` | `[utf-8-sig, cp1252]` | tried in order |
 | `scribe.sources.csv.delimiters` | `",;\t\|"` | delimiters the sniffer may pick; .tsv files use a tab |
 | `scribe.sources.csv.sniff_bytes` | `65536` |  |
+
+#### `scribe.sources.json_files`
+
+Json and jsonl Sources (local files)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.sources.json_files.allowed_roots` | `[]` | directories JSON files may be read from; empty: none |
+| `scribe.sources.json_files.max_bytes` | `104857600` | largest json document, parsed whole (100 MiB) |
+| `scribe.sources.json_files.max_line_bytes` | `16777216` | longest jsonl line (16 MiB); jsonl files are streamed |
+
+#### `scribe.sources.parquet`
+
+Parquet Sources (local files; needs lorebase-scribe[parquet])
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.sources.parquet.allowed_roots` | `[]` | directories Parquet files may be read from; empty: none |
+| `scribe.sources.parquet.batch_rows` | `10000` | rows decoded per batch; files are streamed, never read whole |
+
+#### `scribe.sources.http_json`
+
+Http_json Sources (GET, JSON responses, pagination)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.sources.http_json.allowed_hosts` | `[]` | hosts URLs (next pages included) may point at; empty: none |
+| `scribe.sources.http_json.allowed_schemes` | `[https]` |  |
+| `scribe.sources.http_json.allow_private_targets` | `false` | true: hosts may resolve to private/loopback addresses |
+| `scribe.sources.http_json.timeout_s` | `30.0` | time budget of one request, lookup included |
+| `scribe.sources.http_json.max_bytes` | `52428800` | larger responses are refused (50 MiB) |
+| `scribe.sources.http_json.max_pages` | `1000` | more pages fail the run; a Source's http.max_pages may lower it |
+| `scribe.sources.http_json.max_attempts` | `4` | attempts per request, the first included |
+| `scribe.sources.http_json.retry_statuses` | `[429, 500, 502, 503, 504]` | retried, as are network errors and timeouts |
+| `scribe.sources.http_json.backoff_base_s` | `1.0` | pause before the first retry |
+| `scribe.sources.http_json.backoff_factor` | `2.0` | each further retry waits this many times longer |
+| `scribe.sources.http_json.backoff_max_s` | `60.0` | longest pause, a server's Retry-After included |
 
 #### `scribe.sources.postgres`
 

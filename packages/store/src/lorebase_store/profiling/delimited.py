@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import csv
 import io
-import random
 from collections.abc import Iterable, Iterator
 from itertools import chain
 from pathlib import Path
 from typing import TextIO
 
 from lorebase_core.infer import ColumnProfile, TableProfile
+from lorebase_store.profiling.records import RowSampler
 from lorebase_store.settings import CsvProfilingSettings
 
 TSV_SUFFIXES = (".tsv", ".tab")
@@ -40,28 +40,12 @@ def _sample(
     rows: Iterator[list[str]], settings: CsvProfilingSettings
 ) -> tuple[list[list[str]], int]:
     """Kept rows (in file order) and the number of rows read."""
-    size = settings.sample_rows
-    if settings.sampling == "head":
-        kept: list[list[str]] = []
-        total = 0
-        for row in rows:
-            total += 1
-            if len(kept) < size:
-                kept.append(row)
-        return kept, total
-    rnd = random.Random(settings.seed)
-    reservoir: list[tuple[int, list[str]]] = []
-    total = 0
-    for index, row in enumerate(rows):
-        total += 1
-        if len(reservoir) < size:
-            reservoir.append((index, row))
-        else:
-            slot = rnd.randint(0, index)
-            if slot < size:
-                reservoir[slot] = (index, row)
-    reservoir.sort(key=lambda item: item[0])
-    return [row for _, row in reservoir], total
+    sampler: RowSampler[list[str]] = RowSampler(
+        settings.sample_rows, settings.sampling, settings.seed
+    )
+    for row in rows:
+        sampler.add(row)
+    return sampler.kept(), sampler.total
 
 
 def _header(cells: list[str]) -> list[str]:

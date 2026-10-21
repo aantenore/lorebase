@@ -5,7 +5,7 @@ description = "Lorebase Scribe: job worker, scheduler and Source synchronization
 requires-python = ">=3.12"
 # lorebase-store: job queue, commit pipeline, merges, webhooks, index jobs and GC.
 # lorebase-inference: model interfaces for the extraction jobs to come.
-# httpx: webhook deliveries and CSV Sources served over HTTP(S).
+# httpx: webhook deliveries, CSV Sources served over HTTP(S) and http_json Sources.
 # asyncpg and sqlalchemy: reading Postgres Sources (the drivers the store already uses).
 dependencies = [
   "lorebase-core>=0.1,<0.2",
@@ -25,6 +25,9 @@ dependencies = [
 # reads Word documents (MIT). Without them those media types fail with a message naming this
 # extra.
 documents = ["pypdf>=4.2", "python-docx>=1.1"]
+# parquet: pyarrow (Apache-2.0) reads parquet Sources batch by batch. Without it those Sources
+# fail with a message naming this extra.
+parquet = ["pyarrow>=15"]
 
 [project.scripts]
 lorebase-scribe = "lorebase_scribe.__main__:main"

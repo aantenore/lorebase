@@ -1,40 +1,39 @@
-"""Readers of Source rows (design 9.1): CSV files or URLs, Postgres tables and queries.
+"""Readers of Source rows (design 9.1): CSV, JSON, JSON Lines and Parquet files, JSON APIs,
+Postgres tables and queries.
 
 A connector yields `(locator, row)` pairs; the locator (`name:row number`) becomes the row
 locator of the provenance entries. The connection of a Source is a secret reference; its
-value is the CSV location or the Postgres DSN.
+value is the file location, the URL or the Postgres DSN.
 
 - CSV: a local path under one of `scribe.sources.csv.allowed_roots`, or an `http(s)` URL whose
-  scheme and host are allowed (`allowed_schemes`, `allowed_hosts`). A local path is resolved
-  (symbolic links included) and must then lie under a resolved root; the file is opened from
-  the root one component at a time without following symbolic links, so a link swapped in
-  after the check is refused instead of followed, and it must be a regular file. A URL host
-  must resolve to global unicast addresses only (unless `allow_private_targets`), checked as
-  for webhooks, and the download connects to those checked addresses, never to a new lookup.
-  Downloads never follow redirects; files and downloads are read in bounded steps and refused
-  past `max_bytes`. The delimiter is sniffed, the first decodable encoding of `encodings`
-  wins, and the first row is the header.
+  scheme and host are allowed (`allowed_schemes`, `allowed_hosts`), both read through the
+  guards of `access` (no symbolic link followed after the roots check, regular files only,
+  hosts resolving to global unicast addresses only unless `allow_private_targets`, requests
+  pinned to the checked addresses, no redirects). Files and downloads are read in bounded
+  steps and refused past `max_bytes`. The delimiter is sniffed, the first decodable encoding
+  of `encodings` wins, and the first row is the header.
+- JSON, JSON Lines and Parquet files (`records`) and JSON APIs (`http_json`): see those
+  modules.
 - Postgres: the `table` (default: the last segment of the Source api name) or the `query` of
   the Source, filtered by `scope_filter`, read in one read-only transaction with a statement
   timeout and fetched `fetch_rows` at a time.
 
 Incremental Sources read only rows whose watermark column is greater than the highest watermark
 of the previous successful run (compared in SQL with the column's own type for Postgres, as text
-for CSV, so CSV watermarks should be ISO timestamps or zero-padded numbers).
+for CSV, so CSV watermarks should be ISO timestamps or zero-padded numbers, and natively, or as
+text when the types differ, for the other Sources).
 """
 
 from __future__ import annotations
 
 import asyncio
 import csv
-import errno
 import io
 import os
 import re
-import stat
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -45,22 +44,39 @@ from sqlalchemy.pool import NullPool
 
 from lorebase_core.model import Source
 from lorebase_core.model.source import SourceType
-from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_scribe.settings import CsvSourceSettings, PostgresSourceSettings, SourceSettings
+from lorebase_scribe.sources.access import (
+    HttpRules,
+    PinnedClient,
+    SourceReadError,
+    local_path,
+    open_local,
+    read_bounded,
+    resolve_location,
+)
+from lorebase_scribe.sources.http_json import HttpJsonConnector
 from lorebase_scribe.sources.mapping import Row, SourceDefinitionError
-from lorebase_scribe.webhooks import pin
+from lorebase_scribe.sources.records import JsonConnector, JsonLinesConnector, ParquetConnector
 from lorebase_store.db import async_url
-from lorebase_store.webhooks import WebhookSettings
-from lorebase_store.webhooks.delivery import Resolver, check_target, resolve_host
+from lorebase_store.webhooks.delivery import Resolver, resolve_host
+
+__all__ = [
+    "Connector",
+    "ConnectorFactory",
+    "CsvConnector",
+    "HttpJsonConnector",
+    "JsonConnector",
+    "JsonLinesConnector",
+    "ParquetConnector",
+    "PostgresConnector",
+    "SourceReadError",
+    "check_connection",
+    "default_connector",
+]
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 APPLICATION_NAME = "lorebase-scribe"
-READ_CHUNK = 1024 * 1024
-"""Bytes read from a local CSV file per call; the total is bounded by `max_bytes`."""
-
-
-class SourceReadError(RuntimeError):
-    """The Source could not be read (network, file system or database); a retry may work."""
+CSV_SECTION = "scribe.sources.csv"
 
 
 class Connector(Protocol):
@@ -68,7 +84,9 @@ class Connector(Protocol):
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """Column names, known after the first row was read (header for CSV)."""
+        """Column names, known after the first row was read (header for CSV). Empty for
+        Sources without fixed columns (JSON records): a key missing from a row is null there,
+        and the mapped columns are checked against every key the run saw."""
         ...
 
     def rows(self, since: Any) -> AsyncIterator[tuple[str, Row]]:
@@ -92,13 +110,6 @@ def check_connection(source: Source, settings: SourceSettings) -> None:
         )
 
 
-def _location(source: Source) -> str:
-    try:
-        return resolve_secret(source.connection)
-    except SecretResolutionError as error:
-        raise SourceDefinitionError(f"connection: {error}") from None
-
-
 def quote_identifier(name: str) -> str:
     """A dotted SQL identifier, each part checked and double-quoted."""
     parts = name.split(".")
@@ -108,26 +119,6 @@ def quote_identifier(name: str) -> str:
 
 
 # CSV ----------------------------------------------------------------------------------------
-
-
-def _open_beneath(root: Path, relative: PurePath) -> int:
-    """A descriptor of `root / relative`, opened without following any symbolic link.
-
-    Each directory below `root` is opened relative to its parent with `O_NOFOLLOW`, and so is
-    the file itself (non-blocking, so a FIFO cannot hold the worker): a component replaced by
-    a symbolic link after the path was checked fails with ELOOP or ENOTDIR.
-    """
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for part in relative.parts[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = child
-        return os.open(
-            relative.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
-        )
-    finally:
-        os.close(directory)
 
 
 @dataclass
@@ -143,159 +134,56 @@ class CsvConnector:
         return self._columns
 
     async def _load(self) -> tuple[str, bytes]:
-        location = _location(self.source)
+        location = resolve_location(self.source)
         parts = urlsplit(location)
         if parts.scheme in ("http", "https"):
             return Path(parts.path).name or parts.netloc, await self._download(location)
-        if parts.scheme not in ("", "file"):
-            raise SourceDefinitionError("connection: unsupported CSV location scheme")
-        return self._read_file(Path(parts.path if parts.scheme == "file" else location))
-
-    def _beneath_root(self, path: Path) -> tuple[Path, PurePath]:
-        """The allowed root `path` resolves under, and the resolved path relative to it.
-
-        Symbolic links are resolved here, so a link inside a root that points inside a root
-        keeps working; the file is then opened along the resolved path, which has no links,
-        without following any (`_open_beneath`)."""
-        try:
-            resolved = path.resolve()
-            roots = [Path(root).resolve() for root in self.settings.allowed_roots]
-        except (OSError, RuntimeError):
-            raise SourceReadError(f"{path.name}: the path cannot be resolved") from None
-        for root in roots:
-            if resolved != root and resolved.is_relative_to(root):
-                return root, resolved.relative_to(root)
-        raise SourceDefinitionError(
-            "connection: the path is outside scribe.sources.csv.allowed_roots"
-        )
+        return self._read_file(local_path(location, "CSV"))
 
     def _read_file(self, path: Path) -> tuple[str, bytes]:
-        root, relative = self._beneath_root(path)
+        descriptor = open_local(path, self.settings.allowed_roots, CSV_SECTION)
         try:
-            descriptor = _open_beneath(root, relative)
-        except OSError as error:
-            if error.errno in (errno.ELOOP, errno.ENOTDIR):
-                raise SourceDefinitionError(
-                    "connection: the path meets a symbolic link or a non-directory when opened "
-                    "under scribe.sources.csv.allowed_roots"
-                ) from None
-            raise SourceReadError(f"{path.name}: {error.strerror}") from None
-        try:
-            return path.name, self._read_descriptor(path.name, descriptor)
+            return path.name, read_bounded(
+                descriptor, path.name, self.settings.max_bytes, f"{CSV_SECTION}.max_bytes"
+            )
         except OSError as error:
             raise SourceReadError(f"{path.name}: {error.strerror}") from None
         finally:
             os.close(descriptor)
 
-    def _read_descriptor(self, name: str, descriptor: int) -> bytes:
-        """At most `max_bytes` of a regular file, read from the descriptor that was checked."""
-        limit = self.settings.max_bytes
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode):
-            raise SourceDefinitionError(f"{name}: not a regular file")
-        if status.st_size > limit:
-            raise SourceDefinitionError(
-                f"{name}: {status.st_size} bytes, more than the {limit} allowed by "
-                "scribe.sources.csv.max_bytes"
-            )
-        chunks: list[bytes] = []
-        size = 0
-        while chunk := os.read(descriptor, min(READ_CHUNK, limit + 1 - size)):
-            size += len(chunk)
-            if size > limit:  # the file grew after fstat
-                raise SourceDefinitionError(
-                    f"{name}: more than the {limit} bytes allowed by scribe.sources.csv.max_bytes"
-                )
-            chunks.append(chunk)
-        return b"".join(chunks)
-
-    async def _download(self, url: str) -> bytes:
-        parts = urlsplit(url)
-        if parts.scheme not in self.settings.allowed_schemes:
-            raise SourceDefinitionError(
-                "connection: the URL scheme is not in scribe.sources.csv.allowed_schemes"
-            )
-        if (parts.hostname or "") not in self.settings.allowed_hosts:
-            raise SourceDefinitionError(
-                "connection: the URL host is not in scribe.sources.csv.allowed_hosts"
-            )
+    async def _download(self, location: str) -> bytes:
+        settings = self.settings
+        try:
+            url = httpx.URL(location)
+        except httpx.InvalidURL:
+            raise SourceDefinitionError("connection: not a valid URL") from None
+        rules = HttpRules(
+            CSV_SECTION,
+            settings.allowed_schemes,
+            settings.allowed_hosts,
+            settings.allow_private_targets,
+            settings.max_bytes,
+        )
         try:
             async with (
-                asyncio.timeout(self.settings.timeout_s),
+                asyncio.timeout(settings.timeout_s),
                 httpx.AsyncClient(
                     trust_env=False,
                     follow_redirects=False,
-                    timeout=self.settings.timeout_s,
+                    timeout=settings.timeout_s,
                     transport=self.transport,
                 ) as client,
             ):
-                addresses = await self._addresses(url)
-                return await self._fetch(client, httpx.URL(url), addresses)
+                fetched = await PinnedClient(client, rules, self.resolve).get(url, {}, "connection")
         except TimeoutError:
             raise SourceReadError(
-                f"GET {parts.hostname}: not complete within scribe.sources.csv.timeout_s"
+                f"GET {url.host}: not complete within {CSV_SECTION}.timeout_s"
             ) from None
         except httpx.HTTPError as error:
-            raise SourceReadError(f"GET {parts.hostname}: {type(error).__name__}") from None
-
-    async def _addresses(self, url: str) -> tuple[str, ...]:
-        """The addresses of the URL host, checked as the webhook worker checks its targets.
-
-        Empty when private targets are allowed: the client then resolves the host itself."""
-        checks = WebhookSettings(
-            allowed_schemes=self.settings.allowed_schemes,
-            allow_private_targets=self.settings.allow_private_targets,
-        )
-        target = await check_target(url, checks, self.resolve)
-        if target.problem is None:
-            return target.addresses
-        if target.problem.startswith("cannot resolve"):
-            raise SourceReadError("connection: the URL host cannot be resolved")
-        # `check_target` problems never contain the host name or the URL.
-        raise SourceDefinitionError(
-            f"connection: the URL host {target.problem}, refused unless "
-            "scribe.sources.csv.allow_private_targets"
-        )
-
-    async def _fetch(
-        self, client: httpx.AsyncClient, url: httpx.URL, addresses: Sequence[str]
-    ) -> bytes:
-        if not addresses:
-            return await self._get(client, url, url, {}, {})
-        failure: httpx.TransportError | None = None
-        for address in addresses:
-            pinned, host, extensions = pin(url, address)
-            try:
-                return await self._get(client, url, pinned, host, extensions)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
-                failure = error  # the next checked address, never a new lookup
-        assert failure is not None
-        raise failure
-
-    async def _get(
-        self,
-        client: httpx.AsyncClient,
-        url: httpx.URL,
-        target: httpx.URL,
-        headers: dict[str, str],
-        extensions: dict[str, Any],
-    ) -> bytes:
-        """The body of a GET to `target` (`url`, maybe pinned), at most `max_bytes` of it."""
-        limit = self.settings.max_bytes
-        chunks: list[bytes] = []
-        size = 0
-        async with client.stream("GET", target, headers=headers, extensions=extensions) as response:
-            if response.status_code != 200:
-                raise SourceReadError(f"GET {url.host}: HTTP {response.status_code}")
-            async for chunk in response.aiter_bytes():
-                size += len(chunk)
-                if size > limit:
-                    raise SourceDefinitionError(
-                        f"download larger than the {limit} bytes allowed by "
-                        "scribe.sources.csv.max_bytes"
-                    )
-                chunks.append(chunk)
-        return b"".join(chunks)
+            raise SourceReadError(f"GET {url.host}: {type(error).__name__}") from None
+        if fetched.status != 200:
+            raise SourceReadError(f"GET {url.host}: HTTP {fetched.status}")
+        return fetched.body
 
     def _decode(self, name: str, data: bytes) -> str:
         for encoding in self.settings.encodings:
@@ -382,7 +270,7 @@ class PostgresConnector:
     async def rows(self, since: Any) -> AsyncIterator[tuple[str, Row]]:
         sql, parameters, name = self.statement(since)
         try:
-            url = async_url(_location(self.source))
+            url = async_url(resolve_location(self.source))
         except ValueError as error:
             raise SourceDefinitionError(f"connection: {error}") from None
         engine = create_async_engine(
@@ -413,12 +301,20 @@ class PostgresConnector:
 
 
 def default_connector(source: Source, settings: SourceSettings) -> Connector:
-    """The connector of a Source type; Parquet and HTTP JSON are not supported yet.
+    """The connector of a Source type.
 
     The connection must be one of `settings.allowed_connections`."""
     check_connection(source, settings)
     if source.type is SourceType.CSV:
         return CsvConnector(source, settings.csv)
+    if source.type is SourceType.JSON:
+        return JsonConnector(source, settings.json_files)
+    if source.type is SourceType.JSONL:
+        return JsonLinesConnector(source, settings.json_files)
+    if source.type is SourceType.PARQUET:
+        return ParquetConnector(source, settings.parquet)
+    if source.type is SourceType.HTTP_JSON:
+        return HttpJsonConnector(source, settings.http_json, settings.allowed_connections)
     if source.type in (SourceType.POSTGRES_TABLE, SourceType.POSTGRES_QUERY):
         return PostgresConnector(source, settings.postgres)
-    raise SourceDefinitionError(f"Source type {source.type.value!r} is not supported yet")
+    raise SourceDefinitionError(f"Source type {source.type.value!r} is not supported")

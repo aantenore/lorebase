@@ -15,7 +15,7 @@ import pytest
 from lorebase_core.model import Schema, Source
 from lorebase_core.model.source import SourceType, SyncMode
 from lorebase_scribe.settings import CsvSourceSettings, PostgresSourceSettings
-from lorebase_scribe.sources import connectors
+from lorebase_scribe.sources import access
 from lorebase_scribe.sources.connectors import (
     CsvConnector,
     PostgresConnector,
@@ -244,7 +244,7 @@ async def test_a_link_swapped_in_after_the_check_is_not_followed(
     (root / "sub").mkdir()
     (root / "sub" / "secret.csv").write_bytes(CSV)
     location = root / swapped if swapped == "suppliers.csv" else root / swapped / "secret.csv"
-    check_then_open = connectors._open_beneath
+    check_then_open = access._open_beneath
 
     def swap_then_open(base: Path, relative: PurePath) -> int:
         # A writer inside the root replaces a checked component with a link to elsewhere.
@@ -257,7 +257,7 @@ async def test_a_link_swapped_in_after_the_check_is_not_followed(
             replaced.symlink_to(outside / "secret.csv")
         return check_then_open(base, relative)
 
-    monkeypatch.setattr(connectors, "_open_beneath", swap_then_open)
+    monkeypatch.setattr(access, "_open_beneath", swap_then_open)
     source = csv_source(supply_schema, monkeypatch, str(location))
     with pytest.raises(SourceDefinitionError, match="symbolic link"):
         await collect(CsvConnector(source, settings))
@@ -291,7 +291,7 @@ async def test_a_file_growing_after_fstat_stops_at_max_bytes(
         values[stat.ST_SIZE] = 1  # the size when checked; the file grows afterwards
         return os.stat_result(values)
 
-    monkeypatch.setattr(connectors.os, "fstat", small_fstat)
+    monkeypatch.setattr(access.os, "fstat", small_fstat)
     source = csv_source(supply_schema, monkeypatch, str(root / "suppliers.csv"))
     with pytest.raises(SourceDefinitionError, match=r"scribe\.sources\.csv\.max_bytes"):
         await collect(CsvConnector(source, settings))

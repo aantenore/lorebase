@@ -119,12 +119,83 @@ sources:
     target_branch_policy: {merge_policy: auto_with_authority}
 ```
 
+JSON documents, JSON Lines and Parquet files are local files, like local CSV files:
+
+```yaml
+sources:
+  plm.parts:
+    type: json
+    connection: secret://env/PLM_PARTS_JSON     # a path, e.g. /data/sources/plm/parts.json
+    records_path: data.parts                    # the array of records; omit when the document is one
+    flatten_separator: '.'                      # optional: {"spec": {"weight": 2}} -> spec.weight
+    target_kind: Part
+    key_mapping: [part_no]
+    attribute_mapping:
+      name: {column: name}
+      weight_kg: {column: spec.weight}
+      dimensions: {column: dimensions}          # a nested object, kept as a json value
+
+  mes.events:
+    type: jsonl                                 # one object per line, streamed
+    connection: secret://env/MES_EVENTS_JSONL
+    target_kind: ProductionEvent
+    key_mapping: [event_id]
+    attribute_mapping:
+      status: {column: status}
+    sync_mode: incremental
+    watermark_column: recorded_at
+
+  finance.invoices:
+    type: parquet                               # needs lorebase-scribe[parquet]
+    connection: secret://env/FINANCE_INVOICES_PARQUET
+    flatten_separator: '_'                      # struct columns: billing_country, billing_city
+    target_kind: Invoice
+    key_mapping: [invoice_no]
+    attribute_mapping:
+      amount: {column: amount}
+      country: {column: billing_country}
+```
+
+An `http_json` Source reads a JSON API with GET requests, page by page:
+
+```yaml
+sources:
+  crm.accounts:
+    type: http_json
+    connection: secret://env/CRM_ACCOUNTS_URL   # https://crm.example.com/api/v2/accounts
+    records_path: data                          # omit when each response is the array
+    target_kind: Account
+    key_mapping: [id]
+    attribute_mapping:
+      name: {column: name}
+      owner: {column: owner.email}
+    flatten_separator: '.'
+    http:
+      headers:
+        Authorization: secret://env/CRM_TOKEN   # credential headers take secret references only
+        X-Tenant: acme                          # other headers may be literal
+      pagination:
+        type: cursor                            # none | cursor | page | offset | link
+        cursor_path: meta.next_cursor           # cursor: where the next cursor is in a response
+        cursor_param: cursor                    # cursor: query parameter that carries it
+        # page:   page_param (default page), start_page (default 1)
+        # offset: offset_param (default offset), page_size (required)
+        # link:   follows the rel="next" URL of the Link header
+        size_param: limit                       # optional, with page_size: asks for the page size
+        page_size: 200
+      since_param: updated_since                # incremental runs send the previous watermark
+      max_pages: 500                            # optional, below scribe.sources.http_json.max_pages
+    sync_mode: incremental
+    watermark_column: updated_at
+```
+
 **Connections** are secret references, never literals. Scribe resolves them in its own
-environment: for CSV the value is a local path or an `http(s)` URL, for Postgres a DSN. Only
-the references listed in `scribe.sources.allowed_connections` are resolved (empty by default):
-Sources are written by schema authors, and without the list any of them could name a reference
-meant for something else, such as the DSN of the Lorebase database. Errors name the reference,
-never the value behind it.
+environment: for CSV the value is a local path or an `http(s)` URL, for JSON, JSON Lines and
+Parquet a local path, for `http_json` the URL of the first page, for Postgres a DSN. Only
+the references listed in `scribe.sources.allowed_connections` are resolved (empty by default),
+and so are secret header values of `http_json` Sources: Sources are written by schema authors,
+and without the list any of them could name a reference meant for something else, such as the
+DSN of the Lorebase database. Errors name the reference, never the value behind it.
 
 - CSV files must lie under `scribe.sources.csv.allowed_roots`; URLs need a scheme in
   `allowed_schemes` and a host in `allowed_hosts`, are fetched without following redirects and
@@ -140,6 +211,34 @@ never the value behind it.
   the download connects to those addresses, never to a second lookup, and `timeout_s` bounds
   it from lookup to last byte. Hosts on private networks need `allow_private_targets: true`
   (off by default; earlier versions did not check addresses).
+- JSON and JSON Lines files must lie under `scribe.sources.json_files.allowed_roots`, Parquet
+  files under `scribe.sources.parquet.allowed_roots` (both empty by default), and are opened
+  with the same link and file type checks as CSV files. A `json` document is parsed whole, at
+  most `json_files.max_bytes`; its records are the array at `records_path` (dotted keys) or the
+  document itself. A `jsonl` file is streamed line by line (blank lines skipped, lines at most
+  `max_line_bytes`). A `parquet` file is streamed in batches of `parquet.batch_rows` rows and
+  needs pyarrow: install `lorebase-scribe[parquet]` (the run fails with a message naming the
+  extra otherwise). Locators are `file.json:<record>`, `file.jsonl:<line>` and
+  `file.parquet:<row>`.
+- `http_json` URLs, next pages included, follow the CSV URL rules with their own settings
+  (`scribe.sources.http_json`): a scheme in `allowed_schemes`, a host in `allowed_hosts`,
+  global unicast addresses only unless `allow_private_targets`, looked up once per host and
+  run and pinned, no redirects, at most `max_bytes` per response and `timeout_s` per request.
+  429 and 5xx answers (`retry_statuses`), network errors and timeouts are retried up to
+  `max_attempts` times with exponential backoff (`backoff_base_s`, `backoff_factor`, at most
+  `backoff_max_s`, a longer `Retry-After` honored up to that cap); other statuses fail the run.
+  Reading stops at a page without records or without a next page; a Source that needs more
+  than `max_pages` pages (or its own lower `http.max_pages`) fails instead of committing part
+  of itself, since a partial snapshot would remove the Records it did not see. Headers whose
+  name suggests a credential (`Authorization`, `Cookie`, names containing `key`, `token`,
+  `secret`, `auth`...) must be secret references, checked when the schema is written, so a
+  credential never lands in the schema or its history; `Host` and framing headers cannot be
+  set. Locators are `<last URL path segment>:<record number>`.
+- Records keep their JSON (or Arrow) types: nested objects and arrays are JSON values, which a
+  `json` Attribute stores as they are and textual Attributes receive as canonical JSON text.
+  `flatten_separator` turns nested objects into columns named `parent<separator>child`
+  instead (arrays stay values). Records have no header: a key missing from a record is null
+  there, and a mapped column that no record of the run has fails the run.
 - Postgres Sources are read in one `READ ONLY` transaction with
   `scribe.sources.postgres.statement_timeout_ms`, `fetch_rows` rows per round trip. The table
   name is checked as an identifier and quoted; `scope_filter` and `query` are SQL written by
@@ -167,7 +266,10 @@ existing Record are kept, and Links of other Relations are left alone.
 1. Scribe resolves the Source (by id or api name) in the schema of the Domain's default branch,
    the target branch, and records the run in `source_runs`.
 2. It reads the rows (incremental Sources only those whose watermark column is greater than the
-   highest watermark of the last successful run) and maps them.
+   highest watermark of the last successful run) and maps them. Postgres compares watermarks in
+   SQL with the column's type and CSV as text (use ISO timestamps or zero-padded numbers); JSON,
+   JSON Lines, Parquet and `http_json` Sources compare natively (numbers, Parquet timestamps)
+   or as text when the types differ, so string watermarks should be ISO timestamps too.
 3. It prepares the Source branch, `source/<api name>` by default: created from the target
    branch the first time, and recreated at the target head when no Proposal from it is open
    and the heads differ. Every run therefore compares the Source with what the target holds now

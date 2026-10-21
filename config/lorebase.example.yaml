@@ -504,6 +504,11 @@ store:
       sniff_bytes: 65536         # leading bytes used to detect the delimiter
       delimiters: ",;\t|"        # delimiters the sniffer may pick; .tsv files use a tab
       max_columns: 500           # wider files are refused
+    records:                     # rows read as records: JSON, JSON Lines, Parquet, HTTP JSON
+      sample_rows: 10000         # rows kept per table; every row is still counted
+      sampling: reservoir        # head (first rows) | reservoir (uniform, seeded, read order)
+      seed: 0
+      max_columns: 500           # tables with more distinct columns are refused
     postgres:
       sample_rows: 10000         # rows read per table (LIMIT), in a read-only transaction
       max_tables: 200            # tables profiled per request
@@ -753,8 +758,9 @@ scribe:
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
     domain_batch: 100            # Domains read per query
   sources:                       # Source synchronization (design 9.1)
-    allowed_connections: []      # secret references a Source `connection` may name, e.g.
-                                 # secret://env/ERP_DSN; empty: no Source can be synchronized
+    allowed_connections: []      # secret references a Source `connection` (or an http_json
+                                 # header value) may name, e.g. secret://env/ERP_DSN;
+                                 # empty: no Source can be synchronized
     commit_batch: 5000           # changes per Revision; one row's changes are never split
     max_row_errors: 100          # skipped rows tolerated; more fail the run without committing
     error_samples: 20            # row errors kept in the run record
@@ -769,6 +775,25 @@ scribe:
       encodings: [utf-8-sig, cp1252]   # tried in order
       delimiters: ",;\t|"        # delimiters the sniffer may pick; .tsv files use a tab
       sniff_bytes: 65536
+    json_files:                  # json and jsonl Sources (local files)
+      allowed_roots: []          # directories JSON files may be read from; empty: none
+      max_bytes: 104857600       # largest json document, parsed whole (100 MiB)
+      max_line_bytes: 16777216   # longest jsonl line (16 MiB); jsonl files are streamed
+    parquet:                     # parquet Sources (local files; needs lorebase-scribe[parquet])
+      allowed_roots: []          # directories Parquet files may be read from; empty: none
+      batch_rows: 10000          # rows decoded per batch; files are streamed, never read whole
+    http_json:                   # http_json Sources (GET, JSON responses, pagination)
+      allowed_hosts: []          # hosts URLs (next pages included) may point at; empty: none
+      allowed_schemes: [https]
+      allow_private_targets: false   # true: hosts may resolve to private/loopback addresses
+      timeout_s: 30.0            # time budget of one request, lookup included
+      max_bytes: 52428800        # larger responses are refused (50 MiB)
+      max_pages: 1000            # more pages fail the run; a Source's http.max_pages may lower it
+      max_attempts: 4            # attempts per request, the first included
+      retry_statuses: [429, 500, 502, 503, 504]   # retried, as are network errors and timeouts
+      backoff_base_s: 1.0        # pause before the first retry
+      backoff_factor: 2.0        # each further retry waits this many times longer
+      backoff_max_s: 60.0        # longest pause, a server's Retry-After included
     postgres:
       statement_timeout_ms: 60000  # statement_timeout of the read-only transaction
       connect_timeout_s: 10.0
