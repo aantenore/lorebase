@@ -1,8 +1,8 @@
 # Security review before the first release
 
 Review of the trust boundaries of Lorebase at commit `4bd2d26`, with the fixes made on top of it.
-Each fixed finding has its own commit with a test that fails without the fix. Findings that could
-not be fixed safely in this pass are listed with a proposed fix.
+Each fixed finding has its own commit with a test that fails without the fix. The findings left
+open by the first pass (F6, F7, F12 to F23) were fixed in a second pass, described below.
 
 ## Scope and method
 
@@ -35,24 +35,24 @@ near tokens, keys, DSNs and secrets.
 | F3 | High | keeper | `auth.mode: none` could be served on a non-loopback bind address | Fixed |
 | F4 | Medium | store | Webhook targets in shared address space and other non-global ranges were accepted | Fixed |
 | F5 | Medium | scribe | A webhook target could stall delivery for every Domain | Fixed |
-| F6 | Medium | deploy | The compose stack connects as the Postgres superuser, which ignores row-level security | Open |
-| F7 | Medium | deploy | Compose falls back to `change-me` for the LiteLLM master key and the Grafana password | Open |
+| F6 | Medium | deploy | The compose stack connects as the Postgres superuser, which ignores row-level security | Fixed |
+| F7 | Medium | deploy | Compose falls back to `change-me` for the LiteLLM master key and the Grafana password | Fixed |
 | F8 | Low | keeper | A Domain id of `*` in a path was authorized against grants in any Domain | Fixed |
 | F9 | Low | store | Index drop jobs accepted any index name | Fixed |
 | F10 | Low | inference | A per-task endpoint inherited the main API key | Fixed |
 | F11 | Low | CI | Checkouts kept the job token in `.git/config` | Fixed |
-| F12 | Low | store | Security definer functions accept NULL limits and do not check the transaction scope | Open |
-| F13 | Low | store | Revision `0005` does not verify that the table schema is not writable by the application role | Open |
-| F14 | Low | store | Bundle import has no size limits and trusts unhashed metadata | Open |
-| F15 | Low | keeper | Schema inference sources are installation-wide | Open |
-| F16 | Low | keeper | The optional API key IP allowlist of design 13.2 is not implemented | Open |
-| F17 | Low | keeper | OIDC issuer and JWKS URLs may use plain HTTP | Open |
-| F18 | Low | scribe | CSV over HTTP checks the host name only; local CSV reads have a check-then-read race | Open |
-| F19 | Low | deploy | Helm NetworkPolicy is disabled by default; `/api/v1/docs` is served by default | Open |
-| F20 | Low | keeper | Requests with invalid credentials are not rate limited | Open |
-| F21 | Info | inference | Provider error text (up to 300 characters) is kept in exception messages; clients honour proxy variables | Open |
-| F22 | Info | store | `rls_scope` does not refuse commas in Domain ids; `sql_literal` assumes `standard_conforming_strings` | Open |
-| F23 | Info | keeper | Server-Sent Event streams are authorized once, at connection | Open |
+| F12 | Low | store | Security definer functions accept NULL limits and do not check the transaction scope | Fixed |
+| F13 | Low | store | Revision `0005` does not verify that the table schema is not writable by the application role | Fixed |
+| F14 | Low | store | Bundle import has no size limits and trusts unhashed metadata | Fixed |
+| F15 | Low | keeper | Schema inference sources are installation-wide | Fixed |
+| F16 | Low | keeper | The optional API key IP allowlist of design 13.2 is not implemented | Fixed |
+| F17 | Low | keeper | OIDC issuer and JWKS URLs may use plain HTTP | Fixed |
+| F18 | Low | scribe | CSV over HTTP checks the host name only; local CSV reads have a check-then-read race | Fixed |
+| F19 | Low | deploy | Helm NetworkPolicy is disabled by default; `/api/v1/docs` is served by default | Fixed |
+| F20 | Low | keeper | Requests with invalid credentials are not rate limited | Fixed |
+| F21 | Info | inference | Provider error text (up to 300 characters) is kept in exception messages; clients honour proxy variables | Fixed |
+| F22 | Info | store | `rls_scope` does not refuse commas in Domain ids; `sql_literal` assumes `standard_conforming_strings` | Fixed |
+| F23 | Info | keeper | Server-Sent Event streams are authorized once, at connection | Fixed |
 
 ### Fixed
 
@@ -106,82 +106,125 @@ gets no key unless it sets one. Test: `packages/inference/tests/test_settings_pr
 **F11. CI checkouts do not persist credentials** (`.github/workflows/*.yaml`). Every
 `actions/checkout` sets `persist-credentials: false`; no job fetches or pushes afterwards.
 
-### Open
+### Fixed in the second pass
 
-**F6. Compose uses the superuser for the application** — `deploy/compose/docker-compose.yaml`
-(`LOREBASE_DB_DSN`, `LOREBASE_DB_MAINTENANCE_DSN`). Superusers bypass row-level security, so the
-second line of defence of design 13.3 is off on the compose stack. Repro: start the stack and run
-`SELECT rolsuper FROM pg_roles WHERE rolname = current_user` with the Keeper DSN. Fix: an init
-script creating a `NOSUPERUSER NOBYPASSRLS` application role; Keeper and Scribe use it, `migrate`
-keeps the owner. Keeper could also log an error at start when its role has `rolsuper` or
-`rolbypassrls`.
+Each fix has its own commit with a test that fails without it (F21 to F23 are one commit each).
 
-**F7. Default passwords in compose** — `deploy/compose/docker-compose.yaml`
-(`LITELLM_MASTER_KEY`, `GRAFANA_ADMIN_PASSWORD` default to `change-me`), `.env.example`. Both
-services are opt-in profiles bound to `127.0.0.1`. Fix: empty values in `.env.example` and
-`${VAR:?}` in the services, with a documented generation step; the compose validation job needs
-values for every profile.
+**F6. Keeper and Scribe connect as a role subject to RLS on compose**
+(`deploy/compose/docker-compose.yaml`, `deploy/compose/postgres/app-role.sh`). A one-shot
+`db-roles` service creates or updates `LOREBASE_APP_USER` (default `lorebase_app`, password from
+the required `LOREBASE_APP_PASSWORD`) on every start: `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
+NOCREATEROLE NOREPLICATION`, row rights on the tables and sequences of `public` (default
+privileges cover later tables), `CONNECT, TEMPORARY` on the database, `EXECUTE` on the read
+functions of an earlier migration; `CREATE` on `public` is revoked from `PUBLIC`. It is
+idempotent, so existing volumes are converted. Keeper and Scribe use that role; `migrate` and
+the index maintenance DSN keep the owner, and `migrate` sets `database.application_role`. A
+one-shot service was chosen over a `docker-entrypoint-initdb.d` script because init scripts run
+only on an empty volume. Roles are documented in [deployment.md](deployment.md#database-roles).
+Test: `tests/tooling/test_compose_stack.py`; the web e2e suite passed on the stack (11 tests),
+where `pg_stat_activity` showed Keeper as `lorebase_app` with `rolsuper` and `rolbypassrls`
+false, and Scribe ran its index and webhook jobs under the role. The Helm chart still runs the
+migration and the services with one DSN; deployment.md says to give that role neither
+`SUPERUSER` nor `BYPASSRLS`.
 
-**F12. Security definer arguments** — `packages/store/migrations/versions/0005_security_definer_reads.py`.
-`IF p_limit < 1` is NULL for a NULL argument, so `LIMIT NULL` is unbounded (also `p_candidates`,
-`p_fanout`, `p_max_steps`, `p_max_nodes`), and the functions trust `p_domain` without comparing it
-with `lorebase.domain_ids`. Python callers cap every argument and pass an authorized Domain, so
-this is not reachable over HTTP. Fix, in a new revision: `IS NULL OR NOT BETWEEN 1 AND <ceiling>`
-checks and an error unless the Domain is in the transaction scope or the bypass is on.
+**F7. No placeholder secrets for the LiteLLM and Grafana profiles**
+(`deploy/compose/docker-compose.yaml`, `deploy/compose/require-secrets.sh`, `.env.example`).
+The `change-me` defaults are gone and `.env.example` leaves both values empty with a generation
+command. `${VAR:?}` fails for every profile, because compose interpolates every service, so
+`litellm` and `grafana` depend on one-shot guards (`litellm-secrets`, `grafana-secrets`) that
+exit 1 and name the variable when it is empty, `change-me` or shorter than 16 characters.
+Test: `tests/tooling/test_compose_stack.py`.
 
-**F13. Definer search_path** — same revision. The path includes the table schema; if the
-application role can create objects there (Postgres before 15 with `public`), it could shadow an
-operator and run code as the function owner. Fix: refuse the upgrade when
-`has_schema_privilege(<application role>, <schema>, 'CREATE')`.
+**F12, F13. Security definer arguments, scope and search_path**
+(`packages/store/migrations/versions/0007_definer_argument_checks.py`). Revision `0007`
+replaces the four functions (same signatures, owner and grants) with checks at entry: every
+count between 1 and its ceiling (`store.reads.definer_ceilings`, NULL refused, SQLSTATE 22023),
+the Domain given (22023) and in the transaction scope or with the bypass on (42501), and
+`search_path` equal to the path fixed by the migration (55000). The upgrade refuses to run while
+`database.application_role` may create objects in the schema of the tables or of `pg_trgm`.
+Test: `packages/store/tests/test_definer_checks.py` (run as a non-owner role).
 
-**F14. Bundle import** — `packages/store/src/lorebase_store/bundle.py` (CLI only). No cap on
-member size, member count or JSON line length, and authors, provenance, ref log, change sets and
-Domain settings are imported as written. Fix: size caps and bounded `readline`, refuse symlinks in
-directory mode, document bundles as trusted input or sign the manifest.
+**F14. Bundle import is bounded** (`packages/store/src/lorebase_store/bundle.py`). Per-file and
+total size caps counted on the bytes read, an entry count cap and a bounded line length
+(`store.bundle.*`); tarballs accept only regular files and the `schemas` directory and refuse
+links, devices, absolute and `..` paths; directory mode opens every file with `O_NOFOLLOW` at
+each level. Bundles are documented as trusted input in [operations.md](operations.md).
+Test: `packages/store/tests/test_bundle_limits.py`.
 
-**F15. Schema inference sources** — `packages/keeper/src/lorebase_keeper/services/schema_inference.py`.
-`allowed_sources` is installation-wide: `schema.write` in any Domain may profile any table the
-source role reads, and sample values appear in the evidence. Fix: bind each source to Domains and
-optional schema and table lists.
+**F15. Schema inference sources per Domain**
+(`packages/keeper/src/lorebase_keeper/services/schema_inference.py`).
+`keeper.schema_inference.domain_sources` maps a Domain to its own source references (an empty
+list disables Postgres inference for it); Domains not listed use `allowed_sources`. The refusal
+does not name other Domains' sources. Test: `packages/keeper/tests/test_schema_inference.py`.
 
-**F16. API key IP allowlist** — design 13.2 lists an optional allowlist; the key model has none.
-Fix: an `allowed_networks` column checked in `Authenticator._with_api_key` against the client
-address (behind a configured trusted proxy list), or remove the claim from the design.
+**F16. API key network allowlist** (`packages/keeper/src/lorebase_keeper/client_address.py`,
+`auth/principals.py`, revision `0008`). Keys may carry `allowed_networks` (CIDR list, capped by
+`keeper.auth.api_keys.max_allowed_networks`), set through the admin API, the client and
+`lorebase apikey create --allow-network`; a key used from another address gets the 401 of an invalid
+key. The client address is the socket peer, or, when the peer is in `keeper.trusted_proxies`,
+the first `X-Forwarded-For` hop from the right that is not a trusted proxy; uvicorn no longer
+rewrites the peer from proxy headers. Tests: `packages/keeper/tests/test_client_address.py`,
+`packages/keeper/tests/auth/test_api_key_authentication.py`.
 
-**F17. OIDC over HTTP** — `packages/keeper/src/lorebase_keeper/auth/config.py`. Signing keys
-fetched over plain HTTP can be replaced in transit, which allows forged tokens. Fix: require
-`https` for `issuer` and `jwks_uri` except for loopback hosts, with an explicit opt-out.
+**F17. OIDC over HTTPS only** (`packages/keeper/src/lorebase_keeper/auth/config.py`, `oidc.py`).
+`oidc.issuer`, `oidc.jwks_uri` and a discovered `jwks_uri` must use `https` unless the host is
+loopback or `keeper.auth.oidc.allow_insecure` is set.
+Test: `packages/keeper/tests/auth/test_oidc.py`.
 
-**F18. CSV Source reads** — `packages/scribe/src/lorebase_scribe/sources/connectors.py`. URLs
-are checked by host name only (no address check, no pinning); the hosts are operator allowlisted.
-Local files are checked after `resolve()` and read afterwards by path, so a writer inside an
-allowed root can swap a symlink in between. Fix: reuse `check_target` and address pinning from
-the webhook sender; open with `O_NOFOLLOW` and read a bounded amount from the same descriptor.
+**F18. CSV Source reads** (`packages/scribe/src/lorebase_scribe/sources/connectors.py`). URL
+hosts go through the webhook target check (global unicast only, unless
+`scribe.sources.csv.allow_private_targets`) and the download connects to the checked addresses;
+`timeout_s` bounds the whole download and the body is capped by `max_bytes`. Local files are
+resolved and checked against the resolved roots, then opened from the root one component at a
+time with `O_NOFOLLOW`, must be regular files and are read from that descriptor up to
+`max_bytes`. Test: `packages/scribe/tests/test_connectors.py`.
 
-**F19. Helm defaults** — `deploy/helm/lorebase/values.yaml`. `networkPolicy.enabled: false`;
-`ci/production-values.yaml` allows egress to `0.0.0.0/0:443`; `keeper.openapi.docs_enabled`
-defaults to true and `/readyz` returns check details. Fix: enable the policy by default, narrow
-egress, document turning the docs off in production.
+**F19. Helm network policy on by default** (`deploy/helm/lorebase/values.yaml`,
+`templates/networkpolicy.yaml`). Ingress closed except Keeper, Herald, web and Ollama from Scribe;
+egress per workload: DNS, Postgres (in-cluster pods or `networkPolicy.egress.database.to`), the
+OTLP collector when telemetry is on, the model endpoint for Scribe, webhook ranges, Herald and
+the test pod to Keeper only. No default rule opens every address; the production profile lists
+placeholder ranges and turns `keeper.openapi.docs_enabled` off, as [kubernetes.md](kubernetes.md)
+recommends. Test: `tests/tooling/test_helm_network_policy.py`.
 
-**F20. Unthrottled failed authentication** — `packages/keeper/src/lorebase_keeper/ratelimit/enforce.py`.
-Limits are keyed by the authenticated principal, so requests with invalid keys are not limited;
-each costs a prefix lookup and an INFO log line. Guessing a key is infeasible (256-bit secret),
-but the path can be used to load the database and the logs. Fix: a per-client-address bucket for
-401 answers.
+**F20. Failed authentications are rate limited**
+(`packages/keeper/src/lorebase_keeper/ratelimit/enforce.py`, `limiter.py`). A bucket class of
+its own, `keeper.limits.rate.auth_failures` (30 per minute, burst 30), with one bucket per
+client address (IPv6 by /64) and one per API key prefix. A 401 to a request that carried a
+credential takes a token from both; while either is empty the request gets 429 with
+`Retry-After` before the prefix lookup, the HMAC or the token validation, stays out of the audit
+log and is logged at DEBUG. Successes take nothing. Trade-off, documented in
+[operations.md](operations.md): whoever knows a key prefix (it is not secret) can keep that key
+throttled, and clients behind one address share its bucket. Tests:
+`packages/keeper/tests/auth/test_auth_failure_limits.py`,
+`packages/keeper/tests/ratelimit/test_rate_limit_buckets.py`.
 
-**F21. Inference client details** — `packages/inference/src/lorebase_inference/transport.py`.
-Error text from the provider is kept in `EndpointError`; some providers echo a masked key there.
-`httpx` clients in inference and Herald honour proxy environment variables. Fix: omit the detail
-for 401 and 403; make `trust_env` a setting, default false.
+**F21. Inference client details** (`packages/inference/src/lorebase_inference/transport.py`).
+401 and 403 errors keep the status and a fixed message only; other excerpts are scrubbed of
+the configured key, `Bearer` values, `sk-`-style keys and long base64 or hex runs. httpx clients
+of inference and Herald ignore proxy variables unless `trust_env` is set
+(`inference.llm.trust_env`, `inference.embeddings.trust_env`, `herald.keeper.trust_env`); with it,
+`NO_PROXY` is honoured as usual. Tests: `packages/inference/tests/test_transport.py`,
+`packages/herald/tests/test_safety.py`.
 
-**F22. Store literals** — `packages/store/src/lorebase_store/auth/scope.py` joins Domain ids with
-commas without the check `scope_to_domain` has (ids are slugs, so not exploitable);
-`indexes.sql_literal` assumes `standard_conforming_strings=on`. Fix: the same comma check, and
-`standard_conforming_strings: on` in the connection `server_settings`.
+**F22. Store literals** (`packages/store/src/lorebase_store/auth/scope.py`, `db.py`). `rls_scope`
+and `scope_to_domain` share one check that refuses empty ids and ids with a comma; every store
+engine sets `standard_conforming_strings: on`. Tests: `packages/store/tests/auth/test_rls_scope.py`,
+`packages/store/tests/test_settings.py`.
 
-**F23. Event streams** — `packages/keeper/src/lorebase_keeper/routes/events.py`. A grant revoked
-during a stream takes effect at the next connection. Fix: cap stream duration or re-check grants
-every few minutes.
+**F23. Event streams are authorized again** (`packages/keeper/src/lorebase_keeper/agents/feed.py`,
+`routes/events.py`). Every `agents.feed.reauthorize_interval_s` (default 60 s) an open stream
+authenticates its request again (with its client address, for key allowlists) and requires
+`data.read` on the branch; it closes when either fails. The check uses the usual caches, so a
+grant changed through another Keeper is seen within the interval plus
+`keeper.auth.authz.grants_cache_ttl_s`. Test:
+`packages/keeper/tests/integration/test_read_authorization.py`.
+
+Remaining limits: the per-prefix bucket of F20 can be used to throttle a known key; the Helm
+chart has one DSN for the migration and the services (F6); bundle headers of pax and GNU long
+names are bounded by the archive size only (F14); the `O_NOFOLLOW` walk of CSV and bundle files
+is POSIX only (F14, F18); schema inference sources are bound to Domains but not to schemas or
+tables (F15).
 
 ## Other observations
 

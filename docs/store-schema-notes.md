@@ -125,9 +125,10 @@ difference).
 Postgres applies the `domain_isolation` policy before any condition built from functions it
 does not mark leakproof (`->>`, casts, `@@`, `%`), so under row-level security those conditions
 cannot be index conditions (design 8.7). Revision `0005` adds four functions for exactly the
-read paths that depend on them, and revision `0007` replaces them with the checks below; `lorebase_store.reads` and `lorebase_store.traverse` call them
-when `store.reads.use_definer_functions` is true (the default) and run the same statements as
-plain SQL otherwise:
+read paths that depend on them, and revision `0007` replaces them with the checks below;
+`lorebase_store.reads` and `lorebase_store.traverse` call them when
+`store.reads.use_definer_functions` is true (the default) and run the same statements as plain
+SQL otherwise:
 
 | Function | Read path |
 |----------|-----------|
