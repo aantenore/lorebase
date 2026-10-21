@@ -33,6 +33,7 @@ from lorebase_keeper.readiness import (
     packaged_heads,
 )
 from lorebase_keeper.routes.admin import router as admin_router
+from lorebase_keeper.routes.documents import document_upload_path
 from lorebase_keeper.routes.domain_api import domain_routers
 from lorebase_keeper.routes.whoami import router as whoami_router
 from lorebase_keeper.settings import keeper_settings
@@ -167,8 +168,18 @@ def create_app(
         app.include_router(router, prefix=keeper.api_prefix)
 
     # Innermost first: the last middleware added is the outermost one.
+    documents = keeper.documents
     app.add_middleware(
-        BodyLimitMiddleware, max_bytes=keeper.limits.max_request_body_bytes, renderer=renderer
+        BodyLimitMiddleware,
+        max_bytes=keeper.limits.max_request_body_bytes,
+        renderer=renderer,
+        overrides=[
+            (
+                "POST",
+                document_upload_path(keeper.api_prefix),
+                documents.max_bytes + documents.multipart_overhead_bytes,
+            )
+        ],
     )
     if limits is not None:
         app.add_middleware(RateLimitHeadersMiddleware)

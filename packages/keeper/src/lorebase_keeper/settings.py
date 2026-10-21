@@ -17,6 +17,7 @@ from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings
 from lorebase_keeper.services.config import (
     AgentWriteSettings,
     BranchSettings,
+    DocumentSettings,
     DomainSettings,
     OperationSettings,
     ProposalSettings,
@@ -168,6 +169,7 @@ class KeeperSettings(SectionModel):
     operations: OperationSettings = Field(default_factory=OperationSettings)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
     agent_writes: AgentWriteSettings = Field(default_factory=AgentWriteSettings)
+    documents: DocumentSettings = Field(default_factory=DocumentSettings)
 
     @field_validator("api_prefix")
     @classmethod

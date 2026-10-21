@@ -6,7 +6,10 @@
 | `webhook_delivery` | none | `lorebase_store.webhooks.deliver_pending`, one pass |
 | `store.index` | `{"action", "name", "branch", "kind"}`, Domain set | `indexes.run_index_job` |
 | `gc` | `{"dry_run": bool, "grace_seconds": int}`, Domain set | `lorebase_store.gc.run_gc_job` |
-| `extraction` | reserved | not implemented yet: fails without retries |
+| `extraction` | `{"documents", "tiers", "requested_by"}`, Domain set | `ExtractionRun.run` |
+
+An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
+`scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
 
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
@@ -14,14 +17,17 @@ Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is con
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from lorebase_inference import InferenceSettings
+from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
+from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
 from lorebase_scribe.settings import ScribeSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
@@ -30,12 +36,11 @@ from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
-from lorebase_store.jobs import GC_JOB, INDEX_JOB, SOURCE_SYNC_JOB, JobRow
+from lorebase_store.jobs import EXTRACTION_JOB, GC_JOB, INDEX_JOB, SOURCE_SYNC_JOB, JobRow
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
 WEBHOOK_DELIVERY_JOB = "webhook_delivery"
-EXTRACTION_JOB = "extraction"
 
 JOB_TYPES = (SOURCE_SYNC_JOB, WEBHOOK_DELIVERY_JOB, INDEX_JOB, GC_JOB, EXTRACTION_JOB)
 """Every job type Scribe knows."""
@@ -46,7 +51,8 @@ class JobContext:
     """What the handlers share: database, store runtime, settings and the HTTP client.
 
     `ddl_engine` runs per-Attribute index DDL: the maintenance engine
-    (`database.maintenance_dsn`) when configured, else `engine`."""
+    (`database.maintenance_dsn`) when configured, else `engine`. `extraction_models` replaces
+    the models built from `inference` (tests)."""
 
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
@@ -58,6 +64,8 @@ class JobContext:
     connectors: ConnectorFactory = default_connector
     clock: Callable[[], datetime] = utc_now
     ddl_engine: AsyncEngine | None = None
+    inference: InferenceSettings = field(default_factory=InferenceSettings)
+    extraction_models: Callable[[Sequence[int]], ExtractionModels] | None = None
 
 
 def _domain(job: JobRow) -> str:
@@ -109,7 +117,29 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             raise PermanentJobError(str(error)) from None
 
     async def extraction(job: JobRow) -> Mapping[str, Any]:
-        raise PermanentJobError("extraction jobs are not implemented yet")
+        documents = job.payload.get("documents")
+        if not isinstance(documents, list) or not documents:
+            raise PermanentJobError("an extraction job needs `documents`")
+        tiers = job.payload.get("tiers")
+        if tiers is not None and not isinstance(tiers, list):
+            raise PermanentJobError("`tiers` must be a list")
+        run = ExtractionRun(
+            context.sessions,
+            context.runtime,
+            context.settings.extraction,
+            context.inference,
+            principal=context.settings.worker.principal,
+            models=context.extraction_models,
+            clock=context.clock,
+        )
+        requested_by = job.payload.get("requested_by")
+        report = await run.run(
+            _domain(job),
+            [str(d) for d in documents],
+            tiers=None if tiers is None else [int(t) for t in tiers],
+            requested_by=str(requested_by) if requested_by else None,
+        )
+        return report.as_dict()
 
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
@@ -125,5 +155,5 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
     return {name: available[name] for name in chosen}
 
 
-PERMANENT_JOB_ERRORS: tuple[type[Exception], ...] = PERMANENT_ERRORS
+PERMANENT_JOB_ERRORS: tuple[type[Exception], ...] = (*PERMANENT_ERRORS, *EXTRACTION_ERRORS)
 """Handler failures the worker fails at once instead of retrying."""

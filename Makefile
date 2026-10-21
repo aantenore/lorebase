@@ -15,8 +15,8 @@ OTHER_SRC := packages/platform/src packages/inference/src
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
-sync: ## Install all workspace packages and dev tools
-	$(UV) sync --all-packages
+sync: ## Install all workspace packages, the document parsers and dev tools
+	$(UV) sync --all-packages --extra documents
 
 fmt: ## Format and apply safe lint fixes
 	$(UV) run ruff format $(PY_PATHS)

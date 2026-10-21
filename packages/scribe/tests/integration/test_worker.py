@@ -195,7 +195,7 @@ async def test_permanent_failures_are_not_retried(
     assert await worker_for(context, sessions).run_once() == 2
     status, attempts, result = await job_state(sessions, extraction)
     assert (status, attempts) == ("failed", 1)
-    assert "not implemented" in result["error"]
+    assert "needs `documents`" in result["error"]
     status, attempts, result = await job_state(sessions, sync)
     assert (status, attempts) == ("failed", 1)
     assert result["error"].startswith("SourceNotFoundError")

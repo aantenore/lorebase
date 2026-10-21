@@ -68,7 +68,7 @@ docker compose --profile local-models run --rm inference-check
 ```
 
 The stock image has no local models. To run fastembed and the extractors in containers, build
-with `UV_SYNC_ARGS="--all-packages --extra fastembed --extra local-extractors"` (set it in
+with `UV_SYNC_ARGS="--extra fastembed --extra local-extractors"` (set it in
 `.env`; see `.env.example`).
 
 ## Switch to a paid provider: configuration only

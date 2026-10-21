@@ -15,6 +15,7 @@ from lorebase_store.models.governance import (
 )
 from lorebase_store.models.ingestion import (
     Document,
+    DocumentBlob,
     DocumentChunk,
     ExtractionCacheEntry,
     ExtractionJob,
@@ -55,6 +56,7 @@ __all__ = [
     "Conflict",
     "ConflictResolution",
     "Document",
+    "DocumentBlob",
     "DocumentChunk",
     "Domain",
     "Embedding",

@@ -640,3 +640,52 @@ async def search_records(
         statement = _SEARCH[(kinds is not None, titles is not None)]
     rows = (await session.execute(statement, params)).all()
     return [SearchHit(kind_id, key, title, float(score)) for kind_id, key, title, score in rows]
+
+
+# Title matching (entity resolution) -------------------------------------------------------------
+
+_SIMILAR_TITLES = text(
+    "SELECT m.kind_id, m.key, m.title, "
+    "CAST(GREATEST(CASE WHEN lower(m.title) = lower(:query) THEN 1 ELSE 0 END, "
+    "similarity(m.title, :query)) AS real) AS score "
+    f"FROM mat_records m WHERE {_SCOPE} AND m.kind_id = ANY(CAST(:kinds AS text[])) "
+    "AND m.title IS NOT NULL "
+    "AND (lower(m.title) = lower(:query) OR similarity(m.title, :query) >= :threshold) "
+    "ORDER BY score DESC, m.kind_id, m.key LIMIT :limit"
+)
+
+
+async def similar_titles(
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    query: str,
+    *,
+    kind_ids: Sequence[str],
+    threshold: float,
+    limit: int,
+    runtime: StoreRuntime | None = None,
+) -> list[SearchHit]:
+    """Records of `kind_ids` whose title equals `query` ignoring case (score 1) or is at least
+    `threshold` similar to it by trigrams (`pg_trgm`), best first.
+
+    Meant for entity resolution in batch jobs: under row-level security the trigram index
+    cannot serve the condition, so the statement scans the titles of the named Kinds.
+    """
+    if not kind_ids or not query.strip():
+        return []
+    settings = _runtime(runtime).settings
+    rows = (
+        await session.execute(
+            _SIMILAR_TITLES,
+            {
+                "domain": domain_id,
+                "branch": branch,
+                "kinds": list(kind_ids),
+                "query": query,
+                "threshold": threshold,
+                "limit": _cap(limit, settings.reads.max_search_rows),
+            },
+        )
+    ).all()
+    return [SearchHit(kind_id, key, title, float(score)) for kind_id, key, title, score in rows]

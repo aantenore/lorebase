@@ -1,8 +1,9 @@
 # Scribe
 
 Scribe is the Lorebase worker. It runs the jobs queued in Postgres and schedules the periodic
-ones: Source synchronization, webhook delivery, queued index builds and garbage collection.
-Extraction and embeddings (design 9.2, 9.3) come later. Design references:
+ones: Source synchronization, document extraction ([extraction.md](extraction.md)), webhook
+delivery, queued index builds and garbage collection. Embeddings (design 9.3) come later.
+Design references:
 [5.9](design.md#59-source) (Source), [9.1](design.md#91-structured-sources) (structured
 Sources), [6.6](design.md#66-the-commit-pipeline) (commit pipeline), AC-18 (no external broker).
 
@@ -39,7 +40,7 @@ Domain-wide `data.read` grant.
 | `webhook_delivery` | the scheduler, every `webhook_interval_s` | One pass of `lorebase_store.webhooks.deliver_pending`: fan-out of outbox events, signed POSTs, retries with backoff |
 | `store.index` | commits whose per-Attribute index plan changed (large Kinds, or roles that do not own `mat_records`) | Builds or drops one per-Attribute index (`CONCURRENTLY`), as `database.maintenance_dsn` when it is set ([store schema notes](store-schema-notes.md#physical-layout)) |
 | `gc` | the scheduler, at `gc_schedule` per Domain; `python -m lorebase_store.gc --enqueue` | Garbage collection of a Domain ([operations](operations.md)) |
-| `extraction` | nothing yet | Reserved; fails at once without retries |
+| `extraction` | `{"documents": [ids], "tiers": [..] or null, "requested_by"}` | Documents into a Proposal of items ([extraction.md](extraction.md)) |
 
 ### Worker loop
 

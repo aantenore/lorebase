@@ -30,7 +30,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --extra documents
       - name: ruff and import-linter
         run: make lint
 
@@ -46,7 +46,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --extra documents
       - name: mypy strict for core, store, keeper, herald, client and cli; default settings for the rest
         run: make type
 
@@ -62,7 +62,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --extra documents
       - name: pytest inside an empty network namespace
         # The test suite also refuses outbound sockets in-process (conftest.py); this second
         # layer removes every network interface for the whole run, and the step first proves
@@ -110,7 +110,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --extra documents
       - name: pytest -m integration (tests/integration and packages)
         run: make test-int
 

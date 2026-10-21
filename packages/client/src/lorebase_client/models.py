@@ -27,6 +27,8 @@ ReviewVerdict = Literal["approve", "request_changes", "comment"]
 ConflictStatus = Literal["open", "resolved"]
 CheckStatus = Literal["passed", "failed", "pending"]
 ContextFormat = Literal["json", "markdown"]
+ItemDecisionValue = Literal["pending", "accepted", "rejected"]
+ItemType = Literal["record", "value", "link"]
 
 
 class Model(BaseModel):
@@ -1068,6 +1070,134 @@ class SourceRun(Model):
     revision: str | None = None
     proposal_id: str | None = None
     error: dict[str, JsonValue] | None = None
+
+
+# Documents --------------------------------------------------------------------------------
+
+
+class DocumentFromUrl(RequestModel):
+    """A document fetched by the server from an allowlisted URL."""
+
+    url: str = Field(min_length=1, max_length=2000)
+    filename: str | None = Field(default=None, max_length=255)
+    extract: bool | None = None
+    tiers: list[int] | None = None
+
+
+class Document(Model):
+    """A stored document; `text_sha256` is set once Scribe parsed its text."""
+
+    id: str
+    filename: str
+    media_type: str
+    sha256: str
+    size: int
+    text_sha256: str | None = None
+    metadata: dict[str, JsonValue]
+    created_at: datetime | None = None
+    created_by: str
+
+
+class ExtractionJob(Model):
+    id: str
+    status: str
+    model: str
+    prompt_version: str
+    branch: str | None = None
+    proposal_id: str | None = None
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    usage: dict[str, JsonValue]
+    stats: dict[str, JsonValue]
+    error: dict[str, JsonValue] | None = None
+
+
+class DocumentDetail(Document):
+    """A document with its extraction jobs, newest first."""
+
+    extraction_jobs: list[ExtractionJob]
+
+
+class DocumentUploaded(Model):
+    """The stored document; `duplicate` when the same bytes were stored before."""
+
+    document: Document
+    duplicate: bool
+    job_id: int | None = None
+
+
+# Extraction items -------------------------------------------------------------------------
+
+
+class ProposalItem(Model):
+    """One extracted Record, value or Link of an extraction Proposal."""
+
+    id: str
+    type: ItemType
+    seq: int
+    decision: ItemDecisionValue
+    confidence: float | None
+    tier: int | None
+    model: str | None
+    kind: str | None = None
+    relation: str | None = None
+    key: str | None = None
+    attribute: str | None = None
+    value: JsonValue = None
+    current: JsonValue = None
+    from_key: str | None = Field(default=None, alias="from")
+    to_key: str | None = Field(default=None, alias="to")
+    values: dict[str, JsonValue] = Field(default_factory=dict)
+    subject: dict[str, JsonValue]
+    evidence: dict[str, JsonValue] | None
+    match: dict[str, JsonValue] | None
+    edits: dict[str, JsonValue] | None
+    decided_by: str | None
+    decided_at: datetime | None
+    not_applied: str | None = None
+
+
+class ItemSelection(RequestModel):
+    """Items matching every given filter."""
+
+    status: list[ItemDecisionValue] | None = None
+    kind: list[str] | None = None
+    type: list[ItemType] | None = None
+    min_confidence: float | None = Field(default=None, ge=0, le=1)
+    max_confidence: float | None = Field(default=None, ge=0, le=1.01)
+
+
+class ItemDecision(RequestModel):
+    """A decision on one item; `edits` omitted keeps the stored ones, `{}` clears them."""
+
+    item: str = Field(min_length=1)
+    decision: ItemDecisionValue
+    edits: dict[str, JsonValue] | None = None
+
+
+class DecideItems(RequestModel):
+    """Decisions by item, and or one decision for every item matching `where`."""
+
+    decisions: list[ItemDecision] = Field(default_factory=list)
+    where: ItemSelection | None = None
+    decision: ItemDecisionValue | None = None
+
+
+class MaterializedItems(Model):
+    """What the extraction branch holds after the decisions."""
+
+    revision: str | None
+    changes: int
+    applied: int
+    skipped: dict[str, str]
+
+
+class ItemsDecided(Model):
+    proposal_id: str
+    title: str
+    checks: dict[str, JsonValue]
+    items: list[ProposalItem]
+    materialized: MaterializedItems
 
 
 RecordItem.model_rebuild()

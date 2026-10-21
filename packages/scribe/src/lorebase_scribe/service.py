@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from lorebase_inference import inference_settings
 from lorebase_platform.settings import Settings
 from lorebase_scribe.jobs import PERMANENT_JOB_ERRORS, JobContext, build_handlers
 from lorebase_scribe.scheduler import Scheduler
@@ -83,6 +84,7 @@ async def open_scribe(
                 worker_id=worker_name,
                 connectors=connectors,
                 ddl_engine=maintenance,
+                inference=inference_settings(settings),
             )
             worker = Worker(
                 sessions,

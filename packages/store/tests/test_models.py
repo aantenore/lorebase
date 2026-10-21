@@ -40,6 +40,7 @@ DESIGN_TABLES = {
     "jobs",
     "source_runs",
     "documents",
+    "document_blobs",
     "document_chunks",
     "extraction_jobs",
     "extraction_cache",
@@ -94,5 +95,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_api_key_usage_migration() -> None:
-    assert head_revisions() == ("0006",)
+def test_head_revision_is_the_document_extraction_migration() -> None:
+    assert head_revisions() == ("0007",)

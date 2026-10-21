@@ -372,6 +372,9 @@ export interface paths {
         /**
          * Execute an Operation
          * @description Validate parameters, compute the edits and commit them as a Revision (or dry-run).
+         *
+         *     An Operation that needs review is a 409 `review-required` unless the request names a
+         *     `task`: then it runs on a task branch and the answer is 202 with the Proposal.
          */
         post: operations["execute_operation_api_v1_domains__domain_id__operations__operation__execute_post"];
         delete?: never;
@@ -706,6 +709,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List documents
+         * @description Documents of the Domain, newest first.
+         */
+        get: operations["list_documents_api_v1_domains__domain_id__documents_get"];
+        put?: never;
+        /**
+         * Upload a document for extraction
+         * @description Store a document (multipart upload or allowlisted URL) and queue its extraction.
+         */
+        post: operations["upload_document_api_v1_domains__domain_id__documents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/documents/{document_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a document
+         * @description The document's metadata and its extraction jobs, newest first.
+         */
+        get: operations["get_document_api_v1_domains__domain_id__documents__document_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/branches/{branch}/events": {
         parameters: {
             query?: never;
@@ -740,6 +787,46 @@ export interface paths {
         get: operations["branch_changes_api_v1_domains__domain_id__branches__branch__changes_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the items of an extraction Proposal
+         * @description Items in proposal order (Records, values, Links), with evidence and match details.
+         */
+        get: operations["list_items_api_v1_domains__domain_id__proposals__proposal_id__items_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/items:decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept or reject extraction items
+         * @description Record decisions, re-materialize the extraction branch and refresh the Proposal.
+         */
+        post: operations["decide_api_v1_domains__domain_id__proposals__proposal_id__items_decide_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1106,6 +1193,109 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentApprovalOut */
+        AgentApprovalOut: {
+            /** Required */
+            required: number;
+            /** Approvals */
+            approvals: number;
+            /** Satisfied */
+            satisfied: boolean;
+        };
+        /**
+         * AgentAttemptOut
+         * @description The merge attempt: Conflicts between the task branch and the target.
+         */
+        AgentAttemptOut: {
+            /** Id */
+            id: string;
+            /** Result */
+            result: string | null;
+            /** Open Conflicts */
+            open_conflicts: number;
+            /** Resolved Conflicts */
+            resolved_conflicts: number;
+            /** Counts */
+            counts: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+        };
+        /** AgentMergeOut */
+        AgentMergeOut: {
+            /** Requested */
+            requested: boolean;
+            /**
+             * Allowed
+             * @description The Domain allows automatic merges for the caller's role.
+             */
+            allowed: boolean;
+            /** Performed */
+            performed: boolean;
+            /**
+             * Blockers
+             * @description What keeps the Proposal from merging by itself: `approvals-pending` (the target needs approvals), `review-policy-needs-approval` (the Operation's review policy asks for a review and nobody approved).
+             */
+            blockers: string[];
+        };
+        /**
+         * AgentWriteOut
+         * @description An Operation that needed review, run on a task branch and proposed.
+         */
+        AgentWriteOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "merged" | "conflicts";
+            /** Operation */
+            operation: string;
+            /**
+             * Branch
+             * @description The task branch.
+             */
+            branch: string;
+            /**
+             * Target
+             * @description The branch the Proposal merges into.
+             */
+            target: string;
+            /** Invocation Id */
+            invocation_id: string;
+            /** Parameters Hash */
+            parameters_hash: string;
+            /**
+             * Revision
+             * @description Last Revision written on the task branch.
+             */
+            revision: string | null;
+            /** Revisions */
+            revisions: string[];
+            /** Edit Count */
+            edit_count: number;
+            /** Replayed */
+            replayed: boolean;
+            proposal: components["schemas"]["ProposalRefOut"];
+            approval: components["schemas"]["AgentApprovalOut"];
+            attempt: components["schemas"]["AgentAttemptOut"] | null;
+            merge: components["schemas"]["AgentMergeOut"];
+            /**
+             * Merged Revision
+             * @description Head of the target after an automatic merge.
+             */
+            merged_revision: string | null;
+            /** Branch Created */
+            branch_created: boolean;
+            /** Branch Deleted */
+            branch_deleted: boolean;
+            /** Warnings */
+            warnings: {
+                [key: string]: unknown;
+            }[];
+            /** Next */
+            next: components["schemas"]["NextHint"][];
+        };
         /**
          * Aggregate
          * @description Count the matching Records per Kind, and per value of `group_by` when given.
@@ -1909,6 +2099,40 @@ export interface components {
             } | null;
         };
         /**
+         * DecideIn
+         * @description Decisions by item, and or one decision for every item matching `where`.
+         */
+        DecideIn: {
+            /** Decisions */
+            decisions?: components["schemas"]["ItemDecisionIn"][];
+            where?: components["schemas"]["ItemSelection"] | null;
+            /**
+             * Decision
+             * @description Decision for `where`.
+             */
+            decision?: ("pending" | "accepted" | "rejected") | null;
+        };
+        /** DecideOut */
+        DecideOut: {
+            /** Proposal Id */
+            proposal_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Checks
+             * @description The `extraction` summary and `merge` preview.
+             */
+            checks: {
+                [key: string]: unknown;
+            };
+            /**
+             * Items
+             * @description The decided items.
+             */
+            items: components["schemas"]["ItemOut"][];
+            materialized: components["schemas"]["MaterializedOut"];
+        };
+        /**
          * DerivedCondition
          * @description Compare a derived Attribute with a value.
          */
@@ -1932,6 +2156,77 @@ export interface components {
             records_missing_value: number;
             /** Stale */
             stale: boolean;
+        };
+        /** DocumentDetailOut */
+        DocumentDetailOut: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Media Type */
+            media_type: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /**
+             * Text Sha256
+             * @description Set once Scribe parsed the text.
+             */
+            text_sha256?: string | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by: string;
+            /**
+             * Extraction Jobs
+             * @description Newest first.
+             */
+            extraction_jobs: components["schemas"]["ExtractionJobOut"][];
+        };
+        /** DocumentOut */
+        DocumentOut: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Media Type */
+            media_type: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /**
+             * Text Sha256
+             * @description Set once Scribe parsed the text.
+             */
+            text_sha256?: string | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by: string;
+        };
+        /** DocumentUploaded */
+        DocumentUploaded: {
+            document: components["schemas"]["DocumentOut"];
+            /**
+             * Duplicate
+             * @description The same bytes were stored before.
+             */
+            duplicate: boolean;
+            /**
+             * Job Id
+             * @description Queued extraction job, if any.
+             */
+            job_id?: number | null;
         };
         /**
          * DomainCreate
@@ -2142,6 +2437,26 @@ export interface components {
             expected_head?: string | null;
             /** Message */
             message?: string | null;
+            /**
+             * Task
+             * @description Short slug naming the piece of work. When the Operation needs review (protected branch, review policy), Keeper runs it on the branch `agent/{principal}/{task}` and opens or updates a Proposal; without a task the refusal is the 409 `review-required`. Ignored when the Operation commits directly.
+             */
+            task?: string | null;
+            /**
+             * Intent
+             * @description What the agent is after, in a sentence or two; becomes the start of the Proposal description.
+             */
+            intent?: string | null;
+            /**
+             * Auto Propose
+             * @description Open a Proposal when review is needed. Default: `keeper.agent_writes.auto_propose` for agent principals, false for others. `true` needs a `task`.
+             */
+            auto_propose?: boolean | null;
+            /**
+             * Auto Merge
+             * @description Merge the Proposal at once. Default: `keeper.agent_writes.auto_merge`. Honoured only when the Domain allows it for the caller's role, there is no open Conflict and the required approvals are in.
+             */
+            auto_merge?: boolean | null;
         };
         /**
          * ExecutionOut
@@ -2243,6 +2558,37 @@ export interface components {
             updated_revision?: string | null;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /** ExtractionJobOut */
+        ExtractionJobOut: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+            /** Model */
+            model: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Branch */
+            branch?: string | null;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Usage */
+            usage: {
+                [key: string]: unknown;
+            };
+            /** Stats */
+            stats: {
+                [key: string]: unknown;
+            };
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * FieldProblem
@@ -2373,6 +2719,127 @@ export interface components {
              * @description Keys of some of the Records.
              */
             examples: string[];
+        };
+        /** ItemDecisionIn */
+        ItemDecisionIn: {
+            /** Item */
+            item: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "pending" | "accepted" | "rejected";
+            /**
+             * Edits
+             * @description Reviewer edits; omitted keeps the stored ones, {} clears.
+             */
+            edits?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** ItemOut */
+        ItemOut: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "record" | "value" | "link";
+            /** Seq */
+            seq: number;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "pending" | "accepted" | "rejected";
+            /** Confidence */
+            confidence: number | null;
+            /** Tier */
+            tier: number | null;
+            /** Model */
+            model: string | null;
+            /**
+             * Kind
+             * @description Kind api name (record, value items).
+             */
+            kind?: string | null;
+            /**
+             * Relation
+             * @description Relation api name (link items).
+             */
+            relation?: string | null;
+            /** Key */
+            key?: string | null;
+            /**
+             * Attribute
+             * @description Attribute api name (value items).
+             */
+            attribute?: string | null;
+            value?: components["schemas"]["JsonValue"];
+            /** @description The value on the target branch. */
+            current?: components["schemas"]["JsonValue"];
+            /** From */
+            from?: string | null;
+            /** To */
+            to?: string | null;
+            /**
+             * Values
+             * @description Proposed values by Attribute api name, edits applied.
+             */
+            values?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Subject
+             * @description What the item proposes, by ids, before edits.
+             */
+            subject: {
+                [key: string]: unknown;
+            };
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            } | null;
+            /** Match */
+            match: {
+                [key: string]: unknown;
+            } | null;
+            /** Edits */
+            edits: {
+                [key: string]: unknown;
+            } | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /**
+             * Not Applied
+             * @description Why an accepted item is not on the branch.
+             */
+            not_applied?: string | null;
+        };
+        /**
+         * ItemSelection
+         * @description Items matching every given filter.
+         */
+        ItemSelection: {
+            /** Status */
+            status?: ("pending" | "accepted" | "rejected")[];
+            /**
+             * Kind
+             * @description Kind or Relation api names (or ids).
+             */
+            kind?: string[];
+            /** Type */
+            type?: ("record" | "value" | "link")[];
+            /** Min Confidence */
+            min_confidence?: number | null;
+            /**
+             * Max Confidence
+             * @description Exclusive upper bound.
+             */
+            max_confidence?: number | null;
         };
         JsonValue: unknown;
         /** KindHealth */
@@ -2566,6 +3033,19 @@ export interface components {
          * @enum {string}
          */
         Materialization: "full" | "overlay" | "none";
+        /** MaterializedOut */
+        MaterializedOut: {
+            /** Revision */
+            revision: string | null;
+            /** Changes */
+            changes: number;
+            /** Applied */
+            applied: number;
+            /** Skipped */
+            skipped: {
+                [key: string]: string;
+            };
+        };
         /** MergeIn */
         MergeIn: {
             /** Message */
@@ -2640,6 +3120,22 @@ export interface components {
              * @default false
              */
             truncated: boolean;
+        };
+        /**
+         * NextHint
+         * @description A next step, in the style of problem details extensions.
+         */
+        NextHint: {
+            /** Action */
+            action: string;
+            /** Detail */
+            detail: string;
+            /** Method */
+            method?: string | null;
+            /** Href */
+            href?: string | null;
+            /** Permission */
+            permission?: string | null;
         };
         /** NotCondition */
         NotCondition: {
@@ -2782,6 +3278,13 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
         };
+        /** Page[DocumentOut] */
+        Page_DocumentOut_: {
+            /** Items */
+            items: components["schemas"]["DocumentOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
         /** Page[DomainOut] */
         Page_DomainOut_: {
             /** Items */
@@ -2793,6 +3296,13 @@ export interface components {
         Page_GrantOut_: {
             /** Items */
             items: components["schemas"]["GrantOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** Page[ItemOut] */
+        Page_ItemOut_: {
+            /** Items */
+            items: components["schemas"]["ItemOut"][];
             /** Next Cursor */
             next_cursor?: string | null;
         };
@@ -2969,6 +3479,29 @@ export interface components {
          * @enum {string}
          */
         ProposalOrigin: "manual" | "source_sync" | "extraction" | "operation";
+        /**
+         * ProposalRefOut
+         * @description The Proposal carrying the edits of an agent write.
+         */
+        ProposalRefOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /** Source Ref */
+            source_ref: string;
+            /** Target Ref */
+            target_ref: string;
+            /** Url */
+            url: string;
+            /**
+             * Created
+             * @description False when an open Proposal of the branch was updated.
+             */
+            created: boolean;
+        };
         /**
          * ProposalStatus
          * @description Proposal lifecycle.
@@ -5434,6 +5967,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExecutionOut"];
                 };
             };
+            /** @description The Operation needs review and ran on a task branch; a Proposal carries the edits (`status`: `proposed`, `merged` or `conflicts`). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWriteOut"];
+                };
+            };
             /** @description The caller lacks the permission named in the body. */
             403: {
                 headers: {
@@ -5452,7 +5994,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Review required (`review-required`), head moved (`stale-head`) or idempotency key reused with other parameters (`idempotency-conflict`). */
+            /** @description Review required (`review-required`, with `next` hints), head moved (`stale-head`), idempotency key reused with other parameters (`idempotency-conflict`) or too many task branches (`agent-branch-limit`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6658,6 +7200,278 @@ export interface operations {
             };
         };
     };
+    list_documents_api_v1_domains__domain_id__documents_get: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_DocumentOut_"];
+                };
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unsupported or invalid document, URL or fields. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The URL could not be fetched. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    upload_document_api_v1_domains__domain_id__documents_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    extract?: boolean;
+                    /** @description JSON list, e.g. [0, 1] */
+                    tiers?: string;
+                };
+                "application/json": {
+                    /** Url */
+                    url: string;
+                    /**
+                     * Filename
+                     * @description Name to store; default: the URL's last segment.
+                     */
+                    filename?: string | null;
+                    /**
+                     * Extract
+                     * @description Queue an extraction job.
+                     */
+                    extract?: boolean | null;
+                    /**
+                     * Tiers
+                     * @description Extraction tiers (0, 1, 2).
+                     */
+                    tiers?: number[] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentUploaded"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentUploaded"];
+                };
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unsupported or invalid document, URL or fields. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The URL could not be fetched. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_document_api_v1_domains__domain_id__documents__document_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentDetailOut"];
+                };
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unsupported or invalid document, URL or fields. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The URL could not be fetched. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     branch_events_api_v1_domains__domain_id__branches__branch__events_get: {
         parameters: {
             query?: {
@@ -6793,6 +7607,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_items_api_v1_domains__domain_id__proposals__proposal_id__items_get: {
+        parameters: {
+            query?: {
+                status?: ("pending" | "accepted" | "rejected")[] | null;
+                /** @description Kind or Relation api names (or ids). */
+                kind?: string[] | null;
+                type?: ("record" | "value" | "link")[] | null;
+                min_confidence?: number | null;
+                max_confidence?: number | null;
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_ItemOut_"];
+                };
+            };
+            /** @description The caller lacks the permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or Proposal not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not an extraction Proposal, or not open. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, unknown items, invalid edits, or the branch rejects the accepted items. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The extraction branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    decide_api_v1_domains__domain_id__proposals__proposal_id__items_decide_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecideOut"];
+                };
+            };
+            /** @description The caller lacks the permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or Proposal not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not an extraction Proposal, or not open. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, unknown items, invalid edits, or the branch rejects the accepted items. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The extraction branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Problem details (RFC 9457), media type application/problem+json. */
