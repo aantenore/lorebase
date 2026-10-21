@@ -66,8 +66,8 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 - [ ] Source branches, merge policies and Lineage for syncs
 - [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
 - [x] Web app shell, Explorer, Canvas (graph and schema graph) and Review screens on the mock API
-- [ ] Web app verified against a live Keeper
-- [ ] Review: Proposal list and detail, schema and data diff and merge against live Proposals
+- [x] Web app verified against a live Keeper (Playwright flows against Keeper in CI)
+- [x] Review: Proposal list and detail, reviews, data diff and merge against live Proposals
 - [ ] Canvas rendering 5k nodes and 10k edges smoothly, with a worker layout
 
 ## M3: Governance and agents
@@ -80,7 +80,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals
 - [ ] Modeler with every editor (schema editing exists on the mock API; Operation, Derivation and Source editors are not built)
-- [ ] Conflict resolver against live data (the screen exists on the mock API)
+- [x] Conflict resolver against live data
 - [ ] Traits in queries
 
 ## M4: Documents, extraction and semantic search
