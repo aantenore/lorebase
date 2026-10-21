@@ -22,7 +22,8 @@ application's own `lorebase.yaml`, and the same environment variables.
 | Herald, MCP over streamable HTTP (Deployment, Service, PDB, optional HPA) | off | |
 | Web app (nginx Deployment, Service, runtime config) | off | |
 | Ollama (Deployment, Service, PVC) | off | Local models profile; pulls the model on start |
-| Ingress, NetworkPolicy, ServiceMonitor | off | |
+| NetworkPolicy | on | Ingress closed but for the exposed services; egress per workload ([below](#network-policy)) |
+| Ingress, ServiceMonitor | off | |
 | CloudNativePG Cluster | off | Optional in-cluster Postgres, subchart `postgresql` |
 
 Postgres 16 with pgvector is required. Production uses an external Postgres (managed or
@@ -116,18 +117,25 @@ kubectl -n lorebase port-forward svc/lorebase-keeper 8080:8080
 ### Production
 
 `ci/production-values.yaml`: a Secret you manage, a pinned image tag, OIDC next to API keys, 3 Keepers
-with larger requests, Herald and the web app, an Ingress with TLS, NetworkPolicy with egress
-restricted to Postgres, the collector and HTTPS, OTLP export, and a ServiceMonitor on the collector.
-Edit the hosts, CIDRs and issuer. Key points:
+with larger requests, Herald and the web app, an Ingress with TLS, egress restricted to the Postgres
+range, the collector namespace and the identity provider range, no `/docs` page, OTLP export, and a
+ServiceMonitor on the collector. Edit the hosts, address ranges (the placeholders are documentation
+ranges) and issuer. Key points:
 
 ```yaml
 image: {tag: "0.1.0"}
 secrets: {existingSecret: lorebase-secrets}
 config:
-  keeper: {auth: {mode: api_key+oidc, oidc: {issuer: https://login.example.com/realms/lorebase, audience: [lorebase]}}}
+  keeper:
+    auth: {mode: api_key+oidc, oidc: {issuer: https://login.example.com/realms/lorebase, audience: [lorebase]}}
+    openapi: {docs_enabled: false}
 keeper: {replicaCount: 3}
 ingress: {enabled: true, className: nginx, tls: [{secretName: lorebase-tls, hosts: [lorebase.example.com]}]}
-networkPolicy: {enabled: true}
+networkPolicy:
+  egress:
+    database: {to: [{ipBlock: {cidr: 10.0.0.0/16}}]}
+    telemetry: {to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]}
+    extra: {keeper: [{to: [{ipBlock: {cidr: 192.0.2.0/24}}], ports: [{protocol: TCP, port: 443}]}]}
 telemetry: {otlpEndpoint: "http://otel-collector.observability.svc:4317"}
 ```
 
@@ -202,14 +210,59 @@ created as hooks so that they exist before a first install.
 - Pods run as uid 10001, drop all capabilities, forbid privilege escalation, use the runtime default
   seccomp profile, and have a read-only root file system (`/tmp` is an `emptyDir`). Override through
   `podSecurityContext` and `containerSecurityContext`.
-- `networkPolicy.enabled` closes ingress for every pod of the release and opens Keeper to the other
-  release pods and to `networkPolicy.ingressFrom` (default: the `ingress-nginx` namespace), and Herald and
-  the web app to the same peers. `egress.enabled` also restricts egress to DNS, the release and `egress.rules`.
+- `keeper.openapi.docs_enabled` (in `config`) is true by default and serves `/api/v1/docs` and
+  `/api/v1/openapi.json` without authentication. Set it to false in production, as the production
+  profile does; the document of each release is in `docs/openapi.json`.
+- The NetworkPolicy is on by default (below).
 - Herald forwards each caller's own API key to Keeper and holds no credential. Its readiness is a TCP
   check because it serves only the MCP endpoint. Set `herald.http.allowed_hosts` and `allowed_origins` in
   `config` for DNS rebinding protection behind your hostname.
 - API key mode needs the pepper (32 characters or more); changing it invalidates every issued key.
 
+### Network policy
+
+`networkPolicy.enabled` (default true) needs a CNI that enforces NetworkPolicy. Ingress to every pod of
+the release is closed; Keeper accepts the other release pods and `networkPolicy.ingressFrom` (default: the
+`ingress-nginx` namespace), Herald and the web app accept the same peers, Ollama accepts Scribe. The
+ServiceMonitor scrapes the collector, not the release, so it needs no rule here.
+
+`networkPolicy.egress.enabled` (default true) closes egress too and opens, per workload, only:
+
+| Workload | Egress |
+|----------|--------|
+| Keeper | DNS, Postgres, the OTLP collector, `egress.extra.keeper` |
+| Scribe | DNS, Postgres, the OTLP collector, the model endpoint, webhook receivers, `egress.extra.scribe` |
+| Herald | DNS, Keeper, `egress.extra.herald` |
+| Web app | `egress.extra.web` only (nginx serves static files; the browser calls Keeper) |
+| Ollama | DNS, `egress.extra.ollama` |
+| Migration Job | DNS, Postgres, `egress.extra.migrate` |
+| `helm test` pod | DNS, Keeper |
+
+No rule allows every address. Peers are lists of NetworkPolicyPeer (`ipBlock`, `namespaceSelector`,
+`podSelector`); the defaults:
+
+- **DNS**: pods labelled `k8s-app: kube-dns` in `kube-system` (CoreDNS and kube-dns), UDP and TCP 53
+  (`dnsNamespaceSelector`, `dnsPodSelector`, `dnsPorts`). With NodeLocal DNSCache, add its link-local
+  address to `egress.rules`.
+- **Postgres** (`egress.database`): with `postgresql.enabled`, the pods of the CloudNativePG Cluster.
+  Otherwise `database.to`, by default the private IPv4 ranges on port 5432. Narrow it to the database,
+  for example `database: {to: [{ipBlock: {cidr: 10.20.0.0/24}}]}`; a Postgres on a public address needs
+  its own range here. An empty `to` with an external database is refused.
+- **OTLP collector** (`egress.telemetry`), only when `telemetry.otlpEndpoint` is set: the private IPv4
+  ranges on 4317 and 4318 by default. Narrow it to the collector, for example
+  `telemetry: {to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]}`.
+- **Model endpoint** (`egress.model`): with `ollama.enabled`, the Ollama pods on `ollama.port`. A hosted
+  endpoint is not reachable until you list its range: `model: {to: [{ipBlock: {cidr: <range>}}]}` (port 443).
+- **Webhooks** (`egress.webhooks`): empty, so Scribe delivers no webhook. Receivers must be public
+  addresses (`webhooks.allow_private_targets` is false), so list their ranges (port 443).
+- **Anything else** goes in `egress.extra.<workload>` as NetworkPolicyEgressRule entries: the OIDC issuer
+  for Keeper with the `oidc` modes (its keys are fetched over HTTPS), a hosted embedding endpoint or a
+  model download at start, Source databases for Scribe, a Keeper outside the cluster for Herald
+  (`herald.keeperUrl`), the registry Ollama pulls from. `egress.rules` applies to every pod of the release.
+
+Kubernetes policies match addresses, not host names: for a hosted service, use the published address
+ranges of the provider or an egress gateway with a fixed range. `egress.enabled: false` leaves egress
+open; `networkPolicy.enabled: false` removes every policy.
 ## Web app
 
 `web.enabled` runs an unprivileged nginx with the production build (image `ghcr.io/aantenore/lorebase-web`,
@@ -239,7 +292,8 @@ backup job for an external database; with the CloudNativePG subchart, configure 
 ## Validation status
 
 The chart is checked by `helm lint --strict`, `helm template` of every profile and `kubeconform --strict` in the
-`helm` job of CI. It has not been installed on a live cluster in this change: the pieces that depend on a running
+`helm` job of CI; `tests/tooling/test_helm_network_policy.py` renders the profiles and checks the policies
+(skipped without a `helm` binary). It has not been installed on a live cluster in this change: the pieces that depend on a running
 cluster (the hook ordering, the Ollama sidecar, the CloudNativePG integration, NetworkPolicy behavior) follow the
 documented Kubernetes and Helm semantics but are untested end to end. The web image and a metrics endpoint
 on the services do not exist yet; the chart's switches for them are off. Scribe is off by default.
