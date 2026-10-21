@@ -26,6 +26,7 @@ dev = [
   "import-linter>=2.0",
   "pre-commit>=3.7",
   "types-PyYAML>=6.0",
+  "types-jsonschema>=4.22",
 ]
 
 [tool.uv]
