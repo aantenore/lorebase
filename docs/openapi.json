@@ -90,7 +90,7 @@
           "auth"
         ],
         "summary": "Identify the caller",
-        "description": "Who the credential of this request belongs to, with the ids grants may name.",
+        "description": "Who the credential of this request belongs to, with the ids grants may name and, for an\nAPI key, its daily quotas.",
         "operationId": "whoami_api_v1_auth_whoami_get",
         "responses": {
           "200": {
@@ -11849,6 +11849,75 @@
         ],
         "title": "QueryResponse"
       },
+      "QuotaReport": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "const": "day",
+            "title": "Period",
+            "default": "day"
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Resets At",
+            "description": "Start of the next UTC day, when the counters reset."
+          },
+          "requests": {
+            "$ref": "#/components/schemas/QuotaUse"
+          },
+          "context_tokens": {
+            "$ref": "#/components/schemas/QuotaUse",
+            "description": "Estimated tokens of context packs delivered."
+          }
+        },
+        "type": "object",
+        "required": [
+          "resets_at",
+          "requests",
+          "context_tokens"
+        ],
+        "title": "QuotaReport",
+        "description": "Daily quotas of an API key and what it has used since the last reset."
+      },
+      "QuotaUse": {
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "used": {
+            "type": "integer",
+            "title": "Used"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining"
+          }
+        },
+        "type": "object",
+        "required": [
+          "limit",
+          "used",
+          "remaining"
+        ],
+        "title": "QuotaUse",
+        "description": "Use of one daily quota. Without a limit, `limit` and `remaining` are null."
+      },
       "Readiness": {
         "properties": {
           "status": {
@@ -13758,6 +13827,17 @@
           "installation_admin": {
             "type": "boolean",
             "title": "Installation Admin"
+          },
+          "quota": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuotaReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Daily quotas of the API key; null for users and without quotas."
           }
         },
         "type": "object",

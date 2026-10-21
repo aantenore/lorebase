@@ -42,6 +42,47 @@ keeper:
     max_age_s: 600
   limits:
     max_request_body_bytes: 1048576   # larger bodies are rejected with 413
+    rate:                        # token buckets per principal (API key id or user) and request
+                                 # class; refusals are 429 with Retry-After, every response of a
+                                 # limited route carries RateLimit-Limit/-Remaining/-Reset
+      enabled: true
+      backend: memory            # per process: N Keeper processes allow N times the limits
+      max_buckets: 100000        # buckets kept in memory; least recently used are dropped
+      exempt_paths: [/healthz, /readyz]   # route paths without the API prefix, never limited
+      reads:                     # GETs, query, traverse, neighborhood
+        requests_per_minute: 1200   # sustained rate
+        burst: 200               # requests allowed back to back
+      writes:                    # every other POST, PUT, PATCH and DELETE
+        requests_per_minute: 300
+        burst: 60
+      searches:                  # POST .../search
+        requests_per_minute: 300
+        burst: 60
+      context:                   # POST .../context (context packs)
+        requests_per_minute: 120
+        burst: 30
+      admin:                     # routes tagged `admin`: keys, principals, grants, audit
+        requests_per_minute: 120
+        burst: 30
+      domains: {}                # per-Domain buckets by Domain id, any of the classes above, e.g.
+                                 #   supply: {writes: {requests_per_minute: 60, burst: 10}}
+      routes:                    # how requests are sorted into classes
+        admin_tags: [admin]
+        search_suffixes: [/search]
+        context_suffixes: [/context]
+        read_post_suffixes: [/query, /traverse, /neighborhood]
+      throttle_audit:            # audit entry `rate_limit.throttled` for a principal that keeps
+        threshold: 20            # being refused: this many refusals within window_s; 0 disables
+        window_s: 300
+        max_tracked: 10000
+    quota:                       # daily quotas per API key, in UTC days (users have none);
+                                 # exceeded: 429 `quota-exceeded` with Retry-After to the reset.
+                                 # Usage is stored in api_key_usage and shown by GET /auth/whoami
+      enabled: true
+      requests_per_day: 100000   # null: unlimited
+      context_tokens_per_day: 2000000   # estimated tokens of context packs; null: unlimited
+      flush_interval_s: 5        # a process writes its counted use this often
+      keys: {}                   # per API key id, e.g. key_01...: {requests_per_day: null}
   pagination:
     default_limit: 50
     max_limit: 500

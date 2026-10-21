@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -112,6 +112,20 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None]
     revoked_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class ApiKeyUsage(Base):
+    """Requests and context-pack tokens a key used on one UTC day (daily quotas)."""
+
+    __tablename__ = "api_key_usage"
+
+    api_key_id: Mapped[str] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(primary_key=True)
+    requests: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    context_tokens: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
 
 class OperationInvocation(Base):

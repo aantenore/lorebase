@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from lorebase_keeper import __version__
@@ -19,6 +19,12 @@ from lorebase_keeper.db import create_database
 from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handlers
 from lorebase_keeper.health import router as health_router
 from lorebase_keeper.middleware import BodyLimitMiddleware, RequestContextMiddleware
+from lorebase_keeper.ratelimit.enforce import (
+    EXPOSED_HEADERS,
+    RateLimitHeadersMiddleware,
+    build_limits,
+    enforce_limits,
+)
 from lorebase_keeper.readiness import (
     MigrationHeads,
     ReadinessCheck,
@@ -115,11 +121,20 @@ def create_app(
         meter_provider=telemetry.meter_provider if telemetry else None,
     )
 
+    limits = build_limits(
+        keeper.limits.rate,
+        keeper.limits.quota,
+        auth,
+        meter_provider=telemetry.meter_provider if telemetry else None,
+    )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
+            if limits is not None:
+                await limits.aclose()
             await auth.aclose()
             if database is not None:
                 await database.dispose()
@@ -134,6 +149,7 @@ def create_app(
         docs_url=f"{keeper.api_prefix}/docs" if docs else None,
         redoc_url=None,
         responses=_DEFAULT_RESPONSES,
+        dependencies=[Depends(enforce_limits)],
         lifespan=lifespan,
     )
     app.state.settings = settings
@@ -141,6 +157,7 @@ def create_app(
     app.state.readiness_checks = checks
     app.state.auth = auth
     app.state.database = database
+    app.state.limits = limits
 
     install_error_handlers(app, renderer)
     app.include_router(health_router)
@@ -153,13 +170,15 @@ def create_app(
     app.add_middleware(
         BodyLimitMiddleware, max_bytes=keeper.limits.max_request_body_bytes, renderer=renderer
     )
+    if limits is not None:
+        app.add_middleware(RateLimitHeadersMiddleware)
     if keeper.cors.allow_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(keeper.cors.allow_origins),
             allow_methods=list(keeper.cors.allow_methods),
             allow_headers=[*keeper.cors.allow_headers, keeper.request_id_header],
-            expose_headers=[keeper.request_id_header],
+            expose_headers=[keeper.request_id_header, *EXPOSED_HEADERS],
             allow_credentials=keeper.cors.allow_credentials,
             max_age=keeper.cors.max_age_s,
         )

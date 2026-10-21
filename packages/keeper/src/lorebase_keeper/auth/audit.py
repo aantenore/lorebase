@@ -47,6 +47,7 @@ class AuditDraft:
     target: str | None = None
     permission: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    suppressed: bool = False
 
 
 def draft_of(connection: HTTPConnection) -> AuditDraft | None:
@@ -80,6 +81,13 @@ def annotate(
         if value is not None:
             setattr(draft, name, value)
     draft.details.update(details)
+
+
+def suppress(connection: HTTPConnection) -> None:
+    """Leave the request out of the audit log (throttled requests are reported in aggregate)."""
+    draft = draft_of(connection)
+    if draft is not None:
+        draft.suppressed = True
 
 
 def outcome_of(status: int) -> str:
@@ -173,6 +181,8 @@ class AuditMiddleware:
         )
 
     def _entry(self, scope: Scope, draft: AuditDraft, status: int) -> NewAuditEntry | None:
+        if draft.suppressed:
+            return None
         method = scope["method"]
         denied = status in DENIED_STATUSES
         recorded_mutation = method in MUTATING_METHODS and draft.actor is not None

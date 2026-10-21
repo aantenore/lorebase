@@ -68,6 +68,23 @@ class Page[T](Model):
 # Identity ---------------------------------------------------------------------------------
 
 
+class QuotaUse(Model):
+    """Use of one daily quota; without a limit, `limit` and `remaining` are None."""
+
+    limit: int | None = None
+    used: int
+    remaining: int | None = None
+
+
+class QuotaReport(Model):
+    """Daily quotas of an API key and what it has used since the last reset."""
+
+    period: str = "day"
+    resets_at: datetime
+    requests: QuotaUse
+    context_tokens: QuotaUse
+
+
 class WhoAmI(Model):
     """The authenticated caller."""
 
@@ -78,6 +95,7 @@ class WhoAmI(Model):
     subjects: list[str]
     key_scopes: list[str]
     installation_admin: bool
+    quota: QuotaReport | None = None
 
 
 # Domains ----------------------------------------------------------------------------------

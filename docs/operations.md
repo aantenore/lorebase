@@ -93,3 +93,41 @@ otherwise empty: the hash chain is verified in `seq` order and the first entry o
 its anchor. `pg_dump` of the whole database is the only way to keep the chain, vault and
 embeddings intact; bundles are for moving or archiving Domain content and for restoring it
 into a fresh installation, after which embeddings are recomputed.
+
+## Rate limits and quotas
+
+Keeper limits how fast a principal may call the API and, for API keys, how much it may use per
+day (design 13.6). Both are on by default with generous limits; set them under
+`keeper.limits.rate` and `keeper.limits.quota` (`config/lorebase.example.yaml`).
+
+**Rate limits** are token buckets. Each principal (the API key id, or the principal id of a
+user) has one bucket per request class: `reads` (GETs, query, traverse, neighborhood),
+`writes` (other POST, PUT, PATCH, DELETE), `searches`, `context` (context packs) and `admin`
+(routes tagged `admin`). A bucket refills at `requests_per_minute` and holds at most `burst`
+tokens. A Domain can override any class (`domains.<id>.<class>`); requests in that Domain then
+use a bucket of their own.
+
+- Every response of a limited route has `RateLimit-Limit` (the burst), `RateLimit-Remaining`
+  and `RateLimit-Reset` (seconds until the bucket is full again).
+- A refused request is `429` with the problem type `rate-limited`, `Retry-After` (seconds) and
+  the members `class` and `retry_after_s`. A refused request takes no token.
+- `/healthz` and `/readyz` are exempt (`exempt_paths`), and so are requests without a valid
+  credential: they are answered `401` before any bucket is touched.
+- The limit counts `lorebase.http.rate_limited{class}` (OpenTelemetry) per refusal.
+- A principal refused `throttle_audit.threshold` times within `window_s` produces one audit
+  entry `rate_limit.throttled` (actor, Domain, API key as target, `refusals`, `reason`); the
+  refused requests themselves are not audited one by one.
+- The only backend is `memory`: buckets live in the process, so N Keeper processes allow N
+  times the limit. A shared store (Valkey, Redis) is a class implementing
+  `lorebase_keeper.ratelimit.RateStore.take`; nothing else changes.
+
+**Daily quotas** apply to API keys, counted in UTC days: `requests_per_day` and
+`context_tokens_per_day` (the estimated tokens of context packs delivered, using
+`agents.context.chars_per_token`). A quota that is used up answers `429` with the problem type
+`quota-exceeded`, `Retry-After` to the next UTC midnight and the members `quota`, `limit` and
+`resets_at`. `keys.<api key id>` overrides the limits of one key (`null` removes a limit).
+Use is kept in `api_key_usage` (migration `0005`): each process counts in memory and writes at
+most every `flush_interval_s`, adding to the stored row, so quotas hold across restarts and
+across processes up to one interval of traffic. If the database fails, requests are still
+served and the quota is enforced on what is known. `GET /auth/whoami` shows a key's `quota`
+with its use, remaining amounts and reset time.

@@ -78,6 +78,12 @@ async def test_whoami_describes_the_key_owner(
         "subjects": ["svc_agent", "grp_bots"],
         "key_scopes": ["domain:acme"],
         "installation_admin": False,
+        "quota": {
+            "period": "day",
+            "resets_at": "2026-10-21T00:00:00Z",
+            "requests": {"limit": 100_000, "used": 1, "remaining": 99_999},
+            "context_tokens": {"limit": 2_000_000, "used": 0, "remaining": 2_000_000},
+        },
     }
     assert key.id not in str(body)
 

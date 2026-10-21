@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -35,19 +35,27 @@ def whoami(ctx: typer.Context, json_out: JsonOpt = False) -> None:
     """Show who the credentials authenticate as."""
     app = app_of(ctx, json_out)
     me = app.client().whoami()
-    app.out.emit(
-        me,
-        lambda: app.out.pairs(
-            [
-                ("id", me.id),
-                ("name", me.display_name),
-                ("type", me.type),
-                ("method", me.method),
-                ("installation admin", me.installation_admin),
-                ("subjects", me.subjects),
-            ]
-        ),
-    )
+
+    def human() -> None:
+        rows: list[tuple[str, Any]] = [
+            ("id", me.id),
+            ("name", me.display_name),
+            ("type", me.type),
+            ("method", me.method),
+            ("installation admin", me.installation_admin),
+            ("subjects", me.subjects),
+        ]
+        if me.quota is not None:
+            rows.append(("quota resets", me.quota.resets_at))
+            for name, use in (
+                ("requests", me.quota.requests),
+                ("context tokens", me.quota.context_tokens),
+            ):
+                limit = "unlimited" if use.limit is None else use.limit
+                rows.append((f"{name} today", f"{use.used} of {limit}"))
+        app.out.pairs(rows)
+
+    app.out.emit(me, human)
 
 
 # Domains ----------------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from typing import Self
 from pydantic import Field, field_validator, model_validator
 
 from lorebase_keeper.auth.config import AuthSettings
+from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings
 from lorebase_keeper.services.config import (
     BranchSettings,
     DomainSettings,
@@ -44,11 +45,13 @@ class CorsSettings(SectionModel):
 
 
 class LimitSettings(SectionModel):
-    """Request size limits."""
+    """Request size limits, rate limits and daily quotas."""
 
     max_request_body_bytes: int = Field(
         default=1_048_576, ge=1, description="Larger request bodies are rejected with 413."
     )
+    rate: RateLimitSettings = Field(default_factory=RateLimitSettings)
+    quota: QuotaSettings = Field(default_factory=QuotaSettings)
 
 
 class PaginationSettings(SectionModel):
