@@ -22,6 +22,7 @@ export {
 } from './errors';
 export * from './types';
 export * from './admin-types';
+export * from './extraction-types';
 export * from './inference-types';
 export * from './sources-types';
 

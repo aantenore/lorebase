@@ -372,6 +372,9 @@ export interface paths {
         /**
          * Execute an Operation
          * @description Validate parameters, compute the edits and commit them as a Revision (or dry-run).
+         *
+         *     An Operation that needs review is a 409 `review-required` unless the request names a
+         *     `task`: then it runs on a task branch and the answer is 202 with the Proposal.
          */
         post: operations["execute_operation_api_v1_domains__domain_id__operations__operation__execute_post"];
         delete?: never;
@@ -1106,6 +1109,109 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentApprovalOut */
+        AgentApprovalOut: {
+            /** Required */
+            required: number;
+            /** Approvals */
+            approvals: number;
+            /** Satisfied */
+            satisfied: boolean;
+        };
+        /**
+         * AgentAttemptOut
+         * @description The merge attempt: Conflicts between the task branch and the target.
+         */
+        AgentAttemptOut: {
+            /** Id */
+            id: string;
+            /** Result */
+            result: string | null;
+            /** Open Conflicts */
+            open_conflicts: number;
+            /** Resolved Conflicts */
+            resolved_conflicts: number;
+            /** Counts */
+            counts: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+        };
+        /** AgentMergeOut */
+        AgentMergeOut: {
+            /** Requested */
+            requested: boolean;
+            /**
+             * Allowed
+             * @description The Domain allows automatic merges for the caller's role.
+             */
+            allowed: boolean;
+            /** Performed */
+            performed: boolean;
+            /**
+             * Blockers
+             * @description What keeps the Proposal from merging by itself: `approvals-pending` (the target needs approvals), `review-policy-needs-approval` (the Operation's review policy asks for a review and nobody approved).
+             */
+            blockers: string[];
+        };
+        /**
+         * AgentWriteOut
+         * @description An Operation that needed review, run on a task branch and proposed.
+         */
+        AgentWriteOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "merged" | "conflicts";
+            /** Operation */
+            operation: string;
+            /**
+             * Branch
+             * @description The task branch.
+             */
+            branch: string;
+            /**
+             * Target
+             * @description The branch the Proposal merges into.
+             */
+            target: string;
+            /** Invocation Id */
+            invocation_id: string;
+            /** Parameters Hash */
+            parameters_hash: string;
+            /**
+             * Revision
+             * @description Last Revision written on the task branch.
+             */
+            revision: string | null;
+            /** Revisions */
+            revisions: string[];
+            /** Edit Count */
+            edit_count: number;
+            /** Replayed */
+            replayed: boolean;
+            proposal: components["schemas"]["ProposalRefOut"];
+            approval: components["schemas"]["AgentApprovalOut"];
+            attempt: components["schemas"]["AgentAttemptOut"] | null;
+            merge: components["schemas"]["AgentMergeOut"];
+            /**
+             * Merged Revision
+             * @description Head of the target after an automatic merge.
+             */
+            merged_revision: string | null;
+            /** Branch Created */
+            branch_created: boolean;
+            /** Branch Deleted */
+            branch_deleted: boolean;
+            /** Warnings */
+            warnings: {
+                [key: string]: unknown;
+            }[];
+            /** Next */
+            next: components["schemas"]["NextHint"][];
+        };
         /**
          * Aggregate
          * @description Count the matching Records per Kind, and per value of `group_by` when given.
@@ -2142,6 +2248,26 @@ export interface components {
             expected_head?: string | null;
             /** Message */
             message?: string | null;
+            /**
+             * Task
+             * @description Short slug naming the piece of work. When the Operation needs review (protected branch, review policy), Keeper runs it on the branch `agent/{principal}/{task}` and opens or updates a Proposal; without a task the refusal is the 409 `review-required`. Ignored when the Operation commits directly.
+             */
+            task?: string | null;
+            /**
+             * Intent
+             * @description What the agent is after, in a sentence or two; becomes the start of the Proposal description.
+             */
+            intent?: string | null;
+            /**
+             * Auto Propose
+             * @description Open a Proposal when review is needed. Default: `keeper.agent_writes.auto_propose` for agent principals, false for others. `true` needs a `task`.
+             */
+            auto_propose?: boolean | null;
+            /**
+             * Auto Merge
+             * @description Merge the Proposal at once. Default: `keeper.agent_writes.auto_merge`. Honoured only when the Domain allows it for the caller's role, there is no open Conflict and the required approvals are in.
+             */
+            auto_merge?: boolean | null;
         };
         /**
          * ExecutionOut
@@ -2641,6 +2767,22 @@ export interface components {
              */
             truncated: boolean;
         };
+        /**
+         * NextHint
+         * @description A next step, in the style of problem details extensions.
+         */
+        NextHint: {
+            /** Action */
+            action: string;
+            /** Detail */
+            detail: string;
+            /** Method */
+            method?: string | null;
+            /** Href */
+            href?: string | null;
+            /** Permission */
+            permission?: string | null;
+        };
         /** NotCondition */
         NotCondition: {
             /** Not */
@@ -2969,6 +3111,29 @@ export interface components {
          * @enum {string}
          */
         ProposalOrigin: "manual" | "source_sync" | "extraction" | "operation";
+        /**
+         * ProposalRefOut
+         * @description The Proposal carrying the edits of an agent write.
+         */
+        ProposalRefOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /** Source Ref */
+            source_ref: string;
+            /** Target Ref */
+            target_ref: string;
+            /** Url */
+            url: string;
+            /**
+             * Created
+             * @description False when an open Proposal of the branch was updated.
+             */
+            created: boolean;
+        };
         /**
          * ProposalStatus
          * @description Proposal lifecycle.
@@ -5434,6 +5599,15 @@ export interface operations {
                     "application/json": components["schemas"]["ExecutionOut"];
                 };
             };
+            /** @description The Operation needs review and ran on a task branch; a Proposal carries the edits (`status`: `proposed`, `merged` or `conflicts`). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWriteOut"];
+                };
+            };
             /** @description The caller lacks the permission named in the body. */
             403: {
                 headers: {
@@ -5452,7 +5626,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Review required (`review-required`), head moved (`stale-head`) or idempotency key reused with other parameters (`idempotency-conflict`). */
+            /** @description Review required (`review-required`, with `next` hints), head moved (`stale-head`), idempotency key reused with other parameters (`idempotency-conflict`) or too many task branches (`agent-branch-limit`). */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -25,6 +25,8 @@ import {
   toRow,
 } from './engine';
 import { createAdminMock } from './admin';
+import { createDocumentsMock } from './documents';
+import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
 import { createSourcesMock } from './sources';
@@ -191,6 +193,11 @@ export function createMockApi(options: MockOptions): KeeperApi {
         details: { run: run.id, changes: 0 },
       });
     },
+  );
+
+  const documents = createDocumentsMock(
+    (id) => domains.has(id),
+    Object.fromEntries(seed.domains.map((d) => [d.domain.id, d.documents ?? []])),
   );
 
   const requireOperation = (data: BranchData, name: string) => {
@@ -613,19 +620,11 @@ export function createMockApi(options: MockOptions): KeeperApi {
         return Promise.resolve(summary(state.detail));
       },
       items: (id, proposal, params) =>
-        Promise.resolve(
-          paginate(proposalOf(domainOf(id), proposal).items, params?.limit, params?.cursor),
-        ),
+        Promise.resolve(listItems(proposalOf(domainOf(id), proposal), params)),
       decideItems: (id, proposal, input) => {
-        const state = proposalOf(domainOf(id), proposal);
-        const at = new Date().toISOString();
-        const touched = state.items.filter((item) => input.item_ids.includes(item.item_id));
-        for (const item of touched) {
-          item.decision = input.decision;
-          item.decided_by = 'usr_mock';
-          item.decided_at = at;
-        }
-        return Promise.resolve(page(touched));
+        const domain = domainOf(id);
+        const state = proposalOf(domain, proposal);
+        return Promise.resolve(decide(state, branchOf(domain, state.detail.source_ref), id, input));
       },
     },
 
@@ -676,6 +675,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
       delete: () => Promise.reject(notSupported('Webhooks')),
     },
 
+    documents: documents.api,
     inference: inference.api,
     sources: sources.api,
     admin: admin.api,

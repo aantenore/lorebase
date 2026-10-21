@@ -4,7 +4,12 @@ import type { ProblemDetails } from './types';
 /** Path prefix of the Keeper REST API (design 11.1). Protocol constant, not configuration. */
 export const API_BASE_PATH = '/api/v1';
 
-export type QueryValue = string | number | boolean | string[] | null | undefined;
+/** A list sent as one parameter per value (`status=a&status=b`), as FastAPI list parameters expect. */
+export interface Repeated {
+  readonly repeat: readonly string[];
+}
+
+export type QueryValue = string | number | boolean | string[] | Repeated | null | undefined;
 export type QueryParams = Record<string, QueryValue>;
 
 export interface FetcherOptions {
@@ -63,7 +68,11 @@ export function toSearch(params: QueryParams): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null) continue;
-    search.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      for (const item of value.repeat) search.append(key, item);
+    } else {
+      search.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    }
   }
   const text = search.toString();
   return text === '' ? '' : `?${text}`;

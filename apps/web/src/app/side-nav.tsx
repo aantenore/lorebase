@@ -8,6 +8,7 @@ const ITEMS = [
   { to: '/$domain/modeler', label: 'Modeler' },
   { to: '/$domain/review', label: 'Review' },
   { to: '/$domain/sources', label: 'Sources' },
+  { to: '/$domain/documents', label: 'Documents' },
   { to: '/$domain/settings', label: 'Settings' },
 ] as const;
 
