@@ -1,0 +1,692 @@
+# Default values of the Lorebase chart. Every key is documented here; docs/kubernetes.md has the
+# install steps and three ready-made profiles (minimal, production, scale-out).
+#
+# What the chart installs, by default: Keeper (REST API) and the migration hook. Scribe, Herald,
+# the web app, Ollama and the in-cluster Postgres are switched on one by one. Settings of the
+# application itself live in `config` (the lorebase.yaml file, see config/lorebase.example.yaml);
+# this file holds deployment settings only, the same split docker compose uses with .env.
+
+# -- Naming ---------------------------------------------------------------------------------
+
+# Replaces the chart name in resource names and in the app.kubernetes.io/name label.
+nameOverride: ""
+# Replaces the whole resource name prefix (default: <release>-<chart>, or <release> if it already contains the chart name).
+fullnameOverride: ""
+# Labels added to every resource and every pod.
+commonLabels: {}
+# Annotations added to every resource.
+commonAnnotations: {}
+
+# -- Image ----------------------------------------------------------------------------------
+
+# One backend image for every Python service; the command selects Keeper, Scribe, Herald or the migration.
+image:
+  # Image repository (design 15.1).
+  repository: ghcr.io/aantenore/lorebase
+  # Image tag. Empty: the chart appVersion. Pin a version, or a digest with `@sha256:...` in `tag`, in production.
+  tag: ""
+  # Kubernetes image pull policy of the backend image.
+  pullPolicy: IfNotPresent
+# Pull secrets for private registries (list of {name: secret}). Used by every pod of the release.
+imagePullSecrets: []
+
+# -- Identity and security ---------------------------------------------------------------------
+
+serviceAccount:
+  # Create a ServiceAccount for the Keeper, Scribe, Herald, web and Ollama pods.
+  create: true
+  # Name of the ServiceAccount. Empty: the full release name when `create` is true, else `default`.
+  name: ""
+  # Annotations of the ServiceAccount (for example cloud workload identity bindings).
+  annotations: {}
+  # Mount the API token into pods. Lorebase never calls the Kubernetes API, so it stays off.
+  automount: false
+
+# Pod-level security context of the Lorebase pods (backend image uid/gid are 10001, see
+# deploy/docker/backend.Dockerfile).
+podSecurityContext:
+  # Refuse to start a container that runs as root.
+  runAsNonRoot: true
+  # User id of the backend image.
+  runAsUser: 10001
+  # Group id of the backend image.
+  runAsGroup: 10001
+  # Group that owns mounted volumes.
+  fsGroup: 10001
+  # Default seccomp profile of the container runtime.
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level security context: no privilege escalation, no capabilities, read-only root
+# file system (writable paths are emptyDir volumes: /tmp).
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# -- Application settings (lorebase.yaml) -------------------------------------------------------
+
+# Rendered as-is into the ConfigMap mounted at /etc/lorebase/lorebase.yaml and read through
+# LOREBASE_CONFIG. Same keys and defaults as config/lorebase.example.yaml; every key is optional.
+# Environment variables set by the chart override the file (precedence of the application):
+# database.dsn and read_dsn, keeper.host and port, keeper.reads.prefer_replica, logging.level,
+# telemetry.*, the API key pepper and the LLM settings of Scribe. Do not repeat those here.
+config:
+  logging:
+    # Structured logs for a log pipeline.
+    format: json
+  keeper:
+    auth:
+      # none | api_key | oidc | api_key+oidc. `none` accepts every request as an administrator:
+      # development only. api_key and api_key+oidc need `secrets.values.apiKeyPepper`
+      # (or the pepper key of an existing Secret); the chart refuses to render without it.
+      mode: api_key
+      # Example OIDC block (issuer and audience are required with the oidc modes):
+      # oidc:
+      #   issuer: https://login.example.com/realms/lorebase
+      #   audience: [lorebase]
+      # installation_admins: [<principal id or identity provider subject>]
+
+# Log level of every service (LOREBASE__LOGGING__LEVEL). CRITICAL | ERROR | WARNING | INFO | DEBUG.
+logLevel: INFO
+
+# Telemetry (design 14). Empty endpoint disables export; there is no vendor exporter in the code.
+telemetry:
+  # OTLP/gRPC endpoint of a collector, for example http://otel-collector.observability:4317.
+  otlpEndpoint: ""
+  # Fraction of root traces sampled, 0 to 1.
+  sampleRatio: 0.1
+
+# -- Secrets ------------------------------------------------------------------------------------
+
+# Values never appear in the ConfigMap: the application reads them through `secret://env/NAME`
+# references or the documented environment aliases. Either let the chart create one Secret from
+# `values`, or point `existingSecret` at a Secret you manage (sealed secrets, external-secrets,
+# a vault injector). A key is wired into the pods only when its name below is non-empty and, for
+# a chart-managed Secret, its value is set. With an existing Secret the read DSN and LLM key
+# entries are optional (a missing key is ignored), and the pepper is wired when an API key mode is on.
+secrets:
+  # Name of an existing Secret in the release namespace. When set, the chart creates no Secret.
+  existingSecret: ""
+  # Key names inside the Secret (chart-managed or existing). An empty name disables the entry.
+  keys:
+    # Primary connection string, for example postgresql+asyncpg://user:pass@host:5432/lorebase (LOREBASE_DB_DSN).
+    dbDsn: db-dsn
+    # Read replica connection strings, comma separated (LOREBASE_DB_READ_DSN). Empty: all reads on the primary.
+    dbReadDsn: db-read-dsn
+    # Pepper of the API key hashes, at least 32 characters (secret://env/LOREBASE_API_KEY_PEPPER). Changing it invalidates every key.
+    apiKeyPepper: api-key-pepper
+    # API key of the LLM endpoint used by Scribe (LLM_API_KEY). Not needed for Ollama.
+    llmApiKey: llm-api-key
+  # Values for the chart-managed Secret. Ignored when `existingSecret` is set. Prefer
+  # `--set-file` or a values file kept out of git; never commit real values.
+  values:
+    # Primary DSN. Ignored when `postgresql.enabled` (the in-cluster cluster supplies it).
+    dbDsn: ""
+    # Read replica DSNs: a string, or a list that the chart joins with commas.
+    dbReadDsn: ""
+    # Pepper for API key hashes, 32 characters or more.
+    apiKeyPepper: ""
+    # LLM API key for hosted endpoints.
+    llmApiKey: ""
+  # Any further secret as ENV_NAME: value in the chart-managed Secret. Reference it from `config`
+  # as secret://env/ENV_NAME (for example OIDC or hosted-embedding credentials). Exposed to Keeper and Scribe.
+  extra: {}
+  # With `existingSecret`: names of keys in that Secret to expose as environment variables of the
+  # same name to Keeper and Scribe, for use in `secret://env/NAME` references.
+  extraNames: []
+
+# -- Database ---------------------------------------------------------------------------------
+
+# Postgres 16 with the pgvector extension is required. Production: an external managed or
+# operator-run Postgres, passed as a DSN through `secrets`. Optional in-cluster Postgres: the
+# CloudNativePG `cluster` chart as a subchart under this key (requires the CloudNativePG operator
+# in the cluster and `helm dependency build`). The chart reads the connection string from the
+# `<cluster>-app` Secret the operator creates. Keys other than `enabled` below are passed to the subchart.
+postgresql:
+  # Deploy a CloudNativePG Cluster with the release. Off by default.
+  enabled: false
+  # Name of the Cluster and its Services (<name>-rw, <name>-ro). Empty: <release>-postgresql.
+  fullnameOverride: ""
+  # Postgres major version; the image below must ship it.
+  version:
+    postgresql: "16"
+  cluster:
+    # Postgres instances (1 primary + standbys).
+    instances: 1
+    # REQUIRED when enabled: a CloudNativePG-compatible image that includes pgvector. The default
+    # CloudNativePG image does not ship it; the chart refuses to render with this empty.
+    imageName: ""
+    storage:
+      # Size of the data volume of each instance.
+      size: 20Gi
+      # Storage class; empty: the cluster default.
+      storageClass: ""
+    initdb:
+      # Application database and owner created at bootstrap.
+      database: lorebase
+      owner: lorebase
+      # Run as superuser in the new database, once.
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector
+
+# -- Migrations ---------------------------------------------------------------------------------
+
+# `alembic upgrade head` as a Helm hook Job (design 15.3). Forward-only and online-safe
+# migrations; the Job finishes before the new Keeper pods roll out.
+migrate:
+  # Run the Job. Turn off only to run migrations yourself.
+  enabled: true
+  # Helm hook events. With the in-cluster Postgres the database does not exist before the first
+  # install, so the chart uses `post-install` instead of `pre-install` (do not combine with --wait).
+  hookEvents: [pre-install, pre-upgrade]
+  # Hook events used instead when `postgresql.enabled`.
+  hookEventsInCluster: [post-install, pre-upgrade]
+  # Order among hooks; the hook ConfigMap and Secret run at -5 so they exist before the Job.
+  hookWeight: 0
+  # Command; alembic.ini sits in the working directory.
+  command: ["alembic", "upgrade", "head"]
+  # Where alembic.ini and the migration scripts are in the image.
+  workingDir: /opt/lorebase/store
+  # Retries of a failed Job pod.
+  backoffLimit: 3
+  # Hard limit on the whole Job, in seconds. Long migrations on big tables need more.
+  activeDeadlineSeconds: 1800
+  # Wait until the database port accepts connections before running alembic.
+  waitForDatabase:
+    enabled: true
+    # Give up after this many seconds (the Job then fails and Helm reports it).
+    timeoutSeconds: 180
+    # Pause between attempts.
+    intervalSeconds: 3
+  # ServiceAccount of the Job. Empty: the namespace default. The chart ServiceAccount does not
+  # exist yet during pre-install hooks.
+  serviceAccountName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Additional environment variables of the Job (list of Kubernetes EnvVar).
+  extraEnv: []
+
+# -- Keeper (REST API) --------------------------------------------------------------------------
+
+keeper:
+  # Command of the backend image.
+  command: ["python", "-m", "lorebase_keeper"]
+  # Replicas when the HPA is off. Stateless: any number works behind the Service (docs/deployment.md).
+  replicaCount: 2
+  # Container port and keeper.port.
+  port: 8080
+  # Route read endpoints to the read replicas when one is fresh enough (keeper.reads.prefer_replica).
+  # Needs `secrets.values.dbReadDsn`.
+  preferReplica: false
+  # Rolling update: add a pod first, never go below the desired count.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # Annotations and labels added to the pods.
+  podAnnotations: {}
+  podLabels: {}
+  # CPU and memory. The memory limit leaves room for the node cache (store.nodes.cache_bytes,
+  # 64 MiB) and the read cache (32 MiB). No CPU limit: throttling hurts latency.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  # Probes use the real endpoints: /healthz never touches dependencies; /readyz checks the
+  # database, the migration revision and the replicas (503 when not ready).
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 3
+    failureThreshold: 30
+    timeoutSeconds: 3
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 15
+    failureThreshold: 3
+    timeoutSeconds: 3
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 5
+  # Seconds the pod gets to finish in-flight requests after SIGTERM.
+  terminationGracePeriodSeconds: 30
+  # Seconds to keep serving after the pod leaves the Service endpoints, so no request is cut off.
+  preStopSleepSeconds: 5
+  # Spread the replicas over zones and nodes. The labelSelector of the release is added when omitted.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  # Additional environment variables, volumes and mounts (Kubernetes EnvVar, Volume, VolumeMount).
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    # ClusterIP behind the Ingress; LoadBalancer for direct exposure.
+    type: ClusterIP
+    # Service port.
+    port: 8080
+    annotations: {}
+  autoscaling:
+    # HorizontalPodAutoscaler (autoscaling/v2). Needs metrics-server. When on, `replicaCount` is ignored.
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    # Average CPU utilisation of the requests, in percent. null disables the metric.
+    targetCPUUtilizationPercentage: 70
+    # Average memory utilisation, in percent. null disables the metric.
+    targetMemoryUtilizationPercentage: null
+    # Placeholder for a custom metric (Prometheus Adapter, KEDA metrics API...). Full v2 metric
+    # specs, appended to the CPU entry. Example, p95 request rate per pod:
+    #   - type: Pods
+    #     pods:
+    #       metric:
+    #         name: lorebase_http_requests_per_second
+    #       target:
+    #         type: AverageValue
+    #         averageValue: "50"
+    customMetrics: []
+    # HPA scaling behavior (stabilization windows, policies); omitted when empty.
+    behavior: {}
+  pdb:
+    # PodDisruptionBudget so that node drains keep Keeper available.
+    enabled: true
+    # Pods that must stay up. Set one of the two; null skips the field.
+    minAvailable: null
+    # Pods that may be unavailable at once.
+    maxUnavailable: 1
+
+# -- Scribe (job worker and scheduler, docs/scribe.md) ----------------------------------------
+
+scribe:
+  # Off by default: without it, queued jobs (Source syncs, index builds) are not processed. When
+  # on, the workers pull jobs with SELECT ... FOR UPDATE SKIP LOCKED and elect their leader inside
+  # the application, so any replica count is safe.
+  enabled: false
+  command: ["lorebase-scribe"]
+  replicaCount: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  podAnnotations: {}
+  podLabels: {}
+  # Model and CPU bound, not database bound (docs/deployment.md).
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  # Scribe has no HTTP port; add probes here (for example an exec probe) once it ships a health command.
+  startupProbe: {}
+  livenessProbe: {}
+  readinessProbe: {}
+  terminationGracePeriodSeconds: 60
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  autoscaling:
+    # Scale on queue depth through a custom or external metric (KEDA, Prometheus Adapter).
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: null
+    # Placeholder, same format as keeper.autoscaling.customMetrics. Example (external metric):
+    #   - type: External
+    #     external:
+    #       metric:
+    #         name: lorebase_jobs_queue_depth
+    #       target:
+    #         type: AverageValue
+    #         averageValue: "20"
+    customMetrics: []
+    behavior: {}
+  pdb:
+    enabled: false
+    minAvailable: null
+    maxUnavailable: 1
+
+# -- Herald (MCP server, streamable HTTP) -----------------------------------------------------
+
+herald:
+  # Serve the Model Context Protocol over streamable HTTP for agents. Each caller's own API key
+  # is forwarded to Keeper, so Herald holds no credential.
+  enabled: false
+  command: ["python", "-m", "lorebase_herald"]
+  replicaCount: 2
+  # Container port (herald.http.port).
+  port: 8090
+  # Endpoint path (herald.http.path).
+  path: /mcp
+  # Origin of Keeper as seen from Herald (herald.keeper.base_url). Empty: the in-cluster Keeper Service.
+  keeperUrl: ""
+  # Domain and branch used when a call names none (herald.domain, herald.branch). Empty: not set.
+  domain: ""
+  branch: ""
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  # Herald serves only the MCP endpoint (no health route), so the probes check the TCP port.
+  startupProbe:
+    tcpSocket:
+      port: http
+    periodSeconds: 3
+    failureThreshold: 20
+  livenessProbe:
+    tcpSocket:
+      port: http
+    periodSeconds: 15
+    failureThreshold: 3
+  readinessProbe:
+    tcpSocket:
+      port: http
+    periodSeconds: 10
+    failureThreshold: 3
+  terminationGracePeriodSeconds: 30
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    type: ClusterIP
+    port: 8090
+    annotations: {}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: null
+    customMetrics: []
+    behavior: {}
+  pdb:
+    enabled: true
+    minAvailable: null
+    maxUnavailable: 1
+
+# -- Web app (nginx serving the built static files) -------------------------------------------
+
+web:
+  # Deploy the web app. The image is an unprivileged nginx with the production build in
+  # /usr/share/nginx/html (design 15.1).
+  enabled: false
+  image:
+    repository: ghcr.io/aantenore/lorebase-web
+    # Empty: the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  # Container port of the unprivileged nginx.
+  port: 8080
+  # Runtime configuration, served as /config.js (window.__LOREBASE_CONFIG__) so that one image
+  # works against any Keeper. The keys are the names of the Vite variables of apps/web.
+  config:
+    # `live` talks to Keeper over REST; `mock` serves sample Domains from memory.
+    apiMode: live
+    # Origin of Keeper as the browser sees it, without /api/v1. Empty with an enabled Ingress:
+    # https:// plus the first host of `ingress.hosts` (http:// without `ingress.tls`).
+    keeperBaseUrl: ""
+    # Further VITE_* values (for example VITE_PAGE_SIZE: "50"), written to config.js unchanged.
+    extra: {}
+  # Cache-Control of the hashed assets under /assets/.
+  assetsCacheControl: "public, max-age=31536000, immutable"
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  podAnnotations: {}
+  podLabels: {}
+  # nginx-unprivileged runs as uid/gid 101.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 3
+    failureThreshold: 20
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 15
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 10
+    failureThreshold: 3
+  terminationGracePeriodSeconds: 30
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: null
+    customMetrics: []
+    behavior: {}
+  pdb:
+    enabled: true
+    minAvailable: null
+    maxUnavailable: 1
+
+# -- Ollama (local models profile) ------------------------------------------------------------
+
+ollama:
+  # Run Ollama in the cluster and point Scribe at it (the Kubernetes counterpart of the
+  # compose profile `local-models`). Needs `scribe.enabled`.
+  enabled: false
+  image:
+    repository: ollama/ollama
+    # Pin a version in production; compose follows `latest` as well.
+    tag: latest
+    pullPolicy: IfNotPresent
+  # Model pulled when the pod starts; also LLM_MODEL of Scribe.
+  model: qwen2.5:7b-instruct
+  # Set LLM_BASE_URL and LLM_MODEL on Scribe from the two values above. Turn off to configure
+  # inference only through `config.inference`.
+  wireScribe: true
+  # Container and Service port.
+  port: 11434
+  persistence:
+    # Keep the models on a PersistentVolumeClaim; off uses an emptyDir (models are pulled again after a restart).
+    enabled: true
+    # Use an existing claim instead of creating one.
+    existingClaim: ""
+    size: 30Gi
+    # Storage class; empty: the cluster default.
+    storageClass: ""
+    accessModes: ["ReadWriteOnce"]
+  # One pod: a PVC with ReadWriteOnce cannot be shared, so the Deployment recreates the pod on updates.
+  # GPU: add `nvidia.com/gpu: 1` under resources.limits and a matching nodeSelector or toleration.
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+    limits:
+      memory: 16Gi
+  # Ollama image runs as root by default; the chart runs it as this user with HOME on the volume.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10002
+    runAsGroup: 10002
+    fsGroup: 10002
+    seccompProfile:
+      type: RuntimeDefault
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  service:
+    annotations: {}
+
+# -- Ingress -----------------------------------------------------------------------------------
+
+ingress:
+  # Create an Ingress for Keeper (and Herald and the web app when enabled).
+  enabled: false
+  # IngressClass name, for example nginx. Empty: the cluster default class.
+  className: ""
+  # Annotations of the controller. Example for ingress-nginx and cert-manager:
+  #   nginx.ingress.kubernetes.io/proxy-body-size: 2m   # above keeper.limits.max_request_body_bytes
+  #   cert-manager.io/cluster-issuer: letsencrypt
+  annotations: {}
+  # Hosts and the path of each component. A path whose component is not enabled is skipped.
+  # Keep the Keeper path equal to keeper.api_prefix of `config` (default /api/v1) without the version.
+  hosts:
+    - host: lorebase.example.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          component: keeper
+        - path: /mcp
+          pathType: Prefix
+          component: herald
+        - path: /
+          pathType: Prefix
+          component: web
+  # TLS: list of {secretName, hosts}. Leave the secretName empty to let the controller default apply.
+  tls: []
+  #  - secretName: lorebase-tls
+  #    hosts: [lorebase.example.com]
+
+# -- Network policy ----------------------------------------------------------------------------
+
+networkPolicy:
+  # Restrict ingress traffic to the Lorebase pods (and egress when enabled below). Needs a CNI that enforces policies.
+  enabled: false
+  # Who may reach the exposed pods (Keeper, Herald, web) besides the pods of this release:
+  # a list of NetworkPolicyPeer. Default: the namespace of the ingress controller.
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    # Also restrict egress. Allowed then: DNS, the pods of this release, and `rules`.
+    enabled: false
+    # Namespace and pod labels of the cluster DNS.
+    dnsNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    # Further egress rules (list of NetworkPolicyEgressRule): Postgres, the OTLP collector,
+    # the OIDC provider, hosted model endpoints. Example, Postgres in a CIDR:
+    #   - to: [{ipBlock: {cidr: 10.0.0.0/16}}]
+    #     ports: [{protocol: TCP, port: 5432}]
+    rules: []
+
+# -- Monitoring --------------------------------------------------------------------------------
+
+serviceMonitor:
+  # Create a Prometheus Operator ServiceMonitor. The services export OTLP (telemetry.otlpEndpoint)
+  # and do not serve /metrics themselves, so this scrapes the Prometheus exporter of your
+  # OpenTelemetry Collector (deploy/observability/otel-collector.yaml, port 8889). Needs the
+  # monitoring.coreos.com CRDs.
+  enabled: false
+  # Namespace of the ServiceMonitor. Empty: the release namespace.
+  namespace: ""
+  # Labels so that your Prometheus selects it (for example release: kube-prometheus-stack).
+  labels: {}
+  # REQUIRED when enabled: labels of the collector Service to scrape.
+  selector:
+    matchLabels: {}
+  # Namespaces searched for that Service. Empty: the release namespace.
+  namespaceSelector:
+    matchNames: []
+  # Name of the collector Service port that serves the metrics.
+  port: prometheus
+  # Metrics path.
+  path: /metrics
+  # Scrape interval and timeout.
+  interval: 30s
+  scrapeTimeout: 10s
+
+# -- Tests -------------------------------------------------------------------------------------
+
+tests:
+  # `helm test` calls /readyz on the Keeper Service with the backend image.
+  enabled: true

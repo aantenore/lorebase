@@ -1,0 +1,55 @@
+# Scale-out profile (docs/deployment.md): read replicas, Keepers on an HPA, Scribe on queue
+# depth, Herald and the web app scaled too. Adds to the production profile:
+#   helm upgrade --install lorebase deploy/helm/lorebase -f ci/production-values.yaml -f ci/scale-out-values.yaml
+secrets:
+  existingSecret: lorebase-secrets
+  keys:
+    dbDsn: db-dsn
+    dbReadDsn: db-read-dsn
+    apiKeyPepper: api-key-pepper
+    llmApiKey: llm-api-key
+config:
+  database:
+    read_max_lag_ms: 5000
+    read_fallback_to_primary: true
+keeper:
+  preferReplica: true
+  autoscaling:
+    enabled: true
+    minReplicas: 4
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 65
+    customMetrics:
+      - type: Pods
+        pods:
+          metric:
+            name: lorebase_http_requests_per_second
+          target:
+            type: AverageValue
+            averageValue: "50"
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+  pdb:
+    maxUnavailable: 1
+scribe:
+  enabled: true
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 12
+    customMetrics:
+      - type: External
+        external:
+          metric:
+            name: lorebase_jobs_queue_depth
+          target:
+            type: AverageValue
+            averageValue: "20"
+herald:
+  autoscaling:
+    enabled: true
+web:
+  autoscaling:
+    enabled: true

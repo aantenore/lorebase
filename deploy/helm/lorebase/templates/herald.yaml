@@ -1,0 +1,28 @@
+{{- if .Values.herald.enabled }}
+{{- $checksums := dict "checksum/config" (include "lorebase.appConfig" . | sha256sum) -}}
+{{ include "lorebase.deployment" (dict
+  "ctx" .
+  "component" "herald"
+  "cfg" .Values.herald
+  "image" (include "lorebase.backendImage" .)
+  "pullPolicy" .Values.image.pullPolicy
+  "command" .Values.herald.command
+  "port" .Values.herald.port
+  "env" (include "lorebase.heraldEnv" .)
+  "volumes" (include "lorebase.configVolume" .)
+  "mounts" (include "lorebase.configMount" .)
+  "podSecurity" .Values.podSecurityContext
+  "checksums" $checksums
+  "preStop" 0
+) }}
+---
+{{ include "lorebase.service" (dict "ctx" . "component" "herald" "cfg" .Values.herald) }}
+{{- if .Values.herald.autoscaling.enabled }}
+---
+{{ include "lorebase.hpa" (dict "ctx" . "component" "herald" "cfg" .Values.herald) }}
+{{- end }}
+{{- if .Values.herald.pdb.enabled }}
+---
+{{ include "lorebase.pdb" (dict "ctx" . "component" "herald" "cfg" .Values.herald) }}
+{{- end }}
+{{- end }}

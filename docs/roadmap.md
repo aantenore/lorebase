@@ -98,7 +98,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 
 - [ ] Overlay branch materialization
 - [ ] PII vault storage and erasure
-- [ ] Helm chart
+- [x] Helm chart ([kubernetes](kubernetes.md)); landed early, validated by lint, template and kubeconform, not yet on a live cluster
 - [x] Garbage collection of unreachable objects ([operations](operations.md)); landed early
 - [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
 - [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md))

@@ -1,0 +1,33 @@
+Lorebase {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Keeper (REST API):
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  {{ if $.Values.ingress.tls }}https{{ else }}http{{ end }}://{{ .host }}{{ range .paths }}{{ if eq .component "keeper" }}{{ .path }}{{ end }}{{ end }}/v1/docs
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "lorebase.componentName" (dict "ctx" . "component" "keeper") }} {{ .Values.keeper.service.port }}:{{ .Values.keeper.service.port }}
+  then open http://127.0.0.1:{{ .Values.keeper.service.port }}/healthz and /readyz
+{{- end }}
+{{- if .Values.herald.enabled }}
+
+Herald (MCP, streamable HTTP): service {{ include "lorebase.componentName" (dict "ctx" . "component" "herald") }}:{{ .Values.herald.service.port }}{{ .Values.herald.path }}
+{{- end }}
+{{- if .Values.web.enabled }}
+
+Web app: service {{ include "lorebase.componentName" (dict "ctx" . "component" "web") }}:{{ .Values.web.service.port }}
+{{- end }}
+{{- if not .Values.scribe.enabled }}
+
+Scribe is off (scribe.enabled=false): jobs such as Source syncs are queued but not processed.
+{{- end }}
+{{- if eq (dig "keeper" "auth" "mode" "none" .Values.config) "none" }}
+
+WARNING: config.keeper.auth.mode is "none": every request is accepted as an administrator. Development only.
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+
+The database runs in the cluster (CloudNativePG cluster "{{ include "lorebase.pgClusterName" . }}"); the migration runs after install, so do not use --wait on the first install.
+{{- end }}
+
+Check readiness with: helm -n {{ .Release.Namespace }} test {{ .Release.Name }}

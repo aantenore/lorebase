@@ -1,0 +1,35 @@
+{{- include "lorebase.validate" . -}}
+{{- $scope := dict "ctx" . "component" "keeper" -}}
+{{- $env := include "lorebase.appEnv" $scope -}}
+{{- $env = printf "%s\n%s" $env (include "lorebase.keeperEnv" .) -}}
+{{- $volumes := include "lorebase.configVolume" . -}}
+{{- $mounts := include "lorebase.configMount" . -}}
+{{- $checksums := dict "checksum/config" (include "lorebase.appConfig" . | sha256sum) -}}
+{{- if include "lorebase.managedSecret" . }}
+{{- $_ := set $checksums "checksum/secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) }}
+{{- end }}
+{{ include "lorebase.deployment" (dict
+  "ctx" .
+  "component" "keeper"
+  "cfg" .Values.keeper
+  "image" (include "lorebase.backendImage" .)
+  "pullPolicy" .Values.image.pullPolicy
+  "command" .Values.keeper.command
+  "port" .Values.keeper.port
+  "env" $env
+  "volumes" $volumes
+  "mounts" $mounts
+  "podSecurity" .Values.podSecurityContext
+  "checksums" $checksums
+  "preStop" .Values.keeper.preStopSleepSeconds
+) }}
+---
+{{ include "lorebase.service" (dict "ctx" . "component" "keeper" "cfg" .Values.keeper) }}
+{{- if .Values.keeper.autoscaling.enabled }}
+---
+{{ include "lorebase.hpa" (dict "ctx" . "component" "keeper" "cfg" .Values.keeper) }}
+{{- end }}
+{{- if .Values.keeper.pdb.enabled }}
+---
+{{ include "lorebase.pdb" (dict "ctx" . "component" "keeper" "cfg" .Values.keeper) }}
+{{- end }}
