@@ -106,9 +106,13 @@ class LlmSettings(SectionModel):
     )
 
     def for_task(self, task: str | None) -> Self:
-        """Effective settings for a task: this model with the task's overrides applied."""
+        """Effective settings for a task: this model with the task's overrides applied.
+
+        A task that names another `base_url` uses only its own `api_key`: the main key is never
+        sent to an endpoint it was not configured for.
+        """
         override = self.tasks.get(task) if task else None
-        changes = (
+        changes: dict[str, Any] = (
             {
                 name: value
                 for name in type(override).model_fields
@@ -117,6 +121,8 @@ class LlmSettings(SectionModel):
             if override
             else {}
         )
+        if override and override.base_url not in (None, self.base_url):
+            changes["api_key"] = override.api_key
         return self.model_copy(update={**changes, "tasks": {}})
 
 

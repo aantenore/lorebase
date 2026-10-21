@@ -49,6 +49,25 @@ def test_task_override_inherits_the_retry_policy_and_repair_attempts() -> None:
     )
 
 
+def test_a_task_on_another_endpoint_does_not_inherit_the_api_key() -> None:
+    # The main key belongs to the main endpoint; a task routed elsewhere without its own key
+    # must not send it to that other host.
+    llm = LlmSettings.model_validate(
+        {
+            "base_url": "https://main.example/v1",
+            "api_key": "main-key-123",
+            "tasks": {
+                "elsewhere": {"base_url": "https://other.example/v1"},
+                "same": {"model": "tiny"},
+            },
+        }
+    )
+    assert llm.for_task("elsewhere").api_key is None
+    same = llm.for_task("same").api_key
+    assert same is not None
+    assert same.get_secret_value() == "main-key-123"
+
+
 @pytest.mark.parametrize(
     "section",
     [

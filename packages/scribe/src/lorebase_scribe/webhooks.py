@@ -8,11 +8,14 @@ the environment sits between the checks and the target) and:
   is rewritten to the address while the `Host` header and the TLS server name (SNI and
   certificate verification) keep the host name, so a DNS answer that changed after the check
   cannot reach an internal service;
-- never follows redirects (a redirect could lead to a target the checks did not see).
+- never follows redirects (a redirect could lead to a target the checks did not see);
+- never reads the response body, and bounds each attempt by the timeout as a whole, so a
+  target that streams or trickles cannot hold the worker.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -61,12 +64,18 @@ class HttpxSender:
         timeout_s: float,
         extensions: dict[str, Any],
     ) -> int:
-        response = await self._client.post(
-            url,
-            content=body,
-            headers=headers,
-            timeout=timeout_s,
-            follow_redirects=False,
-            extensions=extensions,
-        )
-        return response.status_code
+        # httpx applies `timeout` to each connect, write and read, not to the whole exchange,
+        # and `post` reads the whole body: bound the exchange and close without reading it.
+        async with (
+            asyncio.timeout(timeout_s),
+            self._client.stream(
+                "POST",
+                url,
+                content=body,
+                headers=headers,
+                timeout=timeout_s,
+                follow_redirects=False,
+                extensions=extensions,
+            ) as response,
+        ):
+            return response.status_code

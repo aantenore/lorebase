@@ -7,6 +7,7 @@ Every value has a code default for local runs; deployments override them through
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Self
 
 from pydantic import Field, field_validator, model_validator
@@ -172,6 +173,26 @@ class KeeperSettings(SectionModel):
         if not value.startswith("/") or (len(value) > 1 and value.endswith("/")):
             raise ValueError("must start with '/' and not end with '/'")
         return "" if value == "/" else value
+
+    @model_validator(mode="after")
+    def _no_anonymous_access_off_loopback(self) -> Self:
+        if self.auth.mode == "none" and not self.auth.allow_insecure and not is_loopback(self.host):
+            raise ValueError(
+                f"auth.mode 'none' accepts every request as an administrator and host "
+                f"{self.host!r} is not a loopback address: choose another auth.mode, bind to "
+                "127.0.0.1, or set auth.allow_insecure to true"
+            )
+        return self
+
+
+def is_loopback(host: str) -> bool:
+    """Whether a bind address only accepts connections from this machine."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 register_section(SECTION, KeeperSettings)

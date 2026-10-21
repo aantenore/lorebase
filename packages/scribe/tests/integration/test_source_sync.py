@@ -45,8 +45,13 @@ def suppliers_csv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+CONNECTIONS = ("secret://env/SUPPLY_APPROVED_SUPPLIERS_CSV", "secret://env/ERP_DSN")
+
+
 def settings_for(root: Path) -> SourceSettings:
-    return SourceSettings(csv=CsvSourceSettings(allowed_roots=(str(root),)))
+    return SourceSettings(
+        allowed_connections=CONNECTIONS, csv=CsvSourceSettings(allowed_roots=(str(root),))
+    )
 
 
 def rewrite(path: Path, change: Any) -> None:
@@ -287,7 +292,13 @@ async def test_postgres_source(
                 {"t": t0},
             )
         monkeypatch.setenv("ERP_DSN", database_url)
-        sync = SourceSync(sessions, runtime, SourceSettings(), principal="svc_scribe", clock=clock)
+        sync = SourceSync(
+            sessions,
+            runtime,
+            SourceSettings(allowed_connections=CONNECTIONS),
+            principal="svc_scribe",
+            clock=clock,
+        )
 
         first = await sync.run(DOMAIN, "erp.purchase_orders")
         assert first.rows_read == 3  # the archived order is outside the scope filter
