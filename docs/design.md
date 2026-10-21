@@ -318,6 +318,7 @@ Custom code Derivations (Python functions) are out of scope until after M5; when
 |-------|-------|
 | id, api_name, type | `postgres_table`, `postgres_query`, `csv`, `parquet`, `http_json` (M5) |
 | connection | reference to a secret, never a literal: `secret://env/ERP_DSN` or `secret://file/erp.dsn` |
+| table, query | `postgres_table`: table name, optionally schema-qualified (default: last segment of the api name); `postgres_query`: read-only `SELECT` |
 | target_kind | Kind id |
 | key_mapping | source columns to primary key |
 | attribute_mapping | `{attribute_id: {column or expression, transform}}`; transforms from a fixed set: `cast`, `trim`, `lower`, `upper`, `parse_date(format)`, `concat`, `constant`, `map(values)`, `null_if` |

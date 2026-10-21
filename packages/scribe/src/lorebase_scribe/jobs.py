@@ -2,6 +2,7 @@
 
 | Type | Payload | Handler |
 |------|---------|---------|
+| `source_sync` | `{"source": id or api name, "dry_run": bool}`, Domain set | `SourceSync.run` |
 | `webhook_delivery` | none | `lorebase_store.webhooks.deliver_pending`, one pass |
 | `index_build` | none | `lorebase_store.indexes.run_index_jobs` (queued index builds) |
 | `gc` | `{"dry_run": bool, "grace_seconds": int}`, Domain set | `lorebase_store.gc.run_gc_job` |
@@ -13,18 +14,21 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_scribe.settings import ScribeSettings
+from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
+from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
+from lorebase_scribe.sources.sync import utc_now
 from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_jobs
-from lorebase_store.jobs import GC_JOB, JobRow
+from lorebase_store.jobs import GC_JOB, SOURCE_SYNC_JOB, JobRow
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
@@ -32,7 +36,7 @@ WEBHOOK_DELIVERY_JOB = "webhook_delivery"
 INDEX_BUILD_JOB = "index_build"
 EXTRACTION_JOB = "extraction"
 
-JOB_TYPES = (WEBHOOK_DELIVERY_JOB, INDEX_BUILD_JOB, GC_JOB, EXTRACTION_JOB)
+JOB_TYPES = (SOURCE_SYNC_JOB, WEBHOOK_DELIVERY_JOB, INDEX_BUILD_JOB, GC_JOB, EXTRACTION_JOB)
 """Every job type Scribe knows."""
 
 
@@ -47,7 +51,8 @@ class JobContext:
     webhooks: WebhookSettings
     http: httpx.AsyncClient
     worker_id: str
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    connectors: ConnectorFactory = default_connector
+    clock: Callable[[], datetime] = utc_now
 
 
 def _domain(job: JobRow) -> str:
@@ -58,6 +63,23 @@ def _domain(job: JobRow) -> str:
 
 def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, JobHandler]:
     """Handlers of `types` (default: every type); unknown types raise `ValueError`."""
+
+    async def source_sync(job: JobRow) -> Mapping[str, Any]:
+        reference = job.payload.get("source")
+        if not isinstance(reference, str) or not reference:
+            raise PermanentJobError("a source_sync job needs a `source`")
+        sync = SourceSync(
+            context.sessions,
+            context.runtime,
+            context.settings.sources,
+            principal=context.settings.worker.principal,
+            connectors=context.connectors,
+            clock=context.clock,
+        )
+        report = await sync.run(
+            _domain(job), reference, dry_run=bool(job.payload.get("dry_run", False))
+        )
+        return report.as_dict()
 
     async def webhook_delivery(job: JobRow) -> Mapping[str, Any]:
         report = await deliver_pending(
@@ -99,6 +121,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         raise PermanentJobError("extraction jobs are not implemented yet")
 
     available: dict[str, JobHandler] = {
+        SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
         INDEX_BUILD_JOB: index_build,
         GC_JOB: gc,
@@ -111,5 +134,5 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
     return {name: available[name] for name in chosen}
 
 
-PERMANENT_JOB_ERRORS: tuple[type[Exception], ...] = ()
+PERMANENT_JOB_ERRORS: tuple[type[Exception], ...] = PERMANENT_ERRORS
 """Handler failures the worker fails at once instead of retrying."""

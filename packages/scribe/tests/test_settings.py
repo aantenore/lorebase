@@ -16,14 +16,16 @@ def test_defaults() -> None:
     scribe = scribe_settings(Settings())
     assert scribe.worker.concurrency == 2
     assert scribe.scheduler.gc_schedule == "0 3 * * *"
+    assert scribe.sources.commit_batch == 5000
+    assert scribe.sources.csv.allowed_roots == ()
 
 
 def test_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOREBASE__SCRIBE__WORKER__CONCURRENCY", "4")
-    monkeypatch.setenv("LOREBASE__SCRIBE__WORKER__TYPES", '["gc"]')
+    monkeypatch.setenv("LOREBASE__SCRIBE__SOURCES__CSV__ALLOWED_ROOTS", '["/data/supply"]')
     scribe = scribe_settings(load_settings())
     assert scribe.worker.concurrency == 4
-    assert scribe.worker.types == ("gc",)
+    assert scribe.sources.csv.allowed_roots == ("/data/supply",)
 
 
 def test_invalid_gc_schedule_is_refused() -> None:

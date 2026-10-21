@@ -537,8 +537,8 @@ herald:
     page_size: 50
     max_pages: 10
 
-# Scribe, the job worker: webhook delivery, queued index builds and garbage collection.
-# Job retries and stale locks: store.jobs.
+# Scribe, the job worker (docs/scribe.md): Source synchronization, webhook delivery, queued
+# index builds and garbage collection. Job retries and stale locks: store.jobs.
 scribe:
   worker:
     concurrency: 2               # jobs run at the same time by one process
@@ -558,3 +558,21 @@ scribe:
     gc_dry_run: false
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
     domain_batch: 100            # Domains read per query
+  sources:                       # Source synchronization (design 9.1)
+    commit_batch: 5000           # changes per Revision; one row's changes are never split
+    max_row_errors: 100          # skipped rows tolerated; more fail the run without committing
+    error_samples: 20            # row errors kept in the run record
+    auto_merge_protected: true   # automatic merge policies also merge into protected branches
+    csv:
+      allowed_roots: []          # directories local CSV files may be read from; empty: none
+      allowed_hosts: []          # hosts CSV URLs may point at; empty: none
+      allowed_schemes: [https]
+      max_bytes: 104857600       # larger files or downloads are refused (100 MiB)
+      timeout_s: 60.0            # time budget of one download
+      encodings: [utf-8-sig, cp1252]   # tried in order
+      delimiters: ",;\t|"        # delimiters the sniffer may pick; .tsv files use a tab
+      sniff_bytes: 65536
+    postgres:
+      statement_timeout_ms: 60000  # statement_timeout of the read-only transaction
+      connect_timeout_s: 10.0
+      fetch_rows: 5000           # rows fetched per round trip
