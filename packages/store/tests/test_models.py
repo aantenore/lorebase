@@ -76,9 +76,9 @@ def test_domain_scoped_tables_lead_with_domain_id() -> None:
 def test_named_indexes_and_constraints() -> None:
     indexes = {index.name for table in metadata.tables.values() for index in table.indexes}
     assert {
-        "ix_mat_records_search",
+        "ix_mat_records_branch_search",
         "ix_mat_records_values",
-        "ix_mat_records_title",
+        "ix_mat_records_branch_title",
         "ix_mat_links_reverse",
         "ix_revision_parents_domain_id_parent_id",
         "uq_operation_invocations_idempotency",
@@ -95,5 +95,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_overlay_branches_migration() -> None:
-    assert head_revisions() == ("0010",)
+def test_head_revision_is_the_branch_scoped_search_index_migration() -> None:
+    assert head_revisions() == ("0011",)
