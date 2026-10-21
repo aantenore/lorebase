@@ -91,4 +91,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_initial_schema() -> None:
-    assert head_revisions() == ("0002",)
+    assert head_revisions() == ("0004",)

@@ -9,8 +9,16 @@ reports, run the reads of one request in a `REPEATABLE READ` transaction.
 - `head_schema`: the schema at the head through the per-process `SchemaCache`.
 - `get_record`, `list_records`, `hydrate_records`: primary-key lookups and keyset pages.
 - `links_of_record`: Links in either direction, stored or foreign-key backed.
+- `links_to_record`: one page of the Links pointing at a Record along one Relation.
 - `query_by_attribute`: comparisons served by the per-Attribute partial indexes.
 - `search_records`: full-text search over the GIN index, ranking a bounded candidate set.
+
+Incoming foreign-key Links, attribute queries and search compare with functions Postgres does
+not mark leakproof, so under row-level security plain SQL cannot use their indexes. With
+`store.reads.use_definer_functions` (the default) they run through the security definer
+functions of revision 0004 (`lb_links_in`, `lb_query_by_attribute`, `lb_search`), which take
+the Domain as an argument: only these primitives call them, with the Domain their caller has
+already authorized (store schema notes). Otherwise the same statements run as plain SQL.
 """
 
 from __future__ import annotations
@@ -117,6 +125,11 @@ class SearchHit:
 
 def _runtime(runtime: StoreRuntime | None) -> StoreRuntime:
     return runtime or default_runtime()
+
+
+def _definer(runtime: StoreRuntime | None) -> bool:
+    """Whether reads go through the security definer functions (`store.reads`)."""
+    return _runtime(runtime).settings.reads.use_definer_functions
 
 
 def _cap(limit: int, maximum: int) -> int:
@@ -349,22 +362,102 @@ async def links_of_record(
             f"WHERE {_SCOPE} AND m.kind_id = :kind AND m.key = :key "
             'AND m."values" ->> r.attribute IS NOT NULL'
         )
-    parts.extend(
-        foreign_key_inbound_sql(r, domain_id, branch, target=":key", limit=":limit")
-        for r in foreign_key_relations(incoming)
-    )
+    definer = _definer(runtime)
+    for index, relation in enumerate(foreign_key_relations(incoming)):
+        if not definer:
+            parts.append(
+                foreign_key_inbound_sql(relation, domain_id, branch, target=":key", limit=":limit")
+            )
+            continue
+        params[f"fk_in_{index}"] = relation.id
+        params[f"fk_in_kind_{index}"] = relation.from_kind
+        params[f"fk_in_attribute_{index}"] = relation.foreign_key_attribute
+        parts.append(
+            f"SELECT {_LINK_SELECT} FROM lb_links_in(:domain, :branch, :fk_in_{index}, :key, "
+            f"CAST(:limit AS integer), NULL, :fk_in_kind_{index}, :fk_in_attribute_{index})"
+        )
     if not parts:
         return []
     union = " UNION ALL ".join(f"({part})" for part in parts)
-    statement = text(
+    statement = _links(
         f"SELECT * FROM ({union}) AS links ORDER BY relation_id, from_key, to_key LIMIT :limit"
-    ).columns(
+    )
+    return [LinkRef(**row) for row in (await session.execute(statement, params)).mappings()]
+
+
+def _links(sql: str) -> TextualSelect:
+    """A statement returning Link columns, typed so JSON comes back decoded."""
+    return text(sql).columns(
         MAT_LINKS.c.relation_id,
         MAT_LINKS.c.from_key,
         MAT_LINKS.c.to_key,
         MAT_LINKS.c["values"],
         MAT_LINKS.c.object_hash,
     )
+
+
+_LINKS_IN = _links(
+    "SELECT * FROM lb_links_in(:domain, :branch, :relation, :to_key, CAST(:limit AS integer), "
+    ":after, :from_kind, :attribute)"
+)
+
+
+def _plain_links_in(domain_id: str, branch: str, relation: Relation, *, after: bool) -> str:
+    """`lb_links_in` as plain SQL (parameters `:relation`, `:to_key`, `:limit`, `:after`)."""
+    if relation.backing is not RelationBacking.FOREIGN_KEY:
+        return (
+            f"SELECT {_LINK_SELECT} FROM mat_links WHERE domain_id = :domain "
+            "AND branch = :branch AND relation_id = :relation AND to_key = :to_key"
+            f"{' AND from_key > :after' if after else ''} ORDER BY from_key LIMIT :limit"
+        )
+    assert relation.foreign_key_attribute is not None
+    predicate = escape_colons(predicate_sql(domain_id, branch, relation.from_kind))
+    return (
+        "SELECT CAST(:relation AS text) AS relation_id, key AS from_key, "
+        "CAST(:to_key AS text) AS to_key, CAST('{}' AS jsonb) AS \"values\", "
+        f"CAST(NULL AS bytea) AS object_hash FROM mat_records WHERE {predicate} "
+        f"AND {values_text(relation.foreign_key_attribute)} = :to_key"
+        f"{' AND key > :after' if after else ''} ORDER BY key LIMIT :limit"
+    )
+
+
+async def links_to_record(
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    relation: Relation,
+    to_key: str,
+    *,
+    limit: int,
+    after: str | None = None,
+    runtime: StoreRuntime | None = None,
+) -> list[LinkRef]:
+    """Links of `relation` pointing at the Record `to_key`, in from-key order after `after`.
+
+    Stored Links are read through the `(domain_id, branch, relation_id, to_key)` index,
+    foreign-key backed ones through the per-Attribute index of the from Kind.
+    """
+    foreign = relation.backing is RelationBacking.FOREIGN_KEY
+    if foreign and relation.foreign_key_attribute is None:
+        return []
+    params: dict[str, Any] = {
+        "domain": domain_id,
+        "branch": branch,
+        "relation": relation.id,
+        "to_key": to_key,
+        "limit": _cap(limit, _runtime(runtime).settings.reads.max_page_rows),
+    }
+    if _definer(runtime):
+        params.update(
+            after=after,
+            from_kind=relation.from_kind if foreign else None,
+            attribute=relation.foreign_key_attribute if foreign else None,
+        )
+        statement = _LINKS_IN
+    else:
+        if after is not None:
+            params["after"] = after
+        statement = _links(_plain_links_in(domain_id, branch, relation, after=after is not None))
     return [LinkRef(**row) for row in (await session.execute(statement, params)).mappings()]
 
 
@@ -408,8 +501,22 @@ async def query_by_attribute(
         "value": _value_text(value),
         "limit": _cap(limit, _runtime(runtime).settings.reads.max_page_rows),
     }
+    if _definer(runtime):
+        ranged = comparison is not Comparison.EQ
+        params.update(
+            domain=domain_id,
+            branch=branch,
+            kind=spec.kind_id,
+            attribute=spec.attribute_id,
+            type=spec.value_type,
+            op=comparison.value,
+            after_value=_value_text(after[0]) if after is not None and ranged else None,
+            after_key=None if after is None else after[1],
+        )
+        found = (await session.execute(_QUERY_BY_ATTRIBUTE, params)).mappings()
+        return [RecordRow(**row) for row in found]
     where = [
-        escape_colons(predicate_sql(domain_id, branch, spec.kind_id)),
+        escape_colons(spec.predicate_sql(domain_id, branch)),
         f"{expression} {_OPERATORS[comparison]} {spec.value_sql(':value')}",
     ]
     if comparison is Comparison.EQ:
@@ -429,29 +536,65 @@ async def query_by_attribute(
     return [RecordRow(**row) for row in (await session.execute(statement, params)).mappings()]
 
 
+_QUERY_BY_ATTRIBUTE = _records(
+    "SELECT * FROM lb_query_by_attribute(:domain, :branch, :kind, :attribute, :type, :op, "
+    ":value, CAST(:limit AS integer), :after_value, :after_key)"
+)
+
+
 # Full-text search -------------------------------------------------------------------------------
 
 _QUERY = "websearch_to_tsquery(CAST(:config AS regconfig), :query)"
 
 
-def search_sql(*, by_kind: bool) -> str:
+@dataclass(frozen=True, slots=True)
+class TitleSimilarity:
+    """Typo-tolerant title matches by trigram similarity (`pg_trgm`, trigram index on titles).
+
+    Titles at least `threshold` similar to the query match too, and `weight` times the
+    similarity is added to the rank.
+    """
+
+    threshold: float
+    weight: float
+
+
+def search_sql(*, by_kind: bool, titles: bool = False) -> str:
     """Full-text search: the GIN index finds at most `:candidates` matches of the branch, and
     only those are ranked (`ts_rank_cd` reads each candidate's vector).
 
     Parameters: `:domain`, `:branch`, `:config`, `:query` (web search syntax), `:candidates`,
-    `:limit`, and `:kinds` (text array) when `by_kind`.
+    `:limit`, `:kinds` (text array) when `by_kind`, and `:title_weight` when `titles` (the
+    threshold is the transaction's `pg_trgm.similarity_threshold`).
     """
     kinds = "AND m.kind_id = ANY(CAST(:kinds AS text[])) " if by_kind else ""
+    match = f"m.search @@ {_QUERY}"
+    score = f"ts_rank_cd(c.search, {_QUERY})"
+    if titles:
+        match = f"({match} OR m.title % :query)"
+        score += " + CAST(:title_weight AS real) * similarity(coalesce(c.title, ''), :query)"
     return (
-        f"SELECT c.kind_id, c.key, c.title, ts_rank_cd(c.search, {_QUERY}) AS score "
+        f"SELECT c.kind_id, c.key, c.title, CAST({score} AS real) AS score "
         f"FROM (SELECT m.kind_id, m.key, m.title, m.search FROM mat_records m "
-        f"WHERE {_SCOPE} {kinds}AND m.search @@ {_QUERY} LIMIT :candidates) AS c "
+        f"WHERE {_SCOPE} {kinds}AND {match} LIMIT :candidates) AS c "
         f"ORDER BY score DESC, c.kind_id, c.key LIMIT :limit"
     )
 
 
-_SEARCH = text(search_sql(by_kind=False))
-_SEARCH_KINDS = text(search_sql(by_kind=True))
+_SEARCH = {
+    (by_kind, titles): text(search_sql(by_kind=by_kind, titles=titles))
+    for by_kind in (False, True)
+    for titles in (False, True)
+}
+_SEARCH_DEFINER = text(
+    "SELECT * FROM lb_search(:domain, :branch, CAST(:kinds AS text[]), "
+    "CAST(:config AS regconfig), :query, CAST(:candidates AS integer), CAST(:limit AS integer), "
+    "CAST(:threshold AS real), CAST(:title_weight AS real))"
+)
+_SIMILARITY_THRESHOLD = text(
+    "SELECT set_config('pg_trgm.similarity_threshold', "
+    "CAST(CAST(:threshold AS real) AS text), true)"
+)
 
 
 async def search_records(
@@ -462,9 +605,15 @@ async def search_records(
     *,
     limit: int,
     kind_ids: Sequence[str] | None = None,
+    titles: TitleSimilarity | None = None,
     runtime: StoreRuntime | None = None,
 ) -> list[SearchHit]:
-    """Best `limit` lexical matches of `query` (web search syntax) on the branch head."""
+    """Best `limit` lexical matches of `query` (web search syntax) on the branch head.
+
+    `kind_ids` restricts the Kinds searched (`None`: every Kind); `titles` adds typo-tolerant
+    title matches (the plain SQL path sets `pg_trgm.similarity_threshold` for the
+    transaction, the function only for its own call).
+    """
     settings = _runtime(runtime).settings
     params: dict[str, Any] = {
         "domain": domain_id,
@@ -474,8 +623,20 @@ async def search_records(
         "candidates": settings.reads.search_candidates,
         "limit": _cap(limit, settings.reads.max_search_rows),
     }
-    statement = _SEARCH
-    if kind_ids:
-        statement, params["kinds"] = _SEARCH_KINDS, list(kind_ids)
+    kinds = None if kind_ids is None else list(kind_ids)
+    if _definer(runtime):
+        params.update(
+            kinds=kinds,
+            threshold=None if titles is None else titles.threshold,
+            title_weight=0.0 if titles is None else titles.weight,
+        )
+        statement = _SEARCH_DEFINER
+    else:
+        if titles is not None:
+            await session.execute(_SIMILARITY_THRESHOLD, {"threshold": titles.threshold})
+            params["title_weight"] = titles.weight
+        if kinds is not None:
+            params["kinds"] = kinds
+        statement = _SEARCH[(kinds is not None, titles is not None)]
     rows = (await session.execute(statement, params)).all()
     return [SearchHit(kind_id, key, title, float(score)) for kind_id, key, title, score in rows]
