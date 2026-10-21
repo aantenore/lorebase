@@ -29,7 +29,21 @@ import {
   refusedChange,
   refusedExecution,
 } from './live/versioning';
+import {
+  decideBody,
+  itemQuery,
+  mapDecided,
+  mapDocument,
+  mapDocumentDetail,
+  mapItem,
+} from './live/extraction';
 import { splitRecordRef } from './refs';
+import type {
+  DocumentDetail,
+  DocumentInfo,
+  DocumentUploaded,
+  UploadDocumentInput,
+} from './extraction-types';
 import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
   Branch,
@@ -68,6 +82,15 @@ function inferForm(files: File[], options: Record<string, unknown> | undefined):
   const form = new FormData();
   for (const file of files) form.append('files', file, file.name);
   if (options !== undefined) form.append('options', JSON.stringify(options));
+  return form;
+}
+
+/** The multipart body of a document upload: `file`, and `extract` and `tiers` when given. */
+function documentForm(file: File, input: UploadDocumentInput): FormData {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  if (input.extract !== undefined) form.append('extract', String(input.extract));
+  if (input.tiers !== undefined) form.append('tiers', JSON.stringify(input.tiers));
   return form;
 }
 
@@ -392,9 +415,49 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
         }
       },
       close: (domain, proposal) => post(`${prop(domain, proposal)}/close`),
-      // Keeper has no extraction items yet: every Proposal lists none.
-      items: () => Promise.resolve({ items: [], next_cursor: null }),
-      decideItems: () => Promise.reject(notSupported('Deciding extraction items')),
+      items: async (domain, proposal, params) => {
+        const page = await get<{ items: Record<string, unknown>[]; next_cursor?: string | null }>(
+          `${prop(domain, proposal)}/items`,
+          { ...itemQuery(params), ...pageParams(params) },
+        );
+        return { items: page.items.map(mapItem), next_cursor: page.next_cursor ?? null };
+      },
+      decideItems: async (domain, proposal, input) =>
+        mapDecided(
+          await post<Record<string, unknown>>(
+            `${prop(domain, proposal)}/items:decide`,
+            decideBody(input),
+          ),
+        ),
+    },
+
+    documents: {
+      list: async (domain, params) => {
+        const page = await get<{ items: DocumentInfo[]; next_cursor?: string | null }>(
+          `${d(domain)}/documents`,
+          pageParams(params),
+        );
+        return { items: page.items.map(mapDocument), next_cursor: page.next_cursor ?? null };
+      },
+      get: async (domain, document) =>
+        mapDocumentDetail(await get<DocumentDetail>(`${d(domain)}/documents/${enc(document)}`)),
+      upload: async (domain, input) => {
+        const answer =
+          'file' in input
+            ? await postForm<DocumentUploaded>(
+                `${d(domain)}/documents`,
+                documentForm(input.file, input),
+              )
+            : await post<DocumentUploaded>(`${d(domain)}/documents`, {
+                url: input.url,
+                ...(input.filename === undefined ? {} : { filename: input.filename }),
+                ...(input.extract === undefined ? {} : { extract: input.extract }),
+                ...(input.tiers === undefined ? {} : { tiers: input.tiers }),
+              });
+        return { ...answer, document: mapDocument(answer.document), job_id: answer.job_id ?? null };
+      },
+      // Keeper serves the metadata of a document, not its parsed text.
+      text: () => Promise.resolve(null),
     },
 
     conflicts: {

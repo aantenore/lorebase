@@ -541,14 +541,6 @@ describe('live adapter: writes', () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
-  it('lists no extraction items and refuses to decide them', async () => {
-    const { api } = fakeKeeper({});
-    expect(await api.proposals.items('supply', 'prp_1')).toEqual({ items: [], next_cursor: null });
-    await expect(
-      api.proposals.decideItems('supply', 'prp_1', { item_ids: ['i'], decision: 'accepted' }),
-    ).rejects.toMatchObject({ status: 501 });
-  });
-
   it('takes the Proposal diff from the merge base', async () => {
     const { api, calls } = fakeKeeper({
       'GET /domains/supply/proposals/prp_1': {
@@ -770,5 +762,196 @@ describe('live adapter: agents, inference and webhooks', () => {
     expect(await api.sources.sync('supply', 'erp.vendors')).toEqual(queued);
     expect(calls[0]?.url.pathname).toBe('/api/v1/domains/supply/sources/erp.vendors/sync');
     expect(calls[0]?.method).toBe('POST');
+  });
+});
+
+describe('live adapter: documents and extraction items', () => {
+  const document = {
+    id: 'doc_1',
+    filename: 'c.md',
+    media_type: 'text/markdown',
+    sha256: 'ab',
+    size: 12,
+    text_sha256: null,
+    metadata: { source: 'upload' },
+    created_at: '2026-10-20T08:00:00Z',
+    created_by: 'usr_1',
+  };
+
+  it('uploads a document as multipart with extract and tiers, and reports a duplicate', async () => {
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/documents': json({ document, duplicate: true, job_id: null }, 200),
+    });
+    const file = new File(['# Contract'], 'c.md', { type: 'text/markdown' });
+    const uploaded = await api.documents.upload('supply', { file, extract: true, tiers: [0, 1] });
+    expect(uploaded).toEqual({ document, duplicate: true, job_id: null });
+    const body = calls[0]?.body;
+    expect(body).toBeInstanceOf(FormData);
+    const form = body as FormData;
+    expect((form.get('file') as File).name).toBe('c.md');
+    expect(form.get('extract')).toBe('true');
+    expect(form.get('tiers')).toBe('[0,1]');
+    expect(calls[0]?.headers['Content-Type']).toBeUndefined();
+  });
+
+  it('sends a URL as JSON and leaves unset options out', async () => {
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/documents': json({ document, duplicate: false, job_id: 7 }, 201),
+    });
+    const uploaded = await api.documents.upload('supply', {
+      url: 'https://docs.example.com/c.pdf',
+      filename: 'c.pdf',
+    });
+    expect(uploaded.job_id).toBe(7);
+    expect(calls[0]?.body).toEqual({ url: 'https://docs.example.com/c.pdf', filename: 'c.pdf' });
+  });
+
+  it('refuses an upload with the findings of the 422', async () => {
+    const { api } = fakeKeeper({
+      'POST /domains/supply/documents': problem(422, 'validation-failed', 'No.', {
+        errors: [{ pointer: '/body/file', message: 'unsupported file type .exe', code: 'invalid' }],
+      }),
+    });
+    const file = new File(['x'], 'c.exe');
+    await expect(api.documents.upload('supply', { file })).rejects.toMatchObject({
+      status: 422,
+      fields: [{ pointer: '/body/file' }],
+    });
+  });
+
+  it('lists documents and reads one with its jobs; the parsed text is not served', async () => {
+    const job = {
+      id: 'job_1',
+      status: 'succeeded',
+      model: 'rules',
+      prompt_version: 'extract-v1',
+      branch: 'extract/job_1',
+      proposal_id: 'prp_1',
+      created_at: '2026-10-20T08:00:00Z',
+      finished_at: '2026-10-20T08:01:00Z',
+      usage: {},
+      stats: {},
+      error: null,
+    };
+    const { api, calls } = fakeKeeper({
+      'GET /domains/supply/documents': { items: [document], next_cursor: 'c2' },
+      'GET /domains/supply/documents/doc_1': { ...document, extraction_jobs: [job] },
+    });
+    const page = await api.documents.list('supply', { limit: 1 });
+    expect(page).toEqual({ items: [document], next_cursor: 'c2' });
+    expect(calls[0]?.url.searchParams.get('limit')).toBe('1');
+    expect((await api.documents.get('supply', 'doc_1')).extraction_jobs[0]?.proposal_id).toBe(
+      'prp_1',
+    );
+    expect(await api.documents.text('supply', 'doc_1')).toBeNull();
+    expect(calls).toHaveLength(2);
+  });
+
+  const itemOut = {
+    id: 'pit_1',
+    type: 'link',
+    seq: 1,
+    decision: 'pending',
+    confidence: 0.6,
+    tier: 0,
+    model: null,
+    kind: null,
+    relation: 'with_supplier',
+    key: null,
+    attribute: null,
+    value: null,
+    current: null,
+    from: 'C-3025',
+    to: 'S-1025',
+    values: {},
+    subject: {},
+    evidence: { document_id: 'doc_1', chunk: 0, start: 4, end: 20, quote: 'Kavvik' },
+    match: {
+      status: 'ambiguous',
+      method: 'trigram',
+      score: 0.9,
+      candidates: [{ key: 'S-1025', title: 'Kavvik', score: 0.9, method: 'title' }],
+    },
+    edits: null,
+    decided_by: null,
+    decided_at: null,
+    not_applied: null,
+  };
+
+  it('lists items with one query parameter per filter value', async () => {
+    const { api, calls } = fakeKeeper({
+      'GET /domains/supply/proposals/prp_1/items': { items: [itemOut], next_cursor: null },
+    });
+    const page = await api.proposals.items('supply', 'prp_1', {
+      status: ['pending', 'accepted'],
+      kind: ['with_supplier'],
+      type: ['link'],
+      min_confidence: 0.5,
+      max_confidence: 1.01,
+      limit: 10,
+      cursor: 'x',
+    });
+    const search = calls[0]?.url.searchParams;
+    expect(search?.getAll('status')).toEqual(['pending', 'accepted']);
+    expect(search?.getAll('kind')).toEqual(['with_supplier']);
+    expect(search?.getAll('type')).toEqual(['link']);
+    expect(search?.get('min_confidence')).toBe('0.5');
+    expect(search?.get('max_confidence')).toBe('1.01');
+    expect(search?.get('limit')).toBe('10');
+    expect(page.items[0]).toMatchObject({
+      id: 'pit_1',
+      from: 'C-3025',
+      evidence: { start: 4, end: 20, quote: 'Kavvik' },
+      match: { status: 'ambiguous', candidates: [{ key: 'S-1025', title: 'Kavvik' }] },
+    });
+  });
+
+  it('posts decisions to items:decide and maps the materialized counts', async () => {
+    const decided = {
+      proposal_id: 'prp_1',
+      title: 'Extract',
+      checks: { extraction: { items: 1 } },
+      items: [{ ...itemOut, decision: 'accepted' }],
+      materialized: { revision: 'r1', changes: 2, applied: 1, skipped: {} },
+    };
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/proposals/prp_1/items:decide': decided,
+    });
+    const result = await api.proposals.decideItems('supply', 'prp_1', {
+      decisions: [{ item: 'pit_1', decision: 'accepted', edits: { to: 'S-1026' } }],
+      where: { type: ['link'], min_confidence: 0.5 },
+      decision: 'rejected',
+    });
+    expect(calls[0]?.body).toEqual({
+      decisions: [{ item: 'pit_1', decision: 'accepted', edits: { to: 'S-1026' } }],
+      where: { type: ['link'], min_confidence: 0.5 },
+      decision: 'rejected',
+    });
+    expect(result.materialized).toEqual(decided.materialized);
+    expect(result.items[0]?.decision).toBe('accepted');
+  });
+
+  it('keeps the 422 issues of a branch that rejects the accepted items', async () => {
+    const { api } = fakeKeeper({
+      'POST /domains/supply/proposals/prp_1/items:decide': problem(
+        422,
+        'validation-failed',
+        'No.',
+        {
+          issues: [
+            {
+              code: 'link.required',
+              message: 'C-3025 needs with_supplier',
+              path: ['items', 'pit_1'],
+            },
+          ],
+        },
+      ),
+    });
+    await expect(
+      api.proposals.decideItems('supply', 'prp_1', {
+        decisions: [{ item: 'pit_1', decision: 'accepted' }],
+      }),
+    ).rejects.toMatchObject({ status: 422, issues: [{ code: 'link.required' }] });
   });
 });

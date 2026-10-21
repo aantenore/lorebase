@@ -25,6 +25,34 @@ export interface AppConfig {
   schemaBranchPrefix: string;
   /** "Start from data" in the Modeler: upload caps, accepted suffixes and the review defaults. */
   inference: InferenceConfig;
+  /** Documents screen: upload caps, accepted suffixes and the extraction defaults. */
+  documents: DocumentsConfig;
+  /** Extraction item review in Review. */
+  extraction: ExtractionConfig;
+}
+
+export interface DocumentsConfig {
+  /** Documents per drop; the upload sends one request per document. */
+  maxFiles: number;
+  /** Bytes per document; Keeper's `keeper.documents.max_bytes`. */
+  maxFileBytes: number;
+  /** Lower-case file suffixes the upload accepts, with the dot; Keeper's `media_types`. */
+  fileSuffixes: string[];
+  /** Tiers preselected for an extraction (0 rules, 1 local models, 2 chat model). */
+  defaultTiers: number[];
+  /** Whether an upload queues an extraction unless the person turns it off. */
+  extractOnUpload: boolean;
+  /** Offer intake by URL; Keeper allows it only for hosts in `keeper.documents.url_hosts`. */
+  urlIntake: boolean;
+  /** How often the library asks again while an extraction job is queued or running. */
+  jobPollMs: number;
+}
+
+export interface ExtractionConfig {
+  /** Confidence (0 to 1) from which "Accept at or above" accepts the matching items. */
+  acceptThreshold: number;
+  /** Items loaded per page of the item list. */
+  itemsPageSize: number;
 }
 
 export interface InferenceConfig {
@@ -67,6 +95,14 @@ const NON_FUNCTIONAL_DEFAULTS = {
   inferMaxTotalBytes: 1_048_576,
   inferFileSuffixes: ['.csv', '.tsv', '.txt'],
   inferAcceptThreshold: 0.9,
+  // The document caps repeat the defaults of keeper.documents.
+  documentsMaxFiles: 20,
+  documentsMaxFileBytes: 20_971_520,
+  documentsFileSuffixes: ['.md', '.markdown', '.txt', '.pdf', '.docx'],
+  documentsTiers: [0, 1],
+  documentsJobPollMs: 3000,
+  extractionAcceptThreshold: 0.9,
+  extractionItemsPageSize: 200,
 } as const;
 
 function text(raw: RawEnv, key: string): string | undefined {
@@ -101,6 +137,23 @@ function fraction(raw: RawEnv, key: string, fallback: number): number {
     throw new ConfigError(`${key} must be a number between 0 and 1, got "${value}".`);
   }
   return parsed;
+}
+
+function flag(raw: RawEnv, key: string, fallback: boolean): boolean {
+  const value = text(raw, key);
+  if (value === undefined) return fallback;
+  if (value === 'true' || value === 'false') return value === 'true';
+  throw new ConfigError(`${key} must be "true" or "false", got "${value}".`);
+}
+
+function tiers(raw: RawEnv, key: string, fallback: readonly number[]): number[] {
+  const values = list(raw, key);
+  if (values === undefined) return [...fallback];
+  const parsed = values.map(Number);
+  if (parsed.length === 0 || !parsed.every((t) => t === 0 || t === 1 || t === 2)) {
+    throw new ConfigError(`${key} must list tiers among 0, 1 and 2, got "${values.join(',')}".`);
+  }
+  return [...new Set(parsed)].sort((a, b) => a - b);
 }
 
 function parseBaseUrl(value: string): string {
@@ -179,6 +232,44 @@ export function loadConfig(raw: RawEnv): AppConfig {
         NON_FUNCTIONAL_DEFAULTS.inferAcceptThreshold,
       ),
       postgresSources: list(raw, 'VITE_INFER_POSTGRES_SOURCES') ?? [],
+    },
+    documents: {
+      maxFiles: positiveInt(
+        raw,
+        'VITE_DOCUMENTS_MAX_FILES',
+        NON_FUNCTIONAL_DEFAULTS.documentsMaxFiles,
+      ),
+      maxFileBytes: positiveInt(
+        raw,
+        'VITE_DOCUMENTS_MAX_FILE_BYTES',
+        NON_FUNCTIONAL_DEFAULTS.documentsMaxFileBytes,
+      ),
+      fileSuffixes: (
+        list(raw, 'VITE_DOCUMENTS_FILE_SUFFIXES') ?? [
+          ...NON_FUNCTIONAL_DEFAULTS.documentsFileSuffixes,
+        ]
+      ).map((suffix) => suffix.toLowerCase()),
+      defaultTiers: tiers(raw, 'VITE_DOCUMENTS_TIERS', NON_FUNCTIONAL_DEFAULTS.documentsTiers),
+      extractOnUpload: flag(raw, 'VITE_DOCUMENTS_EXTRACT_ON_UPLOAD', true),
+      urlIntake: flag(raw, 'VITE_DOCUMENTS_URL_INTAKE', true),
+      jobPollMs: positiveInt(
+        raw,
+        'VITE_DOCUMENTS_JOB_POLL_MS',
+        NON_FUNCTIONAL_DEFAULTS.documentsJobPollMs,
+        0,
+      ),
+    },
+    extraction: {
+      acceptThreshold: fraction(
+        raw,
+        'VITE_EXTRACTION_ACCEPT_THRESHOLD',
+        NON_FUNCTIONAL_DEFAULTS.extractionAcceptThreshold,
+      ),
+      itemsPageSize: positiveInt(
+        raw,
+        'VITE_EXTRACTION_ITEMS_PAGE_SIZE',
+        NON_FUNCTIONAL_DEFAULTS.extractionItemsPageSize,
+      ),
     },
   };
 }
