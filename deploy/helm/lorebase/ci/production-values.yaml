@@ -1,5 +1,6 @@
 # Production profile: secrets come from a Secret you manage, pinned image, Ingress with TLS,
-# network policy, Herald and the web app, telemetry to a collector.
+# network policy with narrow egress, Herald and the web app, telemetry to a collector. The
+# address ranges below are placeholders (192.0.2.0/24 is a documentation range): replace them.
 image:
   tag: "0.1.0"
 secrets:
@@ -22,6 +23,9 @@ config:
       oidc:
         issuer: https://login.example.com/realms/lorebase
         audience: [lorebase]
+    openapi:
+      # Do not serve /api/v1/docs and /api/v1/openapi.json in production.
+      docs_enabled: false
 keeper:
   replicaCount: 3
   resources:
@@ -53,13 +57,18 @@ networkPolicy:
   enabled: true
   egress:
     enabled: true
-    rules:
-      - to: [{ipBlock: {cidr: 10.0.0.0/16}}]
-        ports: [{protocol: TCP, port: 5432}]
-      - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]
-        ports: [{protocol: TCP, port: 4317}]
-      - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
-        ports: [{protocol: TCP, port: 443}]
+    # The external Postgres.
+    database:
+      to: [{ipBlock: {cidr: 10.0.0.0/16}}]
+    # The OpenTelemetry Collector (OTLP/gRPC).
+    telemetry:
+      to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]
+      ports: [{protocol: TCP, port: 4317}]
+    extra:
+      # The OIDC issuer, for its discovery document and keys.
+      keeper:
+        - to: [{ipBlock: {cidr: 192.0.2.0/24}}]
+          ports: [{protocol: TCP, port: 443}]
 serviceMonitor:
   enabled: true
   labels:

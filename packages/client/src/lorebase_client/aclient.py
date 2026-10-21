@@ -46,6 +46,7 @@ class AsyncLorebaseClient:
         cache: bool | int = False,
         headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        trust_env: bool = True,
         env: Mapping[str, str] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -63,7 +64,9 @@ class AsyncLorebaseClient:
         )
         self._core = RequestCore(self.config)
         self._sleep = sleep
-        self._http = httpx.AsyncClient(timeout=self.config.timeout_s, transport=transport)
+        self._http = httpx.AsyncClient(
+            timeout=self.config.timeout_s, transport=transport, trust_env=trust_env
+        )
         self.domains = Domains(self)
         self.branches = Branches(self)
         self.tags = Tags(self)
@@ -776,9 +779,19 @@ class ApiKeys(_Resource):
         role: str | None = None,
         ttl_days: int | None = None,
         principal_id: str | None = None,
+        allowed_networks: Sequence[str] | None = None,
     ) -> m.ApiKeyCreated:
-        """Create a key; the secret is in `key` of the answer and is not shown again."""
-        body = m.CreateApiKey(name=name, role=role, ttl_days=ttl_days, principal_id=principal_id)
+        """Create a key; the secret is in `key` of the answer and is not shown again.
+
+        `allowed_networks` (CIDR) limits the client addresses the key works from.
+        """
+        body = m.CreateApiKey(
+            name=name,
+            role=role,
+            ttl_days=ttl_days,
+            principal_id=principal_id,
+            allowed_networks=list(allowed_networks) if allowed_networks else None,
+        )
         return await self._c.send(ep.create_api_key(domain, body))
 
     async def list(

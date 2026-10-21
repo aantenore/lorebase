@@ -643,9 +643,11 @@ ingress:
 
 # -- Network policy ----------------------------------------------------------------------------
 
+# On by default; it needs a CNI that enforces NetworkPolicy (without one the objects have no effect).
+# Ingress to every pod of the release is closed except Keeper, Herald and the web app (below) and
+# Ollama (from Scribe). With `egress.enabled` each workload may open only the connections it needs.
 networkPolicy:
-  # Restrict ingress traffic to the Lorebase pods (and egress when enabled below). Needs a CNI that enforces policies.
-  enabled: false
+  enabled: true
   # Who may reach the exposed pods (Keeper, Herald, web) besides the pods of this release:
   # a list of NetworkPolicyPeer. Default: the namespace of the ingress controller.
   ingressFrom:
@@ -653,16 +655,83 @@ networkPolicy:
         matchLabels:
           kubernetes.io/metadata.name: ingress-nginx
   egress:
-    # Also restrict egress. Allowed then: DNS, the pods of this release, and `rules`.
-    enabled: false
-    # Namespace and pod labels of the cluster DNS.
+    # Restrict egress per workload. Allowed then, and nothing else:
+    #   Keeper: DNS, Postgres, the OTLP collector, `extra.keeper`
+    #   Scribe: DNS, Postgres, the OTLP collector, the model endpoint, webhook receivers, `extra.scribe`
+    #   Herald: DNS, Keeper, `extra.herald`; web app: `extra.web` only (static files)
+    #   Ollama: DNS, `extra.ollama`; migration Job: DNS, Postgres; `helm test` pod: DNS, Keeper
+    enabled: true
+    # Namespace and pods of the cluster DNS (CoreDNS and kube-dns both carry k8s-app: kube-dns).
+    # NodeLocal DNSCache answers on a link-local address: add it to `rules` as an ipBlock.
     dnsNamespaceSelector:
       matchLabels:
         kubernetes.io/metadata.name: kube-system
-    # Further egress rules (list of NetworkPolicyEgressRule): Postgres, the OTLP collector,
-    # the OIDC provider, hosted model endpoints. Example, Postgres in a CIDR:
-    #   - to: [{ipBlock: {cidr: 10.0.0.0/16}}]
-    #     ports: [{protocol: TCP, port: 5432}]
+    # null: every pod of the namespace above.
+    dnsPodSelector:
+      matchLabels:
+        k8s-app: kube-dns
+    dnsPorts:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    # Postgres, from Keeper, Scribe and the migration Job.
+    database:
+      # Peers of an external Postgres (list of NetworkPolicyPeer): the ipBlock of its address
+      # range, or pod and namespace selectors. Ignored with `postgresql.enabled`: the pods of the
+      # in-cluster Cluster are used. Default: the private IPv4 ranges; narrow it to the database.
+      to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 5432
+    # OTLP collector, from Keeper and Scribe, when `telemetry.otlpEndpoint` is set. Default: the
+    # private IPv4 ranges; narrow it, for example to the collector namespace. Empty: no rule.
+    telemetry:
+      to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    # Model endpoint of Scribe. With `ollama.enabled` the Ollama pods are allowed on `ollama.port`
+    # without configuration. A hosted endpoint needs its address range here. Empty: none.
+    model:
+      to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Webhook receivers, from Scribe (webhook_delivery jobs). Targets are public addresses
+    # (webhooks.allow_private_targets is false by default), so list their ranges. Empty: none.
+    webhooks:
+      to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Further egress rules per workload (lists of NetworkPolicyEgressRule). Examples: the OIDC
+    # issuer (JWKS over HTTPS) and hosted embeddings for keeper, Source databases for scribe, a
+    # Keeper outside the cluster for herald, the model registry of the Ollama pull for ollama.
+    extra:
+      keeper: []
+      scribe: []
+      herald: []
+      web: []
+      ollama: []
+      migrate: []
+    # Rules added to every pod of the release (list of NetworkPolicyEgressRule). Example:
+    #   - to: [{ipBlock: {cidr: 169.254.20.10/32}}]
+    #     ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
     rules: []
 
 # -- Monitoring --------------------------------------------------------------------------------

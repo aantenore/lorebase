@@ -22,7 +22,7 @@ import httpx
 import jwt
 from jwt import PyJWK
 
-from lorebase_keeper.auth.config import OidcSettings
+from lorebase_keeper.auth.config import OidcSettings, insecure_url_problem
 
 logger = logging.getLogger("lorebase.keeper.auth.oidc")
 
@@ -131,6 +131,10 @@ class JwksCache:
         uri = document.get("jwks_uri")
         if not isinstance(uri, str) or not uri:
             raise ValueError("discovery document has no jwks_uri")
+        problem = insecure_url_problem(uri, self._settings.allow_insecure)
+        if problem:
+            logger.warning("discovered jwks_uri %r refused: %s", uri, problem)
+            raise ValueError("discovered jwks_uri is not acceptable")
         return uri
 
 

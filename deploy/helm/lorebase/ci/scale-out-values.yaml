@@ -53,3 +53,8 @@ herald:
 web:
   autoscaling:
     enabled: true
+networkPolicy:
+  egress:
+    # The hosted model endpoint of Scribe (placeholder documentation range: replace it).
+    model:
+      to: [{ipBlock: {cidr: 198.51.100.0/24}}]

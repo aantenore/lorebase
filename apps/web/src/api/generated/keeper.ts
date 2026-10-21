@@ -1357,6 +1357,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Allowed Networks
+             * @description Client networks (CIDR) the key may be used from; empty: any address.
+             */
+            allowed_networks?: string[];
             /** Key */
             key: string;
             /**
@@ -1389,6 +1394,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Allowed Networks
+             * @description Client networks (CIDR) the key may be used from; empty: any address.
+             */
+            allowed_networks?: string[];
         };
         /**
          * ApprovalOut
@@ -2024,6 +2034,11 @@ export interface components {
              * @description Add the key to an existing service principal instead of creating one; its grants are left as they are. The principal must hold a grant in this Domain and must not be an installation administrator.
              */
             principal_id?: string | null;
+            /**
+             * Allowed Networks
+             * @description Client networks the key may be used from, e.g. 203.0.113.0/24 or 2001:db8::/48; a single address is a network of one. Requests from other addresses are refused as if the key were invalid. Empty or omitted: any address. At most `keeper.auth.api_keys.max_allowed_networks` entries.
+             */
+            allowed_networks?: string[] | null;
         };
         /**
          * CreateGrant

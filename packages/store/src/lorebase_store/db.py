@@ -37,6 +37,8 @@ def create_engine(
         "server_settings": {
             "application_name": database.application_name,
             "statement_timeout": str(timeout),
+            # `indexes.sql_literal` writes standard literals, where a backslash is plain text.
+            "standard_conforming_strings": "on",
         },
         # Statements are prepared once per connection and SQL text, then reused.
         "prepared_statement_cache_size": database.prepared_statement_cache_size,

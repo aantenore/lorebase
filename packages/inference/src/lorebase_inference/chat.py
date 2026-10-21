@@ -87,6 +87,7 @@ class EndpointChatModel:
             api_key=llm.api_key,
             timeout_s=llm.timeout_s,
             retry=llm.retry,
+            trust_env=llm.trust_env,
             max_concurrency=llm.max_concurrency,
             transport=transport,
             sleep=sleep,

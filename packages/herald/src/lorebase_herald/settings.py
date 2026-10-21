@@ -58,6 +58,12 @@ class KeeperConnection(SectionModel):
         default=5, gt=0, description="Longest pause before a retry; Retry-After is capped to it."
     )
     verify_tls: bool = Field(default=True, description="Verify Keeper's TLS certificate.")
+    trust_env: bool = Field(
+        default=False,
+        description="Honor HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and other httpx environment "
+        "settings) when reaching Keeper; false ignores them and connects directly. Proxies "
+        "are not used with verify_tls false.",
+    )
     user_agent: str = Field(default="lorebase-herald", min_length=1)
 
     @field_validator("base_url", "api_prefix")

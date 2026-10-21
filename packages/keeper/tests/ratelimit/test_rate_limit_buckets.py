@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 import pytest
 
 from lorebase_keeper.ratelimit.bucket import BucketSpec, BucketState, InMemoryRateStore, take
@@ -79,6 +81,49 @@ async def test_the_store_keeps_one_bucket_per_key_and_forgets_the_least_recently
     assert (await store.take("c", one)).allowed  # evicts "a", the least recently used
     assert len(store) == 2
     assert (await store.take("a", one)).allowed  # forgotten: full again
+
+
+async def test_peeking_at_a_bucket_takes_nothing() -> None:
+    store = InMemoryRateStore(max_buckets=10, clock=lambda: 0.0)
+    one = BucketSpec(capacity=1, refill_per_s=0.001)
+    for _ in range(3):
+        assert (await store.peek("a", one)).allowed
+    assert (await store.take("a", one)).allowed
+    refused = await store.peek("a", one)
+    assert not refused.allowed
+    assert refused.retry_after_s >= 1
+
+
+def test_auth_failure_buckets_have_defaults() -> None:
+    settings = RateLimitSettings()
+    assert (settings.auth_failures.requests_per_minute, settings.auth_failures.burst) == (30, 30)
+    assert settings.auth_failures.ipv6_prefix_length == 64
+
+
+def test_auth_failure_keys_are_the_address_and_the_key_prefix() -> None:
+    found = limiter(auth_failures={"ipv6_prefix_length": 48})
+    assert found.failure_keys(ipaddress.ip_address("192.0.2.1"), "abcdefghij") == (
+        "auth_failures|addr:192.0.2.1",
+        "auth_failures|prefix:abcdefghij",
+    )
+    assert found.failure_keys(ipaddress.ip_address("2001:db8:1:2::9"), None) == (
+        "auth_failures|addr:2001:db8:1::/48",
+    )
+    assert found.failure_keys(None, None) == ()
+
+
+async def test_failures_are_refused_when_any_bucket_is_empty() -> None:
+    found = limiter(auth_failures={"requests_per_minute": 0.001, "burst": 2})
+    both = found.failure_keys(ipaddress.ip_address("192.0.2.1"), "abcdefghij")
+    other_address = found.failure_keys(ipaddress.ip_address("192.0.2.2"), "abcdefghij")
+    assert await found.failures_exhausted(both) is None
+    await found.record_failure(both)
+    await found.record_failure(both)
+    refused = await found.failures_exhausted(both)
+    assert refused is not None
+    assert refused.retry_after_s >= 1
+    assert await found.failures_exhausted(other_address) is not None  # the prefix is spent
+    assert await found.failures_exhausted(other_address[:1]) is None
 
 
 def limiter(**overrides: object) -> RateLimiter:

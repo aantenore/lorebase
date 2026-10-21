@@ -104,6 +104,7 @@ async def issue_api_key(
     *,
     scopes: Sequence[str] = (),
     expires_at: datetime | None = None,
+    allowed_networks: Sequence[str] = (),
 ) -> tuple[str, ApiKeyRecord]:
     """Store a new key for `principal_id`; returns the secret token (shown once) and the row.
 
@@ -118,6 +119,7 @@ async def issue_api_key(
                 key_hash=generated.key_hash,
                 scopes=scopes,
                 expires_at=expires_at,
+                allowed_networks=allowed_networks,
             )
         except PrefixTakenError:
             continue

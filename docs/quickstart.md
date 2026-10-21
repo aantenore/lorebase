@@ -83,15 +83,17 @@ need Docker.
 cp .env.example .env
 ```
 
-Edit `.env` and set `POSTGRES_PASSWORD` (URL-safe characters only; it is embedded in the
-connection string). The other values have working defaults. Then:
+Edit `.env` and set `POSTGRES_PASSWORD` and `LOREBASE_APP_PASSWORD` (URL-safe characters
+only, for example `openssl rand -hex 24`; they are embedded in the connection strings). The
+other values have working defaults. Then:
 
 ```bash
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postgres migrate keeper
 ```
 
 The first run builds the backend image, which takes a few minutes. Compose starts Postgres 16,
-runs the Alembic migrations once (`migrate` exits when done) and starts Keeper on
+creates the application role Keeper connects as (`db-roles`), runs the Alembic migrations once
+(`migrate` exits when done) and starts Keeper on
 `127.0.0.1:8080`. Check it:
 
 ```bash
@@ -130,6 +132,8 @@ lifetime (`keeper.auth.api_keys.default_ttl_days`), writes an `apikey.bootstrap`
 log, and prints the key once on standard output (messages go to standard error). It refuses when
 an installation administrator already holds a usable key: issue further keys with that one, or
 pass `--force` to add another (existing keys stay valid; revoke them over the API).
+It connects as the owner role of `database.maintenance_dsn` when that is set (compose sets it), else
+with `database.dsn`.
 `--principal` picks another entry of `installation_admins`. The administrator creates a Domain and
 holds `admin` in it; `python -m lorebase_keeper principal create ID` adds a service principal with a
 chosen id, for a schema that names it in Operation `permissions`.

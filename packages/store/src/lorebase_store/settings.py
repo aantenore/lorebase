@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from lorebase_core.expr import ExprLimits
 from lorebase_core.validate import SchemaRules
@@ -78,9 +78,10 @@ class DatabaseSettings(SectionModel):
         default=None,
         min_length=1,
         description="Database role the services connect as (subject to row-level security). "
-        "Read by migrations only: revision 0005 grants it EXECUTE on the security definer "
-        "read functions, which are revoked from PUBLIC. Empty grants nothing (the owner role "
-        "can still call them).",
+        "Read by migrations only: revisions 0005 and 0008 grant it EXECUTE on the security "
+        "definer read functions, which are revoked from PUBLIC, and 0008 refuses to run while "
+        "it may create objects in the schema of the tables or of pg_trgm. Empty grants nothing "
+        "(the owner role can still call them).",
     )
     read_dsn: tuple[SecretValue, ...] = Field(
         default=(),
@@ -291,6 +292,26 @@ class BundleSettings(SectionModel):
         default=True,
         description="Verify every rebuilt branch against its tree after an import.",
     )
+    max_member_bytes: int = Field(
+        default=17_179_869_184,
+        ge=1,
+        description="Largest file of a bundle being imported, counted as read (after gzip).",
+    )
+    max_total_bytes: int = Field(
+        default=68_719_476_736,
+        ge=1,
+        description="Largest sum of the file sizes of a bundle being imported.",
+    )
+    max_entries: int = Field(
+        default=100_000,
+        ge=1,
+        description="Most files and directories a bundle being imported may hold.",
+    )
+    max_line_bytes: int = Field(
+        default=67_108_864,
+        ge=1,
+        description="Longest .jsonl record, and largest .json file, read into memory on import.",
+    )
 
 
 class CsvProfilingSettings(SectionModel):
@@ -360,6 +381,46 @@ class IndexSettings(SectionModel):
     )
 
 
+class DefinerCeilingSettings(SectionModel):
+    """Largest count arguments the security definer read functions accept.
+
+    Read when revision 0008 runs and written into the functions, which refuse NULL and values
+    outside 1..ceiling; changing them later has no effect. Each is at least the matching cap of
+    `store.reads` or `store.traverse` (checked when the settings load).
+    """
+
+    limit: int = Field(
+        default=10000,
+        ge=1,
+        description="Rows returned by lb_search, lb_links_in and lb_query_by_attribute; at "
+        "least reads.max_page_rows and reads.max_search_rows.",
+    )
+    candidates: int = Field(
+        default=100000,
+        ge=1,
+        description="Candidates ranked by lb_search; at least reads.search_candidates.",
+    )
+    depth: int = Field(
+        default=10, ge=1, description="Hops of lb_neighborhood; at least traverse.max_depth."
+    )
+    fanout: int = Field(
+        default=10000,
+        ge=1,
+        description="Links per Record and hop of lb_neighborhood; at least traverse.max_fanout.",
+    )
+    max_steps: int = Field(
+        default=1000000,
+        ge=1,
+        description="Steps (Links walked plus seeds) of lb_neighborhood; at least "
+        "traverse.max_links plus traverse.max_seeds.",
+    )
+    max_nodes: int = Field(
+        default=100000,
+        ge=1,
+        description="Records returned by lb_neighborhood; at least traverse.max_nodes.",
+    )
+
+
 class ReadSettings(SectionModel):
     """Read primitives on materialized heads (`lorebase_store.reads`)."""
 
@@ -390,6 +451,7 @@ class ReadSettings(SectionModel):
         "the security definer functions of revision 0005, whose index plans survive row-level "
         "security; false runs the same statements as plain SQL.",
     )
+    definer_ceilings: DefinerCeilingSettings = Field(default_factory=DefinerCeilingSettings)
 
 
 class TraverseSettings(SectionModel):
@@ -427,6 +489,27 @@ class StoreSettings(SectionModel):
     indexes: IndexSettings = Field(default_factory=IndexSettings)
     reads: ReadSettings = Field(default_factory=ReadSettings)
     traverse: TraverseSettings = Field(default_factory=TraverseSettings)
+
+    @model_validator(mode="after")
+    def _caps_within_definer_ceilings(self) -> StoreSettings:
+        """The read primitives never pass the definer functions a count above its ceiling."""
+        if not self.reads.use_definer_functions:
+            return self
+        ceilings, reads, walk = self.reads.definer_ceilings, self.reads, self.traverse
+        for name, cap, ceiling in (
+            ("reads.max_page_rows", reads.max_page_rows, ceilings.limit),
+            ("reads.max_search_rows", reads.max_search_rows, ceilings.limit),
+            ("reads.search_candidates", reads.search_candidates, ceilings.candidates),
+            ("traverse.max_depth", walk.max_depth, ceilings.depth),
+            ("traverse.max_fanout", walk.max_fanout, ceilings.fanout),
+            ("traverse.max_links + max_seeds", walk.max_links + walk.max_seeds, ceilings.max_steps),
+            ("traverse.max_nodes", walk.max_nodes, ceilings.max_nodes),
+        ):
+            if cap > ceiling:
+                raise ValueError(
+                    f"{name} ({cap}) exceeds its ceiling in reads.definer_ceilings ({ceiling})"
+                )
+        return self
 
 
 class SchemaSettings(SectionModel):

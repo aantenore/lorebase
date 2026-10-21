@@ -86,3 +86,17 @@ class ScriptedEndpoint:
 @pytest.fixture
 def scripted() -> type[ScriptedEndpoint]:
     return ScriptedEndpoint
+
+
+@pytest.fixture
+def client_options(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Keyword arguments of every `httpx.AsyncClient` built while the test runs."""
+    built: list[dict[str, Any]] = []
+    real = httpx.AsyncClient
+
+    def recording(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        built.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording)
+    return built

@@ -169,3 +169,28 @@ async def test_bootstrap_issues_one_installation_admin_key(app_database_url: str
         )
     assert whoami.status_code == 200
     assert (whoami.json()["id"], whoami.json()["installation_admin"]) == ("svc_root", True)
+
+
+async def test_key_networks_are_stored_and_enforced(
+    database_url: str, app_database_url: str
+) -> None:
+    admin = {"Authorization": f"Bearer {await seed(database_url)}"}
+    async with running(app_database_url) as http:  # requests come from 127.0.0.1
+        local = await http.post(
+            f"{BASE}/api-keys",
+            json={"name": "local bot", "allowed_networks": ["127.0.0.1/8", "::1"]},
+            headers=admin,
+        )
+        remote = await http.post(
+            f"{BASE}/api-keys",
+            json={"name": "remote bot", "allowed_networks": ["203.0.113.0/24"]},
+            headers=admin,
+        )
+        assert local.json()["allowed_networks"] == ["127.0.0.0/8", "::1/128"]
+        listed = (await http.get(f"{BASE}/api-keys", headers=admin)).json()["items"]
+        networks = {k["id"]: k["allowed_networks"] for k in listed}
+        assert networks[remote.json()["id"]] == ["203.0.113.0/24"]
+        whoami = "/api/v1/auth/whoami"
+        for created, status in ((local, 200), (remote, 401)):
+            bearer = {"Authorization": f"Bearer {created.json()['key']}"}
+            assert (await http.get(whoami, headers=bearer)).status_code == status

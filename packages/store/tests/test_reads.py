@@ -463,8 +463,9 @@ RIVAL = "rival"
 async def test_read_functions_read_only_the_domain_they_are_given(
     engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime
 ) -> None:
-    """The functions pin the Domain argument in every predicate and never read the
-    transaction's RLS scope; EXECUTE is revoked from PUBLIC."""
+    """The functions pin the Domain argument in every predicate, even when the transaction
+    is scoped to more Domains, and refuse a Domain outside the scope; EXECUTE is revoked from
+    PUBLIC."""
     async with sessions() as session:
         rival = Domain(id=RIVAL, display_name="Rival", description="Another Domain.")
         await create_domain(session, rival, author=AUTHOR, runtime=runtime, clock=Clock())
@@ -484,6 +485,14 @@ async def test_read_functions_read_only_the_domain_they_are_given(
     ):
         await session.execute(text(f"SET LOCAL ROLE {role}"))
         await scope_to_domain(session, RIVAL)
+        # Plain SQL stays inside the transaction's RLS scope; the functions refuse to leave it.
+        assert (
+            await search_records(session, DOMAIN, "main", "bearing", limit=10, runtime=plain) == []
+        )
+        with pytest.raises(DBAPIError, match="not in the transaction scope"):
+            async with session.begin_nested():
+                await search_records(session, DOMAIN, "main", "bearing", limit=5, runtime=definer)
+        await scope_to_domain(session, DOMAIN)
         found = await head_schema(session, RIVAL, "main", runtime=runtime)
         assert found is not None
         schema = found.schema
@@ -514,7 +523,3 @@ async def test_read_functions_read_only_the_domain_they_are_given(
         titles += [n.record.title for n in hood.records]
         assert titles
         assert not any((title or "").startswith("Rival") for title in titles)
-        # Plain SQL stays inside the transaction's RLS scope.
-        assert (
-            await search_records(session, DOMAIN, "main", "bearing", limit=10, runtime=plain) == []
-        )

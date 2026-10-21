@@ -45,6 +45,7 @@ class EndpointEmbeddingModel:
             api_key=embeddings.api_key,
             timeout_s=embeddings.timeout_s,
             retry=embeddings.retry,
+            trust_env=embeddings.trust_env,
             max_concurrency=max_concurrency,
             transport=transport,
             sleep=sleep,

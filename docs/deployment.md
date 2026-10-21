@@ -28,6 +28,11 @@ flowchart LR
 Everything that matters is in Postgres: a Keeper holds no state it cannot rebuild, so replicas
 are added, removed and restarted freely behind any load balancer, without session affinity.
 
+Keeper takes the client address from the socket peer and ignores forwarding headers unless the
+peer is listed in `keeper.trusted_proxies` (the server's own proxy header handling is off).
+Behind a proxy or load balancer, list its networks there so that API key allowlists see the real
+client (`docs/operations.md`); list only addresses that clients cannot reach Keeper from directly.
+
 ## What scales where
 
 | Part | How it scales | Why it stays correct |
@@ -79,15 +84,45 @@ only when `prefer_replica` is on, fallback is off and no replica is usable). Met
 `lorebase.db.reads{source,reason}` (where each read went and why),
 `lorebase.db.replica.lag` (ms) and `lorebase.db.replica.up` per replica.
 
+## Database roles
+
+Row-level security (design 13.3) is the second line of defence behind Keeper's authorization,
+and Postgres skips it for superusers and roles with `BYPASSRLS`. The services therefore never
+connect as the role that owns the tables.
+
+| Role | Used by | Rights |
+|------|---------|--------|
+| Owner (compose: `POSTGRES_USER`, a superuser of the stack's own Postgres) | `migrate` (`alembic upgrade head`), `database.maintenance_dsn` (index jobs run by Scribe, `python -m lorebase_keeper bootstrap` and `principal create`) | Owns the schema, tables and the security definer read functions |
+| Application (compose: `LOREBASE_APP_USER`, default `lorebase_app`) | Keeper and Scribe (`database.dsn`), read replicas (`database.read_dsn`) | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`; `SELECT, INSERT, UPDATE, DELETE` on the tables, `USAGE, SELECT` on the sequences, `CONNECT, TEMPORARY` on the database, `EXECUTE` on the read functions; no `CREATE` anywhere |
+
+On compose, the one-shot `db-roles` (`deploy/compose/postgres/app-role.sh`) runs before the
+migrations on every `up`: it creates or updates the application role with the password of
+`LOREBASE_APP_PASSWORD`, revokes `CREATE` on `public` from `PUBLIC`, grants the rights above
+on the existing tables and, through default privileges of the owner, on every table later
+migrations create, and grants the read functions when an earlier migration already created
+them. It is idempotent, so a volume created before the role existed is converted on the next
+`up`. `migrate` runs as the owner with `database.application_role` set to the application role,
+so revisions `0005` and `0008` grant it `EXECUTE` on the read functions. Index DDL needs the owner, so
+`LOREBASE_DB_MAINTENANCE_DSN` defaults to it.
+
+Elsewhere, create the same two roles before the first migration: an owner (not necessarily a
+superuser; it needs `CREATE` on the schema and the extensions `vector` and `pg_trgm`, see
+[store schema notes](store-schema-notes.md)) and an application role with the grants above,
+then set `database.application_role` for the migration. The Helm chart runs the migration Job
+and the services with the one DSN of its secret ([kubernetes.md](kubernetes.md)): give that role
+neither `SUPERUSER` nor `BYPASSRLS` (the tables force row-level security on their owner too).
+Check the role a service uses with
+`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`: both must be false.
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot
 `replica-prep` and an unprivileged nginx (`proxy`) in front of the Keepers.
 
 ```bash
-cp .env.example .env      # set POSTGRES_PASSWORD and REPLICATION_PASSWORD
-# route reads to the replica: uncomment/set in .env
-#   LOREBASE_DB_READ_DSN=postgresql+asyncpg://lorebase:<password>@postgres-replica:5432/lorebase
+cp .env.example .env      # set POSTGRES_PASSWORD, LOREBASE_APP_PASSWORD and REPLICATION_PASSWORD
+# route reads to the replica as the application role: uncomment/set in .env
+#   LOREBASE_DB_READ_DSN=postgresql+asyncpg://lorebase_app:<password>@postgres-replica:5432/lorebase
 #   KEEPER_PREFER_REPLICA=true
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml --profile scale-out up -d
 curl http://127.0.0.1:8088/readyz        # through the proxy; PROXY_HOST_PORT

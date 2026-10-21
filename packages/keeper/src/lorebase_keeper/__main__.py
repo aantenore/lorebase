@@ -6,6 +6,9 @@ python -m lorebase_keeper bootstrap [--principal ID] [--name NAME] [--force]
     Create the first installation administrator key and print it once (see bootstrap.py).
 python -m lorebase_keeper principal create ID [--name NAME]
     Add a service principal with a chosen id; nothing happens when it exists.
+
+Both installation commands connect with `database.maintenance_dsn` when it is set, else with
+`database.dsn`.
 """
 
 from __future__ import annotations
@@ -108,6 +111,8 @@ def serve() -> None:
             log_config=None,
             access_log=False,
             server_header=False,
+            # The client address comes from `keeper.trusted_proxies` (client_address.py) only.
+            proxy_headers=False,
         )
     finally:
         telemetry.shutdown()
@@ -124,7 +129,14 @@ def _run_admin(command: Callable[[Settings], Coroutine[Any, Any, None]]) -> None
 
 
 def _store(settings: Settings) -> tuple[SqlAuthStore, Callable[[], Awaitable[None]]]:
-    engine = create_engine(settings.section("database", DatabaseSettings), pooled=False)
+    """Auth store of the installation commands: the owner role of `database.maintenance_dsn`
+    when it is set (the services may connect as a role subject to row-level security), else
+    `database.dsn`."""
+    database = settings.section("database", DatabaseSettings)
+    owner = database.maintenance_dsn
+    engine = create_engine(
+        database, url=None if owner is None else owner.get_secret_value(), pooled=False
+    )
     return SqlAuthStore(async_sessionmaker(engine, expire_on_commit=False)), engine.dispose
 
 

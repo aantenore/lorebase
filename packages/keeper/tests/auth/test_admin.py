@@ -120,6 +120,65 @@ async def test_key_lifetime_follows_the_request_and_the_limits(
     assert long.json()["errors"][0]["pointer"] == "/body/ttl_days"
 
 
+async def test_create_key_with_allowed_networks_normalizes_and_lists_them(
+    http: httpx.AsyncClient, store: Any, admin: dict[str, str]
+) -> None:
+    plain = (await http.post(f"{BASE}/api-keys", json={"name": "open"}, headers=admin)).json()
+    assert plain["allowed_networks"] == []
+    response = await http.post(
+        f"{BASE}/api-keys",
+        json={
+            "name": "bot",
+            "allowed_networks": ["203.0.113.9/24", "2001:DB8::/48", "198.51.100.7"],
+        },
+        headers=admin,
+    )
+    body = response.json()
+    expected = ["203.0.113.0/24", "2001:db8::/48", "198.51.100.7/32"]
+    assert response.status_code == 201
+    assert body["allowed_networks"] == expected
+    assert store.key_rows[body["id"]].allowed_networks == tuple(expected)
+    page = (await http.get(f"{BASE}/api-keys", headers=admin)).json()
+    listed = next(k for k in page["items"] if k["id"] == body["id"])
+    assert listed["allowed_networks"] == expected
+    unrestricted = next(k for k in page["items"] if k["id"] == plain["id"])
+    assert unrestricted["allowed_networks"] == []
+    entry = next(a for a in store.audit_rows if a.target == body["id"])
+    assert entry.details["allowed_networks"] == expected
+
+
+@pytest.mark.parametrize(
+    "networks", [["not-a-network"], ["10.0.0.0/33"], ["203.0.113.0/24", "300.1.1.1"]]
+)
+async def test_create_key_refuses_invalid_networks(
+    http: httpx.AsyncClient, store: Any, admin: dict[str, str], networks: list[str]
+) -> None:
+    keys_before = len(store.key_rows)
+    response = await http.post(
+        f"{BASE}/api-keys", json={"name": "bot", "allowed_networks": networks}, headers=admin
+    )
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["pointer"].startswith("/body/allowed_networks")
+    assert len(store.key_rows) == keys_before
+
+
+async def test_create_key_refuses_more_networks_than_configured(
+    auth_app: Callable[..., FastAPI], client_for: ClientFor, admin: dict[str, str]
+) -> None:
+    app = auth_app({**API_KEYS, "api_keys": {"pepper": PEPPER, "max_allowed_networks": 2}})
+    networks = ["192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"]
+    async with client_for(app) as http:
+        refused = await http.post(
+            f"{BASE}/api-keys", json={"name": "a", "allowed_networks": networks}, headers=admin
+        )
+        accepted = await http.post(
+            f"{BASE}/api-keys", json={"name": "b", "allowed_networks": networks[:2]}, headers=admin
+        )
+    assert refused.status_code == 422
+    assert refused.json()["errors"][0]["pointer"] == "/body/allowed_networks"
+    assert accepted.status_code == 201
+
+
 async def test_keys_can_be_created_without_expiry_when_configured(
     auth_app: Callable[..., FastAPI], client_for: ClientFor, admin: dict[str, str]
 ) -> None:

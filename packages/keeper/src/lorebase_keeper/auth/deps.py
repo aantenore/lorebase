@@ -24,6 +24,7 @@ from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import NO_CONTEXT, AccessContext, Authorizer
 from lorebase_keeper.auth.runtime import AuthRuntime
+from lorebase_keeper.client_address import client_address
 from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, UNAVAILABLE, ProblemError
 
 _PRINCIPAL_KEY = "principal"
@@ -53,7 +54,7 @@ async def current_principal(
     state = request.scope.setdefault("state", {})
     principal = state.get(_PRINCIPAL_KEY)
     if principal is None:
-        principal = await auth.authenticator.authenticate(request.headers)
+        principal = await auth.authenticator.authenticate(request.headers, client_address(request))
         state[_PRINCIPAL_KEY] = principal
     annotate(request, actor=principal.id)
     return cast(Principal, principal)

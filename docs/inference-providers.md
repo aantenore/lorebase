@@ -120,11 +120,16 @@ provider library.
 
 ```bash
 # .env
-LITELLM_MASTER_KEY=<strong secret>
+LITELLM_MASTER_KEY=sk-<48 hex characters>     # printf 'sk-%s\n' "$(openssl rand -hex 24)"
 LITELLM_UPSTREAM_MODEL=<provider>/<model>      # LiteLLM notation
 LITELLM_UPSTREAM_API_KEY=<provider key>
 docker compose --profile litellm up -d litellm
 ```
+
+The proxy does not start while `LITELLM_MASTER_KEY` is empty, still `change-me` or shorter
+than 16 characters: the one-shot `litellm-secrets` exits with the reason
+(`docker compose logs litellm-secrets`). Grafana of the `observability` profile has the same
+guard for `GRAFANA_ADMIN_PASSWORD` (`grafana-secrets`).
 
 ```yaml
 inference:
@@ -190,7 +195,17 @@ time.
 ### Logging
 
 Operational events (retries, mode step-downs) are logged. Prompts, documents, answers and keys
-are never logged; error messages carry the status and the server's error text only.
+are never logged; error messages carry the status and an excerpt of the server's error text
+only. The excerpt is scrubbed first: the configured key, `Bearer` values, `sk-...`-style keys
+and long base64 or hex runs become `[redacted]`. For 401 and 403 no server text is kept, since
+providers often echo the key there.
+
+### Proxies
+
+Proxy variables are ignored by default: each endpoint connects directly. Set `trust_env: true`
+on `inference.llm` (or a task), or on `inference.embeddings`, to have the client honor
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (and the other `httpx` environment settings, such as
+`SSL_CERT_FILE`).
 
 ## Tier 1: GLiNER and GLiREL
 

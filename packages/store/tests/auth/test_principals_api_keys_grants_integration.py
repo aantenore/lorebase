@@ -124,6 +124,32 @@ async def test_api_key_lookup_by_prefix_and_usability(auth_store: SqlAuthStore) 
         assert await unit.api_keys.get(key.id) == key
 
 
+async def test_api_key_allowed_networks_round_trip(
+    auth_store: SqlAuthStore, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    async with auth_store.unit() as unit:
+        service = await unit.principals.add(PrincipalType.SERVICE, "bot")
+        limited = await unit.api_keys.add(
+            principal_id=service.id,
+            prefix="netted",
+            key_hash=bytes(32),
+            allowed_networks=["203.0.113.0/24", "2001:db8::/48", "198.51.100.7/32"],
+        )
+        open_key = await unit.api_keys.add(
+            principal_id=service.id, prefix="anywhere", key_hash=bytes(32)
+        )
+    assert limited.allowed_networks == ("203.0.113.0/24", "2001:db8::/48", "198.51.100.7/32")
+    assert open_key.allowed_networks == ()
+    async with auth_store.unit() as unit:
+        assert await unit.api_keys.get_by_prefix("netted") == limited
+        assert await unit.api_keys.get(open_key.id) == open_key
+    async with sessions() as session:
+        stored = await session.execute(
+            text("SELECT allowed_networks IS NULL FROM api_keys WHERE prefix = 'anywhere'")
+        )
+        assert stored.scalar_one() is True
+
+
 async def test_api_key_prefix_is_unique(auth_store: SqlAuthStore) -> None:
     async with auth_store.unit() as unit:
         service = await unit.principals.add(PrincipalType.SERVICE, "bot")

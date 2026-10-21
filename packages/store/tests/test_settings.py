@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
 from lorebase_platform.settings import CONFIG_ENV_VAR, ConfigError, load_settings
+from lorebase_store import db
 from lorebase_store.db import async_url, create_engine
 from lorebase_store.settings import (
     DEFAULT_DSN,
@@ -91,6 +93,25 @@ def test_invalid_values_fail_at_startup(
 
 
 @pytest.mark.parametrize(
+    ("key", "value", "name"),
+    [
+        ("LOREBASE__STORE__READS__MAX_PAGE_ROWS", "10001", "reads.max_page_rows"),
+        ("LOREBASE__STORE__READS__SEARCH_CANDIDATES", "100001", "reads.search_candidates"),
+        ("LOREBASE__STORE__TRAVERSE__MAX_LINKS", "999951", "traverse.max_links"),
+        ("LOREBASE__STORE__READS__DEFINER_CEILINGS__MAX_NODES", "199", "traverse.max_nodes"),
+    ],
+)
+def test_read_caps_may_not_exceed_the_definer_ceilings(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str, name: str
+) -> None:
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ConfigError, match=rf"{name}.*exceeds its ceiling"):
+        load_settings()
+    monkeypatch.setenv("LOREBASE__STORE__READS__USE_DEFINER_FUNCTIONS", "false")
+    load_settings()
+
+
+@pytest.mark.parametrize(
     "url",
     ["postgres://u@h/db", "postgresql://u@h/db", "postgresql+asyncpg://u@h/db"],
 )
@@ -111,6 +132,24 @@ def test_engine_uses_pool_settings() -> None:
         assert engine.url.drivername == "postgresql+asyncpg"
     finally:
         engine.sync_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},  # primary
+        {"url": "postgresql://replica.test/lorebase"},  # read replica
+        {"pooled": False, "statement_timeout_ms": 0},  # maintenance and batch jobs
+    ],
+)
+def test_every_engine_pins_standard_conforming_strings(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
+) -> None:
+    built: list[dict[str, Any]] = []
+    monkeypatch.setattr(db, "create_async_engine", lambda url, **kwargs: built.append(kwargs))
+    create_engine(DatabaseSettings(), **options)
+    [kwargs] = built
+    assert kwargs["connect_args"]["server_settings"]["standard_conforming_strings"] == "on"
 
 
 # Read replicas ------------------------------------------------------------------------------

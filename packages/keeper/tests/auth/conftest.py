@@ -110,10 +110,13 @@ class MemKeys:
         key_hash: bytes,
         scopes: Sequence[str] = (),
         expires_at: datetime | None = None,
+        allowed_networks: Sequence[str] = (),
     ) -> ApiKeyRecord:
         if any(k.prefix == prefix for k in self.s.key_rows.values()):
             raise PrefixTakenError(prefix)
-        return self.s.put_key(principal_id, prefix, key_hash, scopes, expires_at, None)
+        return self.s.put_key(
+            principal_id, prefix, key_hash, scopes, expires_at, None, allowed_networks
+        )
 
     async def get(self, key_id: str) -> ApiKeyRecord | None:
         return self.s.key_rows.get(key_id)
@@ -346,6 +349,7 @@ class MemoryStore:
         scopes: Sequence[str],
         expires_at: datetime | None,
         revoked_at: datetime | None,
+        allowed_networks: Sequence[str] = (),
     ) -> ApiKeyRecord:
         record = ApiKeyRecord(
             id=f"key_{len(self.key_rows) + 1}",
@@ -357,6 +361,7 @@ class MemoryStore:
             last_used_at=None,
             revoked_at=revoked_at,
             created_at=self.tick(),
+            allowed_networks=tuple(allowed_networks),
         )
         self.key_rows[record.id] = record
         return record
@@ -369,11 +374,18 @@ class MemoryStore:
         scopes: Sequence[str] = (),
         expires_at: datetime | None = None,
         revoked_at: datetime | None = None,
+        allowed_networks: Sequence[str] = (),
     ) -> tuple[str, ApiKeyRecord]:
         """Issue a key through `codec`; returns the token and the stored row."""
         generated = codec.generate()
         record = self.put_key(
-            principal_id, generated.prefix, generated.key_hash, scopes, expires_at, revoked_at
+            principal_id,
+            generated.prefix,
+            generated.key_hash,
+            scopes,
+            expires_at,
+            revoked_at,
+            allowed_networks,
         )
         return generated.token, record
 

@@ -1373,8 +1373,8 @@ One Lorebase installation serves one organization. Domains are the isolation bou
 
 ### 13.2 Authentication
 
-- **Users:** OIDC authorization code flow with PKCE against any compliant provider. Keeper acts as a backend-for-frontend: it holds tokens server-side and issues an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie to the web app; CSRF protection on state-changing requests. Group claims map to Lorebase groups.
-- **Agents and automation:** API keys bound to a service principal, with Domain scopes, roles, expiry and optional IP allowlist. Format `lbk_{prefix}_{secret}`; only an HMAC-SHA256 of the secret with a server-side pepper is stored. Keys are shown once.
+- **Users:** OIDC authorization code flow with PKCE against any compliant provider. Keeper acts as a backend-for-frontend: it holds tokens server-side and issues an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie to the web app; CSRF protection on state-changing requests. Group claims map to Lorebase groups. The issuer and the signing key URL (configured or discovered) must use `https`, except for loopback hosts or with `keeper.auth.oidc.allow_insecure`.
+- **Agents and automation:** API keys bound to a service principal, with Domain scopes, roles, expiry and an optional allowlist of client networks (`allowed_networks`, CIDR; a key used from another address is refused like an invalid one). The client address is the socket peer, or the `X-Forwarded-For` hop left of the configured `keeper.trusted_proxies` when the peer is one of them. Format `lbk_{prefix}_{secret}`; only an HMAC-SHA256 of the secret with a server-side pepper is stored. Keys are shown once.
 - **Bootstrap:** the first admin key is created by `python -m lorebase_keeper bootstrap` with access to the database; it refuses when an installation administrator already holds a usable key (unless `--force`); no default credentials exist.
 
 ### 13.3 Authorization enforcement
@@ -1406,6 +1406,7 @@ One Lorebase installation serves one organization. Domains are the isolation bou
 | Tampering with history | Content addressing, immutable Revisions, hash-chained audit log |
 | Supply chain | Pinned dependencies with lockfiles, dependency review in CI, SBOM per image, signed images, minimal base images, non-root containers |
 | Credential leakage | Hashed API keys, secret references, log redaction filters |
+| Credential guessing, load through bad credentials | 256-bit key secrets; failed authentications limited per client address and per key prefix, refused before any lookup |
 
 ---
 

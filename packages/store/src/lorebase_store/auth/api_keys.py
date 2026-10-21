@@ -37,6 +37,8 @@ class ApiKeyRecord:
     last_used_at: datetime | None
     revoked_at: datetime | None
     created_at: datetime
+    allowed_networks: tuple[str, ...] = ()
+    """Client networks (CIDR) the key may be used from; empty: any address."""
 
     def is_usable(self, now: datetime) -> bool:
         """Neither revoked nor expired at `now`."""
@@ -54,6 +56,7 @@ def _record(row: ApiKey) -> ApiKeyRecord:
         last_used_at=row.last_used_at,
         revoked_at=row.revoked_at,
         created_at=row.created_at,
+        allowed_networks=tuple(str(network) for network in row.allowed_networks or ()),
     )
 
 
@@ -71,8 +74,12 @@ class ApiKeyRepository:
         key_hash: bytes,
         scopes: Sequence[str] = (),
         expires_at: datetime | None = None,
+        allowed_networks: Sequence[str] = (),
     ) -> ApiKeyRecord:
-        """Insert a key; `PrefixTakenError` when the prefix is already in use."""
+        """Insert a key; `PrefixTakenError` when the prefix is already in use.
+
+        `allowed_networks` are CIDR strings; empty stores null (any address).
+        """
         row = ApiKey(
             id=new_id(ID_PREFIX),
             principal_id=principal_id,
@@ -80,6 +87,7 @@ class ApiKeyRepository:
             hash=key_hash,
             scopes=list(scopes),
             expires_at=expires_at,
+            allowed_networks=list(allowed_networks) or None,
         )
         try:
             async with self._session.begin_nested():

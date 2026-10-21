@@ -362,6 +362,10 @@ data: {"sequence":42,"type":"revision.committed","domain":"supply","branch":"mai
   to resume after it; without it the stream starts with the next commit.
 - A comment line is sent after `agents.feed.heartbeat_s` of silence; the server closes the
   stream after `agents.feed.max_connection_s`, and clients reconnect.
+- Every `agents.feed.reauthorize_interval_s` the stream checks the credential and the grants
+  again and closes when they no longer allow the read: a revoked key or an expired token ends it
+  within that interval, a withdrawn grant within that interval plus
+  `keeper.auth.authz.grants_cache_ttl_s`. The reconnection then answers `401` or `403`.
 - `keys` lists at most `agents.feed.changed_keys_max` changed Record keys (`keys_truncated`).
 
 ### Polling fallback
