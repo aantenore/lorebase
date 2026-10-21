@@ -451,6 +451,15 @@ read:
     page:
       default_limit: 100
       max_limit: 1000
+  health:                        # GET .../health and .../kinds/{kind}/health (docs/agents.md)
+    max_records_validated: 5000  # Records of a Kind re-validated; larger Kinds are sampled
+    examples_per_issue: 3        # Record keys listed per kind of violation
+    max_issue_groups: 50         # kinds of violation listed per Kind
+    duplicates_max_records: 200000   # larger Kinds skip the duplicate check; 0 turns it off
+    max_duplicate_groups: 20     # duplicate groups listed per Attribute
+    duplicate_keys_per_group: 5
+    orphan_examples: 5           # orphan Links and Records with a gap listed per Relation
+    statement_timeout_ms: 15000  # for the scans, instead of read.statement_timeout_ms; 0 disables
 
 # Search (design 8.4). Keeper never computes embeddings: semantic and hybrid search take the
 # caller's query_vector. The text search configuration is store.materialize.text_search_config

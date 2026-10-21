@@ -861,6 +861,46 @@ class Explain(Model):
     proposals: list[dict[str, Any]]
 
 
+class HealthSummary(Model):
+    """Totals of a health report; `ok` is false when there are violations, orphan Links,
+    required-relation gaps or duplicates of unique Attributes."""
+
+    ok: bool
+    kinds: int
+    records: int
+    links: int
+    invalid_records: int
+    orphan_links: int
+    required_relation_gaps: int
+    duplicate_groups: int
+    stale_kinds: int
+    sampled_kinds: int
+
+
+class DomainHealth(Model):
+    """Health of a Domain at the head of a branch; Kind and Relation sections are plain data."""
+
+    revision: str
+    served_from: ServedFrom
+    domain: str
+    branch: str
+    summary: HealthSummary
+    kinds: list[dict[str, Any]]
+    relations: list[dict[str, Any]]
+
+
+class KindHealthReport(Model):
+    """Health of one Kind with the Relations it takes part in."""
+
+    revision: str
+    served_from: ServedFrom
+    domain: str
+    branch: str
+    summary: HealthSummary
+    health: dict[str, Any]
+    relations: list[dict[str, Any]]
+
+
 class RevisionEvent(Model):
     """A Revision committed on a branch."""
 
