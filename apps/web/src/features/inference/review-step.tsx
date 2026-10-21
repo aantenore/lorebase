@@ -1,0 +1,99 @@
+import { lazy, Suspense, useState } from 'react';
+import type { SchemaProposalDraft } from '@/api/inference-types';
+import type { Schema } from '@/api/types';
+import { useConfig } from '@/config/context';
+import { ChangeSetPanel } from '@/features/modeler/change-set-panel';
+import { useChangeCheck } from '@/features/modeler/use-change-check';
+import { Button } from '@/ui/button';
+import { Section } from '@/ui/layout';
+import { DraftProvider } from './draft-context';
+import { IssuesList } from './issues-list';
+import { ProposalToolbar } from './proposal-toolbar';
+import { ProposalTree } from './proposal-tree';
+import { useProposalDraft } from './use-proposal-draft';
+
+// CodeMirror loads when the preview first shows, as in the schema editor.
+const YamlEditor = lazy(() => import('@/features/modeler/yaml-editor'));
+
+const APPLY_LABELS = {
+  save: 'Apply as schema change',
+  propose: 'Apply as schema change and open a Proposal',
+};
+const MESSAGE = 'Add the schema inferred from data';
+
+export interface ReviewStepProps {
+  proposal: SchemaProposalDraft;
+  /** Schema of the current Branch, which the accepted elements are laid over. */
+  base: Schema;
+  onRestart: () => void;
+}
+
+/** Review of an inferred proposal: tree, bulk acceptance, YAML preview, issues and apply. */
+export function ReviewStep({ proposal, base, onRestart }: ReviewStepProps) {
+  const config = useConfig();
+  const [percent, setPercent] = useState(Math.round(config.inference.acceptThreshold * 100));
+  const draft = useProposalDraft(proposal, base);
+  const {
+    check,
+    remote,
+    blocked: checkBlocked,
+  } = useChangeCheck(draft.changes, draft.issues.length === 0);
+
+  const blocked = draft.issues.length > 0 ? 'Fix the schema problems first.' : checkBlocked;
+  const problems = [...draft.issues, ...remote];
+
+  return (
+    <DraftProvider value={{ draft, threshold: percent / 100 }}>
+      <div className="flex flex-col gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted">
+            Nothing is saved yet. Rename, change types, accept or drop; the YAML follows.
+          </p>
+          <Button onClick={onRestart}>Start over</Button>
+        </div>
+
+        <ProposalToolbar percent={percent} onPercent={setPercent} tables={proposal.tables} />
+
+        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <Section title="Proposed schema" className="mb-0 min-w-0">
+            <ProposalTree />
+          </Section>
+          <Section title="YAML preview" className="mb-0 min-w-0 xl:sticky xl:top-4">
+            <Suspense
+              fallback={
+                <p role="status" className="text-muted">
+                  Loading editor...
+                </p>
+              }
+            >
+              <YamlEditor
+                value={draft.yaml}
+                onChange={() => undefined}
+                label="Proposal YAML"
+                jump={null}
+                readOnly
+                className="h-[32rem]"
+              />
+            </Suspense>
+          </Section>
+        </div>
+
+        <IssuesList
+          issues={proposal.issues}
+          issueCount={proposal.issue_count}
+          validation={problems}
+        />
+
+        <ChangeSetPanel
+          base={base}
+          next={draft.next}
+          changes={draft.changes}
+          blocked={blocked}
+          check={{ pending: check.isFetching, result: check.data }}
+          defaultMessage={MESSAGE}
+          actionLabels={APPLY_LABELS}
+        />
+      </div>
+    </DraftProvider>
+  );
+}

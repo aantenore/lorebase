@@ -17,6 +17,10 @@ export interface YamlEditorProps {
   onChange: (text: string) => void;
   label: string;
   jump: Jump | null;
+  /** A preview: the text cannot be edited from the keyboard. */
+  readOnly?: boolean;
+  /** Height classes of the host; 24rem by default. */
+  className?: string;
 }
 
 /** Marks edits that come from the `value` prop, so they are not reported back as changes. */
@@ -48,7 +52,14 @@ const theme = EditorView.theme({
  * of truth: when it changes from outside (the form edited the document) the text is
  * replaced; typing reports the new text through `onChange`.
  */
-export default function YamlEditor({ value, onChange, label, jump }: YamlEditorProps) {
+export default function YamlEditor({
+  value,
+  onChange,
+  label,
+  jump,
+  readOnly = false,
+  className = 'h-96',
+}: YamlEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -71,6 +82,8 @@ export default function YamlEditor({ value, onChange, label, jump }: YamlEditorP
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           theme,
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
           EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true' }),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged) return;
@@ -107,5 +120,12 @@ export default function YamlEditor({ value, onChange, label, jump }: YamlEditorP
     editor.focus();
   }, [jump]);
 
-  return <div ref={host} role="group" aria-label={`${label} editor`} className="h-96 min-h-0" />;
+  return (
+    <div
+      ref={host}
+      role="group"
+      aria-label={`${label} editor`}
+      className={`${className} min-h-0`}
+    />
+  );
 }

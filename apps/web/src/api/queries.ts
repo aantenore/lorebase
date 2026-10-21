@@ -1,5 +1,7 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
+import type { PrincipalListParams } from './admin-types';
 import { useKeeperApi } from './provider';
+import type { SourceRunListParams } from './sources-types';
 import type {
   BranchName,
   DomainId,
@@ -63,6 +65,13 @@ export const keys = {
   proposalDiff: (domain: DomainId, id: string) => ['keeper', 'proposal-diff', domain, id] as const,
   conflicts: (domain: DomainId, id: string) => ['keeper', 'conflicts', domain, id] as const,
   revision: (domain: DomainId, id: RevisionId) => ['keeper', 'revision', domain, id] as const,
+  sourceRuns: (domain: DomainId, params: SourceRunListParams | undefined) =>
+    ['keeper', 'source-runs', domain, params ?? null] as const,
+  apiKeys: (domain: DomainId) => ['keeper', 'api-keys', domain] as const,
+  principals: (params: PrincipalListParams | undefined) =>
+    ['keeper', 'principals', params ?? null] as const,
+  grants: (domain: DomainId) => ['keeper', 'grants', domain] as const,
+  audit: (domain: DomainId) => ['keeper', 'audit', domain] as const,
 };
 
 // ------------------------------------------------------- Domain and Branch
@@ -255,5 +264,50 @@ export function useFirstRecordRefs(scope: QueryScope, kinds: string[]) {
       pending: results.some((r) => r.isPending),
       refs: results.flatMap((r) => r.data?.rows.map((row) => row.ref) ?? []),
     }),
+  });
+}
+
+// ------------------------------------------------------- Sources and Admin
+
+export function useSourceRuns(domain: DomainId, params?: SourceRunListParams) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.sourceRuns(domain, params),
+    queryFn: () => api.sources.runs(domain, params),
+    // Runs need a Domain-wide grant; a 403 or 404 does not change when asked again.
+    retry: false,
+  });
+}
+
+export function useApiKeys(domain: DomainId) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.apiKeys(domain),
+    queryFn: () => api.admin.apiKeys.list(domain),
+  });
+}
+
+export function usePrincipals(params?: PrincipalListParams) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.principals(params),
+    queryFn: () => api.admin.principals.list(params),
+  });
+}
+
+export function useGrants(domain: DomainId) {
+  const api = useKeeperApi();
+  return useQuery({ queryKey: keys.grants(domain), queryFn: () => api.admin.grants.list(domain) });
+}
+
+/** The audit log, newest first, one page more each time `fetchNextPage` is called. */
+export function useAuditLog(domain: DomainId, pageSize: number) {
+  const api = useKeeperApi();
+  return useInfiniteQuery({
+    queryKey: keys.audit(domain),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.admin.audit.list(domain, { limit: pageSize, cursor: pageParam }),
+    getNextPageParam: (last) => last.next_cursor,
   });
 }

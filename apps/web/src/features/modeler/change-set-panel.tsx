@@ -42,7 +42,14 @@ export interface ChangeSetPanelProps {
   blocked: string | null;
   /** Result of the dry run on the Branch, while there is one. */
   check: { pending: boolean; result: SchemaChangeResult | undefined };
+  /** Revision message and Proposal title used when the reviewer writes none. */
+  defaultMessage?: string;
+  /** Text of the two actions; the Modeler editor uses the defaults. */
+  actionLabels?: { save: string; propose: string };
 }
+
+const DEFAULT_MESSAGE = 'Change the schema';
+const DEFAULT_LABELS = { save: 'Save change set', propose: 'Open Proposal' };
 
 function Migrations({ result }: { result: SchemaChangeResult }) {
   if (result.migrations.length === 0) {
@@ -82,7 +89,15 @@ function slugOf(message: string): string {
  * says they imply, and how to keep them. An unprotected Branch takes the change set as a
  * schema Revision; a protected one needs a new Branch and a Proposal.
  */
-export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSetPanelProps) {
+export function ChangeSetPanel({
+  base,
+  next,
+  changes,
+  blocked,
+  check,
+  defaultMessage = DEFAULT_MESSAGE,
+  actionLabels = DEFAULT_LABELS,
+}: ChangeSetPanelProps) {
   const api = useKeeperApi();
   const scope = useScope();
   const config = useConfig();
@@ -93,7 +108,7 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
   const [branchName, setBranchName] = useState('');
   const protectedBranch = scope.branchInfo.protected;
   const names = new Map([...buildNames(base), ...buildNames(next)]);
-  const revisionMessage = message.trim() === '' ? 'Change the schema' : message.trim();
+  const revisionMessage = message.trim() === '' ? defaultMessage : message.trim();
   const proposedBranch =
     branchName.trim() === ''
       ? `${config.schemaBranchPrefix}${slugOf(revisionMessage)}`
@@ -175,7 +190,7 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
           <Input
             label="Revision message"
             value={message}
-            placeholder="Change the schema"
+            placeholder={defaultMessage}
             onChange={(event) => {
               setMessage(event.target.value);
             }}
@@ -205,7 +220,7 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
                   propose.mutate();
                 }}
               >
-                Open Proposal
+                {actionLabels.propose}
               </Button>
             ) : (
               <Button
@@ -215,7 +230,7 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
                   save.mutate();
                 }}
               >
-                Save change set
+                {actionLabels.save}
               </Button>
             )}
           </div>

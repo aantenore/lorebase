@@ -65,6 +65,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 - [x] Source branches, merge policies and Lineage for syncs
 - [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
 - [x] Web app shell, Explorer, Canvas (graph and schema graph) and Review screens on the mock API
+- [x] Web app Modeler "Start from data" wizard over schema inference, a Sources screen (list, runs, YAML editor) and Admin basics (API keys, principals and grants, audit log) on the mock API; Source runs and Sync now use Keeper's Source routes in live mode
 - [ ] Web app verified against a live Keeper
 - [ ] Review: Proposal list and detail, schema and data diff and merge against live Proposals
 - [ ] Canvas rendering 5k nodes and 10k edges smoothly, with a worker layout

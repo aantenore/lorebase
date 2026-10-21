@@ -1,12 +1,15 @@
 import type { KeeperApi } from './client';
 import { ApiError } from './errors';
+import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
   MergeAttempt,
   MergeOutcome,
+  Page,
   PageParams,
   ProblemDetails,
   ReadScope,
   Resolution,
+  Schema,
 } from './types';
 
 /** Path prefix of the Keeper REST API (design 11.1). Protocol constant, not configuration. */
@@ -37,6 +40,58 @@ function resolutionBody(resolution: Resolution) {
     ...(value === undefined ? {} : { value }),
     ...(values === undefined ? {} : { values }),
   };
+}
+
+/** The multipart body of `schema:infer`: one `files` part per file, `options` as JSON text. */
+function inferForm(files: File[], options: Record<string, unknown> | undefined): FormData {
+  const form = new FormData();
+  for (const file of files) form.append('files', file, file.name);
+  if (options !== undefined) form.append('options', JSON.stringify(options));
+  return form;
+}
+
+/** A Source run as Keeper returns it (`SourceRunOut`); `stats` is the Scribe sync report. */
+interface KeeperSourceRun {
+  id: string;
+  source: string;
+  status: SourceRunStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  stats: {
+    branch?: string;
+    rows?: { read?: number };
+    counts?: { added?: number; changed?: number; removed?: number };
+  };
+  revision: string | null;
+  proposal_id: string | null;
+  error: { message?: string } | null;
+}
+
+/** Keeper names the Source by id; the screens use its api name. */
+function sourceRun(run: KeeperSourceRun, apiName: string): SourceRun {
+  const counts = run.stats.counts ?? {};
+  return {
+    id: run.id,
+    source: apiName,
+    status: run.status,
+    trigger: null,
+    started_at: run.started_at,
+    finished_at: run.finished_at,
+    rows_read: run.stats.rows?.read ?? 0,
+    changes: {
+      added: counts.added ?? 0,
+      updated: counts.changed ?? 0,
+      deleted: counts.removed ?? 0,
+    },
+    branch: run.stats.branch ?? null,
+    proposal: run.proposal_id,
+    error: run.error === null ? null : (run.error.message ?? 'The run failed.'),
+  };
+}
+
+/** Newest first; runs not started yet (no `started_at`) come first. */
+function newestFirst(a: SourceRun, b: SourceRun): number {
+  return (b.started_at ?? '\uffff').localeCompare(a.started_at ?? '\uffff');
 }
 
 function toSearch(params: QueryParams): string {
@@ -81,15 +136,17 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
   async function request<T>(
     method: 'GET' | 'POST' | 'DELETE',
     path: string,
-    init: { query?: QueryParams; body?: unknown } = {},
+    init: { query?: QueryParams; body?: unknown; form?: FormData } = {},
   ): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json', ...options.headers?.() };
     if (init.body !== undefined) headers['Content-Type'] = 'application/json';
 
+    // A FormData body sets its own Content-Type, with the multipart boundary.
+    const payload = init.form ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
     const response = await doFetch(`${root}${path}${toSearch(init.query ?? {})}`, {
       method,
       headers,
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      ...(payload === undefined ? {} : { body: payload }),
     });
     if (!response.ok) throw new ApiError(await readProblem(response));
     if (response.status === 204) return undefined as T;
@@ -103,6 +160,8 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
       ...(body === undefined ? {} : { body }),
       ...(query === undefined ? {} : { query }),
     });
+
+  const postForm = <T>(path: string, form: FormData) => request<T>('POST', path, { form });
 
   const d = (domain: string) => `/domains/${enc(domain)}`;
   const b = (domain: string, branch: string) => `${d(domain)}/branches/${enc(branch)}`;
@@ -224,6 +283,54 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
         ),
       resolveMany: (domain, proposal, input) =>
         post(`${prop(domain, proposal)}/conflicts:resolve`, input),
+    },
+
+    inference: {
+      infer: (domain, req) =>
+        'files' in req
+          ? postForm(`${d(domain)}/schema:infer`, inferForm(req.files, req.options))
+          : post(`${d(domain)}/schema:infer`, {
+              postgres: req.postgres,
+              ...(req.options === undefined ? {} : { options: req.options }),
+            }),
+    },
+
+    sources: {
+      runs: async (domain, params) => {
+        const runsOf = async (apiName: string, cursor?: string | null) => {
+          const page = await get<Page<KeeperSourceRun>>(
+            `${d(domain)}/sources/${enc(apiName)}/runs`,
+            { limit: params?.limit, cursor },
+          );
+          return {
+            items: page.items.map((run) => sourceRun(run, apiName)),
+            next_cursor: page.next_cursor,
+          };
+        };
+        if (params?.source !== undefined) return runsOf(params.source, params.cursor);
+        // Keeper lists runs per Source: merge the first page of each Source of the schema.
+        const schema = await get<Schema>(`${d(domain)}/schema`);
+        const pages = await Promise.all(schema.sources.map((source) => runsOf(source.api_name)));
+        const items = pages.flatMap((page) => page.items).sort(newestFirst);
+        return {
+          items: params?.limit === undefined ? items : items.slice(0, params.limit),
+          next_cursor: null,
+        };
+      },
+      sync: (domain, source) => post(`${d(domain)}/sources/${enc(source)}/sync`),
+    },
+
+    admin: {
+      apiKeys: {
+        list: (domain, params) => get(`${d(domain)}/api-keys`, pageParams(params)),
+        create: (domain, input) => post(`${d(domain)}/api-keys`, input),
+        revoke: (domain, keyId) => request('DELETE', `${d(domain)}/api-keys/${enc(keyId)}`),
+      },
+      principals: {
+        list: (params) => get('/principals', { type: params?.type, ...pageParams(params) }),
+      },
+      grants: { list: (domain, params) => get(`${d(domain)}/grants`, pageParams(params)) },
+      audit: { list: (domain, params) => get(`${d(domain)}/audit`, pageParams(params)) },
     },
   };
 }

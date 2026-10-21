@@ -46,19 +46,25 @@ The routes, viewport, theme and the browser flags live in the `SHOTS` and `CONFI
 
 Everything comes from Vite environment variables. No URL, endpoint or limit is written in the code; the only default for the Keeper URL lives in `.env.example`.
 
-| Variable                        | Required       | Meaning                                                              |
-| ------------------------------- | -------------- | -------------------------------------------------------------------- |
-| `VITE_API_MODE`                 | yes            | `mock` (in-memory sample Domains) or `live` (Keeper over REST)       |
-| `VITE_KEEPER_BASE_URL`          | in `live` mode | Keeper origin without `/api/v1`, for example `http://localhost:8080` |
-| `VITE_PAGE_SIZE`                | no (50)        | Rows per page in Record lists                                        |
-| `VITE_SEARCH_LIMIT`             | no (20)        | Results per search                                                   |
-| `VITE_CANVAS_DEPTH`             | no (2)         | Neighborhood depth for the Canvas graph explorer                     |
-| `VITE_CANVAS_MAX_NODES`         | no (200)       | Node cap for one Canvas neighborhood                                 |
-| `VITE_CANVAS_LAYOUT_ITERATIONS` | no (100)       | ForceAtlas2 iterations when laying out a graph                       |
-| `VITE_QUERY_STALE_MS`           | no (30000)     | How long cached reads count as fresh                                 |
-| `VITE_TOAST_MS`                 | no (5000)      | How long a toast stays on screen                                     |
-| `VITE_MOCK_LATENCY_MS`          | no (0)         | Artificial delay of every mock call                                  |
-| `VITE_SCHEMA_BRANCH_PREFIX`     | no (`schema/`) | Prefix of the Branch that carries schema changes of a protected one  |
+| Variable                        | Required              | Meaning                                                                 |
+| ------------------------------- | --------------------- | ----------------------------------------------------------------------- |
+| `VITE_API_MODE`                 | yes                   | `mock` (in-memory sample Domains) or `live` (Keeper over REST)          |
+| `VITE_KEEPER_BASE_URL`          | in `live` mode        | Keeper origin without `/api/v1`, for example `http://localhost:8080`    |
+| `VITE_PAGE_SIZE`                | no (50)               | Rows per page in Record lists                                           |
+| `VITE_SEARCH_LIMIT`             | no (20)               | Results per search                                                      |
+| `VITE_CANVAS_DEPTH`             | no (2)                | Neighborhood depth for the Canvas graph explorer                        |
+| `VITE_CANVAS_MAX_NODES`         | no (200)              | Node cap for one Canvas neighborhood                                    |
+| `VITE_CANVAS_LAYOUT_ITERATIONS` | no (100)              | ForceAtlas2 iterations when laying out a graph                          |
+| `VITE_QUERY_STALE_MS`           | no (30000)            | How long cached reads count as fresh                                    |
+| `VITE_TOAST_MS`                 | no (5000)             | How long a toast stays on screen                                        |
+| `VITE_MOCK_LATENCY_MS`          | no (0)                | Artificial delay of every mock call                                     |
+| `VITE_SCHEMA_BRANCH_PREFIX`     | no (`schema/`)        | Prefix of the Branch that carries schema changes of a protected one     |
+| `VITE_INFER_MAX_FILES`          | no (50)               | Files accepted by "Start from data"; keep equal to Keeper's `max_files` |
+| `VITE_INFER_MAX_FILE_BYTES`     | no (1048576)          | Bytes per uploaded file; Keeper's `max_file_bytes`                      |
+| `VITE_INFER_MAX_TOTAL_BYTES`    | no (1048576)          | Bytes for all uploaded files together; Keeper's `max_total_bytes`       |
+| `VITE_INFER_FILE_SUFFIXES`      | no (`.csv,.tsv,.txt`) | File suffixes the upload accepts                                        |
+| `VITE_INFER_ACCEPT_THRESHOLD`   | no (0.9)              | Confidence from which "Accept all at or above" accepts an element       |
+| `VITE_INFER_POSTGRES_SOURCES`   | no (empty)            | Comma separated secret references offered for Postgres inference        |
 
 The optional values are non-functional tunables with defaults in `src/config/env.ts`. A missing or invalid required value stops the app at start with a message on screen. `src/config/env.ts` is the only place that reads the environment; components get the validated config from `useConfig()`.
 
@@ -72,6 +78,7 @@ The mock is a plain object that implements the same `KeeperApi` interface as the
 - Writes: create and delete Branches, create, review, close and merge Proposals, resolve Conflicts, decide extraction items, create Domains, commit schema change sets.
 - Merge attempts: Proposal 41 (`model/risk` into `main`) carries six Conflicts of six kinds (`SC1`, `DV1`, `DV2`, `XS4`, `XS5`, `XS9`) and one automatic policy Resolution; Proposal 43 carries one `DV1`. The Conflicts are seeded, not recomputed from the Branches. Resolutions are stored by fingerprint and checked against the Conflict (choice allowed for its kind, `value` or `values` only on `custom`, a value for every member of a group). `POST .../merge` applies them to a copy of the source state, schema changes first, and re-validates custom values against the merged schema: a refused Resolution is dropped and its reason is kept on the Conflict (`details.rejected`). It answers `merged` with a merge Revision (parents: target head, source head) or `conflicts` with the attempt that remains. The target does not change until every Conflict is resolved.
 - Schema change sets: `applyChanges` runs the commands on the Branch schema, checks the structural rules (names, references, types, constraints, cardinality, Trait mappings), migrates the stored Records and Links (casts with the safe, checked and forbidden rules, defaults, dropped Attributes and Kinds) and reports the migrations. A checked cast that fails on a stored value, or a new required Attribute without a default, makes the set invalid and commits nothing. A protected Branch refuses a commit (409 `branch_protected`) but answers a dry run. Built-in Operations are generated for new Kinds.
+- Inference, Sources and Admin: `schema:infer` answers with the recorded output of the real inference on `examples/supply/data` (the run behind the gold test: 6 of 6 Kinds and keys, 44 of 47 Attribute types, 7 of 7 Relations), narrowed to the tables the request names (file names for CSV, `tables` for Postgres); it does not read the uploaded bytes. Only `secret://env/ERP_DSN` is allowlisted for Postgres. Source runs are sample data, and a sync queues a job that the mock runs at once with nothing new to read. API keys, principals, grants and the audit log are kept in memory; creating or revoking a key, a sync and an inference write audit entries, newest first, with a chained hash.
 - Not emulated, answered with a 501 problem: committing an Operation (dry run works), traversal, Trait queries. Stale merge attempts (target head moved while resolving) are not modeled.
 
 Sample data lives in `src/api/mock/sample/`. To point the app at a real Keeper, set `VITE_API_MODE=live` and `VITE_KEEPER_BASE_URL`; nothing else changes.
@@ -91,6 +98,9 @@ src/
   config/               env loading and validation, config context
   api/
     types.ts            Keeper types mirroring the glossary and design 5, 6, 8, 11
+    inference-types.ts  schema inference: proposal, evidence, issues, request
+    sources-types.ts    Source runs
+    admin-types.ts      API keys, principals, grants, audit entries
     client.ts           the KeeperApi interface (one per resource area)
     http.ts             fetch adapter for /api/v1, RFC 9457 problems as ApiError
     mock/               in-memory adapter, query interpreter, sample Domains
@@ -101,8 +111,11 @@ src/
     explorer/           Domain home, search, Kind table, Record page
     canvas/             graph explorer and schema graph (Sigma.js)
     modeler/            schema overview, schema editor (form and YAML over one document)
+    inference/          "Start from data" wizard: source step, proposal tree, YAML preview, apply
+    sources/            Sources list, run history, YAML editor of the sources section
+    admin/              API keys, principals and grants, audit log (tabs of Settings)
     review/             Proposal list and detail
-    settings/           appearance, runtime configuration, Domain settings
+    settings/           appearance, runtime configuration, Domain settings, Admin tabs
     inventory.ts        screen inventory of design 12.3, source of the planned-screen placeholders
   ui/                   small accessible primitives: button, field (input, select), dialog, table, tabs, toast, layout helpers, theme
   test/                 test setup and render helper
@@ -118,9 +131,23 @@ src/
 
 ## Screens
 
-Built with real data from the active adapter: Explorer (Domain home, search with Kind filter, Kind table with sort and paging, Record page), Canvas (graph explorer, schema graph), Modeler (Kinds, Attributes, Relations, Traits, Operations, Derivations, Sources lists, and the schema editor), Review (Proposal list with Conflict counts, Proposal detail with checks, reviews, merge attempt and Conflict resolver, data diff, merge and close), Settings.
+Built with real data from the active adapter: Explorer (Domain home, search with Kind filter, Kind table with sort and paging, Record page), Canvas (graph explorer, schema graph), Modeler (Kinds, Attributes, Relations, Traits, Operations, Derivations, Sources lists, the schema editor and "Start from data"), Review (Proposal list with Conflict counts, Proposal detail with checks, reviews, merge attempt and Conflict resolver, data diff, merge and close), Sources (list, run history, YAML editor), Settings (appearance, configuration, and the Admin basics: API keys, principals and grants, audit log).
 
-Every other screen of the inventory in design 12.3 (Trait view, diff overlay, Operation, Derivation and Source mapping editors, extraction items, Sources, History, Admin) appears as a placeholder section marked "Planned", built from `src/features/inventory.ts`.
+Every other screen of the inventory in design 12.3 (Trait view, diff overlay, Operation, Derivation and Source mapping editors, extraction items, documents and extraction jobs, History, Domain settings editor) appears as a placeholder section marked "Planned", built from `src/features/inventory.ts`.
+
+## Start from data
+
+The Modeler's "Start from data" view (`?view=start`, `src/features/inference/`) turns tables you already have into a schema change, following `docs/inference.md`.
+
+- **Source.** CSV or TSV files (drag and drop or a file picker; the file name is the table name) or a Postgres source reference. The caps (files, bytes per file, bytes in total, suffixes) come from the `VITE_INFER_*` variables and are checked before anything is sent; a file that breaks one is listed with the reason. A Postgres source is a secret reference that an administrator allowlisted on Keeper (`secret://env/ERP_DSN`): the field refuses anything else, so a connection string is never sent. The HTTP adapter posts multipart (`files`, `options`) for CSV and JSON (`postgres`) for the reference, both to `POST .../schema:infer`.
+- **Review.** The proposal is read from the `yaml` of the answer and shown as a tree: Kinds with a confidence badge, the primary key evidence, and each Attribute with type, sample values, confidence and the reasons the engine gave; then the Relations with endpoints, cardinality, the inclusion ratio (read from the reasons of a reference) and evidence. Evidence is matched to elements by id, so renames keep it. Names are edited in place (a rename rewrites the references to it), types are changed from the list the schema editor uses (an enum is seeded from the sample values), elements are accepted or dropped one by one, and "Accept all at or above N%" accepts everything that reaches the threshold (default `VITE_INFER_ACCEPT_THRESHOLD`) except what was dropped. Accepting a Kind accepts its undecided Attributes. Only accepted elements are applied: a Relation needs both its Kinds and its reference Attribute, an Attribute that references a Kind that is not accepted is left out, and the screen says why. Primary key Attributes cannot be dropped. The inference issues (`infer.ambiguous_primary_key` and the others) are listed, with the count Keeper reports when it caps the list.
+- **Apply.** The accepted elements are laid over the schema of the current Branch by api name: a new Kind or Relation is added as proposed; a Kind that exists keeps its key and settings and takes the proposed Attributes (an Attribute that exists keeps its id, so it becomes an update); a Relation that exists stays as it is. The schema rules of the editor run on the result, the dry run reports data migrations and violations, and the change set goes through the same panel as the editor: "Apply as schema change" commits on an unprotected Branch, and on a protected one it creates a Branch (`VITE_SCHEMA_BRANCH_PREFIX`), commits there and opens a Proposal. The YAML preview (read only, CodeMirror) always shows the accepted, edited proposal.
+- **Limits.** Inference options (`options`) are not exposed in the UI, and Source mappings are not produced (the proposal is a schema, as in the inference document).
+
+## Sources and Admin
+
+- **Sources** (`/{domain}/sources`). The Sources of the schema on the current Branch with type, connection reference, mapping summary, sync mode and merge policy, schedule, last run and its counts; "Sync now"; the run history with the error of a failed run and a link to the Proposal a run opened; and the `sources` section of the schema as YAML, validated with the schema rules and saved as a change set. In live mode the HTTP adapter reads `GET .../sources/{source}/runs` (Keeper lists runs per Source, so the history merges the first page of each Source of the default branch) and "Sync now" calls `POST .../sources/{source}/sync`, which queues a job for Scribe. Keeper records no trigger, so that column shows `-`; reading runs needs a Domain-wide grant.
+- **Admin** (Settings tabs, `?section=keys|access|audit`). API keys (create with name, role and lifetime, the secret shown once, revoke behind a confirmation), principals (filter by type) and grants (read only), and the audit log, newest first. Keeper's audit route only pages (`limit`, `cursor`), so the actor, action and text filters apply to the entries loaded so far and "Load older entries" fetches more. A members editor, chain verification and export are not built.
 
 ## Conflict resolver
 
@@ -149,4 +176,4 @@ The command vocabulary of `POST .../schema/changes` is not in design 11.1 yet; t
 
 ## Tests
 
-`pnpm test` runs a router smoke test, one component test per screen, tests for the API adapters and the config loader, and tests for the UI primitives. The Conflict resolver has component tests for choice application, custom values and grouped values, and app-level tests for the merge attempt flow; the schema editor has tests for the form and YAML sync (the YAML view is driven through its CodeMirror state), validation, change sets and the protected Branch flow; the mock has tests for merge attempts, Resolutions and schema change sets. Component tests render the whole app against the mock adapter with an in-memory router history, so they exercise routing, URL state and data loading together.
+`pnpm test` runs a router smoke test, one component test per screen (Start from data, Sources and Admin included, each against the mock: the wizard tests drive upload, edits, the threshold and apply; the Sources tests drive Sync now and the YAML editor; the Admin tests drive key creation, revocation and the audit filters), tests for the API adapters and the config loader, and tests for the UI primitives. The Conflict resolver has component tests for choice application, custom values and grouped values, and app-level tests for the merge attempt flow; the schema editor has tests for the form and YAML sync (the YAML view is driven through its CodeMirror state), validation, change sets and the protected Branch flow; the mock has tests for merge attempts, Resolutions and schema change sets. Component tests render the whole app against the mock adapter with an in-memory router history, so they exercise routing, URL state and data loading together.

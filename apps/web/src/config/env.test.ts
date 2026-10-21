@@ -29,4 +29,35 @@ describe('loadConfig', () => {
     expect(config.pageSize).toBe(25);
     expect(() => loadConfig({ VITE_API_MODE: 'mock', VITE_PAGE_SIZE: '0' })).toThrow(ConfigError);
   });
+
+  it('reads the inference caps, suffixes, threshold and Postgres suggestions', () => {
+    const defaults = loadConfig({ VITE_API_MODE: 'mock' }).inference;
+    expect(defaults).toMatchObject({ maxFiles: 50, maxFileBytes: 1_048_576, acceptThreshold: 0.9 });
+    expect(defaults.fileSuffixes).toEqual(['.csv', '.tsv', '.txt']);
+    expect(defaults.postgresSources).toEqual([]);
+
+    const config = loadConfig({
+      VITE_API_MODE: 'mock',
+      VITE_INFER_MAX_FILES: '5',
+      VITE_INFER_MAX_FILE_BYTES: '2048',
+      VITE_INFER_MAX_TOTAL_BYTES: '4096',
+      VITE_INFER_FILE_SUFFIXES: '.CSV, .psv',
+      VITE_INFER_ACCEPT_THRESHOLD: '0.75',
+      VITE_INFER_POSTGRES_SOURCES: 'secret://env/A, secret://env/B',
+    }).inference;
+    expect(config).toEqual({
+      maxFiles: 5,
+      maxFileBytes: 2048,
+      maxTotalBytes: 4096,
+      fileSuffixes: ['.csv', '.psv'],
+      acceptThreshold: 0.75,
+      postgresSources: ['secret://env/A', 'secret://env/B'],
+    });
+    expect(() => loadConfig({ VITE_API_MODE: 'mock', VITE_INFER_ACCEPT_THRESHOLD: '1.5' })).toThrow(
+      /between 0 and 1/,
+    );
+    expect(() => loadConfig({ VITE_API_MODE: 'mock', VITE_INFER_MAX_FILES: '0' })).toThrow(
+      ConfigError,
+    );
+  });
 });
