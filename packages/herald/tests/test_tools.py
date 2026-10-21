@@ -112,6 +112,8 @@ async def test_execute_description_states_governed_writes(connect: Connect) -> N
     assert "Proposal" in description
     assert "dry_run defaults to true" in description
     assert "task" in description
+    assert "required for the proposal flow" in description
+    assert "problem text" in description
     assert "auto_merge" in description
 
 
@@ -624,6 +626,60 @@ async def test_execute_with_a_task_reports_the_proposal(connect: Connect, fake: 
     assert "auto_merge requested, not performed: approvals-pending" in lines
     assert lines[-1].startswith("next: await_review: Waiting for approval")
     assert lines[-1].endswith("[POST /api/v1/domains/supply/proposals/prp_1/reviews]")
+
+
+async def test_execute_without_a_task_passes_auto_propose_to_keeper_and_returns_its_problem(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on(
+        "POST",
+        f"{API}/operations/flag_supplier_risk/execute",
+        problem(
+            422,
+            "validation-failed",
+            "One or more request members are invalid.",
+            errors=[{"pointer": "/body/task", "message": "is required with auto_propose"}],
+        ),
+    )
+    async with connect() as client:
+        out = error_text(
+            await client.call_tool(
+                "lorebase_execute",
+                {
+                    "operation": "flag_supplier_risk",
+                    "dry_run": False,
+                    "intent": "Flag S-1",
+                    "auto_propose": True,
+                },
+            )
+        )
+    assert fake.last_body() == {
+        "parameters": {},
+        "dry_run": False,
+        "intent": "Flag S-1",
+        "auto_propose": True,
+    }
+    assert "[validation-failed] One or more request members are invalid." in out
+    assert "/body/task: is required with auto_propose" in out
+
+
+async def test_execute_with_only_intent_still_goes_through_keeper_validation(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on(
+        "POST",
+        f"{API}/operations/flag_supplier_risk/execute",
+        problem(409, "review-required", "Edits need review.", proposals="/proposals"),
+    )
+    async with connect() as client:
+        out = error_text(
+            await client.call_tool(
+                "lorebase_execute",
+                {"operation": "flag_supplier_risk", "dry_run": False, "intent": "Flag S-1"},
+            )
+        )
+    assert fake.last_body() == {"parameters": {}, "dry_run": False, "intent": "Flag S-1"}
+    assert "[review-required] Edits need review." in out
 
 
 # Size caps -----------------------------------------------------------------------------------
