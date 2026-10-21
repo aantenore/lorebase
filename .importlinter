@@ -8,13 +8,14 @@ root_packages =
     lorebase_client
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 include_external_packages = False
 
 # Dependency direction (design 17): core depends on nothing internal; store on core and
 # platform; inference on core and platform; keeper on store; client on nothing internal;
-# cli on client; herald on platform (and client once published), never on inference. Scribe
-# joins these contracts when its package is created (M2): it may depend on store and
-# inference. Nothing depends on herald.
+# cli on client; herald on platform (and client once published), never on inference; scribe
+# on store, platform, inference and core, never on keeper. Nothing depends on herald or
+# scribe.
 
 [importlinter:contract:core-is-pure]
 name = core has no internal dependencies
@@ -29,6 +30,7 @@ forbidden_modules =
     lorebase_client
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:platform-is-leaf]
 name = platform has no internal dependencies
@@ -43,6 +45,7 @@ forbidden_modules =
     lorebase_client
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:store-layer]
 name = store depends on core and platform only
@@ -55,6 +58,7 @@ forbidden_modules =
     lorebase_client
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:inference-layer]
 name = inference depends on core and platform only
@@ -67,6 +71,7 @@ forbidden_modules =
     lorebase_client
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:keeper-layer]
 name = keeper depends on store and never on inference
@@ -78,6 +83,7 @@ forbidden_modules =
     lorebase_client
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:client-is-standalone]
 name = client has no internal dependencies
@@ -92,6 +98,7 @@ forbidden_modules =
     lorebase_keeper
     lorebase_cli
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:cli-layer]
 name = cli depends on client only
@@ -105,6 +112,7 @@ forbidden_modules =
     lorebase_store
     lorebase_keeper
     lorebase_herald
+    lorebase_scribe
 
 [importlinter:contract:herald-layer]
 name = herald depends on platform only and never on inference
@@ -118,3 +126,15 @@ forbidden_modules =
     lorebase_keeper
     lorebase_client
     lorebase_cli
+    lorebase_scribe
+
+[importlinter:contract:scribe-layer]
+name = scribe depends on store, platform, inference and core, never on keeper
+type = forbidden
+source_modules =
+    lorebase_scribe
+forbidden_modules =
+    lorebase_keeper
+    lorebase_client
+    lorebase_cli
+    lorebase_herald
