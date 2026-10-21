@@ -1148,7 +1148,7 @@ async def _import_refs(c: _Import) -> list[dict[str, Any]]:
                 "kind": RefKind(ref["kind"]),
                 "head": from_hex(ref["head"]),
                 "protected": ref["protected"],
-                "materialization": Materialization(ref["materialization"]),
+                "materialization": _imported_materialization(ref["materialization"]),
                 "version": ref["version"],
                 "created_at": datetime.fromisoformat(ref["created_at"]),
                 "created_by": ref["created_by"],
@@ -1160,6 +1160,12 @@ async def _import_refs(c: _Import) -> list[dict[str, Any]]:
     c.report.refs = len(rows)
     c.expect("refs", len(rows))
     return refs
+
+
+def _imported_materialization(value: str) -> Materialization:
+    """Overlay branches come back as full copies: import rebuilds every head from its tree."""
+    found = Materialization(value)
+    return Materialization.FULL if found is Materialization.OVERLAY else found
 
 
 async def _import_ref_log(c: _Import) -> None:

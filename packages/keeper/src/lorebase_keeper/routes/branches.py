@@ -35,6 +35,7 @@ from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import branches as service
 from lorebase_keeper.services.reads import resolve_readable
 from lorebase_keeper.settings import KeeperSettings
+from lorebase_store.materialize import BranchMode
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories import RefRow
 
@@ -80,6 +81,13 @@ class BranchCreate(BaseModel):
     )
     revision: str | None = Field(
         default=None, description="Revision id to start at; default: the head of `source`."
+    )
+    mode: BranchMode | None = Field(
+        default=None,
+        description="`copy`: the branch gets its own materialized rows. `overlay`: it stores "
+        "only the rows it changes and reads the rest from `source` as of its head (only when "
+        "starting at the head of a fully materialized branch; otherwise a copy). Default: "
+        "`store.materialize.branch_mode`, overlay for names with an overlay prefix.",
     )
 
 
@@ -190,7 +198,8 @@ async def create_branch(
     keeper: KeeperSettingsDep,
     idempotency_key: IdempotencyKeyDep,
 ) -> BranchOut:
-    """Create a fully materialized branch from a branch, tag or Revision.
+    """Create a materialized branch (a copy, or an overlay on its source) from a branch, tag
+    or Revision.
 
     With an `Idempotency-Key`, retrying a create that succeeded returns the branch with status
     200 and `Idempotent-Replayed: true`.
@@ -216,6 +225,7 @@ async def create_branch(
         source=body.source,
         revision=revision,
         idempotency_key=idempotency_key,
+        mode=body.mode,
     )
     annotate(
         request,

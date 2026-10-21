@@ -1,6 +1,7 @@
-"""Checks inside the security definer read functions (revision 0008), called as the
-application role: bounded counts, a Domain inside the transaction scope, a fixed
-search_path; and the upgrade refused while that role may create objects in their schemas."""
+"""Checks inside the security definer read functions (revision 0008, and their overlay
+variants of revision 0010), called as the application role: bounded counts, a Domain inside
+the transaction scope, a fixed search_path; and the upgrade refused while that role may create
+objects in their schemas."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from lorebase_store.auth.scope import BYPASS_SETTING
 from lorebase_store.commit import create_domain
 from lorebase_store.db import create_engine
 from lorebase_store.definer import READ_FUNCTIONS
+from lorebase_store.materialize import BranchMode, create_branch
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.repositories.refs import sqlstate
 from lorebase_store.runtime import StoreRuntime
@@ -30,22 +32,36 @@ from .support import AUTHOR, DOMAIN, PART, SUPPLIED_BY, SUPPLIER, VAT, Clock, do
 
 Sessions = async_sessionmaker[AsyncSession]
 
-CALLS = {
-    "lb_search": "SELECT * FROM lb_search(:domain, 'main', NULL, 'simple', 'bearing', "
+OVERLAY = "agent/checks"
+"""An overlay branch on `main`, read by the `_overlay` variants."""
+
+_TEMPLATES = {
+    "lb_search": "SELECT * FROM {name}(:domain, {branch}, NULL, 'simple', 'bearing', "
     "CAST(:p_candidates AS integer), CAST(:p_limit AS integer))",
-    "lb_links_in": "SELECT * FROM lb_links_in(:domain, 'main', :relation, 'S-1', "
+    "lb_links_in": "SELECT * FROM {name}(:domain, {branch}, :relation, 'S-1', "
     "CAST(:p_limit AS integer))",
-    "lb_query_by_attribute": "SELECT * FROM lb_query_by_attribute(:domain, 'main', :kind, "
+    "lb_query_by_attribute": "SELECT * FROM {name}(:domain, {branch}, :kind, "
     ":attribute, 'text', 'eq', 'IT2', CAST(:p_limit AS integer))",
-    "lb_neighborhood": "SELECT * FROM lb_neighborhood(:domain, 'main', CAST(:seeds AS jsonb), "
-    "CAST(:p_depth AS integer), CAST('{}' AS jsonb), CAST(:p_fanout AS integer), "
+    "lb_neighborhood": "SELECT * FROM {name}(:domain, {branch}, CAST(:seeds AS jsonb), "
+    "CAST(:p_depth AS integer), CAST('{{}}' AS jsonb), CAST(:p_fanout AS integer), "
     "CAST(:p_max_steps AS integer), CAST(:p_max_nodes AS integer))",
 }
-COUNTS = {
+_COUNTS = {
     "lb_search": ("p_candidates", "p_limit"),
     "lb_links_in": ("p_limit",),
     "lb_query_by_attribute": ("p_limit",),
     "lb_neighborhood": ("p_depth", "p_fanout", "p_max_steps", "p_max_nodes"),
+}
+CALLS = {
+    **{name: sql.format(name=name, branch="'main'") for name, sql in _TEMPLATES.items()},
+    **{
+        f"{name}_overlay": sql.format(name=f"{name}_overlay", branch=f"'{OVERLAY}'")
+        for name, sql in _TEMPLATES.items()
+    },
+}
+COUNTS = {
+    **_COUNTS,
+    **{f"{name}_overlay": counts for name, counts in _COUNTS.items()},
 }
 ARGUMENTS: dict[str, Any] = {
     "domain": DOMAIN,
@@ -103,6 +119,16 @@ async def sessions(
         await create_domain(session, domain(), author=AUTHOR, runtime=runtime, clock=Clock())
     async with factory() as session:
         await seed_graph(session, runtime)
+    async with factory() as session:
+        created = await create_branch(
+            session,
+            DOMAIN,
+            OVERLAY,
+            created_by="usr_test",
+            mode=BranchMode.OVERLAY,
+            runtime=runtime,
+        )
+    assert created.mode.value == "overlay"
     return factory
 
 
@@ -180,7 +206,7 @@ async def test_a_changed_search_path_is_refused(
             {"names": list(READ_FUNCTIONS)},
         )
         signatures = list(found.scalars())
-        assert len(signatures) == len(READ_FUNCTIONS)
+        assert len(signatures) == len(READ_FUNCTIONS) == len(CALLS)
         for change in ("RESET search_path", "SET search_path = public, pg_catalog, pg_temp"):
             for signature in signatures:
                 await auto.exec_driver_sql(f"ALTER FUNCTION {signature} {change}")
@@ -223,9 +249,14 @@ def test_upgrade_and_downgrade_keep_the_grants(
     names = sorted(READ_FUNCTIONS)
     checked = [(name, True, False, True) for name in names]
     assert _privileges(database_url, application_role) == checked
+    plain = sorted(name for name in READ_FUNCTIONS if not name.endswith("_overlay"))
+    migrations.downgrade("0009", database=database, store=store, url=database_url)
+    assert _privileges(database_url, application_role) == [
+        (name, True, False, True) for name in plain
+    ]
     migrations.downgrade("0007", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [
-        (name, False, False, True) for name in names
+        (name, False, False, True) for name in plain
     ]
     migrations.upgrade(database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == checked

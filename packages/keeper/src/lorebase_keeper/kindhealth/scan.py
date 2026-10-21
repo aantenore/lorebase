@@ -3,7 +3,8 @@
 Each function answers one question for one Kind or Relation and reads the database through the
 caller's session. Nothing here writes. Statements are scoped to the Domain and the branch and
 use only primary-key friendly predicates, so the cost is a scan per Kind (validation, duplicates,
-derived values) or per Relation (orphans and gaps) at worst.
+derived values) or per Relation (orphans and gaps) at worst. An overlay branch is read through
+its resolved rows (`lorebase_store.layout`).
 """
 
 from __future__ import annotations
@@ -12,9 +13,20 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
-from sqlalchemy import ColumnElement, and_, exists, func, literal_column, or_, select, text
+from sqlalchemy import (
+    ColumnElement,
+    FromClause,
+    and_,
+    exists,
+    func,
+    literal_column,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,16 +48,15 @@ from lorebase_keeper.kindhealth.models import (
     ViolationReport,
 )
 from lorebase_keeper.reading.views import kind_name
-from lorebase_store.repositories.materialized import MAT_HISTORY, MAT_LINKS, MAT_RECORDS
+from lorebase_store.layout import BranchLayout
 
 BATCH = 500
 """Records fetched per round trip while re-validating."""
 
-_DUPLICATES = text(
-    r"""
+_DUPLICATES = r"""
     WITH normalized AS (
         SELECT key, lower(regexp_replace(btrim("values" ->> :attribute), '\s+', ' ', 'g')) AS norm
-        FROM mat_records
+        FROM {records}
         WHERE domain_id = :domain AND branch = :branch AND kind_id = :kind
           AND "values" ->> :attribute IS NOT NULL
     )
@@ -59,23 +70,42 @@ _DUPLICATES = text(
     ORDER BY count(*) DESC, norm
     LIMIT :groups
     """
-)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Branch:
-    """The materialized head being examined."""
+    """The materialized head being examined; `layout` locates its rows (default: the
+    branch's own rows)."""
 
     domain_id: str
     branch: str
+    layout: BranchLayout | None = None
+
+    @cached_property
+    def rows(self) -> BranchLayout:
+        return self.layout or BranchLayout(self.domain_id, self.branch)
+
+    @cached_property
+    def records(self) -> FromClause:
+        return self.rows.records()
+
+    @cached_property
+    def links(self) -> FromClause:
+        return self.rows.links()
+
+    @cached_property
+    def history(self) -> FromClause:
+        return self.rows.history()
 
 
 def _records(where: Branch) -> ColumnElement[bool]:
-    return and_(MAT_RECORDS.c.domain_id == where.domain_id, MAT_RECORDS.c.branch == where.branch)
+    r = where.records
+    return and_(r.c.domain_id == where.domain_id, r.c.branch == where.branch)
 
 
 def _links(where: Branch) -> ColumnElement[bool]:
-    return and_(MAT_LINKS.c.domain_id == where.domain_id, MAT_LINKS.c.branch == where.branch)
+    link = where.links
+    return and_(link.c.domain_id == where.domain_id, link.c.branch == where.branch)
 
 
 # Counts and history -------------------------------------------------------------------------
@@ -83,20 +113,18 @@ def _links(where: Branch) -> ColumnElement[bool]:
 
 async def record_counts(session: AsyncSession, where: Branch) -> dict[str, int]:
     """Records per Kind id."""
+    r = where.records
     result = await session.execute(
-        select(MAT_RECORDS.c.kind_id, func.count())
-        .where(_records(where))
-        .group_by(MAT_RECORDS.c.kind_id)
+        select(r.c.kind_id, func.count()).where(_records(where)).group_by(r.c.kind_id)
     )
     return {kind_id: int(count) for kind_id, count in result}
 
 
 async def link_counts(session: AsyncSession, where: Branch) -> dict[str, int]:
     """Stored Links per Relation id."""
+    link = where.links
     result = await session.execute(
-        select(MAT_LINKS.c.relation_id, func.count())
-        .where(_links(where))
-        .group_by(MAT_LINKS.c.relation_id)
+        select(link.c.relation_id, func.count()).where(_links(where)).group_by(link.c.relation_id)
     )
     return {relation_id: int(count) for relation_id, count in result}
 
@@ -108,7 +136,7 @@ async def last_changes(
     partitions = {kind_partition(kind_id): kind_id for kind_id in kinds}
     if not partitions:
         return {}
-    h = MAT_HISTORY
+    h = where.history
     result = await session.execute(
         select(h.c.partition, h.c.revision_id, h.c.at)
         .ext(distinct_on(h.c.partition))
@@ -143,7 +171,7 @@ async def validate_records(
     settings: HealthSettings,
 ) -> ViolationReport:
     """Re-validate the Records of a Kind with `validate_record` against the branch's schema."""
-    r = MAT_RECORDS
+    r = where.records
     step = max(1, math.ceil(total / settings.max_records_validated))
     checked = invalid = 0
     groups: dict[tuple[str, str | None], list[Any]] = defaultdict(lambda: [0, []])
@@ -223,7 +251,7 @@ async def find_duplicates(
         attribute = kind.attributes[attribute_id]
         rows = (
             await session.execute(
-                _DUPLICATES,
+                text(_DUPLICATES.format(records=where.rows.records_from())),
                 {
                     "domain": where.domain_id,
                     "branch": where.branch,
@@ -259,7 +287,7 @@ async def derived_status(
     derived = [a for a in kind.attributes.values() if a.is_derived]
     if not derived:
         return None
-    r = MAT_RECORDS
+    r = where.records
     missing = 0
     if total:
         missing = int(
@@ -315,8 +343,8 @@ async def relation_health(
 async def _orphan_links(
     session: AsyncSession, where: Branch, relation: Relation, settings: HealthSettings
 ) -> OrphanLinks:
-    link = MAT_LINKS
-    f, t = MAT_RECORDS.alias("f"), MAT_RECORDS.alias("t")
+    link = where.links
+    f, t = where.rows.records("f"), where.rows.records("t")
     from_exists = exists().where(
         f.c.domain_id == link.c.domain_id,
         f.c.branch == link.c.branch,
@@ -359,7 +387,7 @@ async def _orphan_links(
 async def _missing_links(
     session: AsyncSession, where: Branch, relation: Relation, settings: HealthSettings
 ) -> RequiredGaps:
-    r, link = MAT_RECORDS, MAT_LINKS
+    r, link = where.records, where.links
     linked = exists().where(
         link.c.domain_id == r.c.domain_id,
         link.c.branch == r.c.branch,
@@ -376,7 +404,7 @@ async def _gap_query(
     condition: ColumnElement[bool],
     settings: HealthSettings,
 ) -> RequiredGaps:
-    r = MAT_RECORDS
+    r = where.records
     scope = (_records(where), r.c.kind_id == kind_id, condition)
     missing = int((await session.execute(select(func.count()).where(*scope))).scalar_one())
     keys: Sequence[str] = []
@@ -393,7 +421,7 @@ async def _foreign_key_health(
 ) -> tuple[int, OrphanLinks, RequiredGaps]:
     """A foreign-key backed Relation has no stored Links: they are the `ref` values of the
     `from` Kind. Orphans are references to missing Records; gaps are Records without one."""
-    r, t = MAT_RECORDS, MAT_RECORDS.alias("t")
+    r, t = where.records, where.rows.records("t")
     attribute = str(relation.foreign_key_attribute)
     value = r.c["values"][attribute].astext
     target_exists = exists().where(

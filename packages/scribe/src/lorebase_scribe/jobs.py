@@ -6,6 +6,7 @@
 | `webhook_delivery` | none | `lorebase_store.webhooks.deliver_pending`, one pass |
 | `store.index` | `{"action", "name", "branch", "kind"}`, Domain set | `indexes.run_index_job` |
 | `gc` | `{"dry_run": bool, "grace_seconds": int}`, Domain set | `lorebase_store.gc.run_gc_job` |
+| `store.materialize` | `{"branch"}`, Domain set | `materialize.run_materialize_job` |
 | `extraction` | `{"documents", "tiers", "requested_by"}`, Domain set | `ExtractionRun.run` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
@@ -36,13 +37,28 @@ from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
-from lorebase_store.jobs import EXTRACTION_JOB, GC_JOB, INDEX_JOB, SOURCE_SYNC_JOB, JobRow
+from lorebase_store.jobs import (
+    EXTRACTION_JOB,
+    GC_JOB,
+    INDEX_JOB,
+    MATERIALIZE_JOB,
+    SOURCE_SYNC_JOB,
+    JobRow,
+)
+from lorebase_store.materialize import run_materialize_job
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
 WEBHOOK_DELIVERY_JOB = "webhook_delivery"
 
-JOB_TYPES = (SOURCE_SYNC_JOB, WEBHOOK_DELIVERY_JOB, INDEX_JOB, GC_JOB, EXTRACTION_JOB)
+JOB_TYPES = (
+    SOURCE_SYNC_JOB,
+    WEBHOOK_DELIVERY_JOB,
+    INDEX_JOB,
+    MATERIALIZE_JOB,
+    GC_JOB,
+    EXTRACTION_JOB,
+)
 """Every job type Scribe knows."""
 
 
@@ -107,6 +123,10 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         _domain(job)
         return await run_index_job(context.ddl_engine or context.engine, job)
 
+    async def materialize(job: JobRow) -> Mapping[str, Any]:
+        _domain(job)
+        return await run_materialize_job(context.engine, job, runtime=context.runtime)
+
     async def gc(job: JobRow) -> Mapping[str, Any]:
         _domain(job)
         try:
@@ -145,6 +165,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
         INDEX_JOB: index,
+        MATERIALIZE_JOB: materialize,
         GC_JOB: gc,
         EXTRACTION_JOB: extraction,
     }

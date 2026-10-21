@@ -24,7 +24,9 @@ python -m lorebase_store.jobs work                        # run queued jobs (SKI
 python -m lorebase_store.indexes plan --domain supply     # pending per-Attribute index DDL
 ```
 
-`jobs work` runs `gc` and `store.index` jobs by default (`--types` narrows it). Index jobs
+`jobs work` runs `gc`, `store.index` and `store.materialize` (promotion of an overlay branch
+whose base moved too far, [store schema notes](store-schema-notes.md#overlay-branches)) jobs
+by default (`--types` narrows it). Index jobs
 build and drop per-Attribute indexes; they run as `database.maintenance_dsn` when it is set,
 because their DDL needs a role that owns `mat_records` ([store schema
 notes](store-schema-notes.md#physical-layout)). `indexes plan` prints that DDL for an

@@ -19,6 +19,7 @@ DOMAIN_ID_PATTERN = r"^[a-z][a-z0-9_-]*$"
 
 SchemaSection = Literal["kinds", "relations", "traits", "operations", "derivations", "sources"]
 SearchMode = Literal["lexical", "semantic", "hybrid"]
+BranchMode = Literal["copy", "overlay"]
 ServedFrom = Literal["materialized", "tree"]
 LinkDirection = Literal["forward", "inverse"]
 ProposalStatus = Literal["open", "merged", "closed"]
@@ -142,6 +143,8 @@ class BranchCreate(RequestModel):
     name: str = Field(min_length=1)
     source: str | None = None
     revision: str | None = None
+    mode: BranchMode | None = None
+    """`copy` (own rows) or `overlay` (only its changes); default: the server's setting."""
 
 
 class BranchUpdate(RequestModel):

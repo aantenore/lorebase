@@ -317,6 +317,7 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         refresh_kinds=prepared.refresh_kinds,
         settings=settings,
         expression_limits=request.runtime.schema.expression_limits,
+        runtime=request.runtime,
     )
     if indexes is not None:
         await indexes.ensure(prepared.schema)
@@ -643,6 +644,7 @@ async def _create_domain(
         schema=schema,
         schema_hash=prepared.schema_hash,
         settings=settings,
+        runtime=runtime,
     )
     await _record_events(session, domain.id, domain.default_branch, stored, changeset, message)
     return CommitResult(

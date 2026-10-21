@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from lorebase_core.model import Domain, Schema
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.definer import READ_FUNCTIONS, grant_read_functions
+from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.reads import (
     Comparison,
@@ -326,24 +328,29 @@ async def bulk(engine: AsyncEngine, runtime: StoreRuntime) -> Sessions:
     return factory
 
 
-async def _exercise(session: AsyncSession, schema: Schema, runtime: StoreRuntime) -> None:
-    """One call of every hot read primitive on the bulk branch."""
-    await get_record(session, DOMAIN, BULK_BRANCH, SUPPLIER, "BS-77")
-    await list_records(session, DOMAIN, BULK_BRANCH, PART, limit=50, after="BP-5", runtime=runtime)
+async def _exercise(
+    session: AsyncSession,
+    schema: Schema,
+    runtime: StoreRuntime,
+    branch: str | BranchLayout = BULK_BRANCH,
+) -> None:
+    """One call of every hot read primitive on the bulk branch (or `branch`)."""
+    await get_record(session, DOMAIN, branch, SUPPLIER, "BS-77")
+    await list_records(session, DOMAIN, branch, PART, limit=50, after="BP-5", runtime=runtime)
     await links_of_record(
-        session, DOMAIN, BULK_BRANCH, schema, SUPPLIER, "BS-8", limit=50, runtime=runtime
+        session, DOMAIN, branch, schema, SUPPLIER, "BS-8", limit=50, runtime=runtime
     )
     await links_to_record(
         session,
         DOMAIN,
-        BULK_BRANCH,
+        branch,
         schema.relations[SOURCED_FROM],
         "BS-8",
         limit=50,
         runtime=runtime,
     )
-    await neighborhood(session, DOMAIN, BULK_BRANCH, schema, [(PART, "BP-11")], runtime=runtime)
-    await hydrate_records(session, DOMAIN, BULK_BRANCH, [(PART, "BP-1"), (SUPPLIER, "BS-2")])
+    await neighborhood(session, DOMAIN, branch, schema, [(PART, "BP-11")], runtime=runtime)
+    await hydrate_records(session, DOMAIN, branch, [(PART, "BP-1"), (SUPPLIER, "BS-2")])
     rating = index_spec(schema, SUPPLIER, RATING)
     vat = index_spec(schema, SUPPLIER, VAT)
     assert rating is not None
@@ -354,13 +361,13 @@ async def _exercise(session: AsyncSession, schema: Schema, runtime: StoreRuntime
         (vat, Comparison.EQ, "VAT99"),
     ):
         await query_by_attribute(
-            session, DOMAIN, BULK_BRANCH, spec, comparison, value, limit=50, runtime=runtime
+            session, DOMAIN, branch, spec, comparison, value, limit=50, runtime=runtime
         )
-    await search_records(session, DOMAIN, BULK_BRANCH, "metal42", limit=20, runtime=runtime)
+    await search_records(session, DOMAIN, branch, "metal42", limit=20, runtime=runtime)
     await search_records(
         session,
         DOMAIN,
-        BULK_BRANCH,
+        branch,
         "Suplier 77",
         limit=20,
         titles=TitleSimilarity(threshold=0.6, weight=0.5),
@@ -412,8 +419,9 @@ async def test_plain_paths_use_indexes_at_scale(engine: AsyncEngine, bulk: Sessi
         await scope_to_domain(session, DOMAIN)
         found = await head_schema(session, DOMAIN, BULK_BRANCH, runtime=runtime)
         assert found is not None
+        layout = await load_layout(session, DOMAIN, BULK_BRANCH)
         with captured(engine) as statements:
-            await _exercise(session, found.schema, runtime)
+            await _exercise(session, found.schema, runtime, layout)
         reads = [(sql, params) for sql, params in statements if "set_config" not in sql]
         connection = await session.connection()
         plans = [scans(await plan_of(connection, sql, params)) for sql, params in reads]
@@ -441,7 +449,8 @@ async def test_definer_functions_keep_index_plans_under_row_level_security(
                 await scope_to_domain(session, DOMAIN)
                 found = await head_schema(session, DOMAIN, BULK_BRANCH, runtime=runtime)
                 assert found is not None
-                await _exercise(session, found.schema, runtime)
+                layout = await load_layout(session, DOMAIN, BULK_BRANCH)
+                await _exercise(session, found.schema, runtime, layout)
             record = await get_record(session, DOMAIN, BULK_BRANCH, SUPPLIER, "BS-77")
         assert record is not None
     reading = [found for found in (scans(plan) for plan in plans) if found]
@@ -451,9 +460,118 @@ async def test_definer_functions_keep_index_plans_under_row_level_security(
         for node in plan_nodes(plan)
         if node.get("Function Name", "").startswith("lb_")
     ]
-    assert set(functions) == set(READ_FUNCTIONS)
+    assert set(functions) == {f for f in READ_FUNCTIONS if not f.endswith("_overlay")}
     _assert_index_plans(reading)
     _assert_index_kinds(reading)
+
+
+OVERLAY_BRANCH = "agent/bulk"
+
+_OVERLAY_ROWS = text(
+    """
+    INSERT INTO mat_records (domain_id, branch, kind_id, key, "values", derived, title, search,
+                             object_hash, lineage, updated_revision, updated_at,
+                             revision_generation, deleted)
+    SELECT domain_id, :overlay, kind_id, key, "values", derived, title || ' changed',
+           to_tsvector('simple', title || ' changed'), object_hash, lineage, updated_revision,
+           updated_at, revision_generation, kind_id = :part
+    FROM mat_records
+    WHERE domain_id = :domain AND branch = :bulk
+      AND key = ANY(SELECT p || g FROM generate_series(1, 500) AS g, (VALUES ('BS-'), ('BP-')) v(p))
+    """
+)
+
+
+async def _bulk_overlay(engine: AsyncEngine, bulk: Sessions, runtime: StoreRuntime) -> None:
+    """An overlay of the bulk branch holding 500 changed Suppliers and 500 Part tombstones."""
+    async with bulk() as session:
+        await create_branch(
+            session,
+            DOMAIN,
+            OVERLAY_BRANCH,
+            created_by="usr_test",
+            source=BULK_BRANCH,
+            mode="overlay",
+            runtime=runtime,
+        )
+    async with bulk() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await session.execute(
+            _OVERLAY_ROWS,
+            {"overlay": OVERLAY_BRANCH, "domain": DOMAIN, "bulk": BULK_BRANCH, "part": PART},
+        )
+    async with engine.connect() as connection:
+        auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        await auto.exec_driver_sql("VACUUM ANALYZE mat_records, mat_links, refs")
+
+
+def _mat_scans(plan: dict[str, Any]) -> list[tuple[str, str]]:
+    """`(node type, relation or index)` of the scans of materialized tables."""
+    return [
+        (node["Node Type"], node.get("Index Name") or node.get("Relation Name", ""))
+        for node in plan_nodes(plan)
+        if str(node.get("Relation Name") or node.get("Index Name") or "").startswith("mat_")
+    ]
+
+
+def _assert_overlay_plans(plans: list[dict[str, Any]]) -> None:
+    """Every statement reads both the overlay and its base, through indexes only."""
+    reading = [found for found in (_mat_scans(plan) for plan in plans) if found]
+    assert reading
+    for found in reading:
+        assert all(node != "Seq Scan" for node, _ in found), found
+    used = {name for found in reading for _, name in found}
+    assert any(name.startswith("mat_records_attr_") for name in used), used
+    assert any(name.endswith("search_idx") for name in used), used
+    assert any("pkey" in name for name in used), used
+
+
+@pytest.mark.integration
+async def test_overlay_reads_keep_index_plans(
+    engine: AsyncEngine, bulk: Sessions, runtime: StoreRuntime
+) -> None:
+    """On an overlay the statements read the resolved rows (overlay over base): plain SQL
+    for a role not subject to RLS, custom and generic plans, and the `_overlay` definer
+    functions for a role subject to it, all on the indexes of the base and the overlay."""
+    await _bulk_overlay(engine, bulk, runtime)
+    plain = reads_runtime(definer=False)
+    async with bulk() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        found = await head_schema(session, DOMAIN, OVERLAY_BRANCH, runtime=plain)
+        assert found is not None
+        layout = await load_layout(session, DOMAIN, OVERLAY_BRANCH)
+        assert layout.overlay
+        with captured(engine) as statements:
+            await _exercise(session, found.schema, plain, layout)
+        reads = [(sql, params) for sql, params in statements if "set_config" not in sql]
+        connection = await session.connection()
+        plans = [await plan_of(connection, sql, params) for sql, params in reads]
+        generic = [await plan_of(connection, sql, params, generic=True) for sql, params in reads]
+    _assert_overlay_plans(plans)
+    _assert_overlay_plans(generic)
+
+    definer = reads_runtime(definer=True)
+    async with reader_role(engine, functions=True) as role, bulk() as session, session.begin():
+        async with nested_plans(session) as nested:
+            await session.execute(text(f"SET LOCAL ROLE {role}"))
+            await scope_to_domain(session, DOMAIN)
+            await _exercise(session, found.schema, definer, layout)
+        changed = await get_record(session, DOMAIN, layout, SUPPLIER, "BS-77")
+        gone = await get_record(session, DOMAIN, layout, PART, "BP-77")
+        kept = await get_record(session, DOMAIN, layout, PART, "BP-777")
+    functions = {
+        node["Function Name"]
+        for plan in nested
+        for node in plan_nodes(plan)
+        if node.get("Function Name", "").startswith("lb_")
+    }
+    assert functions == {f for f in READ_FUNCTIONS if f.endswith("_overlay")}
+    _assert_overlay_plans(nested)
+    assert changed is not None
+    assert changed.title is not None
+    assert changed.title.endswith(" changed")
+    assert gone is None
+    assert kept is not None
 
 
 RIVAL = "rival"
