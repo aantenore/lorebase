@@ -753,6 +753,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/documents/{document_id}/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the parsed text of a document
+         * @description The text Scribe parsed from the document; extraction evidence offsets index it.
+         */
+        get: operations["get_document_text_api_v1_domains__domain_id__documents__document_id__text_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/branches/{branch}/events": {
         parameters: {
             query?: never;
@@ -2228,6 +2248,31 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by: string;
+        };
+        /** DocumentTextOut */
+        DocumentTextOut: {
+            /** Document Id */
+            document_id: string;
+            /**
+             * Text Sha256
+             * @description SHA-256 of the whole parsed text (UTF-8).
+             */
+            text_sha256: string;
+            /**
+             * Text
+             * @description The parsed text, cut at `keeper.documents.max_text_chars`.
+             */
+            text: string;
+            /**
+             * Length
+             * @description Characters (code points) of the whole parsed text.
+             */
+            length: number;
+            /**
+             * Truncated
+             * @description `text` holds only the first characters.
+             */
+            truncated: boolean;
         };
         /** DocumentUploaded */
         DocumentUploaded: {
@@ -7469,6 +7514,63 @@ export interface operations {
             };
             /** @description The URL could not be fetched. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_document_text_api_v1_domains__domain_id__documents__document_id__text_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentTextOut"];
+                };
+            };
+            /** @description Not modified (`If-None-Match`). */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found, or not parsed. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

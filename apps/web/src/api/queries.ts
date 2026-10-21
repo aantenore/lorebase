@@ -69,7 +69,8 @@ export const keys = {
   revision: (domain: DomainId, id: RevisionId) => ['keeper', 'revision', domain, id] as const,
   documents: (domain: DomainId) => ['keeper', 'documents', domain] as const,
   document: (domain: DomainId, id: string) => ['keeper', 'document', domain, id] as const,
-  documentText: (domain: DomainId, id: string) => ['keeper', 'document-text', domain, id] as const,
+  documentText: (domain: DomainId, id: string, textSha256: string | null) =>
+    ['keeper', 'document-text', domain, id, textSha256] as const,
   proposalItems: (domain: DomainId, id: string) =>
     ['keeper', 'proposal-items', domain, id] as const,
   sourceRuns: (domain: DomainId, params: SourceRunListParams | undefined) =>
@@ -352,11 +353,14 @@ export function useDocument(domain: DomainId, id: string) {
   });
 }
 
-/** The parsed text of a document, or `null` when this Keeper does not serve it. */
-export function useDocumentText(domain: DomainId, id: string) {
+/**
+ * The parsed text of a document, or `null` while it is not parsed. Keyed by the hash of the
+ * text, so a document parsed (again) after the first look is fetched anew.
+ */
+export function useDocumentText(domain: DomainId, id: string, textSha256: string | null) {
   const api = useKeeperApi();
   return useQuery({
-    queryKey: keys.documentText(domain, id),
+    queryKey: keys.documentText(domain, id, textSha256),
     queryFn: () => api.documents.text(domain, id),
     staleTime: Infinity,
   });

@@ -1,4 +1,4 @@
-"""`documents upload|list|get`: documents stored for extraction by Scribe."""
+"""`documents upload|list|get|text`: documents stored for extraction by Scribe."""
 
 from __future__ import annotations
 
@@ -140,3 +140,22 @@ def documents_get(
     app = app_of(ctx, json_out)
     found = app.client().documents.get(app.domain(domain), document_id)
     app.out.emit(found, lambda: _show_document(app, found))
+
+
+@documents_app.command("text")
+def documents_text(
+    ctx: typer.Context,
+    document_id: Annotated[str, typer.Argument(help="Document id.", metavar="ID")],
+    domain: DomainOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Print the parsed text of a document (the text extraction evidence offsets index)."""
+    app = app_of(ctx, json_out)
+    found = app.client().documents.text(app.domain(domain), document_id)
+
+    def human() -> None:
+        app.out.text(found.text)
+        if found.truncated:
+            app.out.info(f"text cut at {len(found.text)} of {found.length} characters")
+
+    app.out.emit(found, human)

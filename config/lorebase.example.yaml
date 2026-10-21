@@ -325,6 +325,7 @@ keeper:
     url_timeout_s: 30.0          # time budget of one fetch (redirects are not followed)
     extract_on_upload: true      # queue an extraction job per upload unless the request says no
     jobs_listed: 20              # extraction jobs shown with a document
+    max_text_chars: 2000000      # parsed text served by GET .../documents/{id}/text (cut above)
 
 # Model inference, used by Scribe only. Lorebase never imports a model vendor library: every
 # chat model is an OpenAI-compatible HTTP endpoint, local or hosted.

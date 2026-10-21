@@ -4927,6 +4927,86 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/documents/{document_id}/text": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get the parsed text of a document",
+        "description": "The text Scribe parsed from the document; extraction evidence offsets index it.",
+        "operationId": "get_document_text_api_v1_domains__domain_id__documents__document_id__text_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentTextOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified (`If-None-Match`)."
+          },
+          "403": {
+            "description": "The caller lacks the permission Domain-wide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or document not found, or not parsed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/branches/{branch}/events": {
       "get": {
         "tags": [
@@ -11075,6 +11155,43 @@
           "created_by"
         ],
         "title": "DocumentOut"
+      },
+      "DocumentTextOut": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "text_sha256": {
+            "type": "string",
+            "title": "Text Sha256",
+            "description": "SHA-256 of the whole parsed text (UTF-8)."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The parsed text, cut at `keeper.documents.max_text_chars`."
+          },
+          "length": {
+            "type": "integer",
+            "title": "Length",
+            "description": "Characters (code points) of the whole parsed text."
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "`text` holds only the first characters."
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "text_sha256",
+          "text",
+          "length",
+          "truncated"
+        ],
+        "title": "DocumentTextOut"
       },
       "DocumentUploaded": {
         "properties": {

@@ -335,3 +335,9 @@ class DocumentSettings(SectionModel):
     jobs_listed: int = Field(
         default=20, ge=1, description="Extraction jobs listed with a document, newest first."
     )
+    max_text_chars: int = Field(
+        default=2_000_000,
+        ge=1,
+        description="Characters of parsed text one `GET .../documents/{id}/text` returns; a "
+        "longer text is cut there and the answer says `truncated`.",
+    )

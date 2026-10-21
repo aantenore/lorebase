@@ -1138,6 +1138,23 @@ def test_documents_list_and_get(http: respx.MockRouter) -> None:
     assert as_json["extraction_jobs"][0]["id"] == "ext_1"
 
 
+def test_documents_text_prints_the_parsed_text(http: respx.MockRouter) -> None:
+    body = {
+        "document_id": "doc_1",
+        "text_sha256": "ab" * 32,
+        "text": "Supplier S-1025 ships part",
+        "length": 40,
+        "truncated": True,
+    }
+    http.get("/domains/supply/documents/doc_1/text").respond(200, json=body)
+    shown = run("documents", "text", "doc_1", "-d", "supply")
+    assert shown.exit_code == 0, shown.output
+    assert shown.stdout == "Supplier S-1025 ships part\n"
+    assert "text cut at 26 of 40 characters" in shown.stderr
+    as_json = json.loads(run("documents", "text", "doc_1", "-d", "supply", "--json").stdout)
+    assert as_json["truncated"] is True
+
+
 def test_proposal_items_filters_and_renders(http: respx.MockRouter) -> None:
     route = http.get("/domains/supply/proposals/prp_1/items").respond(
         200, json={"items": [ITEM_ROW], "next_cursor": None}

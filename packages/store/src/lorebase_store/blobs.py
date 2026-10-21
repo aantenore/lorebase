@@ -19,6 +19,8 @@ from lorebase_store.models import metadata
 
 BLOBS: Table = metadata.tables["document_blobs"]
 POSTGRES_SCHEME = "postgres"
+TEXT_REF_KEY = "text_ref"
+"""Document metadata member holding the blob reference of the parsed text (UTF-8)."""
 
 
 class BlobNotFoundError(LookupError):

@@ -1255,3 +1255,7 @@ class Documents(_Resource):
     async def get(self, domain: str, document_id: str) -> m.DocumentDetail:
         """A document with its extraction jobs."""
         return await self._c.send(ep.get_document(domain, document_id))
+
+    async def text(self, domain: str, document_id: str) -> m.DocumentText:
+        """The parsed text of a document (404 until it is parsed)."""
+        return await self._c.send(ep.get_document_text(domain, document_id))
