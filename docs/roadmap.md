@@ -6,10 +6,9 @@ Lorebase is pre-alpha. Nothing is released, no tag exists and interfaces may cha
 
 ## Next up
 
-1. Python client and CLI (M1, T24 and T25).
-2. Lineage and history endpoints, then the 1M-Record performance baseline (M1, T23 and T28).
-3. Expressions accepted in schema change sets, so the CEL path of stored Operations can be used end to end.
-4. Scribe and Source ingestion (M2).
+1. Lineage and history endpoints, then the 1M-Record performance baseline (M1, T23 and T28).
+2. Expressions accepted in schema change sets, so the CEL path of stored Operations can be used end to end.
+3. Scribe and Source ingestion (M2).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -46,8 +45,8 @@ Keeper REST API
 
 Clients and operations
 
-- [ ] Python client
-- [ ] CLI
+- [x] Python client (sync and async), checked against the committed OpenAPI document
+- [x] CLI (`lorebase`)
 - [x] Docker image and docker compose for Postgres, migrations and Keeper
 - [x] CI: lint, types, import contracts, unit and integration tests; CodeQL, Scorecard, SBOM and pinned actions
 - [x] Inference interfaces and a deterministic fake provider (no model calls in M1; the read path cannot import them)

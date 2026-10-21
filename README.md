@@ -11,7 +11,7 @@
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so does the MCP server (Herald). The CLI, the Python client, Source syncs and document extraction do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
+> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs and document extraction do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
 
 ## What it is
 
@@ -79,7 +79,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
 | Operations | Garbage collection, Domain backup and restore bundles, a Postgres job queue ([docs/operations.md](docs/operations.md)) | Done | M5, landed early |
 | Agent access | Context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([docs/agents.md](docs/agents.md)) | Done | M3, landed early |
-| Agent access | Python client and CLI | Planned (empty packages) | M1 |
+| Agent access | Python client (sync and async) and the `lorebase` CLI over the REST API, Proposals, context packs and explanations included; the OpenAPI document is committed as [docs/openapi.json](docs/openapi.json) | Done | M1 |
 | Agent access | MCP server (Herald) on stdio and Streamable HTTP ([docs/mcp.md](docs/mcp.md)) | Done | M3, landed early |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
 | Ingestion | CSV, Parquet and Postgres Sources with snapshot and incremental syncs | Planned | M2 |
@@ -138,6 +138,7 @@ flowchart LR
   subgraph Clients
     A1[External agents<br/>any framework]
     A2[Web app<br/>Explorer, Canvas, Modeler, Review]
+    A3[Python client and CLI]
   end
 
   subgraph Lorebase
@@ -156,6 +157,7 @@ flowchart LR
   A1 -- REST --> K
   H -- REST --> K
   A2 -- REST --> K
+  A3 -- REST --> K
   K --> V
   K --> M
   K --> G
@@ -192,11 +194,11 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 ## Status and roadmap
 
-Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine and the REST API, Proposals included, are done; the client, the CLI, lineage and history endpoints and the 1M-Record performance baseline are not.
+Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine, the REST API (Proposals included), the Python client and the CLI are done; lineage and history endpoints and the 1M-Record performance baseline are not.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
 
-Next: the Python client and the CLI, lineage and history endpoints and the 1M-Record baseline (finishing M1), expressions accepted in schema change sets, Source ingestion (M2), custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
+Next: lineage and history endpoints and the 1M-Record baseline (finishing M1), expressions accepted in schema change sets, Source ingestion (M2), custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|

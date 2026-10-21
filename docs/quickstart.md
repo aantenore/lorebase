@@ -383,6 +383,25 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml exec -T pos
 You should see 30 Suppliers, 40 Parts and 20 Plants on `work`, and `S-1001` titled
 `Kavsen Alloys Sp. z o.o.`.
 
+### Propose the changes to `main`
+
+`main` takes changes through a Proposal. The CLI covers the flow (`proposal create`, `list`,
+`get`, `review`, `merge`, `close`, `conflicts` and `resolve`; each takes `--json`):
+
+```bash
+uv run lorebase proposal create work main --title "Load the supply sample"
+uv run lorebase proposal list --status open
+uv run lorebase proposal review <id> approve
+uv run lorebase proposal merge <id>
+```
+
+The development config answers every request as the same anonymous administrator, and
+`keeper.proposals.allow_self_approval` is `false`, so the approval has to come from another
+principal; for a local trial set `allow_self_approval: true`. Open Conflicts or missing approvals
+refuse the merge with exit code 2. `uv run lorebase context --ref Supplier/S-1001 -b work` and
+`uv run lorebase explain Supplier S-1001 -b work` print what an agent gets from the context pack
+and Record explanation endpoints ([agents.md](agents.md)).
+
 ## 8. Web app in mock mode
 
 The web app talks to a `KeeperApi` interface with two adapters. In `mock` mode it serves
