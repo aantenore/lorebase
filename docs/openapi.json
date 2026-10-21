@@ -2391,7 +2391,7 @@
             }
           },
           "422": {
-            "description": "Invalid parameters or violations (`issues`, `edits`), or expressions not enabled (`expressions-not-enabled`).",
+            "description": "Invalid parameters or violations (`issues`, `edits`), a precondition that does not hold (`precondition-failed`, with the expression and its position), or expressions not enabled (`expressions-not-enabled`).",
             "content": {
               "application/json": {
                 "schema": {
