@@ -227,6 +227,42 @@ def test_write_body_contains_only_the_set_members(http: respx.MockRouter, sleeps
     assert json.loads(route.calls.last.request.content) == {"name": "work", "source": "main"}
 
 
+def test_import_batch_sends_records_and_links_in_one_call(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    route = http.post("/domains/supply/operations/import_batch/execute").respond(
+        200, json=_execution()
+    )
+    records = [{"kind": "Contract", "contract_number": "C-1"}]
+    links = [{"relation": "with_supplier", "from": "C-1", "to": "S-1"}]
+    with make(sleeps) as client:
+        client.operations.import_batch(
+            "supply", records, links, branch="work", message="Load", idempotency_key="k1"
+        )
+        client.operations.import_batch("supply", links=links)
+    first, second = (json.loads(call.request.content) for call in route.calls)
+    assert first == {
+        "parameters": {"records": records, "links": links},
+        "branch": "work",
+        "dry_run": False,
+        "message": "Load",
+    }
+    assert route.calls[0].request.headers["idempotency-key"] == "k1"
+    assert second["parameters"] == {"records": [], "links": links}
+
+
+async def test_async_import_batch(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.post("/domains/supply/operations/import_batch/execute").respond(
+        200, json=_execution()
+    )
+    async with amake(sleeps) as client:
+        result = await client.operations.import_batch("supply", [{"kind": "Plant"}], dry_run=True)
+    assert result.status == "committed"
+    body = json.loads(route.calls.last.request.content)
+    assert body["parameters"] == {"records": [{"kind": "Plant"}], "links": []}
+    assert body["dry_run"] is True
+
+
 # Errors -------------------------------------------------------------------------------------
 
 

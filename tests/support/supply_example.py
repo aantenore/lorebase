@@ -30,6 +30,21 @@ LINK_FILES = {
     "supplied_by": "supplied_by.csv",
     "stocked_at": "stocked_at.csv",
 }
+# Everything `lorebase import batch` loads in one command: the six Kinds (the three above need
+# no Link on creation) and the explicit Relations, whose Links travel with their Records.
+BATCH_KIND_FILES = {
+    **KIND_FILES,
+    "Contract": "contract.csv",
+    "PurchaseOrder": "purchase_order.csv",
+    "RiskFlag": "risk_flag.csv",
+}
+BATCH_LINK_FILES = {
+    **LINK_FILES,
+    "with_supplier": "with_supplier.csv",
+    "for_part": "for_part.csv",
+    "delivered_to": "delivered_to.csv",
+    "flags": "flags.csv",
+}
 DOMAIN = "supply"
 WORK = "work"
 TRUE_TEXT = {"true": True, "false": False}

@@ -15,6 +15,7 @@ output only ever holds results.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from lorebase_client import (
@@ -43,8 +44,15 @@ class CliError(Exception):
         self.exit_code = exit_code
 
 
+Locator = Callable[[Sequence[Any]], str | None]
+
+
 class ImportAbortedError(CliError):
-    """An import stopped at a rejected batch; earlier batches stay committed."""
+    """An import stopped at a rejected batch; earlier batches stay committed.
+
+    `locate` turns the path of an issue into a place in the input files, for imports that read
+    several (the default numbers the rows of the one file); `scope` words which rows were rejected.
+    """
 
     def __init__(
         self,
@@ -54,13 +62,16 @@ class ImportAbortedError(CliError):
         last_row: int,
         committed_rows: int,
         committed_revisions: list[str],
+        scope: str | None = None,
+        locate: Locator | None = None,
     ) -> None:
         super().__init__(
-            f"rows {first_row}-{last_row} were rejected; {committed_rows} earlier rows are "
-            "committed",
+            f"{scope or f'rows {first_row}-{last_row} were rejected'}; {committed_rows} earlier "
+            "rows are committed",
             exit_code=exit_code_for(cause),
         )
         self.cause = cause
+        self.locate = locate
         self.first_row = first_row
         self.last_row = last_row
         self.committed_rows = committed_rows
@@ -93,11 +104,18 @@ def _location(path: list[Any], row_offset: int) -> str:
     return text
 
 
-def issue_lines(error: LorebaseError, *, row_offset: int = 0, limit: int = 20) -> list[str]:
+def issue_lines(
+    error: LorebaseError,
+    *,
+    row_offset: int = 0,
+    limit: int = 20,
+    locate: Locator | None = None,
+) -> list[str]:
     """One line per validation finding or invalid request member."""
     lines: list[str] = []
     for issue in error.issues[:limit]:
-        where = _location(list(issue.get("path") or []), row_offset)
+        path = list(issue.get("path") or [])
+        where = (locate(path) if locate else None) or _location(path, row_offset)
         subject = " ".join(
             str(issue[name]) for name in ("kind", "relation", "key", "attribute") if issue.get(name)
         )
@@ -114,10 +132,12 @@ def issue_lines(error: LorebaseError, *, row_offset: int = 0, limit: int = 20) -
     return lines
 
 
-def describe(error: LorebaseError, *, row_offset: int = 0) -> list[str]:
+def describe(
+    error: LorebaseError, *, row_offset: int = 0, locate: Locator | None = None
+) -> list[str]:
     """Lines to print for an error: the problem detail, what it carries and a hint."""
     lines = [f"error: {error.message}"]
-    lines.extend(issue_lines(error, row_offset=row_offset))
+    lines.extend(issue_lines(error, row_offset=row_offset, locate=locate))
     if error.current_head:
         lines.append(f"  the branch is now at {error.current_head}; read it again and retry")
     if error.extra.get("proposals"):
@@ -134,12 +154,14 @@ def describe(error: LorebaseError, *, row_offset: int = 0) -> list[str]:
 def render_failure(error: Exception, *, json_mode: bool) -> tuple[str, int]:
     """The text for standard error and the exit code of a failure."""
     row_offset = 0
+    locate: Locator | None = None
     committed: dict[str, Any] = {}
     api_error: LorebaseError | None = None
     notes: list[str] = []
     if isinstance(error, ImportAbortedError):
         api_error = error.cause
         row_offset = error.first_row  # 1-based row numbers of the input file
+        locate = error.locate
         committed = {
             "committed_rows": error.committed_rows,
             "committed_revisions": error.committed_revisions,
@@ -169,5 +191,5 @@ def render_failure(error: Exception, *, json_mode: bool) -> tuple[str, int]:
         return json.dumps({"error": body}, indent=2), code
     if api_error is None:
         return f"error: {error}", code
-    lines = describe(api_error, row_offset=row_offset)
+    lines = describe(api_error, row_offset=row_offset, locate=locate)
     return "\n".join([*lines, *(f"  {note}" for note in notes)]), code
