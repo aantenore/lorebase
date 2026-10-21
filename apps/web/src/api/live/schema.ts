@@ -316,6 +316,32 @@ function derivation(raw: Raw, names: Names): Derivation {
   };
 }
 
+/** Keys of a raw Source that `source()` reads; any other key is carried in `extra`. */
+const SOURCE_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'status',
+  'watermark_column',
+  'tombstone_column',
+  'type',
+  'connection',
+  'table',
+  'query',
+  'records_path',
+  'flatten_separator',
+  'http',
+  'target_kind',
+  'key_mapping',
+  'attribute_mapping',
+  'relation_mapping',
+  'scope_filter',
+  'sync_mode',
+  'schedule',
+  'target_branch_policy',
+] as const;
+
 function source(raw: Raw): Source {
   const policy = isRaw(raw['target_branch_policy']) ? raw['target_branch_policy'] : {};
   const mapping = isRaw(raw['attribute_mapping']) ? raw['attribute_mapping'] : {};
@@ -323,6 +349,12 @@ function source(raw: Raw): Source {
   const description = str(raw['description']);
   const watermark = strOrNull(raw['watermark_column']);
   const tombstone = strOrNull(raw['tombstone_column']);
+  const table = strOrNull(raw['table']);
+  const query = strOrNull(raw['query']);
+  const recordsPath = strOrNull(raw['records_path']);
+  const separator = strOrNull(raw['flatten_separator']);
+  const http = isRaw(raw['http']) ? raw['http'] : undefined;
+  const extra = omit(raw, SOURCE_KEYS);
   return {
     id: str(raw['id']),
     api_name: str(raw['api_name']),
@@ -333,6 +365,11 @@ function source(raw: Raw): Source {
     ...(tombstone === null ? {} : { tombstone_column: tombstone }),
     type: str(raw['type'], 'csv') as Source['type'],
     connection: str(raw['connection']),
+    ...(table === null ? {} : { table }),
+    ...(query === null ? {} : { query }),
+    ...(recordsPath === null ? {} : { records_path: recordsPath }),
+    ...(separator === null ? {} : { flatten_separator: separator }),
+    ...(http === undefined ? {} : { http }),
     target_kind: str(raw['target_kind']),
     key_mapping: list(raw['key_mapping']).map(String),
     attribute_mapping: Object.fromEntries(
@@ -355,6 +392,7 @@ function source(raw: Raw): Source {
         ? { merge_policy: policy['merge_policy'] as 'proposal' }
         : {}),
     },
+    ...(Object.keys(extra).length === 0 ? {} : { extra }),
   };
 }
 

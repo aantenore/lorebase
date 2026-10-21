@@ -83,4 +83,44 @@ describe('mapSchema', () => {
     expect(back.schema.derivations).toEqual(schema.derivations);
     expect(back.schema.sources).toEqual(schema.sources);
   });
+
+  it('keeps the fields of file and HTTP Sources and the keys it does not model', () => {
+    const http = {
+      headers: { Authorization: 'secret://env/API_TOKEN' },
+      pagination: { type: 'page', page_param: 'p' },
+      max_pages: 5,
+    };
+    const copy = structuredClone(out);
+    const sources = copy.schema['sources'] as Record<string, Record<string, unknown>>;
+    const [id] = Object.keys(sources);
+    if (id === undefined) throw new Error('No Source');
+    Object.assign(sources[id] as Record<string, unknown>, {
+      type: 'http_json',
+      table: 'erp.vendors',
+      query: 'SELECT 1',
+      records_path: 'data.items',
+      flatten_separator: '__',
+      http,
+      future_option: { nested: [1, 2] },
+    });
+    const mapped = mapSchema(copy).sources.find((s) => s.id === id);
+    expect(mapped).toMatchObject({
+      type: 'http_json',
+      table: 'erp.vendors',
+      query: 'SELECT 1',
+      records_path: 'data.items',
+      flatten_separator: '__',
+      http,
+      extra: { future_option: { nested: [1, 2] } },
+    });
+    expect(Object.keys(mapped?.extra ?? {})).toEqual(['future_option']);
+  });
+
+  it('leaves out the optional Source fields and extra when Keeper sends none', () => {
+    for (const source of schema.sources) {
+      expect(source).not.toHaveProperty('extra');
+      expect(source).not.toHaveProperty('http');
+      expect(source).not.toHaveProperty('records_path');
+    }
+  });
 });
