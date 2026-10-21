@@ -1,10 +1,10 @@
 name: SBOM
 
 # CycloneDX software bills of materials for the Python workspace and the web app, built from the
-# lockfiles. Produced on release tags and on demand; the files are kept as workflow artifacts.
+# lockfiles. Called by release.yaml on a version tag, and on demand; the files are kept as workflow
+# artifacts (sbom-python and sbom-web).
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
