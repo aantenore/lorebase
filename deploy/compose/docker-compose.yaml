@@ -105,6 +105,37 @@ services:
     ports:
       - "${KEEPER_BIND:-127.0.0.1}:${KEEPER_HOST_PORT:-8080}:${KEEPER_PORT:-8080}"
 
+  # Scribe (docs/scribe.md): job worker and scheduler. Replicas are safe: jobs are claimed with
+  # SKIP LOCKED and one process at a time schedules. CSV Sources read files under
+  # /data/sources; the supply example data is mounted there read-only for development.
+  scribe:
+    <<: *backend
+    command: ["lorebase-scribe"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    stop_grace_period: ${SCRIBE_STOP_GRACE:-45s}
+    environment:
+      <<: *database
+      LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
+      LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+      LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
+      LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-scribe
+      LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
+      LOREBASE__SCRIBE__WORKER__CONCURRENCY: ${SCRIBE_CONCURRENCY:-2}
+      LOREBASE__SCRIBE__SOURCES__CSV__ALLOWED_ROOTS: '["/data/sources"]'
+      # Secret values behind the `connection` references of the example Sources.
+      SUPPLY_APPROVED_SUPPLIERS_CSV: ${SUPPLY_APPROVED_SUPPLIERS_CSV:-/data/sources/supply/supplier.csv}
+      ERP_DSN: ${ERP_DSN:-}
+    volumes:
+      - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+      - ${SCRIBE_SOURCES_DIR:-../../examples/supply/data}:/data/sources/supply:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   # ---- profile local-models -------------------------------------------------------------
 
   ollama:

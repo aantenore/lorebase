@@ -1165,7 +1165,7 @@ Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run
 |------|-------------|
 | `viewer` | read schema and data (subject to sensitivity masking) |
 | `explorer` | viewer plus saved views |
-| `editor` | execute built-in Operations on unprotected branches; create branches |
+| `editor` | execute built-in Operations on unprotected branches; create branches; trigger Source synchronizations (`source.sync`) |
 | `operator` | execute granted custom Operations on any branch allowed by policy |
 | `modeler` | schema change sets on branches; Source mappings |
 | `reviewer` | review Proposals, resolve Conflicts |

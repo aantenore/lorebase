@@ -5,8 +5,8 @@ Design references: [6.5](design.md#65-branches-and-refs) (refs, advisory locks),
 [6.6](design.md#66-the-commit-pipeline), [8](design.md#8-read-path-and-search) (read path),
 [15](design.md#15-deployment) (deployment), [13](design.md#13-security-and-multi-tenancy).
 
-Status: Keeper is the only service so far. Scribe and Herald are described where they matter
-and join the same topology when they exist. The read endpoints do not call `read_session` yet,
+Status: Keeper, Scribe ([scribe](scribe.md): job worker and scheduler) and Herald exist; the
+compose stack runs Keeper and Scribe. The read endpoints do not call `read_session` yet,
 so `keeper.reads.prefer_replica` takes effect endpoint by endpoint as they adopt it.
 
 ## Topology
