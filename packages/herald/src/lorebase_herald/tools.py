@@ -528,6 +528,10 @@ class LorebaseTools:
         expected_head: str | None,
         idempotency_key: str | None,
         message: str | None,
+        task: str | None,
+        intent: str | None,
+        auto_propose: bool | None,
+        auto_merge: bool | None,
         domain: str | None,
         branch: str | None,
         fmt: str | None,
@@ -538,9 +542,14 @@ class LorebaseTools:
             ("expected_head", expected_head),
             ("idempotency_key", idempotency_key),
             ("message", message),
+            ("task", task),
+            ("intent", intent),
         ):
             if value:
                 body[key] = value
+        for key, flag in (("auto_propose", auto_propose), ("auto_merge", auto_merge)):
+            if flag is not None:
+                body[key] = flag
         path = self.path(self.domain(domain), "operations", segment(operation), "execute")
         found = await self.call(self.keeper.post(path, credential=credential, body=body))
         view = views.execution_view(found, self.output)

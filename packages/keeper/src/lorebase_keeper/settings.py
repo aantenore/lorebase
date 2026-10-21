@@ -14,6 +14,7 @@ from pydantic import Field, field_validator, model_validator
 from lorebase_keeper.auth.config import AuthSettings
 from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings
 from lorebase_keeper.services.config import (
+    AgentWriteSettings,
     BranchSettings,
     DomainSettings,
     OperationSettings,
@@ -165,6 +166,7 @@ class KeeperSettings(SectionModel):
     schema_inference: SchemaInferenceSettings = Field(default_factory=SchemaInferenceSettings)
     operations: OperationSettings = Field(default_factory=OperationSettings)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
+    agent_writes: AgentWriteSettings = Field(default_factory=AgentWriteSettings)
 
     @field_validator("api_prefix")
     @classmethod

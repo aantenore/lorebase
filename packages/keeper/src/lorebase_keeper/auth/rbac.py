@@ -99,6 +99,18 @@ class Authorizer:
         grants = await self._grants(principal, domain_id)
         return any(permission in self._roles.get(grant.role, frozenset()) for grant in grants)
 
+    async def roles_of(
+        self, principal: Principal, domain_id: str, context: AccessContext = NO_CONTEXT
+    ) -> frozenset[str]:
+        """Roles the principal holds in the Domain through grants covering `context`. With
+        authentication off the caller holds every role."""
+        if principal.method == "none":
+            return self.role_names
+        if principal.key_scopes and domain_scope(domain_id) not in principal.key_scopes:
+            return frozenset()
+        grants = await self._grants(principal, domain_id)
+        return frozenset(g.role for g in grants if _covers(g, context))
+
     async def reveals_missing_domain(self, principal: Principal, domain_id: str) -> bool:
         """Whether `domain_id` names no Domain and `principal` may be told so (404, not 403).
 

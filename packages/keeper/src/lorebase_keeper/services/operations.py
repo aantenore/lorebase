@@ -8,7 +8,9 @@
        are refused)
     -> idempotency check (principal, key): same parameters replay, others conflict
     -> review policy (custom `always`, or any Operation on a protected branch unless settings
-       allow direct commits): refused with a pointer to Proposals
+       allow direct commits): refused with a pointer to Proposals (`services.agent_writes`
+       turns that refusal into a task branch and a Proposal for callers that name a task;
+       such an execution runs with `reviewed_by_proposal`)
     -> take the branch lock, check the expected head
     -> bind parameters, compute edits (stored Operations with `expressions_enabled`: evaluate
        preconditions (false: 422 `precondition-failed` with the expression and its position),
@@ -119,6 +121,10 @@ from lorebase_store.repositories import (
     RefRepository,
 )
 
+REVIEW_PROTECTED = "protected-branch"
+REVIEW_POLICY = "review-policy"
+"""Why an execution needs review: its branch is protected, or its review policy says so."""
+
 INVOKE_ACTION = "operation.invoke"
 INVOCATION_PREFIX = "inv"
 PRECONDITIONS_SKIPPED = "operation.preconditions_skipped"
@@ -145,6 +151,9 @@ class ExecutionRequest:
     idempotency_key: str | None = None
     expected_head: bytes | None = None
     message: str | None = None
+    reviewed_by_proposal: bool = False
+    """The edits go to a task branch whose Proposal is their review (agent writes): the
+    review policy and the protection of the branch no longer refuse the execution."""
 
 
 @dataclass
@@ -164,6 +173,8 @@ class ExecutionOutcome:
     warnings: list[Finding] = field(default_factory=list)
     review_required: bool = False
     replayed: bool = False
+    preconditions_failed: bool = False
+    """A dry run found the violations in `violations` in failed preconditions."""
 
 
 @dataclass(frozen=True)
@@ -232,7 +243,7 @@ def expressions_gate(operation: Operation, settings: OperationSettings) -> list[
 
 def review_required(resolved: _Resolved, *, protected: bool, settings: OperationSettings) -> bool:
     """Whether the edits must go through a Proposal instead of a direct commit."""
-    if resolved.custom is not None and resolved.custom.review_policy.mode is ReviewMode.ALWAYS:
+    if _policy_demands_review(resolved):
         return True
     return protected and not settings.direct_commit_on_protected
 
@@ -387,9 +398,17 @@ async def _execute(
         found = await invocations.by_key(principal.id, request.idempotency_key)
         if found is not None:
             return _replay(found, request, branch, digest)
-    needs_review = review_required(resolved, protected=ref.protected, settings=settings)
+    needs_review = (
+        review_required(resolved, protected=ref.protected, settings=settings)
+        and not request.reviewed_by_proposal
+    )
     if needs_review and not request.dry_run:
-        raise _review_problem(resolved.name, branch, proposals_path)
+        raise _review_problem(
+            resolved.name,
+            branch,
+            proposals_path,
+            REVIEW_POLICY if _policy_demands_review(resolved) else REVIEW_PROTECTED,
+        )
 
     refs = RefRepository(session, domain_id)
     await refs.lock(branch, timeout_ms=store.runtime.settings.commit.lock_timeout_ms)
@@ -413,15 +432,16 @@ async def _execute(
         schema, resolved, request, rows, read_links, settings, principal, store.clock()
     )
     changes, findings = planned.changes, planned.findings
-    if planned.review and not needs_review:
+    if planned.review and not needs_review and not request.reviewed_by_proposal:
         outcome.review_required = True
         if not request.dry_run:
-            raise _review_problem(resolved.name, branch, proposals_path)
+            raise _review_problem(resolved.name, branch, proposals_path, REVIEW_POLICY)
     outcome.edit_count = len(changes)
     outcome.edits = [edit_document(schema, c) for c in changes[: settings.dry_run_max_edits]]
     if findings:
         if request.dry_run:
             outcome.violations = findings
+            outcome.preconditions_failed = planned.preconditions_failed
             return outcome
         if planned.preconditions_failed:
             raise _precondition_problem(resolved.name, findings, limit=settings.max_issues)
@@ -490,12 +510,28 @@ async def _execute(
     return outcome
 
 
-def _review_problem(operation: str, branch: str, proposals_path: str) -> ProblemError:
+def _policy_demands_review(resolved: _Resolved) -> bool:
+    return resolved.custom is not None and resolved.custom.review_policy.mode is ReviewMode.ALWAYS
+
+
+def refused(dry_run: ExecutionOutcome, *, limit: int) -> ProblemError:
+    """The 422 a dry run with violations stands for: what executing it would have raised."""
+    if dry_run.preconditions_failed:
+        return _precondition_problem(dry_run.operation, dry_run.violations, limit=limit)
+    return rejected(dry_run.violations, limit=limit, edits=dry_run.edits)
+
+
+def _review_problem(operation: str, branch: str, proposals_path: str, reason: str) -> ProblemError:
     return ProblemError(
         REVIEW_REQUIRED,
         f"Edits of {operation!r} on branch {branch!r} need review: run the Operation on "
         "another branch and open a Proposal.",
-        extensions={"branch": branch, "operation": operation, "proposals": proposals_path},
+        extensions={
+            "branch": branch,
+            "operation": operation,
+            "proposals": proposals_path,
+            "reason": reason,
+        },
     )
 
 

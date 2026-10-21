@@ -27,6 +27,7 @@ from lorebase_client import (
     UnavailableError,
     new_idempotency_key,
 )
+from lorebase_client import models as m
 
 BASE = "http://keeper.test"
 API = f"{BASE}/api/v1"
@@ -261,6 +262,50 @@ async def test_async_import_batch(http: respx.MockRouter, sleeps: Sleeps) -> Non
     body = json.loads(route.calls.last.request.content)
     assert body["parameters"] == {"records": [{"kind": "Plant"}], "links": []}
     assert body["dry_run"] is True
+
+
+def test_execute_as_agent_returns_the_proposal_of_a_202(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    proposed = {
+        **_execution(),
+        "status": "proposed",
+        "target": "main",
+        "branch": "agent/svc_1/audit",
+        "proposal": {
+            "id": "prp_1",
+            "title": "Agent svc_1: audit",
+            "status": "open",
+            "source_ref": "agent/svc_1/audit",
+            "target_ref": "main",
+            "url": "/api/v1/domains/supply/proposals/prp_1",
+            "created": True,
+        },
+        "approval": {"required": 1, "approvals": 0, "satisfied": False},
+        "attempt": None,
+        "merge": {"requested": False, "allowed": False, "performed": False, "blockers": []},
+        "merged_revision": None,
+        "branch_created": True,
+        "branch_deleted": False,
+        "next": [{"action": "get_proposal", "detail": "Read it."}],
+    }
+    route = http.post("/domains/supply/operations/flag_supplier_risk/execute")
+    route.side_effect = [httpx.Response(202, json=proposed), httpx.Response(200, json=_execution())]
+    with make(sleeps) as client:
+        first = client.operations.execute_as_agent(
+            "supply", "flag_supplier_risk", {"supplier": "S-1"}, task="audit", intent="Review"
+        )
+        second = client.operations.execute_as_agent("supply", "flag_supplier_risk", task="audit")
+    assert isinstance(first, m.AgentWrite)
+    assert (first.status, first.proposal.id, first.next[0].action) == (
+        "proposed",
+        "prp_1",
+        "get_proposal",
+    )
+    assert isinstance(second, m.Execution)
+    body = json.loads(route.calls[0].request.content)
+    assert (body["task"], body["intent"]) == ("audit", "Review")
+    assert "auto_merge" not in body
 
 
 # Errors -------------------------------------------------------------------------------------

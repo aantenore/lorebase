@@ -412,10 +412,13 @@ def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
     @server.tool(
         name="lorebase_execute",
         description="The only way to write: run a governed Operation (listed by "
-        "lorebase_schema) with parameters. Keeper checks permissions, preconditions and "
-        "validation; Operations with a review policy, and protected branches, need a "
-        "Proposal instead of a direct commit. dry_run defaults to true and writes nothing: "
-        "check edits and violations, then commit with dry_run=false and expected_head.",
+        "lorebase_schema). Keeper checks permissions, preconditions and validation. dry_run "
+        "defaults to true and writes nothing: check edits and violations, then commit with "
+        "dry_run=false, expected_head and idempotency_key. Operations that need review "
+        "(review policy, protected branch): pass task (short slug) and intent; Keeper runs "
+        "them on branch agent/{you}/{task} and answers with the Proposal id and status "
+        "(proposed, merged, conflicts) and next steps. auto_merge only works if the Domain "
+        "allows it for your role.",
         annotations=WRITE,
         structured_output=False,
     )
@@ -441,6 +444,27 @@ def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
         message: Annotated[
             str | None, Field(max_length=2000, description="Revision message.")
         ] = None,
+        task: Annotated[
+            str | None,
+            Field(
+                min_length=1,
+                max_length=200,
+                description="Short slug naming the piece of work. Needed to get a Proposal "
+                "when the Operation needs review; Keeper uses the branch agent/{you}/{task}.",
+            ),
+        ] = None,
+        intent: Annotated[
+            str | None,
+            Field(max_length=4000, description="What you are after; goes into the Proposal."),
+        ] = None,
+        auto_propose: Annotated[
+            bool | None,
+            Field(description="Open a Proposal when review is needed (default: Keeper's)."),
+        ] = None,
+        auto_merge: Annotated[
+            bool | None,
+            Field(description="Merge the Proposal at once, if the Domain allows it for you."),
+        ] = None,
         domain: DomainArg = None,
         branch: BranchArg = None,
         format: FormatArg = None,
@@ -453,6 +477,10 @@ def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
             expected_head=expected_head,
             idempotency_key=idempotency_key,
             message=message,
+            task=task,
+            intent=intent,
+            auto_propose=auto_propose,
+            auto_merge=auto_merge,
             domain=domain,
             branch=branch,
             fmt=format,

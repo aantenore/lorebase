@@ -353,6 +353,38 @@ class Operations(_Resource):
             ep.execute_operation(domain, operation, body, idempotency_key=idempotency_key)
         )
 
+    async def execute_as_agent(
+        self,
+        domain: str,
+        operation: str,
+        parameters: JsonObject | None = None,
+        *,
+        task: str,
+        intent: str | None = None,
+        auto_propose: bool | None = None,
+        auto_merge: bool | None = None,
+        branch: str | None = None,
+        expected_head: str | None = None,
+        message: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.Execution | m.AgentWrite:
+        """Execute an Operation that may need review. When it does (protected branch, review
+        policy) it runs on the branch `agent/{principal}/{task}` and the answer is an
+        `AgentWrite` naming the Proposal; otherwise it is the usual `Execution`."""
+        body = m.ExecuteRequest(
+            parameters=dict(parameters or {}),
+            branch=branch,
+            expected_head=expected_head,
+            message=message,
+            task=task,
+            intent=intent,
+            auto_propose=auto_propose,
+            auto_merge=auto_merge,
+        )
+        return await self._c.send(
+            ep.execute_operation_as_agent(domain, operation, body, idempotency_key=idempotency_key)
+        )
+
     async def import_records(
         self,
         domain: str,

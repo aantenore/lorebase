@@ -683,7 +683,34 @@ def branches_text(view: Mapping[str, Any]) -> str:
 # Operations ----------------------------------------------------------------------------------
 
 
+def proposal_write_view(body: Mapping[str, Any], output: OutputSettings) -> View:
+    """An Operation that needed review and was proposed on a task branch (Keeper's 202)."""
+    proposal = body.get("proposal") or {}
+    approval = body.get("approval") or {}
+    attempt = body.get("attempt") or {}
+    steps, _ = capped(body.get("next") or [], output.max_items)
+    warnings, _ = capped(body.get("warnings") or [], output.max_issues)
+    return {
+        "status": body.get("status"),
+        "operation": body.get("operation"),
+        "branch": body.get("branch"),
+        "target": body.get("target"),
+        "revision": body.get("revision"),
+        "merged_revision": body.get("merged_revision"),
+        "edit_count": int(body.get("edit_count", 0)),
+        "proposal": {k: proposal.get(k) for k in ("id", "status", "title", "url")},
+        "approvals": {k: approval.get(k) for k in ("approvals", "required", "satisfied")},
+        "open_conflicts": int(attempt.get("open_conflicts") or 0),
+        "merge": body.get("merge"),
+        "warnings": warnings,
+        "replayed": bool(body.get("replayed")),
+        "next": steps,
+    }
+
+
 def execution_view(body: Mapping[str, Any], output: OutputSettings) -> View:
+    if isinstance(body.get("proposal"), Mapping):
+        return proposal_write_view(body, output)
     edits, _ = capped(body.get("edits") or [], output.max_items)
     edit_count = int(body.get("edit_count", len(body.get("edits") or [])))
     violations, _ = capped(body.get("violations") or [], output.max_issues)
@@ -710,7 +737,41 @@ def _finding(finding: Mapping[str, Any]) -> str:
     return f"- {where or '<operation>'}: {finding.get('message', '')} [{finding.get('code')}]"
 
 
+def proposal_write_text(view: Mapping[str, Any], output: OutputSettings) -> str:
+    proposal = view["proposal"]
+    approvals = view["approvals"]
+    lines = [
+        f"{view['status']} {view['operation']} on {view['branch']} -> {view['target']}: "
+        f"Proposal {proposal['id']} ({proposal['status']}), {view['edit_count']} edits"
+    ]
+    if view.get("revision"):
+        lines.append(f"revision {view['revision']}")
+    if view.get("merged_revision"):
+        lines.append(f"merged: {view['target']} is now at {view['merged_revision']}")
+    lines.append(f"approvals {approvals['approvals']} of {approvals['required']} required")
+    if view["open_conflicts"]:
+        lines.append(f"open conflicts: {view['open_conflicts']}")
+    merge = view.get("merge") or {}
+    if merge.get("requested") and not merge.get("performed"):
+        reason = ", ".join(merge.get("blockers") or []) or (
+            "not allowed for this role" if not merge.get("allowed") else "conflicts"
+        )
+        lines.append(f"auto_merge requested, not performed: {reason}")
+    if view["warnings"]:
+        lines.append("warnings:")
+        lines.extend(_finding(w) for w in view["warnings"])
+    if view["replayed"]:
+        lines.append("replayed: same idempotency_key and parameters; original result returned")
+    for step in view["next"]:
+        call = f" [{step['method']} {step['href']}]" if step.get("href") else ""
+        detail = value_text(step["detail"], output.max_value_chars)
+        lines.append(f"next: {step['action']}: {detail}{call}")
+    return "\n".join(lines)
+
+
 def execution_text(view: Mapping[str, Any], output: OutputSettings) -> str:
+    if "proposal" in view:
+        return proposal_write_text(view, output)
     limit = output.max_value_chars * 2
     status = view["status"]
     lines = [
