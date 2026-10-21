@@ -6,7 +6,8 @@ PNPM ?= pnpm
 WEB_DIR ?= apps/web
 AUDIT_DIR ?= build/audit
 PY_PATHS := packages scripts tests
-STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src packages/client/src packages/cli/src
+STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src \
+	packages/client/src packages/cli/src packages/scribe/src
 OTHER_SRC := packages/platform/src packages/inference/src
 
 .PHONY: help sync fmt lint type openapi test-unit test-int test-changed test-perf security
@@ -26,7 +27,7 @@ lint: ## Ruff (check and format check) and import-linter contracts
 	$(UV) run ruff format --check $(PY_PATHS)
 	$(UV) run lint-imports
 
-type: ## mypy: strict for core, store, keeper, herald, client and cli; default settings for the rest
+type: ## mypy: strict for core, store, keeper, herald, client, cli and scribe; default settings for the rest
 	$(UV) run mypy --strict $(STRICT_SRC)
 	$(UV) run mypy $(OTHER_SRC)
 

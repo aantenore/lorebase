@@ -82,7 +82,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Agent access | Python client (sync and async) and the `lorebase` CLI over the REST API, Proposals, context packs and explanations included; the OpenAPI document is committed as [docs/openapi.json](docs/openapi.json) | Done | M1 |
 | Agent access | MCP server (Herald) on stdio and Streamable HTTP ([docs/mcp.md](docs/mcp.md)) | Done | M3, landed early |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
-| Ingestion | CSV, Parquet and Postgres Sources with snapshot and incremental syncs | Planned | M2 |
+| Ingestion | CSV and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done; Parquet planned | M2 |
 | Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
 | Web app | Explorer, Canvas, Modeler, Review with Conflict resolver | Done on the mock API; live adapter not yet verified | M2, M3 |
 | Scale | Overlay branches, PII vault, Helm chart, 10M-Record performance | Planned | M5 |
@@ -145,7 +145,7 @@ flowchart LR
   subgraph Lorebase
     H[Herald<br/>MCP server]
     K[Keeper<br/>REST API, auth, commit pipeline,<br/>merge engine, read path]
-    S[Scribe<br/>Source syncs, extraction,<br/>embeddings, jobs]:::planned
+    S[Scribe<br/>jobs, scheduler, Source syncs;<br/>extraction and embeddings planned]
   end
 
   subgraph PG[Postgres 16]
@@ -221,6 +221,7 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Deployment and scale-out](docs/deployment.md): topology, read replicas, sizing
 - [Operations](docs/operations.md): garbage collection, backup and restore of a Domain
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
+- [Scribe](docs/scribe.md): the worker: job types, scheduler, Source definitions, sync policies and operations
 - [Performance](docs/performance.md): read latency baseline and how to reproduce it
 - [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
 - [MCP server](docs/mcp.md): Herald, its tools and its configuration for MCP hosts

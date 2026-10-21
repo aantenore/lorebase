@@ -1,7 +1,7 @@
 """HTTP sender of webhook deliveries, for `lorebase_store.webhooks.deliver_pending`.
 
-The store worker makes no HTTP calls itself; whoever runs it passes a `Sender`. This one uses
-an `httpx.AsyncClient` owned by the caller (build it with `trust_env=False`, so no proxy from
+The store makes no HTTP calls itself; Scribe's `webhook_delivery` jobs pass this `Sender`. It
+uses an `httpx.AsyncClient` owned by the caller (build it with `trust_env=False`, so no proxy from
 the environment sits between the checks and the target) and:
 
 - connects to the addresses the worker checked, never to a fresh lookup of the host: the URL

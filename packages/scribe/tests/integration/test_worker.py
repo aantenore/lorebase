@@ -1,0 +1,355 @@
+"""The worker loop, the job handlers and the scheduler against Postgres."""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import shutil
+import threading
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from lorebase_scribe.jobs import (
+    EXTRACTION_JOB,
+    WEBHOOK_DELIVERY_JOB,
+    JobContext,
+    build_handlers,
+)
+from lorebase_scribe.scheduler import Scheduler
+from lorebase_scribe.settings import SchedulerSettings, ScribeSettings, WorkerSettings
+from lorebase_scribe.sources import PERMANENT_ERRORS
+from lorebase_scribe.worker import Worker
+from lorebase_store.gc import enqueue_gc
+from lorebase_store.jobs import (
+    INDEX_JOB,
+    SOURCE_SYNC_JOB,
+    JobRow,
+    enqueue_job,
+    source_sync_payload,
+)
+from lorebase_store.repositories import scope_to_domain
+from lorebase_store.runtime import StoreRuntime
+from lorebase_store.settings import JobSettings
+from lorebase_store.webhooks import WebhookRepository, WebhookSettings, signing_key
+
+from .support import (
+    DOMAIN,
+    EXAMPLE,
+    Clock,
+    commit_on,
+    fetch,
+    load_domain,
+    record_change,
+    rows,
+    scalar,
+)
+from .support import supply_schema as example_schema
+
+pytestmark = pytest.mark.integration
+
+
+@dataclass
+class Received:
+    path: str
+    headers: dict[str, str]
+    body: bytes
+
+
+@dataclass
+class Receiver:
+    url: str
+    requests: list[Received] = field(default_factory=list)
+
+
+@pytest.fixture
+def receiver() -> Iterator[Receiver]:
+    received: list[Received] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            received.append(Received(self.path, dict(self.headers), self.rfile.read(length)))
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *args: Any) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield Receiver(f"http://127.0.0.1:{server.server_address[1]}", received)
+    finally:
+        server.shutdown()
+
+
+def worker_for(
+    context: JobContext, sessions: async_sessionmaker[AsyncSession], **settings: Any
+) -> Worker:
+    return Worker(
+        sessions,
+        build_handlers(context),
+        settings=WorkerSettings(**settings),
+        jobs=JobSettings(retry_delay_seconds=0),
+        worker_id="test-worker",
+        permanent=PERMANENT_ERRORS,
+    )
+
+
+@pytest.fixture
+async def context(
+    engine: AsyncEngine, sessions: async_sessionmaker[AsyncSession], runtime: StoreRuntime
+) -> Any:
+    async with httpx.AsyncClient(trust_env=False) as http:
+        yield JobContext(
+            engine=engine,
+            sessions=sessions,
+            runtime=runtime,
+            settings=ScribeSettings(),
+            webhooks=WebhookSettings(
+                allowed_schemes=("http", "https"),
+                allow_private_targets=True,
+            ),
+            http=http,
+            worker_id="test-worker",
+        )
+
+
+async def job_state(sessions: async_sessionmaker[AsyncSession], job_id: int) -> tuple[Any, ...]:
+    (row,) = await fetch(
+        sessions, "SELECT status, attempts, result FROM jobs WHERE id = :i", i=job_id
+    )
+    return tuple(row)
+
+
+async def enqueue(sessions: async_sessionmaker[AsyncSession], job_type: str, **kwargs: Any) -> int:
+    async with sessions() as session, session.begin():
+        return await enqueue_job(session, job_type, **kwargs)
+
+
+async def test_worker_runs_a_gc_job(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    await load_domain(sessions, runtime, clock, example_schema())
+    async with sessions() as session, session.begin():
+        job_id = await enqueue_gc(session, DOMAIN, dry_run=True)
+    assert await worker_for(context, sessions).run_once() == 1
+    status, attempts, result = await job_state(sessions, job_id)
+    assert (status, attempts) == ("succeeded", 1)
+    assert result["dry_run"] is True
+
+
+async def test_worker_runs_a_source_sync_job(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await load_domain(sessions, runtime, clock, example_schema())
+    path = tmp_path / "suppliers.csv"
+    shutil.copy(EXAMPLE / "data" / "supplier.csv", path)
+    monkeypatch.setenv("SUPPLY_APPROVED_SUPPLIERS_CSV", str(path))
+    settings = ScribeSettings.model_validate(
+        {"sources": {"csv": {"allowed_roots": [str(tmp_path)]}}}
+    )
+    job_id = await enqueue(
+        sessions,
+        SOURCE_SYNC_JOB,
+        domain_id=DOMAIN,
+        payload=source_sync_payload("approved.suppliers"),
+    )
+    worker = worker_for(dataclasses.replace(context, settings=settings, clock=clock), sessions)
+    assert await worker.run_once() == 1
+    status, attempts, result = await job_state(sessions, job_id)
+    assert (status, attempts) == ("succeeded", 1)
+    assert result["counts"]["added"] == 30
+    assert result["proposal_status"] == "merged"
+
+
+async def test_permanent_failures_are_not_retried(
+    context: JobContext, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    extraction = await enqueue(sessions, EXTRACTION_JOB, domain_id=DOMAIN)
+    sync = await enqueue(
+        sessions, SOURCE_SYNC_JOB, domain_id="nowhere", payload=source_sync_payload("x")
+    )
+    assert await worker_for(context, sessions).run_once() == 2
+    status, attempts, result = await job_state(sessions, extraction)
+    assert (status, attempts) == ("failed", 1)
+    assert "not implemented" in result["error"]
+    status, attempts, result = await job_state(sessions, sync)
+    assert (status, attempts) == ("failed", 1)
+    assert result["error"].startswith("SourceNotFoundError")
+
+
+async def test_concurrent_slots_heartbeat_and_graceful_shutdown(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    started = asyncio.Event()
+    finished: list[int] = []
+
+    async def slow(job: JobRow) -> Mapping[str, Any]:
+        if job.payload.get("block"):
+            started.set()
+            await asyncio.sleep(30)
+        finished.append(job.id)
+        return {}
+
+    ids = [await enqueue(sessions, "test", payload={"n": n}) for n in range(3)]
+    blocked = await enqueue(sessions, "test", payload={"block": True}, priority=-1)
+    worker = Worker(
+        sessions,
+        {"test": slow},
+        settings=WorkerSettings(
+            concurrency=2, poll_interval_s=0.05, heartbeat_interval_s=0.1, shutdown_grace_s=0.2
+        ),
+        jobs=JobSettings(),
+        worker_id="slots",
+    )
+    stop = asyncio.Event()
+    running = asyncio.create_task(worker.run(stop))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    before = await scalar(sessions, "SELECT locked_at FROM jobs WHERE id = :i", i=blocked)
+    await asyncio.sleep(0.3)
+    after = await scalar(sessions, "SELECT locked_at FROM jobs WHERE id = :i", i=blocked)
+    assert after > before  # the heartbeat refreshed the lock
+    stop.set()
+    await asyncio.wait_for(running, timeout=10)
+    assert sorted(finished) == ids
+    status, attempts, _ = await job_state(sessions, blocked)
+    assert (status, attempts) == ("queued", 0)  # released without counting the attempt
+
+
+async def test_webhook_delivery_job_end_to_end(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    receiver: Receiver,
+) -> None:
+    schema = example_schema()
+    await load_domain(sessions, runtime, clock, schema, kinds={"Supplier": "supplier.csv"})
+    async with sessions() as session, session.begin():
+        drain = await enqueue_job(session, WEBHOOK_DELIVERY_JOB, unique=True)
+    worker = worker_for(context, sessions)
+    await worker.run_once()  # hands off the events of the loading commits
+    assert (await job_state(sessions, drain))[0] == "succeeded"
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await WebhookRepository(session, DOMAIN).add(
+            url=f"{receiver.url}/hook",
+            description="tests",
+            event_types=["revision.committed"],
+            branches=None,
+            secret_hash=signing_key("secret"),
+            created_by="usr_admin",
+        )
+    kind = schema.kind_by_api_name("Supplier")
+    assert kind is not None
+    row = next(r for r in rows("supplier.csv") if r["supplier_code"] == "S-1002")
+    await commit_on(sessions, runtime, clock, [record_change(kind, {**row, "risk_score": "90"})])
+    job_id = await enqueue(sessions, WEBHOOK_DELIVERY_JOB, unique=True)
+    assert await worker.run_once() == 1
+    status, _, result = await job_state(sessions, job_id)
+    assert status == "succeeded"
+    assert (result["queued"], result["delivered"]) == (1, 1)
+    (request,) = receiver.requests
+    assert request.path == "/hook"
+    assert b"S-1002" in request.body
+
+
+async def test_worker_runs_a_store_index_job(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    await load_domain(sessions, runtime, clock, example_schema())
+    name = "mat_records_attr_unplanned"
+    payload = {"action": "create", "name": name, "branch": "main", "kind": "k_none"}
+    job_id = await enqueue(sessions, INDEX_JOB, domain_id=DOMAIN, payload=payload)
+    assert await worker_for(context, sessions).run_once() == 1
+    status, _, result = await job_state(sessions, job_id)
+    assert status == "succeeded"
+    assert result["status"] == "cancelled"  # the branch does not plan this index
+    assert result["name"] == name
+
+
+class Stepper:
+    def __init__(self, start: datetime) -> None:
+        self.now = start
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+async def test_scheduler_leader_election_and_schedules(
+    engine: AsyncEngine,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    await load_domain(sessions, runtime, clock, example_schema())
+    time = Stepper(datetime(2026, 10, 21, 1, 0, tzinfo=UTC))
+    settings = SchedulerSettings(webhook_interval_s=10)
+
+    def scheduler() -> Scheduler:
+        return Scheduler(
+            engine,
+            sessions,
+            settings=settings,
+            jobs=runtime.settings.jobs,
+            writes=runtime.settings.writes,
+            clock=time,
+        )
+
+    first, second = scheduler(), scheduler()
+    try:
+        queued = await first.tick()
+        assert first.is_leader
+        assert await second.tick() == []
+        assert not second.is_leader
+        # The leader queued the interval jobs; cron jobs whose firing precedes the
+        # leadership wait for their next firing.
+        types = await fetch(sessions, "SELECT type FROM jobs ORDER BY id")
+        assert [t for (t,) in types] == [WEBHOOK_DELIVERY_JOB]
+        assert len(queued) == 1
+
+        time.now += timedelta(hours=2, minutes=30)  # 03:30: after gc (03:00) and erp (02:00)
+        await first.tick()
+        assert await second.tick() == []
+        scheduled = await fetch(
+            sessions,
+            "SELECT type, domain_id, payload ->> 'source', run_after FROM jobs "
+            "WHERE domain_id IS NOT NULL ORDER BY type",
+        )
+        erp = example_schema().source_by_api_name("erp.purchase_orders")
+        assert erp is not None
+        assert [tuple(r) for r in scheduled] == [
+            ("gc", DOMAIN, None, datetime(2026, 10, 21, 3, 0, tzinfo=UTC)),
+            ("source_sync", DOMAIN, erp.id, datetime(2026, 10, 21, 2, 0, tzinfo=UTC)),
+        ]
+        await first.tick()  # nothing new is due
+        assert await scalar(sessions, "SELECT count(*) FROM jobs WHERE domain_id IS NOT NULL") == 2
+
+        await first.release()
+        assert not first.is_leader
+        await second.tick()
+        assert second.is_leader
+    finally:
+        await first.release()
+        await second.release()

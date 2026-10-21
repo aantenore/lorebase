@@ -18,6 +18,7 @@ members = [
     "lorebase-inference",
     "lorebase-keeper",
     "lorebase-platform",
+    "lorebase-scribe",
     "lorebase-store",
 ]
 
@@ -1184,6 +1185,7 @@ dependencies = [
     { name = "lorebase-inference" },
     { name = "lorebase-keeper" },
     { name = "lorebase-platform" },
+    { name = "lorebase-scribe" },
     { name = "lorebase-store" },
 ]
 
@@ -1212,6 +1214,7 @@ requires-dist = [
     { name = "lorebase-inference", editable = "packages/inference" },
     { name = "lorebase-keeper", editable = "packages/keeper" },
     { name = "lorebase-platform", editable = "packages/platform" },
+    { name = "lorebase-scribe", editable = "packages/scribe" },
     { name = "lorebase-store", editable = "packages/store" },
 ]
 
@@ -1369,6 +1372,35 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
     { name = "pyyaml", specifier = ">=6.0" },
+]
+
+[[package]]
+name = "lorebase-scribe"
+version = "0.1.0"
+source = { editable = "packages/scribe" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "httpx" },
+    { name = "lorebase-core" },
+    { name = "lorebase-inference" },
+    { name = "lorebase-platform" },
+    { name = "lorebase-store" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "lorebase-core", editable = "packages/core" },
+    { name = "lorebase-inference", editable = "packages/inference" },
+    { name = "lorebase-platform", editable = "packages/platform" },
+    { name = "lorebase-store", editable = "packages/store" },
+    { name = "opentelemetry-api", specifier = ">=1.25" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
 ]
 
 [[package]]

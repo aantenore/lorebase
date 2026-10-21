@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
-from lorebase_keeper.services.webhooks import HttpxSender
+from lorebase_scribe.webhooks import HttpxSender
 from lorebase_store.db import create_engine
 from lorebase_store.materialize import create_branch
 from lorebase_store.runtime import StoreRuntime

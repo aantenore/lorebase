@@ -318,6 +318,7 @@ Custom code Derivations (Python functions) are out of scope until after M5; when
 |-------|-------|
 | id, api_name, type | `postgres_table`, `postgres_query`, `csv`, `parquet`, `http_json` (M5) |
 | connection | reference to a secret, never a literal: `secret://env/ERP_DSN` or `secret://file/erp.dsn` |
+| table, query | `postgres_table`: table name, optionally schema-qualified (default: last segment of the api name); `postgres_query`: read-only `SELECT` |
 | target_kind | Kind id |
 | key_mapping | source columns to primary key |
 | attribute_mapping | `{attribute_id: {column or expression, transform}}`; transforms from a fixed set: `cast`, `trim`, `lower`, `upper`, `parse_date(format)`, `concat`, `constant`, `map(values)`, `null_if` |
@@ -1177,7 +1178,7 @@ Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run
 |------|-------------|
 | `viewer` | read schema and data (subject to sensitivity masking) |
 | `explorer` | viewer plus saved views |
-| `editor` | execute built-in Operations on unprotected branches; create branches |
+| `editor` | execute built-in Operations on unprotected branches; create branches; trigger Source synchronizations (`source.sync`) |
 | `operator` | execute granted custom Operations on any branch allowed by policy |
 | `modeler` | schema change sets on branches; Source mappings |
 | `reviewer` | review Proposals, resolve Conflicts |

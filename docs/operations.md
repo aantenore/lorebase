@@ -30,6 +30,9 @@ because their DDL needs a role that owns `mat_records` ([store schema
 notes](store-schema-notes.md#physical-layout)). `indexes plan` prints that DDL for an
 administrator where no such role is configured.
 
+Scribe runs queued `gc` jobs and queues one per Domain at `scribe.scheduler.gc_schedule`
+([scribe](scribe.md)).
+
 The report is one JSON object per Domain (`revisions`, `changesets`, `history_rows`,
 `provenance`, `nodes`, `node_bytes`, `objects`, `object_bytes`, mark and sweep seconds). In
 code: `collect_garbage(engine, domain_id, dry_run=...)`, `run_gc_job` for the `gc` job type

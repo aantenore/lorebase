@@ -73,6 +73,20 @@ _REBUILD_HISTORY = text(
 )
 
 
+_KEYS_WITH_ORIGIN = text(
+    """
+    SELECT r.key FROM mat_records r
+    WHERE r.domain_id = :domain AND r.branch = :branch AND r.kind_id = :kind
+      AND EXISTS (
+        SELECT 1 FROM jsonb_each_text(r.lineage) AS l(attribute, provenance_id)
+        JOIN provenance p ON p.domain_id = r.domain_id AND p.id = l.provenance_id
+        WHERE p.origin_type = :origin_type AND p.origin_ref ->> :field = :value
+      )
+    ORDER BY r.key
+    """
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RecordRow:
     """A materialized Record. `derived` holds derived values by Attribute id (AC-07): they are
@@ -417,6 +431,25 @@ class MaterializedRepository:
                 return
             yield rows
             last = rows[-1][0]
+
+    async def record_keys_with_origin(
+        self, kind_id: str, *, origin_type: str, origin_field: str, origin_value: str
+    ) -> list[str]:
+        """Keys of a Kind's Records whose Lineage names a provenance entry of `origin_type`
+        with `origin_ref[origin_field] == origin_value` (for example the Records a Source
+        wrote: `source_sync`, `source_id`)."""
+        result = await self._session.execute(
+            _KEYS_WITH_ORIGIN,
+            {
+                "domain": self._domain,
+                "branch": self._branch,
+                "kind": kind_id,
+                "origin_type": origin_type,
+                "field": origin_field,
+                "value": origin_value,
+            },
+        )
+        return [str(key) for key in result.scalars()]
 
     async def record_counts(self) -> dict[str, int]:
         """Number of Records per Kind id."""

@@ -10,6 +10,8 @@ Role semantics where the design table leaves room:
   `editor` can still read what it edits;
 - `maintainer` includes `editor` and `reviewer`, not `modeler`;
 - `editor` and `modeler` open Proposals (`proposal.create`) from the branches they change;
+  `editor` (and so `maintainer`) also triggers Source synchronizations (`source.sync`), whose
+  outcome goes through the Source's merge policy;
   `reviewer` reviews them and resolves Conflicts; merging needs `proposal.merge`
   (`maintainer`), into protected and unprotected branches alike;
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
@@ -40,6 +42,7 @@ class Permission(StrEnum):
     CONFLICT_RESOLVE = "conflict.resolve"
     PROPOSAL_MERGE = "proposal.merge"
     SOURCE_MANAGE = "source.manage"
+    SOURCE_SYNC = "source.sync"
     JOB_MANAGE = "job.manage"
     GRANT_MANAGE = "grant.manage"
     APIKEY_MANAGE = "apikey.manage"
@@ -59,6 +62,7 @@ _EDITOR = _VIEWER | {
     Permission.BRANCH_CREATE,
     Permission.OPERATION_EXECUTE,
     Permission.PROPOSAL_CREATE,
+    Permission.SOURCE_SYNC,
 }
 _REVIEWER = _VIEWER | {Permission.PROPOSAL_REVIEW, Permission.CONFLICT_RESOLVE}
 
