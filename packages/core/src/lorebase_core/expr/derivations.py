@@ -1,19 +1,23 @@
 """Derivations (design 5.8): compile ``expression`` Derivations and aggregate filters, evaluate
-them over one Record.
+them over one Record, and tell which derived Attributes and Relations they read.
 
 Recomputing derived values when Records change is the materializer's job; this module only
 computes one value from one Record (whose values may include other derived values).
+``derivation_inputs`` lists the derived Attributes a Derivation may read, for cycle detection
+and evaluation order; ``links_read`` lists the ``links.<relation>`` fields an expression reads.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, fields
 
 from pydantic import JsonValue
 
+from lorebase_core.expr.ast import Ident, Node, Select, parse
 from lorebase_core.expr.compiler import CompiledExpression, compile, run
 from lorebase_core.expr.context import EvaluationContext, activation
-from lorebase_core.expr.environment import LINKS, record_environment
+from lorebase_core.expr.environment import LINKS, LinkField, link_fields, record_environment
 from lorebase_core.expr.errors import ExprError, ExprErrorCode, PathPart
 from lorebase_core.expr.limits import ExprLimits
 from lorebase_core.expr.ops import require_bool
@@ -147,3 +151,108 @@ def matches_filter(
         limits=context.limits,
     )
     return require_bool(value, "filter")
+
+
+# Dependencies ------------------------------------------------------------------------------------
+
+
+def _nodes(node: Node) -> Iterator[Node]:
+    """``node`` and every node below it."""
+    yield node
+    for item in fields(node):
+        value = getattr(node, item.name)
+        children = value if isinstance(value, tuple) else (value,)
+        for child in children:
+            for part in child if isinstance(child, tuple) else (child,):
+                if isinstance(part, Node):
+                    yield from _nodes(part)
+
+
+@dataclass(frozen=True)
+class _Names:
+    """Identifiers, selected fields and ``links.<name>`` fields of an expression."""
+
+    idents: frozenset[str]
+    fields: frozenset[str]
+    links: frozenset[str]
+
+
+def _names(root: Node) -> _Names:
+    idents: set[str] = set()
+    selected: set[str] = set()
+    links: set[str] = set()
+    for node in _nodes(root):
+        if isinstance(node, Ident):
+            idents.add(node.name)
+        elif isinstance(node, Select):
+            selected.add(node.field)
+            if isinstance(node.operand, Ident) and node.operand.name == LINKS:
+                links.add(node.field)
+    return _Names(frozenset(idents), frozenset(selected), frozenset(links))
+
+
+def links_read(program: CompiledExpression) -> list[LinkField]:
+    """The ``links.<relation>`` fields a Record expression reads, in name order."""
+    names = _names(program.root).links
+    available = program.environment.link_fields
+    return [available[name] for name in sorted(names) if name in available]
+
+
+def _record_inputs(schema: Schema, kind_id: str, source: str, limits: ExprLimits) -> set[str]:
+    """Derived Attributes an expression over a Record of ``kind_id`` may read: its own derived
+    Attributes named in it, and derived Attributes of Records one hop away (through a
+    ``links.<relation>`` field) whose name appears in it. Conservative by design."""
+    try:
+        names = _names(parse(source, limits))
+    except ExprError:
+        return set()  # reported by expression validation
+    words = names.idents | names.fields
+    inputs: set[str] = set()
+    kind = schema.kinds.get(kind_id)
+    if kind is not None:
+        inputs.update(
+            a.id for a in kind.attributes.values() if a.is_derived and a.api_name in names.idents
+        )
+    available = link_fields(schema, kind_id)
+    for name in names.links:
+        field = available.get(name)
+        far = (
+            None
+            if field is None
+            else schema.kinds.get(field.relation.far_endpoint(field.direction))
+        )
+        if far is not None:
+            inputs.update(
+                a.id for a in far.attributes.values() if a.is_derived and a.api_name in words
+            )
+    return inputs
+
+
+def derivation_inputs(
+    schema: Schema, derivation: Derivation, limits: ExprLimits | None = None
+) -> frozenset[str]:
+    """Ids of the derived Attributes ``derivation`` may read (a superset, never fewer).
+
+    An ``expression`` Derivation reads its Record and the Records one hop away; an aggregate
+    reads the ``source_attribute`` and the ``filter`` of the Records it aggregates. Path
+    Derivations read nothing derived.
+    """
+    limits = limits or ExprLimits()
+    definition = derivation.definition
+    if isinstance(definition, ExpressionDerivation):
+        return frozenset(_record_inputs(schema, definition.kind, definition.expression, limits))
+    if not isinstance(definition, AggregateDerivation):
+        return frozenset()
+    relation = schema.relations.get(definition.relation)
+    if relation is None:
+        return frozenset()
+    far_id = relation.far_endpoint(definition.direction)
+    far = schema.kinds.get(far_id)
+    inputs: set[str] = set()
+    if far is not None and definition.source_attribute is not None:
+        source = far.attributes.get(definition.source_attribute)
+        if source is not None and source.is_derived:
+            inputs.add(source.id)
+    if definition.filter is not None:
+        inputs.update(_record_inputs(schema, far_id, definition.filter, limits))
+    return frozenset(inputs)

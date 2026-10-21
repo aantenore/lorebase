@@ -443,7 +443,12 @@ class _StepPlanner:
                 f"Record {format_ref(kind.api_name, target.key)} does not exist",
                 path=(*self.path, "target"),
             )
-        merged: dict[str, JsonValue] = dict(current)
+        # derived values the resolver may hold are not Record content (AC-07)
+        merged: dict[str, JsonValue] = {
+            attribute_id: value
+            for attribute_id, value in current.items()
+            if attribute_id not in kind.attributes or not kind.attributes[attribute_id].is_derived
+        }
         for attribute_id, value in self.encoded(kind.attributes).items():
             if value is None:
                 merged.pop(attribute_id, None)

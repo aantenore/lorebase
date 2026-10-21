@@ -278,6 +278,7 @@ class MergeService:
                 provenance=BranchLineage(sync, domain_id, source.name),
                 policy=request.policy,
                 tree_params=TreeParams(domain.leaf_size),
+                schema_rules=runtime.schema.rules(),
             )
             computation = compute_attempt(merge_input, resolutions)
             prepared = None
@@ -408,6 +409,7 @@ class MergeService:
             schema_hash=prepared.schema_hash,
             refresh_kinds=prepared.refresh_kinds,
             settings=settings,
+            expression_limits=self._runtime.schema.expression_limits,
         )
         refs = RefRepository(session, domain_id)
         try:

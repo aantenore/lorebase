@@ -10,7 +10,9 @@ from lorebase_store.db import async_url, create_engine
 from lorebase_store.settings import (
     DEFAULT_DSN,
     DatabaseSettings,
+    SchemaSettings,
     database_settings,
+    schema_settings,
     store_settings,
 )
 
@@ -33,6 +35,21 @@ def test_example_file_matches_code_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     from_example = load_settings()
     assert database_settings(from_example) == database_settings(defaults)
     assert store_settings(from_example) == store_settings(defaults)
+    assert schema_settings(from_example) == schema_settings(defaults)
+
+
+def test_schema_section_feeds_validation_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    rules = schema_settings(load_settings()).rules()
+    assert rules.allow_expressions is True
+    monkeypatch.setenv("LOREBASE__SCHEMA__EXPRESSIONS_ENABLED", "false")
+    monkeypatch.setenv("LOREBASE__SCHEMA__EXPRESSION_LIMITS__MAX_STEPS", "50")
+    disabled = schema_settings(load_settings())
+    assert disabled == SchemaSettings.model_validate(
+        {"expressions_enabled": False, "expression_limits": {"max_steps": 50}}
+    )
+    assert disabled.rules().allow_expressions is False
+    assert disabled.rules().expression_limits is not None
+    assert disabled.rules().expression_limits.max_steps == 50
 
 
 def test_compose_style_dsn_reference(monkeypatch: pytest.MonkeyPatch) -> None:

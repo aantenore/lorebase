@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from lorebase_core.model import validate_schema, validate_schema_yaml
+from lorebase_core.expr import compile_derivation, derivation_inputs, links_read
+from lorebase_core.model import load_schema, validate_schema, validate_schema_yaml
 from lorebase_core.validate import IssueCode, SchemaRules
 
 from .support import SUPPLY_SCHEMA, supply
@@ -34,3 +35,46 @@ def test_broken_expressions_are_reported_with_yaml_paths() -> None:
     assert precondition.details["column"] == 1
     derivation = by_path[("derivations", "single_sourced", "definition", "expression")]
     assert "cannot compare int with string" in derivation.message
+
+
+def test_derivation_inputs_name_the_derived_attributes_read() -> None:
+    schema = supply()
+    single = schema.derivation_by_api_name("single_sourced")
+    count = schema.derivation_by_api_name("supplier_count")
+    assert single is not None
+    assert count is not None
+    part = schema.kind_by_api_name("Part")
+    assert part is not None
+    supplier_count = part.attribute_by_api_name("supplier_count")
+    assert supplier_count is not None
+    assert derivation_inputs(schema, single) == {supplier_count.id}
+    assert derivation_inputs(schema, count) == frozenset()
+    compiled = compile_derivation(schema, single).expression
+    assert compiled is not None
+    assert links_read(compiled) == []
+
+
+def _with_expression(expression: str) -> str:
+    return SUPPLY_SCHEMA.read_text(encoding="utf-8").replace(
+        "expression: supplier_count == 1", f"expression: {expression}"
+    )
+
+
+def test_links_read_by_an_expression() -> None:
+    schema = load_schema(_with_expression("size(links.supplied_by) == 1"))
+    single = schema.derivation_by_api_name("single_sourced")
+    assert single is not None
+    compiled = compile_derivation(schema, single)
+    assert compiled.expression is not None
+    [field] = links_read(compiled.expression)
+    assert field.relation.api_name == "supplied_by"
+
+
+def test_derivation_cycles_through_expressions_are_reported() -> None:
+    itself = validate_schema_yaml(_with_expression("single_sourced || false"), rules=ENABLED)
+    assert {i.code for i in itself} == {IssueCode.SCHEMA_DERIVATION_CYCLE}
+    text = _with_expression("supplier_count == 1").replace(
+        "      relation: supplied_by\n      function: count",
+        "      relation: supplied_by\n      function: count\n      filter: 'status == \"active\"'",
+    )
+    assert not validate_schema_yaml(text, rules=ENABLED)

@@ -56,7 +56,7 @@ Through the REST API: Record reads, the query DSL, traversal, neighborhood and s
 
 ### How do agents write?
 
-Only through Operations. An Operation has parameters, validation and permissions, supports dry run and idempotency keys, and commits a Revision with provenance. Built-in Operations (create, update, delete, link, unlink and bulk import) exist today. Custom Operations need CEL expressions: the engine exists and Keeper evaluates them behind `keeper.operations.expressions_enabled` (off by default), but schema change sets still refuse schemas that use expressions, so in practice they arrive with M3. A write to a protected branch, such as `main` by default, goes through a Proposal: write to another branch, open a Proposal, have it reviewed (one approval by default) and merge it over REST.
+Only through Operations. An Operation has parameters, validation and permissions, supports dry run and idempotency keys, and commits a Revision with provenance. Built-in Operations (create, update, delete, link, unlink and bulk import) exist today. Custom Operations are written in CEL (preconditions, steps, review policy) in the schema and run through the same endpoint; a false precondition answers `422 precondition-failed` and a review policy that holds sends the edits to a Proposal. A write to a protected branch, such as `main` by default, goes through a Proposal: write to another branch, open a Proposal, have it reviewed (one approval by default) and merge it over REST.
 
 ## Versioning and conflicts
 

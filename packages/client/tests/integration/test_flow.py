@@ -68,10 +68,9 @@ async def test_domain_branch_and_schema_lifecycle(client: AsyncLorebaseClient) -
     names = {b.name async for b in client.branches.iterate(DOMAIN)}
     assert names == {"main", WORK, "agent/bot-1/task"}
 
-    # The example as shipped needs expressions, which Keeper does not enable yet.
-    refused = await client.schema.validate(DOMAIN, yaml=(EXAMPLE / "schema.yaml").read_text())
-    assert not refused.valid
-    assert {i["code"] for i in refused.issues} == {"schema.expressions_disabled"}
+    # The example as shipped holds CEL Operations and Derivations, type checked on validation.
+    shipped = await client.schema.validate(DOMAIN, yaml=(EXAMPLE / "schema.yaml").read_text())
+    assert shipped.valid, shipped.issues
 
     stripped = stripped_schema_yaml()
     checked = await client.schema.validate(DOMAIN, yaml=stripped, branch=WORK)

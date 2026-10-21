@@ -40,7 +40,7 @@ from lorebase_core.tree import (
     relation_partition,
     tree_apply,
 )
-from lorebase_core.validate import IssueCode, validate_schema
+from lorebase_core.validate import IssueCode, SchemaRules, validate_schema
 
 __all__ = [
     "SchemaMerge",
@@ -378,19 +378,21 @@ def _validated(
         return model.model_validate(chosen).content()
 
 
-def known_static_issues(schemas: list[Schema | None]) -> set[tuple[object, tuple[object, ...]]]:
+def known_static_issues(
+    schemas: list[Schema | None], rules: SchemaRules | None = None
+) -> set[tuple[object, tuple[object, ...]]]:
     """``(code, path)`` of the static errors of the given schemas."""
     known: set[tuple[object, tuple[object, ...]]] = set()
     for schema in schemas:
         if schema is not None:
-            known.update((i.code, i.path) for i in validate_schema(schema) if i.is_error)
+            known.update((i.code, i.path) for i in validate_schema(schema, rules) if i.is_error)
     return known
 
 
 def _static_conflicts(ctx: Context, merged: SchemaMerge) -> None:
     """Conflicts for static problems of the merged schema that neither side had."""
     known = ctx.known_issues
-    for issue in validate_schema(merged.schema):
+    for issue in validate_schema(merged.schema, ctx.rules):
         if not issue.is_error or (issue.code, issue.path) in known or len(issue.path) < 2:
             continue
         element = str(issue.path[1])

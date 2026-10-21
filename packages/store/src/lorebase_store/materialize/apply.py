@@ -1,7 +1,9 @@
 """Incremental materialization: apply one Revision's changeset to a branch head (design 6.11).
 
 Runs inside the commit transaction (invariant I4). Rows are written in bulk: one statement
-batch per partition and operation, then one set-based search vector update per Kind.
+batch per partition and operation, then the derived values the changeset can affect
+(`materialize.derived`; every derived value when the schema changed), then one set-based
+search vector update per Kind.
 """
 
 from __future__ import annotations
@@ -14,8 +16,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.expr import ExprLimits
 from lorebase_core.model import Schema
 from lorebase_core.revision import ChangesetEntry
+from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
@@ -54,12 +58,14 @@ async def apply_changeset(
     schema_hash: bytes | None,
     refresh_kinds: Sequence[str] = (),
     settings: StoreSettings,
+    expression_limits: ExprLimits | None = None,
 ) -> None:
     """Apply a Revision's changeset to the materialized head of `branch`.
 
     `schema` is the schema at the Revision; `schema_hash` is its schema partition hash when
     the schema changed. `refresh_kinds` lists Kinds whose title or search settings changed:
-    their title and search vectors are recomputed for every Record.
+    their title and search vectors are recomputed for every Record. `expression_limits`
+    bound the evaluation of Derivations (`schema.expression_limits`).
     """
     repository = MaterializedRepository(session, domain_id, branch, writes=settings.writes)
     await repository.insert_history(
@@ -81,20 +87,60 @@ async def apply_changeset(
     by_partition: dict[str, list[MaterializedChange]] = defaultdict(list)
     for change in changes:
         by_partition[change.entry.partition].append(change)
-    search_config = settings.materialize.text_search_config
+    derived = None
+    if settings.materialize.derivations_enabled:
+        derived = DerivedValues(
+            repository,
+            schema,
+            limits=expression_limits or ExprLimits(),
+            now=at,
+            batch=settings.materialize.read_batch_rows,
+            max_incremental=settings.materialize.derivation_max_incremental_records,
+        )
+    applied = AppliedChanges()
+    keep_previous = derived is not None and bool(derived.steps)
+    written_kinds: list[str] = []
     for partition, group in sorted(by_partition.items()):
         parsed = parse_partition(partition)
         if parsed.type is PartitionType.KIND:
-            await _apply_records(repository, parsed.element_id, group, schema, revision_id, at)
-            if parsed.element_id not in refresh_kinds:
-                await repository.refresh_search(
-                    parsed.element_id,
-                    search_weights(schema.kinds.get(parsed.element_id)),
-                    config=search_config,
-                    revision=revision_id,
-                )
+            await _apply_records(
+                repository,
+                parsed.element_id,
+                group,
+                schema,
+                revision_id,
+                at,
+                applied,
+                keep_previous=keep_previous,
+            )
+            written_kinds.append(parsed.element_id)
         elif parsed.type is PartitionType.RELATION:
             await _apply_links(repository, parsed.element_id, group)
+            applied.links[parsed.element_id].update(split_link_key(c.entry.key) for c in group)
+    changed: dict[str, set[str]] = {}
+    if derived is not None:
+        if schema_hash is not None:
+            await derived.prune()
+            changed = await derived.recompute_all()
+        elif derived.steps:
+            changed = await derived.recompute(applied)
+    search_config = settings.materialize.text_search_config
+    for kind_id in written_kinds:
+        if kind_id not in refresh_kinds:
+            await repository.refresh_search(
+                kind_id,
+                search_weights(schema.kinds.get(kind_id)),
+                config=search_config,
+                revision=revision_id,
+            )
+    for kind_id, keys in sorted(changed.items()):
+        if keys and kind_id not in refresh_kinds and derived and derived.searchable(kind_id):
+            await repository.refresh_search(
+                kind_id,
+                search_weights(schema.kinds.get(kind_id)),
+                config=search_config,
+                keys=sorted(keys),
+            )
     for kind_id in refresh_kinds:
         await refresh_kind(repository, schema, kind_id, settings=settings)
 
@@ -122,15 +168,25 @@ async def _apply_records(
     schema: Schema,
     revision_id: bytes,
     at: datetime,
+    applied: AppliedChanges,
+    *,
+    keep_previous: bool,
 ) -> None:
     removed = [c.entry.key for c in changes if c.body is None]
     written = [c for c in changes if c.body is not None]
+    updated = [c.entry.key for c in written if c.entry.old_hash is not None]
+    wanted = [*updated, *removed] if keep_previous else updated
+    previous = await repository.records(kind_id, wanted) if wanted else {}
+    applied.written[kind_id].update(c.entry.key for c in written)
+    applied.removed[kind_id].update(removed)
+    if keep_previous:
+        for key in [*updated, *removed]:
+            row = previous.get(key)
+            applied.previous[(kind_id, key)] = None if row is None else row.values
     if removed:
         await repository.delete_records(kind_id, removed)
     if not written:
         return
-    updated = [c.entry.key for c in written if c.entry.old_hash is not None]
-    previous = await repository.records(kind_id, updated) if updated else {}
     kind = schema.kinds.get(kind_id)
     rows: list[RecordRow] = []
     for change in written:

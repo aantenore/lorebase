@@ -6,6 +6,9 @@
 - `store`: physical layout and vector storage (read by the initial migration), bulk writes,
   tree node caching, commits, materialization, per-Attribute indexes, reads, neighborhood
   traversal and the profilers of schema inference (read at runtime).
+- `schema`: static validation of schemas, shared by Keeper and the store so that every path
+  that validates a schema (schema change sets, the commit pipeline, merges, schema inference)
+  applies the same rules: whether CEL expressions are accepted and their budget.
 """
 
 from __future__ import annotations
@@ -14,11 +17,14 @@ from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
 
+from lorebase_core.expr import ExprLimits
+from lorebase_core.validate import SchemaRules
 from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 DATABASE_SECTION = "database"
 STORE_SECTION = "store"
+SCHEMA_SECTION = "schema"
 ENV_ALIASES = {"LOREBASE_DB_DSN": "dsn", "LOREBASE_DB_READ_DSN": "read_dsn"}
 DEFAULT_DSN = "postgresql+asyncpg://lorebase@localhost:5432/lorebase"
 
@@ -179,6 +185,18 @@ class MaterializeSettings(SectionModel):
     )
     verify_max_divergences: int = Field(
         default=1000, ge=1, description="Divergences listed by a verification report."
+    )
+    derivations_enabled: bool = Field(
+        default=True,
+        description="Recompute derived Attributes (expression and aggregate Derivations) in "
+        "the materialized head on every commit, merge and rebuild.",
+    )
+    derivation_max_incremental_records: int = Field(
+        default=10000,
+        ge=1,
+        description="Records one Derivation recomputes incrementally in one commit (Records "
+        "written plus Records whose Links or linked Records changed); above this the "
+        "Derivation is recomputed for every Record of its Kind, in batches of read_batch_rows.",
     )
 
 
@@ -384,8 +402,33 @@ class StoreSettings(SectionModel):
     traverse: TraverseSettings = Field(default_factory=TraverseSettings)
 
 
+class SchemaSettings(SectionModel):
+    """Static validation of schemas (design 5.7, 5.8, AC-06), shared by Keeper and the store."""
+
+    expressions_enabled: bool = Field(
+        default=True,
+        description="Accept Operations and Derivations written in CEL; every expression is "
+        "parsed and type checked against the schema. False refuses them "
+        "(schema.expressions_disabled) wherever a schema is validated.",
+    )
+    expression_limits: ExprLimits = Field(
+        default_factory=ExprLimits,
+        description="Budget of one schema expression: compiled at validation, evaluated by "
+        "the materializer for Derivations (source length, nesting depth, evaluation steps "
+        "and time, sizes of built strings and lists, Record lookups, decimal precision).",
+    )
+
+    def rules(self) -> SchemaRules:
+        """Options of `validate_schema` for these settings."""
+        return SchemaRules(
+            allow_expressions=self.expressions_enabled,
+            expression_limits=self.expression_limits,
+        )
+
+
 register_section(DATABASE_SECTION, DatabaseSettings, env_aliases=ENV_ALIASES)
 register_section(STORE_SECTION, StoreSettings)
+register_section(SCHEMA_SECTION, SchemaSettings)
 
 
 def database_settings(settings: Settings) -> DatabaseSettings:
@@ -396,3 +439,8 @@ def database_settings(settings: Settings) -> DatabaseSettings:
 def store_settings(settings: Settings) -> StoreSettings:
     """The validated `store` section of loaded settings."""
     return settings.section(STORE_SECTION, StoreSettings)
+
+
+def schema_settings(settings: Settings) -> SchemaSettings:
+    """The validated `schema` section of loaded settings."""
+    return settings.section(SCHEMA_SECTION, SchemaSettings)

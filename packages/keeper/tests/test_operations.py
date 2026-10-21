@@ -11,20 +11,25 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from lorebase_core.expr import ExprLimits
+from lorebase_core.expr import ExprLimits, LinkedRecord
 from lorebase_core.model import (
+    LinkDirection,
     Operation,
+    OperationParameter,
     Precondition,
     ReviewMode,
     ReviewPolicy,
     Schema,
+    UpdateRecordStep,
     load_schema,
 )
+from lorebase_core.types import TypeSpec
 from lorebase_core.validate import LinkDelete, LinkUpsert, RecordDelete, RecordUpsert
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.services.config import OperationSettings
 from lorebase_keeper.services.operation_catalog import (
+    IMPORT_BATCH,
     IMPORT_LINKS,
     IMPORT_RECORDS,
     PARAMETER_INVALID,
@@ -32,6 +37,7 @@ from lorebase_keeper.services.operation_catalog import (
     PARAMETER_UNKNOWN,
     RECORD_EXISTS,
     Action,
+    batches,
     bind,
     builtin_definition,
     edit_document,
@@ -189,6 +195,92 @@ def test_import_rows_locate_bad_rows(schema: Schema) -> None:
     assert isinstance(linked.changes[0], LinkUpsert)
 
 
+CONTRACT_ROW: dict[str, JsonValue] = {
+    "contract_number": "C-3001",
+    "title": "Seals 2026",
+    "status": "draft",
+    "start_date": "2026-01-01",
+}
+
+
+def test_import_records_with_links(schema: Schema) -> None:
+    definition = builtin_definition(schema, IMPORT_RECORDS)
+    assert definition is not None
+    rows: list[JsonValue] = [
+        {**CONTRACT_ROW, "links": {"with_supplier": "S-1001"}},
+        {**CONTRACT_ROW, "contract_number": "C-3002"},
+        {**CONTRACT_ROW, "contract_number": "C-3003", "links": {"with_supplier": ["S-2"]}},
+    ]
+    plan = import_rows(schema, definition, {"kind": "Contract", "rows": rows}, max_rows=10)
+    assert plan.findings == []
+    assert plan.units == [1, 2, 2]  # Records without Links first
+    record, link = plan.changes[1:3]
+    assert isinstance(record, RecordUpsert)
+    assert isinstance(link, LinkUpsert)
+    assert (record.record.key, link.link.from_key, link.link.to_key) == (
+        "C-3001",
+        "C-3001",
+        "S-1001",
+    )
+    parts = {**SUPPLIER_ROW, "links": {"supplies": [{"key": "P-1", "is_primary": True}]}}
+    inverse = import_rows(schema, definition, {"kind": "Supplier", "rows": [parts]}, max_rows=10)
+    [_, supplied] = inverse.changes
+    assert isinstance(supplied, LinkUpsert)
+    assert (supplied.link.from_key, supplied.link.to_key) == ("P-1", "S-1001")
+    bad = {**CONTRACT_ROW, "links": {"flags": "S-1", "with_supplier": {"key": None}}}
+    refused = import_rows(schema, definition, {"kind": "Contract", "rows": [bad]}, max_rows=10)
+    assert [f.path for f in refused.findings] == [
+        ("parameters", "rows", 0, "links", "flags"),
+        ("parameters", "rows", 0, "links", "with_supplier", "to"),
+    ]
+    over = import_rows(schema, definition, {"kind": "Contract", "rows": rows}, max_rows=4)
+    assert over.findings[0].code == "parameter.limit_exceeded"
+
+
+def test_import_batch_groups_links_with_their_records(schema: Schema) -> None:
+    definition = builtin_definition(schema, IMPORT_BATCH)
+    assert definition is not None
+    assert definition.is_import
+    parameters: dict[str, JsonValue] = {
+        "records": [
+            {"kind": "Contract", **CONTRACT_ROW},
+            {"kind": "Supplier", **SUPPLIER_ROW},
+        ],
+        "links": [
+            {"relation": "with_supplier", "from": "C-3001", "to": "S-1001"},
+            {"relation": "supplied_by", "from": "P-1", "to": "S-9"},
+        ],
+    }
+    plan = import_rows(schema, definition, parameters, max_rows=10)
+    assert plan.findings == []
+    assert plan.units == [1, 2, 1]  # lone Records, Records with Links, lone Links
+    assert [type(c).__name__ for c in plan.changes] == [
+        "RecordUpsert",
+        "RecordUpsert",
+        "LinkUpsert",
+        "LinkUpsert",
+    ]
+    changes = plan.changes
+    assert batches(changes, plan.units, 3) == [changes[:3], changes[3:]]
+    assert batches(changes, plan.units, 1) == [changes[:1], changes[1:3], changes[3:]]
+    assert batches(changes, [], 2) == [changes[:2], changes[2:]]
+    unknown = import_rows(
+        schema,
+        definition,
+        {"records": [{"kind": "Nope"}], "links": [{"relation": "supplies"}]},
+        max_rows=10,
+    )
+    assert [f.path for f in unknown.findings] == [
+        ("parameters", "records", 0, "kind"),
+        ("parameters", "links", 0, "relation"),
+    ]
+    empty = import_rows(schema, definition, {}, max_rows=10)
+    assert empty.findings[0].code == PARAMETER_REQUIRED
+
+
+DISABLED = OperationSettings(expressions_enabled=False)
+
+
 def _custom(**fields: Any) -> Operation:
     return Operation(id=OPERATION_ID, api_name="flag_supplier", description="Flag.", **fields)
 
@@ -196,16 +288,19 @@ def _custom(**fields: Any) -> Operation:
 def test_preconditions_are_refused_unless_skipping_is_allowed() -> None:
     operation = _custom(preconditions=(Precondition(expression="true", message="m"),))
     with pytest.raises(ProblemError) as raised:
-        expressions_gate(operation, OperationSettings())
+        expressions_gate(operation, DISABLED)
     assert raised.value.problem.code == "expressions-not-enabled"
-    warnings = expressions_gate(operation, OperationSettings(skip_expression_preconditions=True))
+    warnings = expressions_gate(
+        operation,
+        OperationSettings(expressions_enabled=False, skip_expression_preconditions=True),
+    )
     assert warnings[0].severity == "warning"
 
 
 def test_steps_and_expression_review_policies_are_refused() -> None:
     policy = ReviewPolicy(mode=ReviewMode.EXPRESSION, expression="true")
     with pytest.raises(ProblemError):
-        expressions_gate(_custom(review_policy=policy), OperationSettings())
+        expressions_gate(_custom(review_policy=policy), DISABLED)
 
 
 def test_review_policy(schema: Schema) -> None:
@@ -268,9 +363,9 @@ def _keys() -> Any:
     return lambda: f"01KF00000000000000000000{next(counter):02d}"
 
 
-def test_expressions_are_off_by_default_and_bounded_by_settings() -> None:
+def test_expressions_are_on_by_default_and_bounded_by_settings() -> None:
     settings = OperationSettings()
-    assert settings.expressions_enabled is False
+    assert settings.expressions_enabled is True
     assert settings.expression_limits == ExprLimits()
     tuned = OperationSettings.model_validate({"expression_limits": {"max_steps": 50}})
     assert tuned.expression_limits.max_steps == 50
@@ -360,3 +455,46 @@ async def test_approve_contract_runs_with_the_engine(supply: Schema) -> None:
     tight = OperationSettings(expressions_enabled=True, expression_limits=ExprLimits(max_steps=3))
     limited = await plan_custom(supply, operation, {"contract": "C-3001"}, records, ANA, NOW, tight)
     assert [f.code for f in limited.findings] == ["expression.limit_exceeded"]
+
+
+async def test_links_are_read_through_the_link_reader(supply: Schema) -> None:
+    part, part_attributes = _ids(supply, "Part")
+    _, supplier_attributes = _ids(supply, "Supplier")
+    found = supply.relation_by_api_name("supplied_by")
+    assert found is not None
+    asked: list[tuple[str, LinkDirection, str]] = []
+    status = supplier_attributes["status"]
+
+    async def read_links(
+        relation_id: str, direction: LinkDirection, key: str
+    ) -> list[LinkedRecord]:
+        asked.append((relation_id, direction, key))
+        return [LinkedRecord("S-1001", {status: "active"}), LinkedRecord("S-1007", {})]
+
+    operation = Operation(
+        id=OPERATION_ID,
+        api_name="phase_out_part",
+        description="Phase out a part with several suppliers.",
+        parameters=(OperationParameter(name="part", type=TypeSpec.ref(part), required=True),),
+        preconditions=(
+            Precondition(expression='size(links(part, "supplied_by")) > 1', message="single"),
+        ),
+        steps=(
+            UpdateRecordStep(
+                kind=part,
+                target="params.part",
+                values={part_attributes["lifecycle"]: '"phase_out"'},
+            ),
+        ),
+    )
+    records = FakeRecords({(part, "P-10028"): {part_attributes["name"]: "Seal"}})
+    plan = await plan_custom(
+        supply, operation, {"part": "P-10028"}, records, ANA, NOW, ENABLED, read_links=read_links
+    )
+    assert plan.findings == []
+    assert asked == [(found[0].id, LinkDirection.FORWARD, "P-10028")]
+    [change] = plan.changes
+    assert isinstance(change, RecordUpsert)
+    assert change.record.values[part_attributes["lifecycle"]] == "phase_out"
+    unread = await plan_custom(supply, operation, {"part": "P-10028"}, records, ANA, NOW, ENABLED)
+    assert [f.code for f in unread.findings] == ["expression.evaluation"]
