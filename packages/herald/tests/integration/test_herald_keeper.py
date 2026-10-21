@@ -23,7 +23,7 @@ from mcp import Client
 from mcp.types import CallToolResult, TextContent
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from lorebase_herald.keeper_http import KeeperHttp
+from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.server import create_server
 from lorebase_herald.settings import HeraldSettings
 from lorebase_keeper.app import create_app
@@ -119,12 +119,13 @@ async def keeper_transport(seeded: Seeded) -> AsyncIterator[httpx.AsyncBaseTrans
         yield httpx.ASGITransport(app=app, raise_app_exceptions=False)
 
 
-def _herald(transport: httpx.AsyncBaseTransport, api_key: str) -> tuple[Client, KeeperHttp]:
+def _herald(transport: httpx.AsyncBaseTransport, api_key: str) -> Client:
     settings = HeraldSettings.model_validate(
         {"domain": supply.DOMAIN, "keeper": {"base_url": BASE_URL, "api_key": api_key}}
     )
-    keeper = KeeperHttp(settings.keeper, transport=transport)
-    return Client(create_server(settings, keeper), mode="legacy"), keeper
+    return Client(
+        create_server(settings, KeeperClients(settings.keeper, transport=transport)), mode="legacy"
+    )
 
 
 def _text(result: CallToolResult) -> str:
@@ -137,122 +138,116 @@ def _text(result: CallToolResult) -> str:
 async def test_tools_over_mcp_against_keeper(
     seeded: Seeded, keeper_transport: httpx.AsyncBaseTransport
 ) -> None:
-    client, keeper = _herald(keeper_transport, seeded.agent_key)
+    client = _herald(keeper_transport, seeded.agent_key)
     revs = seeded.revisions
-    try:
-        async with client:
-            call = client.call_tool
-            listed = await client.list_tools()
-            assert len(listed.tools) == 11
+    async with client:
+        call = client.call_tool
+        listed = await client.list_tools()
+        assert len(listed.tools) == 11
 
-            schema = _text(await call("lorebase_schema", {}))
-            assert schema.startswith("schema supply@main rev ")
-            assert "Supplier [key supplier_code; title legal_name" in schema
-            assert "supplied_by: Part -> Supplier (many_to_many; inverse supplies)" in schema
+        schema = _text(await call("lorebase_schema", {}))
+        assert schema.startswith("schema supply@main rev ")
+        assert "Supplier [key supplier_code; title legal_name" in schema
+        assert "supplied_by: Part -> Supplier (many_to_many; inverse supplies)" in schema
 
-            record = _text(await call("lorebase_get", {"ref": "Supplier/S-1001"}))
-            assert record.startswith('Supplier/S-1001 "Kavsen Alloys Sp. z o.o."')
-            assert "country: PL" in record
-            assert "links: " in record
+        record = _text(await call("lorebase_get", {"ref": "Supplier/S-1001"}))
+        assert record.startswith('Supplier/S-1001 "Kavsen Alloys Sp. z o.o."')
+        assert "country: PL" in record
+        assert "links: " in record
 
-            rows = _text(
-                await call(
-                    "lorebase_query",
-                    {
-                        "query": {
-                            "kind": "Part",
-                            "where": {"attr": "category", "op": "eq", "value": "bearing"},
-                            "select": ["category"],
-                            "limit": 3,
-                        }
-                    },
-                )
+        rows = _text(
+            await call(
+                "lorebase_query",
+                {
+                    "query": {
+                        "kind": "Part",
+                        "where": {"attr": "category", "op": "eq", "value": "bearing"},
+                        "select": ["category"],
+                        "limit": 3,
+                    }
+                },
             )
-            assert rows.splitlines()[0].endswith(": 3 rows")
-            assert "category=bearing" in rows
-            assert "next_cursor: " in rows
+        )
+        assert rows.splitlines()[0].endswith(": 3 rows")
+        assert "category=bearing" in rows
+        assert "next_cursor: " in rows
 
-            hits = _text(await call("lorebase_search", {"query": "bearing", "kinds": ["Part"]}))
-            assert "(lexical)" in hits.splitlines()[0]
-            assert "1. Part/" in hits
+        hits = _text(await call("lorebase_search", {"query": "bearing", "kinds": ["Part"]}))
+        assert "(lexical)" in hits.splitlines()[0]
+        assert "1. Part/" in hits
 
-            hood = _text(
-                await call(
-                    "lorebase_neighborhood",
-                    {"seeds": ["Part/P-10001"], "relations": ["supplied_by"]},
-                )
+        hood = _text(
+            await call(
+                "lorebase_neighborhood",
+                {"seeds": ["Part/P-10001"], "relations": ["supplied_by"]},
             )
-            assert "Part/P-10001 -supplied_by-> Supplier/S-1005" in hood
+        )
+        assert "Part/P-10001 -supplied_by-> Supplier/S-1005" in hood
 
-            pack = _text(
-                await call("lorebase_context", {"records": ["Part/P-10001"], "token_budget": 800})
+        pack = _text(
+            await call("lorebase_context", {"records": ["Part/P-10001"], "token_budget": 800})
+        )
+        # Keeper's own pack (`POST .../context`), within the budget
+        assert pack.startswith("# Context: supply/main")
+        assert "### Part/P-10001: Tapered roller bearing 6305" in pack
+        assert "- Part/P-10001 -> Supplier/S-1005" in pack
+
+        lineage = _text(await call("lorebase_explain", {"ref": "Supplier/S-1001"}))
+        assert "legal_name = Kavsen Alloys Sp. z o.o. <- import by usr_loader" in lineage
+        assert "LINKS:" in lineage
+
+        changes = _text(await call("lorebase_changes", {"since": revs["schema"]}))
+        assert f"{revs['data']} " in changes
+        assert "Import the supply example data" in changes
+        assert revs["schema"] not in changes.splitlines()[1]
+
+        diff = _text(
+            await call(
+                "lorebase_diff",
+                {
+                    "from_revision": revs["schema"],
+                    "to_revision": revs["data"],
+                    "kinds": ["Supplier"],
+                    "limit": 2,
+                },
             )
-            # Keeper's own pack (`POST .../context`), within the budget
-            assert pack.startswith("# Context: supply/main")
-            assert "### Part/P-10001: Tapered roller bearing 6305" in pack
-            assert "- Part/P-10001 -> Supplier/S-1005" in pack
+        )
+        assert diff.startswith(f"diff {revs['schema']}..{revs['data']}")
+        assert "summary: Supplier +" in diff
+        assert "+ Supplier/S-" in diff
 
-            lineage = _text(await call("lorebase_explain", {"ref": "Supplier/S-1001"}))
-            assert "legal_name = Kavsen Alloys Sp. z o.o. <- import by usr_loader" in lineage
-            assert "LINKS:" in lineage
-
-            changes = _text(await call("lorebase_changes", {"since": revs["schema"]}))
-            assert f"{revs['data']} " in changes
-            assert "Import the supply example data" in changes
-            assert revs["schema"] not in changes.splitlines()[1]
-
-            diff = _text(
-                await call(
-                    "lorebase_diff",
-                    {
-                        "from_revision": revs["schema"],
-                        "to_revision": revs["data"],
-                        "kinds": ["Supplier"],
-                        "limit": 2,
-                    },
-                )
+        dry = _text(
+            await call(
+                "lorebase_execute",
+                {
+                    "operation": "update_supplier",
+                    "parameters": {"key": "S-1001", "city": "Lodz"},
+                },
             )
-            assert diff.startswith(f"diff {revs['schema']}..{revs['data']}")
-            assert "summary: Supplier +" in diff
-            assert "+ Supplier/S-" in diff
+        )
+        assert dry.startswith("dry_run update_supplier on main")
+        assert "1 edits, 0 violations" in dry
+        # Direct commits to `main` need review: the dry run says so before any write.
+        assert dry.endswith("run it on a work branch, then open a Proposal")
+        after = _text(await call("lorebase_get", {"ref": "Supplier/S-1001"}))
+        assert "city: Poznan" in after  # the dry run wrote nothing
 
-            dry = _text(
-                await call(
-                    "lorebase_execute",
-                    {
-                        "operation": "update_supplier",
-                        "parameters": {"key": "S-1001", "city": "Lodz"},
-                    },
-                )
-            )
-            assert dry.startswith("dry_run update_supplier on main")
-            assert "1 edits, 0 violations" in dry
-            # Direct commits to `main` need review: the dry run says so before any write.
-            assert dry.endswith("run it on a work branch, then open a Proposal")
-            after = _text(await call("lorebase_get", {"ref": "Supplier/S-1001"}))
-            assert "city: Poznan" in after  # the dry run wrote nothing
+        branches = _text(await call("lorebase_branches", {}))
+        assert branches.startswith("main (default")
 
-            branches = _text(await call("lorebase_branches", {}))
-            assert branches.startswith("main (default")
+        resource = await client.read_resource("lorebase://supply/Supplier/S-1001")
+        assert "Supplier/S-1001" in resource.contents[0].text  # type: ignore[union-attr]
 
-            resource = await client.read_resource("lorebase://supply/Supplier/S-1001")
-            assert "Supplier/S-1001" in resource.contents[0].text  # type: ignore[union-attr]
-
-            missing = await call("lorebase_get", {"ref": "Supplier/S-0000"})
-            assert missing.is_error
-            assert "[not-found]" in missing.content[0].text  # type: ignore[union-attr]
-    finally:
-        await keeper.aclose()
+        missing = await call("lorebase_get", {"ref": "Supplier/S-0000"})
+        assert missing.is_error
+        assert "[not-found]" in missing.content[0].text  # type: ignore[union-attr]
 
 
 async def test_calls_without_a_valid_agent_key_are_refused(
     keeper_transport: httpx.AsyncBaseTransport,
 ) -> None:
-    client, keeper = _herald(keeper_transport, "lbk_unknownprefix_notavalidsecret")
-    try:
-        async with client:
-            result: Any = await client.call_tool("lorebase_schema", {})
-    finally:
-        await keeper.aclose()
+    client = _herald(keeper_transport, "lbk_unknownprefix_notavalidsecret")
+    async with client:
+        result: Any = await client.call_tool("lorebase_schema", {})
     assert result.is_error
     assert "[unauthorized]" in result.content[0].text

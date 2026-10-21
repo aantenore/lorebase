@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
 import pytest
 from mcp import Client
 from mcp.types import CallToolResult, TextContent
@@ -13,14 +12,22 @@ from mcp.types import CallToolResult, TextContent
 from .conftest import AGENT_KEY, Connect
 from .fake_keeper import (
     API,
+    CONTEXT_PACK,
+    EXECUTION,
+    EXPLAINED,
+    MARKDOWN_PACK,
     OLDER,
     PARENT,
     REVISION,
     SCHEMA,
     SUPPLIER_RECORD,
     FakeKeeper,
+    branch_entry,
+    markdown_pack,
     problem,
     record,
+    revision_log,
+    served,
 )
 
 TOOLS = {
@@ -168,7 +175,7 @@ async def test_get_encodes_keys_and_rejects_bad_refs(connect: Connect, fake: Fak
     fake.on(
         "GET",
         f"{API}/kinds/Doc/records/a b",
-        {"revision": REVISION, "record": record("Doc", "a b", "A")},
+        served(record=record("Doc", "a b", "A")),
     )
     async with connect() as client:
         assert "Doc/a b" in text(await client.call_tool("lorebase_get", {"ref": "Doc/a b"}))
@@ -184,6 +191,7 @@ async def test_query_sends_the_dsl_and_renders_rows(connect: Connect, fake: Fake
         f"{API}/query",
         {
             "revision": REVISION,
+            "served_from": "materialized",
             "items": [
                 {
                     **record("Part", "P-1", "Bearing", category="bearing", unit_cost="10.79"),
@@ -212,6 +220,7 @@ async def test_search_is_lexical_unless_a_vector_is_given(
 ) -> None:
     hits = {
         "revision": REVISION,
+        "served_from": "materialized",
         "mode": "lexical",
         "items": [
             {"kind": "Part", "key": "P-1", "title": "Bearing", "snippet": "roller", "score": 0.5}
@@ -236,6 +245,7 @@ async def test_neighborhood_renders_nodes_edges_and_truncation(
         f"{API}/neighborhood",
         {
             "revision": REVISION,
+            "served_from": "materialized",
             "nodes": [
                 record("Supplier", "S-1", "Acme", tier="1"),
                 record("Part", "P-1", "Bearing"),
@@ -273,48 +283,8 @@ async def test_neighborhood_renders_nodes_edges_and_truncation(
     assert too_deep.is_error
 
 
-def _context_routes(fake: FakeKeeper) -> None:
-    fake.on("GET", f"{API}/schema", SCHEMA)
-    fake.on("GET", f"{API}/kinds/Supplier/records/S-1001", SUPPLIER_RECORD)
-    fake.on(
-        "POST",
-        f"{API}/neighborhood",
-        {
-            "revision": REVISION,
-            "nodes": [
-                record("Supplier", "S-1001", "Kavsen Alloys"),
-                *(
-                    record(
-                        "PurchaseOrder", f"PO-{i}", f"Order {i}", total=f"{i}.00", note="x" * 200
-                    )
-                    for i in range(30)
-                ),
-            ],
-            "edges": [
-                {
-                    "relation": "issued_to",
-                    "from": {"kind": "PurchaseOrder", "key": f"PO-{i}"},
-                    "to": {"kind": "Supplier", "key": "S-1001"},
-                    "values": {},
-                }
-                for i in range(30)
-            ],
-            "truncated": False,
-        },
-    )
-
-
-MARKDOWN_PACK = "# Context: Supplier/S-1001\nsupply/main at revision " + REVISION + "\n"
-
-
-def _markdown(request: httpx.Request) -> httpx.Response:
-    return httpx.Response(
-        200, text=MARKDOWN_PACK, headers={"content-type": "text/markdown; charset=utf-8"}
-    )
-
-
 async def test_context_uses_keepers_context_endpoint(connect: Connect, fake: FakeKeeper) -> None:
-    fake.on("POST", f"{API}/context", _markdown)
+    fake.on("POST", f"{API}/context", markdown_pack)
     async with connect() as client:
         out = text(
             await client.call_tool(
@@ -336,6 +306,9 @@ async def test_context_uses_keepers_context_endpoint(connect: Connect, fake: Fak
         "depth": 2,
         "budget_tokens": 800,
         "format": "markdown",
+        "include_schema": True,
+        "include_recent_changes": True,
+        "include_lineage": True,
         "relations": ["purchase_orders"],
         "branch": "agent/a",
     }
@@ -347,9 +320,9 @@ async def test_context_endpoint_json_notes_seeds_found_by_search(
     fake.on(
         "POST",
         f"{API}/search",
-        {"revision": REVISION, "items": [{"kind": "Supplier", "key": "S-1001", "score": 1.0}]},
+        served(mode="lexical", items=[{"kind": "Supplier", "key": "S-1001", "score": 1.0}]),
     )
-    fake.on("POST", f"{API}/context", {"revision": REVISION, "seeds": [{"ref": "Supplier/S-1001"}]})
+    fake.on("POST", f"{API}/context", CONTEXT_PACK)
     async with connect() as client:
         packed = json.loads(
             text(
@@ -357,21 +330,14 @@ async def test_context_endpoint_json_notes_seeds_found_by_search(
             )
         )
         found = text(await client.call_tool("lorebase_context", {"question": "kavsen"}))
-    assert packed == {
-        "revision": REVISION,
-        "seeds": [{"ref": "Supplier/S-1001"}],
-        "found_by": "search",
-        "question": "kavsen",
-    }
+    assert packed == {**CONTEXT_PACK, "found_by": "search", "question": "kavsen"}
     assert found.startswith("seeds found by search for 'kavsen'\n")
     context = [json.loads(r.content) for r in fake.requests if r.url.path.endswith("/context")]
     assert context[0]["refs"] == ["Supplier/S-1001"]
     assert context[0]["format"] == "json"
 
 
-async def test_context_endpoint_errors_are_not_masked_by_the_fallback(
-    connect: Connect, fake: FakeKeeper
-) -> None:
+async def test_context_endpoint_errors_are_tool_errors(connect: Connect, fake: FakeKeeper) -> None:
     fake.on("POST", f"{API}/context", problem(404, "not-found", "Record Supplier/S-404 not found."))
     async with connect() as client:
         out = error_text(
@@ -381,115 +347,21 @@ async def test_context_endpoint_errors_are_not_masked_by_the_fallback(
     assert [r.url.path for r in fake.requests] == [f"{API}/context"]
 
 
-async def test_context_composes_a_pack_within_the_budget(
-    connect: Connect, fake: FakeKeeper
-) -> None:
-    _context_routes(fake)
-    async with connect() as client:
-        out = text(
-            await client.call_tool(
-                "lorebase_context", {"records": ["Supplier/S-1001"], "token_budget": 400}
-            )
-        )
-    assert out.startswith(f"context supply@main rev {REVISION}")
-    assert fake.requests[0].url.path == f"{API}/context"  # missing: composed here
-    assert 'SEEDS:\nSupplier/S-1001 "Kavsen Alloys"' in out
-    assert 'PurchaseOrder/PO-0 "Order 0" -issued_to-> Supplier/S-1001' in out
-    assert "[context trimmed to budget:" in out
-    assert len(out) <= 400 * 4 + 200  # budget plus the closing marker
-
-
-async def test_context_large_budget_includes_schema_and_neighbors(
-    connect: Connect, fake: FakeKeeper
-) -> None:
-    _context_routes(fake)
-    async with connect() as client:
-        out = text(
-            await client.call_tool(
-                "lorebase_context", {"records": ["Supplier/S-1001"], "token_budget": 20000}
-            )
-        )
-        packed = json.loads(
-            text(
-                await client.call_tool(
-                    "lorebase_context",
-                    {"records": ["Supplier/S-1001"], "token_budget": 600, "format": "json"},
-                )
-            )
-        )
-    assert "SCHEMA (kinds involved):" in out
-    assert "NEIGHBORS:" in out
-    assert "trimmed" not in out
-    assert packed["seeds"][0]["ref"] == "Supplier/S-1001"
-    assert packed["trimmed"]["neighbors"] > 0
-
-
 async def test_context_finds_seeds_by_question(connect: Connect, fake: FakeKeeper) -> None:
-    _context_routes(fake)
+    fake.on("POST", f"{API}/context", markdown_pack)
     fake.on(
         "POST",
         f"{API}/search",
-        {
-            "revision": REVISION,
-            "mode": "lexical",
-            "items": [{"kind": "Supplier", "key": "S-1001", "title": "Kavsen", "score": 1.0}],
-        },
+        served(
+            mode="lexical",
+            items=[{"kind": "Supplier", "key": "S-1001", "title": "Kavsen", "score": 1.0}],
+        ),
     )
     async with connect() as client:
         out = text(await client.call_tool("lorebase_context", {"question": "kavsen alloys"}))
     assert "seeds found by search for 'kavsen alloys'" in out
     search = next(r for r in fake.requests if r.url.path.endswith("/search"))
     assert json.loads(search.content) == {"q": "kavsen alloys", "mode": "lexical", "limit": 3}
-
-
-EXPLAINED = {
-    "domain": "supply",
-    "branch": "main",
-    "revision": REVISION,
-    "record": {
-        "ref": "Supplier/S-1001",
-        "kind": "Supplier",
-        "key": "S-1001",
-        "title": "Kavsen Alloys",
-        "values": {"supplier_code": "S-1001", "tier": "1"},
-        "updated_revision": REVISION,
-    },
-    "created": {
-        "revision": PARENT,
-        "at": "2026-10-01T08:00:03Z",
-        "actor": "usr_loader",
-        "origin_type": "import",
-        "message": "Import the supply example data",
-    },
-    "attributes": [
-        {
-            "name": "supplier_code",
-            "value": "S-1001",
-            "revision": PARENT,
-            "at": "2026-10-01T08:00:03Z",
-            "actor": "usr_loader",
-            "origin_type": "import",
-        },
-        {"name": "tier", "value": "1"},
-    ],
-    "links": [
-        {
-            "relation": "purchase_orders",
-            "direction": "inverse",
-            "ref": "PurchaseOrder/PO-1",
-            "title": "PO-1",
-            "revision": PARENT,
-            "at": "2026-10-01T08:00:03Z",
-            "actor": "usr_loader",
-            "origin_type": "import",
-        }
-    ],
-    "links_truncated": False,
-    "history": {"changes": 2},
-    "proposals": [
-        {"id": "prp_1", "title": "Raise risk", "status": "merged", "merged_revision": REVISION}
-    ],
-}
 
 
 async def test_explain_uses_keepers_explain_endpoint(connect: Connect, fake: FakeKeeper) -> None:
@@ -522,39 +394,19 @@ async def test_explain_uses_keepers_explain_endpoint(connect: Connect, fake: Fak
     assert "links" not in only
 
 
-async def test_explain_lists_lineage_per_attribute(connect: Connect, fake: FakeKeeper) -> None:
-    fake.on("GET", f"{API}/kinds/Supplier/records/S-1001", SUPPLIER_RECORD)
-    async with connect() as client:
-        out = text(await client.call_tool("lorebase_explain", {"ref": "Supplier/S-1001"}))
-    assert fake.requests[0].url.path.endswith("/explain")  # missing: read from the lineage
-    assert fake.last().url.params["lineage"] == "true"
-    assert "supplier_code = S-1001 <- import by usr_loader at 2026-10-01T08:00:03Z (pvn_1)" in out
-    assert "tier = 1 <- no recorded origin" in out
-
-
-def _log(request: httpx.Request) -> httpx.Response:
-    entries = [
-        {
-            "id": rev,
-            "created_at": "2026-10-02T00:00:00Z",
-            "author": "usr_editor",
-            "origin": {"type": "operation"},
-            "message": f"change {rev[:2]}",
-            "stats": {"records": 1},
-        }
-        for rev in (REVISION, PARENT, OLDER)
-    ]
-    if request.url.params.get("cursor") == "page2":
-        return httpx.Response(200, json={"branch": "main", "head": REVISION, "items": entries[2:]})
-    return httpx.Response(
-        200,
-        json={"branch": "main", "head": REVISION, "items": entries[:2], "next_cursor": "page2"},
-    )
-
-
 async def test_changes_walks_the_log_back_to_since(connect: Connect, fake: FakeKeeper) -> None:
-    fake.on("GET", "/api/v1/domains/supply", {"id": "supply", "default_branch": "main"})
-    fake.on("GET", f"{API}/branches/main/log", _log)
+    fake.on(
+        "GET",
+        "/api/v1/domains/supply",
+        {
+            "id": "supply",
+            "display_name": "Supply",
+            "default_branch": "main",
+            "created_at": "2026-10-01T08:00:00Z",
+            "created_by": "usr_loader",
+        },
+    )
+    fake.on("GET", f"{API}/branches/main/log", revision_log)
     async with connect() as client:
         out = text(await client.call_tool("lorebase_changes", {"since": OLDER[:10]}))
         latest = text(await client.call_tool("lorebase_changes", {"limit": 1}))
@@ -627,8 +479,8 @@ async def test_branches_marks_default_and_protected(connect: Connect, fake: Fake
         f"{API}/branches",
         {
             "items": [
-                {"name": "main", "head": REVISION, "default": True, "protected": True},
-                {"name": "agent/x", "head": PARENT, "default": False, "protected": False},
+                branch_entry("main", REVISION, default=True, protected=True),
+                branch_entry("agent/x", PARENT, default=False, protected=False),
             ]
         },
     )
@@ -641,26 +493,6 @@ async def test_branches_marks_default_and_protected(connect: Connect, fake: Fake
 
 
 # Writes --------------------------------------------------------------------------------------
-
-
-EXECUTION = {
-    "status": "dry_run",
-    "operation": "update_supplier",
-    "branch": "main",
-    "invocation_id": "inv_1",
-    "parameters_hash": "h",
-    "head": REVISION,
-    "revision": None,
-    "revisions": [],
-    "edits": [{"op": "upsert", "kind": "Supplier", "key": "S-1"}],
-    "edit_count": 1,
-    "edits_truncated": False,
-    "violations": [],
-    "violation_count": 0,
-    "warnings": [],
-    "review_required": False,
-    "replayed": False,
-}
 
 
 async def test_execute_dry_runs_by_default(connect: Connect, fake: FakeKeeper) -> None:
@@ -700,8 +532,8 @@ async def test_execute_commit_carries_expected_head(connect: Connect, fake: Fake
         "parameters": {"key": "S-1"},
         "dry_run": False,
         "expected_head": REVISION,
-        "idempotency_key": "k-1",
     }
+    assert fake.last().headers["idempotency-key"] == "k-1"
     assert json.loads(out)["revision"] == PARENT
 
 
@@ -710,7 +542,7 @@ async def test_execute_commit_carries_expected_head(connect: Connect, fake: Fake
 
 async def test_outputs_are_capped_with_markers(connect: Connect, fake: FakeKeeper) -> None:
     items = [record("Part", f"P-{i}", "x" * 50, summary="y" * 400) for i in range(80)]
-    fake.on("POST", f"{API}/query", {"revision": REVISION, "items": items})
+    fake.on("POST", f"{API}/query", served(items=items))
     async with connect(output={"max_items": 10, "max_value_chars": 20, "max_chars": 900}) as c:
         out = text(await c.call_tool("lorebase_query", {"query": {"kind": "Part"}}))
     assert len(out) <= 900
