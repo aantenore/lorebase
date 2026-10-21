@@ -1,0 +1,29 @@
+# Settings of the five-day demo stack (examples/five_day_demo). Everything not listed here keeps
+# the default of config/lorebase.example.yaml. Not for production: it admits webhook targets on
+# private addresses and keeps the demo pace (short polling intervals).
+
+keeper:
+  auth:
+    mode: api_key                      # the demo admin key is created by bootstrap_admin.py
+    installation_admins: [svc_demo_admin]
+    api_keys:
+      pepper: secret://env/LOREBASE_API_KEY_PEPPER
+  proposals:
+    allow_self_approval: true          # one operator plays every team
+  limits:
+    rate:
+      domains:
+        supply:                        # a deliberately small bucket: day 5 shows a 429
+          context: {requests_per_minute: 30, burst: 4}
+
+webhooks:
+  allowed_schemes: [http, https]
+  allow_private_targets: true          # the receiver of day 4 runs on the host
+
+scribe:
+  worker:
+    poll_interval_s: 0.5
+  scheduler:
+    tick_s: 2.0
+    webhook_interval_s: 2.0
+    gc_schedule: null                  # the demo runs the collection by hand
