@@ -536,3 +536,25 @@ herald:
   changes:
     page_size: 50
     max_pages: 10
+
+# Scribe, the job worker: webhook delivery, queued index builds and garbage collection.
+# Job retries and stale locks: store.jobs.
+scribe:
+  worker:
+    concurrency: 2               # jobs run at the same time by one process
+    poll_interval_s: 2.0         # pause of an idle slot before it looks for jobs again
+    heartbeat_interval_s: 60.0   # running jobs refresh their lock this often (< stale_after_seconds)
+    shutdown_grace_s: 30.0       # on SIGTERM, running jobs get this long, then go back to the queue
+    statement_timeout_ms: 0      # Scribe's own connections; 0 disables (GC and index builds run long)
+    principal: svc_scribe        # author of Scribe's commits and Proposals
+    types: []                    # job types this process runs; empty: all of them
+  scheduler:                     # one process at a time is leader (Postgres advisory lock)
+    enabled: true
+    tick_s: 15.0                 # interval between scheduling passes
+    lock_name: lorebase.scribe.scheduler   # hashed into the advisory lock key
+    webhook_interval_s: 10.0     # webhook delivery pass (retries included); 0 disables
+    index_interval_s: 60.0       # pass of the queued per-Attribute index builds; 0 disables
+    gc_schedule: "0 3 * * *"     # cron (UTC) of the collection of every Domain; null disables
+    gc_dry_run: false
+    source_schedules: true       # queue Source synchronizations from each Source's `schedule`
+    domain_batch: 100            # Domains read per query
