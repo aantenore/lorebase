@@ -88,8 +88,10 @@ difference).
   with a warning and `python -m lorebase_store.indexes plan --domain <id> [--branch <name>]`
   prints the pending DDL (`CREATE INDEX CONCURRENTLY`, `COMMENT ON INDEX`, `DROP INDEX
   CONCURRENTLY`, one statement per line) for an administrator to run outside a transaction.
-- The dev compose stack sets `LOREBASE_DB_MAINTENANCE_DSN` to its Postgres superuser; that
-  is for development only.
+- The compose stack runs Keeper and Scribe as an application role subject to row-level
+  security and sets `LOREBASE_DB_MAINTENANCE_DSN` to the owner role that runs the migrations,
+  its Postgres superuser ([deployment.md](deployment.md#database-roles)); production uses a
+  dedicated owner role instead of a superuser.
 - Extensions `pg_trgm` and `vector` are created if missing and never dropped on downgrade. Where
   the migration role cannot create extensions, an administrator creates them first.
 
