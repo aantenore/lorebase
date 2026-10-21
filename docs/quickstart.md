@@ -186,6 +186,8 @@ curl -s -X POST http://localhost:8080/api/v1/domains/supply/branches \
 uv run lorebase branch create work
 ```
 
+`--mode copy|overlay` chooses how the branch stores its rows (own copy, or only its changes); without it `store.materialize.branch_mode` applies.
+
 The schema of the sample Domain has two Operations (`flag_supplier_risk`, `approve_contract`)
 and two Derivations (`Part.supplier_count`, `Part.single_sourced`); the Operations and
 `single_sourced` are written in CEL. Expressions are type checked against the schema when it is

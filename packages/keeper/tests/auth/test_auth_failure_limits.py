@@ -226,3 +226,28 @@ async def test_limits_off_means_failures_are_not_limited(
             for _ in range(BURST * 2)
         }
     assert statuses == {401}
+
+
+async def test_without_the_prefix_bucket_only_the_address_is_limited(
+    make_app: AppFactory, store: Any, clock: Any, provider: Any, codec: ApiKeyCodec, valid: str
+) -> None:
+    app = make_app(
+        auth_settings(per_key_prefix_enabled=False),
+        auth_store=store,
+        clock=clock,
+        http_client=provider.http,
+    )
+    guessed = valid[:-4] + "aaaa"  # the right prefix with a wrong secret
+    statuses = []
+    for n in range(BURST * 2):
+        async with from_peer(app, f"192.0.2.{n + 1}") as http:
+            statuses.append((await http.get(WHOAMI, headers=bearer(guessed))).status_code)
+    assert statuses == [401] * (BURST * 2)  # many addresses cannot throttle the key
+    async with from_peer(app, "192.0.2.200") as http:
+        assert (await http.get(WHOAMI, headers=bearer(valid))).status_code == 200
+    async with from_peer(app, "198.51.100.7") as http:  # one address still runs out
+        failed = [
+            (await http.get(WHOAMI, headers=bearer(codec.generate().token))).status_code
+            for _ in range(BURST + 1)
+        ]
+    assert failed == [401] * BURST + [429]

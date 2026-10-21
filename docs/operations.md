@@ -139,7 +139,8 @@ use a bucket of their own.
   with that prefix, valid ones included, are answered `429` (class `auth_failures`,
   `Retry-After`) before any key lookup or token validation, and are logged at DEBUG only. An
   attacker who knows a key's prefix can therefore hold that key off for as long as the attack
-  lasts; raise `burst` if that matters more than the database load. Client addresses come from
+  lasts; raise `burst` if that matters more than the database load, or set
+  `per_key_prefix_enabled: false` to keep only the per-address bucket. Client addresses come from
   `keeper.trusted_proxies` (see below).
 - The limit counts `lorebase.http.rate_limited{class}` (OpenTelemetry) per refusal.
 - A principal refused `throttle_audit.threshold` times within `window_s` produces one audit
