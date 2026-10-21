@@ -29,10 +29,11 @@ Meter `lorebase.keeper`.
 | `lorebase.db.reads` | `lorebase_db_reads_total` | counter | none | `source`, `reason` | Reads by the database that served them. `source` is `primary` or `replica`. `reason` is why: `replica_fresh` (a replica served it), `no_replicas`, `not_preferred`, `stale`, `lagging`, `unreachable`. | `lorebase_keeper.db.create_database` (route callback of `lorebase_store.replicas.ReadSessionFactory`) |
 | `lorebase.db.replica.lag` | `lorebase_db_replica_lag_milliseconds` | gauge | ms | `replica` | Replay lag of each read replica at its latest probe. Absent while a replica has not answered a probe, and when no replica is configured (`database.read_dsn`). | `lorebase_keeper.db._observe_lag` |
 | `lorebase.db.replica.up` | `lorebase_db_replica_up` | gauge | none | `replica` | 1 when the replica answered its latest probe, 0 otherwise. Absent when no replica is configured. | `lorebase_keeper.db._observe_lag` |
+| `lorebase.keeper.cache.requests` | `lorebase_keeper_cache_requests_total` | counter | `{request}` | `result` | Lookups of the read response cache by GET reads (a 304 answered from `If-None-Match` is not counted). `result` is `hit`, `miss` or `bypass` (read response cache disabled). | `lorebase_keeper.reading.caching.respond_with` |
+| `lorebase.auth.failures` | `lorebase_auth_failures_total` | counter | `{request}` | `reason` | Requests whose authentication failed. `reason` is `missing` (no credential), `malformed` (unsupported `Authorization` header, or a token not shaped like a key), `method_not_accepted` (API keys or bearer tokens not enabled), `unknown_key`, `wrong_secret`, `revoked`, `expired`, `network` (client address outside the key's allowed networks), `principal_missing`, `invalid_token` (OIDC token rejected) or `no_account` (valid token, no account and no auto provisioning; answered 403). | `lorebase_keeper.auth.principals.Authenticator` |
 
-There is no authentication failure counter of its own. Failed authentications are the 401 and 403
-rows of `http_server_request_duration_seconds_count`, and the refusal of clients that keep failing
-is `lorebase_http_rate_limited_total{class="auth_failures"}`.
+The refusal of clients that keep failing to authenticate is `lorebase_http_rate_limited_total{class="auth_failures"}`;
+it counts the requests answered 429, while `lorebase_auth_failures_total` counts the failed authentications.
 
 ### Route classes
 
@@ -51,6 +52,22 @@ rebuild the classes from the method and the route suffix, with the same defaults
 `admin` is chosen by OpenAPI tag and cannot be told apart in this metric. If you change the
 suffixes in `keeper.limits.rate.routes`, change the selectors in the dashboards and rules too.
 
+## Store
+
+Meter `lorebase.store` (`lorebase_store.telemetry`). The store code runs in whichever process
+calls it: Keeper records commits, merges and reads, Scribe the commits of its jobs (Source
+syncs, extraction), job claims, garbage collection and webhook deliveries. Both export the series, so sum over `service_name` for the installation total.
+
+| OpenTelemetry name | Prometheus series | Type | Unit | Labels | Meaning | Emitted by |
+|--------------------|-------------------|------|------|--------|---------|------------|
+| `lorebase.store.commit.duration` | `lorebase_store_commit_duration_seconds` (`_bucket`, `_sum`, `_count`) | histogram | s | `origin` | Time of a successful commit through the commit pipeline (lock, validation, tree, Revision, materialization, ref swap, events). It does not include the caller's final transaction commit when the pipeline runs inside the caller's transaction. `origin` is the origin type of the Revision: `operation`, `source_sync`, `extraction`, `schema_change`, `import`, and so on. | `lorebase_store.commit.pipeline.commit` |
+| `lorebase.store.merge.attempts` | `lorebase_store_merge_attempts_total` | counter | `{attempt}` | `result` | Merge runs of a Proposal (`POST` merge) by outcome. `result` is `merged`, `fast_forward`, `up_to_date` or `conflicts` (open Conflicts left, nothing written). | `lorebase_store.merging.service.MergeService.merge` |
+| `lorebase.store.reads.definer` | `lorebase_store_reads_definer_total` | counter | `{call}` | `function` | Calls of the `SECURITY DEFINER` read functions, only when `store.reads.use_definer_functions` is on. `function` is `lb_search`, `lb_links_in`, `lb_neighborhood`, `lb_query_by_attribute` or one of their `_overlay` variants. | `lorebase_store.reads`, `lorebase_store.traverse` |
+| `lorebase.jobs.claimed` | `lorebase_jobs_claimed_total` | counter | `{job}` | `type` | Jobs claimed by workers from the queue. | `lorebase_store.jobs.claim_jobs` |
+| `lorebase.webhooks.deliveries` | `lorebase_webhooks_deliveries_total` | counter | `{delivery}` | `outcome` | Webhook delivery attempts by outcome: `delivered`, `retrying` (failed, another attempt is scheduled) or `dead` (attempts used up, or the target was refused). | `lorebase_store.webhooks.delivery.deliver_pending` |
+| `lorebase.gc.runs` | `lorebase_gc_runs_total` | counter | `{run}` | `dry_run` | Completed garbage collections of a Domain. `dry_run` is `true` or `false`. | `lorebase_store.gc.collect_garbage` |
+| `lorebase.gc.freed_bytes` | `lorebase_gc_freed_bytes_total` | counter | `By` | `content` | Bytes of tree nodes and objects deleted by garbage collection; dry runs add nothing. `content` is `nodes` or `objects`. The name already ends in `bytes`, so the conversion adds nothing to it. | `lorebase_store.gc.collect_garbage` |
+
 ## Scribe
 
 Meter `lorebase.scribe` (`lorebase_scribe.telemetry`).
@@ -62,6 +79,8 @@ Meter `lorebase.scribe` (`lorebase_scribe.telemetry`).
 | `lorebase.scribe.scheduled` | `lorebase_scribe_scheduled_total` | counter | `{job}` | none | Jobs the scheduler queued in one tick (the webhook delivery pass, scheduled Source syncs, garbage collection). Jobs queued by the API are not counted. | `lorebase_scribe.scheduler.Scheduler` |
 | `lorebase.scribe.source.rows` | `lorebase_scribe_source_rows_total` | counter | `{row}` | `lorebase_source` | Rows read from a Source by sync runs. | `lorebase_scribe.sources.sync.SourceSync` |
 | `lorebase.scribe.source.changes` | `lorebase_scribe_source_changes_total` | counter | `{change}` | `lorebase_source`, `dry_run` | Data changes a Source run computed against the Domain (committed unless `dry_run` is `true`). | `lorebase_scribe.sources.sync.SourceSync` |
+| `lorebase.jobs.queue_depth` | `lorebase_jobs_queue_depth` | gauge | `{job}` | `type`, `status` | Rows of the `jobs` table waiting or running, counted by the scheduler leader at each tick (`scribe.scheduler.tick_s`). `status` is `queued` or `running`. Only the leader reports it, so it is absent when no Scribe holds leadership; a type and status pair that empties reports 0. | `lorebase_scribe.scheduler.Scheduler` |
+| `lorebase.extraction.items` | `lorebase_extraction_items_total` | counter | `{item}` | `tier`, `decision` | Items an extraction job proposes. `tier` is `0`, `1`, `2` or `none` (items without a tier). `decision` is `accepted` (accepted at once by the confidence rules) or `pending` (left for review). | `lorebase_scribe.extraction.pipeline` |
 
 Job counts per type answer most questions about the work: runs of `source_sync` are Source sync
 runs, `extraction` is extraction throughput, `webhook_delivery` is the delivery pass, `gc` is
@@ -83,29 +102,16 @@ extraction steps) are not emitted yet. Herald emits no telemetry of its own.
 
 ## Histogram buckets
 
-Both histograms are recorded in seconds, but the instruments do not set bucket boundaries, so the
-OpenTelemetry SDK uses its defaults: 0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000,
-7500, 10000. Every request faster than 5 seconds lands in the first bucket, so
-`histogram_quantile` over these series reads close to 5 seconds whatever the real latency (the
-mean, `_sum / _count`, is exact). The p50 and p95 panels are correct once the instruments declare
-boundaries in seconds, for example `explicit_bucket_boundaries_advisory=[0.005, 0.01, 0.025,
-0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]` on `create_histogram`. The latency alerts check that a
-bucket exists at their budget (`le="0.1"`, `0.25`, `1`, `2.5`) and stay silent until it does.
+The latency histograms (`http_server_request_duration_seconds`, `lorebase_scribe_job_duration_seconds`
+and `lorebase_store_commit_duration_seconds`) are recorded in seconds with explicit boundaries:
+0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5 and 10 (`lorebase_platform.telemetry.LATENCY_BUCKETS_S`,
+declared through `explicit_bucket_boundaries_advisory`). Everything slower than 10 seconds lands in the
+`+Inf` bucket, where `histogram_quantile` returns the highest finite boundary. The p50 and p95 panels of
+the dashboards and the latency alerts are meaningful between 5 ms and 10 s, and every budget they use
+(100 ms, 250 ms, 1 s, 2.5 s) is a boundary.
 
 ## Not emitted yet
 
-Design 14 lists signals that no code records. The dashboards do not chart them and no alert
-depends on them; the nearest series is given.
-
-| Signal | What to use meanwhile |
-|--------|-----------------------|
-| Commit duration and changes per commit | `writes` class latency (`http_server_request_duration_seconds`) |
-| Merge attempts and Conflicts by code | requests to routes ending in `/merge` by `http_response_status_code` |
-| Cache hit ratio (read response cache, schema cache) | none |
-| `SECURITY DEFINER` function calls | none |
-| Job queue depth and age | `lorebase_scribe_scheduled_total` against `lorebase_scribe_jobs_total` (alert `LorebaseJobQueueStalled`); queue rows in the `jobs` table |
-| Jobs claimed | `lorebase_scribe_jobs_total` (runs, by outcome) |
-| Webhook deliveries (sent, retried, dead) | `webhook_delivery` runs in `lorebase_scribe_jobs_total`; the `webhook_deliveries` table by `status` |
-| Extraction items, tokens, cost | `extraction` runs in `lorebase_scribe_jobs_total` |
-| Garbage collection reclaimed rows | the JSON report of the `gc` job; runs in `lorebase_scribe_jobs_total{type="gc"}` |
-| Database pool usage | none |
+Design 14 lists signals that no code records, and the dashboards and alerts do not cover them:
+database pool usage, extraction tokens and cost, changes per commit, Conflicts by code, schema cache
+hits, and spans beyond those listed above.

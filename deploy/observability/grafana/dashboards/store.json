@@ -186,14 +186,14 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Write p95 (s)",
+      "title": "Commit p95 (s)",
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 18,
         "y": 0
       },
-      "description": "Write route class, a proxy for commit latency. Quantiles read from the default histogram buckets are not meaningful below 5 s: see Histogram buckets in docs/metrics.md.",
+      "description": "Successful commits through the commit pipeline (lock to events), recorded by Keeper and Scribe. Not the caller's final transaction commit when the pipeline runs inside it.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -201,7 +201,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])))"
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(lorebase_store_commit_duration_seconds_bucket[$__rate_interval])))"
         }
       ],
       "fieldConfig": {
@@ -455,14 +455,14 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Write latency (commit pipeline proxy)",
+      "title": "Commit duration",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 22
       },
-      "description": "Requests that change data: operations, bulk loads, branch and Proposal actions. Quantiles read from the default histogram buckets are not meaningful below 5 s: see Histogram buckets in docs/metrics.md.",
+      "description": "Time of a successful commit through the commit pipeline: lock, validation, tree, Revision, materialization, ref swap, events.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -470,17 +470,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(http_server_request_duration_seconds_sum{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval]))",
+          "expr": "sum(rate(lorebase_store_commit_duration_seconds_sum[$__rate_interval])) / sum(rate(lorebase_store_commit_duration_seconds_count[$__rate_interval]))",
           "legendFormat": "mean"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(lorebase_store_commit_duration_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p50"
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method=~\"POST|PUT|PATCH|DELETE\",http_route!~\".*/(query|traverse|neighborhood|search|context)\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(lorebase_store_commit_duration_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p95"
         }
       ],
@@ -560,16 +560,16 @@
       }
     },
     {
-      "id": 13,
+      "id": 16,
       "type": "timeseries",
-      "title": "Merge requests per second by status",
+      "title": "Commit p95 by origin",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 30
       },
-      "description": "POST .../proposals/{id}/merge. A merge attempt that ends in Conflicts is a 409.",
+      "description": "p95 of the commit pipeline by the origin type of the Revision (operation, source_sync, extraction, schema_change, import, ...).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -577,13 +577,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{http_request_method=\"POST\",http_route=~\".*/merge\"}[$__rate_interval]))",
-          "legendFormat": "{{http_response_status_code}}"
+          "expr": "histogram_quantile(0.95, sum by (le, origin) (rate(lorebase_store_commit_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{origin}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
+          "unit": "s",
           "custom": {
             "fillOpacity": 10,
             "lineWidth": 1,
@@ -607,15 +607,16 @@
       }
     },
     {
-      "id": 14,
+      "id": 17,
       "type": "timeseries",
-      "title": "Garbage collection and index jobs",
+      "title": "Commits per second by origin",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 30
       },
+      "description": "Successful commits by the origin type of the Revision.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -623,8 +624,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (type, status) (rate(lorebase_scribe_jobs_total{type=~\"gc|store.index\"}[$__rate_interval]))",
-          "legendFormat": "{{type}} {{status}}"
+          "expr": "sum by (origin) (rate(lorebase_store_commit_duration_seconds_count[$__rate_interval]))",
+          "legendFormat": "{{origin}}"
         }
       ],
       "fieldConfig": {
@@ -653,18 +654,251 @@
       }
     },
     {
-      "id": 15,
-      "type": "text",
-      "title": "Signals not emitted yet",
+      "id": 13,
+      "type": "timeseries",
+      "title": "Merge attempts per second by result",
       "gridPos": {
-        "h": 4,
-        "w": 24,
+        "h": 8,
+        "w": 12,
         "x": 0,
         "y": 38
       },
+      "description": "Merge runs of Proposals by outcome. conflicts: open Conflicts were left and nothing was written.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(lorebase_store_merge_attempts_total[$__rate_interval]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
       "options": {
-        "mode": "markdown",
-        "content": "Commit phases and changes per commit, merge attempts by Conflict code, cache hit ratio, `SECURITY DEFINER` function usage and database pool usage are not recorded by the code yet, so there is no panel for them. The write and merge panels above are the nearest request-level view. See *Not emitted yet* in `docs/metrics.md`."
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "SECURITY DEFINER read function calls per second",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "description": "Calls of the SECURITY DEFINER read functions (lb_search, lb_links_in, lb_neighborhood, lb_query_by_attribute and their overlay variants). Present only with store.reads.use_definer_functions on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (function) (rate(lorebase_store_reads_definer_total[$__rate_interval]))",
+          "legendFormat": "{{function}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Garbage collection",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Garbage collections per hour by dry run",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 47
+      },
+      "description": "Completed garbage collections of a Domain.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dry_run) (increase(lorebase_gc_runs_total[1h]))",
+          "legendFormat": "dry_run={{dry_run}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Bytes freed per hour by content",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 47
+      },
+      "description": "Bytes of tree nodes and objects deleted by garbage collection; dry runs add nothing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (content) (increase(lorebase_gc_freed_bytes_total[1h]))",
+          "legendFormat": "{{content}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Index jobs per second by status",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 55
+      },
+      "description": "Runs of store.index jobs (per-Attribute index maintenance).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(lorebase_scribe_jobs_total{type=\"store.index\"}[$__rate_interval]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     }
   ]

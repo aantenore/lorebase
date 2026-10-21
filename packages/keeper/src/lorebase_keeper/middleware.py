@@ -27,6 +27,7 @@ from lorebase_keeper.errors import (
     request_id_of,
 )
 from lorebase_platform.logging import request_context
+from lorebase_platform.telemetry import LATENCY_BUCKETS_S
 
 logger = logging.getLogger("lorebase.keeper")
 access_logger = logging.getLogger("lorebase.keeper.access")
@@ -68,7 +69,10 @@ class RequestContextMiddleware:
             (meter_provider or metrics.get_meter_provider())
             .get_meter("lorebase.keeper")
             .create_histogram(
-                "http.server.request.duration", unit="s", description="Duration of HTTP requests."
+                "http.server.request.duration",
+                unit="s",
+                description="Duration of HTTP requests.",
+                explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_S,
             )
         )
 

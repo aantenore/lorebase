@@ -204,23 +204,28 @@ def test_dashboards_cover_the_requested_views() -> None:
         "p95 latency by route class",
         "5xx per second",
         "lorebase_http_rate_limited_total",
-        'http_response_status_code=~\\"401|403\\"',
+        "lorebase_auth_failures_total",
+        "lorebase_keeper_cache_requests_total",
     ):
         assert needle in keeper, needle
     for needle in (
         "lorebase_db_replica_lag_milliseconds",
         "lorebase_db_reads_total",
-        "Write latency",
-        "Merge requests",
-        "Signals not emitted yet",
+        "lorebase_store_commit_duration_seconds_bucket",
+        "lorebase_store_merge_attempts_total",
+        "lorebase_store_reads_definer_total",
+        "lorebase_gc_freed_bytes_total",
     ):
         assert needle in store, needle
     for needle in (
         "lorebase_scribe_jobs_total",
         "lorebase_scribe_source_rows_total",
         "lorebase_scribe_source_changes_total",
-        "webhook_delivery",
-        'type=\\"extraction\\"',
+        "lorebase_jobs_queue_depth",
+        "lorebase_jobs_claimed_total",
+        "lorebase_webhooks_deliveries_total",
+        "lorebase_extraction_items_total",
+        "lorebase_gc_runs_total",
     ):
         assert needle in scribe, needle
 

@@ -52,6 +52,7 @@ from lorebase_store.repositories.refs import advisory_lock_key
 from lorebase_store.repositories.scope import DOMAIN_IDS_SETTING
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.settings import GcSettings
+from lorebase_store.telemetry import GC_FREED_BYTES, GC_RUNS
 
 log = logging.getLogger(__name__)
 
@@ -702,13 +703,22 @@ async def collect_garbage(
             connection, domain_id, settings, dry_run=dry_run, cutoff=cutoff, hook=hook
         )
         try:
-            return await collector.run()
+            report = await collector.run()
         finally:
             if connection.in_transaction():
                 await connection.rollback()
             async with connection.begin():
                 await connection.execute(text("DROP TABLE IF EXISTS " + ", ".join(_MARK_TABLES)))
                 await connection.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+    _record(report)
+    return report
+
+
+def _record(report: GcReport) -> None:
+    GC_RUNS.add(1, {"dry_run": str(report.dry_run).lower()})
+    if not report.dry_run:
+        GC_FREED_BYTES.add(report.node_bytes, {"content": "nodes"})
+        GC_FREED_BYTES.add(report.object_bytes, {"content": "objects"})
 
 
 async def run_gc_job(

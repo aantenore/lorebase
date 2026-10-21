@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from opentelemetry import metrics
+from opentelemetry.metrics import MeterProvider
+
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
 from lorebase_keeper.auth.cache import TtlCache
 from lorebase_keeper.auth.config import AuthSettings
@@ -32,6 +35,13 @@ ANONYMOUS_ID = "anonymous"
 _MISSING_HASH = bytes(32)
 _CHALLENGE = "Bearer"
 _INVALID_CHALLENGE = 'Bearer error="invalid_token"'
+_REJECTED_KEY_REASONS = {
+    "unknown prefix": "unknown_key",
+    "wrong secret": "wrong_secret",
+    "revoked": "revoked",
+    "expired": "expired",
+}
+"""Metric reason of each API key rejection logged by `_reject_reason`."""
 
 
 @dataclass(frozen=True)
@@ -84,6 +94,7 @@ class Authenticator:
         oidc: OidcVerifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
+        meter_provider: MeterProvider | None = None,
     ) -> None:
         if settings.mode != "none" and store is None:
             raise ValueError("authentication needs a store")
@@ -98,6 +109,20 @@ class Authenticator:
             monotonic,
         )
         self._admins = frozenset(settings.installation_admins)
+        self._failures = (
+            (meter_provider or metrics.get_meter_provider())
+            .get_meter("lorebase.keeper")
+            .create_counter(
+                "lorebase.auth.failures",
+                unit="{request}",
+                description="Failed authentications, by reason.",
+            )
+        )
+
+    def _failed(self, reason: str, error: ProblemError) -> ProblemError:
+        """Count a failed authentication and return its problem, for the caller to raise."""
+        self._failures.add(1, {"reason": reason})
+        return error
 
     async def authenticate(
         self, headers: Mapping[str, str], client: IPAddress | None = None
@@ -106,16 +131,27 @@ class Authenticator:
         (the client address; None when unknown)."""
         if self._settings.mode == "none":
             return anonymous_principal()
-        bearer, api_key = self._credentials(headers)
+        try:
+            bearer, api_key = self._credentials(headers)
+        except ProblemError as error:
+            raise self._failed("malformed", error) from None
         token = api_key or bearer
         if token is None:
-            raise _unauthorized("Authentication required.", presented=False)
+            raise self._failed(
+                "missing", _unauthorized("Authentication required.", presented=False)
+            )
         if api_key is not None or (self._codec and self._codec.looks_like_key(token)):
             if self._codec is None:
-                raise _unauthorized("API keys are not accepted.", presented=True)
+                raise self._failed(
+                    "method_not_accepted",
+                    _unauthorized("API keys are not accepted.", presented=True),
+                )
             return await self._with_api_key(token, client)
         if self._oidc is None:
-            raise _unauthorized("Bearer tokens are not accepted.", presented=True)
+            raise self._failed(
+                "method_not_accepted",
+                _unauthorized("Bearer tokens are not accepted.", presented=True),
+            )
         return await self._with_token(token)
 
     def presents_credentials(self, headers: Mapping[str, str]) -> bool:
@@ -155,20 +191,20 @@ class Authenticator:
         assert self._store is not None
         parsed = self._codec.parse(token)
         if parsed is None:
-            raise _unauthorized("Invalid credentials.", presented=True)
+            raise self._failed("malformed", _unauthorized("Invalid credentials.", presented=True))
         now = self._clock()
         async with self._store.unit() as unit:
             key = await unit.api_keys.get_by_prefix(parsed.prefix)
             secret_matches = self._codec.matches(parsed.secret, key.hash if key else _MISSING_HASH)
             if key is None or not secret_matches or not key.is_usable(now):
+                reason = _reject_reason(key, secret_matches, now)
                 logger.info(
-                    "api key rejected",
-                    extra={
-                        "key_prefix": parsed.prefix,
-                        "reason": _reject_reason(key, secret_matches, now),
-                    },
+                    "api key rejected", extra={"key_prefix": parsed.prefix, "reason": reason}
                 )
-                raise _unauthorized("Invalid credentials.", presented=True)
+                raise self._failed(
+                    _REJECTED_KEY_REASONS[reason],
+                    _unauthorized("Invalid credentials.", presented=True),
+                )
             if key.allowed_networks and not in_networks(client, key.allowed_networks):
                 # Same answer as a wrong key: the caller learns nothing about the key.
                 logger.info(
@@ -179,10 +215,12 @@ class Authenticator:
                         "client_address": str(client) if client else None,
                     },
                 )
-                raise _unauthorized("Invalid credentials.", presented=True)
+                raise self._failed("network", _unauthorized("Invalid credentials.", presented=True))
             record = await unit.principals.get(key.principal_id)
             if record is None:
-                raise _unauthorized("Invalid credentials.", presented=True)
+                raise self._failed(
+                    "principal_missing", _unauthorized("Invalid credentials.", presented=True)
+                )
             groups = await unit.groups.group_ids_for(record.id)
         await self._record_use(key, now)
         subjects = (record.id, *groups)
@@ -216,7 +254,9 @@ class Authenticator:
             claims = await self._oidc.verify(token)
         except InvalidTokenError as exc:
             logger.info("bearer token rejected: %s", exc)
-            raise _unauthorized("Invalid or expired token.", presented=True) from None
+            raise self._failed(
+                "invalid_token", _unauthorized("Invalid or expired token.", presented=True)
+            ) from None
         except ProviderUnavailableError:
             raise ProblemError(
                 UNAVAILABLE, "The identity provider's keys are unavailable."
@@ -229,7 +269,10 @@ class Authenticator:
             record = await unit.principals.get_by_subject(claims.subject)
             if record is None:
                 if not self._settings.oidc.auto_provision:
-                    raise ProblemError(FORBIDDEN, "No account exists for this identity.")
+                    raise self._failed(
+                        "no_account",
+                        ProblemError(FORBIDDEN, "No account exists for this identity."),
+                    )
                 record, created = await unit.principals.get_or_create_user(
                     claims.subject, claims.display_name
                 )

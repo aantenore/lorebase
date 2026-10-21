@@ -185,13 +185,14 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Garbage collections succeeded (7 d)",
+      "title": "Garbage collections (7 d)",
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 18,
         "y": 0
       },
+      "description": "Completed garbage collections, dry runs excluded.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -199,7 +200,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(lorebase_scribe_jobs_total{type=\"gc\",status=\"succeeded\"}[7d]))"
+          "expr": "sum(increase(lorebase_gc_runs_total{dry_run=\"false\"}[7d]))"
         }
       ],
       "fieldConfig": {
@@ -344,6 +345,100 @@
       }
     },
     {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Job queue depth by type and status",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "description": "Rows of the jobs table waiting (queued, including jobs waiting for a retry delay) or running, counted by the scheduler leader at each tick. Absent when no Scribe holds leadership.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (type, status) (lorebase_jobs_queue_depth)",
+          "legendFormat": "{{type}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Jobs claimed per second by type",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "description": "Jobs claimed by workers from the queue.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (type) (rate(lorebase_jobs_claimed_total[$__rate_interval]))",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "id": 8,
       "type": "timeseries",
       "title": "Retries per second by type",
@@ -351,7 +446,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 21
       },
       "datasource": {
         "type": "prometheus",
@@ -397,9 +492,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 21
       },
-      "description": "Stand-in for queue depth growth, which is not emitted: queued above finished for long means the backlog grows (alert LorebaseJobQueueStalled).",
+      "description": "Jobs the scheduler queued against job runs recorded by workers.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -449,7 +544,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 29
       },
       "datasource": {
         "type": "prometheus",
@@ -495,9 +590,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 21
+        "y": 29
       },
-      "description": "p95 of one run. Quantiles read from the default histogram buckets are not meaningful below 5 s: see Histogram buckets in docs/metrics.md.",
+      "description": "p95 of one run.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -542,7 +637,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 37
       },
       "collapsed": false,
       "panels": []
@@ -550,14 +645,14 @@
     {
       "id": 13,
       "type": "timeseries",
-      "title": "Webhook delivery passes per second by status",
+      "title": "Webhook deliveries per second by outcome",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 38
       },
-      "description": "One run is one delivery pass over the outbox; individual deliveries are not counted. Dead deliveries are rows of webhook_deliveries.",
+      "description": "delivered; retrying (failed, another attempt is scheduled); dead (attempts used up or target refused).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -565,8 +660,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status) (rate(lorebase_scribe_jobs_total{type=\"webhook_delivery\"}[$__rate_interval]))",
-          "legendFormat": "{{status}}"
+          "expr": "sum by (outcome) (rate(lorebase_webhooks_deliveries_total[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
         }
       ],
       "fieldConfig": {
@@ -602,7 +697,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 38
       },
       "datasource": {
         "type": "prometheus",
@@ -648,7 +743,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 46
       },
       "datasource": {
         "type": "prometheus",
@@ -694,7 +789,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 38
+        "y": 46
       },
       "description": "Changes computed against the Domain; committed unless dry_run is true.",
       "datasource": {
@@ -741,7 +836,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 54
       },
       "description": "Extraction throughput at the level of jobs; items are not counted.",
       "datasource": {
@@ -781,15 +876,16 @@
       }
     },
     {
-      "id": 18,
+      "id": 21,
       "type": "timeseries",
-      "title": "Garbage collection runs per second by status",
+      "title": "Extraction items per second by tier and decision",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 46
+        "y": 54
       },
+      "description": "Items an extraction job proposes. accepted: accepted at once by the confidence rules; pending: left for review. tier none: items without a tier.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -797,13 +893,107 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status) (rate(lorebase_scribe_jobs_total{type=\"gc\"}[$__rate_interval]))",
-          "legendFormat": "{{status}}"
+          "expr": "sum by (tier, decision) (rate(lorebase_extraction_items_total[$__rate_interval]))",
+          "legendFormat": "tier {{tier}} {{decision}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Garbage collections per hour by dry run",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "description": "Completed garbage collections of a Domain.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dry_run) (increase(lorebase_gc_runs_total[1h]))",
+          "legendFormat": "dry_run={{dry_run}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Bytes freed per hour by content",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      },
+      "description": "Bytes of tree nodes and objects deleted by garbage collection; dry runs add nothing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (content) (increase(lorebase_gc_freed_bytes_total[1h]))",
+          "legendFormat": "{{content}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
           "custom": {
             "fillOpacity": 10,
             "lineWidth": 1,

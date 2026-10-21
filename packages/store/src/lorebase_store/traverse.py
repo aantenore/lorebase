@@ -41,6 +41,7 @@ from lorebase_store.reads import (
 )
 from lorebase_store.repositories.materialized import RecordRow
 from lorebase_store.runtime import StoreRuntime, default_runtime
+from lorebase_store.telemetry import record_definer_call
 
 _STEP_COLUMNS = (
     "via_kind, via_key, kind_id, key, relation_id, from_kind, from_key, to_kind, to_key, "
@@ -362,7 +363,9 @@ async def neighborhood(
             "seeds": json.dumps([list(seed) for seed in seeds]),
             "relations": hops.as_json(),
         }
-        statement = _DEFINER["lb_neighborhood_overlay" if layout.overlay else "lb_neighborhood"]
+        function = "lb_neighborhood_overlay" if layout.overlay else "lb_neighborhood"
+        record_definer_call(function)
+        statement = _DEFINER[function]
     else:
         sql, params = neighborhood_sql(
             schema, domain_id, layout, direction, relation_ids, follow=follow

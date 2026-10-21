@@ -12,7 +12,9 @@ Each tick of the leader:
   reused, so a backlog never piles up);
 - queues a `gc` job per Domain at each firing of `gc_schedule`;
 - queues a `source_sync` job for each Source whose `schedule` fired, read from the schema of
-  the Domain's default branch.
+  the Domain's default branch;
+- counts the waiting and running jobs for the `lorebase.jobs.queue_depth` gauge (reported by
+  the leader only).
 
 A cron job is due when its latest firing time is later than the `run_after` of the newest job
 it queued before (jobs are queued with `run_after` set to the firing time) or, with no such
@@ -36,13 +38,14 @@ from lorebase_core.model import ElementStatus
 from lorebase_scribe.cron import CronError, parse_cron
 from lorebase_scribe.jobs import WEBHOOK_DELIVERY_JOB
 from lorebase_scribe.settings import SchedulerSettings
-from lorebase_scribe.telemetry import SCHEDULED, tracer
+from lorebase_scribe.telemetry import QUEUE_DEPTH, SCHEDULED, tracer
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import (
     GC_JOB,
     SOURCE_SYNC_JOB,
     enqueue_job,
+    queue_depth,
     requeue_stale,
     source_sync_payload,
 )
@@ -128,6 +131,7 @@ class Scheduler:
     async def _drop(self) -> None:
         connection, self._connection = self._connection, None
         self._leader_since = None
+        QUEUE_DEPTH.clear()
         if connection is not None:
             with contextlib.suppress(Exception):
                 await connection.close()
@@ -155,6 +159,7 @@ class Scheduler:
                     log.warning("stale jobs requeued", extra={"jobs": stale})
                 queued.extend(await self._intervals(session, now))
                 queued.extend(await self._domains(session, now))
+                QUEUE_DEPTH.update(await queue_depth(session))
         if queued:
             SCHEDULED.add(len(queued))
         return queued

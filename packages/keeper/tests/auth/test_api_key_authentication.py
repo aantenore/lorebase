@@ -11,8 +11,11 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
+from lorebase_platform.telemetry import Telemetry
 from lorebase_store.models.enums import PrincipalType
 
 PEPPER = "test-pepper-0123456789-0123456789-abcdef"
@@ -280,3 +283,28 @@ async def test_a_key_without_an_allowlist_works_from_any_address(
     token, _ = store.add_key(codec, agent)
     async with from_peer(auth_app(API_KEYS), "198.51.100.7") as http:
         assert (await http.get(PROBE, headers=bearer(token))).status_code == 200
+
+
+async def test_failed_authentications_are_counted_by_reason(
+    auth_app: Callable[..., FastAPI],
+    client_for: ClientFor,
+    store: Any,
+    codec: ApiKeyCodec,
+    agent: str,
+) -> None:
+    reader = InMemoryMetricReader()
+    telemetry = Telemetry(enabled=True, meter_provider=MeterProvider(metric_readers=[reader]))
+    token, _ = store.add_key(codec, agent)
+    async with client_for(auth_app(API_KEYS, telemetry=telemetry)) as http:
+        assert (await http.get(PROBE)).status_code == 401
+        assert (await http.get(PROBE, headers=bearer(token + "x"))).status_code == 401
+        assert (await http.get(PROBE, headers={"Authorization": "Basic x"})).status_code == 401
+        assert (await http.get(PROBE, headers=bearer(token))).status_code == 200
+    counted: dict[str, int] = {}
+    for resource in reader.get_metrics_data().resource_metrics:  # type: ignore[union-attr]
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                if metric.name == "lorebase.auth.failures":
+                    for point in metric.data.data_points:
+                        counted[str(point.attributes["reason"])] = point.value
+    assert counted == {"missing": 1, "wrong_secret": 1, "malformed": 1}

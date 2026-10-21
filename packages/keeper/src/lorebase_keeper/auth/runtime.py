@@ -81,7 +81,14 @@ def build_runtime(
     return AuthRuntime(
         settings=settings,
         store=store,
-        authenticator=Authenticator(settings, store=store, codec=codec, oidc=verifier, clock=clock),
+        authenticator=Authenticator(
+            settings,
+            store=store,
+            codec=codec,
+            oidc=verifier,
+            clock=clock,
+            meter_provider=meter_provider,
+        ),
         authorizer=Authorizer(settings.authz, store=store),
         codec=codec,
         audit_writer=audit_writer,
