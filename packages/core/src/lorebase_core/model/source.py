@@ -18,6 +18,8 @@ class SourceType(StrEnum):
     POSTGRES_TABLE = "postgres_table"
     POSTGRES_QUERY = "postgres_query"
     CSV = "csv"
+    JSON = "json"
+    JSONL = "jsonl"
     PARQUET = "parquet"
     HTTP_JSON = "http_json"
 
@@ -76,6 +78,93 @@ class TargetBranchPolicy(Model):
     merge_policy: MergePolicy = MergePolicy.PROPOSAL
 
 
+class PaginationType(StrEnum):
+    NONE = "none"
+    CURSOR = "cursor"
+    PAGE = "page"
+    OFFSET = "offset"
+    LINK = "link"
+
+
+class HttpPagination(Model):
+    """How an ``http_json`` Source asks for the next page.
+
+    ``cursor`` sends the value found at ``cursor_path`` of a response as ``cursor_param`` of the
+    next request; ``page`` counts ``page_param`` up from ``start_page``; ``offset`` moves
+    ``offset_param`` by ``page_size``; ``link`` follows the ``rel="next"`` URL of the ``Link``
+    header. ``size_param`` (with ``page_size``) asks for the page size.
+    """
+
+    type: PaginationType = PaginationType.NONE
+    cursor_path: str | None = Field(default=None, min_length=1)
+    cursor_param: str = Field(default="cursor", min_length=1)
+    page_param: str = Field(default="page", min_length=1)
+    start_page: int = Field(default=1, ge=0)
+    offset_param: str = Field(default="offset", min_length=1)
+    size_param: str | None = Field(default=None, min_length=1)
+    page_size: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _check_type(self) -> Self:
+        if self.type is PaginationType.CURSOR and self.cursor_path is None:
+            raise ValueError("cursor pagination needs cursor_path")
+        if self.type is PaginationType.OFFSET and self.page_size is None:
+            raise ValueError("offset pagination needs page_size")
+        if self.size_param is not None and self.page_size is None:
+            raise ValueError("size_param needs page_size")
+        return self
+
+
+#: Request headers an ``http_json`` Source may not set: Scribe owns the target and the framing.
+RESERVED_HEADERS = frozenset(
+    {"host", "content-length", "transfer-encoding", "connection", "te", "upgrade"}
+)
+#: Header names containing one of these carry credentials: their values must be secret
+#: references, so no credential is ever stored in a schema.
+CREDENTIAL_HEADER_HINTS = (
+    "auth",
+    "token",
+    "secret",
+    "key",
+    "password",
+    "cookie",
+    "session",
+    "signature",
+)
+
+
+def credential_header(name: str) -> bool:
+    """Whether the value of header ``name`` must be a secret reference."""
+    lowered = name.lower()
+    return any(hint in lowered for hint in CREDENTIAL_HEADER_HINTS)
+
+
+class HttpOptions(Model):
+    """Requests of an ``http_json`` Source (the URL is the value of its ``connection``)."""
+
+    #: Header values; values of credential headers (``credential_header``) must be secret
+    #: references, resolved by Scribe like the connection.
+    headers: dict[str, str] = Field(default_factory=dict)
+    pagination: HttpPagination = Field(default_factory=HttpPagination)
+    #: Query parameter carrying the watermark of the previous run on incremental reads, so the
+    #: server can filter; rows are filtered by the watermark column either way.
+    since_param: str | None = Field(default=None, min_length=1)
+    #: Pages read at most by one run, below ``scribe.sources.http_json.max_pages``.
+    max_pages: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _check_headers(self) -> Self:
+        for name, value in self.headers.items():
+            if not name.strip() or name.lower() in RESERVED_HEADERS:
+                raise ValueError(f"header {name!r} cannot be set by a Source")
+            if credential_header(name) and not value.startswith(SECRET_REFERENCE_PREFIX):
+                raise ValueError(
+                    f"header {name!r} carries credentials: its value must be a secret "
+                    f"reference ({SECRET_REFERENCE_PREFIX}...), never a literal"
+                )
+        return self
+
+
 class Source(SchemaElement):
     object_type: ClassVar[str] = "schema.source"
 
@@ -87,6 +176,14 @@ class Source(SchemaElement):
     table: str | None = None
     #: Read-only ``SELECT`` of a ``postgres_query`` Source.
     query: str | None = None
+    #: ``json`` and ``http_json``: dotted path of the array of records in the document
+    #: (``data.items``); ``None``: the document is the array.
+    records_path: str | None = Field(default=None, min_length=1)
+    #: ``json``, ``jsonl``, ``http_json`` and ``parquet``: nested objects become columns named
+    #: ``parent<separator>child``; ``None`` keeps them as JSON values.
+    flatten_separator: str | None = Field(default=None, min_length=1)
+    #: Requests of an ``http_json`` Source.
+    http: HttpOptions | None = None
     target_kind: KindId
     #: Source columns producing the primary key, in primary key order.
     key_mapping: tuple[str, ...] = ()

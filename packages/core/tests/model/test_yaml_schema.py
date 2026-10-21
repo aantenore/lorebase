@@ -313,3 +313,45 @@ def test_unsupported_format_is_rejected() -> None:
     document = base_document()
     document["format"] = "other/v9"
     assert ("format",) in problems_of(document)
+
+
+# Source options ---------------------------------------------------------------------------------
+
+
+def http_json_document() -> dict[str, Any]:
+    document = base_document()
+    source = document["sources"]["erp.vendors"]
+    source["type"] = "http_json"
+    source["connection"] = "secret://env/VENDORS_API_URL"
+    source["records_path"] = "data.items"
+    source["flatten_separator"] = "."
+    source["http"] = {
+        "headers": {"Authorization": "secret://env/VENDORS_API_TOKEN", "X-Tenant": "acme"},
+        "pagination": {"type": "cursor", "cursor_path": "meta.next", "cursor_param": "after"},
+        "since_param": "updated_since",
+        "max_pages": 50,
+    }
+    return document
+
+
+def test_http_json_options_round_trip() -> None:
+    schema = schema_from_document(http_json_document())
+    source = next(iter(schema.sources.values()))
+    assert source.http is not None
+    assert source.http.pagination.cursor_path == "meta.next"
+    assert source.records_path == "data.items"
+    text = dump_schema(schema)
+    assert load_schema(text) == schema
+    assert "VENDORS_API_TOKEN" in text
+
+
+def test_literal_credentials_and_incomplete_pagination_are_reported() -> None:
+    document = http_json_document()
+    document["sources"]["erp.vendors"]["http"]["headers"]["X-Api-Key"] = "plain-key"
+    messages = " ".join(problems_of(document).values())
+    assert "must be a secret reference" in messages
+    assert "plain-key" not in messages
+    document = http_json_document()
+    document["sources"]["erp.vendors"]["http"]["pagination"] = {"type": "offset"}
+    path = ("sources", "erp.vendors", "http", "pagination")
+    assert "offset pagination needs page_size" in problems_of(document)[path]
