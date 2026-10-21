@@ -72,6 +72,9 @@ keeper:
         requests_per_minute: 30  # and per API key prefix; when either is spent, requests are
         burst: 30                # answered 429 before the credential is checked
         ipv6_prefix_length: 64   # IPv6 clients are counted by network of this length
+        per_key_prefix_enabled: true  # false: count by address only (key prefixes are not
+                                 # secret, so with a bucket per prefix whoever knows one can keep
+                                 # that key throttled); the per-address bucket is always on
       domains: {}                # per-Domain buckets by Domain id, any of the classes above, e.g.
                                  #   supply: {writes: {requests_per_minute: 60, burst: 10}}
       routes:                    # how requests are sorted into classes
