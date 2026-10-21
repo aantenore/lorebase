@@ -45,6 +45,17 @@ import type {
   TraverseRequest,
   TraverseResponse,
 } from './types';
+import type {
+  ApiKey,
+  ApiKeyCreated,
+  AuditEntry,
+  CreateApiKeyInput,
+  Grant,
+  Principal,
+  PrincipalListParams,
+} from './admin-types';
+import type { InferRequest, SchemaProposalDraft } from './inference-types';
+import type { SourceRun, SourceRunListParams } from './sources-types';
 
 /**
  * The Keeper surface the web app uses (design 11.1). One interface, two
@@ -147,5 +158,37 @@ export interface KeeperApi {
     resolve(domain: DomainId, proposal: string, resolution: Resolution): Promise<Resolution>;
     /** Stores several Resolutions at once; answers with the updated attempt. */
     resolveMany(domain: DomainId, proposal: string, input: ResolveManyInput): Promise<MergeAttempt>;
+  };
+
+  readonly inference: {
+    /**
+     * Profiles CSV files or an allowlisted Postgres source and proposes a schema
+     * (`POST .../schema:infer`). Nothing is committed; the caller applies the edited
+     * proposal as a schema change set.
+     */
+    infer(domain: DomainId, request: InferRequest): Promise<SchemaProposalDraft>;
+  };
+
+  readonly sources: {
+    /**
+     * Runs of the Sources of a Domain, newest first. Keeper has no route for them yet:
+     * the HTTP adapter fails with a 501 `not_supported` problem.
+     */
+    runs(domain: DomainId, params?: SourceRunListParams): Promise<Page<SourceRun>>;
+    /** Starts a run of one Source (by api name). Same availability as `runs`. */
+    sync(domain: DomainId, source: string): Promise<SourceRun>;
+  };
+
+  readonly admin: {
+    apiKeys: {
+      list(domain: DomainId, params?: PageParams): Promise<Page<ApiKey>>;
+      create(domain: DomainId, input: CreateApiKeyInput): Promise<ApiKeyCreated>;
+      revoke(domain: DomainId, keyId: string): Promise<void>;
+    };
+    /** Installation-wide: principals are not scoped to a Domain. */
+    principals: { list(params?: PrincipalListParams): Promise<Page<Principal>> };
+    grants: { list(domain: DomainId, params?: PageParams): Promise<Page<Grant>> };
+    /** Keeper filters by nothing but paging; screens filter the loaded entries. */
+    audit: { list(domain: DomainId, params?: PageParams): Promise<Page<AuditEntry>> };
   };
 }

@@ -6,6 +6,9 @@ import { asRemote, createMockApi } from './mock/adapter';
 export type { KeeperApi } from './client';
 export { ApiError, isApiError } from './errors';
 export * from './types';
+export * from './admin-types';
+export * from './inference-types';
+export * from './sources-types';
 
 /** Pick the adapter from configuration: `live` talks to Keeper, `mock` serves sample data. */
 export function createKeeperApi(config: AppConfig): KeeperApi {

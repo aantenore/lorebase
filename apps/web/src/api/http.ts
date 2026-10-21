@@ -1,5 +1,5 @@
 import type { KeeperApi } from './client';
-import { ApiError } from './errors';
+import { ApiError, problem } from './errors';
 import type {
   MergeAttempt,
   MergeOutcome,
@@ -38,6 +38,25 @@ function resolutionBody(resolution: Resolution) {
     ...(values === undefined ? {} : { values }),
   };
 }
+
+/** The multipart body of `schema:infer`: one `files` part per file, `options` as JSON text. */
+function inferForm(files: File[], options: Record<string, unknown> | undefined): FormData {
+  const form = new FormData();
+  for (const file of files) form.append('files', file, file.name);
+  if (options !== undefined) form.append('options', JSON.stringify(options));
+  return form;
+}
+
+/** Keeper has no route for Source runs yet (design 11.1 lists them, openapi.json does not). */
+const sourceRunsUnavailable = () =>
+  Promise.reject(
+    problem(
+      501,
+      'Not supported',
+      'Keeper does not publish Source runs yet; they are available in mock mode only.',
+      'not_supported',
+    ),
+  );
 
 function toSearch(params: QueryParams): string {
   const search = new URLSearchParams();
@@ -81,15 +100,17 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
   async function request<T>(
     method: 'GET' | 'POST' | 'DELETE',
     path: string,
-    init: { query?: QueryParams; body?: unknown } = {},
+    init: { query?: QueryParams; body?: unknown; form?: FormData } = {},
   ): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json', ...options.headers?.() };
     if (init.body !== undefined) headers['Content-Type'] = 'application/json';
 
+    // A FormData body sets its own Content-Type, with the multipart boundary.
+    const payload = init.form ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
     const response = await doFetch(`${root}${path}${toSearch(init.query ?? {})}`, {
       method,
       headers,
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      ...(payload === undefined ? {} : { body: payload }),
     });
     if (!response.ok) throw new ApiError(await readProblem(response));
     if (response.status === 204) return undefined as T;
@@ -103,6 +124,8 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
       ...(body === undefined ? {} : { body }),
       ...(query === undefined ? {} : { query }),
     });
+
+  const postForm = <T>(path: string, form: FormData) => request<T>('POST', path, { form });
 
   const d = (domain: string) => `/domains/${enc(domain)}`;
   const b = (domain: string, branch: string) => `${d(domain)}/branches/${enc(branch)}`;
@@ -224,6 +247,34 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
         ),
       resolveMany: (domain, proposal, input) =>
         post(`${prop(domain, proposal)}/conflicts:resolve`, input),
+    },
+
+    inference: {
+      infer: (domain, req) =>
+        'files' in req
+          ? postForm(`${d(domain)}/schema:infer`, inferForm(req.files, req.options))
+          : post(`${d(domain)}/schema:infer`, {
+              postgres: req.postgres,
+              ...(req.options === undefined ? {} : { options: req.options }),
+            }),
+    },
+
+    sources: {
+      runs: sourceRunsUnavailable,
+      sync: sourceRunsUnavailable,
+    },
+
+    admin: {
+      apiKeys: {
+        list: (domain, params) => get(`${d(domain)}/api-keys`, pageParams(params)),
+        create: (domain, input) => post(`${d(domain)}/api-keys`, input),
+        revoke: (domain, keyId) => request('DELETE', `${d(domain)}/api-keys/${enc(keyId)}`),
+      },
+      principals: {
+        list: (params) => get('/principals', { type: params?.type, ...pageParams(params) }),
+      },
+      grants: { list: (domain, params) => get(`${d(domain)}/grants`, pageParams(params)) },
+      audit: { list: (domain, params) => get(`${d(domain)}/audit`, pageParams(params)) },
     },
   };
 }
