@@ -229,7 +229,16 @@ idempotency key returns the original result; a moved head answers `409`.
 An Operation needs review when its branch is protected (the default branch of a Domain is) or
 its review policy says so. Without more, that is `409 review-required` (problem details with
 `branch`, `operation`, `proposals`, `reason`, either `protected-branch` or `review-policy`, and
-`next` hints). Name a `task` and Keeper does the rest in one call:
+`next` hints).
+
+The review policy counts on every branch, protected or not. A policy that evaluates to true (the
+supply schema's `flag_supplier_risk` with `severity: critical`, for example) refuses the write on
+an unprotected work branch too: `409 review-required` with `reason: review-policy` and the `next`
+hints of the agent flow (`name_a_task` first). With a `task`, the task branch is cut from that work
+branch, the Proposal targets it, and merging it needs an actual approval even when the work branch
+requires none (`review-policy-needs-approval`).
+
+Name a `task` and Keeper does the rest in one call:
 
 | Member | Default | Meaning |
 |--------|---------|---------|
