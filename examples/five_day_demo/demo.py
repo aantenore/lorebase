@@ -113,7 +113,7 @@ SOURCE_COLUMNS = [
 # --- Day 5 -------------------------------------------------------------------------------------
 
 AGENT_OPERATION = "flag_supplier_risk"
-AGENT_PRINCIPAL = "agent-risk"  # created by bootstrap_admin.py
+AGENT_PRINCIPAL = "agent-risk"  # created by stack.sh (lorebase_keeper principal create)
 EXPIRY_WINDOW_DAYS = 90
 REFERENCE_DATE = date(2026, 1, 15)  # the date examples/supply is generated for
 LIMIT_PROBES = 8
@@ -524,8 +524,9 @@ def cmd_changes(args: argparse.Namespace) -> None:
 def cmd_agent_setup(args: argparse.Namespace) -> None:
     """A key for the agent: role agent-reader, plus the Operation grant for flag_supplier_risk.
 
-    The Operation is restricted to the subject `agent-risk`; bootstrap_admin.py created the
-    service principal of that name, so the key is issued on it.
+    The Operation is restricted to the subject `agent-risk`; stack.sh created the service
+    principal of that name (`python -m lorebase_keeper principal create`), so the key is issued
+    on it.
     """
     with client() as c:
         reader = c.grants.create(DOMAIN, AGENT_PRINCIPAL, "agent-reader")

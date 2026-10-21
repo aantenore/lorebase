@@ -147,6 +147,10 @@ class MemKeys:
             rows = [k for k in rows if (k.created_at, k.id) > after]
         return rows[:limit]
 
+    async def list_for_principals(self, principal_ids: Collection[str]) -> list[ApiKeyRecord]:
+        rows = sorted(self.s.key_rows.values(), key=lambda k: (k.created_at, k.id))
+        return [k for k in rows if k.principal_id in principal_ids]
+
 
 class MemGrants:
     def __init__(self, store: MemoryStore) -> None:

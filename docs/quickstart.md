@@ -114,6 +114,26 @@ docs.
 > and use `api_key` or `oidc` modes (they need the `database` section and further settings,
 > see the comments in the file) for anything shared.
 
+### The first administrator key
+
+In `api_key` mode Keeper accepts no request without a key, and only an administrator can issue
+one. The first key comes from the database side, with Keeper's own settings: list the
+administrator in `keeper.auth.installation_admins` (for example `[svc_admin]`), then run
+
+```bash
+docker compose -f deploy/compose/docker-compose.yaml exec -T keeper \
+  python -m lorebase_keeper bootstrap > admin.key      # or `uv run python -m lorebase_keeper bootstrap`
+```
+
+It creates the service principal `svc_admin` when it does not exist and a key with the default
+lifetime (`keeper.auth.api_keys.default_ttl_days`), writes an `apikey.bootstrap` entry to the audit
+log, and prints the key once on standard output (messages go to standard error). It refuses when
+an installation administrator already holds a usable key: issue further keys with that one, or
+pass `--force` to add another (existing keys stay valid; revoke them over the API).
+`--principal` picks another entry of `installation_admins`. The administrator creates a Domain and
+holds `admin` in it; `python -m lorebase_keeper principal create ID` adds a service principal with a
+chosen id, for a schema that names it in Operation `permissions`.
+
 ## 6. Create a Domain and apply the supply schema
 
 Each step is shown twice: with curl against the REST API, and with the `lorebase` command line

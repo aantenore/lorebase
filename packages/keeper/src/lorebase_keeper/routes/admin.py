@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
+from lorebase_keeper.auth.api_keys import issue_api_key
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.config import ApiKeySettings
 from lorebase_keeper.auth.deps import Access, AuthDep, require, require_installation, require_store
@@ -40,14 +41,11 @@ from lorebase_store.auth import (
     ApiKeyRecord,
     AuditRecord,
     GrantRecord,
-    PrefixTakenError,
     PrincipalRecord,
 )
 from lorebase_store.models.enums import GrantScope, PrincipalType
 
 router = APIRouter(tags=["admin"])
-
-KEY_CREATION_ATTEMPTS = 5
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks the permission named in the body."},
@@ -282,8 +280,12 @@ async def create_api_key(
                     domain_id=domain_id, subject=service.id, role=body.role, created_by=actor
                 )
                 role = body.role
-            token, key = await _add_key(
-                auth, unit, service.id, [domain_scope(domain_id)], expires_at
+            token, key = await issue_api_key(
+                auth.codec,
+                unit.api_keys,
+                service.id,
+                scopes=[domain_scope(domain_id)],
+                expires_at=expires_at,
             )
     except IntegrityError:
         raise ProblemError(NOT_FOUND, "Domain not found.") from None
@@ -317,30 +319,6 @@ async def _check_key_holder(
         )
     if not await unit.grants.for_subjects(domain_id, subjects):
         raise ProblemError(FORBIDDEN, "The service principal holds no grant in this Domain.")
-
-
-async def _add_key(
-    auth: AuthDep,
-    unit: AuthUnitPort,
-    principal_id: str,
-    scopes: list[str],
-    expires_at: datetime | None,
-) -> tuple[str, ApiKeyRecord]:
-    assert auth.codec is not None
-    for _ in range(KEY_CREATION_ATTEMPTS):
-        generated = auth.codec.generate()
-        try:
-            key = await unit.api_keys.add(
-                principal_id=principal_id,
-                prefix=generated.prefix,
-                key_hash=generated.key_hash,
-                scopes=scopes,
-                expires_at=expires_at,
-            )
-        except PrefixTakenError:
-            continue
-        return generated.token, key
-    raise RuntimeError("could not find an unused API key prefix")
 
 
 @router.get(

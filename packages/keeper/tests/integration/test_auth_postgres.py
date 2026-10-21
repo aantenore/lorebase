@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from lorebase_keeper.app import create_app
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
-from lorebase_keeper.auth.config import ApiKeySettings
+from lorebase_keeper.auth.config import ApiKeySettings, AuthSettings
+from lorebase_keeper.bootstrap import BootstrapError, bootstrap, create_service_principal
 from lorebase_platform.settings import Settings
 from lorebase_store.auth import SqlAuthStore
 from lorebase_store.db import create_engine
@@ -143,3 +144,28 @@ async def test_keys_grants_and_audit_work_end_to_end_under_row_level_security(
         verification = await unit.audit.verify()
     assert verification.ok
     assert verification.checked == 10  # eight in acme, the globex denial, the globex audit read
+
+
+async def test_bootstrap_issues_one_installation_admin_key(app_database_url: str) -> None:
+    settings = AuthSettings(
+        mode="api_key", installation_admins=("svc_root",), api_keys=ApiKeySettings(pepper=PEPPER)
+    )
+    now = datetime.now(UTC)
+    async with owner_store(app_database_url) as store:
+        created = await bootstrap(store, settings, now=now)
+        with pytest.raises(BootstrapError):
+            await bootstrap(store, settings, now=now)
+        assert await create_service_principal(store, "agent-risk", "risk agent", now=now)
+        async with store.unit() as unit:
+            keys = await unit.api_keys.list_for_principals(["svc_root", "agent-risk"])
+            verification = await unit.audit.verify()
+    assert [k.id for k in keys] == [created.key_id]
+    assert verification.ok
+    assert verification.checked == 2
+
+    async with running(app_database_url, installation_admins=["svc_root"]) as http:
+        whoami = await http.get(
+            "/api/v1/auth/whoami", headers={"Authorization": f"Bearer {created.token}"}
+        )
+    assert whoami.status_code == 200
+    assert (whoami.json()["id"], whoami.json()["installation_admin"]) == ("svc_root", True)

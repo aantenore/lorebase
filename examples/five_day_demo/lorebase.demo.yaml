@@ -4,7 +4,7 @@
 
 keeper:
   auth:
-    mode: api_key                      # the demo admin key is created by bootstrap_admin.py
+    mode: api_key                      # stack.sh: python -m lorebase_keeper bootstrap
     installation_admins: [svc_demo_admin]
     api_keys:
       pepper: secret://env/LOREBASE_API_KEY_PEPPER

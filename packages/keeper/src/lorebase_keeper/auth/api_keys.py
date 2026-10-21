@@ -16,12 +16,21 @@ import hashlib
 import hmac
 import re
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from lorebase_keeper.auth.config import ApiKeySettings
+from lorebase_store.auth import ApiKeyRecord, PrefixTakenError
+
+if TYPE_CHECKING:
+    from lorebase_keeper.auth.ports import ApiKeysPort
 
 _PREFIX_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
 _PART = re.compile(r"^[A-Za-z0-9_-]+$")
+
+KEY_CREATION_ATTEMPTS = 5
 
 
 @dataclass(frozen=True)
@@ -86,3 +95,31 @@ class ApiKeyCodec:
     def matches(self, secret: str, stored_hash: bytes) -> bool:
         """Constant-time comparison of a presented secret with a stored hash."""
         return hmac.compare_digest(self.hash_secret(secret), stored_hash)
+
+
+async def issue_api_key(
+    codec: ApiKeyCodec,
+    keys: ApiKeysPort,
+    principal_id: str,
+    *,
+    scopes: Sequence[str] = (),
+    expires_at: datetime | None = None,
+) -> tuple[str, ApiKeyRecord]:
+    """Store a new key for `principal_id`; returns the secret token (shown once) and the row.
+
+    A generated prefix that is already taken is drawn again, a few times at most.
+    """
+    for _ in range(KEY_CREATION_ATTEMPTS):
+        generated = codec.generate()
+        try:
+            key = await keys.add(
+                principal_id=principal_id,
+                prefix=generated.prefix,
+                key_hash=generated.key_hash,
+                scopes=scopes,
+                expires_at=expires_at,
+            )
+        except PrefixTakenError:
+            continue
+        return generated.token, key
+    raise RuntimeError("could not find an unused API key prefix")
