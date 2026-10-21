@@ -79,7 +79,8 @@ config:
   keeper:
     auth:
       # none | api_key | oidc | api_key+oidc. `none` accepts every request as an administrator:
-      # development only. api_key and api_key+oidc need `secrets.values.apiKeyPepper`
+      # development only, and Keeper refuses it on the pod address unless `allow_insecure: true`
+      # is set next to it. api_key and api_key+oidc need `secrets.values.apiKeyPepper`
       # (or the pepper key of an existing Secret); the chart refuses to render without it.
       mode: api_key
       # Example OIDC block (issuer and audience are required with the oidc modes):
@@ -87,6 +88,11 @@ config:
       #   issuer: https://login.example.com/realms/lorebase
       #   audience: [lorebase]
       # installation_admins: [<principal id or identity provider subject>]
+  # Secret references a Source `connection` may name (docs/scribe.md). Empty, the default: Scribe
+  # synchronizes no Source. Expose the referenced variables through `secrets.extra` or `extraNames`.
+  # scribe:
+  #   sources:
+  #     allowed_connections: ["secret://env/ERP_DSN"]
 
 # Log level of every service (LOREBASE__LOGGING__LEVEL). CRITICAL | ERROR | WARNING | INFO | DEBUG.
 logLevel: INFO

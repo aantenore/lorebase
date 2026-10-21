@@ -74,7 +74,9 @@ Three layers, like compose:
 
 1. `config` (values) is the application's `lorebase.yaml`, rendered into a ConfigMap. Same keys and
    defaults as `config/lorebase.example.yaml`. Everything is optional; the chart sets
-   `keeper.auth.mode: api_key`, because `none` accepts every request as an administrator.
+   `keeper.auth.mode: api_key`, because `none` accepts every request as an administrator (Keeper
+   refuses `none` on the pod address unless `keeper.auth.allow_insecure: true`). Source syncs need
+   their connection references in `scribe.sources.allowed_connections`.
 2. Environment variables set by the chart override the file, for the deployment-level values only:
    `LOREBASE__KEEPER__HOST/PORT`, `keeper.preferReplica`, `logLevel`, `telemetry.*`, the DSNs, the
    pepper, the Ollama and LLM settings of Scribe. Do not repeat those in `config`.
