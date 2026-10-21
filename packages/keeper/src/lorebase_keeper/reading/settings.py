@@ -80,11 +80,24 @@ class DiffSettings(SectionModel):
     page: Bounds = Field(default_factory=lambda: Bounds(default_limit=100, max_limit=1000))
 
 
+class HistorySettings(Bounds):
+    """Per-Record history and lineage (`.../records/{key}/history` and `/lineage`)."""
+
+    lineage_max_changes: int = Field(
+        default=10_000,
+        ge=1,
+        description="Newest changes of a Record read to attribute its values to Revisions.",
+    )
+
+
 class ReadSettings(SectionModel):
     """Bounds of the read path."""
 
     records: Bounds = Field(default_factory=Bounds, description="Record and Link pages.")
     log: Bounds = Field(default_factory=Bounds, description="Pages of the Revision log.")
+    history: HistorySettings = Field(
+        default_factory=HistorySettings, description="Per-Record history and lineage."
+    )
     statement_timeout_ms: int = Field(
         default=2000, ge=0, description="statement_timeout of read transactions; 0 disables."
     )

@@ -444,6 +444,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/kinds/{kind}/records/{key}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * History of a Record
+         * @description Revisions that changed the Record on the branch, newest first, with the Attributes each
+         *     changed and their provenance. Served at the branch head from the branch history.
+         */
+        get: operations["get_record_history_api_v1_domains__domain_id__kinds__kind__records__key__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/kinds/{kind}/records/{key}/lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lineage of a Record
+         * @description Where each current value of the Record came from: provenance, Revision, Source,
+         *     Operation, extraction evidence and Proposal. Served at the branch head.
+         */
+        get: operations["get_record_lineage_api_v1_domains__domain_id__kinds__kind__records__key__lineage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/relations/{relation}/links": {
         parameters: {
             query?: never;
@@ -1512,6 +1554,19 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** AttributeChangeOut */
+        AttributeChangeOut: {
+            /**
+             * Name
+             * @description Attribute api name.
+             */
+            name: string;
+            /** @description Value before; with `values=true`. */
+            before?: components["schemas"]["JsonValue"];
+            /** @description Value after; with `values=true`. */
+            after?: components["schemas"]["JsonValue"];
+            provenance?: components["schemas"]["ProvenanceOut"] | null;
+        };
         /**
          * AttributeCondition
          * @description Compare an Attribute, `key` or `title` with a value.
@@ -1711,6 +1766,11 @@ export interface components {
              */
             capped: boolean;
         };
+        /**
+         * ChangeKind
+         * @enum {string}
+         */
+        ChangeKind: "created" | "updated" | "deleted";
         /**
          * ChangeOut
          * @description One changed element.
@@ -2629,6 +2689,24 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
         };
+        /**
+         * ExtractionEvidenceOut
+         * @description Where an extracted value was read: the document span and the model that read it.
+         */
+        ExtractionEvidenceOut: {
+            /** Job Id */
+            job_id: string;
+            /** Document Id */
+            document_id: string;
+            /** Span Start */
+            span_start: number;
+            /** Span End */
+            span_end: number;
+            /** Model Id */
+            model_id: string;
+            /** Prompt Version */
+            prompt_version: string;
+        };
         /** ExtractionJobOut */
         ExtractionJobOut: {
             /** Id */
@@ -2967,6 +3045,17 @@ export interface components {
             actor?: string | null;
             /** At */
             at?: string | null;
+        };
+        /** LineageProposalOut */
+        LineageProposalOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /** Merged Revision */
+            merged_revision?: string | null;
         };
         /** LinkCountOut */
         LinkCountOut: {
@@ -3589,6 +3678,33 @@ export interface components {
             description?: string | null;
         };
         /**
+         * ProvenanceOut
+         * @description A provenance entry (design 5.11): where a change came from.
+         */
+        ProvenanceOut: {
+            /** Id */
+            id: string;
+            /**
+             * Origin Type
+             * @description `operation`, `source_sync`, `extraction`, `merge_resolution`, `schema_migration` or `import`.
+             */
+            origin_type: string;
+            /**
+             * Origin
+             * @description The origin document of that type.
+             */
+            origin: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Actor */
+            actor: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+        };
+        /**
          * Query
          * @description A query over the Records of one Kind or of the Kinds implementing a Trait.
          */
@@ -3716,6 +3832,95 @@ export interface components {
             kind: string;
             /** Key */
             key: string;
+        };
+        /**
+         * RecordChangeOut
+         * @description One Revision that changed the Record on the branch.
+         */
+        RecordChangeOut: {
+            /** Revision */
+            revision: string;
+            /** Generation */
+            generation: number;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Author */
+            author: string;
+            /** On Behalf Of */
+            on_behalf_of?: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Origin
+             * @description Origin of the Revision (`type`, `ref`).
+             */
+            origin: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            change: components["schemas"]["ChangeKind"];
+            /**
+             * Attributes
+             * @description Attributes whose value changed, in schema order.
+             */
+            attributes: components["schemas"]["AttributeChangeOut"][];
+            /** @description Provenance of the change as a whole (a deletion, for one). */
+            provenance?: components["schemas"]["ProvenanceOut"] | null;
+        };
+        /** RecordHistoryOut */
+        RecordHistoryOut: {
+            /**
+             * Revision
+             * @description Revision the response was served from (hex).
+             */
+            revision: string;
+            served_from: components["schemas"]["ServedFrom"];
+            /** Branch */
+            branch: string;
+            /** Kind */
+            kind: string;
+            /** Key */
+            key: string;
+            /** Items */
+            items: components["schemas"]["RecordChangeOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** RecordLineageOut */
+        RecordLineageOut: {
+            /**
+             * Revision
+             * @description Revision the response was served from (hex).
+             */
+            revision: string;
+            served_from: components["schemas"]["ServedFrom"];
+            /** Branch */
+            branch: string;
+            /** Kind */
+            kind: string;
+            /** Key */
+            key: string;
+            /** @description The change that last created the Record. */
+            created?: components["schemas"]["RecordChangeOut"] | null;
+            /**
+             * Changes
+             * @description Changes of the Record on the branch.
+             */
+            changes: number;
+            /** Attributes */
+            attributes: components["schemas"]["ValueLineageOut"][];
+            /**
+             * Sources
+             * @description Sources behind the current values, by api name.
+             */
+            sources: string[];
+            /**
+             * Proposals
+             * @description Proposals behind the current values.
+             */
+            proposals: components["schemas"]["LineageProposalOut"][];
         };
         /**
          * RecordOut
@@ -4429,6 +4634,46 @@ export interface components {
             name: string;
             old?: components["schemas"]["JsonValue"];
             new?: components["schemas"]["JsonValue"];
+        };
+        /**
+         * ValueLineageOut
+         * @description Where the current value of one Attribute came from.
+         */
+        ValueLineageOut: {
+            /**
+             * Name
+             * @description Attribute api name.
+             */
+            name: string;
+            value?: components["schemas"]["JsonValue"];
+            provenance?: components["schemas"]["ProvenanceOut"] | null;
+            /**
+             * Revision
+             * @description Revision of the last change.
+             */
+            revision?: string | null;
+            /** Revision At */
+            revision_at?: string | null;
+            /**
+             * Author
+             * @description Author of that Revision.
+             */
+            author?: string | null;
+            /** Message */
+            message?: string | null;
+            /**
+             * Source
+             * @description Source api name (`source_sync`).
+             */
+            source?: string | null;
+            /**
+             * Operation
+             * @description Operation api name (`operation`).
+             */
+            operation?: string | null;
+            extraction?: components["schemas"]["ExtractionEvidenceOut"] | null;
+            /** @description The Proposal merged in that Revision, or whose conflict resolution set the value. */
+            proposal?: components["schemas"]["LineageProposalOut"] | null;
         };
         /**
          * ViaCondition
@@ -6289,6 +6534,152 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecordResponse"];
+                };
+            };
+            /** @description Not modified: If-None-Match names the current ETag. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller lacks data.read for the branch or Revision read. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch, Revision, Kind or Record not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request or query. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_record_history_api_v1_domains__domain_id__kinds__kind__records__key__history_get: {
+        parameters: {
+            query?: {
+                /** @description Branch to read; default: the Domain's default branch. */
+                branch?: string | null;
+                /** @description Add the values before and after each change. */
+                values?: boolean;
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordHistoryOut"];
+                };
+            };
+            /** @description Not modified: If-None-Match names the current ETag. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller lacks data.read for the branch or Revision read. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch, Revision, Kind or Record not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request or query. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_record_lineage_api_v1_domains__domain_id__kinds__kind__records__key__lineage_get: {
+        parameters: {
+            query?: {
+                /** @description Branch to read; default: the Domain's default branch. */
+                branch?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordLineageOut"];
                 };
             };
             /** @description Not modified: If-None-Match names the current ETag. */
