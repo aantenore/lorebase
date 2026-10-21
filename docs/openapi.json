@@ -2108,6 +2108,178 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/schema:infer": {
+      "post": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Propose a schema from tables or CSV files",
+        "description": "Profile the uploaded files or the Postgres tables and propose Kinds, typed Attributes,\nkeys and Relations with evidence. Deterministic and model-free; nothing is written.",
+        "operationId": "infer_api_v1_domains__domain_id__schema_infer_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "json",
+                    "yaml"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/lorebase_keeper__routes__schema_inference__ProposalOut"
+                }
+              },
+              "text/yaml": {}
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks schema.write in the Domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A file or the upload is too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid files, source or options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The source database cannot be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "CSV or TSV files; the file name is the table name."
+                  },
+                  "options": {
+                    "type": "string",
+                    "description": "JSON object of InferenceOptions overrides."
+                  }
+                },
+                "required": [
+                  "files"
+                ]
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "postgres": {
+                    "type": "object",
+                    "properties": {
+                      "dsn": {
+                        "type": "string",
+                        "example": "secret://env/ERP_DSN"
+                      },
+                      "schema": {
+                        "type": "string",
+                        "default": "public"
+                      },
+                      "tables": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "dsn"
+                    ]
+                  },
+                  "options": {
+                    "type": "object",
+                    "description": "InferenceOptions overrides."
+                  }
+                },
+                "required": [
+                  "postgres"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/operations/{operation}/execute": {
       "post": {
         "tags": [
@@ -3346,6 +3518,2124 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/context": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Context pack for an agent",
+        "description": "Seed Records, their neighborhood, schema, recent changes and lineage within a budget.",
+        "operationId": "context_pack_api_v1_domains__domain_id__context_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pack in JSON, or markdown with `format: markdown`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextPackOut"
+                }
+              },
+              "text/markdown; charset=utf-8": {}
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for what is read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch, Revision, Kind or Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/kinds/{kind}/records/{key}/explain": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Explain a Record",
+        "description": "Creation, per-Attribute lineage, Links with their origin and Proposals of a Record.",
+        "operationId": "explain_api_v1_domains__domain_id__kinds__kind__records__key__explain_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Branch to read; default: the Domain's default branch.",
+              "title": "Branch"
+            },
+            "description": "Branch to read; default: the Domain's default branch."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "type": "string",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The explanation in JSON, or markdown with `format=markdown`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainOut"
+                }
+              },
+              "text/markdown; charset=utf-8": {}
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for what is read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch, Revision, Kind or Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/webhooks": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Create a webhook",
+        "description": "Register an endpoint for the Domain's events; the secret is returned once.",
+        "operationId": "create_webhook_api_v1_domains__domain_id__webhooks_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhook"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks domain.settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or webhook not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List webhooks",
+        "description": "Webhooks of the Domain, oldest first (secrets are never shown again).",
+        "operationId": "list_webhooks_api_v1_domains__domain_id__webhooks_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks domain.settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or webhook not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/webhooks/{webhook_id}": {
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete a webhook",
+        "description": "Remove a webhook and its pending deliveries.",
+        "operationId": "delete_webhook_api_v1_domains__domain_id__webhooks__webhook_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "webhook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Webhook Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks domain.settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or webhook not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/branches/{branch}/events": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Stream the Revisions of a branch (Server-Sent Events)",
+        "description": "Revisions committed on the branch from now on, or after `Last-Event-ID`.",
+        "operationId": "branch_events_api_v1_domains__domain_id__branches__branch__events_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Branch"
+            }
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only events changing these Kinds (repeated or comma-separated).",
+              "title": "Kinds"
+            },
+            "description": "Only events changing these Kinds (repeated or comma-separated)."
+          },
+          {
+            "name": "last_event_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Resume after this event id (for clients that cannot set headers).",
+              "title": "Last Event Id"
+            },
+            "description": "Resume after this event id (for clients that cannot set headers)."
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`event: revision` messages whose `data` is a RevisionEventOut and whose `id` is the event sequence; comment lines as heartbeats.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Revision not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/branches/{branch}/changes": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Revisions of a branch since a Revision",
+        "description": "First-parent Revisions after `since`, oldest first; continue with `next_since`.",
+        "operationId": "branch_changes_api_v1_domains__domain_id__branches__branch__changes_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Branch"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision id or tag; default: the latest Revisions.",
+              "title": "Since"
+            },
+            "description": "Revision id or tag; default: the latest Revisions."
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only events changing these Kinds (repeated or comma-separated).",
+              "title": "Kinds"
+            },
+            "description": "Only events changing these Kinds (repeated or comma-separated)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesFeedPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Revision not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          },
+          "409": {
+            "description": "`since` is not reachable from the head.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Create a Proposal",
+        "description": "Open a Proposal and compute its merge preview (Conflict count).\n\nThe merge policy comes from the Domain's `merge_policy` setting. With an\n`Idempotency-Key`, a retried create returns the Proposal with status 200 and\n`Idempotent-Replayed: true`.",
+        "operationId": "create_proposal_api_v1_domains__domain_id__proposals_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalDetailOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "List Proposals",
+        "description": "Proposals the caller may read, newest first.",
+        "operationId": "list_proposals_api_v1_domains__domain_id__proposals_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ProposalStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "origin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ProposalOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Source branch.",
+              "title": "Source"
+            },
+            "description": "Source branch."
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target branch.",
+              "title": "Target"
+            },
+            "description": "Target branch."
+          },
+          {
+            "name": "author",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Author"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ProposalOut_"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}": {
+      "get": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Get a Proposal",
+        "description": "The Proposal with its reviews, approval state and latest merge attempt.",
+        "operationId": "get_proposal_api_v1_domains__domain_id__proposals__proposal_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalDetailOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Update a Proposal",
+        "description": "Change the title or description of an open Proposal (its author or a maintainer).",
+        "operationId": "update_proposal_api_v1_domains__domain_id__proposals__proposal_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalDetailOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/close": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Close a Proposal",
+        "description": "Close without merging; the merge attempt is discarded and the target is unchanged.",
+        "operationId": "close_proposal_api_v1_domains__domain_id__proposals__proposal_id__close_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalDetailOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/reviews": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Review a Proposal",
+        "description": "Approve, request changes or comment.",
+        "operationId": "review_proposal_api_v1_domains__domain_id__proposals__proposal_id__reviews_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/merge": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Merge a Proposal",
+        "description": "Run or re-run the merge with the stored resolutions.\n\n200 with the new target head when the merge committed (merge Revision with parents\n`[target head, source head]`, fast-forward, or nothing to do); 409 `merge-conflicts`\nwith the attempt when Conflicts remain. With an `Idempotency-Key`, retrying a merge that\ncommitted returns it again (`Idempotent-Replayed: true`).",
+        "operationId": "merge_proposal_api_v1_domains__domain_id__proposals__proposal_id__merge_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MergeIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/conflicts": {
+      "get": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "List the Conflicts of a Proposal",
+        "description": "The current merge attempt with one page of its Conflicts, ordered by id.",
+        "operationId": "list_conflicts_api_v1_domains__domain_id__proposals__proposal_id__conflicts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Conflict codes, comma-separated (`DV1,XS8`).",
+              "title": "Kind"
+            },
+            "description": "Conflict codes, comma-separated (`DV1,XS8`)."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "resolved"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictsOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/conflicts/{conflict_id}/resolution": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Resolve one Conflict",
+        "description": "Store the resolution of one Conflict of the current attempt (no merge run).",
+        "operationId": "resolve_conflict_api_v1_domains__domain_id__proposals__proposal_id__conflicts__conflict_id__resolution_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          },
+          {
+            "name": "conflict_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conflict Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolutionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/conflicts:resolve": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Resolve Conflicts in bulk",
+        "description": "Store several resolutions, re-run the merge and return the new attempt.",
+        "operationId": "resolve_conflicts_api_v1_domains__domain_id__proposals__proposal_id__conflicts_resolve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveManyIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictsOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission, or self-approval refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, Proposal, branch or Conflict not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5211,6 +7501,211 @@
         "title": "ApiKeyOut",
         "description": "An API key. The secret is never shown again after creation."
       },
+      "ApprovalOut": {
+        "properties": {
+          "protected": {
+            "type": "boolean",
+            "title": "Protected"
+          },
+          "required": {
+            "type": "integer",
+            "title": "Required"
+          },
+          "approvals": {
+            "type": "integer",
+            "title": "Approvals"
+          },
+          "approvers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approvers"
+          },
+          "changes_requested": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changes Requested"
+          },
+          "satisfied": {
+            "type": "boolean",
+            "title": "Satisfied"
+          }
+        },
+        "type": "object",
+        "required": [
+          "protected",
+          "required",
+          "approvals",
+          "approvers",
+          "changes_requested",
+          "satisfied"
+        ],
+        "title": "ApprovalOut",
+        "description": "Review state against the target branch's protection."
+      },
+      "AttemptOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "proposal": {
+            "type": "string",
+            "title": "Proposal"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result",
+            "description": "`conflicts`, `merged`, `fast_forward` or `up_to_date`."
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "ours": {
+            "type": "string",
+            "title": "Ours"
+          },
+          "theirs": {
+            "type": "string",
+            "title": "Theirs"
+          },
+          "virtual_base": {
+            "type": "boolean",
+            "title": "Virtual Base"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Target head after the merge committed."
+          },
+          "policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Policy"
+          },
+          "open_conflicts": {
+            "type": "integer",
+            "title": "Open Conflicts"
+          },
+          "resolved_conflicts": {
+            "type": "integer",
+            "title": "Resolved Conflicts"
+          },
+          "counts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Counts",
+            "description": "Per Conflict code: open, resolved."
+          },
+          "recomputed": {
+            "type": "boolean",
+            "title": "Recomputed",
+            "description": "This request ran the merge."
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "description": "A head moved since the previous attempt."
+          },
+          "resolutions": {
+            "items": {
+              "$ref": "#/components/schemas/ResolutionOut"
+            },
+            "type": "array",
+            "title": "Resolutions"
+          },
+          "unmatched_resolutions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unmatched Resolutions"
+          },
+          "auto_resolutions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Auto Resolutions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "proposal",
+          "status",
+          "result",
+          "base",
+          "ours",
+          "theirs",
+          "virtual_base",
+          "created_at",
+          "created_by",
+          "revision",
+          "policy",
+          "open_conflicts",
+          "resolved_conflicts",
+          "counts",
+          "recomputed",
+          "stale",
+          "resolutions",
+          "unmatched_resolutions",
+          "auto_resolutions"
+        ],
+        "title": "AttemptOut",
+        "description": "A merge attempt (design 6.8 step 5) and the resolutions of its Proposal."
+      },
       "AttributeCondition": {
         "properties": {
           "attr": {
@@ -5233,6 +7728,94 @@
         ],
         "title": "AttributeCondition",
         "description": "Compare an Attribute, `key` or `title` with a value."
+      },
+      "AttributeLineageOut": {
+        "properties": {
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "origin_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Type",
+            "description": "Provenance origin type."
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin",
+            "description": "Provenance origin."
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "Message of the Revision."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AttributeLineageOut"
       },
       "AuditEntryOut": {
         "properties": {
@@ -5463,6 +8046,68 @@
         "title": "BranchUpdate",
         "description": "Branch flags."
       },
+      "BudgetOut": {
+        "properties": {
+          "limit_tokens": {
+            "type": "integer",
+            "title": "Limit Tokens"
+          },
+          "used_tokens": {
+            "type": "integer",
+            "title": "Used Tokens",
+            "description": "Estimated tokens of the sections."
+          },
+          "chars_per_token": {
+            "type": "number",
+            "title": "Chars Per Token"
+          },
+          "sections": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Sections",
+            "description": "Estimated tokens per section."
+          },
+          "trimmed": {
+            "items": {
+              "$ref": "#/components/schemas/TrimOut"
+            },
+            "type": "array",
+            "title": "Trimmed"
+          },
+          "omitted": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Omitted",
+            "description": "Entries removed to fit, per section."
+          },
+          "over_budget": {
+            "type": "boolean",
+            "title": "Over Budget",
+            "description": "True when even the seed Records exceed the budget."
+          },
+          "capped": {
+            "type": "boolean",
+            "title": "Capped",
+            "description": "True when graph caps cut the neighborhood."
+          }
+        },
+        "type": "object",
+        "required": [
+          "limit_tokens",
+          "used_tokens",
+          "chars_per_token",
+          "sections",
+          "trimmed",
+          "omitted",
+          "over_budget",
+          "capped"
+        ],
+        "title": "BudgetOut"
+      },
       "ChangeOut": {
         "properties": {
           "element": {
@@ -5624,6 +8269,55 @@
         ],
         "title": "ChangeType"
       },
+      "ChangesFeedPage": {
+        "properties": {
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "head": {
+            "type": "string",
+            "title": "Head"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionEventOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_since": {
+            "type": "string",
+            "title": "Next Since",
+            "description": "Pass as `since` to continue."
+          },
+          "more": {
+            "type": "boolean",
+            "title": "More",
+            "description": "True when more Revisions follow `next_since`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "branch",
+          "head",
+          "items",
+          "next_since",
+          "more"
+        ],
+        "title": "ChangesFeedPage"
+      },
       "ChangesPage": {
         "properties": {
           "from_revision": {
@@ -5683,12 +8377,48 @@
         "title": "ChangesPage",
         "description": "A page of element changes with the summary of all of them."
       },
+      "CheckOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "pending"
+            ],
+            "title": "Status"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "CheckOut",
+        "description": "One Proposal check (design 10.3)."
+      },
       "CheckReport": {
         "properties": {
           "status": {
             "type": "string",
             "enum": [
               "ok",
+              "degraded",
               "not_configured",
               "failed"
             ],
@@ -5712,6 +8442,468 @@
         ],
         "title": "CheckReport",
         "description": "Outcome of one dependency check."
+      },
+      "ConflictOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "resolved"
+            ],
+            "title": "Status"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "ConflictOut",
+        "description": "A Conflict (core `Conflict`) with its id, state and members."
+      },
+      "ConflictsOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "proposal": {
+            "type": "string",
+            "title": "Proposal"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result",
+            "description": "`conflicts`, `merged`, `fast_forward` or `up_to_date`."
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "ours": {
+            "type": "string",
+            "title": "Ours"
+          },
+          "theirs": {
+            "type": "string",
+            "title": "Theirs"
+          },
+          "virtual_base": {
+            "type": "boolean",
+            "title": "Virtual Base"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Target head after the merge committed."
+          },
+          "policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Policy"
+          },
+          "open_conflicts": {
+            "type": "integer",
+            "title": "Open Conflicts"
+          },
+          "resolved_conflicts": {
+            "type": "integer",
+            "title": "Resolved Conflicts"
+          },
+          "counts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Counts",
+            "description": "Per Conflict code: open, resolved."
+          },
+          "recomputed": {
+            "type": "boolean",
+            "title": "Recomputed",
+            "description": "This request ran the merge."
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "description": "A head moved since the previous attempt."
+          },
+          "resolutions": {
+            "items": {
+              "$ref": "#/components/schemas/ResolutionOut"
+            },
+            "type": "array",
+            "title": "Resolutions"
+          },
+          "unmatched_resolutions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unmatched Resolutions"
+          },
+          "auto_resolutions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Auto Resolutions"
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/ConflictOut"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "proposal",
+          "status",
+          "result",
+          "base",
+          "ours",
+          "theirs",
+          "virtual_base",
+          "created_at",
+          "created_by",
+          "revision",
+          "policy",
+          "open_conflicts",
+          "resolved_conflicts",
+          "counts",
+          "recomputed",
+          "stale",
+          "resolutions",
+          "unmatched_resolutions",
+          "auto_resolutions",
+          "conflicts"
+        ],
+        "title": "ConflictsOut",
+        "description": "An attempt with one page of its Conflicts."
+      },
+      "ContextPackOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "seeds": {
+            "items": {
+              "$ref": "#/components/schemas/PackRecordOut"
+            },
+            "type": "array",
+            "title": "Seeds"
+          },
+          "neighbors": {
+            "items": {
+              "$ref": "#/components/schemas/PackNeighborOut"
+            },
+            "type": "array",
+            "title": "Neighbors"
+          },
+          "links": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/PackLinkOut"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Links"
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SchemaFragmentOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recent_changes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PackChangeOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Changes"
+          },
+          "lineage": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PackLineageOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineage"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "branch",
+          "revision",
+          "etag",
+          "seeds",
+          "neighbors",
+          "links",
+          "budget"
+        ],
+        "title": "ContextPackOut",
+        "description": "A context pack in JSON (`format: json`)."
+      },
+      "ContextRequest": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch",
+            "description": "Default: the Domain's default branch."
+          },
+          "refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refs",
+            "description": "Seed Records as `Kind/key` references."
+          },
+          "query": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Query"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "DSL query selecting the seeds."
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search",
+            "description": "Lexical search text selecting the seeds."
+          },
+          "budget_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Tokens",
+            "description": "Estimated token budget; default from settings."
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depth",
+            "description": "Neighborhood depth (0: none)."
+          },
+          "relations": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relations",
+            "description": "Relation api names to follow (forward or inverse); default: all."
+          },
+          "include_schema": {
+            "type": "boolean",
+            "title": "Include Schema",
+            "default": true
+          },
+          "include_recent_changes": {
+            "type": "boolean",
+            "title": "Include Recent Changes",
+            "default": true
+          },
+          "include_lineage": {
+            "type": "boolean",
+            "title": "Include Lineage",
+            "default": true
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since",
+            "description": "Revision id or tag: recent changes after it; default: the latest changes."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "Format",
+            "description": "`markdown` answers text/markdown to paste into a prompt.",
+            "default": "json"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ContextRequest",
+        "description": "What an agent needs to reason about: seed Records and how much around them."
       },
       "CountCondition": {
         "properties": {
@@ -5879,6 +9071,160 @@
         ],
         "title": "CreateGrant",
         "description": "Request to grant a role."
+      },
+      "CreateWebhook": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url",
+            "description": "Target of the POST requests."
+          },
+          "events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events",
+            "description": "Event types delivered; default: every type."
+          },
+          "branches": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branches",
+            "description": "Only events of these branches; default: all."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "CreateWebhook"
+      },
+      "CreatedOut": {
+        "properties": {
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "origin_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Type",
+            "description": "Provenance origin type."
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin",
+            "description": "Provenance origin."
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "Message of the Revision."
+          },
+          "revision_origin": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Origin",
+            "description": "Origin of the Revision (`type`, `ref`)."
+          }
+        },
+        "type": "object",
+        "title": "CreatedOut"
       },
       "DerivedCondition": {
         "properties": {
@@ -6324,6 +9670,141 @@
         "title": "ExecutionOut",
         "description": "Result of an execution."
       },
+      "ExplainOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "record": {
+            "$ref": "#/components/schemas/ExplainedRecordOut"
+          },
+          "created": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreatedOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/AttributeLineageOut"
+            },
+            "type": "array",
+            "title": "Attributes"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/LinkLineageOut"
+            },
+            "type": "array",
+            "title": "Links"
+          },
+          "links_truncated": {
+            "type": "boolean",
+            "title": "Links Truncated"
+          },
+          "history": {
+            "$ref": "#/components/schemas/HistoryOut"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/lorebase_keeper__agents__explain__ProposalOut"
+            },
+            "type": "array",
+            "title": "Proposals"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "branch",
+          "revision",
+          "record",
+          "attributes",
+          "links",
+          "links_truncated",
+          "history",
+          "proposals"
+        ],
+        "title": "ExplainOut",
+        "description": "An explained Record (`format: json`)."
+      },
+      "ExplainedRecordOut": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "updated_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Revision"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "kind",
+          "key",
+          "values"
+        ],
+        "title": "ExplainedRecordOut"
+      },
       "FieldProblem": {
         "properties": {
           "pointer": {
@@ -6347,6 +9828,42 @@
         ],
         "title": "FieldProblem",
         "description": "One invalid request member."
+      },
+      "FingerprintedResolutionIn": {
+        "properties": {
+          "choice": {
+            "type": "string",
+            "title": "Choice"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Fingerprint"
+          }
+        },
+        "type": "object",
+        "required": [
+          "choice",
+          "fingerprint"
+        ],
+        "title": "FingerprintedResolutionIn"
       },
       "GrantOut": {
         "properties": {
@@ -6414,6 +9931,41 @@
         ],
         "title": "GrantScope",
         "description": "What a grant applies to (design 10.2)."
+      },
+      "HistoryOut": {
+        "properties": {
+          "changes": {
+            "type": "integer",
+            "title": "Changes"
+          },
+          "first_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Revision"
+          },
+          "last_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "changes"
+        ],
+        "title": "HistoryOut"
       },
       "Include": {
         "properties": {
@@ -6563,6 +10115,127 @@
           "inverse"
         ],
         "title": "LinkDirection"
+      },
+      "LinkLineageOut": {
+        "properties": {
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "origin_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Type",
+            "description": "Provenance origin type."
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin",
+            "description": "Provenance origin."
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "Message of the Revision."
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation",
+            "description": "Relation api name seen from the Record."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/LinkDirection"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref",
+            "description": "The Record at the other end."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "direction",
+          "ref"
+        ],
+        "title": "LinkLineageOut"
       },
       "LinkOut": {
         "properties": {
@@ -6723,6 +10396,69 @@
         ],
         "title": "Materialization",
         "description": "Branch materialization mode (design 6.11)."
+      },
+      "MergeIn": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "title": "MergeIn"
+      },
+      "MergeOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "merged",
+            "title": "Status",
+            "default": "merged"
+          },
+          "result": {
+            "type": "string",
+            "title": "Result",
+            "description": "`merged`, `fast_forward` or `up_to_date`."
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Head of the target branch after the merge."
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/lorebase_keeper__routes__proposals__ProposalOut"
+          },
+          "attempt": {
+            "$ref": "#/components/schemas/ConflictsOut"
+          },
+          "source_deleted": {
+            "type": "boolean",
+            "title": "Source Deleted"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result",
+          "revision",
+          "proposal",
+          "attempt",
+          "source_deleted",
+          "replayed"
+        ],
+        "title": "MergeOut",
+        "description": "A merged Proposal."
       },
       "NeighborhoodRequest": {
         "properties": {
@@ -6922,6 +10658,241 @@
         "title": "OrderBy",
         "description": "One ordering term: an Attribute, `key` or `title`. Absent values sort last."
       },
+      "PackChangeOut": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "added",
+              "modified",
+              "removed"
+            ],
+            "title": "Change"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "at",
+          "ref",
+          "change",
+          "actor",
+          "origin",
+          "message"
+        ],
+        "title": "PackChangeOut"
+      },
+      "PackLineageOut": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "attributes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attributes"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "attributes"
+        ],
+        "title": "PackLineageOut"
+      },
+      "PackLinkOut": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "PackLinkOut"
+      },
+      "PackNeighborOut": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values",
+            "description": "Absent when trimmed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "depth"
+        ],
+        "title": "PackNeighborOut"
+      },
+      "PackRecordOut": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "updated_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "values"
+        ],
+        "title": "PackRecordOut"
+      },
       "Page_ApiKeyOut_": {
         "properties": {
           "items": {
@@ -7083,6 +11054,33 @@
           "items"
         ],
         "title": "Page[PrincipalOut]"
+      },
+      "Page_ProposalOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/lorebase_keeper__routes__proposals__ProposalOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "Page[ProposalOut]"
       },
       "Page_TagOut_": {
         "properties": {
@@ -7308,6 +11306,350 @@
         ],
         "title": "Problem",
         "description": "Problem details document (schema of every error response)."
+      },
+      "ProposalCreate": {
+        "properties": {
+          "source_ref": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source Ref"
+          },
+          "target_ref": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Ref"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_ref",
+          "target_ref",
+          "title"
+        ],
+        "title": "ProposalCreate",
+        "description": "A new Proposal: merge `source_ref` into `target_ref`."
+      },
+      "ProposalDetailOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "source_ref": {
+            "type": "string",
+            "title": "Source Ref"
+          },
+          "target_ref": {
+            "type": "string",
+            "title": "Target Ref"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ProposalOrigin"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProposalStatus"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "merged_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Revision"
+          },
+          "policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Policy",
+            "description": "Merge policy options differing from defaults."
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckOut"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewOut"
+            },
+            "type": "array",
+            "title": "Reviews"
+          },
+          "approval": {
+            "$ref": "#/components/schemas/ApprovalOut"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttemptOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "description",
+          "source_ref",
+          "target_ref",
+          "origin",
+          "status",
+          "author",
+          "created_at",
+          "updated_at",
+          "merged_revision",
+          "policy",
+          "checks",
+          "reviews",
+          "approval",
+          "attempt"
+        ],
+        "title": "ProposalDetailOut"
+      },
+      "ProposalOrigin": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "source_sync",
+          "extraction",
+          "operation"
+        ],
+        "title": "ProposalOrigin",
+        "description": "What opened a Proposal."
+      },
+      "ProposalStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "merged",
+          "closed"
+        ],
+        "title": "ProposalStatus",
+        "description": "Proposal lifecycle."
+      },
+      "ProposalUpdate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "title": "ProposalUpdate",
+        "description": "Title and description; omitted members are left unchanged."
+      },
+      "Query": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "trait": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trait"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AllOf"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AnyOf"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NotCondition"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ViaCondition"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CountCondition"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MatchCondition"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DerivedCondition"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AttributeCondition"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Where"
+          },
+          "select": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Select"
+          },
+          "include": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Include"
+            },
+            "type": "object",
+            "title": "Include"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/OrderBy"
+            },
+            "type": "array",
+            "title": "Order By"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "aggregate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Aggregate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Query",
+        "description": "A query over the Records of one Kind or of the Kinds implementing a Trait."
       },
       "QueryRequest": {
         "properties": {
@@ -7748,6 +12090,332 @@
         ],
         "title": "RecordResponse"
       },
+      "ResolutionIn": {
+        "properties": {
+          "choice": {
+            "type": "string",
+            "title": "Choice"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "choice"
+        ],
+        "title": "ResolutionIn",
+        "description": "A decision for one Conflict (`value` or per-member `values` for `custom` only)."
+      },
+      "ResolutionOut": {
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "choice": {
+            "type": "string",
+            "title": "Choice"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          },
+          "resolver": {
+            "type": "string",
+            "title": "Resolver"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "matched": {
+            "type": "boolean",
+            "title": "Matched",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "choice",
+          "resolver",
+          "at"
+        ],
+        "title": "ResolutionOut",
+        "description": "A stored resolution; `matched` is false when its Conflict is gone from the attempt."
+      },
+      "ResolveManyIn": {
+        "properties": {
+          "resolutions": {
+            "items": {
+              "$ref": "#/components/schemas/FingerprintedResolutionIn"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Resolutions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resolutions"
+        ],
+        "title": "ResolveManyIn"
+      },
+      "ReviewIn": {
+        "properties": {
+          "verdict": {
+            "$ref": "#/components/schemas/ReviewVerdict"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "ReviewIn"
+      },
+      "ReviewOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/ReviewVerdict"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "reviewer",
+          "verdict",
+          "comment",
+          "at"
+        ],
+        "title": "ReviewOut"
+      },
+      "ReviewResult": {
+        "properties": {
+          "review": {
+            "$ref": "#/components/schemas/ReviewOut"
+          },
+          "approval": {
+            "$ref": "#/components/schemas/ApprovalOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review",
+          "approval"
+        ],
+        "title": "ReviewResult"
+      },
+      "ReviewVerdict": {
+        "type": "string",
+        "enum": [
+          "approve",
+          "request_changes",
+          "comment"
+        ],
+        "title": "ReviewVerdict",
+        "description": "Outcome of one Proposal review."
+      },
+      "RevisionEventOut": {
+        "properties": {
+          "sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sequence",
+            "description": "Outbox sequence; the SSE id. Absent in `changes` pages."
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "parents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Parents"
+          },
+          "generation": {
+            "type": "integer",
+            "title": "Generation"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "on_behalf_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Behalf Of"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "origin": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Origin"
+          },
+          "stats": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Stats"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Kinds",
+            "description": "Changed Records per Kind api name."
+          },
+          "relations": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Relations",
+            "description": "Changed Links per Relation api name."
+          },
+          "schema_changed": {
+            "type": "boolean",
+            "title": "Schema Changed"
+          },
+          "keys": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Keys",
+            "description": "Changed Record keys per Kind, capped."
+          },
+          "keys_truncated": {
+            "type": "boolean",
+            "title": "Keys Truncated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "domain",
+          "branch",
+          "revision",
+          "parents",
+          "generation",
+          "author",
+          "message",
+          "origin",
+          "stats",
+          "created_at",
+          "kinds",
+          "relations",
+          "schema_changed",
+          "keys",
+          "keys_truncated"
+        ],
+        "title": "RevisionEventOut",
+        "description": "A Revision committed on a branch."
+      },
       "RevisionOut": {
         "properties": {
           "id": {
@@ -7817,6 +12485,57 @@
           "created_at"
         ],
         "title": "RevisionOut"
+      },
+      "SchemaAttributeOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "derived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Derived"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "SchemaAttributeOut"
       },
       "SchemaChangeOut": {
         "properties": {
@@ -7971,6 +12690,81 @@
         "title": "SchemaChangeRequest",
         "description": "A schema change set for one branch."
       },
+      "SchemaFragmentOut": {
+        "properties": {
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/SchemaKindOut"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/SchemaRelationOut"
+            },
+            "type": "array",
+            "title": "Relations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kinds",
+          "relations"
+        ],
+        "title": "SchemaFragmentOut"
+      },
+      "SchemaKindOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "key": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Key"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/SchemaAttributeOut"
+            },
+            "type": "array",
+            "title": "Attributes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "key",
+          "attributes"
+        ],
+        "title": "SchemaKindOut"
+      },
       "SchemaOut": {
         "properties": {
           "domain": {
@@ -8007,6 +12801,64 @@
         ],
         "title": "SchemaOut",
         "description": "The schema of a Revision."
+      },
+      "SchemaRelationOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "inverse": {
+            "type": "string",
+            "title": "Inverse"
+          },
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          },
+          "cardinality": {
+            "type": "string",
+            "title": "Cardinality"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SchemaAttributeOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "inverse",
+          "from",
+          "to",
+          "cardinality"
+        ],
+        "title": "SchemaRelationOut"
       },
       "SchemaValidateRequest": {
         "properties": {
@@ -8553,6 +13405,24 @@
         ],
         "title": "TraverseStep"
       },
+      "TrimOut": {
+        "properties": {
+          "step": {
+            "type": "string",
+            "title": "Step"
+          },
+          "removed": {
+            "type": "integer",
+            "title": "Removed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step",
+          "removed"
+        ],
+        "title": "TrimOut"
+      },
       "ValidationProblem": {
         "properties": {
           "type": {
@@ -8707,6 +13577,153 @@
         "title": "ViaCondition",
         "description": "A Link of `via` exists, to a Record matching `where` when given."
       },
+      "WebhookCreated": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "branches": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branches"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "secret": {
+            "type": "string",
+            "title": "Secret",
+            "description": "Signing secret. Requests carry `t=<unix>,v1=<hex HMAC-SHA256>` computed over `<t>.<body>` with the key SHA-256(secret)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "events",
+          "created_by",
+          "created_at",
+          "secret"
+        ],
+        "title": "WebhookCreated",
+        "description": "A new webhook; `secret` is shown this once."
+      },
+      "WebhookList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "WebhookList"
+      },
+      "WebhookOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "branches": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branches"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "events",
+          "created_by",
+          "created_at"
+        ],
+        "title": "WebhookOut"
+      },
       "WhoAmI": {
         "properties": {
           "id": {
@@ -8755,6 +13772,203 @@
         ],
         "title": "WhoAmI",
         "description": "The authenticated caller."
+      },
+      "lorebase_keeper__agents__explain__ProposalOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "merged_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status"
+        ],
+        "title": "ProposalOut"
+      },
+      "lorebase_keeper__routes__proposals__ProposalOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "source_ref": {
+            "type": "string",
+            "title": "Source Ref"
+          },
+          "target_ref": {
+            "type": "string",
+            "title": "Target Ref"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ProposalOrigin"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProposalStatus"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "merged_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Revision"
+          },
+          "policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Policy",
+            "description": "Merge policy options differing from defaults."
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckOut"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "description",
+          "source_ref",
+          "target_ref",
+          "origin",
+          "status",
+          "author",
+          "created_at",
+          "updated_at",
+          "merged_revision",
+          "policy",
+          "checks"
+        ],
+        "title": "ProposalOut"
+      },
+      "lorebase_keeper__routes__schema_inference__ProposalOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "status": {
+            "type": "string",
+            "const": "proposed",
+            "title": "Status",
+            "default": "proposed"
+          },
+          "schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Schema"
+          },
+          "yaml": {
+            "type": "string",
+            "title": "Yaml",
+            "description": "The proposed schema as a YAML document."
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "issues": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "issue_count": {
+            "type": "integer",
+            "title": "Issue Count"
+          },
+          "tables": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Tables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "schema",
+          "yaml",
+          "evidence",
+          "issues",
+          "issue_count",
+          "tables"
+        ],
+        "title": "ProposalOut",
+        "description": "A proposed schema; never committed."
       }
     },
     "securitySchemes": {

@@ -288,12 +288,44 @@ async def test_branching_change_diff_and_log(client: AsyncLorebaseClient, supply
 
     await client.branches.delete(DOMAIN, "review")
 
-    # A Domain with a single Revision can be deleted (one with history cannot yet: Keeper
-    # answers 500, see the report of T24); afterwards it grants nothing.
+    # A deleted Domain is gone: an installation admin is told so.
     await client.domains.create("scratch")
     await client.domains.delete("scratch", confirm="scratch")
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(NotFoundError):
         await client.domains.get("scratch")
+
+
+async def test_proposal_merge_and_agent_reads(client: AsyncLorebaseClient, supply: Loaded) -> None:
+    await client.branches.create(DOMAIN, "fix", source=WORK)
+    types = attribute_types(
+        (await client.schema.get(DOMAIN, branch=WORK)).schema_, "kinds", "Supplier"
+    )
+    row = next(
+        r for r in read_rows("supplier.csv", types, links=False) if r["supplier_code"] == "S-1001"
+    )
+    row["legal_name"] = "Kavsen Alloys Fixed"
+    await client.operations.import_records(DOMAIN, "Supplier", [row], branch="fix")
+
+    proposal = await client.proposals.create(
+        DOMAIN, "fix", WORK, title="Fix S-1001", idempotency_key=client.idempotency_key("p")
+    )
+    assert proposal.status == "open"
+    assert [p.id async for p in client.proposals.iterate(DOMAIN, source="fix")] == [proposal.id]
+    assert (await client.proposals.get(DOMAIN, proposal.id)).title == "Fix S-1001"
+
+    merged = await client.proposals.merge(DOMAIN, proposal.id, message="Merge the fix")
+    assert merged.proposal.status == "merged"
+    assert (await client.records.get(DOMAIN, "Supplier", "S-1001", branch=WORK)).record.title == (
+        "Kavsen Alloys Fixed"
+    )
+
+    pack = await client.agents.context(DOMAIN, {"branch": WORK, "refs": ["Supplier/S-1001"]})
+    assert [seed["ref"] for seed in pack.seeds] == ["Supplier/S-1001"]
+    explained = await client.agents.explain(DOMAIN, "Supplier", "S-1001", branch=WORK)
+    assert explained.revision == merged.revision
+    feed = await client.agents.changes(DOMAIN, WORK, since=supply.schema_revision)
+    assert feed.head == merged.revision
+    assert feed.items
 
 
 async def test_api_keys_grants_and_audit(
@@ -367,7 +399,7 @@ def test_sync_client_over_real_http(served_keeper: RunningKeeper) -> None:
         assert sorted(keys) == ["first", "second"]
         assert [d.id for d in client.domains.iterate()] == ["tiny"]
         assert client.revisions.diff("tiny", "main", "work").total >= 1
-        with pytest.raises(PermissionDeniedError):
+        with pytest.raises(NotFoundError):
             client.domains.get("missing")
         client.domains.create("gone")
         client.domains.delete("gone", confirm="gone")

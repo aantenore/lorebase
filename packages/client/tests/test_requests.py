@@ -591,3 +591,393 @@ def _execution() -> dict[str, Any]:
         "review_required": False,
         "replayed": False,
     }
+
+
+# Proposals, agents and webhooks -------------------------------------------------------------
+
+FINGERPRINT = "ab" * 32
+
+
+def _proposal(**members: Any) -> dict[str, Any]:
+    return {
+        "id": "prp_1",
+        "title": "Add suppliers",
+        "description": None,
+        "source_ref": "work",
+        "target_ref": "main",
+        "origin": "manual",
+        "status": "open",
+        "author": "usr_1",
+        "created_at": "2026-10-01T08:00:00Z",
+        "updated_at": None,
+        "merged_revision": None,
+        "policy": {},
+        "checks": [{"name": "schema", "status": "passed"}],
+        **members,
+    }
+
+
+def _detail() -> dict[str, Any]:
+    return {
+        **_proposal(),
+        "reviews": [],
+        "approval": {
+            "protected": False,
+            "required": 0,
+            "approvals": 0,
+            "approvers": [],
+            "changes_requested": [],
+            "satisfied": True,
+        },
+        "attempt": None,
+    }
+
+
+def _attempt() -> dict[str, Any]:
+    return {
+        "id": "att_1",
+        "proposal": "prp_1",
+        "status": "conflicted",
+        "result": None,
+        "base": "aa",
+        "ours": "bb",
+        "theirs": "cc",
+        "virtual_base": False,
+        "created_at": "2026-10-01T08:00:00Z",
+        "created_by": "usr_1",
+        "revision": None,
+        "policy": {},
+        "open_conflicts": 1,
+        "resolved_conflicts": 0,
+        "counts": {"DV1": {"open": 1}},
+        "recomputed": False,
+        "stale": False,
+        "resolutions": [],
+        "unmatched_resolutions": [],
+        "auto_resolutions": [],
+    }
+
+
+def _conflicts(next_cursor: str | None = None) -> dict[str, Any]:
+    conflict = {"id": "cf_1", "status": "open", "code": "DV1", "key": "P-1"}
+    return {**_attempt(), "conflicts": [conflict], "next_cursor": next_cursor}
+
+
+def test_create_proposal_sends_the_body_and_idempotency_key(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    route = http.post("/domains/supply/proposals").respond(201, json=_detail())
+    with make(sleeps) as client:
+        created = client.proposals.create(
+            "supply", "work", "main", title="Add suppliers", idempotency_key="k-1"
+        )
+    assert created.status == "open"
+    assert created.checks[0].name == "schema"
+    sent = route.calls.last.request
+    assert sent.headers["idempotency-key"] == "k-1"
+    assert json.loads(sent.content) == {
+        "source_ref": "work",
+        "target_ref": "main",
+        "title": "Add suppliers",
+    }
+
+
+def test_list_proposals_filters_and_pages(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.get("/domains/supply/proposals").respond(
+        200, json={"items": [_proposal()], "next_cursor": "c1"}
+    )
+    with make(sleeps) as client:
+        result = client.proposals.list(
+            "supply", status="open", origin="manual", source="work", target="main", limit=5
+        )
+    assert [p.id for p in result.items] == ["prp_1"]
+    assert result.next_cursor == "c1"
+    params = route.calls.last.request.url.params
+    assert dict(params) == {
+        "status": "open",
+        "origin": "manual",
+        "source": "work",
+        "target": "main",
+        "limit": "5",
+    }
+
+
+def test_proposal_reads_and_changes(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    get = http.get("/domains/supply/proposals/prp_1").respond(200, json=_detail())
+    patch = http.patch("/domains/supply/proposals/prp_1").respond(200, json=_detail())
+    close = http.post("/domains/supply/proposals/prp_1/close").respond(200, json=_detail())
+    review = http.post("/domains/supply/proposals/prp_1/reviews").respond(
+        201, json={"review": {**_review()}, "approval": _detail()["approval"]}
+    )
+    with make(sleeps) as client:
+        assert client.proposals.get("supply", "prp_1").approval.satisfied
+        client.proposals.update("supply", "prp_1", title="New title")
+        client.proposals.close("supply", "prp_1")
+        result = client.proposals.review("supply", "prp_1", "approve", comment="ok")
+    assert get.called
+    assert json.loads(patch.calls.last.request.content) == {"title": "New title"}
+    assert close.calls.last.request.content == b""
+    assert json.loads(review.calls.last.request.content) == {"verdict": "approve", "comment": "ok"}
+    assert result.review.verdict == "approve"
+
+
+def _review() -> dict[str, Any]:
+    return {
+        "id": "rev_1",
+        "reviewer": "usr_2",
+        "verdict": "approve",
+        "comment": "ok",
+        "at": "2026-10-01T09:00:00Z",
+    }
+
+
+def test_merge_proposal_sends_message_and_key(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    merged = {
+        "status": "merged",
+        "result": "merged",
+        "revision": "dd",
+        "proposal": _proposal(status="merged", merged_revision="dd"),
+        "attempt": _conflicts(),
+        "source_deleted": False,
+        "replayed": False,
+    }
+    route = http.post("/domains/supply/proposals/prp_1/merge").respond(200, json=merged)
+    with make(sleeps) as client:
+        result = client.proposals.merge("supply", "prp_1", message="Ship it", idempotency_key="k-2")
+    assert result.revision == "dd"
+    assert result.proposal.status == "merged"
+    sent = route.calls.last.request
+    assert sent.headers["idempotency-key"] == "k-2"
+    assert json.loads(sent.content) == {"message": "Ship it"}
+
+
+def test_conflicts_are_paged_and_resolved(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["status"] == "open"
+        cursor = request.url.params.get("cursor")
+        return httpx.Response(200, json=_conflicts(None if cursor else "c1"))
+
+    listing = http.get("/domains/supply/proposals/prp_1/conflicts").mock(side_effect=answer)
+    one = http.post("/domains/supply/proposals/prp_1/conflicts/cf_1/resolution").respond(
+        200,
+        json={
+            "fingerprint": FINGERPRINT,
+            "choice": "custom",
+            "value": {"x": 1},
+            "resolver": "usr_1",
+            "at": "2026-10-01T09:00:00Z",
+        },
+    )
+    many = http.post("/domains/supply/proposals/prp_1/conflicts:resolve").respond(
+        200, json=_conflicts()
+    )
+    with make(sleeps) as client:
+        page = client.proposals.conflicts("supply", "prp_1", status="open", limit=1)
+        assert page.next_cursor == "c1"
+        assert page.conflicts[0].model_dump()["code"] == "DV1"
+        keys = [c.id for c in client.proposals.iterate_conflicts("supply", "prp_1", status="open")]
+        resolution = client.proposals.resolve("supply", "prp_1", "cf_1", "custom", value={"x": 1})
+        client.proposals.resolve_many(
+            "supply", "prp_1", [{"choice": "ours", "fingerprint": FINGERPRINT}]
+        )
+    assert keys == ["cf_1", "cf_1"]
+    assert listing.call_count == 3
+    assert resolution.value == {"x": 1}
+    assert json.loads(one.calls.last.request.content) == {"choice": "custom", "value": {"x": 1}}
+    assert json.loads(many.calls.last.request.content) == {
+        "resolutions": [{"choice": "ours", "fingerprint": FINGERPRINT}]
+    }
+
+
+def test_resolutions_need_a_well_formed_fingerprint(sleeps: Sleeps) -> None:
+    with make(sleeps) as client, pytest.raises(ValueError, match="fingerprint"):
+        client.proposals.resolve_many("supply", "prp_1", [{"choice": "ours", "fingerprint": "x"}])
+
+
+PACK = {
+    "domain": "supply",
+    "branch": "main",
+    "revision": "aa",
+    "etag": '"e"',
+    "seeds": [{"kind": "Part", "key": "P-1"}],
+    "neighbors": [],
+    "links": {},
+    "schema": {"kinds": {}},
+    "budget": {"used": 10},
+}
+
+
+def test_context_json_and_markdown(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.post("/domains/supply/context")
+    route.side_effect = [
+        httpx.Response(200, json=PACK),
+        httpx.Response(200, text="# Context\n", headers={"content-type": "text/markdown"}),
+    ]
+    with make(sleeps) as client:
+        pack = client.agents.context("supply", {"refs": ["Part/P-1"], "depth": 1})
+        text = client.agents.context_markdown("supply", m_context(search="bolt"))
+    assert pack.schema_ == {"kinds": {}}
+    assert pack.seeds[0]["key"] == "P-1"
+    assert text == "# Context\n"
+    first, second = (json.loads(c.request.content) for c in route.calls)
+    assert first["format"] == "json"
+    assert first["refs"] == ["Part/P-1"]
+    assert second["format"] == "markdown"
+    assert second["search"] == "bolt"
+    assert route.calls[1].request.headers["accept"] == "text/markdown"
+
+
+def m_context(**members: Any) -> Any:
+    from lorebase_client.models import ContextRequest
+
+    return ContextRequest(**members)
+
+
+def test_explain_json_and_markdown(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.get("/domains/supply/kinds/Part/records/P-1/explain")
+    explained = {
+        "domain": "supply",
+        "branch": "work",
+        "revision": "aa",
+        "record": {"kind": "Part", "key": "P-1"},
+        "attributes": [],
+        "links": [],
+        "links_truncated": False,
+        "history": {},
+        "proposals": [],
+    }
+    route.side_effect = [
+        httpx.Response(200, json=explained),
+        httpx.Response(200, text="# Part P-1\n", headers={"content-type": "text/markdown"}),
+    ]
+    with make(sleeps) as client:
+        result = client.agents.explain("supply", "Part", "P-1", branch="work")
+        text = client.agents.explain_markdown("supply", "Part", "P-1", branch="work")
+    assert result.record["key"] == "P-1"
+    assert text.startswith("# Part")
+    assert [dict(c.request.url.params) for c in route.calls] == [
+        {"branch": "work", "format": "json"},
+        {"branch": "work", "format": "markdown"},
+    ]
+
+
+def test_changes_feed_and_event_stream(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    event = {
+        "type": "revision.committed",
+        "domain": "supply",
+        "branch": "work",
+        "revision": "bb",
+        "parents": ["aa"],
+        "generation": 2,
+        "author": "usr_1",
+        "message": "m",
+        "origin": {},
+        "stats": {},
+        "created_at": "2026-10-01T08:00:00Z",
+        "kinds": {"Part": 1},
+        "relations": {},
+        "schema_changed": False,
+        "keys": {"Part": ["P-1"]},
+        "keys_truncated": False,
+    }
+    feed = http.get("/domains/supply/branches/agent/x/changes").respond(
+        200,
+        json={
+            "branch": "agent/x",
+            "head": "bb",
+            "items": [event],
+            "next_since": "bb",
+            "more": False,
+        },
+    )
+    stream = http.get("/domains/supply/branches/agent/x/events").respond(
+        200, text="id: 1\ndata: {}\n\n", headers={"content-type": "text/event-stream"}
+    )
+    with make(sleeps) as client:
+        page = client.agents.changes("supply", "agent/x", since="aa", kinds=["Part", "Link"])
+        text = client.agents.events("supply", "agent/x", kinds=["Part"], last_event_id="1")
+    assert page.items[0].keys == {"Part": ["P-1"]}
+    assert page.more is False
+    assert feed.calls.last.request.url.params.get_list("kinds") == ["Part", "Link"]
+    assert feed.calls.last.request.url.params["since"] == "aa"
+    assert text.startswith("id: 1")
+    sent = stream.calls.last.request
+    assert sent.headers["accept"] == "text/event-stream"
+    assert dict(sent.url.params) == {"kinds": "Part", "last_event_id": "1"}
+
+
+def test_webhooks_create_list_delete(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    hook = {
+        "id": "wh_1",
+        "url": "https://example.test/hook",
+        "description": None,
+        "events": ["revision.committed"],
+        "branches": None,
+        "created_by": "usr_1",
+        "created_at": "2026-10-01T08:00:00Z",
+    }
+    create = http.post("/domains/supply/webhooks").respond(201, json={**hook, "secret": "whsec"})
+    listing = http.get("/domains/supply/webhooks").respond(200, json={"items": [hook]})
+    delete = http.delete("/domains/supply/webhooks/wh_1").respond(204)
+    with make(sleeps) as client:
+        created = client.webhooks.create(
+            "supply", "https://example.test/hook", events=["revision.committed"]
+        )
+        hooks = client.webhooks.list("supply")
+        assert client.webhooks.delete("supply", "wh_1") is None
+    assert created.secret == "whsec"
+    assert json.loads(create.calls.last.request.content) == {
+        "url": "https://example.test/hook",
+        "events": ["revision.committed"],
+    }
+    assert [h.id for h in hooks.items] == ["wh_1"]
+    assert listing.called
+    assert delete.called
+
+
+def test_schema_inference_from_postgres_and_files(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    answer = {"domain": "supply", "status": "proposed", "yaml": "kinds: {}\n", "tables": []}
+    route = http.post("/domains/supply/schema:infer").respond(200, json=answer)
+    with make(sleeps) as client:
+        result = client.schema.infer_postgres(
+            "supply", "secret://env/ERP_DSN", tables=["parts"], options={"sample": 10}
+        )
+        client.schema.infer_files("supply", {"parts.csv": b"id\nP-1\n"}, options={"sample": 10})
+    assert result["yaml"] == "kinds: {}\n"
+    posted, uploaded = (c.request for c in route.calls)
+    assert json.loads(posted.content) == {
+        "postgres": {"dsn": "secret://env/ERP_DSN", "tables": ["parts"]},
+        "options": {"sample": 10},
+    }
+    assert posted.url.params["format"] == "json"
+    assert uploaded.headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert b'name="files"; filename="parts.csv"' in uploaded.content
+    assert b'name="options"' in uploaded.content
+    assert b"id\nP-1\n" in uploaded.content
+
+
+async def test_async_proposals_agents_and_webhooks(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    create = http.post("/domains/supply/proposals").respond(201, json=_detail())
+    listing = http.get("/domains/supply/proposals").respond(
+        200, json={"items": [_proposal()], "next_cursor": None}
+    )
+    conflicts = http.get("/domains/supply/proposals/prp_1/conflicts").respond(
+        200, json=_conflicts()
+    )
+    context = http.post("/domains/supply/context").respond(200, json=PACK)
+    hooks = http.get("/domains/supply/webhooks").respond(200, json={"items": []})
+    async with amake(sleeps) as client:
+        await client.proposals.create("supply", "work", "main", title="t", idempotency_key="k")
+        listed = [p.id async for p in client.proposals.iterate("supply", status="open")]
+        found = [c.id async for c in client.proposals.iterate_conflicts("supply", "prp_1")]
+        pack = await client.agents.context("supply", {"search": "x"})
+        empty = await client.webhooks.list("supply")
+    assert create.calls.last.request.headers["idempotency-key"] == "k"
+    assert listed == ["prp_1"]
+    assert listing.calls.last.request.url.params["status"] == "open"
+    assert found == ["cf_1"]
+    assert conflicts.called
+    assert pack.revision == "aa"
+    assert json.loads(context.calls.last.request.content)["format"] == "json"
+    assert empty.items == []
+    assert hooks.called

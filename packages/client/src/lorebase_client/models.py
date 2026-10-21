@@ -21,6 +21,12 @@ SchemaSection = Literal["kinds", "relations", "traits", "operations", "derivatio
 SearchMode = Literal["lexical", "semantic", "hybrid"]
 ServedFrom = Literal["materialized", "tree"]
 LinkDirection = Literal["forward", "inverse"]
+ProposalStatus = Literal["open", "merged", "closed"]
+ProposalOrigin = Literal["manual", "source_sync", "extraction", "operation"]
+ReviewVerdict = Literal["approve", "request_changes", "comment"]
+ConflictStatus = Literal["open", "resolved"]
+CheckStatus = Literal["passed", "failed", "pending"]
+ContextFormat = Literal["json", "markdown"]
 
 
 class Model(BaseModel):
@@ -603,6 +609,304 @@ class AuditEntry(Model):
     target: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
     entry_hash: str
+
+
+# Proposals --------------------------------------------------------------------------------
+
+
+class ProposalCreate(RequestModel):
+    """A new Proposal: merge `source_ref` into `target_ref`."""
+
+    source_ref: str = Field(min_length=1, max_length=200)
+    target_ref: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=20000)
+
+
+class ProposalUpdate(RequestModel):
+    """Title and description; omitted members are left unchanged."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=20000)
+
+
+class ReviewIn(RequestModel):
+    """A review of a Proposal."""
+
+    verdict: ReviewVerdict
+    comment: str | None = Field(default=None, max_length=20000)
+
+
+class MergeIn(RequestModel):
+    """Options of a merge."""
+
+    message: str | None = Field(default=None, max_length=2000)
+
+
+class ResolutionIn(RequestModel):
+    """A decision for one Conflict (`value` or per-member `values` for `custom` only)."""
+
+    choice: str
+    value: JsonValue = None
+    values: dict[str, JsonValue] | None = None
+
+
+class FingerprintedResolutionIn(ResolutionIn):
+    """A decision for the Conflict with this fingerprint."""
+
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ResolveManyIn(RequestModel):
+    """Decisions for several Conflicts at once."""
+
+    resolutions: list[FingerprintedResolutionIn]
+
+
+class Check(Model):
+    """One Proposal check."""
+
+    name: str
+    status: CheckStatus
+    message: str | None = None
+
+
+class Review(Model):
+    id: str
+    reviewer: str
+    verdict: ReviewVerdict
+    comment: str | None
+    at: datetime
+
+
+class Approval(Model):
+    """Review state against the protection of the target branch."""
+
+    protected: bool
+    required: int
+    approvals: int
+    approvers: list[str]
+    changes_requested: list[str]
+    satisfied: bool
+
+
+class Resolution(Model):
+    """A stored resolution; `matched` is false when its Conflict is gone from the attempt."""
+
+    fingerprint: str
+    choice: str
+    value: JsonValue = None
+    values: dict[str, JsonValue] | None = None
+    resolver: str
+    at: datetime
+    matched: bool = True
+
+
+class Attempt(Model):
+    """A merge attempt and the resolutions of its Proposal."""
+
+    id: str
+    proposal: str
+    status: str
+    result: str | None
+    base: str | None
+    ours: str
+    theirs: str
+    virtual_base: bool
+    created_at: datetime
+    created_by: str | None
+    revision: str | None
+    policy: dict[str, Any]
+    open_conflicts: int
+    resolved_conflicts: int
+    counts: dict[str, dict[str, int]]
+    recomputed: bool
+    stale: bool
+    resolutions: list[Resolution]
+    unmatched_resolutions: list[str]
+    auto_resolutions: list[dict[str, Any]]
+
+
+class ConflictItem(Model):
+    """A Conflict: `id`, `status` and the members the merge engine reports."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    status: ConflictStatus
+    resolution: dict[str, Any] | None = None
+
+
+class Conflicts(Attempt):
+    """An attempt with one page of its Conflicts; walkable with the pagination helpers."""
+
+    conflicts: list[ConflictItem]
+    next_cursor: str | None = None
+
+    @property
+    def items(self) -> list[ConflictItem]:
+        return self.conflicts
+
+
+class Proposal(Model):
+    """A Proposal as listed."""
+
+    id: str
+    title: str
+    description: str | None
+    source_ref: str
+    target_ref: str
+    origin: ProposalOrigin
+    status: ProposalStatus
+    author: str
+    created_at: datetime
+    updated_at: datetime | None
+    merged_revision: str | None
+    policy: dict[str, Any]
+    checks: list[Check]
+
+
+class ProposalDetail(Proposal):
+    """A Proposal with its reviews, approval state and last merge attempt."""
+
+    reviews: list[Review]
+    approval: Approval
+    attempt: Attempt | None
+
+
+class ReviewResult(Model):
+    review: Review
+    approval: Approval
+
+
+class MergeResult(Model):
+    """A merged Proposal."""
+
+    status: Literal["merged"] = "merged"
+    result: str
+    revision: str
+    proposal: Proposal
+    attempt: Conflicts
+    source_deleted: bool
+    replayed: bool
+
+
+# Agents -----------------------------------------------------------------------------------
+
+
+class ContextRequest(RequestModel):
+    """What an agent needs to reason about: seed Records and how much around them."""
+
+    branch: str | None = None
+    refs: list[str] | None = None
+    query: dict[str, JsonValue] | None = None
+    search: str | None = Field(default=None, min_length=1)
+    budget_tokens: int | None = Field(default=None, ge=1)
+    depth: int | None = Field(default=None, ge=0)
+    relations: list[str] | None = None
+    include_schema: bool = True
+    include_recent_changes: bool = True
+    include_lineage: bool = True
+    since: str | None = None
+    format: ContextFormat = "json"
+
+
+class ContextPack(Model):
+    """A context pack in JSON; sections are kept as plain data."""
+
+    domain: str
+    branch: str
+    revision: str
+    etag: str
+    seeds: list[dict[str, Any]]
+    neighbors: list[dict[str, Any]]
+    links: dict[str, list[dict[str, Any]]]
+    schema_: dict[str, Any] | None = Field(default=None, alias="schema")
+    recent_changes: list[dict[str, Any]] | None = None
+    lineage: list[dict[str, Any]] | None = None
+    since: str | None = None
+    budget: dict[str, Any]
+
+
+class Explain(Model):
+    """An explained Record: where its values and Links came from; sections are plain data."""
+
+    domain: str
+    branch: str
+    revision: str
+    record: dict[str, Any]
+    created: dict[str, Any] | None = None
+    attributes: list[dict[str, Any]]
+    links: list[dict[str, Any]]
+    links_truncated: bool
+    history: dict[str, Any]
+    proposals: list[dict[str, Any]]
+
+
+class RevisionEvent(Model):
+    """A Revision committed on a branch."""
+
+    sequence: int | None = None
+    type: str
+    domain: str
+    branch: str
+    revision: str
+    parents: list[str]
+    generation: int
+    author: str
+    on_behalf_of: str | None = None
+    message: str
+    origin: dict[str, JsonValue]
+    stats: dict[str, JsonValue]
+    created_at: datetime
+    kinds: dict[str, int]
+    relations: dict[str, int]
+    schema_changed: bool
+    keys: dict[str, list[str]]
+    keys_truncated: bool
+
+
+class ChangesFeed(Model):
+    """Revision events after a point; `next_since` continues the feed while `more` is true."""
+
+    branch: str
+    head: str
+    since: str | None = None
+    items: list[RevisionEvent]
+    next_since: str
+    more: bool
+
+
+# Webhooks ---------------------------------------------------------------------------------
+
+
+class CreateWebhook(RequestModel):
+    """A webhook for events of a Domain, optionally narrowed to some branches."""
+
+    url: str = Field(min_length=1, max_length=2048)
+    events: list[str] | None = None
+    branches: list[str] | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+
+class Webhook(Model):
+    id: str
+    url: str
+    description: str | None = None
+    events: list[str]
+    branches: list[str] | None = None
+    created_by: str
+    created_at: datetime
+
+
+class WebhookCreated(Webhook):
+    """A new webhook: `secret` signs deliveries and is returned once."""
+
+    secret: str
+
+
+class WebhookList(Model):
+    items: list[Webhook]
 
 
 RecordItem.model_rebuild()
