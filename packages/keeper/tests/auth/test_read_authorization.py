@@ -330,3 +330,27 @@ def test_reachability_depth_setting_has_a_default() -> None:
     assert ReadsSettings().reachability_max_depth == 1000
     with pytest.raises(ValueError, match="greater than or equal to 1"):
         ReadsSettings(reachability_max_depth=0)
+
+
+# Domain-wide reads (Source runs) -----------------------------------------------------------
+
+
+def guard(authorizer: Authorizer) -> ReadGuard:
+    return ReadGuard(authorizer, user(), (Permission.DATA_READ,), "acme", max_depth=100)
+
+
+async def test_domain_wide_reads_need_a_grant_on_the_whole_domain(store: Any) -> None:
+    await guard(grant(store, scope="*")).require_wide()
+
+
+@pytest.mark.parametrize(
+    ("scope_type", "scope_ref"), [(GrantScope.BRANCH, "main"), (GrantScope.KIND, "k_supplier")]
+)
+async def test_domain_wide_reads_refuse_narrowed_grants(
+    store: Any, scope_type: GrantScope, scope_ref: str
+) -> None:
+    store.add_grant("acme", "usr_u", "viewer", scope_type, scope_ref)
+    with pytest.raises(ProblemError) as raised:
+        await guard(Authorizer(AuthzSettings(), store=store)).require_wide()
+    assert raised.value.status_code == 403
+    assert raised.value.extensions["permission"] == "data.read"  # type: ignore[attr-defined]
