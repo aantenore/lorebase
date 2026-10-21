@@ -28,7 +28,7 @@ from lorebase_core.model import Kind, LinkDirection, Relation
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.query import Hop, Target
 from lorebase_core.tree import kind_partition, link_key, relation_partition
-from lorebase_keeper.agents.context import MAT_HISTORY, ref_of, timestamp
+from lorebase_keeper.agents.context import ref_of, timestamp
 from lorebase_keeper.agents.markdown import pairs, short, table, text
 from lorebase_keeper.agents.pack import ordered_attributes, ordered_values
 from lorebase_keeper.agents.settings import ExplainSettings
@@ -41,7 +41,6 @@ from lorebase_keeper.reading.views import record_out, relation_name
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import metadata
 from lorebase_store.repositories import MaterializedRepository, ProvenanceRepository
-from lorebase_store.repositories.materialized import MAT_RECORDS
 from lorebase_store.repositories.provenance import ProvenanceRow
 
 PROPOSALS: Table = metadata.tables["proposals"]
@@ -224,7 +223,7 @@ async def _links(
         if remaining < 0:
             break
         source = compiler.link_source(hop)
-        far = MAT_RECORDS.alias("far")
+        far = point.layout.records("far")
         inverse_key = hop.foreign_key and hop.direction is LinkDirection.INVERSE
         holder = source.rows.c.lineage if inverse_key else None
         columns: list[Any] = [
@@ -278,7 +277,7 @@ async def _link_creations(
     """Per explicit Link element, the Revision of its latest creation and its provenance."""
     if not elements:
         return {}
-    h, r = MAT_HISTORY, REVISIONS
+    h, r = point.layout.history(), REVISIONS
     ranked = (
         select(
             h.c.partition,
@@ -364,7 +363,7 @@ async def explain_record(
     record = record_out(point.schema, row)
     writes = runtime.store_settings.writes
     history = await MaterializedRepository(
-        session, point.domain.id, point.branch, writes=writes
+        session, point.domain.id, point.branch, writes=writes, layout=point.layout
     ).history(kind_partition(kind.id), key)
     links, truncated = await _links(session, runtime, point, kind, key, row, settings.max_links)
     explicit = [

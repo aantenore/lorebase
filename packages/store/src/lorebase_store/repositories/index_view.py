@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import JsonValue
-from sqlalchemy import ColumnElement, and_, func, select, text, tuple_
+from sqlalchemy import ColumnElement, FromClause, TextClause, and_, func, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from lorebase_core.model import Link, Record, RecordIdentity, RelationBacking, Schema
@@ -25,26 +25,22 @@ from lorebase_core.model.record import LinkIdentity
 from lorebase_core.types import AttributeType, CanonicalValue
 from lorebase_core.validate import DataChange, LinkUpsert, RecordDelete, RecordUpsert
 from lorebase_store.bulk import chunks
-from lorebase_store.repositories.materialized import MAT_LINKS, MAT_RECORDS
+from lorebase_store.layout import BranchLayout, load_layout_sync
 
 Side = Literal["from", "to"]
 
-_UNIQUE_VALUES = text(
-    """
+_UNIQUE_VALUES = """
     SELECT key, "values" -> :attribute AS value
-    FROM mat_records
+    FROM {records}
     WHERE domain_id = :domain AND branch = :branch AND kind_id = :kind
       AND "values" -> :attribute IN (SELECT jsonb_array_elements(CAST(:candidates AS jsonb)))
     """
-)
-_REFERENCING = text(
-    """
+_REFERENCING = """
     SELECT key, "values" -> :attribute AS value
-    FROM mat_records
+    FROM {records}
     WHERE domain_id = :domain AND branch = :branch AND kind_id = :kind
       AND jsonb_exists_any("values" -> :attribute, CAST(:keys AS text[]))
     """
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,13 +80,25 @@ def _keys_in(value: JsonValue) -> list[str]:
 
 
 class MaterializedIndexView:
-    """`IndexView` over `mat_records` and `mat_links` of one branch, with bulk prefetch."""
+    """`IndexView` over `mat_records` and `mat_links` of one branch, with bulk prefetch.
 
-    def __init__(self, session: Session, domain_id: str, branch: str, *, batch: int) -> None:
+    An overlay branch is read through its resolved rows (`lorebase_store.layout`).
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        domain_id: str,
+        branch: str,
+        *,
+        batch: int,
+        layout: BranchLayout | None = None,
+    ) -> None:
         self._session = session
         self._domain = domain_id
         self._branch = branch
         self._batch = batch
+        self._layout = layout
         self._records: dict[tuple[str, str], RecordState | None] = {}
         self._links: dict[tuple[str, str, str], LinkState | None] = {}
         self._unique: dict[tuple[str, str, str], str | None] = {}
@@ -162,16 +170,17 @@ class MaterializedIndexView:
 
     def records_of_kind(self, kind_id: str) -> Iterator[Record]:
         """Every materialized Record of a Kind, in key order."""
+        rows_from = self._record_rows()
         last: str | None = None
         while True:
             query = (
-                select(MAT_RECORDS.c.key, MAT_RECORDS.c["values"])
-                .where(self._scope(MAT_RECORDS), MAT_RECORDS.c.kind_id == kind_id)
-                .order_by(MAT_RECORDS.c.key)
+                select(rows_from.c.key, rows_from.c["values"])
+                .where(self._scope(rows_from), rows_from.c.kind_id == kind_id)
+                .order_by(rows_from.c.key)
                 .limit(self._batch)
             )
             if last is not None:
-                query = query.where(MAT_RECORDS.c.key > last)
+                query = query.where(rows_from.c.key > last)
             rows = list(self._execute(query))
             if not rows:
                 return
@@ -181,16 +190,17 @@ class MaterializedIndexView:
 
     def links_of_relation(self, relation_id: str) -> Iterator[Link]:
         """Every materialized Link of a Relation, in `(from, to)` order."""
+        links = self._link_rows()
         last: tuple[str, str] | None = None
         while True:
             query = (
-                select(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key, MAT_LINKS.c["values"])
-                .where(self._scope(MAT_LINKS), MAT_LINKS.c.relation_id == relation_id)
-                .order_by(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key)
+                select(links.c.from_key, links.c.to_key, links.c["values"])
+                .where(self._scope(links), links.c.relation_id == relation_id)
+                .order_by(links.c.from_key, links.c.to_key)
                 .limit(self._batch)
             )
             if last is not None:
-                query = query.where(tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key) > last)
+                query = query.where(tuple_(links.c.from_key, links.c.to_key) > last)
             rows = list(self._execute(query))
             if not rows:
                 return
@@ -205,19 +215,20 @@ class MaterializedIndexView:
         for kind_id, key in dict.fromkeys(identities):
             if (kind_id, key) not in self._records:
                 by_kind[kind_id].append(key)
+        rows = self._record_rows()
         for kind_id, keys in by_kind.items():
             for chunk in chunks(keys, self._batch):
                 for key in chunk:
                     self._records[(kind_id, key)] = None
                 query = select(
-                    MAT_RECORDS.c.key,
-                    MAT_RECORDS.c["values"],
-                    MAT_RECORDS.c.lineage,
-                    MAT_RECORDS.c.object_hash,
+                    rows.c.key,
+                    rows.c["values"],
+                    rows.c.lineage,
+                    rows.c.object_hash,
                 ).where(
-                    self._scope(MAT_RECORDS),
-                    MAT_RECORDS.c.kind_id == kind_id,
-                    MAT_RECORDS.c.key.in_(chunk),
+                    self._scope(rows),
+                    rows.c.kind_id == kind_id,
+                    rows.c.key.in_(chunk),
                 )
                 for key, values, lineage, digest in self._execute(query):
                     self._records[(kind_id, key)] = RecordState(values, lineage, digest)
@@ -227,20 +238,21 @@ class MaterializedIndexView:
         for relation_id, from_key, to_key in dict.fromkeys(identities):
             if (relation_id, from_key, to_key) not in self._links:
                 by_relation[relation_id].append((from_key, to_key))
+        links = self._link_rows()
         for relation_id, pairs in by_relation.items():
             for chunk in chunks(pairs, self._batch):
                 for from_key, to_key in chunk:
                     self._links[(relation_id, from_key, to_key)] = None
                 query = select(
-                    MAT_LINKS.c.from_key,
-                    MAT_LINKS.c.to_key,
-                    MAT_LINKS.c["values"],
-                    MAT_LINKS.c.lineage,
-                    MAT_LINKS.c.object_hash,
+                    links.c.from_key,
+                    links.c.to_key,
+                    links.c["values"],
+                    links.c.lineage,
+                    links.c.object_hash,
                 ).where(
-                    self._scope(MAT_LINKS),
-                    MAT_LINKS.c.relation_id == relation_id,
-                    tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key).in_(chunk),
+                    self._scope(links),
+                    links.c.relation_id == relation_id,
+                    tuple_(links.c.from_key, links.c.to_key).in_(chunk),
                 )
                 for from_key, to_key, values, lineage, digest in self._execute(query):
                     self._links[(relation_id, from_key, to_key)] = LinkState(
@@ -259,7 +271,7 @@ class MaterializedIndexView:
             for memo in chunk:
                 self._unique[(kind_id, attribute_id, memo)] = None
             rows = self._execute(
-                _UNIQUE_VALUES,
+                self._text(_UNIQUE_VALUES),
                 {
                     "domain": self._domain,
                     "branch": self._branch,
@@ -279,7 +291,7 @@ class MaterializedIndexView:
             for key in chunk:
                 self._referencing[(kind_id, attribute_id, key)] = set()
             rows = self._execute(
-                _REFERENCING,
+                self._text(_REFERENCING),
                 {
                     "domain": self._domain,
                     "branch": self._branch,
@@ -295,7 +307,8 @@ class MaterializedIndexView:
                         self._referencing[(kind_id, attribute_id, target)].add(record_key)
 
     def prefetch_link_counts(self, relation_id: str, side: Side, keys: Iterable[str]) -> None:
-        column = MAT_LINKS.c.from_key if side == "from" else MAT_LINKS.c.to_key
+        links = self._link_rows()
+        column = links.c.from_key if side == "from" else links.c.to_key
         pending = [k for k in dict.fromkeys(keys) if (relation_id, side, k) not in self._counts]
         for chunk in chunks(pending, self._batch):
             for key in chunk:
@@ -303,8 +316,8 @@ class MaterializedIndexView:
             query = (
                 select(column, func.count())
                 .where(
-                    self._scope(MAT_LINKS),
-                    MAT_LINKS.c.relation_id == relation_id,
+                    self._scope(links),
+                    links.c.relation_id == relation_id,
                     column.in_(chunk),
                 )
                 .group_by(column)
@@ -391,6 +404,20 @@ class MaterializedIndexView:
 
     # Queries ----------------------------------------------------------------------------
 
+    def layout(self) -> BranchLayout:
+        if self._layout is None:
+            self._layout = load_layout_sync(self._session, self._domain, self._branch)
+        return self._layout
+
+    def _record_rows(self) -> FromClause:
+        return self.layout().records()
+
+    def _link_rows(self) -> FromClause:
+        return self.layout().links()
+
+    def _text(self, template: str) -> TextClause:
+        return text(template.format(records=self.layout().records_from()))
+
     def _scope(self, table: Any) -> ColumnElement[bool]:
         return and_(table.c.domain_id == self._domain, table.c.branch == self._branch)
 
@@ -401,23 +428,23 @@ class MaterializedIndexView:
     def _pairs_query(
         self, relation_id: str, side: Side | None, keys: Sequence[str]
     ) -> list[tuple[str, str]]:
-        query = select(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key).where(
-            self._scope(MAT_LINKS), MAT_LINKS.c.relation_id == relation_id
+        links = self._link_rows()
+        query = select(links.c.from_key, links.c.to_key).where(
+            self._scope(links), links.c.relation_id == relation_id
         )
         if side == "from":
-            query = query.where(MAT_LINKS.c.from_key.in_(keys))
+            query = query.where(links.c.from_key.in_(keys))
         elif side == "to":
-            query = query.where(MAT_LINKS.c.to_key.in_(keys))
+            query = query.where(links.c.to_key.in_(keys))
         return [(f, t) for f, t in self._execute(query)]
 
     def _count_all(self, relation_id: str, from_key: str | None, to_key: str | None) -> int:
-        query = select(func.count()).where(
-            self._scope(MAT_LINKS), MAT_LINKS.c.relation_id == relation_id
-        )
+        links = self._link_rows()
+        query = select(func.count()).where(self._scope(links), links.c.relation_id == relation_id)
         if from_key is not None:
-            query = query.where(MAT_LINKS.c.from_key == from_key)
+            query = query.where(links.c.from_key == from_key)
         if to_key is not None:
-            query = query.where(MAT_LINKS.c.to_key == to_key)
+            query = query.where(links.c.to_key == to_key)
         return int(self._execute(query).scalar_one())
 
 

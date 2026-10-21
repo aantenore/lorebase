@@ -74,7 +74,7 @@ from lorebase_core.query import (
 )
 from lorebase_core.types import AttributeType, decode_value
 from lorebase_store.indexes import IndexMethod, IndexSpec
-from lorebase_store.repositories.materialized import MAT_LINKS, MAT_RECORDS
+from lorebase_store.layout import BranchLayout
 
 EARTH_RADIUS_M = 6_371_008.8
 """Mean Earth radius (IUGG) used by `near`."""
@@ -150,7 +150,9 @@ class Compiler:
 
     `indexes` are the per-Attribute indexes of the branch schema by `(kind id, attribute
     id)` (`lorebase_store.indexes.plan_indexes`); comparisons on those Attributes repeat the
-    index predicate and expression so the partial index can serve them.
+    index predicate and expression so the partial index can serve them. `layout` gives the
+    rows of the branch (`lorebase_store.layout`): the tables of a full branch, the resolved
+    rows of an overlay, which keep the table's columns and report the overlay as `branch`.
     """
 
     def __init__(
@@ -160,17 +162,21 @@ class Compiler:
         *,
         text_search_config: str,
         indexes: Mapping[tuple[str, str], IndexSpec] | None = None,
+        layout: BranchLayout | None = None,
     ) -> None:
         self.domain_id = domain_id
         self.branch = branch
+        self.layout = layout or BranchLayout(domain_id, branch)
         self._config = text_search_config
         self._indexes = dict(indexes or {})
 
     # Tables and scopes ------------------------------------------------------------------
 
-    @staticmethod
-    def records(name: str | None = None) -> FromClause:
-        return MAT_RECORDS.alias(name) if name else MAT_RECORDS
+    def records(self, name: str | None = None) -> FromClause:
+        return self.layout.records(name)
+
+    def links(self, name: str | None = None) -> FromClause:
+        return self.layout.links(name)
 
     def record_scope(self, rows: FromClause, target: Target) -> ColumnElement[bool]:
         """Rows of the target's Kinds on this branch."""
@@ -252,7 +258,7 @@ class Compiler:
                 if len(target.kinds) > 1:
                     query = query.where(rows.c.kind_id == literal(hop.near_kind))
                 if where is not None:
-                    far = MAT_RECORDS.alias()
+                    far = self.layout.records_alias()
                     query = query.join(far, self._far_join(far, source, hop)).where(
                         self.condition(far, where, hop.far)
                     )
@@ -262,7 +268,7 @@ class Compiler:
                 query = select(func.count()).select_from(source.rows)
                 query = query.where(source.scope, source.near == rows.c.key)
                 if where is not None:
-                    far = MAT_RECORDS.alias()
+                    far = self.layout.records_alias()
                     query = query.join(far, self._far_join(far, source, hop)).where(
                         self.condition(far, where, hop.far)
                     )
@@ -386,7 +392,7 @@ class Compiler:
         forward = hop.direction is LinkDirection.FORWARD
         if hop.foreign_key:
             assert relation.foreign_key_attribute is not None
-            rows = MAT_RECORDS.alias()
+            rows = self.layout.records_alias()
             attribute = relation.foreign_key_attribute
             target_key = json_text(rows.c["values"], attribute)
             scope = and_(
@@ -397,7 +403,7 @@ class Compiler:
             )
             near, far = (rows.c.key, target_key) if forward else (target_key, rows.c.key)
             return LinkSource(rows, near, far, _jsonb({}), scope)
-        links = MAT_LINKS.alias()
+        links = self.layout.links_alias()
         scope = and_(
             links.c.domain_id == literal(self.domain_id),
             links.c.branch == literal(self.branch),
@@ -431,7 +437,7 @@ class Compiler:
         keeps the first Links (by far key) of each near key; `limit` caps the whole result.
         """
         source = self.link_source(hop)
-        far = MAT_RECORDS.alias("far")
+        far = self.records("far")
         columns: list[ColumnElement[Any]] = [
             source.near.label("near_key"),
             source.far.label("far_key"),

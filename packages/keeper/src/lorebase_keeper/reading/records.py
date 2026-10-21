@@ -61,7 +61,6 @@ from lorebase_store.indexes import plan_indexes
 from lorebase_store.materialize.rows import record_title, split_link_key
 from lorebase_store.reads import hydrate_records, links_to_record
 from lorebase_store.repositories import ProvenanceRepository
-from lorebase_store.repositories.materialized import MAT_LINKS, MAT_RECORDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +90,7 @@ def compiler_for(point: ReadPoint, runtime: ReadRuntime) -> Compiler:
         point.branch,
         text_search_config=runtime.store_settings.materialize.text_search_config,
         indexes=plan_indexes(point.schema).by_attribute(),
+        layout=point.layout,
     )
 
 
@@ -111,7 +111,7 @@ async def fetch_record(
 ) -> FetchedRecord:
     """The Record `(kind, key)` at the read point; 404 when absent."""
     if point.materialized:
-        r = MAT_RECORDS
+        r = point.layout.records()
         found = (
             (
                 await session.execute(
@@ -194,7 +194,7 @@ async def link_counts(
                 )
             else:
                 explicit[direction].append(relation)
-    links = MAT_LINKS
+    links = point.layout.links()
     for direction, relations in explicit.items():
         near = links.c.from_key if direction is LinkDirection.FORWARD else links.c.to_key
         result = await session.execute(
@@ -228,7 +228,7 @@ async def _foreign_key_count(
     assert attribute is not None
     if direction is LinkDirection.FORWARD:
         return 1 if attribute in (row.get("values") or {}) else 0
-    r = MAT_RECORDS
+    r = point.layout.records()
     count = await session.scalar(
         select(func.count()).where(
             r.c.domain_id == point.domain.id,
@@ -487,7 +487,7 @@ async def record_links(
         return await _inbound_links(session, runtime, point, hop, key, limit, after_key, shape)
     compiler = compiler_for(point, runtime)
     source = compiler.link_source(hop)
-    far = MAT_RECORDS.alias("far")
+    far = point.layout.records("far")
     query = (
         select(source.far.label("far_key"), source.values.label("link_values"), far.c.title)
         .select_from(source.rows)
@@ -528,7 +528,7 @@ async def _inbound_links(
     """Links pointing at the Record along an inverse name, through the store primitive
     (`links_to_record`: the reverse Link index, or the from Kind's per-Attribute index for
     foreign-key Relations, with index plans under row-level security)."""
-    domain_id, branch, store = point.domain.id, point.branch, runtime.store
+    domain_id, branch, store = point.domain.id, point.layout, runtime.store
     links = await links_to_record(
         session, domain_id, branch, hop.relation, key, limit=limit, after=after_key, runtime=store
     )

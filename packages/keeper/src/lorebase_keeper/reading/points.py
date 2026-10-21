@@ -28,6 +28,7 @@ from lorebase_keeper.reading.caching import not_modified
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.services.reads import ReadGuard, ReadTarget, StoreReadSource
 from lorebase_store.commit.schema import load_compiled
+from lorebase_store.layout import BranchLayout
 from lorebase_store.materialize.rebuild import load_schema
 from lorebase_store.models.enums import RefKind
 from lorebase_store.nodestore import NodeRepository
@@ -80,7 +81,8 @@ class KindScope:
 @dataclass(frozen=True, slots=True)
 class ReadPoint:
     """A resolved read: the Domain, the branch, the Revision served, its schema and the Kinds
-    the caller may read there."""
+    the caller may read there. `layout` says where the branch's materialized rows live (its
+    own, or an overlay over a base branch); materialized reads take their rows from it."""
 
     domain: DomainRow
     branch: str
@@ -88,6 +90,7 @@ class ReadPoint:
     schema: Schema
     served_from: ServedFrom
     scope: KindScope
+    layout: BranchLayout
 
     @property
     def materialized(self) -> bool:
@@ -229,12 +232,15 @@ async def resolve_point(
             raise
         ref, revision = await _locate_point(session, guard, domain, branch, at)
         scope = KindScope(guard, granted)
+    layout = ref.layout
     if revision.id == ref.head:
         schema = await branch_schema(session, runtime, domain.id, ref.name)
         if schema is not None:
-            return ReadPoint(domain, ref.name, revision, schema, ServedFrom.MATERIALIZED, scope)
+            return ReadPoint(
+                domain, ref.name, revision, schema, ServedFrom.MATERIALIZED, scope, layout
+            )
     schema = await schema_at(session, runtime, domain.id, revision)
-    return ReadPoint(domain, ref.name, revision, schema, ServedFrom.TREE, scope)
+    return ReadPoint(domain, ref.name, revision, schema, ServedFrom.TREE, scope, layout)
 
 
 async def branch_schema(

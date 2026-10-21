@@ -16,6 +16,7 @@ from lorebase_keeper.reading.points import KindScope, ReadPoint, ServedFrom
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.routes import agents
 from lorebase_keeper.services.reads import ReadGuard
+from lorebase_store.layout import BranchLayout
 
 
 class Untouched:
@@ -40,6 +41,7 @@ def narrowed(schema: Schema, *kinds: str) -> ReadPoint:
         schema=schema,
         served_from=ServedFrom.MATERIALIZED,
         scope=KindScope(guard, frozenset(kinds)),
+        layout=BranchLayout("acme", "main"),
     )
 
 
