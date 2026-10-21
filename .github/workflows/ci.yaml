@@ -146,11 +146,58 @@ jobs:
       - if: steps.detect.outputs.present == 'true'
         run: pnpm run build
 
+  helm:
+    name: Helm chart (lint, template, schema)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CHART: deploy/helm/lorebase
+      # kubeconform image and the Kubernetes version the manifests are validated against.
+      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.7.0
+      KUBERNETES_VERSION: "1.30.0"
+      # Schemas of the custom resources the chart can render (ServiceMonitor, CloudNativePG Cluster).
+      CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: deploy/helm
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.21.1
+      - name: Fetch the chart dependencies (pinned by Chart.lock)
+        run: helm dependency build "$CHART"
+      - name: helm lint, every profile
+        run: |
+          helm lint --strict "$CHART" -f "$CHART/ci/minimal-values.yaml"
+          helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml"
+          helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml"
+          helm lint --strict "$CHART" -f "$CHART/ci/local-models-values.yaml"
+      - name: helm template, every profile
+        run: |
+          mkdir -p build/helm
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/minimal-values.yaml" > build/helm/minimal.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" > build/helm/production.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" > build/helm/scale-out.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/local-models-values.yaml" > build/helm/local-models.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" -f "$CHART/ci/local-models-values.yaml" > build/helm/all.yaml
+      - name: The chart refuses an unsafe or incomplete configuration
+        run: |
+          if helm template ci "$CHART" > /dev/null 2>&1; then
+            echo "the chart rendered without a database or an API key pepper" >&2
+            exit 1
+          fi
+      - name: kubeconform, strict, against the Kubernetes schemas
+        run: |
+          docker run --rm -v "$PWD/build/helm:/manifests:ro" "$KUBECONFORM_IMAGE" \
+            -strict -summary -kubernetes-version "$KUBERNETES_VERSION" \
+            -schema-location default -schema-location "$CRD_SCHEMAS" \
+            /manifests
+
   # Single required check for branch protection: fails when any job above failed or was cancelled.
   ci:
     name: CI
     if: always()
-    needs: [lint, types, unit, integration, web]
+    needs: [lint, types, unit, integration, web, helm]
     runs-on: ubuntu-latest
     env:
       RESULTS: ${{ join(needs.*.result, ' ') }}
