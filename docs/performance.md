@@ -5,7 +5,7 @@ Latency of the agent read paths on a materialized head (design 8, "Agent read bu
 ## Dataset
 
 - `supply` Domain from `examples/supply/scripts/make_supply_data.py --scale 540`, plus 4 extra `supplied_by` and `stocked_at` Links per Part.
-- 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (145 s, then `VACUUM ANALYZE`).
+- 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (161 s, then `VACUUM ANALYZE`).
 - 300 timed calls per read after 30 warm-up calls, random keys from the dataset.
 
 ## Environment
@@ -26,42 +26,42 @@ Latency of the agent read paths on a materialized head (design 8, "Agent read bu
 
 | Operation | Target p95 | owner p50 | owner p95 | rls p50 | rls p95 |
 |-----------|-----------:|----------:|----------:|--------:|--------:|
-| get by key | 5.00 | 1.01 | 1.09 | 1.17 | 1.26 |
-| list page of 50 | 20.00 | 1.39 | 1.48 | 1.52 | 1.87 |
-| links of a record | 10.00 | 1.22 | 1.37 | 1.36 | 1.65 |
-| 2-hop neighborhood | 30.00 | 4.39 | 5.58 | 4.52 | 5.05 |
-| query by indexed attribute | 25.00 | 1.61 | 1.74 | 1.58 | 1.84 |
-| full-text search | 50.00 | 1.96 | 2.33 | 1.88 | 2.32 |
-| full-text search with typo-tolerant titles | 50.00 | 9.13 | 20.92 | 9.57 | 21.59 |
+| get by key | 5.00 | 1.01 | 1.07 | 1.17 | 1.25 |
+| list page of 50 | 20.00 | 1.40 | 1.57 | 1.55 | 1.65 |
+| links of a record | 10.00 | 1.22 | 1.30 | 1.35 | 1.58 |
+| 2-hop neighborhood | 30.00 | 4.38 | 5.67 | 4.51 | 5.11 |
+| query by indexed attribute | 25.00 | 1.54 | 1.71 | 1.78 | 1.86 |
+| full-text search | 50.00 | 2.16 | 2.58 | 2.32 | 2.75 |
+| full-text search with typo-tolerant titles | 50.00 | 10.20 | 22.32 | 10.65 | 22.64 |
 
 ## Writes (milliseconds)
 
 | Operation | Runs | p50 | p95 |
 |-----------|-----:|----:|----:|
-| branch creation (copy) | 3 | 7175.49 | 7314.06 |
-| branch creation (overlay) | 20 | 5.53 | 6.71 |
-| commit of 1000 changes | 5 | 383.66 | 485.97 |
+| branch creation (copy) | 3 | 7280.91 | 7315.67 |
+| branch creation (overlay) | 20 | 11.71 | 13.83 |
+| commit of 1000 changes | 5 | 364.60 | 547.02 |
 
 ## Overlay branches (milliseconds)
 
-`agent/perf` (overlay) and `perf-copy` (copy) forked from `main` and got the same commit of 1000 Part updates; `main` then committed 1000 other Part updates. The overlay stores 2,000 rows (its changes, its derived and copied-on-write rows), the copy 402,840. Reads alternate between the two branches per operation, 300 timed calls each.
+`agent/perf` (overlay) and `perf-copy` (copy) forked from `main` and got the same commit of 1000 Part updates; `main` then committed 1000 other Part updates. The overlay stores 2,000 rows (its changes, its derived and copied-on-write rows), the copy 402,840. Reads alternate between the two branches call by call, with the same random keys, 300 timed calls each.
 
 | Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | overhead p50 | overhead p95 |
 |-----------|------|---------:|------------:|---------:|------------:|-------------:|-------------:|
-| get by key | owner | 1.01 | 1.03 | 1.10 | 1.24 | +2% | +13% |
-| get by key | rls | 1.17 | 1.20 | 1.32 | 1.27 | +2% | -3% |
-| list page of 50 | owner | 1.42 | 1.45 | 1.55 | 1.57 | +2% | +1% |
-| list page of 50 | rls | 1.61 | 1.59 | 1.75 | 1.69 | -2% | -4% |
-| links of a record | owner | 1.24 | 1.56 | 1.46 | 1.74 | +26% | +19% |
-| links of a record | rls | 1.40 | 1.61 | 1.57 | 1.75 | +15% | +12% |
-| 2-hop neighborhood | owner | 4.46 | 6.71 | 6.13 | 8.21 | +50% | +34% |
-| 2-hop neighborhood | rls | 4.60 | 6.91 | 5.25 | 8.36 | +50% | +59% |
-| query by indexed attribute | owner | 1.64 | 1.94 | 1.78 | 2.37 | +19% | +34% |
-| query by indexed attribute | rls | 1.82 | 2.15 | 1.99 | 2.58 | +18% | +30% |
-| full-text search | owner | 2.35 | 4.72 | 2.99 | 5.18 | +101% | +73% |
-| full-text search | rls | 2.71 | 5.22 | 3.67 | 8.51 | +93% | +132% |
-| full-text search with typo-tolerant titles | owner | 15.88 | 18.03 | 42.70 | 49.08 | +14% | +15% |
-| full-text search with typo-tolerant titles | rls | 17.67 | 19.09 | 45.80 | 52.80 | +8% | +15% |
+| get by key | owner | 1.02 | 1.04 | 1.13 | 1.16 | +2% | +3% |
+| get by key | rls | 1.17 | 1.19 | 1.27 | 1.29 | +2% | +1% |
+| list page of 50 | owner | 1.48 | 1.47 | 1.62 | 1.63 | -1% | +1% |
+| list page of 50 | rls | 1.65 | 1.60 | 1.80 | 1.72 | -3% | -5% |
+| links of a record | owner | 1.29 | 1.58 | 1.45 | 1.79 | +23% | +23% |
+| links of a record | rls | 1.44 | 1.76 | 1.57 | 1.91 | +22% | +22% |
+| 2-hop neighborhood | owner | 5.06 | 6.49 | 6.57 | 7.73 | +28% | +18% |
+| 2-hop neighborhood | rls | 4.98 | 6.28 | 6.13 | 7.60 | +26% | +24% |
+| query by indexed attribute | owner | 1.92 | 2.27 | 2.16 | 2.51 | +18% | +16% |
+| query by indexed attribute | rls | 1.90 | 2.29 | 2.29 | 2.64 | +21% | +15% |
+| full-text search | owner | 2.38 | 2.92 | 2.77 | 3.29 | +23% | +19% |
+| full-text search | rls | 2.64 | 3.18 | 3.07 | 3.64 | +20% | +19% |
+| full-text search with typo-tolerant titles | owner | 11.16 | 11.80 | 25.27 | 27.04 | +6% | +7% |
+| full-text search with typo-tolerant titles | rls | 11.53 | 12.08 | 25.97 | 27.75 | +5% | +7% |
 
 ## Plans
 
@@ -74,15 +74,16 @@ Scan nodes of the statements of one call of each read, statements run inside the
 | links of a record | Index Scan mat_links_p3_domain_id_branch_relation_id_to_key_idx<br>Index Scan mat_records_attr_e90c8d94b5cd137b3bb8375b | Index Scan mat_links_p3_domain_id_branch_relation_id_to_key_idx<br>Index Scan mat_records_attr_e90c8d94b5cd137b3bb8375b |
 | 2-hop neighborhood | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_attr_e90c8d94b5cd137b3bb8375b<br>Index Scan mat_links_p3_domain_id_branch_relation_id_to_key_idx<br>Index Scan mat_links_p3_pkey<br>Index Scan mat_records_p3_pkey | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_attr_e90c8d94b5cd137b3bb8375b<br>Index Scan mat_links_p3_domain_id_branch_relation_id_to_key_idx<br>Index Scan mat_links_p3_pkey<br>Index Scan mat_records_p3_pkey |
 | query by indexed attribute | Index Scan mat_records_attr_71d8b499dff05dab64f394fe | Index Scan mat_records_attr_71d8b499dff05dab64f394fe |
-| full-text search | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_search_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_search_idx |
-| full-text search with typo-tolerant titles | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_search_idx<br>Bitmap Index Scan mat_records_p3_title_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_search_idx<br>Bitmap Index Scan mat_records_p3_title_idx |
+| full-text search | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx |
+| full-text search with typo-tolerant titles | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Bitmap Index Scan mat_records_p3_domain_id_branch_title_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Bitmap Index Scan mat_records_p3_domain_id_branch_title_idx |
 
 ## Reading the results
 
 - Both roles run the defaults: search, incoming Links, the neighborhood and attribute queries
   go through the security definer functions of revision `0005` (`lb_search`, `lb_links_in`,
-  `lb_neighborhood`, `lb_query_by_attribute`; store schema notes). The `rls` role gets the
-  owner's index plans inside them, and every read of both roles is within its budget.
+  `lb_neighborhood`, `lb_query_by_attribute`; store schema notes), on an overlay their
+  `_overlay` variants. The `rls` role gets the owner's index plans inside them, and every read
+  of both roles is within its budget.
 - With plain SQL (`store.reads.use_definer_functions: false`), a role subject to RLS cannot use
   conditions built from functions Postgres does not mark leakproof (`->>`, casts, `@@`, `%`)
   as index conditions: the policy is applied first. The plain SQL baseline of 2026-10-20
@@ -94,27 +95,37 @@ Scan nodes of the statements of one call of each read, statements run inside the
 - The functions build each statement with the Domain, branch and Kind as literals, so every
   call is planned with them (partial index predicates match) and runs without JIT; the
   planning time is part of the numbers above.
-- Search ranks at most `store.reads.search_candidates` matches, so very common terms cost a
-  bounded amount. Typo-tolerant titles (trigram similarity, Keeper's lexical search) add the
-  matches of the trigram index on titles to the candidates.
+- Search reads the GIN indexes on `(domain_id, branch, search)` and `(domain_id, branch,
+  title gin_trgm_ops)` (revision `0011`, `btree_gin`): the Domain and branch are index
+  conditions, so a search reads its branch's matches only, however many branches share the
+  partition (here `main`, a copy and an overlay). It ranks at most
+  `store.reads.search_candidates` matches, so very common terms cost a bounded amount.
+  Typo-tolerant titles (trigram similarity, Keeper's lexical search) add the branch's
+  trigram matches on titles to the candidates.
 - Times come from a laptop shared with other work; repeated runs differ by a few milliseconds
   at p95, up to ten for typo-tolerant search.
 - Branch creation copies the Records, Links and history rows of `main` (about twice the Records
   and Links) and builds the new branch's per-Attribute indexes in the same transaction.
-- An overlay branch (AC-16, store schema notes) is created by inserting its ref and copying
-  the compiled schema row: its cost does not depend on the size of the Domain.
+- An overlay branch (AC-16, store schema notes) is created by inserting its ref, copying the
+  compiled schema row and queuing the builds of its per-Attribute indexes (`store.index`
+  jobs, one per index): its cost does not depend on the size of the Domain. The job worker
+  builds them concurrently; this run builds them before the reads below.
 - Overlay reads resolve the overlay's own rows over the base rows as of the fork point in one
-  statement: an index scan of each branch, a primary-key probe of the overlay per base row
-  read and a one-row check that the ref is still that overlay. Keyset pages and attribute
-  queries are cut per half, lookups by key are lateral (store schema notes), so the plans are
-  those of the copy run twice on few rows; `test_overlay_reads_keep_index_plans` checks them.
-- Against the 20% overhead target: key reads, pages, Links of a Record (p95) and typo-tolerant
-  search are within it; attribute queries (+0.3 to 0.6 ms), the neighborhood (+2 to 3 ms) and
-  plain full-text search (+2.5 to 5 ms) are above it, and every read stays far within its
-  budget of design 8.7. Search pays twice for the GIN index on `search`, which is shared by
-  every branch of the partition: each half reads all matches of the partition and keeps its
-  branch's (the composite `(domain_id, branch, search)` index of design 8.7 "Deferred" would
-  remove that). The neighborhood plans one lateral lookup per hop and half.
+  statement: an index scan of each branch (the overlay's own per-Attribute indexes for its
+  half), a primary-key probe of the overlay per base row read (search hashes the overlay's
+  keys instead) and a one-row check that the ref is still that overlay. Keyset pages and
+  attribute queries are cut per half; the neighborhood looks Links and Records up by key with
+  one index scan over both branches (revision `0012`). `test_overlay_reads_keep_index_plans`
+  checks the plans.
+- Much of the overlay overhead left is planning: an overlay statement plans two or three
+  scans of the partition where the copy plans one, and the planner checks each scan against
+  every partial index of the partition (the per-Attribute indexes of `main`, the copy and the
+  overlay: 42 here), about 0.2 ms more per statement. Search, attribute queries, Links of a
+  Record and the neighborhood stay within 30% of the copy at p50, and every read far within
+  its budget of design 8.7; `tests/perf/test_perf.py` asserts that search on the overlay
+  stays within 25% of the copy at p50 at a small scale. Before revisions `0011` and `0012`
+  and the overlay's own indexes, search cost +93 to +101% at p50 (+73 to +132% at p95) and
+  the neighborhood +50%.
 - The overlay and the copy below got the same commits; `main` then moved, and its commit
   copied the previous state of the rows it changed into the overlay (copy on write).
 

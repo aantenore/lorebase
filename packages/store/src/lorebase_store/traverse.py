@@ -13,8 +13,10 @@ Inbound foreign-key hops compare a JSON value, which row-level security keeps fr
 index condition; with `store.reads.use_definer_functions` the statement runs inside the
 security definer function `lb_neighborhood` (revision 0005), which builds the same statement
 from the Domain, branch and Relations it is given. On an overlay branch the walk reads the
-resolved rows (`lorebase_store.layout`) and the function is `lb_neighborhood_overlay`
-(revision 0010).
+resolved rows (`lorebase_store.layout`): Links and Records by key through one lateral lookup
+over the overlay's and the base's rows at once (`BranchLayout.links_lookup`,
+`records_lookup`), inbound foreign keys through both halves and their per-Attribute indexes;
+the function is `lb_neighborhood_overlay` (revisions 0010 and 0012).
 """
 
 from __future__ import annotations
@@ -144,18 +146,22 @@ def _branches(hops: Hops, layout: BranchLayout) -> list[str]:
     """Lateral sources of one hop from the frontier Record `w`."""
 
     def links(near: str) -> str:
-        scope = (
-            "l.domain_id = :domain AND l.branch = :branch AND l.relation_id = r.relation_id "
-            f"AND l.{near} = w.key"
-        )
         if layout.overlay:
-            # Lateral, so that the Relation and the frontier key reach both halves of the
-            # overlay's Links as index conditions (OFFSET 0 keeps it a subquery).
-            return (
-                f"CROSS JOIN LATERAL (SELECT * FROM {layout.links_from('l')} WHERE {scope} "
-                "OFFSET 0) AS l"
-            )
-        return f"JOIN mat_links l ON {scope}"
+            # One lateral lookup reads the overlay's and the base's Links of the frontier key
+            # in one index scan (`BranchLayout.links_lookup`).
+            found = layout.links_lookup(f"x.relation_id = r.relation_id AND x.{near} = w.key")
+            return f"CROSS JOIN LATERAL {found} AS l"
+        return (
+            "JOIN mat_links l ON l.domain_id = :domain AND l.branch = :branch "
+            f"AND l.relation_id = r.relation_id AND l.{near} = w.key"
+        )
+
+    record = (
+        f"CROSS JOIN LATERAL {layout.records_lookup('x.kind_id = w.kind_id AND x.key = w.key')} m"
+        if layout.overlay
+        else "JOIN mat_records m ON m.domain_id = :domain AND m.branch = :branch "
+        "AND m.kind_id = w.kind_id AND m.key = w.key"
+    )
 
     parts: list[str] = []
     if hops.stored_out:
@@ -174,9 +180,7 @@ def _branches(hops: Hops, layout: BranchLayout) -> list[str]:
         parts.append(
             'SELECT f.to_kind, m."values" ->> f.attribute, f.relation_id, f.from_kind, m.key, '
             "f.to_kind, m.\"values\" ->> f.attribute, CAST('{}' AS jsonb), CAST(NULL AS bytea) "
-            f"FROM fk_rels f JOIN {layout.records_from('m')} ON m.domain_id = :domain "
-            "AND m.branch = :branch "
-            "AND m.kind_id = w.kind_id AND m.key = w.key "
+            f"FROM fk_rels f {record} "
             'WHERE f.from_kind = w.kind_id AND m."values" ->> f.attribute IS NOT NULL '
             "LIMIT :fanout"
         )
@@ -238,15 +242,13 @@ def neighborhood_sql(
         "FROM walk w WHERE false"
     )
     record_columns = ", ".join(f'm."{c}"' for c in RECORD_NAMES)
-    found = (
-        "m.domain_id = :domain AND m.branch = :branch AND m.kind_id = n.kind_id AND m.key = n.key"
-    )
+    alias = "x" if layout.overlay else "m"
+    found = f"{alias}.kind_id = n.kind_id AND {alias}.key = n.key"
     hydrate = (
-        # A lateral lookup per node: the join keys reach both halves of an overlay's rows.
-        # (LIMIT 1 keeps it a per-node subquery instead of a join with every row).
-        f"CROSS JOIN LATERAL (SELECT * FROM {layout.records_from('m')} WHERE {found} LIMIT 1) AS m"
+        # A lateral lookup per node over the overlay's and the base's rows at once.
+        f"CROSS JOIN LATERAL {layout.records_lookup(found)} AS m"
         if layout.overlay
-        else f"JOIN mat_records m ON {found}"
+        else f"JOIN mat_records m ON m.domain_id = :domain AND m.branch = :branch AND {found}"
     )
     sql = f"""
     WITH RECURSIVE
