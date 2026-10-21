@@ -1,7 +1,10 @@
 """Compile resolved DSL plans to SQL over the materialized head of one branch.
 
 Everything comes from the plan, which holds ids and canonical operands; every value, id and
-key reaches Postgres as a bound parameter, never as SQL text. Attribute values are read from
+key reaches Postgres as a bound parameter, never as SQL text, except where a per-Attribute
+partial index must match: comparisons on an indexed Attribute of one Kind render the index
+predicate (Domain, branch, Kind) and the Attribute id as escaped literals and compare the
+index expression (`lorebase_store.indexes.IndexSpec`). Attribute values are read from
 `values` (or `derived`) by Attribute id and cast per type: integer and decimal to numeric,
 float to double precision, date, timestamp and duration to their Postgres types, text types as
 text. Equality on scalar Attributes of one Kind uses JSONB containment (`values @> {...}`) so
@@ -18,13 +21,14 @@ every position unique. `SortKey` carries what a cursor needs to resume after a r
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     ColumnElement,
     Date,
@@ -69,6 +73,7 @@ from lorebase_core.query import (
     Target,
 )
 from lorebase_core.types import AttributeType, decode_value
+from lorebase_store.indexes import IndexMethod, IndexSpec
 from lorebase_store.repositories.materialized import MAT_LINKS, MAT_RECORDS
 
 EARTH_RADIUS_M = 6_371_008.8
@@ -86,6 +91,26 @@ _TYPED: dict[AttributeType, TypeEngine[Any]] = {
 _SCALAR_JSON = frozenset(
     {AttributeType.ARRAY, AttributeType.JSON, AttributeType.GEO_POINT}
 )  # compared as JSONB, never through containment of a scalar
+
+_INDEXED_OPERATORS = frozenset(
+    {
+        Operator.EQ,
+        Operator.IN,
+        Operator.LT,
+        Operator.LTE,
+        Operator.GT,
+        Operator.GTE,
+        Operator.BETWEEN,
+    }
+)
+_RANGE_OPERATORS = frozenset(
+    {Operator.LT, Operator.LTE, Operator.GT, Operator.GTE, Operator.BETWEEN}
+)
+_TEXT_ORDERED = frozenset(
+    {AttributeType.STRING, AttributeType.URI, AttributeType.ENUM, AttributeType.REF}
+)
+"""Text-indexed types this compiler also orders as text; dates, timestamps and durations are
+compared as their SQL types, so ranges on them keep the typed comparison."""
 
 _COMPARE = {
     Operator.EQ: lambda a, b: a == b,
@@ -121,12 +146,25 @@ class SortKey:
 
 
 class Compiler:
-    """SQL builder for the materialized head of `branch` in `domain_id`."""
+    """SQL builder for the materialized head of `branch` in `domain_id`.
 
-    def __init__(self, domain_id: str, branch: str, *, text_search_config: str) -> None:
+    `indexes` are the per-Attribute indexes of the branch schema by `(kind id, attribute
+    id)` (`lorebase_store.indexes.plan_indexes`); comparisons on those Attributes repeat the
+    index predicate and expression so the partial index can serve them.
+    """
+
+    def __init__(
+        self,
+        domain_id: str,
+        branch: str,
+        *,
+        text_search_config: str,
+        indexes: Mapping[tuple[str, str], IndexSpec] | None = None,
+    ) -> None:
         self.domain_id = domain_id
         self.branch = branch
         self._config = text_search_config
+        self._indexes = dict(indexes or {})
 
     # Tables and scopes ------------------------------------------------------------------
 
@@ -252,6 +290,9 @@ class Compiler:
             return self.field_json(rows, ref).contains(_jsonb(list(operand)))
         if op is Operator.NEAR:
             return self._near(rows, ref, operand)
+        indexed = self._indexed(rows, condition, target)
+        if indexed is not None:
+            return indexed
         if (
             op is Operator.EQ
             and ref.source in (FieldSource.VALUE, FieldSource.DERIVED)
@@ -268,6 +309,47 @@ class Compiler:
             low, high = operand
             return typed.between(_bind(spec, low, typed), _bind(spec, high, typed))
         return _compare(typed, op, _bind(spec, operand, typed))
+
+    def _indexed(
+        self, rows: FromClause, condition: Comparison, target: Target
+    ) -> ColumnElement[bool] | None:
+        """A comparison in the shape of the Attribute's partial index, `None` when it has
+        no index or the index cannot serve the operator.
+
+        The index predicate (Domain, branch and Kind) and the Attribute id are rendered as
+        literals: a partial index matches only a query that repeats its literals. Equality
+        adds `IS NOT NULL` so that absent values compare false, as with containment.
+        """
+        ref, op, operand = condition.field, condition.op, condition.operand
+        if ref.source is not FieldSource.VALUE or len(ref.attributes) != 1:
+            return None
+        ((kind_id, attribute_id),) = ref.attributes.items()
+        spec = self._indexes.get((kind_id, attribute_id))
+        if spec is None or target.kind_ids != (kind_id,) or op not in _INDEXED_OPERATORS:
+            return None
+        if op is Operator.IN and spec.method is not IndexMethod.BTREE:
+            return None
+        if op in _RANGE_OPERATORS and not (
+            spec.ordered and (spec.cast is not None or spec.attribute_type in _TEXT_ORDERED)
+        ):
+            return None
+        expression = _index_expression(rows, spec)
+        compared: ColumnElement[bool]
+        if op is Operator.EQ:
+            compared = and_(expression == _index_value(spec, operand), expression.is_not(None))
+        elif op is Operator.IN:
+            compared = expression.in_([_index_value(spec, value) for value in operand])
+        elif op is Operator.BETWEEN:
+            low, high = operand
+            compared = expression.between(_index_value(spec, low), _index_value(spec, high))
+        else:
+            compared = _COMPARE[op](expression, _index_value(spec, operand))
+        return and_(
+            rows.c.domain_id == literal(self.domain_id, Text(), literal_execute=True),
+            rows.c.branch == literal(self.branch, Text(), literal_execute=True),
+            rows.c.kind_id == literal(kind_id, Text(), literal_execute=True),
+            compared,
+        )
 
     def _present(self, rows: FromClause, ref: FieldRef) -> ColumnElement[bool]:
         if ref.source is FieldSource.KEY:
@@ -459,6 +541,38 @@ def _compare(left: ColumnElement[Any], op: Operator, right: Any) -> ColumnElemen
         right = literal(right)
     result: ColumnElement[bool] = _COMPARE[op](left, right)
     return result
+
+
+_INDEX_CASTS: dict[str, TypeEngine[Any]] = {
+    "bigint": BigInteger(),
+    "numeric": Numeric(),
+    "double precision": DOUBLE_PRECISION(),
+    "boolean": Boolean(),
+}
+
+
+def _index_expression(rows: FromClause, spec: IndexSpec) -> ColumnElement[Any]:
+    """`spec.expression` over `rows`, with the Attribute id as a literal."""
+    raw = rows.c["values"].op("->>", return_type=Text)(
+        literal(spec.attribute_id, Text(), literal_execute=True)
+    )
+    if spec.digest:
+        return func.md5(raw)
+    if spec.cast is not None:
+        return cast(raw, _INDEX_CASTS[spec.cast])
+    return raw
+
+
+def _index_value(spec: IndexSpec, canonical: Any) -> ColumnElement[Any]:
+    """A canonical operand compared with `_index_expression` (`spec.value_sql`)."""
+    if isinstance(canonical, bool):
+        canonical = "true" if canonical else "false"
+    value = literal(str(canonical), Text())
+    if spec.digest:
+        return func.md5(value)
+    if spec.cast is not None:
+        return cast(value, _INDEX_CASTS[spec.cast])
+    return value
 
 
 def _jsonb(value: Any) -> ColumnElement[Any]:

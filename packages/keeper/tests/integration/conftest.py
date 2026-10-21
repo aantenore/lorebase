@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from lorebase_store import migrations, testing
+from lorebase_store.definer import grant_read_functions
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 APP_ROLE_PASSWORD = "app-role-test-password"
@@ -50,6 +51,7 @@ async def _create_role(url: str, role: str) -> None:
                 f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {role}",
             ):
                 await connection.execute(text(statement))
+            await grant_read_functions(connection, role)
     finally:
         await engine.dispose()
 

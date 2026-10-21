@@ -402,7 +402,8 @@ read:
     include_default_limit: 10    # neighbors per Record in `include`
     include_max_limit: 50
     max_aggregate_groups: 1000   # groups returned by `aggregate`; more are cut
-  traverse:                      # POST /traverse and POST /neighborhood
+  traverse:                      # POST /traverse and POST /neighborhood; a neighborhood is also
+                                 # bounded by store.traverse (the smaller cap applies)
     max_hops: 5
     max_nodes_per_hop: 1000
     max_seeds: 100

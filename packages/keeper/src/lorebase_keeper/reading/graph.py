@@ -1,15 +1,15 @@
-"""Traversal and neighborhoods (design 8.3): one set-based query per hop, capped per hop.
+"""Traversal and neighborhoods (design 8.3).
 
-Both read the materialized head; at another Revision they are refused.
+Traversal runs one set-based query per hop, capped per hop. A neighborhood is one statement
+of the store primitive `lorebase_store.traverse.neighborhood` (a recursive walk with fan-out,
+Link and node caps). Both read the materialized head; at another Revision they are refused.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind, LinkDirection
@@ -21,7 +21,6 @@ from lorebase_core.query import (
     resolve_hop,
     resolve_where,
 )
-from lorebase_keeper.reading.compiler import record_columns
 from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupported
 from lorebase_keeper.reading.records import compiler_for, get_record, require_kind
@@ -38,7 +37,9 @@ from lorebase_keeper.reading.views import (
     record_ref,
     served,
 )
-from lorebase_store.repositories.materialized import MAT_RECORDS
+from lorebase_store.reads import Direction, hydrate_records
+from lorebase_store.repositories.materialized import RecordRow
+from lorebase_store.traverse import neighborhood as walk_neighborhood
 
 
 def _edge(point: ReadPoint, hop: Hop, row: Mapping[Any, Any]) -> Edge:
@@ -114,85 +115,83 @@ async def traverse(
 async def neighborhood(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, request: NeighborhoodRequest
 ) -> NeighborhoodResponse:
-    """Records and Links around the seeds, breadth first, within the depth and the caps."""
+    """Records and Links around the seeds, breadth first, within the depth and the caps.
+
+    One statement of the store primitive `lorebase_store.traverse.neighborhood`; caps are the
+    smaller of `read.traverse` and `store.traverse`. Nodes come nearest first; each Link is
+    reported once, by its forward name, from its `from` Record to its `to` Record.
+    """
     if not point.materialized:
         raise tree_unsupported("Neighborhoods")
-    caps = runtime.read.traverse
-    if len(request.seeds) > caps.max_seeds:
-        raise invalid("/body/seeds", f"at most {caps.max_seeds} seeds", "limit_exceeded")
-    if request.depth > caps.max_depth:
-        raise invalid("/body/depth", f"must not exceed {caps.max_depth}", "limit_exceeded")
-    max_nodes = request.max_nodes or caps.max_nodes
-    max_edges = request.max_edges or caps.max_edges
-    if max_nodes > caps.max_nodes:
-        raise invalid("/body/max_nodes", f"must not exceed {caps.max_nodes}", "limit_exceeded")
-    if max_edges > caps.max_edges:
-        raise invalid("/body/max_edges", f"must not exceed {caps.max_edges}", "limit_exceeded")
-    wanted = _followed(point, request.relations)
+    caps, store = runtime.read.traverse, runtime.store_settings.traverse
+    max_seeds = min(caps.max_seeds, store.max_seeds)
+    if len(request.seeds) > max_seeds:
+        raise invalid("/body/seeds", f"at most {max_seeds} seeds", "limit_exceeded")
+    max_depth = min(caps.max_depth, store.max_depth)
+    if request.depth > max_depth:
+        raise invalid("/body/depth", f"must not exceed {max_depth}", "limit_exceeded")
+    nodes_cap = min(caps.max_nodes, store.max_nodes)
+    edges_cap = min(caps.max_edges, store.max_links)
+    max_nodes = request.max_nodes or nodes_cap
+    max_edges = request.max_edges or edges_cap
+    if max_nodes > nodes_cap:
+        raise invalid("/body/max_nodes", f"must not exceed {nodes_cap}", "limit_exceeded")
+    if max_edges > edges_cap:
+        raise invalid("/body/max_edges", f"must not exceed {edges_cap}", "limit_exceeded")
+    follow = _follow(point, _followed(point, request.relations))
+    seeds = [(require_kind(point, seed.kind).id, seed.key) for seed in request.seeds]
+    found = await hydrate_records(
+        session, point.domain.id, point.branch, seeds, runtime=runtime.store
+    )
+    for kind_id, key in seeds:
+        if (kind_id, key) not in found:
+            raise not_found(f"Record {point.schema.kinds[kind_id].api_name}/{key}")
 
-    nodes: dict[tuple[str, str], RecordOut] = {}
-    frontier: dict[str, set[str]] = defaultdict(set)
-    seeds: dict[str, list[str]] = defaultdict(list)
-    for seed in request.seeds:
-        seeds[require_kind(point, seed.kind).id].append(seed.key)
-    r = MAT_RECORDS
-    for kind_id, keys in seeds.items():
-        seed_rows = await session.execute(
-            select(*record_columns(r)).where(
-                r.c.domain_id == point.domain.id,
-                r.c.branch == point.branch,
-                r.c.kind_id == kind_id,
-                r.c.key.in_(keys),
+    walked = await walk_neighborhood(
+        session,
+        point.domain.id,
+        point.branch,
+        point.schema,
+        seeds,
+        depth=request.depth,
+        follow=follow,
+        max_nodes=max_nodes,
+        max_links=max_edges,
+        runtime=runtime.store,
+    )
+    titles = {(n.record.kind_id, n.record.key): n.record.title for n in walked.records}
+    nodes = [record_out(point.schema, _row(n.record)) for n in walked.records]
+    edges = []
+    for link in walked.links:
+        relation = point.schema.relations[link.relation_id]
+        edges.append(
+            Edge(
+                relation=relation.api_name,
+                source=record_ref(point.schema, relation.from_kind, link.from_key),
+                to=record_ref(
+                    point.schema,
+                    relation.to_kind,
+                    link.to_key,
+                    titles.get((relation.to_kind, link.to_key)),
+                ),
+                values=link_values(relation, link.values),
             )
         )
-        found = {row["key"]: row for row in seed_rows.mappings()}
-        for key in keys:
-            if key not in found:
-                raise not_found(f"Record {point.schema.kinds[kind_id].api_name}/{key}")
-            nodes.setdefault((kind_id, key), record_out(point.schema, found[key]))
-            frontier[kind_id].add(key)
-
-    compiler = compiler_for(point, runtime)
-    edges: list[Edge] = []
-    seen_edges: set[tuple[str, str, str]] = set()
-    truncated = False
-    for _ in range(request.depth):
-        following: dict[str, set[str]] = defaultdict(set)
-        for hop in _hops(point, frontier, wanted):
-            remaining = max_edges - len(edges)
-            if remaining <= 0:
-                truncated = True
-                break
-            query = compiler.neighbors(hop, sorted(frontier[hop.near_kind]), limit=remaining + 1)
-            rows = list((await session.execute(query)).mappings())
-            if len(rows) > remaining:
-                truncated = True
-                rows = rows[:remaining]
-            far_kind = hop.far.kind_ids[0]
-            for row in rows:
-                forward = hop.direction is LinkDirection.FORWARD
-                identity = (
-                    hop.relation.id,
-                    row["near_key"] if forward else row["far_key"],
-                    row["far_key"] if forward else row["near_key"],
-                )
-                if identity in seen_edges:
-                    continue
-                node = (far_kind, row["far_key"])
-                if node not in nodes:
-                    if len(nodes) >= max_nodes:
-                        truncated = True
-                        continue
-                    nodes[node] = record_out(point.schema, row)
-                    following[far_kind].add(row["far_key"])
-                seen_edges.add(identity)
-                edges.append(_edge(point, hop, row))
-        frontier = following
-        if not frontier:
-            break
     return NeighborhoodResponse(
-        **served(point), nodes=list(nodes.values()), edges=edges, truncated=truncated
+        **served(point), nodes=nodes, edges=edges, truncated=walked.truncated
     )
+
+
+def _row(record: RecordRow) -> dict[str, Any]:
+    """A store Record row as the mapping `record_out` reads."""
+    return {
+        "kind_id": record.kind_id,
+        "key": record.key,
+        "title": record.title,
+        "values": record.values,
+        "updated_revision": record.updated_revision,
+        "updated_at": record.updated_at,
+    }
 
 
 def _followed(point: ReadPoint, names: list[str] | None) -> set[tuple[str, LinkDirection]] | None:
@@ -208,26 +207,19 @@ def _followed(point: ReadPoint, names: list[str] | None) -> set[tuple[str, LinkD
     return wanted
 
 
-def _hops(
-    point: ReadPoint,
-    frontier: Mapping[str, set[str]],
-    wanted: set[tuple[str, LinkDirection]] | None,
-) -> list[Hop]:
-    hops: list[Hop] = []
+def _follow(
+    point: ReadPoint, wanted: set[tuple[str, LinkDirection]] | None
+) -> list[tuple[str, Direction]]:
+    """`(Relation id, direction)` pairs to walk: those requested (all by default) whose far
+    Kind the caller may read; Kinds the caller may not read are left out."""
+    follow: list[tuple[str, Direction]] = []
     for relation in sorted(point.schema.relations.values(), key=lambda r: r.id):
         for direction in LinkDirection:
-            near = relation.endpoint(direction)
-            if not frontier.get(near):
-                continue
             if wanted is not None and (relation.id, direction) not in wanted:
                 continue
             far: Kind | None = point.schema.kinds.get(relation.far_endpoint(direction))
             if far is None or not point.scope.allows(far.api_name):
-                continue  # Kinds the caller may not read are left out of the neighborhood
-            name = (
-                relation.api_name
-                if direction is LinkDirection.FORWARD
-                else relation.inverse_api_name
-            )
-            hops.append(Hop(name, relation, direction, near, Target(far.api_name, (far,))))
-    return hops
+                continue
+            forward = direction is LinkDirection.FORWARD
+            follow.append((relation.id, Direction.OUT if forward else Direction.IN))
+    return follow

@@ -53,7 +53,9 @@ from lorebase_keeper.reading.views import (
     record_ref,
     relation_name,
 )
+from lorebase_store.indexes import plan_indexes
 from lorebase_store.materialize.rows import record_title, split_link_key
+from lorebase_store.reads import hydrate_records, links_to_record
 from lorebase_store.repositories import ProvenanceRepository
 from lorebase_store.repositories.materialized import MAT_LINKS, MAT_RECORDS
 
@@ -84,6 +86,7 @@ def compiler_for(point: ReadPoint, runtime: ReadRuntime) -> Compiler:
         point.domain.id,
         point.branch,
         text_search_config=runtime.store_settings.materialize.text_search_config,
+        indexes=plan_indexes(point.schema).by_attribute(),
     )
 
 
@@ -464,6 +467,8 @@ async def record_links(
         items = [_link_out(point, hop, key, far, values) for far, values in page]
         more = len(pairs) > limit
         return LinkPageResult(items, issue(shape, [page[-1][0]]) if more and page else None)
+    if hop.direction is LinkDirection.INVERSE:
+        return await _inbound_links(session, runtime, point, hop, key, limit, after_key, shape)
     compiler = compiler_for(point, runtime)
     source = compiler.link_source(hop)
     far = MAT_RECORDS.alias("far")
@@ -492,6 +497,47 @@ async def record_links(
         _link_out(point, hop, key, row["far_key"], row["link_values"], row["title"]) for row in rows
     ]
     return LinkPageResult(items, issue(shape, [rows[-1]["far_key"]]) if more else None)
+
+
+async def _inbound_links(
+    session: AsyncSession,
+    runtime: ReadRuntime,
+    point: ReadPoint,
+    hop: Hop,
+    key: str,
+    limit: int,
+    after_key: str | None,
+    shape: str,
+) -> LinkPageResult:
+    """Links pointing at the Record along an inverse name, through the store primitive
+    (`links_to_record`: the reverse Link index, or the from Kind's per-Attribute index for
+    foreign-key Relations, with index plans under row-level security)."""
+    domain_id, branch, store = point.domain.id, point.branch, runtime.store
+    links = await links_to_record(
+        session, domain_id, branch, hop.relation, key, limit=limit, after=after_key, runtime=store
+    )
+    more = len(links) == limit and bool(
+        await links_to_record(
+            session,
+            domain_id,
+            branch,
+            hop.relation,
+            key,
+            limit=1,
+            after=links[-1].from_key,
+            runtime=store,
+        )
+    )
+    far_kind = hop.far.kind_ids[0]
+    found = await hydrate_records(
+        session, domain_id, branch, [(far_kind, link.from_key) for link in links], runtime=store
+    )
+    items = []
+    for link in links:
+        record = found.get((far_kind, link.from_key))
+        title = None if record is None else record.title
+        items.append(_link_out(point, hop, key, link.from_key, link.values, title))
+    return LinkPageResult(items, issue(shape, [links[-1].from_key]) if more else None)
 
 
 async def _tree_links(
