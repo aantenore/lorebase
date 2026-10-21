@@ -449,8 +449,10 @@ def test_promtool_parses_every_dashboard_expression(promtool: Promtool, tmp_path
             recorded.append({"record": f"dashboard:{path.stem}:{index}", "expr": substituted})
             assert "$" not in substituted, f"{path.name}, {where}: unsubstituted variable"
     assert recorded
-    (tmp_path / "dashboards.rules.yml").write_text(
-        yaml.safe_dump({"groups": [{"name": "dashboards", "rules": recorded}]})
-    )
+    rules_file = tmp_path / "dashboards.rules.yml"
+    rules_file.write_text(yaml.safe_dump({"groups": [{"name": "dashboards", "rules": recorded}]}))
+    # The image runs promtool as an unprivileged user: let it read the private temporary dir.
+    tmp_path.chmod(0o755)
+    rules_file.chmod(0o644)
     result = promtool(["check", "rules", "/rules/dashboards.rules.yml"], {tmp_path: "/rules"})
     assert result.returncode == 0, result.stdout + result.stderr

@@ -125,7 +125,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-          sparse-checkout: apps/web
+          # docs/openapi.json: the generated API types are checked against it.
+          sparse-checkout: |
+            apps/web
+            docs
       - name: Detect the web app
         id: detect
         working-directory: .
@@ -170,12 +173,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-          sparse-checkout: deploy/helm
+          # deploy/observability: the chart's `observability` symlink points into it.
+          sparse-checkout: |
+            deploy/helm
+            deploy/observability
       - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
         with:
           version: v3.21.1
       - name: Fetch the chart dependencies (pinned by Chart.lock)
-        run: helm dependency build "$CHART"
+        run: |
+          helm repo add cnpg https://cloudnative-pg.github.io/charts
+          helm dependency build "$CHART"
       - name: helm lint, every profile
         run: |
           helm lint --strict "$CHART" -f "$CHART/ci/minimal-values.yaml"
