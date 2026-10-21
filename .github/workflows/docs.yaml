@@ -1,0 +1,79 @@
+name: Docs
+
+# Builds the documentation site (mkdocs.yml) with every warning as an error. On main the site is
+# published to GitHub Pages; a pull request only builds it, so a broken link fails the review.
+# The repository setting Pages > Source must be "GitHub Actions".
+
+on:
+  pull_request:
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - overrides/**
+      - scripts/docs/**
+      - CHANGELOG.md
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/docs.yaml
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - overrides/**
+      - scripts/docs/**
+      - CHANGELOG.md
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/docs.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: mkdocs build --strict
+        run: uv run --only-group docs mkdocs build --strict
+      - name: Upload the site
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: build/site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages # one deployment at a time; a running one is never cancelled
+      cancel-in-progress: false
+    timeout-minutes: 10
+    permissions:
+      pages: write # publish the artifact
+      id-token: write # prove to Pages that the deployment comes from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

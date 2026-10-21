@@ -1,0 +1,131 @@
+site_name: Lorebase
+site_description: >-
+  Lorebase is an open-source ontology platform: a versioned knowledge graph on Postgres with
+  git-like branching and three-way merge, a deterministic read API and an MCP server for AI agents.
+site_url: https://aantenore.github.io/lorebase/
+site_author: Antonio Antenore
+repo_url: https://github.com/aantenore/lorebase
+repo_name: aantenore/lorebase
+edit_uri: edit/main/docs/
+copyright: Copyright 2026 Antonio Antenore. Apache License 2.0.
+
+docs_dir: docs
+site_dir: build/site
+
+# The launch kit (posts for announcements) is not part of the documentation.
+exclude_docs: |
+  launch/
+
+# Pages built from repository files outside docs/ and links that leave the docs tree.
+hooks:
+  - scripts/docs/mkdocs_hooks.py
+
+watch:
+  - CHANGELOG.md
+  - CONTRIBUTING.md
+  - SECURITY.md
+  - overrides
+  - scripts/docs
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  font: false # system fonts: no request to a font provider
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/aantenore/lorebase
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+      # GitHub-style heading ids, so the anchors written for GitHub keep working here
+      slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Start:
+      - Overview: index.md
+      - Quickstart: quickstart.md
+      - Five-day demo: demo.md
+      - Visual tour: tour.md
+  - Concepts:
+      - Why Lorebase: why.md
+      - Glossary: glossary.md
+      - Design: design.md
+      - FAQ: faq.md
+      - Comparison: comparison.md
+  - Guides:
+      - Agents: agents.md
+      - MCP server: mcp.md
+      - Schema inference: inference.md
+      - Inference providers: inference-providers.md
+      - Document extraction: extraction.md
+      - Scribe: scribe.md
+      - Operations: operations.md
+      - Deployment: deployment.md
+      - Kubernetes: kubernetes.md
+      - Performance: performance.md
+      - Security review: security-review.md
+  - Reference:
+      - REST API: reference/api.md
+      - Command line: reference/cli.md
+      - Configuration: reference/configuration.md
+      - Store schema notes: store-schema-notes.md
+  - Project:
+      - Roadmap: roadmap.md
+      - Changelog: project/changelog.md
+      - Contributing: project/contributing.md
+      - Security policy: project/security.md
+      - Releasing: release.md
+      - M1 plan: plan/m1.md
