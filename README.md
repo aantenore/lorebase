@@ -11,7 +11,7 @@
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, and documents are extracted into reviewable Proposals; embeddings and semantic search do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
+> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, documents are extracted into reviewable Proposals, and agent writes that need review become Proposals; embeddings and semantic search do not exist yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
 
 ## What it is
 
@@ -92,6 +92,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Agent access | Context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([docs/agents.md](docs/agents.md)) | Done | M3, landed early |
 | Agent access | Python client (sync and async) and the `lorebase` CLI over the REST API, Proposals, context packs and explanations included; the OpenAPI document is committed as [docs/openapi.json](docs/openapi.json) | Done | M1 |
 | Agent access | MCP server (Herald) on stdio and Streamable HTTP ([docs/mcp.md](docs/mcp.md)) | Done | M3, landed early |
+| Agent access | Agent writes that need review run on a task branch and open a Proposal, merged automatically only for roles the Domain allows and with the required approvals ([docs/agents.md](docs/agents.md#writes-that-need-review)) | Done | M3 |
 | Ingestion | Schema inference from CSV files and Postgres tables (`POST .../schema:infer`, [docs/inference.md](docs/inference.md)) | Done | M2 |
 | Ingestion | CSV and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done; Parquet planned | M2 |
 | Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
@@ -208,11 +209,11 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 ## Status and roadmap
 
-Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine, the REST API (Proposals included), the Python client and the CLI are done; lineage and history endpoints and the 1M-Record performance baseline are not.
+Pre-alpha. Version 0.1.0 is prepared ([CHANGELOG](CHANGELOG.md), [release process](docs/release.md)); before 1.0 interfaces may change in any minor version. M1 (engine and API) is nearly done: the engine, the REST API (Proposals included), the Python client and the CLI are done; lineage and history endpoints and the 1M-Record performance baseline are not.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; CEL expressions end to end (schema validation, custom Operations, derived values in the materialized head); the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; document intake and tiered extraction into Proposals with item review; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; CEL expressions end to end (schema validation, custom Operations, derived values in the materialized head); the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; document intake and tiered extraction into Proposals with item review; agent writes that turn a refused Operation into a task branch and a Proposal; a performance harness with a 100k-Record baseline; docker compose and a Helm chart; CI with CodeQL, a release workflow with signed images and SBOMs; a security review of the trust boundaries ([docs/security-review.md](docs/security-review.md)); the five-day demo (`make demo`); the web app on the mock API or a live Keeper.
 
-Next: lineage and history endpoints and the 1M-Record baseline (finishing M1), Source ingestion (M2), the Operation outbox (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
+Next: lineage and history endpoints and the 1M-Record baseline (finishing M1), Parquet Sources (M2), the Operation outbox (M3), schema suggestions from documents, embeddings and hybrid search (M4), the open findings of the security review and hardening to 1.0 (M5).
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|
