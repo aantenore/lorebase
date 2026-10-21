@@ -749,7 +749,8 @@ async def search_records(
             params["title_weight"] = titles.weight
         if kinds is not None:
             params["kinds"] = kinds
-        statement = _search(layout.records_from("m"), kinds is not None, titles is not None)
+        records = layout.records_from("m", probe=False)
+        statement = _search(records, kinds is not None, titles is not None)
     rows = (await session.execute(statement, params)).all()
     return [SearchHit(kind_id, key, title, float(score)) for kind_id, key, title, score in rows]
 

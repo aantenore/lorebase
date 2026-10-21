@@ -46,7 +46,15 @@ class MatRecord(Base):
     __tablename__ = "mat_records"
     __table_args__ = (
         _branch_fk(),
-        Index("ix_mat_records_search", "search", postgresql_using="gin"),
+        # btree_gin (revision 0011): a search's Domain and branch are index conditions of the
+        # search vector and trigram title indexes.
+        Index(
+            "ix_mat_records_branch_search",
+            "domain_id",
+            "branch",
+            "search",
+            postgresql_using="gin",
+        ),
         Index(
             "ix_mat_records_values",
             "values",
@@ -54,7 +62,9 @@ class MatRecord(Base):
             postgresql_ops={"values": "jsonb_path_ops"},
         ),
         Index(
-            "ix_mat_records_title",
+            "ix_mat_records_branch_title",
+            "domain_id",
+            "branch",
             "title",
             postgresql_using="gin",
             postgresql_ops={"title": "gin_trgm_ops"},

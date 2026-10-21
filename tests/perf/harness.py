@@ -282,7 +282,7 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
                 origin=ORIGIN,
                 runtime=runtime,
             )
-    await run_index_jobs(engine, runtime.settings.indexes)
+    await build_indexes(engine, runtime)
     await _analyze(engine)
     seconds = time.perf_counter() - started
     async with sessions() as session, session.begin():
@@ -300,6 +300,12 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
             )
         ).scalar_one()
     return SeedReport(int(records), int(links), seconds, len(batches) + 1)
+
+
+async def build_indexes(engine: AsyncEngine, runtime: StoreRuntime) -> None:
+    """Run the queued index jobs until none is left, as the job worker would."""
+    while await run_index_jobs(engine, runtime.settings.indexes):
+        pass
 
 
 async def _analyze(engine: AsyncEngine) -> None:
@@ -497,6 +503,34 @@ async def measure_reads(
     return results
 
 
+async def measure_alternating(
+    engine: AsyncEngine,
+    name: str,
+    operations: Sequence[Operation],
+    *,
+    iterations: int,
+    warmup: int,
+    role: str | None,
+    seed: int = 7,
+) -> list[Measurement]:
+    """p50/p95 of the same read on several branches, called in turn with the same random
+    keys (one transaction per call), so that every branch sees the same machine load."""
+    rngs = [random.Random(seed) for _ in operations]
+    measurements = [Measurement(name) for _ in operations]
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        for index in range(warmup + iterations):
+            for operation, rng, measurement in zip(operations, rngs, measurements, strict=True):
+                started = time.perf_counter()
+                async with session.begin():
+                    if role is not None:
+                        await session.execute(text(f"SET LOCAL ROLE {role}"))
+                    await scope_to_domain(session, DOMAIN)
+                    await operation(session, rng)
+                if index >= warmup:
+                    measurement.samples_ms.append((time.perf_counter() - started) * 1000)
+    return measurements
+
+
 async def measure_branch_copy(
     engine: AsyncEngine, runtime: StoreRuntime, *, iterations: int
 ) -> Measurement:
@@ -513,7 +547,7 @@ async def measure_branch_copy(
             await scope_to_domain(session, DOMAIN)
             await RefRepository(session, DOMAIN).delete(name)
             await BranchIndexes(session, DOMAIN, name, settings=runtime.settings.indexes).drop_all()
-        await run_index_jobs(engine, runtime.settings.indexes)
+        await build_indexes(engine, runtime)
     return measurement
 
 
@@ -599,7 +633,7 @@ async def overlay_pair(
                     origin=ORIGIN,
                     runtime=runtime,
                 )
-    await run_index_jobs(engine, runtime.settings.indexes)
+    await build_indexes(engine, runtime)
     await _analyze(engine)
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
