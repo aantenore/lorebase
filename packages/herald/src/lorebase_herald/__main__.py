@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import sys
 
-from lorebase_herald.keeper_http import KeeperHttp
+from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.server import serve
 from lorebase_herald.settings import herald_settings
 from lorebase_platform.logging import configure_logging
@@ -28,7 +28,7 @@ def main() -> None:
         sys.exit(str(exc))
     configure_logging(settings.logging, service=SERVICE_NAME, stream=sys.stderr)
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(serve(herald, KeeperHttp(herald.keeper)))
+        asyncio.run(serve(herald, KeeperClients(herald.keeper)))
 
 
 if __name__ == "__main__":

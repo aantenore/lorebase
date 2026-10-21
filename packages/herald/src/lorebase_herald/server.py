@@ -6,7 +6,8 @@ schemas a host sees match what Herald accepts.
 
 Credentials: on stdio, every call uses the API key configured for this agent's server process;
 on Streamable HTTP, every call forwards the caller's own `Authorization` header and fails
-without one. Herald holds no key of its own and never substitutes one.
+without one. Herald holds no key of its own and never substitutes one: each call opens its own
+client with that one credential.
 """
 
 # No `from __future__ import annotations`: tool signatures are evaluated where they are defined
@@ -23,7 +24,7 @@ from pydantic import Field
 
 from lorebase_herald import __version__, prompts
 from lorebase_herald.errors import invalid_input
-from lorebase_herald.keeper_http import KeeperHttp
+from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.settings import HeraldSettings
 from lorebase_herald.tools import LorebaseTools
 
@@ -87,8 +88,8 @@ class Credentials:
         return key.get_secret_value() if key is not None else None
 
 
-def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
-    """The MCP server over `keeper`, with every tool, resource and prompt registered."""
+def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer:
+    """The MCP server over `clients`, with every tool, resource and prompt registered."""
     server: MCPServer = MCPServer(
         settings.server_name,
         title="Lorebase",
@@ -96,7 +97,7 @@ def create_server(settings: HeraldSettings, keeper: KeeperHttp) -> MCPServer:
         version=__version__,
         log_level=settings.log_level,
     )
-    tools = LorebaseTools(keeper, settings)
+    tools = LorebaseTools(clients, settings)
     credential = Credentials(settings)
     hood = settings.neighborhood
     pack = settings.context
@@ -539,21 +540,18 @@ def transport_security(settings: HeraldSettings) -> TransportSecuritySettings | 
     )
 
 
-async def serve(settings: HeraldSettings, keeper: KeeperHttp) -> None:
+async def serve(settings: HeraldSettings, clients: KeeperClients) -> None:
     """Run the configured transport until it stops."""
-    server = create_server(settings, keeper)
-    try:
-        if settings.transport == "stdio":
-            await server.run_stdio_async()
-        else:
-            http = settings.http
-            await server.run_streamable_http_async(
-                host=http.host,
-                port=http.port,
-                streamable_http_path=http.path,
-                json_response=http.json_response,
-                stateless_http=http.stateless,
-                transport_security=transport_security(settings),
-            )
-    finally:
-        await keeper.aclose()
+    server = create_server(settings, clients)
+    if settings.transport == "stdio":
+        await server.run_stdio_async()
+        return
+    http = settings.http
+    await server.run_streamable_http_async(
+        host=http.host,
+        port=http.port,
+        streamable_http_path=http.path,
+        json_response=http.json_response,
+        stateless_http=http.stateless,
+        transport_security=transport_security(settings),
+    )

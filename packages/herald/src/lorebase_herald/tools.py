@@ -1,35 +1,34 @@
 """What each Herald tool does: Keeper calls with the agent's credential, then a compact view.
 
 The functions here know nothing about MCP; `server.py` registers them as tools with their
-schemas and descriptions. Read tools only read Keeper's REST API: no tool calls a model.
+schemas and descriptions. Read tools only read Keeper's REST API through the typed Lorebase
+client: no tool calls a model.
 
 `lorebase_context` and `lorebase_explain` use Keeper's agent endpoints (`POST .../context`,
-`GET .../records/{key}/explain`). Against a Keeper without them (the route itself is missing)
-they fall back to composing the answer from the read endpoints.
+`GET .../records/{key}/explain`).
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
+from lorebase_client import ApiError, AsyncLorebaseClient, LorebaseConnectionError
+from lorebase_client import models as m
 from lorebase_herald import views
-from lorebase_herald.context_pack import ContextPack
-from lorebase_herald.errors import invalid_input, tool_error
-from lorebase_herald.keeper_http import (
-    KeeperError,
-    KeeperHttp,
-    KeeperUnavailableError,
-    route_missing,
-    segment,
+from lorebase_herald.errors import (
+    invalid_input,
+    invalid_request,
+    tool_error,
+    unexpected_answer,
 )
-from lorebase_herald.render import render
+from lorebase_herald.keeper import KeeperClients
+from lorebase_herald.render import as_json, render
 from lorebase_herald.settings import HeraldSettings
-
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -48,15 +47,15 @@ class RecordRef:
             )
         return cls(kind, key)
 
-    def address(self) -> dict[str, str]:
-        return {"kind": self.kind, "key": self.key}
+    def address(self) -> m.RecordAddress:
+        return m.RecordAddress(kind=self.kind, key=self.key)
 
 
 class LorebaseTools:
-    """The tool implementations over one Keeper client."""
+    """The tool implementations over the clients of Keeper."""
 
-    def __init__(self, keeper: KeeperHttp, settings: HeraldSettings) -> None:
-        self.keeper = keeper
+    def __init__(self, clients: KeeperClients, settings: HeraldSettings) -> None:
+        self.clients = clients
         self.settings = settings
         self.output = settings.output
 
@@ -78,62 +77,24 @@ class LorebaseTools:
     def fmt(self, fmt: str | None) -> str:
         return fmt or self.output.default_format
 
-    async def call(self, request: Awaitable[T]) -> T:
-        """Await a Keeper call, turning failures into tool errors the model can act on."""
+    @asynccontextmanager
+    async def session(self, credential: str | None) -> AsyncIterator[AsyncLorebaseClient]:
+        """The client of one tool call, with its failures turned into tool errors the model can
+        act on."""
         try:
-            return await request
-        except (KeeperError, KeeperUnavailableError) as error:
+            async with self.clients.open(credential) as client:
+                yield client
+        except (ApiError, LorebaseConnectionError) as error:
             raise tool_error(error, max_issues=self.output.max_issues) from None
+        except ValidationError as error:
+            raise unexpected_answer(error) from None
 
-    async def newer(self, request: Callable[[], Awaitable[T]]) -> T | None:
-        """`request()` to an endpoint older Keepers lack; None when this Keeper lacks it."""
+    def request[M: BaseModel](self, model: type[M], **members: Any) -> M:
+        """A request model, its rejection reported as a tool error before anything is sent."""
         try:
-            return await request()
-        except KeeperError as error:
-            if route_missing(error):
-                return None
-            raise tool_error(error, max_issues=self.output.max_issues) from None
-        except KeeperUnavailableError as error:
-            raise tool_error(error, max_issues=self.output.max_issues) from None
-
-    def path(self, domain: str, *parts: str) -> str:
-        return KeeperHttp.domain_path(domain, *parts)
-
-    async def fetch_schema(self, credential: str | None, domain: str, branch: str | None) -> Any:
-        return await self.keeper.get(
-            self.path(domain, "schema"),
-            credential=credential,
-            params={"branch": branch, "format": "json"},
-        )
-
-    async def fetch_record(
-        self,
-        credential: str | None,
-        domain: str,
-        record: RecordRef,
-        *,
-        branch: str | None,
-        at: str | None = None,
-        links: bool = False,
-        lineage: bool = False,
-    ) -> Any:
-        return await self.keeper.get(
-            self.path(domain, "kinds", segment(record.kind), "records", segment(record.key)),
-            credential=credential,
-            params={"branch": branch, "at": at, "links": links, "lineage": lineage},
-        )
-
-    async def fetch_neighborhood(
-        self, credential: str | None, domain: str, body: Mapping[str, Any]
-    ) -> Any:
-        return await self.keeper.post(
-            self.path(domain, "neighborhood"), credential=credential, body=body
-        )
-
-    async def fetch_search(
-        self, credential: str | None, domain: str, body: Mapping[str, Any]
-    ) -> Any:
-        return await self.keeper.post(self.path(domain, "search"), credential=credential, body=body)
+            return model(**members)
+        except ValidationError as error:
+            raise invalid_request(error, max_issues=self.output.max_issues) from None
 
     # Tools -----------------------------------------------------------------------------------
 
@@ -148,7 +109,8 @@ class LorebaseTools:
         fmt: str | None,
     ) -> str:
         name = self.domain(domain)
-        document = await self.call(self.fetch_schema(credential, name, self.branch(branch)))
+        async with self.session(credential) as client:
+            document = await client.schema.get(name, branch=self.branch(branch))
         view = views.schema_view(document, kinds=kinds, detail=detail)
         text = views.schema_text(view, detail=detail, output=self.output)
         return render(view, text, self.fmt(fmt), self.output)
@@ -165,19 +127,19 @@ class LorebaseTools:
         fmt: str | None,
     ) -> str:
         target = RecordRef.parse(record)
-        body = await self.call(
-            self.fetch_record(
-                credential,
-                self.domain(domain),
-                target,
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.records.get(
+                name,
+                target.kind,
+                target.key,
                 branch=self.branch(branch),
                 at=at,
                 links=links and at is None,
             )
-        )
-        view = views.record_view(body["record"])
-        view["revision"] = body.get("revision")
-        text = views.record_text(view, body.get("revision"), self.output)
+        view = views.record_view(found.record)
+        view["revision"] = found.revision
+        text = views.record_text(view, found.revision, self.output)
         return render(view, text, self.fmt(fmt), self.output)
 
     async def query(
@@ -200,10 +162,10 @@ class LorebaseTools:
             body["branch"] = branch
         if at:
             body["at"] = at
+        request = self.request(m.QueryRequest, **body)
         name = self.domain(domain)
-        found = await self.call(
-            self.keeper.post(self.path(name, "query"), credential=credential, body=body)
-        )
+        async with self.session(credential) as client:
+            found = await client.records.query(name, request)
         view = views.page_view(found, self.output)
         return render(view, views.page_text(view, self.output), self.fmt(fmt), self.output)
 
@@ -226,19 +188,19 @@ class LorebaseTools:
                 "give `query` text (lexical search) or a `query_vector`",
                 "pass the words to look for in `query`",
             )
-        body: dict[str, Any] = {}
-        if query:
-            body["q"] = query
-        if query_vector:
-            body["query_vector"] = list(query_vector)
-        else:
-            body["mode"] = "lexical"
-        for name, value in (("kinds", kinds), ("where", where), ("limit", limit)):
-            if value:
-                body[name] = value
-        if branch := self.branch(branch):
-            body["branch"] = branch
-        found = await self.call(self.fetch_search(credential, self.domain(domain), body))
+        request = self.request(
+            m.SearchRequest,
+            q=query or None,
+            query_vector=list(query_vector) if query_vector else None,
+            mode=None if query_vector else "lexical",
+            kinds=list(kinds) if kinds else None,
+            where=dict(where) if where else None,
+            limit=limit or None,
+            branch=self.branch(branch),
+        )
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.records.search(name, request)
         view = views.search_view(found, self.output)
         return render(view, views.search_text(view, self.output), self.fmt(fmt), self.output)
 
@@ -256,18 +218,18 @@ class LorebaseTools:
         branch: str | None,
         fmt: str | None,
     ) -> str:
-        body: dict[str, Any] = {
-            "seeds": [RecordRef.parse(s).address() for s in seeds],
-            "depth": depth,
-            "max_nodes": max_nodes or self.settings.neighborhood.default_max_nodes,
-        }
-        if relations:
-            body["relations"] = list(relations)
-        if max_edges:
-            body["max_edges"] = max_edges
-        if branch := self.branch(branch):
-            body["branch"] = branch
-        found = await self.call(self.fetch_neighborhood(credential, self.domain(domain), body))
+        request = self.request(
+            m.NeighborhoodRequest,
+            seeds=[RecordRef.parse(s).address() for s in seeds],
+            depth=depth,
+            max_nodes=max_nodes or self.settings.neighborhood.default_max_nodes,
+            relations=list(relations) if relations else None,
+            max_edges=max_edges or None,
+            branch=self.branch(branch),
+        )
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.records.neighborhood(name, request)
         view = views.neighborhood_view(found, self.output, values=values)
         text = views.neighborhood_text(view, self.output)
         return render(view, text, self.fmt(fmt), self.output)
@@ -289,113 +251,52 @@ class LorebaseTools:
         name = self.domain(domain)
         branch = self.branch(branch)
         seeds = [RecordRef.parse(r) for r in records or ()]
-        found_by: str | None = None
-        if not seeds:
-            if not question:
-                raise invalid_input(
-                    "seeds-required",
-                    "give `records` (Kind/key refs) or a `question`",
-                    "name the Records the task is about, or describe it in `question`",
-                )
-            body: dict[str, Any] = {
-                "q": question,
-                "mode": "lexical",
-                "limit": settings.search_seeds,
-            }
-            if branch:
-                body["branch"] = branch
-            hits = await self.call(self.fetch_search(credential, name, body))
-            seeds = [RecordRef(hit["kind"], hit["key"]) for hit in hits.get("items") or []]
-            found_by = "search"
+        if not seeds and not question:
+            raise invalid_input(
+                "seeds-required",
+                "give `records` (Kind/key refs) or a `question`",
+                "name the Records the task is about, or describe it in `question`",
+            )
+        as_json_pack = self.fmt(fmt) == "json"
+        async with self.session(credential) as client:
             if not seeds:
-                return (
-                    f"no Records match {question!r}\n"
-                    "next: try other words with lorebase_search, or read lorebase_schema"
+                hits = await client.records.search(
+                    name,
+                    self.request(
+                        m.SearchRequest,
+                        q=question,
+                        mode="lexical",
+                        limit=settings.search_seeds,
+                        branch=branch,
+                    ),
                 )
-        seeds = seeds[: settings.max_seeds]
-        budget = min(token_budget or settings.token_budget, settings.max_token_budget)
-        as_json = self.fmt(fmt) == "json"
-        request: dict[str, Any] = {
-            "refs": [f"{s.kind}/{s.key}" for s in seeds],
-            "depth": depth or settings.depth,
-            "budget_tokens": budget,
-            "format": "json" if as_json else "markdown",
-        }
-        if relations:
-            request["relations"] = list(relations)
-        if branch:
-            request["branch"] = branch
-        pack = await self.newer(
-            lambda: self.keeper.post_text(
-                self.path(name, "context"), credential=credential, body=request
+                seeds = [RecordRef(hit.kind, hit.key) for hit in hits.items]
+                if not seeds:
+                    return (
+                        f"no Records match {question!r}\n"
+                        "next: try other words with lorebase_search, or read lorebase_schema"
+                    )
+                found_by: str | None = "search"
+            else:
+                found_by = None
+            request = self.request(
+                m.ContextRequest,
+                refs=[f"{s.kind}/{s.key}" for s in seeds[: settings.max_seeds]],
+                depth=depth or settings.depth,
+                budget_tokens=min(token_budget or settings.token_budget, settings.max_token_budget),
+                relations=list(relations) if relations else None,
+                branch=branch,
             )
-        )
-        if pack is None:
-            return await self._composed_context(
-                credential,
-                name,
-                branch,
-                seeds,
-                depth=depth,
-                relations=relations,
-                budget=budget,
-                found_by=found_by,
-                question=question,
-                as_json=as_json,
-            )
+            if as_json_pack:
+                pack = await client.agents.context(name, request)
+                document = pack.model_dump(mode="json", by_alias=True, exclude_unset=True)
+                if found_by is not None:
+                    document.update(found_by=found_by, question=question)
+                return as_json(document)
+            markdown = await client.agents.context_markdown(name, request)
         if found_by is None:
-            return pack
-        if as_json:
-            document = json.loads(pack)
-            document.update(found_by=found_by, question=question)
-            return json.dumps(document, separators=(",", ":"), ensure_ascii=False)
-        return f"seeds found by {found_by} for {question!r}\n{pack}"
-
-    async def _composed_context(
-        self,
-        credential: str | None,
-        name: str,
-        branch: str | None,
-        seeds: Sequence[RecordRef],
-        *,
-        depth: int | None,
-        relations: Sequence[str] | None,
-        budget: int,
-        found_by: str | None,
-        question: str | None,
-        as_json: bool,
-    ) -> str:
-        """A context pack built here from the read endpoints, for Keepers without `/context`."""
-        settings = self.settings.context
-        hood: dict[str, Any] = {
-            "seeds": [s.address() for s in seeds],
-            "depth": depth or settings.depth,
-            "max_nodes": settings.max_nodes,
-            "max_edges": settings.max_edges,
-        }
-        if relations:
-            hood["relations"] = list(relations)
-        if branch:
-            hood["branch"] = branch
-        schema, neighborhood, *seed_bodies = await self.call(
-            asyncio.gather(
-                self.fetch_schema(credential, name, branch),
-                self.fetch_neighborhood(credential, name, hood),
-                *(self.fetch_record(credential, name, s, branch=branch, links=True) for s in seeds),
-            )
-        )
-        pack = ContextPack(
-            schema=schema,
-            neighborhood=neighborhood,
-            seeds=[body["record"] for body in seed_bodies],
-            found_by=found_by,
-            question=question,
-            output=self.output,
-        )
-        max_chars = int(budget * settings.chars_per_token)
-        if as_json:
-            return pack.json(max_chars)
-        return pack.text(max_chars)
+            return markdown
+        return f"seeds found by {found_by} for {question!r}\n{markdown}"
 
     async def explain(
         self,
@@ -408,29 +309,14 @@ class LorebaseTools:
         fmt: str | None,
     ) -> str:
         target = RecordRef.parse(record)
-        name, branch = self.domain(domain), self.branch(branch)
-        explained = await self.newer(
-            lambda: self.keeper.get(
-                self.path(
-                    name, "kinds", segment(target.kind), "records", segment(target.key), "explain"
-                ),
-                credential=credential,
-                params={"branch": branch, "format": "json"},
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            explained = await client.agents.explain(
+                name, target.kind, target.key, branch=self.branch(branch)
             )
-        )
-        if explained is not None:
-            view = views.explain_view(explained, attributes, self.output)
-            text = views.explain_text(view, self.output)
-            return render(view, text, self.fmt(fmt), self.output)
-        body = await self.call(
-            self.fetch_record(credential, name, target, branch=branch, lineage=True)
-        )
-        view = views.lineage_view(body, attributes, self.output)
-        return render(view, views.lineage_text(view, self.output), self.fmt(fmt), self.output)
-
-    async def default_branch(self, credential: str | None, domain: str) -> str:
-        found = await self.call(self.keeper.get(self.path(domain), credential=credential))
-        return str(found["default_branch"])
+        view = views.explain_view(explained, attributes, self.output)
+        text = views.explain_text(view, self.output)
+        return render(view, text, self.fmt(fmt), self.output)
 
     async def changes(
         self,
@@ -446,37 +332,33 @@ class LorebaseTools:
         fmt: str | None,
     ) -> str:
         name = self.domain(domain)
-        branch_name = self.branch(branch) or await self.default_branch(credential, name)
-        path = self.path(name, "branches", segment(branch_name), "log")
         page_size = min(self.settings.changes.page_size, max(limit, 1))
         items: list[dict[str, Any]] = []
         reached = False
         head: str | None = None
         next_cursor = cursor
-        for _ in range(self.settings.changes.max_pages):
-            page = await self.call(
-                self.keeper.get(
-                    path,
-                    credential=credential,
-                    params={
-                        "limit": page_size,
-                        "cursor": next_cursor,
-                        "author": author,
-                        "origin_type": origin_type,
-                    },
+        async with self.session(credential) as client:
+            branch_name = self.branch(branch) or (await client.domains.get(name)).default_branch
+            for _ in range(self.settings.changes.max_pages):
+                page = await client.revisions.log(
+                    name,
+                    branch_name,
+                    author=author,
+                    origin_type=origin_type,
+                    limit=page_size,
+                    cursor=next_cursor,
                 )
-            )
-            head = head or page.get("head")
-            next_cursor = page.get("next_cursor")
-            for entry in page.get("items") or []:
-                if since and _same_revision(entry["id"], since):
-                    reached = True
+                head = head or page.head
+                next_cursor = page.next_cursor
+                for entry in page.items:
+                    if since and _same_revision(entry.id, since):
+                        reached = True
+                        break
+                    items.append(views.log_entry(entry))
+                    if len(items) >= limit:
+                        break
+                if reached or len(items) >= limit or not next_cursor:
                     break
-                items.append(views.log_entry(entry))
-                if len(items) >= limit:
-                    break
-            if reached or len(items) >= limit or not next_cursor:
-                break
         view: dict[str, Any] = {
             "branch": branch_name,
             "head": head,
@@ -501,20 +383,11 @@ class LorebaseTools:
         domain: str | None,
         fmt: str | None,
     ) -> str:
-        body = await self.call(
-            self.keeper.get(
-                self.path(self.domain(domain), "diff"),
-                credential=credential,
-                params={
-                    "from": from_,
-                    "to": to,
-                    "kinds": list(kinds) if kinds else None,
-                    "relations": list(relations) if relations else None,
-                    "limit": limit,
-                    "cursor": cursor,
-                },
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            body = await client.revisions.diff(
+                name, from_, to, kinds=kinds, relations=relations, limit=limit, cursor=cursor
             )
-        )
         view = views.diff_view(body, self.output)
         return render(view, views.diff_text(view, self.output), self.fmt(fmt), self.output)
 
@@ -532,17 +405,18 @@ class LorebaseTools:
         branch: str | None,
         fmt: str | None,
     ) -> str:
-        body: dict[str, Any] = {"parameters": dict(parameters), "dry_run": dry_run}
-        for key, value in (
-            ("branch", self.branch(branch)),
-            ("expected_head", expected_head),
-            ("idempotency_key", idempotency_key),
-            ("message", message),
-        ):
-            if value:
-                body[key] = value
-        path = self.path(self.domain(domain), "operations", segment(operation), "execute")
-        found = await self.call(self.keeper.post(path, credential=credential, body=body))
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.operations.execute(
+                name,
+                operation,
+                parameters,
+                branch=self.branch(branch),
+                dry_run=dry_run,
+                expected_head=expected_head or None,
+                message=message or None,
+                idempotency_key=idempotency_key or None,
+            )
         view = views.execution_view(found, self.output)
         return render(view, views.execution_text(view, self.output), self.fmt(fmt), self.output)
 
@@ -555,13 +429,9 @@ class LorebaseTools:
         domain: str | None,
         fmt: str | None,
     ) -> str:
-        body = await self.call(
-            self.keeper.get(
-                self.path(self.domain(domain), "branches"),
-                credential=credential,
-                params={"limit": limit, "cursor": cursor},
-            )
-        )
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            body = await client.branches.list(name, limit=limit, cursor=cursor)
         view = views.branches_view(body, self.output)
         return render(view, views.branches_text(view), self.fmt(fmt), self.output)
 

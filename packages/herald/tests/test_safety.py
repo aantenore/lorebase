@@ -10,15 +10,16 @@ import httpx
 import pytest
 from mcp.types import TextContent
 
+from lorebase_client import LorebaseConnectionError, RateLimitedError, ServerError
 from lorebase_herald.errors import tool_error
-from lorebase_herald.keeper_http import KeeperError, KeeperHttp, KeeperUnavailableError
+from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.server import Credentials
 from lorebase_herald.settings import herald_settings
 from lorebase_platform.settings import CONFIG_ENV_VAR, load_settings
 
 from .conftest import AGENT_KEY, Connect
 from .conftest import herald_settings as make_settings
-from .fake_keeper import API, REVISION, FakeKeeper, problem
+from .fake_keeper import API, REVISION, SCHEMA, FakeKeeper, problem
 
 EXECUTE = f"{API}/operations/flag_supplier_risk/execute"
 
@@ -130,13 +131,55 @@ async def test_request_validation_errors_use_pointers(connect: Connect, fake: Fa
 
 def test_rate_limits_and_server_errors_suggest_retrying() -> None:
     limited = tool_error(
-        KeeperError(429, "rate-limited", "Too many requests", retry_after="7"), max_issues=5
+        RateLimitedError("Too many requests", status=429, code="rate-limited", retry_after=7.0),
+        max_issues=5,
     )
     assert str(limited).endswith("next: retry after 7 s")
-    broken = tool_error(KeeperError(500, "internal-error", "Internal server error"), max_issues=5)
+    broken = tool_error(
+        ServerError("Internal server error", status=500, code="internal-error"), max_issues=5
+    )
     assert str(broken).endswith("next: retry later")
-    down = tool_error(KeeperUnavailableError("Keeper is unreachable"), max_issues=5)
+    down = tool_error(LorebaseConnectionError("cannot reach the server"), max_issues=5)
     assert str(down).startswith("[keeper-unavailable]")
+
+
+async def test_throttled_calls_are_retried_before_they_fail(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    answers = iter([problem(429, "rate-limited", None), httpx.Response(200, json=SCHEMA)])
+    fake.on("GET", f"{API}/schema", lambda _: next(answers))
+    keeper = {"base_url": "http://keeper.test", "api_key": AGENT_KEY}
+    retrying = {"max_retries": 1, "retry_max_wait_s": 0.01}
+    async with connect(keeper={**keeper, **retrying}) as client:
+        result = await client.call_tool("lorebase_schema", {})
+    assert not result.is_error
+    assert len(fake.requests) == 2
+    fake.requests.clear()
+    fake.on("GET", f"{API}/schema", problem(429, "rate-limited", None))
+    message = await _error(connect, "lorebase_schema", {}, keeper={**keeper, **retrying})
+    assert message.endswith("next: retry later")
+    assert len(fake.requests) == 2
+
+
+async def test_a_query_the_client_models_refuse_is_not_sent(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    message = await _error(
+        connect, "lorebase_query", {"query": {"kind": "Part", "group_by": "category"}}
+    )
+    assert "[validation-failed] the request is not valid" in message
+    assert "- group_by: Extra inputs are not permitted [extra_forbidden]" in message
+    assert message.endswith("next: fix the listed members and call again")
+    assert fake.requests == []
+
+
+async def test_an_answer_that_does_not_fit_the_models_is_a_tool_error(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on("GET", f"{API}/schema", {"domain": "supply"})
+    message = await _error(connect, "lorebase_schema", {})
+    assert "[keeper-response-invalid]" in message
+    assert message.endswith("next: use matching Herald and Keeper versions")
 
 
 async def test_unreachable_keeper_is_a_tool_error(connect: Connect, fake: FakeKeeper) -> None:
@@ -148,6 +191,17 @@ async def test_unreachable_keeper_is_a_tool_error(connect: Connect, fake: FakeKe
     assert message.endswith(
         "[keeper-unavailable] Keeper is unreachable (ConnectError). next: retry later"
     )
+
+
+async def test_a_keeper_that_does_not_answer_in_time_is_a_tool_error(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    def stall(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    fake.on("GET", f"{API}/schema", stall)
+    message = await _error(connect, "lorebase_schema", {})
+    assert message.endswith("[keeper-unavailable] Keeper did not answer in time. next: retry later")
 
 
 async def test_non_problem_errors_keep_the_status(connect: Connect, fake: FakeKeeper) -> None:
@@ -193,17 +247,24 @@ async def test_every_call_carries_the_agent_key(connect: Connect, fake: FakeKeep
     assert "do not retry" in message
 
 
-async def test_keeper_http_forwards_bearer_values_as_they_are() -> None:
+async def test_each_request_opens_a_client_with_its_own_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOREBASE_API_KEY", "lbk_ambient_key")
     fake = FakeKeeper()
     fake.on("GET", "/api/v1/domains", {"items": []})
-    keeper = KeeperHttp(make_settings().keeper, transport=fake.transport())
-    try:
-        await keeper.get("/domains", credential="Bearer abc")
+    clients = KeeperClients(make_settings().keeper, transport=fake.transport())
+    async with clients.open("Bearer abc") as first:
+        await first.domains.list()
         assert fake.last().headers["authorization"] == "Bearer abc"
-        await keeper.get("/domains", credential=None)
-        assert "authorization" not in fake.last().headers
-    finally:
-        await keeper.aclose()
+    async with clients.open("lbk_bare_key") as second:
+        await second.domains.list()
+        assert fake.last().headers["authorization"] == "Bearer lbk_bare_key"
+    async with clients.open(None) as third:
+        await third.domains.list()
+        assert "authorization" not in fake.last().headers  # nor the ambient key
+    assert first is not second is not third
+    assert fake.last().headers["user-agent"] == "lorebase-herald"
 
 
 # Configuration -------------------------------------------------------------------------------
