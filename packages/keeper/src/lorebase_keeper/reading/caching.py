@@ -141,6 +141,22 @@ def _matches(request: Request, tag: str) -> bool:
     return "*" in candidates or tag in candidates or f"W/{tag}" in candidates
 
 
+def not_modified(
+    request: Request,
+    *,
+    domain_id: str,
+    revision: str,
+    headers: Mapping[str, str] | None = None,
+    variant: str = "",
+) -> Response | None:
+    """The 304 answer of a GET read whose `If-None-Match` names its current tag, else `None`."""
+    tag = entity_tag(cache_key(request, domain_id, revision, variant))
+    if not _matches(request, tag):
+        return None
+    common = {"ETag": tag, "Cache-Control": CACHE_CONTROL, **(headers or {})}
+    return Response(status_code=304, headers=common)
+
+
 async def respond(
     request: Request,
     cache: ResponseCache | None,

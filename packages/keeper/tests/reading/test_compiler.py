@@ -28,6 +28,7 @@ from lorebase_keeper.reading.compiler import (
     order_clauses,
     record_columns,
 )
+from lorebase_store.indexes import plan_indexes
 
 SCHEMA = load_schema(
     (Path(__file__).resolve().parents[4] / "examples" / "supply" / "schema.yaml").read_text()
@@ -172,6 +173,55 @@ def test_values_never_enter_the_sql_text() -> None:
     statement = list_statement(plan).compile(dialect=postgresql.dialect())
     assert "DROP" not in str(statement)
     assert any(hostile in json.dumps(v) for v in statement.params.values())
+
+
+INDEXED = Compiler(
+    "supply",
+    "main",
+    text_search_config="simple",
+    indexes=plan_indexes(SCHEMA).by_attribute(),
+)
+
+
+def indexed_sql(where: dict[str, Any]) -> str:
+    """SQL of a Supplier list filtered by `where`, compiled with the per-Attribute indexes and
+    with the literal parameters rendered (as the driver sends them)."""
+    plan = resolve({"kind": "Supplier", "where": where})
+    r = INDEXED.records("r")
+    assert plan.where is not None
+    statement = select(r.c.key).where(
+        INDEXED.record_scope(r, plan.target), INDEXED.condition(r, plan.where, plan.target)
+    )
+    compiled = statement.compile(
+        dialect=postgresql.dialect(), compile_kwargs={"render_postcompile": True}
+    )
+    return str(compiled)
+
+
+def test_indexed_attributes_repeat_the_partial_index() -> None:
+    supplier = SCHEMA.kind_by_api_name("Supplier")
+    assert supplier is not None
+    risk = next(a for a in supplier.attributes.values() if a.api_name == "risk_score")
+    country = next(a for a in supplier.attributes.values() if a.api_name == "country")
+    predicate = f"r.domain_id = 'supply' AND r.branch = 'main' AND r.kind_id = '{supplier.id}'"
+
+    ranged = indexed_sql({"attr": "risk_score", "op": "gte", "value": 50})
+    assert predicate in ranged
+    assert f"CAST(r.values ->> '{risk.id}' AS BIGINT) >= CAST(" in ranged
+    between = indexed_sql({"attr": "risk_score", "op": "between", "value": [10, 80]})
+    assert f"CAST(r.values ->> '{risk.id}' AS BIGINT) BETWEEN" in between
+
+    equal = indexed_sql({"attr": "country", "op": "eq", "value": "PL"})
+    assert predicate in equal
+    assert f"(r.values ->> '{country.id}') IS NOT NULL" in equal, "absent compares false"
+    assert "@>" not in equal
+    listed = indexed_sql({"attr": "country", "op": "in", "value": ["PL", "DE"]})
+    assert f"(r.values ->> '{country.id}') IN (" in listed
+
+    # Not indexed: the generic comparison with bound parameters, no literals.
+    other = indexed_sql({"attr": "city", "op": "eq", "value": "Gdansk"})
+    assert "'supply'" not in other
+    assert "@>" in other
 
 
 @pytest.mark.parametrize(

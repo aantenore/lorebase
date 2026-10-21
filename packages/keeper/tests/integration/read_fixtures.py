@@ -66,12 +66,16 @@ async def owner_session(url: str) -> AsyncIterator[AsyncSession]:
 def seeded_database(server_url: str, seed: Any) -> Iterator[Seeded]:
     """Scratch database, migrated, seeded by `seed(session, runtime, clock, seeded)`."""
     with testing.scratch_database(server_url) as url:
-        migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
         role = f"lorebase_read_{uuid.uuid4().hex[:8]}"
+        asyncio.run(_execute(url, f"CREATE ROLE {role} LOGIN PASSWORD '{ROLE_PASSWORD}'"))
+        # As in production: the role exists first and the migration grants it the read
+        # functions (database.application_role).
+        migrations.upgrade(
+            database=DatabaseSettings(application_role=role), store=StoreSettings(), url=url
+        )
         asyncio.run(
             _execute(
                 url,
-                f"CREATE ROLE {role} LOGIN PASSWORD '{ROLE_PASSWORD}'",
                 f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}",
                 f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {role}",
             )

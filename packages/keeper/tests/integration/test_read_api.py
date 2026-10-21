@@ -10,15 +10,20 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.query import Query as DslQuery
+from lorebase_core.query import QueryLimits, resolve_query
+from lorebase_keeper.reading.compiler import Compiler
 from lorebase_keeper.reading.settings import SearchSettings
+from lorebase_store.indexes import plan_indexes
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 
-from .read_fixtures import Seeded, keeper, seeded_database
+from .read_fixtures import Seeded, keeper, owner_session, seeded_database
 from .supply import DOMAIN, Clock, commit_changes, load_supply, record_change, rows
 
 pytestmark = pytest.mark.integration
@@ -158,6 +163,13 @@ async def test_get_record_with_links_lineage_and_etag(
     again = await http.get(path, params={"links": True}, headers={"If-None-Match": etag})
     assert again.status_code == 304
     assert again.headers["ETag"] == etag
+    assert again.headers["Lorebase-Revision"] == seeded.revisions["updated"]
+    at_head = await http.get(
+        path,
+        params={"links": True, "branch": "main"},
+        headers={"If-None-Match": etag},
+    )
+    assert at_head.status_code == 200, "another query string, another tag"
     cached = await http.get(path, params={"links": True})
     assert cached.status_code == 200
     assert cached.json() == body
@@ -559,6 +571,38 @@ async def test_traverse_and_neighborhood(http: httpx.AsyncClient) -> None:
     )
     assert len(capped["nodes"]) == 3
     assert capped["truncated"]
+
+
+async def test_indexed_predicates_read_through_the_partial_index(seeded: Seeded) -> None:
+    """Compiled comparisons on an indexed Attribute repeat its partial index, so a role not
+    subject to RLS reads them through it (sequential scans off: usable, not just chosen)."""
+    plan = resolve_query(
+        DslQuery.model_validate(
+            {"kind": "Supplier", "where": {"attr": "risk_score", "op": "gte", "value": 50}}
+        ),
+        seeded.schema,
+        QueryLimits(),
+    )
+    assert plan.where is not None
+    compiler = Compiler(
+        DOMAIN,
+        "main",
+        text_search_config="simple",
+        indexes=plan_indexes(seeded.schema).by_attribute(),
+    )
+    r = compiler.records("r")
+    statement = select(r.c.key).where(
+        compiler.record_scope(r, plan.target), compiler.condition(r, plan.where, plan.target)
+    )
+    sql = str(
+        statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    )
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        await session.execute(text("SET LOCAL enable_seqscan = off"))
+        connection = await session.connection()
+        raw = (await connection.exec_driver_sql(f"EXPLAIN (FORMAT JSON) {sql}")).scalar_one()
+    plan_text = json.dumps(raw)
+    assert "mat_records_attr_" in plan_text, plan_text
 
 
 # Search -----------------------------------------------------------------------------------
