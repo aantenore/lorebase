@@ -4,6 +4,13 @@ Importing the package registers the `inference` settings section (with the `LLM_
 aliases) with `lorebase_platform`.
 """
 
+from lorebase_inference.errors import (
+    DimensionMismatchError,
+    EndpointError,
+    InferenceError,
+    InvalidOutputError,
+    ProviderUnavailableError,
+)
 from lorebase_inference.interfaces import (
     ChatModel,
     ChatOptions,
@@ -12,8 +19,11 @@ from lorebase_inference.interfaces import (
     JsonSchema,
     Label,
     Message,
+    RelationExtractor,
+    RelationLabel,
     Span,
     SpanExtractor,
+    SpanRelation,
     Usage,
 )
 from lorebase_inference.registry import (
@@ -21,6 +31,7 @@ from lorebase_inference.registry import (
     UnknownProviderError,
     create_chat_model,
     create_embedding_model,
+    create_relation_extractor,
     create_span_extractor,
     validate_providers,
 )
@@ -32,18 +43,27 @@ __all__ = [
     "ChatModel",
     "ChatOptions",
     "ChatResult",
+    "DimensionMismatchError",
     "EmbeddingModel",
+    "EndpointError",
+    "InferenceError",
     "InferenceSettings",
+    "InvalidOutputError",
     "JsonSchema",
     "Label",
     "Message",
     "ProviderRegistry",
+    "ProviderUnavailableError",
+    "RelationExtractor",
+    "RelationLabel",
     "Span",
     "SpanExtractor",
+    "SpanRelation",
     "UnknownProviderError",
     "Usage",
     "create_chat_model",
     "create_embedding_model",
+    "create_relation_extractor",
     "create_span_extractor",
     "inference_settings",
     "validate_providers",
