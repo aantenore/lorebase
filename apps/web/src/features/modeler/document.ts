@@ -263,6 +263,11 @@ function sourceToDocument(
   if (source.status !== undefined) out['status'] = source.status;
   out['type'] = source.type;
   out['connection'] = source.connection;
+  put(out, 'table', source.table);
+  put(out, 'query', source.query);
+  put(out, 'records_path', source.records_path);
+  put(out, 'flatten_separator', source.flatten_separator);
+  put(out, 'http', source.http);
   out['target_kind'] = kindName(source.target_kind);
   out['key_mapping'] = source.key_mapping;
   out['attribute_mapping'] = Object.fromEntries(
@@ -281,6 +286,9 @@ function sourceToDocument(
   if (source.schedule !== null) out['schedule'] = source.schedule;
   if (Object.keys(source.target_branch_policy).length > 0) {
     out['target_branch_policy'] = source.target_branch_policy;
+  }
+  for (const [key, value] of Object.entries(source.extra ?? {})) {
+    if (!(key in out)) out[key] = value;
   }
   return out;
 }
@@ -935,6 +943,31 @@ function derivationFromDocument(name: string, value: unknown, ctx: ReadContext):
   };
 }
 
+/** Keys of a Source mapping that `sourceFromDocument` reads; any other key goes to `extra`. */
+const SOURCE_DOCUMENT_KEYS = [
+  'id',
+  'display_name',
+  'description',
+  'status',
+  'type',
+  'connection',
+  'table',
+  'query',
+  'records_path',
+  'flatten_separator',
+  'http',
+  'target_kind',
+  'key_mapping',
+  'attribute_mapping',
+  'relation_mapping',
+  'scope_filter',
+  'sync_mode',
+  'watermark_column',
+  'tombstone_column',
+  'schedule',
+  'target_branch_policy',
+];
+
 function sourceFromDocument(
   name: string,
   value: unknown,
@@ -1001,6 +1034,17 @@ function sourceFromDocument(
     `${path}/target_branch_policy`,
   );
   const mergePolicy = reader.optionalString(policy, 'merge_policy', `${path}/target_branch_policy`);
+  const table = reader.optionalString(value, 'table', path);
+  const query = reader.optionalString(value, 'query', path);
+  const recordsPath = reader.optionalString(value, 'records_path', path);
+  const separator = reader.optionalString(value, 'flatten_separator', path);
+  const http =
+    value['http'] === undefined || value['http'] === null
+      ? undefined
+      : reader.map(value['http'], `${path}/http`);
+  const extra = Object.fromEntries(
+    Object.entries(value).filter(([key]) => !SOURCE_DOCUMENT_KEYS.includes(key)),
+  );
   return {
     id: ctx.ids.sources.get(name) ?? '',
     api_name: name,
@@ -1011,6 +1055,11 @@ function sourceFromDocument(
     ...(tombstone === null ? {} : { tombstone_column: tombstone }),
     type: reader.string(value, 'type', path, 'csv') as Source['type'],
     connection: reader.string(value, 'connection', path, ''),
+    ...(table === null ? {} : { table }),
+    ...(query === null ? {} : { query }),
+    ...(recordsPath === null ? {} : { records_path: recordsPath }),
+    ...(separator === null ? {} : { flatten_separator: separator }),
+    ...(http === undefined ? {} : { http }),
     target_kind: targetId,
     key_mapping: reader.strings(value['key_mapping'], `${path}/key_mapping`),
     attribute_mapping: attributeMapping,
@@ -1024,6 +1073,7 @@ function sourceFromDocument(
         ? {}
         : { merge_policy: mergePolicy as Source['target_branch_policy']['merge_policy'] }),
     },
+    ...(Object.keys(extra).length === 0 ? {} : { extra }),
   };
 }
 

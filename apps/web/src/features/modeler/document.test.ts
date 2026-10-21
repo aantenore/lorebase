@@ -118,6 +118,61 @@ describe('schema document', () => {
   });
 });
 
+const HTTP_OPTIONS = {
+  headers: { Authorization: 'secret://env/API_TOKEN', Accept: 'application/json' },
+  pagination: { type: 'cursor', cursor_path: 'meta.next', cursor_param: 'after', page_size: 100 },
+  since_param: 'updated_since',
+  max_pages: 20,
+};
+
+describe('source fields beyond the modelled ones', () => {
+  /** The schema with `fields` merged into its first Source. */
+  async function withSourceFields(fields: Record<string, unknown>): Promise<Schema> {
+    const schema = await sample('main');
+    const [first, ...rest] = schema.sources;
+    if (first === undefined) throw new Error('No Source');
+    return { ...schema, sources: [{ ...first, ...fields }, ...rest] };
+  }
+
+  it.each([
+    ['table', { table: 'erp.vendors' }],
+    ['query', { query: 'SELECT id, name FROM vendors' }],
+    ['records_path', { records_path: 'data.items' }],
+    ['flatten_separator', { flatten_separator: '__' }],
+    ['http', { type: 'http_json', http: HTTP_OPTIONS }],
+    ['an unknown key', { extra: { future_option: { nested: [1, 'two', true] }, retries: 3 } }],
+  ])('keeps %s through the document', async (_name, fields) => {
+    const schema = await withSourceFields(fields);
+    const { schema: back, issues } = documentToSchema(schemaToDocument(schema), schema, mint);
+    expect(issues).toEqual([]);
+    expect(back.sources).toEqual(schema.sources);
+    expect(back.sources[0]).toMatchObject(fields);
+  });
+
+  it('keeps the http options deeply unchanged through YAML text', async () => {
+    const schema = await withSourceFields({
+      type: 'http_json',
+      http: HTTP_OPTIONS,
+      extra: { future_option: 'kept' },
+    });
+    const text = dumpSchemaYaml(schemaToDocument(schema));
+    const parsed = parseSchemaYaml(text);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const { schema: back, issues } = documentToSchema(parsed.document, schema, mint);
+    expect(issues).toEqual([]);
+    expect(back.sources[0]?.http).toEqual(HTTP_OPTIONS);
+    expect(back.sources).toEqual(schema.sources);
+  });
+
+  it('never lets an extra key override a modelled one', async () => {
+    const schema = await withSourceFields({ extra: { type: 'csv', connection: 'literal' } });
+    const source = schemaToDocument(schema).sources?.[schema.sources[0]?.api_name ?? ''];
+    expect(source?.['type']).toBe(schema.sources[0]?.type);
+    expect(source?.['connection']).toBe(schema.sources[0]?.connection);
+  });
+});
+
 describe('schema YAML', () => {
   it('reports syntax errors with line and column', () => {
     const parsed = parseSchemaYaml('kinds:\n  Supplier:\n    attributes: [oops\n');

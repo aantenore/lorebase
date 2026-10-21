@@ -311,7 +311,17 @@ export interface Derivation {
   definition: Record<string, unknown>;
 }
 
-export type SourceType = 'postgres_table' | 'postgres_query' | 'csv' | 'parquet' | 'http_json';
+/** Source types Keeper accepts, in the order the Source model lists them. */
+export const SOURCE_TYPES = [
+  'postgres_table',
+  'postgres_query',
+  'csv',
+  'json',
+  'jsonl',
+  'parquet',
+  'http_json',
+] as const;
+export type SourceType = (typeof SOURCE_TYPES)[number];
 export type SyncMode = 'snapshot' | 'incremental';
 export type SourceMergePolicy = 'auto_when_clean' | 'proposal' | 'auto_with_authority';
 
@@ -333,6 +343,16 @@ export interface Source {
   type: SourceType;
   /** Secret reference such as `secret://env/ERP_DSN`; never a literal. */
   connection: string;
+  /** `postgres_table`: the table, optionally schema-qualified. */
+  table?: string;
+  /** `postgres_query`: the read-only `SELECT`. */
+  query?: string;
+  /** `json` and `http_json`: dotted path of the array of records in the document. */
+  records_path?: string;
+  /** File and `http_json` sources: nested objects become `parent<separator>child` columns. */
+  flatten_separator?: string;
+  /** `http_json`: headers, pagination, `since_param`, `max_pages`; kept as Keeper sends it. */
+  http?: Record<string, unknown>;
   target_kind: ElementId;
   key_mapping: string[];
   attribute_mapping: Record<
@@ -345,6 +365,8 @@ export interface Source {
   /** Cron expression, or `null` for manual. */
   schedule: string | null;
   target_branch_policy: { branch_template?: string; merge_policy?: SourceMergePolicy };
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface SearchCapabilities {
