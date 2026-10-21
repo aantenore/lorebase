@@ -18,9 +18,7 @@ describe('Explorer', () => {
   it('searches Records and filters by Kind', async () => {
     const user = userEvent.setup();
     renderApp('/supply/explorer');
-    const box = await screen
-      .findByRole('searchbox')
-      .catch(() => screen.findByLabelText('Search Records'));
+    const box = await screen.findByLabelText('Search Records');
     await user.type(box, 'brevik{Enter}');
 
     const results = await screen.findByRole('table', { name: 'Search results' });

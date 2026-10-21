@@ -1,6 +1,5 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, lazyRouteComponent } from '@tanstack/react-router';
 import { readText } from '@/app/scope';
-import { KindTablePage } from '@/features/explorer/kind-table-page';
 
 export const Route = createFileRoute('/$domain/explorer/$kind/')({
   validateSearch: (
@@ -19,11 +18,8 @@ export const Route = createFileRoute('/$domain/explorer/$kind/')({
           : undefined,
     cursor: readText(raw['cursor']),
   }),
-  component: KindTableRoute,
+  component: lazyRouteComponent(
+    () => import('@/features/explorer/explorer-route'),
+    'KindTableRoute',
+  ),
 });
-
-function KindTableRoute() {
-  const { kind } = Route.useParams();
-  const { sort, dir, cursor } = Route.useSearch();
-  return <KindTablePage kind={kind} search={{ sort, dir, cursor }} />;
-}
