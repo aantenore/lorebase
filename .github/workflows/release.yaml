@@ -156,13 +156,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          sparse-checkout: deploy/helm
+          sparse-checkout: |
+            deploy/helm
+            deploy/observability
       - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
       - name: Lint, then package with the release version
         env:
           CHART: deploy/helm/lorebase
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
+          helm repo add cnpg https://cloudnative-pg.github.io/charts
           helm dependency build "$CHART"
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml"
           mkdir -p chart
