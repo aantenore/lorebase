@@ -26,8 +26,10 @@ stale locks use `store.jobs`, webhook delivery uses `webhooks`, collections use 
 
 In docker compose the `scribe` service runs the backend image with `lorebase-scribe`. It mounts
 `examples/supply/data` read-only at `/data/sources/supply` and points the example CSV Source at
-it, so `POST /api/v1/domains/supply/sources/approved.suppliers/sync` works once the `supply`
-Domain exists (see the [quickstart](quickstart.md)).
+it, so `POST /api/v1/domains/supply/sources/approved.suppliers/sync` (or `lorebase sources sync
+approved.suppliers -d supply`, then `lorebase sources runs approved.suppliers -d supply`) works
+once the `supply` Domain exists (see the [quickstart](quickstart.md)). The runs listing needs a
+Domain-wide `data.read` grant.
 
 ## Job types
 

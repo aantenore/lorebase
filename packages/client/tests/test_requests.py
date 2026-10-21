@@ -935,6 +935,34 @@ def test_webhooks_create_list_delete(http: respx.MockRouter, sleeps: Sleeps) -> 
     assert delete.called
 
 
+def test_sources_sync_and_runs(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    queued = {"job_id": 7, "source": "src_1", "api_name": "erp.parts", "dry_run": True}
+    run = {
+        "id": "srn_1",
+        "source": "src_1",
+        "status": "succeeded",
+        "started_at": "2026-10-01T08:00:00Z",
+        "finished_at": "2026-10-01T08:00:30Z",
+        "stats": {"counts": {"added": 2}},
+        "revision": "aa",
+        "proposal_id": None,
+        "error": None,
+    }
+    sync = http.post("/domains/supply/sources/erp.parts/sync").respond(202, json=queued)
+    runs = http.get("/domains/supply/sources/erp.parts/runs").respond(
+        200, json={"items": [run], "next_cursor": None}
+    )
+    with make(sleeps) as client:
+        job = client.sources.sync("supply", "erp.parts", dry_run=True)
+        page = client.sources.runs("supply", "erp.parts", limit=5)
+        listed = [r.id for r in client.sources.iterate_runs("supply", "erp.parts")]
+    assert job.job_id == 7
+    assert json.loads(sync.calls.last.request.content) == {"dry_run": True}
+    assert page.items[0].stats == {"counts": {"added": 2}}
+    assert runs.calls[0].request.url.params["limit"] == "5"
+    assert listed == ["srn_1"]
+
+
 def test_schema_inference_from_postgres_and_files(http: respx.MockRouter, sleeps: Sleeps) -> None:
     answer = {"domain": "supply", "status": "proposed", "yaml": "kinds: {}\n", "tables": []}
     route = http.post("/domains/supply/schema:infer").respond(200, json=answer)

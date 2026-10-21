@@ -90,6 +90,9 @@ RESPONSES: dict[type[m.Model], str] = {
     m.Webhook: "WebhookOut",
     m.WebhookCreated: "WebhookCreated",
     m.WebhookList: "WebhookList",
+    m.SyncQueued: "SyncQueued",
+    m.SourceRun: "SourceRunOut",
+    m.Page[m.SourceRun]: "Page_SourceRunOut_",
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
     m.DomainCreate: "DomainCreate",
@@ -118,6 +121,7 @@ REQUESTS: dict[type[m.RequestModel], str] = {
     m.ResolveManyIn: "ResolveManyIn",
     m.ContextRequest: "ContextRequest",
     m.CreateWebhook: "CreateWebhook",
+    m.SyncRequest: "SyncRequest",
 }
 # Members the server accepts through a Python-only alias or computes; none today.
 IGNORED: dict[str, set[str]] = {}
@@ -256,6 +260,8 @@ def sample_calls() -> list[Any]:
         ep.create_webhook(d, m.CreateWebhook(url="https://example.test/hook")),
         ep.list_webhooks(d),
         ep.delete_webhook(d, "w"),
+        ep.sync_source(d, "erp.parts", m.SyncRequest()),
+        ep.list_source_runs(d, "erp.parts"),
     ]
 
 

@@ -77,6 +77,7 @@ class AsyncLorebaseClient:
         self.proposals = Proposals(self)
         self.agents = Agents(self)
         self.webhooks = Webhooks(self)
+        self.sources = Sources(self)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -1020,3 +1021,20 @@ class Webhooks(_Resource):
 
     async def delete(self, domain: str, webhook_id: str) -> None:
         await self._c.send(ep.delete_webhook(domain, webhook_id))
+
+
+class Sources(_Resource):
+    async def sync(self, domain: str, source: str, *, dry_run: bool = False) -> m.SyncQueued:
+        """Queue a synchronization of the Source (id or api name) for Scribe."""
+        return await self._c.send(ep.sync_source(domain, source, m.SyncRequest(dry_run=dry_run)))
+
+    async def runs(
+        self, domain: str, source: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> m.Page[m.SourceRun]:
+        """Runs of the Source, newest first (needs a Domain-wide `data.read` grant)."""
+        return await self._c.send(ep.list_source_runs(domain, source, limit=limit, cursor=cursor))
+
+    def iterate_runs(
+        self, domain: str, source: str, *, page_size: int | None = None
+    ) -> AsyncIterator[m.SourceRun]:
+        return self._c.iterate(ep.list_source_runs(domain, source, limit=page_size))

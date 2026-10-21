@@ -935,6 +935,39 @@ def test_apikey_commands(http: respx.MockRouter) -> None:
     assert json.loads(run("apikey", "list", "-d", "supply", "--json").stdout)[0]["id"] == "key_1"
 
 
+# Sources ------------------------------------------------------------------------------------
+
+
+def test_sources_sync_and_runs(http: respx.MockRouter) -> None:
+    sync = http.post("/domains/supply/sources/erp.parts/sync").respond(
+        202, json={"job_id": 7, "source": "src_1", "api_name": "erp.parts", "dry_run": True}
+    )
+    run_row = {
+        "id": "srn_1",
+        "source": "src_1",
+        "status": "failed",
+        "started_at": NOW,
+        "finished_at": NOW,
+        "stats": {},
+        "revision": None,
+        "proposal_id": None,
+        "error": {"message": "too many row errors"},
+    }
+    http.get("/domains/supply/sources/erp.parts/runs").respond(
+        200, json={"items": [run_row], "next_cursor": None}
+    )
+    queued = run("sources", "sync", "erp.parts", "--dry-run", "-d", "supply")
+    assert queued.exit_code == 0, queued.output
+    assert "erp.parts (src_1)" in queued.stdout
+    assert request_bodies(sync) == [{"dry_run": True}]
+    listed = run("sources", "runs", "erp.parts", "-d", "supply")
+    assert listed.exit_code == 0, listed.output
+    assert "srn_1" in listed.stdout
+    assert "failed" in listed.stdout
+    as_json = json.loads(run("sources", "runs", "erp.parts", "-d", "supply", "--json").stdout)
+    assert as_json[0]["error"] == {"message": "too many row errors"}
+
+
 def test_quiet_silences_progress_and_notes(http: respx.MockRouter, tmp_path: Path) -> None:
     http.get("/domains/supply/schema").respond(200, json=SCHEMA_DOC)
     http.post("/domains/supply/operations/import_records/execute").respond(200, json=execution())
