@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
@@ -48,6 +48,7 @@ from .support import (
     DOMAIN,
     IS_PRIMARY,
     LEGAL_NAME,
+    LOCK_WAIT_TIMEOUT_S,
     ORIGIN,
     PART,
     RATING,
@@ -60,13 +61,12 @@ from .support import (
     supplied,
     supplier,
     supplier_kind,
+    wait_for_lock_waiter,
 )
 
 pytestmark = pytest.mark.integration
 
 Sessions = async_sessionmaker[AsyncSession]
-LOCK_WAIT_TIMEOUT_S = 30.0
-LOCK_POLL_INTERVAL_S = 0.02
 
 
 @pytest.fixture
@@ -316,32 +316,6 @@ async def test_stale_expected_head(sessions: Sessions, runtime: StoreRuntime, cl
     assert stale.value.expected == seeded.revision_id
 
 
-async def wait_for_lock_waiter(engine: AsyncEngine, writer: asyncio.Task[CommitResult]) -> None:
-    """Return once a session of this database is queued on an advisory (branch) lock.
-
-    Polls `pg_locks` for an ungranted advisory lock, so that no other wait counts. Fails with
-    the writer's own error when it finished instead of queueing, and after a bounded wait.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + LOCK_WAIT_TIMEOUT_S
-    async with engine.connect() as connection:
-        while loop.time() < deadline:
-            if writer.done():
-                writer.result()  # raises the writer's error
-                raise AssertionError("the second writer finished without waiting on the lock")
-            waiting = await connection.scalar(
-                text(
-                    "SELECT count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.database "
-                    "WHERE l.locktype = 'advisory' AND NOT l.granted "
-                    "AND d.datname = current_database()"
-                )
-            )
-            if waiting:
-                return
-            await asyncio.sleep(LOCK_POLL_INTERVAL_S)
-    raise AssertionError(f"no session waited on the branch lock within {LOCK_WAIT_TIMEOUT_S} s")
-
-
 async def test_concurrent_commits_serialize(
     engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime, clock: Clock
 ) -> None:
@@ -351,7 +325,7 @@ async def test_concurrent_commits_serialize(
         await first.begin()
         a = await _commit_part(first, runtime, clock, "A")
         second = asyncio.create_task(_commit_in_new_session(sessions, runtime, clock, "B"))
-        await wait_for_lock_waiter(engine, second)
+        await wait_for_lock_waiter(engine, second, locktype="advisory", what="branch lock")
         assert not second.done()
         await first.commit()
     b = await asyncio.wait_for(second, LOCK_WAIT_TIMEOUT_S)

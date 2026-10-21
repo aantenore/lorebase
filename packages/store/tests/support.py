@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import (
@@ -152,3 +154,39 @@ async def session_scope(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     """A session that is closed afterwards; transactions are managed by the caller."""
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         yield session
+
+
+LOCK_WAIT_TIMEOUT_S = 30.0
+LOCK_POLL_INTERVAL_S = 0.02
+
+# Ungranted locks of one type held by sessions of the current database. Transaction id locks
+# carry no database, hence the filter on the session instead of `pg_locks.database`.
+_LOCK_WAITERS = text(
+    "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
+    "WHERE NOT l.granted AND l.locktype = :locktype AND a.datname = current_database()"
+)
+
+
+async def wait_for_lock_waiter(
+    engine: AsyncEngine, waiter: asyncio.Task[Any], *, locktype: str, what: str
+) -> None:
+    """Return once a session of this database is queued on a lock of `locktype` (`pg_locks`).
+
+    `advisory` is a branch lock; a row lock held by another transaction is waited on as its
+    `transactionid`. Each poll runs in its own transaction, so `pg_stat_activity` is read fresh.
+    Fails with the waiter's own error when it finished instead of queueing, and after a bounded
+    wait.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + LOCK_WAIT_TIMEOUT_S
+    async with engine.connect() as connection:
+        while loop.time() < deadline:
+            if waiter.done():
+                waiter.result()  # raises the waiter's error
+                raise AssertionError(f"the waiter finished without waiting on the {what}")
+            async with connection.begin():
+                waiting = await connection.scalar(_LOCK_WAITERS, {"locktype": locktype})
+            if waiting:
+                return
+            await asyncio.sleep(LOCK_POLL_INTERVAL_S)
+    raise AssertionError(f"no session waited on the {what} within {LOCK_WAIT_TIMEOUT_S} s")
