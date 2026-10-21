@@ -13,11 +13,16 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.revision import Origin
+from lorebase_inference import InferenceSettings
+from lorebase_scribe.extraction.pipeline import ExtractionRun
+from lorebase_scribe.extraction.settings import ExtractionSettings
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
+from lorebase_store.db import create_engine
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 from .read_fixtures import Seeded, keeper, owner_session, seeded_database
 from .supply import AUTHOR, DOMAIN, EXAMPLE, Clock, record_change, rows, supply_schema
@@ -128,3 +133,69 @@ async def test_upload_stores_documents_once_and_queues_extraction(
     assert job.payload["documents"] == [document["id"]]
     assert job.payload["tiers"] is None
     assert audited == 2
+
+
+async def extract(seeded: Seeded, document_id: str) -> str:
+    """Run the extraction job in-process; returns the Proposal id."""
+    engine = create_engine(DatabaseSettings(), url=seeded.owner_url, statement_timeout_ms=0)
+    try:
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        run = ExtractionRun(
+            sessions,
+            StoreRuntime.from_settings(StoreSettings()),
+            ExtractionSettings(tiers=(0,), auto_accept_threshold=0.55),
+            InferenceSettings(),
+            principal="svc_scribe",
+            clock=Clock(),
+        )
+        report = await run.run(DOMAIN, [document_id])
+    finally:
+        await engine.dispose()
+    assert report.proposal_id is not None
+    return report.proposal_id
+
+
+async def test_items_are_listed_and_decided(seeded: Seeded) -> None:
+    async with keeper(seeded.app_url) as http:
+        uploaded = await http.post(f"{BASE}/documents", **upload(REVIEW, extract="false"))
+        document_id = uploaded.json()["document"]["id"]
+    proposal_id = await extract(seeded, document_id)
+    items_url = f"{BASE}/proposals/{proposal_id}/items"
+    async with keeper(seeded.app_url) as http:
+        page = (await http.get(items_url, params={"type": "link", "kind": "supplied_by"})).json()
+        links = page["items"]
+        assert links
+        assert all(i["relation"] == "supplied_by" for i in links)
+        first = next(i for i in links if (i["from"], i["to"]) == ("P-10012", "S-1025"))
+        assert first["decision"] == "accepted"
+        assert first["evidence"]["quote"]
+        pending = (await http.get(items_url, params={"status": "pending"})).json()["items"]
+        assert pending
+        assert all(i["decision"] == "pending" for i in pending)
+        paged = (await http.get(items_url, params={"limit": 1})).json()
+        assert len(paged["items"]) == 1
+        assert paged["next_cursor"]
+
+        decided = await http.post(
+            f"{items_url}:decide",
+            json={
+                "decisions": [{"item": first["id"], "decision": "rejected"}],
+                "where": {"type": ["link"], "kind": ["supplied_by"], "status": ["pending"]},
+                "decision": "accepted",
+            },
+        )
+        assert decided.status_code == 200, decided.text
+        body = decided.json()
+        decisions = {i["id"]: i["decision"] for i in body["items"]}
+        assert decisions[first["id"]] == "rejected"
+        assert body["materialized"]["changes"] >= 1
+        assert body["checks"]["extraction"]["decisions"]["rejected"] == 1
+        detail = (await http.get(f"{BASE}/proposals/{proposal_id}")).json()
+        assert any(c["name"] == "extraction" for c in detail["checks"])
+
+        unknown = await http.post(
+            f"{items_url}:decide", json={"decisions": [{"item": "pit_x", "decision": "accepted"}]}
+        )
+        assert unknown.status_code == 422
+        empty = await http.post(f"{items_url}:decide", json={})
+        assert empty.status_code == 422

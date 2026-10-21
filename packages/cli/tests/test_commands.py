@@ -968,6 +968,213 @@ def test_sources_sync_and_runs(http: respx.MockRouter) -> None:
     assert as_json[0]["error"] == {"message": "too many row errors"}
 
 
+# Documents and extraction items -------------------------------------------------------------
+
+
+DOCUMENT_ROW = {
+    "id": "doc_1",
+    "filename": "spec.txt",
+    "media_type": "text/plain",
+    "sha256": "ab" * 32,
+    "size": 5,
+    "text_sha256": None,
+    "metadata": {},
+    "created_at": NOW,
+    "created_by": "usr_1",
+}
+ITEM_ROW = {
+    "id": "itm_1",
+    "type": "link",
+    "seq": 1,
+    "decision": "pending",
+    "confidence": 0.9,
+    "tier": 1,
+    "model": "m",
+    "relation": "supplies",
+    "from": "S-1",
+    "to": "P-1",
+    "subject": {},
+    "evidence": None,
+    "match": None,
+    "edits": None,
+    "decided_by": None,
+    "decided_at": None,
+}
+
+
+def test_documents_upload_sends_the_file(http: respx.MockRouter, tmp_path: Path) -> None:
+    route = http.post("/domains/supply/documents").respond(
+        201, json={"document": DOCUMENT_ROW, "duplicate": False, "job_id": 4}
+    )
+    spec = tmp_path / "spec.txt"
+    spec.write_bytes(b"hello")
+    result = run("documents", "upload", str(spec), "--no-extract", "--tiers", "0,1", "-d", "supply")
+    assert result.exit_code == 0, result.output
+    assert "doc_1" in result.stdout
+    sent = route.calls.last.request
+    assert sent.headers["content-type"].startswith("multipart/form-data")
+    assert b'name="file"; filename="spec.txt"' in sent.content
+    assert b'name="extract"\r\n\r\nfalse' in sent.content
+    assert b'name="tiers"\r\n\r\n[0,1]' in sent.content
+    as_json = json.loads(run("documents", "upload", str(spec), "-d", "supply", "--json").stdout)
+    assert as_json["job_id"] == 4
+    assert b'name="extract"' not in route.calls.last.request.content
+
+
+def test_documents_upload_from_a_url(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/documents").respond(
+        200, json={"document": DOCUMENT_ROW, "duplicate": True, "job_id": None}
+    )
+    result = run("documents", "upload", "--url", "https://example.test/a.pdf", "-d", "supply")
+    assert result.exit_code == 0, result.output
+    assert request_bodies(route) == [{"url": "https://example.test/a.pdf"}]
+    assert "true" in result.stdout
+
+
+def test_documents_upload_checks_its_arguments(http: respx.MockRouter, tmp_path: Path) -> None:
+    route = http.post("/domains/supply/documents")
+    assert run("documents", "upload", "-d", "supply").exit_code == 1
+    spec = tmp_path / "spec.txt"
+    spec.write_bytes(b"x")
+    both = run("documents", "upload", str(spec), "--url", "https://example.test/a", "-d", "supply")
+    assert both.exit_code == 1
+    assert run("documents", "upload", str(spec), "--tiers", "a", "-d", "supply").exit_code == 1
+    missing = run("documents", "upload", str(tmp_path / "none.txt"), "-d", "supply")
+    assert missing.exit_code == 1
+    assert not route.called
+
+
+def test_documents_list_and_get(http: respx.MockRouter) -> None:
+    http.get("/domains/supply/documents").respond(
+        200, json={"items": [DOCUMENT_ROW], "next_cursor": None}
+    )
+    job = {
+        "id": "ext_1",
+        "status": "succeeded",
+        "model": "m",
+        "prompt_version": "v1",
+        "branch": "extraction/x",
+        "proposal_id": "prp_1",
+        "created_at": NOW,
+        "finished_at": NOW,
+        "usage": {},
+        "stats": {},
+        "error": None,
+    }
+    http.get("/domains/supply/documents/doc_1").respond(
+        200, json={**DOCUMENT_ROW, "extraction_jobs": [job]}
+    )
+    listed = run("documents", "list", "-d", "supply")
+    assert listed.exit_code == 0, listed.output
+    assert "spec.txt" in listed.stdout
+    shown = run("documents", "get", "doc_1", "-d", "supply")
+    assert shown.exit_code == 0, shown.output
+    assert "ext_1" in shown.stdout
+    assert "proposal prp_1" in shown.stdout
+    as_json = json.loads(run("documents", "get", "doc_1", "-d", "supply", "--json").stdout)
+    assert as_json["extraction_jobs"][0]["id"] == "ext_1"
+
+
+def test_proposal_items_filters_and_renders(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/proposals/prp_1/items").respond(
+        200, json={"items": [ITEM_ROW], "next_cursor": None}
+    )
+    result = run(
+        "proposal",
+        "items",
+        "prp_1",
+        "--status",
+        "pending",
+        "--kind",
+        "supplies",
+        "--type",
+        "link",
+        "--min-confidence",
+        "0.5",
+        "-d",
+        "supply",
+    )
+    assert result.exit_code == 0, result.output
+    assert "itm_1" in result.stdout
+    assert "supplies" in result.stdout
+    params = route.calls.last.request.url.params
+    assert params["status"] == "pending"
+    assert params["kind"] == "supplies"
+    assert params["type"] == "link"
+    assert params["min_confidence"] == "0.5"
+    as_json = json.loads(run("proposal", "items", "prp_1", "-d", "supply", "--json").stdout)
+    assert as_json[0]["from"] == "S-1"
+    assert run("proposal", "items", "prp_1", "--status", "done", "-d", "supply").exit_code == 1
+
+
+def test_proposal_decide_by_item_and_by_filter(http: respx.MockRouter) -> None:
+    decided = {
+        "proposal_id": "prp_1",
+        "title": "Extraction",
+        "checks": {},
+        "items": [{**ITEM_ROW, "decision": "accepted"}],
+        "materialized": {
+            "revision": REV,
+            "changes": 2,
+            "applied": 1,
+            "skipped": {"itm_9": "stale"},
+        },
+    }
+    route = http.post("/domains/supply/proposals/prp_1/items:decide").respond(200, json=decided)
+    by_item = run(
+        "proposal", "decide", "prp_1", "--accept", "itm_1", "--reject", "itm_2", "-d", "supply"
+    )
+    assert by_item.exit_code == 0, by_item.output
+    assert "itm_9: stale" in by_item.stdout
+    by_filter = run(
+        "proposal",
+        "decide",
+        "prp_1",
+        "--where-status",
+        "pending",
+        "--where-kind",
+        "supplies",
+        "--where-min-confidence",
+        "0.9",
+        "--decision",
+        "accepted",
+        "-d",
+        "supply",
+    )
+    assert by_filter.exit_code == 0, by_filter.output
+    assert request_bodies(route) == [
+        {
+            "decisions": [
+                {"item": "itm_1", "decision": "accepted"},
+                {"item": "itm_2", "decision": "rejected"},
+            ]
+        },
+        {
+            "decisions": [],
+            "where": {"status": ["pending"], "kind": ["supplies"], "min_confidence": 0.9},
+            "decision": "accepted",
+        },
+    ]
+    as_json = json.loads(
+        run("proposal", "decide", "prp_1", "--accept", "itm_1", "-d", "supply", "--json").stdout
+    )
+    assert as_json["materialized"]["applied"] == 1
+
+
+def test_proposal_decide_checks_its_arguments(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/proposals/prp_1/items:decide")
+    assert run("proposal", "decide", "prp_1", "-d", "supply").exit_code == 1
+    only_decision = run("proposal", "decide", "prp_1", "--decision", "accepted", "-d", "supply")
+    assert only_decision.exit_code == 1
+    only_filter = run("proposal", "decide", "prp_1", "--where-kind", "x", "-d", "supply")
+    assert only_filter.exit_code == 1
+    unknown = run(
+        "proposal", "decide", "prp_1", "--where-kind", "x", "--decision", "done", "-d", "supply"
+    )
+    assert unknown.exit_code == 1
+    assert not route.called
+
+
 def test_quiet_silences_progress_and_notes(http: respx.MockRouter, tmp_path: Path) -> None:
     http.get("/domains/supply/schema").respond(200, json=SCHEMA_DOC)
     http.post("/domains/supply/operations/import_records/execute").respond(200, json=execution())

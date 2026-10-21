@@ -23,6 +23,14 @@ from lorebase_store.extraction.proposal import (
     extraction_check,
     refresh_proposal,
 )
+from lorebase_store.extraction.review import (
+    MERGE_POLICY_KEY,
+    Decision,
+    Reviewed,
+    ReviewError,
+    decide_items,
+    extraction_proposal,
+)
 
 EXTRACTION_BRANCH_PREFIX = "extract/"
 """Extraction branches are named `extract/<extraction job id>`."""
@@ -31,12 +39,18 @@ __all__ = [
     "EXTRACTION_BRANCH_PREFIX",
     "EXTRACTION_CHECK",
     "EXTRACTION_ORIGIN",
+    "MERGE_POLICY_KEY",
     "RULES_MODEL",
+    "Decision",
     "ItemEditError",
     "MaterializeContext",
     "Materialized",
+    "ReviewError",
+    "Reviewed",
+    "decide_items",
     "effective_subject",
     "extraction_check",
+    "extraction_proposal",
     "link_element",
     "materialize_items",
     "normalize_edits",

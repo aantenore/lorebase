@@ -18,12 +18,17 @@ from lorebase_core.model import Schema
 from lorebase_inference import InferenceSettings
 from lorebase_scribe.extraction.pipeline import ExtractionReport, ExtractionRun
 from lorebase_scribe.extraction.settings import ExtractionSettings
+from lorebase_store.commit import ValidationFailedError
+from lorebase_store.extraction import Decision, decide_items
+from lorebase_store.merging import MergeRequest, MergeService
 from lorebase_store.models.enums import ItemDecision, ProposalOrigin, ProposalStatus, RunStatus
 from lorebase_store.repositories import (
     ExtractionJobRepository,
     ItemRow,
     MaterializedRepository,
     ProposalRepository,
+    ProvenanceRepository,
+    RecordRow,
     scope_to_domain,
 )
 from lorebase_store.runtime import StoreRuntime
@@ -82,6 +87,19 @@ async def extract(
     return await run.run(DOMAIN, [document], requested_by="usr_editor")
 
 
+async def branch_record(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    branch: str,
+    kind_id: str,
+    key: str,
+) -> RecordRow | None:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        rows = MaterializedRepository(session, DOMAIN, branch, writes=runtime.settings.writes)
+        return (await rows.records(kind_id, [key])).get(key)
+
+
 async def branch_links(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
@@ -103,6 +121,25 @@ def find(items: list[ItemRow], item_type: str, **subject: Any) -> ItemRow:
     ]
     assert len(matches) == 1, (item_type, subject, [i.subject for i in items])
     return matches[0]
+
+
+async def decide(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    proposal_id: str,
+    decisions: list[Decision],
+) -> None:
+    async with sessions() as session, session.begin():
+        await decide_items(
+            session,
+            DOMAIN,
+            proposal_id,
+            decisions,
+            actor="usr_reviewer",
+            runtime=runtime,
+            clock=clock,
+        )
 
 
 @pytest.fixture
@@ -165,6 +202,121 @@ async def test_review_document_proposes_links_between_existing_records(
     on_branch = await branch_links(sessions, runtime, report.branch, names["supplied_by"], pairs)
     assert on_branch == set(pairs)
     assert not await branch_links(sessions, runtime, "main", names["supplied_by"], pairs)
+
+
+async def test_rejecting_an_item_reverts_it_on_the_branch(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    names = ids(schema)
+    report = await extract(extraction(sessions, runtime, clock), sessions, REVIEW)
+    assert report.proposal_id is not None
+    items = await proposal_items(sessions, report.proposal_id)
+    rejected = find(
+        items, "link", relation=names["supplied_by"], **{"from": "P-10023", "to": "S-1025"}
+    )
+    await decide(
+        sessions,
+        runtime,
+        clock,
+        report.proposal_id,
+        [Decision(rejected.item_id, ItemDecision.REJECTED)],
+    )
+    after = {i.item_id: i for i in await proposal_items(sessions, report.proposal_id)}
+    assert after[rejected.item_id].decision is ItemDecision.REJECTED
+    assert after[rejected.item_id].decided_by == "usr_reviewer"
+    pairs = [("P-10012", "S-1025"), ("P-10023", "S-1025")]
+    assert await branch_links(sessions, runtime, report.branch, names["supplied_by"], pairs) == {
+        ("P-10012", "S-1025")
+    }
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        proposal = await ProposalRepository(session, DOMAIN).get(report.proposal_id)
+    assert proposal is not None
+    assert proposal.checks is not None
+    assert proposal.checks["extraction"]["decisions"]["rejected"] == 1
+
+
+async def test_accepting_the_new_contract_commits_it_with_evidence_lineage(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    names = ids(schema)
+    report = await extract(extraction(sessions, runtime, clock), sessions, CONTRACT)
+    assert report.proposal_id is not None
+    items = await proposal_items(sessions, report.proposal_id)
+    record = find(items, "record", kind=names["Contract"], key=NEW_CONTRACT)
+    values = record.subject["values"]
+    assert values[names["Contract.start_date"]] == "2024-02-08"
+    assert values[names["Contract.end_date"]] == "2026-02-07"
+    assert values[names["Contract.annual_value"]] == "1596000.00"
+    assert values[names["Contract.incoterm"]] == "DDP"
+    assert values[names["Contract.title"]] == "Framework Supply Agreement C-3025"
+    # Complete with the `with_supplier` Link proposed next to it, but its values are rule
+    # guesses (confidence below the threshold): both wait for review.
+    assert record.match is not None
+    assert record.match["complete"] is True
+    assert record.confidence is not None
+    assert record.confidence < THRESHOLD
+    link = find(
+        items, "link", relation=names["with_supplier"], **{"from": NEW_CONTRACT, "to": "S-1025"}
+    )
+    assert record.decision is link.decision is ItemDecision.PENDING
+
+    # The Contract alone breaks `with_supplier` (required): nothing is written.
+    with pytest.raises(ValidationFailedError):
+        await decide(
+            sessions,
+            runtime,
+            clock,
+            report.proposal_id,
+            [Decision(record.item_id, ItemDecision.ACCEPTED)],
+        )
+    contract_kind = names["Contract"]
+    assert (
+        await branch_record(sessions, runtime, report.branch, contract_kind, NEW_CONTRACT) is None
+    )
+
+    await decide(
+        sessions,
+        runtime,
+        clock,
+        report.proposal_id,
+        [
+            Decision(record.item_id, ItemDecision.ACCEPTED, {"values": {"status": "active"}}),
+            Decision(link.item_id, ItemDecision.ACCEPTED),
+        ],
+    )
+    stored = await branch_record(sessions, runtime, report.branch, contract_kind, NEW_CONTRACT)
+    assert stored is not None
+    assert stored.values[names["Contract.status"]] == "active"
+    entry_id = stored.lineage[names["Contract.start_date"]]
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        entries = await ProvenanceRepository(
+            session, DOMAIN, writes=runtime.settings.writes
+        ).get_many([entry_id])
+    origin = entries[entry_id].origin_ref
+    assert entries[entry_id].origin_type == "extraction"
+    assert origin["job_id"] == report.job_id
+    assert origin["document_id"] == report.documents[0]
+    assert origin["model_id"] == "rules"
+    text = (DOCUMENTS / CONTRACT).read_text()
+    assert "8 February 2024" in text[origin["span_start"] : origin["span_end"]]
+
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        proposal = await ProposalRepository(session, DOMAIN).get(report.proposal_id)
+        assert proposal is not None
+        merged = await MergeService(session, DOMAIN, runtime=runtime, clock=clock).merge(
+            MergeRequest(proposal=proposal, actor="usr_maintainer")
+        )
+    assert merged.merged
+    assert await branch_record(sessions, runtime, "main", contract_kind, NEW_CONTRACT) is not None
 
 
 async def test_every_example_document_is_extracted(
