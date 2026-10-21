@@ -1,4 +1,5 @@
-"""Grants on the security definer read functions of revision 0005 (store schema notes).
+"""Grants on the security definer read functions of revisions 0005 and 0007 (store schema
+notes).
 
 The migration revokes EXECUTE from PUBLIC and grants it to `database.application_role`.
 `grant_read_functions` grants it to another role later: one created after the migration, or a
@@ -10,7 +11,16 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-READ_FUNCTIONS = ("lb_search", "lb_links_in", "lb_neighborhood", "lb_query_by_attribute")
+READ_FUNCTIONS = (
+    "lb_search",
+    "lb_links_in",
+    "lb_neighborhood",
+    "lb_query_by_attribute",
+    "lb_search_overlay",
+    "lb_links_in_overlay",
+    "lb_neighborhood_overlay",
+    "lb_query_by_attribute_overlay",
+)
 """Functions only the store read primitives call, with a Domain already authorized."""
 
 _SIGNATURES = text(

@@ -19,6 +19,12 @@ not mark leakproof, so under row-level security plain SQL cannot use their index
 functions of revision 0005 (`lb_links_in`, `lb_query_by_attribute`, `lb_search`), which take
 the Domain as an argument: only these primitives call them, with the Domain their caller has
 already authorized (store schema notes). Otherwise the same statements run as plain SQL.
+
+Every primitive that reads rows takes the branch as a name or as its `BranchLayout`
+(`lorebase_store.layout`); a name costs one more primary-key read to find the layout. On an
+overlay branch the statements read its resolved rows (overlay rows over the base rows as of
+the fork point) and the definer functions are their `_overlay` variants (revision `0007`);
+on a full branch they are unchanged.
 """
 
 from __future__ import annotations
@@ -27,14 +33,16 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import LargeBinary, Table, TextualSelect, column, text
+from sqlalchemy import LargeBinary, Table, TextClause, TextualSelect, column, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Relation, RelationBacking, Schema
 from lorebase_store.indexes import IndexSpec, plan_indexes, predicate_sql, sql_literal, values_text
+from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
 from lorebase_store.models import metadata
 from lorebase_store.repositories.materialized import RecordRow
 from lorebase_store.runtime import StoreRuntime, default_runtime
@@ -58,11 +66,6 @@ RECORD_COLUMNS = ", ".join(f'm."{name}"' for name in RECORD_NAMES)
 def _records(sql: str) -> TextualSelect:
     """A statement returning Record columns, typed so JSON comes back decoded."""
     return text(sql).columns(*(MAT_RECORDS.c[name] for name in RECORD_NAMES))
-
-
-def escape_colons(fragment: str) -> str:
-    """A literal-holding SQL fragment made safe for `text()`, where `:name` binds."""
-    return fragment.replace(":", r"\:")
 
 
 class Direction(StrEnum):
@@ -132,6 +135,11 @@ def _definer(runtime: StoreRuntime | None) -> bool:
     return _runtime(runtime).settings.reads.use_definer_functions
 
 
+def _function(name: str, layout: BranchLayout) -> str:
+    """A security definer read function, or its overlay variant on an overlay branch."""
+    return f"{name}_overlay" if layout.overlay else name
+
+
 def _cap(limit: int, maximum: int) -> int:
     if limit < 1:
         raise ValueError("limit must be positive")
@@ -186,39 +194,92 @@ async def head_schema(
 # Records ----------------------------------------------------------------------------------------
 
 _SCOPE = "m.domain_id = :domain AND m.branch = :branch"
-_GET = _records(
-    f"SELECT {RECORD_COLUMNS} FROM mat_records m "
-    f"WHERE {_SCOPE} AND m.kind_id = :kind AND m.key = :key"
-)
-_PAGE = _records(
-    f"SELECT {RECORD_COLUMNS} FROM mat_records m "
-    f"WHERE {_SCOPE} AND m.kind_id = :kind ORDER BY m.key LIMIT :limit"
-)
-_PAGE_AFTER = _records(
-    f"SELECT {RECORD_COLUMNS} FROM mat_records m "
-    f"WHERE {_SCOPE} AND m.kind_id = :kind AND m.key > :after ORDER BY m.key LIMIT :limit"
-)
-_HYDRATE = _records(
-    f"""
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordStatements:
+    get: TextualSelect
+    page: TextualSelect
+    page_after: TextualSelect
+    hydrate: TextualSelect
+
+
+@lru_cache(maxsize=256)
+def _record_statements(records: str) -> _RecordStatements:
+    """Key and page reads over the FROM item `records` (aliased `m`)."""
+    return _RecordStatements(
+        get=_records(
+            f"SELECT {RECORD_COLUMNS} FROM {records} "
+            f"WHERE {_SCOPE} AND m.kind_id = :kind AND m.key = :key"
+        ),
+        page=_records(
+            f"SELECT {RECORD_COLUMNS} FROM {records} "
+            f"WHERE {_SCOPE} AND m.kind_id = :kind ORDER BY m.key LIMIT :limit"
+        ),
+        page_after=_records(
+            f"SELECT {RECORD_COLUMNS} FROM {records} "
+            f"WHERE {_SCOPE} AND m.kind_id = :kind AND m.key > :after ORDER BY m.key LIMIT :limit"
+        ),
+        hydrate=_records(
+            f"""
     SELECT {RECORD_COLUMNS}
     FROM unnest(CAST(:kinds AS text[]), CAST(:keys AS text[])) AS i(kind_id, key)
-    JOIN mat_records m ON {_SCOPE} AND m.kind_id = i.kind_id AND m.key = i.key
+    JOIN {records} ON {_SCOPE} AND m.kind_id = i.kind_id AND m.key = i.key
     """
-)
+        ),
+    )
+
+
+def _statements(layout: BranchLayout) -> _RecordStatements:
+    if layout.overlay:
+        return _overlay_statements(layout)
+    return _record_statements(layout.records_from("m"))
+
+
+@lru_cache(maxsize=256)
+def _overlay_statements(layout: BranchLayout) -> _RecordStatements:
+    """Key and page reads of an overlay: pages are taken from each half (overlay rows, base
+    rows) in key order and merged, so a page reads at most twice its size; hydration looks
+    each identity up laterally (LIMIT 1 keeps the lookup from being turned into a join with
+    every row), so its keys reach both halves as index conditions."""
+    kind = " AND m.kind_id = :kind"
+    page = " ORDER BY m.key LIMIT :limit"
+    return _RecordStatements(
+        get=_record_statements(layout.records_from("m")).get,
+        page=_records(
+            f"SELECT {RECORD_COLUMNS} FROM {layout.records_arms(kind + page)} "
+            "ORDER BY m.key LIMIT :limit"
+        ),
+        page_after=_records(
+            f"SELECT {RECORD_COLUMNS} FROM "
+            f"{layout.records_arms(kind + ' AND m.key > :after' + page)} "
+            "ORDER BY m.key LIMIT :limit"
+        ),
+        hydrate=_records(
+            f"""
+    SELECT {RECORD_COLUMNS}
+    FROM unnest(CAST(:kinds AS text[]), CAST(:keys AS text[])) AS i(kind_id, key)
+    CROSS JOIN LATERAL (
+        SELECT {RECORD_COLUMNS} FROM {layout.records_from("m")}
+        WHERE {_SCOPE} AND m.kind_id = i.kind_id AND m.key = i.key LIMIT 1) AS m
+    """
+        ),
+    )
 
 
 async def get_record(
-    session: AsyncSession, domain_id: str, branch: str, kind_id: str, key: str
+    session: AsyncSession, domain_id: str, branch: str | BranchLayout, kind_id: str, key: str
 ) -> RecordRow | None:
-    params = {"domain": domain_id, "branch": branch, "kind": kind_id, "key": key}
-    found = (await session.execute(_GET, params)).mappings().one_or_none()
+    layout = await resolve_layout(session, domain_id, branch)
+    params = {"domain": domain_id, "branch": layout.branch, "kind": kind_id, "key": key}
+    found = (await session.execute(_statements(layout).get, params)).mappings().one_or_none()
     return None if found is None else RecordRow(**found)
 
 
 async def list_records(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     kind_id: str,
     *,
     limit: int,
@@ -226,22 +287,23 @@ async def list_records(
     runtime: StoreRuntime | None = None,
 ) -> list[RecordRow]:
     """A page of a Kind's Records in key order, starting after the key `after`."""
+    layout = await resolve_layout(session, domain_id, branch)
     params: dict[str, Any] = {
         "domain": domain_id,
-        "branch": branch,
+        "branch": layout.branch,
         "kind": kind_id,
         "limit": _cap(limit, _runtime(runtime).settings.reads.max_page_rows),
     }
-    statement = _PAGE
+    statement = _statements(layout).page
     if after is not None:
-        statement, params["after"] = _PAGE_AFTER, after
+        statement, params["after"] = _statements(layout).page_after, after
     return [RecordRow(**row) for row in (await session.execute(statement, params)).mappings()]
 
 
 async def hydrate_records(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     identities: Iterable[tuple[str, str]],
     *,
     runtime: StoreRuntime | None = None,
@@ -250,15 +312,19 @@ async def hydrate_records(
     unique = list(dict.fromkeys(identities))
     batch = _runtime(runtime).settings.reads.max_hydrate_keys
     found: dict[tuple[str, str], RecordRow] = {}
+    if not unique:
+        return found
+    layout = await resolve_layout(session, domain_id, branch)
+    statement = _statements(layout).hydrate
     for start in range(0, len(unique), batch):
         chunk = unique[start : start + batch]
         params = {
             "domain": domain_id,
-            "branch": branch,
+            "branch": layout.branch,
             "kinds": [kind for kind, _ in chunk],
             "keys": [key for _, key in chunk],
         }
-        for row in (await session.execute(_HYDRATE, params)).mappings():
+        for row in (await session.execute(statement, params)).mappings():
             record = RecordRow(**row)
             found[(record.kind_id, record.key)] = record
     return found
@@ -299,9 +365,16 @@ def foreign_key_relations(relations: Iterable[Relation]) -> list[Relation]:
 
 
 def foreign_key_inbound_sql(
-    relation: Relation, domain_id: str, branch: str, *, target: str, limit: str
+    relation: Relation,
+    domain_id: str,
+    branch: str,
+    *,
+    target: str,
+    limit: str,
+    records: str = "mat_records",
 ) -> str:
-    """Links of a foreign-key Relation that point at `target` (an SQL expression).
+    """Links of a foreign-key Relation that point at `target` (an SQL expression), read from
+    the FROM item `records` (`BranchLayout.records_from()`).
 
     The literal predicate and expression match the Relation's per-Attribute index.
     """
@@ -311,7 +384,7 @@ def foreign_key_inbound_sql(
         f"SELECT CAST({sql_literal(relation.id)} AS text) AS relation_id, key AS from_key, "
         f"{values_text(relation.foreign_key_attribute)} AS to_key, "
         f"CAST('{{}}' AS jsonb) AS \"values\", CAST(NULL AS bytea) AS object_hash "
-        f"FROM mat_records WHERE {predicate} "
+        f"FROM {records} WHERE {predicate} "
         f"AND {values_text(relation.foreign_key_attribute)} = {target} LIMIT {limit}"
     )
 
@@ -319,7 +392,7 @@ def foreign_key_inbound_sql(
 async def links_of_record(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     schema: Schema,
     kind_id: str,
     key: str,
@@ -331,9 +404,11 @@ async def links_of_record(
 ) -> list[LinkRef]:
     """Links of one Record ordered by Relation, from key and to key, at most `limit`."""
     outgoing, incoming = _relations(schema, kind_id, direction, relation_ids)
+    layout = await resolve_layout(session, domain_id, branch)
+    links_from, records_from = layout.links_from(), layout.records_from("m")
     params: dict[str, Any] = {
         "domain": domain_id,
-        "branch": branch,
+        "branch": layout.branch,
         "kind": kind_id,
         "key": key,
         "limit": _cap(limit, _runtime(runtime).settings.reads.max_page_rows),
@@ -342,14 +417,16 @@ async def links_of_record(
     if stored_out := stored_relation_ids(outgoing):
         params["out_rels"] = stored_out
         parts.append(
-            f"SELECT {_LINK_SELECT} FROM mat_links WHERE domain_id = :domain AND branch = :branch "
-            "AND relation_id = ANY(CAST(:out_rels AS text[])) AND from_key = :key LIMIT :limit"
+            f"SELECT {_LINK_SELECT} FROM {links_from} WHERE domain_id = :domain "
+            "AND branch = :branch AND relation_id = ANY(CAST(:out_rels AS text[])) "
+            "AND from_key = :key LIMIT :limit"
         )
     if stored_in := stored_relation_ids(incoming):
         params["in_rels"] = stored_in
         parts.append(
-            f"SELECT {_LINK_SELECT} FROM mat_links WHERE domain_id = :domain AND branch = :branch "
-            "AND relation_id = ANY(CAST(:in_rels AS text[])) AND to_key = :key LIMIT :limit"
+            f"SELECT {_LINK_SELECT} FROM {links_from} WHERE domain_id = :domain "
+            "AND branch = :branch AND relation_id = ANY(CAST(:in_rels AS text[])) "
+            "AND to_key = :key LIMIT :limit"
         )
     if foreign_out := foreign_key_relations(outgoing):
         params["fk_rels"] = [r.id for r in foreign_out]
@@ -357,7 +434,7 @@ async def links_of_record(
         parts.append(
             'SELECT r.relation_id, m.key AS from_key, m."values" ->> r.attribute AS to_key, '
             "CAST('{}' AS jsonb) AS \"values\", CAST(NULL AS bytea) AS object_hash "
-            "FROM mat_records m CROSS JOIN unnest(CAST(:fk_rels AS text[]), "
+            f"FROM {records_from} CROSS JOIN unnest(CAST(:fk_rels AS text[]), "
             "CAST(:fk_attributes AS text[])) AS r(relation_id, attribute) "
             f"WHERE {_SCOPE} AND m.kind_id = :kind AND m.key = :key "
             'AND m."values" ->> r.attribute IS NOT NULL'
@@ -366,15 +443,23 @@ async def links_of_record(
     for index, relation in enumerate(foreign_key_relations(incoming)):
         if not definer:
             parts.append(
-                foreign_key_inbound_sql(relation, domain_id, branch, target=":key", limit=":limit")
+                foreign_key_inbound_sql(
+                    relation,
+                    domain_id,
+                    layout.branch,
+                    target=":key",
+                    limit=":limit",
+                    records=layout.records_from(),
+                )
             )
             continue
         params[f"fk_in_{index}"] = relation.id
         params[f"fk_in_kind_{index}"] = relation.from_kind
         params[f"fk_in_attribute_{index}"] = relation.foreign_key_attribute
         parts.append(
-            f"SELECT {_LINK_SELECT} FROM lb_links_in(:domain, :branch, :fk_in_{index}, :key, "
-            f"CAST(:limit AS integer), NULL, :fk_in_kind_{index}, :fk_in_attribute_{index})"
+            f"SELECT {_LINK_SELECT} FROM {_function('lb_links_in', layout)}(:domain, :branch, "
+            f":fk_in_{index}, :key, CAST(:limit AS integer), NULL, :fk_in_kind_{index}, "
+            f":fk_in_attribute_{index})"
         )
     if not parts:
         return []
@@ -396,26 +481,29 @@ def _links(sql: str) -> TextualSelect:
     )
 
 
-_LINKS_IN = _links(
-    "SELECT * FROM lb_links_in(:domain, :branch, :relation, :to_key, CAST(:limit AS integer), "
-    ":after, :from_kind, :attribute)"
-)
+_LINKS_IN = {
+    function: _links(
+        f"SELECT * FROM {function}(:domain, :branch, :relation, :to_key, "
+        "CAST(:limit AS integer), :after, :from_kind, :attribute)"
+    )
+    for function in ("lb_links_in", "lb_links_in_overlay")
+}
 
 
-def _plain_links_in(domain_id: str, branch: str, relation: Relation, *, after: bool) -> str:
+def _plain_links_in(layout: BranchLayout, relation: Relation, *, after: bool) -> str:
     """`lb_links_in` as plain SQL (parameters `:relation`, `:to_key`, `:limit`, `:after`)."""
     if relation.backing is not RelationBacking.FOREIGN_KEY:
         return (
-            f"SELECT {_LINK_SELECT} FROM mat_links WHERE domain_id = :domain "
+            f"SELECT {_LINK_SELECT} FROM {layout.links_from()} WHERE domain_id = :domain "
             "AND branch = :branch AND relation_id = :relation AND to_key = :to_key"
             f"{' AND from_key > :after' if after else ''} ORDER BY from_key LIMIT :limit"
         )
     assert relation.foreign_key_attribute is not None
-    predicate = escape_colons(predicate_sql(domain_id, branch, relation.from_kind))
+    predicate = escape_colons(predicate_sql(layout.domain_id, layout.branch, relation.from_kind))
     return (
         "SELECT CAST(:relation AS text) AS relation_id, key AS from_key, "
         "CAST(:to_key AS text) AS to_key, CAST('{}' AS jsonb) AS \"values\", "
-        f"CAST(NULL AS bytea) AS object_hash FROM mat_records WHERE {predicate} "
+        f"CAST(NULL AS bytea) AS object_hash FROM {layout.records_from()} WHERE {predicate} "
         f"AND {values_text(relation.foreign_key_attribute)} = :to_key"
         f"{' AND key > :after' if after else ''} ORDER BY key LIMIT :limit"
     )
@@ -424,7 +512,7 @@ def _plain_links_in(domain_id: str, branch: str, relation: Relation, *, after: b
 async def links_to_record(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     relation: Relation,
     to_key: str,
     *,
@@ -440,9 +528,10 @@ async def links_to_record(
     foreign = relation.backing is RelationBacking.FOREIGN_KEY
     if foreign and relation.foreign_key_attribute is None:
         return []
+    layout = await resolve_layout(session, domain_id, branch)
     params: dict[str, Any] = {
         "domain": domain_id,
-        "branch": branch,
+        "branch": layout.branch,
         "relation": relation.id,
         "to_key": to_key,
         "limit": _cap(limit, _runtime(runtime).settings.reads.max_page_rows),
@@ -453,11 +542,11 @@ async def links_to_record(
             from_kind=relation.from_kind if foreign else None,
             attribute=relation.foreign_key_attribute if foreign else None,
         )
-        statement = _LINKS_IN
+        statement = _LINKS_IN[_function("lb_links_in", layout)]
     else:
         if after is not None:
             params["after"] = after
-        statement = _links(_plain_links_in(domain_id, branch, relation, after=after is not None))
+        statement = _links(_plain_links_in(layout, relation, after=after is not None))
     return [LinkRef(**row) for row in (await session.execute(statement, params)).mappings()]
 
 
@@ -480,7 +569,7 @@ def index_spec(schema: Schema, kind_id: str, attribute_id: str) -> IndexSpec | N
 async def query_by_attribute(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     spec: IndexSpec,
     comparison: Comparison,
     value: AttributeValue,
@@ -496,6 +585,7 @@ async def query_by_attribute(
     """
     if comparison is not Comparison.EQ and not spec.ordered:
         raise ValueError(f"the index of {spec.attribute_id} supports equality only")
+    layout = await resolve_layout(session, domain_id, branch)
     expression = spec.expression
     params: dict[str, Any] = {
         "value": _value_text(value),
@@ -505,7 +595,7 @@ async def query_by_attribute(
         ranged = comparison is not Comparison.EQ
         params.update(
             domain=domain_id,
-            branch=branch,
+            branch=layout.branch,
             kind=spec.kind_id,
             attribute=spec.attribute_id,
             type=spec.value_type,
@@ -513,12 +603,15 @@ async def query_by_attribute(
             after_value=_value_text(after[0]) if after is not None and ranged else None,
             after_key=None if after is None else after[1],
         )
-        found = (await session.execute(_QUERY_BY_ATTRIBUTE, params)).mappings()
+        statement = _QUERY_BY_ATTRIBUTE[_function("lb_query_by_attribute", layout)]
+        found = (await session.execute(statement, params)).mappings()
         return [RecordRow(**row) for row in found]
     where = [
-        escape_colons(spec.predicate_sql(domain_id, branch)),
+        f"m.kind_id = {sql_literal(spec.kind_id)}" if layout.overlay else "",
         f"{expression} {_OPERATORS[comparison]} {spec.value_sql(':value')}",
     ]
+    if not layout.overlay:
+        where[0] = escape_colons(spec.predicate_sql(domain_id, layout.branch))
     if comparison is Comparison.EQ:
         order = "m.key"
         if after is not None:
@@ -529,17 +622,27 @@ async def query_by_attribute(
         if after is not None:
             where.append(f"({expression}, m.key) > ({spec.value_sql(':after_value')}, :after_key)")
             params["after_value"], params["after_key"] = _value_text(after[0]), after[1]
-    statement = _records(
-        f"SELECT {RECORD_COLUMNS} FROM mat_records m WHERE {' AND '.join(where)} "
-        f"ORDER BY {order} LIMIT :limit"
-    )
+    if layout.overlay:
+        # Each half (overlay rows, base rows through the base's partial index) is ordered and
+        # cut to the page before the halves are merged.
+        tail = f" AND {' AND '.join(where)} ORDER BY {order} LIMIT :limit"
+        source = layout.records_arms(tail)
+        statement = _records(f"SELECT {RECORD_COLUMNS} FROM {source} ORDER BY {order} LIMIT :limit")
+    else:
+        statement = _records(
+            f"SELECT {RECORD_COLUMNS} FROM {layout.records_from('m')} "
+            f"WHERE {' AND '.join(where)} ORDER BY {order} LIMIT :limit"
+        )
     return [RecordRow(**row) for row in (await session.execute(statement, params)).mappings()]
 
 
-_QUERY_BY_ATTRIBUTE = _records(
-    "SELECT * FROM lb_query_by_attribute(:domain, :branch, :kind, :attribute, :type, :op, "
-    ":value, CAST(:limit AS integer), :after_value, :after_key)"
-)
+_QUERY_BY_ATTRIBUTE = {
+    function: _records(
+        f"SELECT * FROM {function}(:domain, :branch, :kind, :attribute, :type, :op, "
+        ":value, CAST(:limit AS integer), :after_value, :after_key)"
+    )
+    for function in ("lb_query_by_attribute", "lb_query_by_attribute_overlay")
+}
 
 
 # Full-text search -------------------------------------------------------------------------------
@@ -559,13 +662,14 @@ class TitleSimilarity:
     weight: float
 
 
-def search_sql(*, by_kind: bool, titles: bool = False) -> str:
+def search_sql(*, by_kind: bool, titles: bool = False, records: str = "mat_records m") -> str:
     """Full-text search: the GIN index finds at most `:candidates` matches of the branch, and
     only those are ranked (`ts_rank_cd` reads each candidate's vector).
 
     Parameters: `:domain`, `:branch`, `:config`, `:query` (web search syntax), `:candidates`,
     `:limit`, `:kinds` (text array) when `by_kind`, and `:title_weight` when `titles` (the
-    threshold is the transaction's `pg_trgm.similarity_threshold`).
+    threshold is the transaction's `pg_trgm.similarity_threshold`). `records` is the FROM item
+    of the rows, aliased `m` (`BranchLayout.records_from("m")`).
     """
     kinds = "AND m.kind_id = ANY(CAST(:kinds AS text[])) " if by_kind else ""
     match = f"m.search @@ {_QUERY}"
@@ -575,22 +679,25 @@ def search_sql(*, by_kind: bool, titles: bool = False) -> str:
         score += " + CAST(:title_weight AS real) * similarity(coalesce(c.title, ''), :query)"
     return (
         f"SELECT c.kind_id, c.key, c.title, CAST({score} AS real) AS score "
-        f"FROM (SELECT m.kind_id, m.key, m.title, m.search FROM mat_records m "
+        f"FROM (SELECT m.kind_id, m.key, m.title, m.search FROM {records} "
         f"WHERE {_SCOPE} {kinds}AND {match} LIMIT :candidates) AS c "
         f"ORDER BY score DESC, c.kind_id, c.key LIMIT :limit"
     )
 
 
-_SEARCH = {
-    (by_kind, titles): text(search_sql(by_kind=by_kind, titles=titles))
-    for by_kind in (False, True)
-    for titles in (False, True)
+@lru_cache(maxsize=256)
+def _search(records: str, by_kind: bool, titles: bool) -> TextClause:
+    return text(search_sql(by_kind=by_kind, titles=titles, records=records))
+
+
+_SEARCH_DEFINER = {
+    function: text(
+        f"SELECT * FROM {function}(:domain, :branch, CAST(:kinds AS text[]), "
+        "CAST(:config AS regconfig), :query, CAST(:candidates AS integer), "
+        "CAST(:limit AS integer), CAST(:threshold AS real), CAST(:title_weight AS real))"
+    )
+    for function in ("lb_search", "lb_search_overlay")
 }
-_SEARCH_DEFINER = text(
-    "SELECT * FROM lb_search(:domain, :branch, CAST(:kinds AS text[]), "
-    "CAST(:config AS regconfig), :query, CAST(:candidates AS integer), CAST(:limit AS integer), "
-    "CAST(:threshold AS real), CAST(:title_weight AS real))"
-)
 _SIMILARITY_THRESHOLD = text(
     "SELECT set_config('pg_trgm.similarity_threshold', "
     "CAST(CAST(:threshold AS real) AS text), true)"
@@ -600,7 +707,7 @@ _SIMILARITY_THRESHOLD = text(
 async def search_records(
     session: AsyncSession,
     domain_id: str,
-    branch: str,
+    branch: str | BranchLayout,
     query: str,
     *,
     limit: int,
@@ -615,9 +722,10 @@ async def search_records(
     transaction, the function only for its own call).
     """
     settings = _runtime(runtime).settings
+    layout = await resolve_layout(session, domain_id, branch)
     params: dict[str, Any] = {
         "domain": domain_id,
-        "branch": branch,
+        "branch": layout.branch,
         "config": settings.materialize.text_search_config,
         "query": query,
         "candidates": settings.reads.search_candidates,
@@ -630,13 +738,13 @@ async def search_records(
             threshold=None if titles is None else titles.threshold,
             title_weight=0.0 if titles is None else titles.weight,
         )
-        statement = _SEARCH_DEFINER
+        statement = _SEARCH_DEFINER[_function("lb_search", layout)]
     else:
         if titles is not None:
             await session.execute(_SIMILARITY_THRESHOLD, {"threshold": titles.threshold})
             params["title_weight"] = titles.weight
         if kinds is not None:
             params["kinds"] = kinds
-        statement = _SEARCH[(kinds is not None, titles is not None)]
+        statement = _search(layout.records_from("m"), kinds is not None, titles is not None)
     rows = (await session.execute(statement, params)).all()
     return [SearchHit(kind_id, key, title, float(score)) for kind_id, key, title, score in rows]
