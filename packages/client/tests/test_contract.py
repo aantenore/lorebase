@@ -25,6 +25,11 @@ PREFIX = "/api/v1"
 
 RESPONSES: dict[type[m.Model], str] = {
     m.WhoAmI: "WhoAmI",
+    m.QuotaReport: "QuotaReport",
+    m.QuotaUse: "QuotaUse",
+    m.HealthSummary: "HealthSummary",
+    m.DomainHealth: "DomainHealthOut",
+    m.KindHealthReport: "KindHealthOut",
     m.Domain: "DomainOut",
     m.Branch: "BranchOut",
     m.BranchDetail: "BranchDetail",
@@ -255,6 +260,10 @@ def sample_calls() -> list[Any]:
         ep.context_pack_markdown(d, m.ContextRequest(search="x")),
         ep.explain_record(d, "Part", "P-1"),
         ep.explain_record_markdown(d, "Part", "P-1"),
+        ep.domain_health(d),
+        ep.domain_health_markdown(d),
+        ep.kind_health(d, "Part"),
+        ep.kind_health_markdown(d, "Part"),
         ep.branch_changes(d, "agent/x"),
         ep.branch_events(d, "agent/x"),
         ep.create_webhook(d, m.CreateWebhook(url="https://example.test/hook")),

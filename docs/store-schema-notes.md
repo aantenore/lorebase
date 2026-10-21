@@ -104,7 +104,10 @@ difference).
   `jobs`) are visible only with the bypass.
 - Superusers and roles with `BYPASSRLS` ignore policies; the application role must be neither.
 - Tables without `domain_id` (`domains`, `principals`, `groups`, `group_members`, `api_keys`,
-  `extraction_cache`) are installation-wide and have no policy.
+  `api_key_usage`, `extraction_cache`) are installation-wide and have no policy. `api_key_usage`
+  (revision `0006`) holds one row per API key and UTC day with the requests served and the
+  context-pack tokens delivered, the counters of the daily quotas (`docs/operations.md`); rows go
+  with their key.
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
 

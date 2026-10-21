@@ -5,6 +5,7 @@ from __future__ import annotations
 from lorebase_store.models.base import Base
 from lorebase_store.models.governance import (
     ApiKey,
+    ApiKeyUsage,
     AuditEntry,
     Grant,
     Group,
@@ -47,6 +48,7 @@ metadata = Base.metadata
 
 __all__ = [
     "ApiKey",
+    "ApiKeyUsage",
     "AuditEntry",
     "Base",
     "ChangesetEntry",

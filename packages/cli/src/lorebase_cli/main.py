@@ -141,6 +141,7 @@ app.command("log")(history.log_command)
 app.command("diff")(history.diff_command)
 app.command("context")(agents.context_command)
 app.command("explain")(agents.explain_command)
+app.command("health")(agents.health_command)
 
 
 def main() -> None:
