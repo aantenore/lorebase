@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
 from lorebase_platform.settings import CONFIG_ENV_VAR, ConfigError, load_settings
+from lorebase_store import db
 from lorebase_store.db import async_url, create_engine
 from lorebase_store.settings import (
     DEFAULT_DSN,
@@ -130,6 +132,24 @@ def test_engine_uses_pool_settings() -> None:
         assert engine.url.drivername == "postgresql+asyncpg"
     finally:
         engine.sync_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},  # primary
+        {"url": "postgresql://replica.test/lorebase"},  # read replica
+        {"pooled": False, "statement_timeout_ms": 0},  # maintenance and batch jobs
+    ],
+)
+def test_every_engine_pins_standard_conforming_strings(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
+) -> None:
+    built: list[dict[str, Any]] = []
+    monkeypatch.setattr(db, "create_async_engine", lambda url, **kwargs: built.append(kwargs))
+    create_engine(DatabaseSettings(), **options)
+    [kwargs] = built
+    assert kwargs["connect_args"]["server_settings"]["standard_conforming_strings"] == "on"
 
 
 # Read replicas ------------------------------------------------------------------------------
