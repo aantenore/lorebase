@@ -105,9 +105,13 @@ async def _create(
     source_schema = await source_rows.schema()
     if source_ref.head == head.id and source_schema is not None:
         await repository.copy_from(source_name)
-        await BranchIndexes(session, domain_id, name, settings=runtime.settings.indexes).sync(
-            load_compiled(source_schema.compiled)
-        )
+        await BranchIndexes(
+            session,
+            domain_id,
+            name,
+            settings=runtime.settings.indexes,
+            maintenance=runtime.index_maintenance,
+        ).sync(load_compiled(source_schema.compiled))
         return BranchCreation(ref, MaterializationMode.COPY)
     await materialize_revision(session, domain_id, name, head, runtime=runtime)
     return BranchCreation(ref, MaterializationMode.REBUILD)

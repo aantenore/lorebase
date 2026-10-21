@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 GC_JOB = "gc"
 """Job type of a garbage collection (see `lorebase_store.gc.run_gc_job`)."""
 
+INDEX_JOB = "store.index"
+"""Job type of a per-Attribute index build or drop (see `lorebase_store.indexes`)."""
+
 _COLUMNS = "id, type, domain_id, payload, priority, attempts, run_after, locked_by, created_at"
 
 _CLAIM = text(
@@ -255,7 +258,10 @@ def _parser() -> argparse.ArgumentParser:
     work = commands.add_parser("work", help="Run due jobs until the queue is empty.")
     work.add_argument("--limit", type=int, default=None, help="Stop after this many jobs.")
     work.add_argument(
-        "--types", nargs="+", default=[GC_JOB], help="Job types to run (default: gc)."
+        "--types",
+        nargs="+",
+        default=[GC_JOB, INDEX_JOB],
+        help=f"Job types to run (default: {GC_JOB} {INDEX_JOB}).",
     )
     return parser
 
@@ -264,16 +270,27 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_platform.settings import load_settings
     from lorebase_store.db import create_engine
     from lorebase_store.gc import run_gc_job
+    from lorebase_store.indexes import run_index_job
     from lorebase_store.runtime import StoreRuntime
     from lorebase_store.settings import database_settings, store_settings
 
     settings = load_settings()
-    runtime = StoreRuntime.from_settings(store_settings(settings))
-    engine: AsyncEngine = create_engine(
-        database_settings(settings), pooled=False, statement_timeout_ms=0
-    )
+    database = database_settings(settings)
+    runtime = StoreRuntime.from_settings(store_settings(settings), database=database)
+    engine: AsyncEngine = create_engine(database, pooled=False, statement_timeout_ms=0)
+    # Index DDL needs a role that owns mat_records: the maintenance role when configured.
+    maintenance: AsyncEngine | None = None
+    if database.maintenance_dsn is not None:
+        maintenance = create_engine(
+            database,
+            url=database.maintenance_dsn.get_secret_value(),
+            pooled=False,
+            statement_timeout_ms=0,
+        )
+    ddl = maintenance or engine
     known: dict[str, JobHandler] = {
         GC_JOB: lambda job: run_gc_job(engine, job, runtime=runtime),
+        INDEX_JOB: lambda job: run_index_job(ddl, job),
     }
     unknown = [t for t in types if t not in known]
     if unknown:
@@ -287,6 +304,8 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
         )
     finally:
         await engine.dispose()
+        if maintenance is not None:
+            await maintenance.dispose()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
