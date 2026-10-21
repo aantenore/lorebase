@@ -27,7 +27,8 @@ type Step =
   | { scrollToTop: string; offset?: number }
   | { wait: number }
   | { waitFor: string }
-  | { check: string; nth: number };
+  | { check: string; nth: number }
+  | { upload: string; files: string[] };
 
 interface Shot {
   /** File name without extension: docs/images/<name>.png. */
@@ -51,6 +52,8 @@ const CONFIG = {
   /** Mock data only: the build never reads a .env file for this value. */
   apiMode: 'mock',
   outputDir: resolve(import.meta.dirname, '../../../docs/images'),
+  /** CSV files the "Start from data" shot uploads: the demo Domain of examples/supply. */
+  sampleDataDir: resolve(import.meta.dirname, '../../../examples/supply/data'),
   buildDir: resolve(import.meta.dirname, '../node_modules/.cache/screenshots-dist'),
   readyTimeoutMs: 15_000,
   /** Pause after the page is ready, so layout (ForceAtlas2) and fonts have settled. */
@@ -103,6 +106,41 @@ const SHOTS: Shot[] = [
     name: 'modeler-edit',
     path: `/${DOMAIN}/modeler?view=edit`,
     ready: '.cm-content',
+  },
+  {
+    name: 'modeler-start',
+    path: `/${DOMAIN}/modeler?view=start`,
+    ready: 'button:has-text("Run inference")',
+    steps: [
+      {
+        upload: 'input[type=file]',
+        files: [
+          'contract',
+          'delivered_to',
+          'flags',
+          'for_part',
+          'part',
+          'plant',
+          'purchase_order',
+          'risk_flag',
+          'stocked_at',
+          'supplied_by',
+          'supplier',
+          'with_supplier',
+        ].map((table) => `${table}.csv`),
+      },
+      { click: 'button:has-text("Run inference")' },
+      { waitFor: 'text=Proposed schema' },
+      { click: 'button:has-text("Accept all at or above")' },
+      { wait: 400 },
+      { scrollToTop: 'h1', offset: 80 },
+    ],
+  },
+  {
+    name: 'sources',
+    path: `/${DOMAIN}/sources`,
+    ready: 'text=run_7',
+    steps: [{ waitFor: 'text=Run history' }],
   },
   {
     name: 'review-list',
@@ -183,6 +221,9 @@ async function runStep(page: Page, step: Step): Promise<void> {
       .waitFor({ state: 'visible', timeout: CONFIG.readyTimeoutMs });
   } else if ('check' in step) {
     await page.locator(step.check).nth(step.nth).check();
+  } else if ('upload' in step) {
+    const files = step.files.map((name) => resolve(CONFIG.sampleDataDir, name));
+    await page.locator(step.upload).setInputFiles(files);
   } else {
     await page.waitForTimeout(step.wait);
   }

@@ -7,6 +7,7 @@ const ITEMS = [
   { to: '/$domain/canvas', label: 'Canvas' },
   { to: '/$domain/modeler', label: 'Modeler' },
   { to: '/$domain/review', label: 'Review' },
+  { to: '/$domain/sources', label: 'Sources' },
   { to: '/$domain/settings', label: 'Settings' },
 ] as const;
 

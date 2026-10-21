@@ -85,7 +85,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Ingestion | CSV and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done; Parquet planned | M2 |
 | Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
 | Ingestion | Offline document extraction into reviewable Proposals | Planned | M4 |
-| Web app | Explorer, Canvas, Modeler, Review with Conflict resolver | Done on the mock API; live adapter not yet verified | M2, M3 |
+| Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver, Sources, Admin basics | Done on the mock API; live adapter not yet verified | M2, M3 |
 | Scale | Overlay branches, PII vault, Helm chart, 10M-Record performance | Planned | M5 |
 
 The milestone breakdown with checkboxes is in the [roadmap](docs/roadmap.md).

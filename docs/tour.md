@@ -2,7 +2,7 @@
 
 Screenshots of the Lorebase web app (`apps/web`), taken from the `supply` sample Domain at 1440x900 in the light theme.
 
-**Mock versus live.** Every picture below comes from mock mode: the app talks to an in-memory implementation of the Keeper API with two sample Domains (`supply` and `hr`), so no backend is involved. The Keeper REST API now covers Domains, branches, schema and schema change sets, Operations, Proposals with merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff, and the app has an HTTP adapter (`live` mode) for it, but the screens, Review included, have not been exercised against a running Keeper (see [Status](../README.md#status-and-roadmap)). Data you see is sample data, and changes made in the app live only for the browser session.
+**Mock versus live.** Every picture below comes from mock mode: the app talks to an in-memory implementation of the Keeper API with two sample Domains (`supply` and `hr`), so no backend is involved. The Keeper REST API now covers Domains, branches, schema and schema change sets, schema inference, API keys, grants and the audit log, Operations, Proposals with merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff, and the app has an HTTP adapter (`live` mode) for it, but the screens, Review included, have not been exercised against a running Keeper (see [Status](../README.md#status-and-roadmap)). Data you see is sample data, and changes made in the app live only for the browser session.
 
 ![Explorer, a Record, the Canvas and the Review resolver in one pass](images/tour.gif)
 
@@ -56,6 +56,18 @@ The schema of the current Branch as lists: Kinds, Attributes, Relations, Traits,
 
 The schema as one document in two synchronized views: a form for Kinds, Relations and Traits and a YAML editor (CodeMirror) for everything, including Operations, Derivations and Sources. Validation issues point at the field and the YAML line; the change set summary shows the commands and the data migrations a dry run reports. On a protected Branch "Open Proposal" creates a Branch and a Proposal instead of committing. Mock: validation, migrations and commits run in the mock with the same rules as the Keeper design. Keeper now has a schema change endpoint, but this editor has not been run against it yet.
 
+### Start from data
+
+![Modeler, Start from data](images/modeler-start.png)
+
+The wizard for a Domain that starts from tables, not from a blank schema. Upload CSV or TSV files (drag and drop, with the file, size and suffix caps of the configuration) or name a Postgres source by its allowlisted secret reference, run the inference, and review what it proposes: Kinds with a confidence badge and the evidence for their primary key, Attributes with their type, sample values and the reasons behind them, Relations with cardinality and inclusion ratio. Rename, change a type, accept or drop each element, or accept everything at or above a confidence threshold; the YAML on the right follows every edit, and the issues the inference found are listed below. "Apply as schema change" lays the accepted elements over the schema of the Branch and commits them through the same change set panel as the schema editor, or, on a protected Branch such as `main`, creates a Branch and opens a Proposal. The picture shows the twelve CSV files of `examples/supply` after "Accept all at or above 90%": 61 of 63 elements accepted, the two junction Relations read with 85% confidence left to the reviewer. Mock: the inference answer is the recorded output of the real engine on those files (the gold test of `docs/inference.md`), narrowed to the tables you upload; the uploaded bytes are not read.
+
+## Sources
+
+![Sources](images/sources.png)
+
+The Sources of the schema with their connection reference, mapping summary, sync mode and merge policy, schedule, last run and its counts, a "Sync now" button, the run history with the error of a failed run and a link to the Proposal a run opened (run 6 opened Proposal 40), and the `sources` section of the schema as a YAML editor with validation and a change set. Mock: runs are sample data and a manual sync finds nothing new. Live: runs come from Keeper's Source routes and "Sync now" queues a job for Scribe. The mapping editor is planned.
+
 ## Review
 
 ### Proposal list
@@ -75,6 +87,8 @@ Proposal 41 merges `model/risk` into `main` and ends up with six Conflicts of si
 ![Settings](images/settings.png)
 
 Appearance (system, light or dark theme), the settings of the Domain (default Branch, creator, search language) and the runtime configuration the app was started with: data source, page size, search limit and Canvas limits. These are build-time values read from environment variables; the app stops at start if a required one is missing. Mock: the data source reads "mock".
+
+Three more tabs hold the Admin basics (not pictured): API keys (create with a role and a lifetime, the secret is shown once, revoke after a confirmation, last use and status), principals and the grants of the Domain (read only), and the audit log with actor, action and text filters over the loaded entries and paging for older ones. Mock: keys, grants and audit entries live in memory for the session.
 
 ## Dark theme
 

@@ -20,7 +20,7 @@ export function mintId(prefix: string): string {
 }
 
 /** Ids that stay the same for the same element while it is being edited. */
-function memoizedIds(): IdFactory {
+export function memoizedIds(): IdFactory {
   const known = new Map<string, string>();
   return (prefix, key) => {
     const slot = `${prefix}:${key}`;

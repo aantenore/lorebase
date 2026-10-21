@@ -29,9 +29,13 @@ describe('Settings', () => {
     expect(document.documentElement).not.toHaveAttribute('data-theme');
   });
 
-  it('lists the Sources, History and Admin screens as planned', async () => {
+  it('lists History and the Domain settings editor as planned; Admin and Sources are built', async () => {
     renderApp('/supply/settings');
-    expect(await screen.findByRole('region', { name: 'Admin: Audit log' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'History: Log and compare' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'History: Log and compare' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Admin: Domain settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Admin: Audit log' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /^Sources:/ })).not.toBeInTheDocument();
   });
 });
