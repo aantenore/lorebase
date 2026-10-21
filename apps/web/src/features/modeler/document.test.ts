@@ -94,7 +94,7 @@ describe('schema document', () => {
     };
     const { schema: next, issues } = documentToSchema(document, schema, mint);
     // A rename does not rewrite the other documents that name the Kind; the stale one is reported.
-    expect(issues.map((i) => i.path)).toEqual(['derivations/single_sourced/target']);
+    expect(issues.map((i) => i.path)).toEqual(['derivations/single_sourced/definition/kind']);
     expect(next.kinds.find((k) => k.id === 'knd_part')?.api_name).toBe('Component');
     expect(next.relations.find((r) => r.api_name === 'supplied_by')?.from_kind).toBe('knd_part');
   });

@@ -117,7 +117,7 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
 
   const propose = useMutation({
     mutationFn: async () => {
-      await api.branches.create(scope.domain, { name: proposedBranch, from: scope.branch });
+      await api.branches.create(scope.domain, { name: proposedBranch, source: scope.branch });
       const result = await api.schema.applyChanges(scope.domain, proposedBranch, {
         changes,
         message: revisionMessage,

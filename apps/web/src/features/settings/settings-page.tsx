@@ -17,6 +17,11 @@ function Row({ name, value }: { name: string; value: string | number }) {
   );
 }
 
+const searchLanguage = (settings: Record<string, unknown>): string => {
+  const language = settings['search_language'];
+  return typeof language === 'string' ? language : 'default';
+};
+
 /** Settings: appearance, runtime configuration and Domain settings; Admin screens are planned. */
 export function SettingsPage() {
   const scope = useScope();
@@ -60,7 +65,7 @@ export function SettingsPage() {
             <Row name="Domain id" value={domainInfo.id} />
             <Row name="Default Branch" value={domainInfo.default_branch} />
             <Row name="Created by" value={domainInfo.created_by} />
-            <Row name="Search language" value={domainInfo.settings.search_language ?? 'default'} />
+            <Row name="Search language" value={searchLanguage(domainInfo.settings)} />
           </TBody>
         </Table>
       </Section>

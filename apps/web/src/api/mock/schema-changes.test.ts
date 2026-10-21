@@ -89,7 +89,7 @@ describe('mock schema change sets', () => {
     });
     await expect(api.schema.applyChanges('supply', 'main', { changes })).rejects.toMatchObject({
       status: 409,
-      code: 'branch_protected',
+      code: 'protected-branch',
     });
     const dry = await api.schema.applyChanges('supply', 'main', { changes, dry_run: true });
     expect(dry).toMatchObject({ valid: true, revision: null });

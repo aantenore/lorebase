@@ -36,7 +36,7 @@ import type {
   Resolution,
   ResolveManyInput,
   ReviewInput,
-  ProposalReview,
+  ReviewResult,
   Schema,
   SchemaChangeRequest,
   SchemaChangeResult,
@@ -122,7 +122,7 @@ export interface KeeperApi {
     create(domain: DomainId, input: CreateProposalInput): Promise<Proposal>;
     get(domain: DomainId, proposal: string): Promise<ProposalDetail>;
     diff(domain: DomainId, proposal: string, params?: PageParams): Promise<DiffResponse>;
-    review(domain: DomainId, proposal: string, input: ReviewInput): Promise<ProposalReview>;
+    review(domain: DomainId, proposal: string, input: ReviewInput): Promise<ReviewResult>;
     /**
      * Applies the stored Resolutions, re-runs the merge and its consistency checks, and
      * commits the merge Revision, or reports the Conflicts that remain.

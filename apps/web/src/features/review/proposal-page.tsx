@@ -110,7 +110,7 @@ export function ProposalPage({
         <>
           <PageHeader
             title={`#${detail.id} ${detail.title}`}
-            description={detail.description}
+            description={detail.description ?? undefined}
             actions={
               <div className="flex items-center gap-2">
                 <Badge tone={STATUS_TONE[detail.status]}>{detail.status}</Badge>
