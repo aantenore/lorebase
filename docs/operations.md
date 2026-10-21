@@ -23,6 +23,9 @@ python -m lorebase_store.gc --domain supply --enqueue     # queue a `gc` job ins
 python -m lorebase_store.jobs work                        # run queued jobs (SKIP LOCKED)
 ```
 
+Scribe runs queued `gc` jobs and queues one per Domain at `scribe.scheduler.gc_schedule`
+([scribe](scribe.md)).
+
 The report is one JSON object per Domain (`revisions`, `changesets`, `history_rows`,
 `provenance`, `nodes`, `node_bytes`, `objects`, `object_bytes`, mark and sweep seconds). In
 code: `collect_garbage(engine, domain_id, dry_run=...)`, `run_gc_job` for the `gc` job type

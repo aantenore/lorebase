@@ -61,10 +61,10 @@ Acceptance (design 18): a Domain applied from YAML, filled by CLI import of 1M R
 
 Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario) run end to end.
 
-- [ ] Scribe job runner on the Postgres job queue (the queue and a worker for store jobs exist: garbage collection, index builds)
-- [ ] CSV, Parquet and Postgres Sources, snapshot and incremental sync
+- [x] Scribe job runner on the Postgres job queue, with a leader-elected scheduler ([scribe](scribe.md))
+- [ ] CSV, Parquet and Postgres Sources, snapshot and incremental sync (CSV and Postgres are done; Parquet is not)
 - [x] Schema inference from CSV files and Postgres tables, with a golden test on the example `supply` schema ([inference](inference.md)); Sources do not run it yet
-- [ ] Source branches, merge policies and Lineage for syncs
+- [x] Source branches, merge policies and Lineage for syncs
 - [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
 - [x] Web app shell, Explorer, Canvas (graph and schema graph) and Review screens on the mock API
 - [ ] Web app verified against a live Keeper

@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1.7
 #
-# One backend image for every Python service (Keeper today; Scribe and Herald as they land).
-# The service is chosen by the command, for example:
-#   docker run lorebase python -m lorebase_keeper
+# One backend image for every Python service. The service is chosen by the command:
+#   docker run lorebase python -m lorebase_keeper      # Keeper, the REST API (default)
+#   docker run lorebase lorebase-scribe                 # Scribe, the job worker and scheduler
+#   docker run lorebase lorebase-herald                 # Herald, the MCP server
 #
 # Build from the repository root:
 #   docker build -f deploy/docker/backend.Dockerfile -t lorebase .
