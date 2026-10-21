@@ -160,6 +160,11 @@ SCHEMA = {
 }
 
 
+def served(**members: Any) -> dict[str, Any]:
+    """A read answer as Keeper serves it: the Revision it was read at and where from."""
+    return {"revision": REVISION, "served_from": "materialized", **members}
+
+
 def record(kind: str, key: str, title: str, **values: Any) -> dict[str, Any]:
     return {
         "kind": kind,
@@ -167,7 +172,7 @@ def record(kind: str, key: str, title: str, **values: Any) -> dict[str, Any]:
         "title": title,
         "values": values,
         "updated_revision": REVISION,
-        "updated_at": "2026-10-01T08:00:03.000000Z",
+        "updated_at": "2026-10-01T08:00:03Z",
     }
 
 
@@ -189,4 +194,129 @@ SUPPLIER_RECORD = {
             }
         },
     },
+}
+
+
+CONTEXT_PACK = {
+    "domain": "supply",
+    "branch": "main",
+    "revision": REVISION,
+    "etag": "e1",
+    "seeds": [{"ref": "Supplier/S-1001"}],
+    "neighbors": [],
+    "links": {},
+    "budget": {"tokens": 3000},
+}
+MARKDOWN_PACK = "# Context: Supplier/S-1001\nsupply/main at revision " + REVISION + "\n"
+
+
+def markdown_pack(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200, text=MARKDOWN_PACK, headers={"content-type": "text/markdown; charset=utf-8"}
+    )
+
+
+EXPLAINED = {
+    "domain": "supply",
+    "branch": "main",
+    "revision": REVISION,
+    "record": {
+        "ref": "Supplier/S-1001",
+        "kind": "Supplier",
+        "key": "S-1001",
+        "title": "Kavsen Alloys",
+        "values": {"supplier_code": "S-1001", "tier": "1"},
+        "updated_revision": REVISION,
+    },
+    "created": {
+        "revision": PARENT,
+        "at": "2026-10-01T08:00:03Z",
+        "actor": "usr_loader",
+        "origin_type": "import",
+        "message": "Import the supply example data",
+    },
+    "attributes": [
+        {
+            "name": "supplier_code",
+            "value": "S-1001",
+            "revision": PARENT,
+            "at": "2026-10-01T08:00:03Z",
+            "actor": "usr_loader",
+            "origin_type": "import",
+        },
+        {"name": "tier", "value": "1"},
+    ],
+    "links": [
+        {
+            "relation": "purchase_orders",
+            "direction": "inverse",
+            "ref": "PurchaseOrder/PO-1",
+            "title": "PO-1",
+            "revision": PARENT,
+            "at": "2026-10-01T08:00:03Z",
+            "actor": "usr_loader",
+            "origin_type": "import",
+        }
+    ],
+    "links_truncated": False,
+    "history": {"changes": 2},
+    "proposals": [
+        {"id": "prp_1", "title": "Raise risk", "status": "merged", "merged_revision": REVISION}
+    ],
+}
+
+
+def branch_entry(name: str, head: str, *, default: bool, protected: bool) -> dict[str, Any]:
+    return {
+        "name": name,
+        "head": head,
+        "default": default,
+        "protected": protected,
+        "materialization": "materialized",
+        "version": 1,
+        "created_at": "2026-10-01T08:00:00Z",
+        "created_by": "usr_loader",
+    }
+
+
+def revision_log(request: httpx.Request) -> httpx.Response:
+    entries = [
+        {
+            "id": rev,
+            "parents": [],
+            "root": rev,
+            "generation": 1,
+            "created_at": "2026-10-02T00:00:00Z",
+            "author": "usr_editor",
+            "origin": {"type": "operation"},
+            "message": f"change {rev[:2]}",
+            "stats": {"records": 1},
+        }
+        for rev in (REVISION, PARENT, OLDER)
+    ]
+    if request.url.params.get("cursor") == "page2":
+        return httpx.Response(200, json={"branch": "main", "head": REVISION, "items": entries[2:]})
+    return httpx.Response(
+        200,
+        json={"branch": "main", "head": REVISION, "items": entries[:2], "next_cursor": "page2"},
+    )
+
+
+EXECUTION = {
+    "status": "dry_run",
+    "operation": "update_supplier",
+    "branch": "main",
+    "invocation_id": "inv_1",
+    "parameters_hash": "h",
+    "head": REVISION,
+    "revision": None,
+    "revisions": [],
+    "edits": [{"op": "upsert", "kind": "Supplier", "key": "S-1"}],
+    "edit_count": 1,
+    "edits_truncated": False,
+    "violations": [],
+    "violation_count": 0,
+    "warnings": [],
+    "review_required": False,
+    "replayed": False,
 }

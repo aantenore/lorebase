@@ -1,0 +1,202 @@
+{
+  "bad-ref": {
+    "error": true,
+    "text": "Error executing tool lorebase_get: 1 validation error for lorebase_getArguments\nref\n  String should have at least 3 characters [type=string_too_short, input_value='x', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_too_short"
+  },
+  "branch-busy": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [branch-busy] Another writer holds the branch.\nnext: retry later"
+  },
+  "branch-not-materialized": {
+    "error": true,
+    "text": "Error executing tool lorebase_get: [branch-not-materialized] Read it at a Revision.\nnext: read this branch at a Revision with `at`"
+  },
+  "branches-json": {
+    "error": false,
+    "text": "{\"items\":[{\"name\":\"main\",\"head\":\"abababababababababababababababababababababababababababababababab\",\"default\":true,\"protected\":true},{\"name\":\"agent/x\",\"head\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"default\":false,\"protected\":false}],\"next_cursor\":\"b2\"}"
+  },
+  "branches-text": {
+    "error": false,
+    "text": "main (default, protected) head abababababababababababababababababababababababababababababababab\nagent/x head cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\nnext_cursor: b2"
+  },
+  "changes-latest-json": {
+    "error": false,
+    "text": "{\"branch\":\"main\",\"head\":\"abababababababababababababababababababababababababababababababab\",\"since\":null,\"since_reached\":null,\"items\":[{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"at\":\"2026-10-02T00:00:00Z\",\"author\":\"usr_editor\",\"origin\":\"operation\",\"message\":\"change ab\",\"stats\":{\"records\":1}}],\"next_cursor\":\"page2\"}"
+  },
+  "changes-text": {
+    "error": false,
+    "text": "main head abababababababababababababababababababababababababababababababab: 2 Revisions since efefefefef\nabababababababababababababababababababababababababababababababab 2026-10-02T00:00:00Z usr_editor [operation] change ab (records=1)\ncdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd 2026-10-02T00:00:00Z usr_editor [operation] change cd (records=1)"
+  },
+  "changes-unreached-text": {
+    "error": false,
+    "text": "main head abababababababababababababababababababababababababababababababab: 2 Revisions since ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\nabababababababababababababababababababababababababababababababab 2026-10-02T00:00:00Z usr_editor [operation] change ab (records=1)\ncdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd 2026-10-02T00:00:00Z usr_editor [operation] change cd (records=1)\nsince not reached: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff is older than the entries read or not on this branch\nnext_cursor: page2"
+  },
+  "context-json": {
+    "error": false,
+    "text": "{\"domain\":\"supply\",\"branch\":\"main\",\"revision\":\"abababababababababababababababababababababababababababababababab\",\"etag\":\"e1\",\"seeds\":[{\"ref\":\"Supplier/S-1001\"}],\"neighbors\":[],\"links\":{},\"budget\":{\"tokens\":3000}}"
+  },
+  "context-markdown": {
+    "error": false,
+    "text": "# Context: Supplier/S-1001\nsupply/main at revision abababababababababababababababababababababababababababababababab\n"
+  },
+  "context-question-json": {
+    "error": false,
+    "text": "{\"domain\":\"supply\",\"branch\":\"main\",\"revision\":\"abababababababababababababababababababababababababababababababab\",\"etag\":\"e1\",\"seeds\":[{\"ref\":\"Supplier/S-1001\"}],\"neighbors\":[],\"links\":{},\"budget\":{\"tokens\":3000},\"found_by\":\"search\",\"question\":\"kavsen\"}"
+  },
+  "context-question-markdown": {
+    "error": false,
+    "text": "seeds found by search for 'kavsen'\n# Context: Supplier/S-1001\nsupply/main at revision abababababababababababababababababababababababababababababababab\n"
+  },
+  "diff-json": {
+    "error": false,
+    "text": "{\"from\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"to\":\"abababababababababababababababababababababababababababababababab\",\"total\":3,\"summary\":[{\"name\":\"Supplier\",\"element\":\"record\",\"added\":1,\"modified\":1,\"removed\":0},{\"name\":\"supplied_by\",\"element\":\"link\",\"added\":0,\"modified\":0,\"removed\":1}],\"changes\":[{\"change\":\"modified\",\"subject\":\"Supplier/S-1\",\"values\":[{\"name\":\"city\",\"old\":\"Poznan\",\"new\":\"Lodz\"}]},{\"change\":\"added\",\"subject\":\"Supplier/S-2\"},{\"change\":\"removed\",\"subject\":\"supplied_by P-1 -> S-1\"}],\"next_cursor\":\"d2\"}"
+  },
+  "diff-text": {
+    "error": false,
+    "text": "diff cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd..abababababababababababababababababababababababababababababababab: 3 changes\nsummary: Supplier +1 ~1 -0; supplied_by +0 ~0 -1\n~ Supplier/S-1\n  city: Poznan -> Lodz\n+ Supplier/S-2\n- supplied_by P-1 -> S-1\nnext_cursor: d2"
+  },
+  "execute-committed-json": {
+    "error": false,
+    "text": "{\"status\":\"committed\",\"operation\":\"update_supplier\",\"branch\":\"main\",\"head\":\"abababababababababababababababababababababababababababababababab\",\"revision\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"review_required\":false,\"edit_count\":1,\"edits\":[{\"op\":\"upsert\",\"kind\":\"Supplier\",\"key\":\"S-1\"}],\"edits_omitted\":0,\"violation_count\":0,\"violations\":[],\"warnings\":[],\"replayed\":false}"
+  },
+  "execute-dry-run-text": {
+    "error": false,
+    "text": "dry_run update_supplier on main (head abababababababababababababababababababababababababababababababab): 1 edits, 0 violations\nedits:\n- {\"op\":\"upsert\",\"kind\":\"Supplier\",\"key\":\"S-1\"}\nnext: call again with dry_run=false and expected_head=abababababababababababababababababababababababababababababababab to commit"
+  },
+  "execute-rejected-text": {
+    "error": false,
+    "text": "dry_run update_supplier on main (head abababababababababababababababababababababababababababababababab): 0 edits, 1 violations\nviolations:\n- parameters/tier: is required [required]\nwarnings:\n- <operation>: tier is old [stale]\nreplayed: same idempotency_key and parameters; original result returned\nnext: fix the violations; nothing was written"
+  },
+  "explain-attributes-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"branch\":\"main\",\"ref\":\"Supplier/S-1001\",\"title\":\"Kavsen Alloys\",\"updated_revision\":\"abababababababababababababababababababababababababababababababab\",\"history\":{\"changes\":2},\"created\":{\"revision\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"at\":\"2026-10-01T08:00:03Z\",\"actor\":\"usr_loader\",\"origin_type\":\"import\",\"message\":\"Import the supply example data\"},\"attributes\":[{\"name\":\"tier\",\"value\":\"1\"}]}"
+  },
+  "explain-text": {
+    "error": false,
+    "text": "Supplier/S-1001 \"Kavsen Alloys\" rev abababababababababababababababababababababababababababababababab on main (2 changes, last in abababababababababababababababababababababababababababababababab)\ncreated <- import by usr_loader at 2026-10-01T08:00:03Z in cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd: Import the supply example data\nsupplier_code = S-1001 <- import by usr_loader at 2026-10-01T08:00:03Z in cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\ntier = 1 <- no recorded origin\nLINKS:\npurchase_orders -> PurchaseOrder/PO-1 \"PO-1\" <- import by usr_loader at 2026-10-01T08:00:03Z in cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\nPROPOSALS:\nprp_1 \"Raise risk\" merged in abababababababababababababababababababababababababababababababab"
+  },
+  "forbidden": {
+    "error": true,
+    "text": "Error executing tool lorebase_schema: [forbidden] No schema.read.\nnext: this agent's API key lacks the permission; do not retry"
+  },
+  "get-at-text": {
+    "error": false,
+    "text": "Supplier/S-1001 \"Kavsen Alloys\" rev abababababababababababababababababababababababababababababababab\nsupplier_code: S-1001\ntier: 1\nlinks: purchase_orders=2"
+  },
+  "get-json": {
+    "error": false,
+    "text": "{\"ref\":\"Supplier/S-1001\",\"title\":\"Kavsen Alloys\",\"values\":{\"supplier_code\":\"S-1001\",\"tier\":\"1\"},\"updated_revision\":\"abababababababababababababababababababababababababababababababab\",\"updated_at\":\"2026-10-01T08:00:03Z\",\"links\":[{\"relation\":\"purchase_orders\",\"direction\":\"inverse\",\"count\":2},{\"relation\":\"risk_flags\",\"direction\":\"inverse\",\"count\":0}],\"revision\":\"abababababababababababababababababababababababababababababababab\"}"
+  },
+  "get-text": {
+    "error": false,
+    "text": "Supplier/S-1001 \"Kavsen Alloys\" rev abababababababababababababababababababababababababababababababab\nsupplier_code: S-1001\ntier: 1\nlinks: purchase_orders=2"
+  },
+  "idempotency-conflict": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [idempotency-conflict] Key used with other parameters.\nnext: use a new idempotency_key for different parameters"
+  },
+  "internal-error": {
+    "error": true,
+    "text": "Error executing tool lorebase_diff: [internal-error] Internal server error\nnext: retry later"
+  },
+  "limit-exceeded": {
+    "error": true,
+    "text": "Error executing tool lorebase_neighborhood: [limit-exceeded] Too many nodes.\nnext: narrow the request"
+  },
+  "neighborhood-text": {
+    "error": false,
+    "text": "rev abababababababababababababababababababababababababababababababab: 2 nodes, 1 edges\nnodes:\nSupplier/S-1 \"Acme\"\nPart/P-1 \"Bearing\"\nedges:\nPart/P-1 -supplied_by-> Supplier/S-1\ntruncated: Keeper caps reached; narrow `relations` or lower `depth`"
+  },
+  "neighborhood-values-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"nodes\":[{\"ref\":\"Supplier/S-1\",\"title\":\"Acme\",\"values\":{\"tier\":\"1\"}},{\"ref\":\"Part/P-1\",\"title\":\"Bearing\",\"values\":{},\"links\":[]}],\"edges\":[{\"from\":\"Part/P-1\",\"relation\":\"supplied_by\",\"to\":\"Supplier/S-1\",\"values\":{\"since\":\"2026\"}}],\"truncated\":true}"
+  },
+  "non-problem": {
+    "error": true,
+    "text": "Error executing tool lorebase_schema: [http-502] Bad Gateway\nnext: retry later"
+  },
+  "not-found": {
+    "error": true,
+    "text": "Error executing tool lorebase_get: [not-found] Record Supplier/S-1001 not found.\nnext: check the ref with lorebase_search or names with lorebase_schema"
+  },
+  "protected-branch": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [protected-branch] Branch 'main' is protected.\nnext: this change needs review: run it on a work branch, then open a Proposal for that branch; do not retry here"
+  },
+  "query-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"items\":[{\"ref\":\"Part/P-1\",\"title\":\"Bearing\",\"values\":{\"category\":\"bearing\",\"unit_cost\":\"10.79\"},\"updated_revision\":\"abababababababababababababababababababababababababababababababab\",\"updated_at\":\"2026-10-01T08:00:03Z\",\"links\":[{\"relation\":\"supplied_by\",\"direction\":\"forward\",\"count\":1}],\"included\":{\"supplied_by\":[{\"ref\":\"Supplier/S-1\",\"title\":\"Acme\"}]}},{\"ref\":\"Part/P-2\",\"title\":null,\"values\":{\"category\":\"bearing\",\"unit_cost\":\"9.5\",\"note\":\"a\\nb\"},\"updated_revision\":\"abababababababababababababababababababababababababababababababab\",\"updated_at\":\"2026-10-01T08:00:03Z\"}],\"next_cursor\":\"c2\",\"aggregate\":{\"counts\":[{\"kind\":\"Part\",\"value\":\"bearing\",\"count\":2}]}}"
+  },
+  "query-required": {
+    "error": true,
+    "text": "Error executing tool lorebase_search: [query-required] give `query` text (lexical search) or a `query_vector`\nnext: pass the words to look for in `query`"
+  },
+  "query-text": {
+    "error": false,
+    "text": "rev abababababababababababababababababababababababababababababababab: 2 rows\ncount Part bearing: 2\nPart/P-1 \"Bearing\" | category=bearing; unit_cost=10.79\n  supplied_by: Supplier/S-1 \"Acme\"\nPart/P-2 | category=bearing; unit_cost=9.5; note=a b\nnext_cursor: c2"
+  },
+  "rate-limited": {
+    "error": true,
+    "text": "Error executing tool lorebase_schema: [rate-limited] Too many requests\nnext: retry after 7 s"
+  },
+  "request-errors": {
+    "error": true,
+    "text": "Error executing tool lorebase_query: [validation-failed] Invalid query.\n- /body/where/op: unknown operator [invalid]\nnext: fix the listed members and call again"
+  },
+  "resources": {
+    "error": false,
+    "text": "schema supply@main rev abababababababababababababababababababababababababababababababab\nKINDS\nSupplier [key supplier_code; title legal_name] - A company that supplies parts.\n  supplier_code: string! \u00b7 legal_name: string! \u00b7 tier: enum(1|2|3)\n  ops: create_supplier, update_supplier, delete_supplier\nPurchaseOrder [key po_number] - An order.\n  po_number: string! \u00b7 total: decimal(12,2) \u00b7 supplier: ref(Supplier)\n  ops: create_purchase_order\nRELATIONS (from -> to; inverse name reads to -> from)\nissued_to: PurchaseOrder -> Supplier (many_to_one; inverse purchase_orders) - The supplier an order is issued to.\nOPERATIONS (writes; run with lorebase_execute)\nflag_supplier_risk(supplier: ref(Supplier)!) [review: expression] - Flag a supplier as a risk.\nbuilt-in: per Kind ops above, link_/unlink_<relation> for explicit Relations, import_records(kind, rows), import_links(relation, rows)\n--\nSupplier/S-1001 \"Kavsen Alloys\" rev abababababababababababababababababababababababababababababababab\nsupplier_code: S-1001\ntier: 1\nlinks: purchase_orders=2"
+  },
+  "review-required": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [review-required] Edits need review.\nnext: this change needs review: run it on a work branch, then open a Proposal for that branch (/proposals); do not retry here"
+  },
+  "schema-full-text": {
+    "error": false,
+    "text": "schema supply@main rev abababababababababababababababababababababababababababababababab\nKINDS\nSupplier [key supplier_code; title legal_name] - A company that supplies parts.\n  supplier_code: string! - The supplier_code.\n  legal_name: string! - The legal_name.\n  tier: enum(1|2|3) - The tier.\n  ops: create_supplier, update_supplier, delete_supplier\nPurchaseOrder [key po_number] - An order.\n  po_number: string! - The po_number.\n  total: decimal(12,2) - The total.\n  supplier: ref(Supplier) - The supplier.\n  ops: create_purchase_order\nRELATIONS (from -> to; inverse name reads to -> from)\nissued_to: PurchaseOrder -> Supplier (many_to_one; inverse purchase_orders) - The supplier an order is issued to.\nOPERATIONS (writes; run with lorebase_execute)\nflag_supplier_risk(supplier: ref(Supplier)!) [review: expression] - Flag a supplier as a risk.\n  supplier: The supplier to flag.\n  review when: true\nbuilt-in: per Kind ops above, link_/unlink_<relation> for explicit Relations, import_records(kind, rows), import_links(relation, rows)"
+  },
+  "schema-json": {
+    "error": false,
+    "text": "{\"domain\":\"supply\",\"branch\":\"main\",\"revision\":\"abababababababababababababababababababababababababababababababab\",\"kinds\":[{\"name\":\"Supplier\",\"description\":\"A company that supplies parts.\",\"key\":[\"supplier_code\"],\"attributes\":[{\"name\":\"supplier_code\",\"type\":\"string\",\"required\":true},{\"name\":\"legal_name\",\"type\":\"string\",\"required\":true},{\"name\":\"tier\",\"type\":\"enum(1|2|3)\"}],\"operations\":[\"create_supplier\",\"update_supplier\",\"delete_supplier\"],\"title\":\"legal_name\"}],\"relations\":[{\"name\":\"issued_to\",\"inverse\":\"purchase_orders\",\"from\":\"PurchaseOrder\",\"to\":\"Supplier\",\"cardinality\":\"many_to_one\",\"description\":\"The supplier an order is issued to.\",\"operations\":[\"link_issued_to\",\"unlink_issued_to\"]}],\"operations\":[{\"name\":\"flag_supplier_risk\",\"description\":\"Flag a supplier as a risk.\",\"parameters\":[{\"name\":\"supplier\",\"type\":\"ref(Supplier)\",\"required\":true}],\"review\":\"expression\"}],\"generic_operations\":[\"import_records(kind, rows)\",\"import_links(relation, rows)\"]}"
+  },
+  "schema-text": {
+    "error": false,
+    "text": "schema supply@main rev abababababababababababababababababababababababababababababababab\nKINDS\nSupplier [key supplier_code; title legal_name] - A company that supplies parts.\n  supplier_code: string! \u00b7 legal_name: string! \u00b7 tier: enum(1|2|3)\n  ops: create_supplier, update_supplier, delete_supplier\nPurchaseOrder [key po_number] - An order.\n  po_number: string! \u00b7 total: decimal(12,2) \u00b7 supplier: ref(Supplier)\n  ops: create_purchase_order\nRELATIONS (from -> to; inverse name reads to -> from)\nissued_to: PurchaseOrder -> Supplier (many_to_one; inverse purchase_orders) - The supplier an order is issued to.\nOPERATIONS (writes; run with lorebase_execute)\nflag_supplier_risk(supplier: ref(Supplier)!) [review: expression] - Flag a supplier as a risk.\nbuilt-in: per Kind ops above, link_/unlink_<relation> for explicit Relations, import_records(kind, rows), import_links(relation, rows)"
+  },
+  "search-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"mode\":\"lexical\",\"items\":[{\"ref\":\"Part/P-1\",\"title\":\"Bearing\",\"snippet\":\"a\\nb\",\"score\":0.5},{\"ref\":\"Part/P-2\",\"title\":null,\"snippet\":null,\"score\":0.1235}]}"
+  },
+  "search-text": {
+    "error": false,
+    "text": "rev abababababababababababababababababababababababababababababababab (lexical): 2 hits\n1. Part/P-1 \"Bearing\" (0.5) - a b\n2. Part/P-2 (0.1235)"
+  },
+  "search-vector-text": {
+    "error": false,
+    "text": "rev abababababababababababababababababababababababababababababababab (lexical): 2 hits\n1. Part/P-1 \"Bearing\" (0.5) - a b\n2. Part/P-2 (0.1235)"
+  },
+  "seeds-required": {
+    "error": true,
+    "text": "Error executing tool lorebase_context: [seeds-required] give `records` (Kind/key refs) or a `question`\nnext: name the Records the task is about, or describe it in `question`"
+  },
+  "stale-head": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [stale-head] Branch 'main' moved.\nnext: the branch head is now abababababababababababababababababababababababababababababababab; re-read what the change depends on, then retry with expected_head=abababababababababababababababababababababababababababababababab"
+  },
+  "stale-head-unknown": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [stale-head] Branch 'main' moved.\nnext: re-read the branch head and retry"
+  },
+  "unauthorized": {
+    "error": true,
+    "text": "Error executing tool lorebase_schema: [unauthorized] Authentication required.\nnext: the agent's API key is missing, expired or revoked"
+  },
+  "unreachable": {
+    "error": true,
+    "text": "Error executing tool lorebase_schema: [keeper-unavailable] Keeper is unreachable (ConnectError). next: retry later"
+  },
+  "validation-issues": {
+    "error": true,
+    "text": "Error executing tool lorebase_execute: [validation-failed] 3 validation issue(s); nothing was written.\n- parameters/p0 (Supplier/S-1): is required [required]\n- parameters/p1 (Supplier/S-1): is required [required]\n- ... 3 more\nnext: fix the listed members and call again"
+  }
+}
