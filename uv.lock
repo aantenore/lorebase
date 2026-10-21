@@ -2002,6 +2002,9 @@ documents = [
     { name = "pypdf" },
     { name = "python-docx" },
 ]
+parquet = [
+    { name = "pyarrow" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2012,12 +2015,13 @@ requires-dist = [
     { name = "lorebase-platform", editable = "packages/platform" },
     { name = "lorebase-store", editable = "packages/store" },
     { name = "opentelemetry-api", specifier = ">=1.25" },
+    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pypdf", marker = "extra == 'documents'", specifier = ">=4.2" },
     { name = "python-docx", marker = "extra == 'documents'", specifier = ">=1.1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
 ]
-provides-extras = ["documents"]
+provides-extras = ["documents", "parquet"]
 
 [[package]]
 name = "lorebase-store"

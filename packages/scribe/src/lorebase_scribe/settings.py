@@ -145,14 +145,97 @@ class PostgresSourceSettings(SectionModel):
     fetch_rows: int = Field(default=5000, ge=1, description="Rows fetched per round trip.")
 
 
+class JsonSourceSettings(SectionModel):
+    """Reading `json` documents and `jsonl` (JSON Lines) files from local paths."""
+
+    allowed_roots: tuple[str, ...] = Field(
+        default=(),
+        description="Directories JSON and JSON Lines files may be read from; empty refuses "
+        "every file.",
+    )
+    max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        ge=1,
+        description="Largest `json` document; it is parsed whole, so larger files are refused.",
+    )
+    max_line_bytes: int = Field(
+        default=16 * 1024 * 1024,
+        ge=1,
+        description="Longest line of a `jsonl` file; the file itself is streamed.",
+    )
+
+
+class ParquetSourceSettings(SectionModel):
+    """Reading `parquet` files from local paths (needs the `parquet` extra: pyarrow)."""
+
+    allowed_roots: tuple[str, ...] = Field(
+        default=(),
+        description="Directories Parquet files may be read from; empty refuses every file.",
+    )
+    batch_rows: int = Field(
+        default=10000,
+        ge=1,
+        description="Rows decoded per batch; a file is streamed batch by batch, never whole.",
+    )
+
+
+class HttpJsonSourceSettings(SectionModel):
+    """Reading `http_json` Sources: GET requests to JSON APIs, page by page."""
+
+    allowed_hosts: tuple[str, ...] = Field(
+        default=(),
+        description="Host names the URLs may point at, next pages included; empty refuses "
+        "every URL.",
+    )
+    allowed_schemes: tuple[str, ...] = Field(
+        default=("https",), min_length=1, description="URL schemes the URLs may use."
+    )
+    allow_private_targets: bool = Field(
+        default=False,
+        description="Allow hosts that resolve to loopback, private or link-local addresses. "
+        "Off by default: every resolved address must be global unicast.",
+    )
+    timeout_s: float = Field(
+        default=30.0, gt=0, description="Time budget of one request, from lookup to last byte."
+    )
+    max_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        ge=1,
+        description="Larger responses are refused; reads stop after this many bytes.",
+    )
+    max_pages: int = Field(
+        default=1000,
+        ge=1,
+        description="Pages one run may read; a Source with more fails instead of committing "
+        "part of it. A Source's `http.max_pages` can only lower it.",
+    )
+    max_attempts: int = Field(
+        default=4, ge=1, description="Attempts per request, the first one included."
+    )
+    retry_statuses: tuple[int, ...] = Field(
+        default=(429, 500, 502, 503, 504),
+        description="Response statuses that are retried; network errors and timeouts are too.",
+    )
+    backoff_base_s: float = Field(default=1.0, ge=0, description="Pause before the first retry.")
+    backoff_factor: float = Field(
+        default=2.0, ge=1, description="Each further retry waits this many times longer."
+    )
+    backoff_max_s: float = Field(
+        default=60.0,
+        ge=0,
+        description="Longest pause between attempts, a server's Retry-After included.",
+    )
+
+
 class SourceSettings(SectionModel):
     """Source synchronization (design 9.1)."""
 
     allowed_connections: tuple[str, ...] = Field(
         default=(),
         description="Secret references (secret://env/NAME, secret://file/PATH) a Source "
-        "`connection` may name. Sources are defined by schema authors, so any other reference "
-        "is refused rather than resolved on this host. Empty: no Source can be synchronized.",
+        "`connection` or an `http_json` header value may name. Sources are defined by schema "
+        "authors, so any other reference is refused rather than resolved on this host. Empty: "
+        "no Source can be synchronized.",
     )
     commit_batch: int = Field(
         default=5000,
@@ -173,6 +256,9 @@ class SourceSettings(SectionModel):
         "branches too; false leaves those Proposals open for review.",
     )
     csv: CsvSourceSettings = Field(default_factory=CsvSourceSettings)
+    json_files: JsonSourceSettings = Field(default_factory=JsonSourceSettings)
+    parquet: ParquetSourceSettings = Field(default_factory=ParquetSourceSettings)
+    http_json: HttpJsonSourceSettings = Field(default_factory=HttpJsonSourceSettings)
     postgres: PostgresSourceSettings = Field(default_factory=PostgresSourceSettings)
 
 

@@ -451,9 +451,14 @@ class SourceSync:
         limit = self._settings.max_row_errors
         watermark_column = source.watermark_column
         checked = False
+        # Keys seen in the rows of a Source without fixed columns (JSON records): the mapped
+        # columns are checked against all of them once the rows are read.
+        seen: dict[str, None] = {}
         async for locator, row in connector.rows(since):
-            if not checked:
-                mapper.check_columns(connector.columns or tuple(row))
+            if not connector.columns:
+                seen.update(dict.fromkeys(row))
+            elif not checked:
+                mapper.check_columns(connector.columns)
                 checked = True
             report.rows_read += 1
             if watermark_column is not None and row.get(watermark_column) not in (None, ""):
@@ -465,10 +470,14 @@ class SourceSync:
                 if len(report.errors) < self._settings.error_samples:
                     report.errors.append(error.as_dict())
                 if report.rows_failed > limit:
+                    if seen:  # a mapped column no row had explains the failures better
+                        mapper.check_columns(tuple(seen))
                     raise SourceSyncError(
                         f"more than {limit} rows failed mapping; nothing was committed",
                         {"rows_failed": report.rows_failed},
                     ) from None
+        if seen:
+            mapper.check_columns(tuple(seen))
         report.rows_mapped = len(read.rows)
         SOURCE_ROWS.add(report.rows_read, {"lorebase.source": source.api_name})
         return read

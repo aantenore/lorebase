@@ -4,6 +4,10 @@ from lorebase_scribe.sources.connectors import (
     Connector,
     ConnectorFactory,
     CsvConnector,
+    HttpJsonConnector,
+    JsonConnector,
+    JsonLinesConnector,
+    ParquetConnector,
     PostgresConnector,
     SourceReadError,
     default_connector,
@@ -15,6 +19,7 @@ from lorebase_scribe.sources.mapping import (
     RowMapper,
     SourceDefinitionError,
 )
+from lorebase_scribe.sources.profile import profile_source
 from lorebase_scribe.sources.sync import (
     PERMANENT_ERRORS,
     SourceNotFoundError,
@@ -30,7 +35,11 @@ __all__ = [
     "CsvConnector",
     "CurrentState",
     "Delta",
+    "HttpJsonConnector",
+    "JsonConnector",
+    "JsonLinesConnector",
     "MappedRow",
+    "ParquetConnector",
     "PostgresConnector",
     "RowError",
     "RowMapper",
@@ -43,4 +52,5 @@ __all__ = [
     "SyncReport",
     "compute_delta",
     "default_connector",
+    "profile_source",
 ]

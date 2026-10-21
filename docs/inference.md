@@ -10,6 +10,7 @@ that a modeler edits and applies as a schema change set on a branch.
 |-------|-------|
 | Inference rules (pure, no I/O) | `lorebase_core.infer`: `infer_schema(tables, domain, options)` |
 | CSV/TSV and Postgres profilers | `lorebase_store.profiling`: `profile_file`, `profile_bytes`, `profile_postgres` |
+| Record profiler (JSON, JSON Lines, Parquet, APIs) | `lorebase_store.profiling.profile_records`; any Scribe Source through its connector: `lorebase_scribe.sources.profile_source` |
 | REST endpoint | `POST /api/v1/domains/{d}/schema:infer` (permission `schema.write`, audited as `schema.infer`) |
 | Settings | `keeper.schema_inference` and `store.profiling` in [config/lorebase.example.yaml](../config/lorebase.example.yaml) |
 
@@ -52,6 +53,24 @@ from lorebase_store.settings import CsvProfilingSettings
 tables = [profile_file(path, CsvProfilingSettings()) for path in paths]
 proposal = infer_schema(tables, "supply")
 print(dump_schema(proposal.schema))
+```
+
+Any Source Scribe can synchronize (CSV, JSON, JSON Lines, Parquet, `http_json`, Postgres) can be
+profiled through its connector, with the same connection rules and limits as a
+synchronization ([scribe.md](scribe.md#sources)). Every row is read and counted,
+`store.profiling.records` decides which are kept, and the columns are the connector's header
+followed by every other key seen; values keep their native types (numbers, dates and nested
+objects from JSON or Parquet):
+
+```python
+from lorebase_scribe.settings import scribe_settings
+from lorebase_scribe.sources import profile_source
+from lorebase_store.settings import store_settings
+
+profile = await profile_source(
+    source, scribe_settings(settings).sources, store_settings(settings).profiling.records
+)
+proposal = infer_schema([profile], "supply")
 ```
 
 ## How it works
@@ -165,7 +184,8 @@ patterned strings) and all seven Relations with their cardinality; see
   referenced keys; declared constraints are the only certainty.
 - Tell apart day-month and month-day dates (`date_formats` is explicit), or values that are
   coincidentally unique in small tables.
-- Read Parquet files: that needs `pyarrow`, which is not a dependency yet (follow-up), nor
-  spreadsheets other than CSV/TSV exports.
+- Take JSON, JSON Lines or Parquet uploads through the endpoint: those are profiled as Sources
+  through Scribe (`profile_source`; Parquet needs `lorebase-scribe[parquet]`). Spreadsheets
+  other than CSV/TSV exports are not read.
 - Produce Source mappings: the proposal is a schema; mapping the tables as Sources is a later
   step.
