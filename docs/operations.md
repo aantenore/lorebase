@@ -148,3 +148,17 @@ most every `flush_interval_s`, adding to the stored row, so quotas hold across r
 across processes up to one interval of traffic. If the database fails, requests are still
 served and the quota is enforced on what is known. `GET /auth/whoami` shows a key's `quota`
 with its use, remaining amounts and reset time.
+
+## Client addresses and API key networks
+
+An API key may carry `allowed_networks` (CIDR, IPv4 or IPv6; `apikey create --allow-network
+203.0.113.0/24`, repeatable). From any other client address it is refused with the same `401`
+as an invalid key, and Keeper logs `api key rejected` at INFO with the key prefix and the client
+address. Keys without networks, including every key created before migration `0008`, work from
+anywhere. Networks are set when the key is created (at most
+`keeper.auth.api_keys.max_allowed_networks`); to change them create a new key and revoke the old.
+
+The client address is the socket peer. When the peer is in `keeper.trusted_proxies`,
+`X-Forwarded-For` is read from right to left, trusted hops are skipped and the first other
+address is the client; entries further left are written by the client and never believed. A hop
+that is not an address ends the walk with no client address, which no allowlist matches.

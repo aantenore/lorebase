@@ -69,6 +69,11 @@ class ApiKeySettings(SectionModel):
         ge=0,
         description="A key's last-used time is written at most this often; 0 writes on every use.",
     )
+    max_allowed_networks: int = Field(
+        default=32,
+        ge=1,
+        description="Most networks an administrator may list in a key's `allowed_networks`.",
+    )
 
     @field_validator("token_prefix")
     @classmethod

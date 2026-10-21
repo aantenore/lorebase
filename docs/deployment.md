@@ -28,6 +28,11 @@ flowchart LR
 Everything that matters is in Postgres: a Keeper holds no state it cannot rebuild, so replicas
 are added, removed and restarted freely behind any load balancer, without session affinity.
 
+Keeper takes the client address from the socket peer and ignores forwarding headers unless the
+peer is listed in `keeper.trusted_proxies` (the server's own proxy header handling is off).
+Behind a proxy or load balancer, list its networks there so that API key allowlists see the real
+client (`docs/operations.md`); list only addresses that clients cannot reach Keeper from directly.
+
 ## What scales where
 
 | Part | How it scales | Why it stays correct |

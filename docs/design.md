@@ -1374,7 +1374,7 @@ One Lorebase installation serves one organization. Domains are the isolation bou
 ### 13.2 Authentication
 
 - **Users:** OIDC authorization code flow with PKCE against any compliant provider. Keeper acts as a backend-for-frontend: it holds tokens server-side and issues an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie to the web app; CSRF protection on state-changing requests. Group claims map to Lorebase groups.
-- **Agents and automation:** API keys bound to a service principal, with Domain scopes, roles, expiry and optional IP allowlist. Format `lbk_{prefix}_{secret}`; only an HMAC-SHA256 of the secret with a server-side pepper is stored. Keys are shown once.
+- **Agents and automation:** API keys bound to a service principal, with Domain scopes, roles, expiry and an optional allowlist of client networks (`allowed_networks`, CIDR; a key used from another address is refused like an invalid one). The client address is the socket peer, or the `X-Forwarded-For` hop left of the configured `keeper.trusted_proxies` when the peer is one of them. Format `lbk_{prefix}_{secret}`; only an HMAC-SHA256 of the secret with a server-side pepper is stored. Keys are shown once.
 - **Bootstrap:** the first admin is created by `lorebase admin bootstrap` from the CLI with access to the database; no default credentials exist.
 
 ### 13.3 Authorization enforcement

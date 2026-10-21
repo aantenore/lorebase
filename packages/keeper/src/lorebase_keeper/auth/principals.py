@@ -19,6 +19,7 @@ from lorebase_keeper.auth.cache import TtlCache
 from lorebase_keeper.auth.config import AuthSettings
 from lorebase_keeper.auth.oidc import InvalidTokenError, OidcVerifier, ProviderUnavailableError
 from lorebase_keeper.auth.ports import AuthStore
+from lorebase_keeper.client_address import IPAddress, in_networks
 from lorebase_keeper.errors import FORBIDDEN, UNAUTHORIZED, UNAVAILABLE, ProblemError
 from lorebase_store.auth import ApiKeyRecord
 from lorebase_store.models.enums import PrincipalType
@@ -98,8 +99,11 @@ class Authenticator:
         )
         self._admins = frozenset(settings.installation_admins)
 
-    async def authenticate(self, headers: Mapping[str, str]) -> Principal:
-        """The principal behind the request headers (lower-case names)."""
+    async def authenticate(
+        self, headers: Mapping[str, str], client: IPAddress | None = None
+    ) -> Principal:
+        """The principal behind the request headers (lower-case names), sent from `client`
+        (the client address; None when unknown)."""
         if self._settings.mode == "none":
             return anonymous_principal()
         bearer, api_key = self._credentials(headers)
@@ -109,7 +113,7 @@ class Authenticator:
         if api_key is not None or (self._codec and self._codec.looks_like_key(token)):
             if self._codec is None:
                 raise _unauthorized("API keys are not accepted.", presented=True)
-            return await self._with_api_key(token)
+            return await self._with_api_key(token, client)
         if self._oidc is None:
             raise _unauthorized("Bearer tokens are not accepted.", presented=True)
         return await self._with_token(token)
@@ -125,7 +129,7 @@ class Authenticator:
         key = headers.get(self._settings.api_keys.header.lower())
         return bearer, key.strip() if key else None
 
-    async def _with_api_key(self, token: str) -> Principal:
+    async def _with_api_key(self, token: str, client: IPAddress | None) -> Principal:
         assert self._codec is not None
         assert self._store is not None
         parsed = self._codec.parse(token)
@@ -141,6 +145,17 @@ class Authenticator:
                     extra={
                         "key_prefix": parsed.prefix,
                         "reason": _reject_reason(key, secret_matches, now),
+                    },
+                )
+                raise _unauthorized("Invalid credentials.", presented=True)
+            if key.allowed_networks and not in_networks(client, key.allowed_networks):
+                # Same answer as a wrong key: the caller learns nothing about the key.
+                logger.info(
+                    "api key rejected",
+                    extra={
+                        "key_prefix": parsed.prefix,
+                        "reason": "client address not allowed",
+                        "client_address": str(client) if client else None,
                     },
                 )
                 raise _unauthorized("Invalid credentials.", presented=True)

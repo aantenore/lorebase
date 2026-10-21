@@ -34,6 +34,10 @@ keeper:
   api_prefix: /api/v1            # version prefix of every API route; OpenAPI at <prefix>/openapi.json
   request_id_header: X-Request-ID          # accepted from clients when well formed, echoed back
   problem_type_base: "urn:lorebase:problem:"   # error `type` URI = this prefix + error code
+  trusted_proxies: []            # networks of reverse proxies in front of Keeper, e.g. [10.0.0.0/8].
+                                 # Only from these peers is X-Forwarded-For read (right to left,
+                                 # trusted hops skipped) to find the client address used by API
+                                 # key allowlists; empty: the socket peer is the client
   cors:
     allow_origins: []            # browser origins allowed to call the API; empty disables CORS
     allow_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
@@ -123,6 +127,7 @@ keeper:
       default_ttl_days: 365      # lifetime of new keys; null: no expiry
       max_ttl_days: null         # longest lifetime an admin may request; null: no limit
       last_used_interval_s: 60   # a key's last-used time is written at most this often
+      max_allowed_networks: 32   # most client networks a key's allowed_networks may list
     oidc:                        # bearer tokens of any OpenID Connect provider
       issuer: null               # REQUIRED with oidc modes: expected `iss`, base of discovery
       audience: []               # REQUIRED with oidc modes: accepted `aud` values

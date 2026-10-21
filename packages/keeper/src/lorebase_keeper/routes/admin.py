@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
 from lorebase_keeper.auth.audit import annotate
@@ -21,6 +21,7 @@ from lorebase_keeper.auth.deps import Access, AuthDep, require, require_installa
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.ports import AuthUnitPort
 from lorebase_keeper.auth.rbac import domain_scope
+from lorebase_keeper.client_address import normalize_networks
 from lorebase_keeper.errors import (
     BAD_REQUEST,
     FORBIDDEN,
@@ -67,6 +68,10 @@ class ApiKeyOut(BaseModel):
     last_used_at: datetime | None
     revoked_at: datetime | None
     created_at: datetime
+    allowed_networks: list[str] = Field(
+        default_factory=list,
+        description="Client networks (CIDR) the key may be used from; empty: any address.",
+    )
 
 
 class ApiKeyCreated(ApiKeyOut):
@@ -95,6 +100,18 @@ class CreateApiKey(BaseModel):
         "its grants are left as they are. The principal must hold a grant in this Domain and "
         "must not be an installation administrator.",
     )
+    allowed_networks: list[str] | None = Field(
+        default=None,
+        description="Client networks the key may be used from, e.g. 203.0.113.0/24 or "
+        "2001:db8::/48; a single address is a network of one. Requests from other addresses "
+        "are refused as if the key were invalid. Empty or omitted: any address. At most "
+        "`keeper.auth.api_keys.max_allowed_networks` entries.",
+    )
+
+    @field_validator("allowed_networks")
+    @classmethod
+    def _networks(cls, value: list[str] | None) -> list[str] | None:
+        return list(normalize_networks(value)) if value else None
 
 
 class PrincipalOut(BaseModel):
@@ -165,6 +182,7 @@ def _key_out(key: ApiKeyRecord) -> dict[str, Any]:
         "last_used_at": key.last_used_at,
         "revoked_at": key.revoked_at,
         "created_at": key.created_at,
+        "allowed_networks": list(key.allowed_networks),
     }
 
 
@@ -265,6 +283,12 @@ async def create_api_key(
     if auth.codec is None:
         raise ProblemError(BAD_REQUEST, "API keys are not enabled (keeper.auth.mode).")
     _known_role(auth, body.role)
+    networks = body.allowed_networks or []
+    if len(networks) > auth.settings.api_keys.max_allowed_networks:
+        raise _invalid(
+            "/body/allowed_networks",
+            f"must not list more than {auth.settings.api_keys.max_allowed_networks} networks",
+        )
     now = auth.clock()
     expires_at = _expiry(auth.settings.api_keys, body.ttl_days, now)
     actor = access.principal.id
@@ -283,7 +307,7 @@ async def create_api_key(
                 )
                 role = body.role
             token, key = await _add_key(
-                auth, unit, service.id, [domain_scope(domain_id)], expires_at
+                auth, unit, service.id, [domain_scope(domain_id)], expires_at, networks
             )
     except IntegrityError:
         raise ProblemError(NOT_FOUND, "Domain not found.") from None
@@ -296,6 +320,7 @@ async def create_api_key(
         prefix=key.prefix,
         role=role,
         expires_at=expires_at.isoformat() if expires_at else None,
+        allowed_networks=networks or None,
     )
     return ApiKeyCreated(**_key_out(key), key=token, role=role)
 
@@ -325,6 +350,7 @@ async def _add_key(
     principal_id: str,
     scopes: list[str],
     expires_at: datetime | None,
+    allowed_networks: list[str],
 ) -> tuple[str, ApiKeyRecord]:
     assert auth.codec is not None
     for _ in range(KEY_CREATION_ATTEMPTS):
@@ -336,6 +362,7 @@ async def _add_key(
                 key_hash=generated.key_hash,
                 scopes=scopes,
                 expires_at=expires_at,
+                allowed_networks=allowed_networks,
             )
         except PrefixTakenError:
             continue
