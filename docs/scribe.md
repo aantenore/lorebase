@@ -38,6 +38,7 @@ Domain-wide `data.read` grant.
 | `source_sync` | Keeper (`POST .../sources/{s}/sync`), the scheduler (Source `schedule`) | Synchronizes one Source (below). Payload `{"source": id, "dry_run": bool}` |
 | `webhook_delivery` | the scheduler, every `webhook_interval_s` | One pass of `lorebase_store.webhooks.deliver_pending`: fan-out of outbox events, signed POSTs, retries with backoff |
 | `store.index` | commits whose per-Attribute index plan changed (large Kinds, or roles that do not own `mat_records`) | Builds or drops one per-Attribute index (`CONCURRENTLY`), as `database.maintenance_dsn` when it is set ([store schema notes](store-schema-notes.md#physical-layout)) |
+| `store.materialize` | commits that move a base branch past an overlay's `overlay_max_base_lag_revisions` | Promotes the overlay branch to a full copy ([store schema notes](store-schema-notes.md#overlay-branches)). Payload `{"branch": name}` |
 | `gc` | the scheduler, at `gc_schedule` per Domain; `python -m lorebase_store.gc --enqueue` | Garbage collection of a Domain ([operations](operations.md)) |
 | `extraction` | nothing yet | Reserved; fails at once without retries |
 

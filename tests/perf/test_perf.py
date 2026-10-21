@@ -30,6 +30,10 @@ def test_small_scale_baseline() -> None:
             "1",
             "--commit-changes",
             "50",
+            "--overlay-iterations",
+            "3",
+            "--overlay-changes",
+            "50",
         ]
     )
     assert report.seeded.records > 500
@@ -39,3 +43,9 @@ def test_small_scale_baseline() -> None:
     for name in ("get by key", "list page of 50"):
         for role in ("owner", "rls"):
             assert all("Seq Scan" not in node for node in report.plans[name][role]), name
+    assert report.pair.overlay.overlay
+    assert 0 < report.pair.overlay_rows < report.pair.copy_rows
+    for role in ("owner", "rls"):
+        assert set(report.overlay_reads[role]) == set(bench.harness.TARGETS_MS)
+        assert all(m.samples_ms for m in report.copy_reads[role].values())
+    assert report.overlay_branch.samples_ms

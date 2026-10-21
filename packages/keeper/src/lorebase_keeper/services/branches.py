@@ -22,7 +22,13 @@ from lorebase_keeper.services.errors import (
     LIMIT_EXCEEDED,
     PROTECTED_BRANCH,
 )
-from lorebase_store.materialize import BranchExistsError, MaterializationMode, create_branch
+from lorebase_store.materialize import (
+    BranchExistsError,
+    BranchMode,
+    MaterializationMode,
+    create_branch,
+    promote_overlays_of,
+)
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories import (
     LockTimeoutError,
@@ -117,11 +123,15 @@ async def create(
     source: str | None,
     revision: bytes | None,
     idempotency_key: str | None,
+    mode: BranchMode | None = None,
 ) -> CreatedRef:
-    """Create a fully materialized branch at `revision` or at the head of `source`.
+    """Create a materialized branch at `revision` or at the head of `source`.
 
-    `source` is a branch or tag (default: the Domain's default branch). Rows are copied from
-    the source branch when the new branch starts at its head, rebuilt from the tree otherwise.
+    `source` is a branch or tag (default: the Domain's default branch). An overlay (`mode`,
+    default from `store.materialize`) reads the source's rows and stores only its changes;
+    otherwise rows are copied from the source branch when the new branch starts at its head,
+    rebuilt from the tree otherwise. Overlays do not count against
+    `max_materialized_per_domain`.
     """
     check_ref_name(name, settings)
     try:
@@ -156,6 +166,7 @@ async def create(
                 created_by=principal.id,
                 source=source_name,
                 start=revision,
+                mode=mode,
                 runtime=store.runtime,
                 clock=store.clock,
             )
@@ -184,7 +195,8 @@ def _replay(
 
 
 async def delete(store: StoreAccess, domain_id: str, name: str, settings: BranchSettings) -> RefRow:
-    """Delete a branch and its materialized rows. The default and protected branches stay."""
+    """Delete a branch and its materialized rows. The default and protected branches stay;
+    overlay branches based on it are promoted to full copies first."""
     try:
         async with store.sessions() as session, session.begin():
             domain = await require_domain(session, domain_id)
@@ -199,6 +211,7 @@ async def delete(store: StoreAccess, domain_id: str, name: str, settings: Branch
                 raise ProblemError(
                     PROTECTED_BRANCH, f"Branch {name!r} is protected; unprotect it first."
                 )
+            await promote_overlays_of(session, domain_id, name, runtime=store.runtime)
             await refs.delete(name)
     except LockTimeoutError:
         raise _busy(settings) from None
