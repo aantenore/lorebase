@@ -6,7 +6,8 @@ they were served from in `revision` and in the `Lorebase-Revision` header, and `
 (`materialized` or `tree`). GET reads carry an `ETag` bound to that Revision, answer
 `If-None-Match` with 304 and are cached per Revision (`reading.caching`); at a branch head
 the 304 is decided from the head Revision alone (`unchanged_head`), before the read point is
-resolved. POST reads carry an `ETag` too.
+resolved. POST reads carry an `ETag` too. The history and lineage of a Record
+(`reading.record_history`) are served at branch heads only.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from lorebase_core.query import Query as DslQuery
 from lorebase_keeper.errors import Problem, ValidationProblem
-from lorebase_keeper.reading import graph, records, search
+from lorebase_keeper.reading import graph, record_history, records, search
 from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import (
@@ -30,6 +31,7 @@ from lorebase_keeper.reading.points import (
     unchanged_head,
 )
 from lorebase_keeper.reading.problems import invalid, request_problem
+from lorebase_keeper.reading.record_history import RecordHistoryOut, RecordLineageOut
 from lorebase_keeper.reading.requests import (
     NeighborhoodRequest,
     QueryRequest,
@@ -249,6 +251,90 @@ async def get_record(
             session, runtime, point, found, key, links=links, lineage=lineage
         )
         return RecordResponse(**served(point), record=record)
+
+    return await _answer(request, runtime, point, produce)
+
+
+@router.get(
+    f"{BASE}/kinds/{{kind}}/records/{{key}}/history",
+    summary="History of a Record",
+    response_model=RecordHistoryOut,
+    responses={**_ERRORS, **_NOT_MODIFIED},
+)
+async def get_record_history(
+    domain_id: str,
+    kind: str,
+    key: str,
+    access: DataRead,
+    runtime: ReadRuntimeDep,
+    session: ReadSessionDep,
+    request: Request,
+    branch: Branch = None,
+    values: Annotated[
+        bool, Query(description="Add the values before and after each change.")
+    ] = False,
+    limit: Limit = None,
+    cursor: Cursor = None,
+) -> Response:
+    """Revisions that changed the Record on the branch, newest first, with the Attributes each
+    changed and their provenance. Served at the branch head from the branch history."""
+    if unchanged := await unchanged_head(session, access, request, branch=branch):
+        return unchanged
+    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    found = records.require_kind(point, kind)
+    bounds = runtime.read.history
+    effective = bounds.default_limit if limit is None else limit
+    if effective > bounds.max_limit:
+        raise invalid("/limit", f"must not exceed {bounds.max_limit}", "limit_exceeded")
+
+    async def produce() -> RecordHistoryOut:
+        return await record_history.record_history(
+            session,
+            runtime,
+            point,
+            found,
+            key,
+            limit=effective,
+            cursor=cursor,
+            values=values,
+            shape=fingerprint("record-history", kind, key, values),
+        )
+
+    return await _answer(request, runtime, point, produce)
+
+
+@router.get(
+    f"{BASE}/kinds/{{kind}}/records/{{key}}/lineage",
+    summary="Lineage of a Record",
+    response_model=RecordLineageOut,
+    responses={**_ERRORS, **_NOT_MODIFIED},
+)
+async def get_record_lineage(
+    domain_id: str,
+    kind: str,
+    key: str,
+    access: DataRead,
+    runtime: ReadRuntimeDep,
+    session: ReadSessionDep,
+    request: Request,
+    branch: Branch = None,
+) -> Response:
+    """Where each current value of the Record came from: provenance, Revision, Source,
+    Operation, extraction evidence and Proposal. Served at the branch head."""
+    if unchanged := await unchanged_head(session, access, request, branch=branch):
+        return unchanged
+    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    found = records.require_kind(point, kind)
+
+    async def produce() -> RecordLineageOut:
+        return await record_history.record_lineage(
+            session,
+            runtime,
+            point,
+            found,
+            key,
+            max_changes=runtime.read.history.lineage_max_changes,
+        )
 
     return await _answer(request, runtime, point, produce)
 

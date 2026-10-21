@@ -335,6 +335,12 @@ async def test_kind_grant_keeps_agent_reads_to_its_kind(seeded: Seeded) -> None:
         assert all(link["ref"].startswith("Supplier/") for link in explained.json()["links"])
         assert await _status(http, key, "/kinds/Part/records/P-10001/explain") == 403
 
+        # Record history and lineage: the path Kind is authorized like a Record read
+        assert await _status(http, key, "/kinds/Supplier/records/S-1005/history") == 200
+        assert await _status(http, key, "/kinds/Supplier/records/S-1005/lineage") == 200
+        assert await _status(http, key, "/kinds/Part/records/P-10001/history") == 403
+        assert await _status(http, key, "/kinds/Part/records/P-10001/lineage") == 403
+
         # the change feed is history, not limited to Kinds: refused like the branch log
         assert await _status(http, key, "/branches/main/changes") == 403
         assert await _status(http, key, "/branches/main/events") == 403

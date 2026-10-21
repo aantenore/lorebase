@@ -2983,6 +2983,290 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/kinds/{kind}/records/{key}/history": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "History of a Record",
+        "description": "Revisions that changed the Record on the branch, newest first, with the Attributes each\nchanged and their provenance. Served at the branch head from the branch history.",
+        "operationId": "get_record_history_api_v1_domains__domain_id__kinds__kind__records__key__history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Branch to read; default: the Domain's default branch.",
+              "title": "Branch"
+            },
+            "description": "Branch to read; default: the Domain's default branch."
+          },
+          {
+            "name": "values",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Add the values before and after each change.",
+              "default": false,
+              "title": "Values"
+            },
+            "description": "Add the values before and after each change."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordHistoryOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch or Revision read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch, Revision, Kind or Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/kinds/{kind}/records/{key}/lineage": {
+      "get": {
+        "tags": [
+          "read"
+        ],
+        "summary": "Lineage of a Record",
+        "description": "Where each current value of the Record came from: provenance, Revision, Source,\nOperation, extraction evidence and Proposal. Served at the branch head.",
+        "operationId": "get_record_lineage_api_v1_domains__domain_id__kinds__kind__records__key__lineage_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Branch to read; default: the Domain's default branch.",
+              "title": "Branch"
+            },
+            "description": "Branch to read; default: the Domain's default branch."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordLineageOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch or Revision read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch, Revision, Kind or Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match names the current ETag."
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/relations/{relation}/links": {
       "get": {
         "tags": [
@@ -9346,6 +9630,38 @@
         "title": "AttemptOut",
         "description": "A merge attempt (design 6.8 step 5) and the resolutions of its Proposal."
       },
+      "AttributeChangeOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Attribute api name."
+          },
+          "before": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Value before; with `values=true`."
+          },
+          "after": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Value after; with `values=true`."
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvenanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AttributeChangeOut"
+      },
       "AttributeCondition": {
         "properties": {
           "attr": {
@@ -9767,6 +10083,15 @@
           "capped"
         ],
         "title": "BudgetOut"
+      },
+      "ChangeKind": {
+        "type": "string",
+        "enum": [
+          "created",
+          "updated",
+          "deleted"
+        ],
+        "title": "ChangeKind"
       },
       "ChangeOut": {
         "properties": {
@@ -11991,6 +12316,45 @@
         ],
         "title": "ExplainedRecordOut"
       },
+      "ExtractionEvidenceOut": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "span_start": {
+            "type": "integer",
+            "title": "Span Start"
+          },
+          "span_end": {
+            "type": "integer",
+            "title": "Span End"
+          },
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "document_id",
+          "span_start",
+          "span_end",
+          "model_id",
+          "prompt_version"
+        ],
+        "title": "ExtractionEvidenceOut",
+        "description": "Where an extracted value was read: the document span and the model that read it."
+      },
       "ExtractionJobOut": {
         "properties": {
           "id": {
@@ -12928,6 +13292,40 @@
           "provenance_id"
         ],
         "title": "LineageOut"
+      },
+      "LineageProposalOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "merged_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status"
+        ],
+        "title": "LineageProposalOut"
       },
       "LinkCountOut": {
         "properties": {
@@ -14636,6 +15034,46 @@
         "title": "ProposalUpdate",
         "description": "Title and description; omitted members are left unchanged."
       },
+      "ProvenanceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "origin_type": {
+            "type": "string",
+            "title": "Origin Type",
+            "description": "`operation`, `source_sync`, `extraction`, `merge_resolution`, `schema_migration` or `import`."
+          },
+          "origin": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Origin",
+            "description": "The origin document of that type."
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "origin_type",
+          "origin",
+          "actor",
+          "at"
+        ],
+        "title": "ProvenanceOut",
+        "description": "A provenance entry (design 5.11): where a change came from."
+      },
       "Query": {
         "properties": {
           "kind": {
@@ -15076,6 +15514,213 @@
           "key"
         ],
         "title": "RecordAddress"
+      },
+      "RecordChangeOut": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "generation": {
+            "type": "integer",
+            "title": "Generation"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "on_behalf_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Behalf Of"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "origin": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Origin",
+            "description": "Origin of the Revision (`type`, `ref`)."
+          },
+          "change": {
+            "$ref": "#/components/schemas/ChangeKind"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/AttributeChangeOut"
+            },
+            "type": "array",
+            "title": "Attributes",
+            "description": "Attributes whose value changed, in schema order."
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvenanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provenance of the change as a whole (a deletion, for one)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "generation",
+          "at",
+          "author",
+          "message",
+          "origin",
+          "change",
+          "attributes"
+        ],
+        "title": "RecordChangeOut",
+        "description": "One Revision that changed the Record on the branch."
+      },
+      "RecordHistoryOut": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision the response was served from (hex)."
+          },
+          "served_from": {
+            "$ref": "#/components/schemas/ServedFrom"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordChangeOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "served_from",
+          "branch",
+          "kind",
+          "key",
+          "items"
+        ],
+        "title": "RecordHistoryOut"
+      },
+      "RecordLineageOut": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision the response was served from (hex)."
+          },
+          "served_from": {
+            "$ref": "#/components/schemas/ServedFrom"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "created": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecordChangeOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The change that last created the Record."
+          },
+          "changes": {
+            "type": "integer",
+            "title": "Changes",
+            "description": "Changes of the Record on the branch."
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/ValueLineageOut"
+            },
+            "type": "array",
+            "title": "Attributes"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources",
+            "description": "Sources behind the current values, by api name."
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/LineageProposalOut"
+            },
+            "type": "array",
+            "title": "Proposals",
+            "description": "Proposals behind the current values."
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "served_from",
+          "branch",
+          "kind",
+          "key",
+          "changes",
+          "attributes",
+          "sources",
+          "proposals"
+        ],
+        "title": "RecordLineageOut"
       },
       "RecordOut": {
         "properties": {
@@ -16937,6 +17582,126 @@
         ],
         "title": "ValueChange",
         "description": "One changed Attribute (Records, Links) or property (schema elements)."
+      },
+      "ValueLineageOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Attribute api name."
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvenanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Revision of the last change."
+          },
+          "revision_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision At"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author",
+            "description": "Author of that Revision."
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "Source api name (`source_sync`)."
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation",
+            "description": "Operation api name (`operation`)."
+          },
+          "extraction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtractionEvidenceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineageProposalOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Proposal merged in that Revision, or whose conflict resolution set the value."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ValueLineageOut",
+        "description": "Where the current value of one Attribute came from."
       },
       "ViaCondition": {
         "properties": {
