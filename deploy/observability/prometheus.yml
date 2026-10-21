@@ -1,5 +1,11 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 30s
+
+# Alert rules (docs/operations.md, "Dashboards and alerts"). This stack has no Alertmanager: the
+# alerts show in the Prometheus UI and in Grafana. Add an `alerting:` block to route them.
+rule_files:
+  - /etc/prometheus/alerts/*.yml
 
 scrape_configs:
   - job_name: otel-collector

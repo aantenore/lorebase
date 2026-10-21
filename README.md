@@ -87,6 +87,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
 | Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies; side effects (outbox, webhooks) and masking are planned | M3 |
 | Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
+| Operations | Observability bundle: metrics catalogue, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks, OpenTelemetry Collector to Prometheus and Jaeger or Tempo, in compose and the Helm chart ([docs/metrics.md](docs/metrics.md), [docs/operations.md](docs/operations.md#dashboards-and-alerts)) | Done, commit, merge and cache metrics are not emitted yet | M1 |
 | Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
 | Operations | Garbage collection, Domain backup and restore bundles, a Postgres job queue ([docs/operations.md](docs/operations.md)) | Done | M5, landed early |
 | Agent access | Context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([docs/agents.md](docs/agents.md)) | Done | M3, landed early |
@@ -234,7 +235,8 @@ The public [roadmap](docs/roadmap.md) tracks every item. The reasoning behind th
 - [Design](docs/design.md): intent, domain model, versioning engine, storage, APIs, security, roadmap
 - [Deployment and scale-out](docs/deployment.md): topology, read replicas, sizing
 - [Kubernetes](docs/kubernetes.md): the Helm chart, profiles, upgrades and migrations
-- [Operations](docs/operations.md): garbage collection, backup and restore of a Domain
+- [Operations](docs/operations.md): garbage collection, backup and restore of a Domain, rate limits, dashboards and alerts
+- [Metrics](docs/metrics.md): every metric and span emitted, with labels and where it is recorded
 - [Schema inference](docs/inference.md): Kinds, Attributes, keys and Relations proposed from CSV files or Postgres tables
 - [Scribe](docs/scribe.md): the worker: job types, scheduler, Source definitions, sync policies and operations
 - [Inference providers](docs/inference-providers.md): run models free and locally, switch to a paid provider by configuration, LiteLLM routing, limits
