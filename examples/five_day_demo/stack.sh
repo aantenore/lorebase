@@ -2,7 +2,8 @@
 # Brings the compose stack of the five-day demo up and down.
 #
 #   stack.sh up        build the image, start postgres, migrate, keeper and scribe, create the
-#                      admin key (idempotent: a running stack is left alone)
+#                      admin key with `python -m lorebase_keeper bootstrap` (idempotent: a running
+#                      stack is left alone)
 #   stack.sh down      stop the stack and delete its data
 #   stack.sh env       print the variables run.sh needs (eval "$(stack.sh env)")
 #   stack.sh demo      up, run.sh, then down; KEEP=1 leaves the stack running
@@ -86,8 +87,13 @@ up() {
   done
   if ! admin_key_works; then
     say "creating the admin key"
-    compose exec -T keeper python - <"$HERE/bootstrap_admin.py" | tail -n 1 >"$STATE/admin.key.tmp"
-    (umask 077 && mv "$STATE/admin.key.tmp" "$STATE/admin.key")
+    (umask 077 && compose exec -T keeper python -m lorebase_keeper bootstrap --name "demo administrator" \
+      | tail -n 1 >"$STATE/admin.key.tmp")
+    mv "$STATE/admin.key.tmp" "$STATE/admin.key"
+    # flag_supplier_risk (examples/supply/schema.yaml) admits the subject agent-risk; day 5 issues
+    # the agent's key on that service principal.
+    compose exec -T keeper python -m lorebase_keeper principal create agent-risk \
+      --name "agent that flags supplier risk" >&2
   fi
   say "ready"
 }

@@ -21,7 +21,7 @@ def test_main_serves_the_app_on_host_and_port_from_settings(
     monkeypatch.setenv("LOREBASE__KEEPER__AUTH__ALLOW_INSECURE", "true")
     monkeypatch.setenv("LOREBASE__KEEPER__PORT", "9191")
 
-    entrypoint.main()
+    entrypoint.main([])
 
     assert (served["host"], served["port"]) == ("0.0.0.0", 9191)
     assert served["log_config"] is None
@@ -30,5 +30,14 @@ def test_main_serves_the_app_on_host_and_port_from_settings(
 def test_main_exits_with_the_configuration_problem(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOREBASE__KEEPER__PORT", "not-a-port")
     with pytest.raises(SystemExit) as caught:
-        entrypoint.main()
+        entrypoint.main([])
     assert "keeper.port" in str(caught.value)
+
+
+def test_bootstrap_exits_with_the_reason_when_api_keys_are_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOREBASE__KEEPER__AUTH__MODE", "none")
+    with pytest.raises(SystemExit) as caught:
+        entrypoint.main(["bootstrap"])
+    assert "API keys are not accepted" in str(caught.value)

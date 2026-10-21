@@ -12,11 +12,10 @@ It needs Docker with compose, [uv](https://docs.astral.sh/uv/) and `uv sync --al
 
 | File | What it is |
 |------|------------|
-| `examples/five_day_demo/stack.sh` | `up`, `down`, `demo`: the compose stack under its own project name; writes its passwords and the API key pepper to `build/demo` (git-ignored) |
+| `examples/five_day_demo/stack.sh` | `up`, `down`, `demo`: the compose stack under its own project name; writes its passwords and the API key pepper to `build/demo` (git-ignored); creates the first administrator key with `python -m lorebase_keeper bootstrap` (in `api_key` mode nobody can issue the first key over the API) and the service principal `agent-risk` with `principal create` |
 | `examples/five_day_demo/run.sh` | The five days, in bash with strict mode; idempotent |
 | `examples/five_day_demo/demo.py` | The parts that are awkward in shell: schema inference, rebasing the curated schema, conflict tables, the webhook receiver, the MCP client, rate-limit probes |
 | `examples/five_day_demo/lorebase.demo.yaml` | The stack's settings: `api_key` authentication, self-approval, a small context bucket, private webhook targets, short polling intervals |
-| `examples/five_day_demo/bootstrap_admin.py` | Creates the first administrator straight in the database: in `api_key` mode nobody can issue the first key |
 
 `run.sh` works against any Keeper. Its parameters, all environment variables:
 
@@ -32,7 +31,7 @@ It needs Docker with compose, [uv](https://docs.astral.sh/uv/) and `uv sync --al
 
 ## How the days map to the design
 
-The demo follows what is built. Document extraction (design day 3) does not exist yet, so the days are: model, load and explore, version and merge, sync a Source, agents.
+The demo follows what is built. Document extraction (design day 3) is not part of the demo yet, so the days are: model, load and explore, version and merge, sync a Source, agents.
 
 | Demo | Design 3.2 | Shown |
 |------|-----------|-------|
@@ -268,7 +267,7 @@ delivery 3 revision.committed signature=ok branch=main revision=79d120c60008 aut
 
 ## Day 5: agents
 
-Alex gets a key for his agent: role `agent-reader` on the Domain plus a grant of role `operator` on one Operation. The Operation `flag_supplier_risk` is restricted to the subject `agent-risk`, so the key is issued on that service principal (the bootstrap script created it: groups cannot be created through the API yet). The key authenticates as the agent and has its own quota.
+Alex gets a key for his agent: role `agent-reader` on the Domain plus a grant of role `operator` on one Operation. The Operation `flag_supplier_risk` is restricted to the subject `agent-risk`, so the key is issued on that service principal (`stack.sh` created it with `python -m lorebase_keeper principal create agent-risk`: the API creates service principals only with generated ids, and groups not at all). The key authenticates as the agent and has its own quota.
 
 ```text
 $ lorebase branch create agent/flags
@@ -381,6 +380,6 @@ Things the script works around or states, found while writing it:
 - A required Attribute with a `default` is backfilled by the schema change that adds it, but imports and Source syncs do not apply the default: a row without the value is rejected (`'risk_band' is required`). Day 3 therefore writes `risk_band` into the rows it imports, and day 4 syncs existing Suppliers only.
 - Imports replace whole rows; there is no partial update through `lorebase import`.
 - An Operation restricted by `permissions` is open to the principal ids and groups named there. API-key principals have no groups and the API cannot create them, so the demo issues the agent's key on a service principal named like the permitted subject.
-- The first administrator has to be created in the database; there is no `admin bootstrap` command yet.
+- The first administrator key comes from `python -m lorebase_keeper bootstrap`, run inside the Keeper container with its settings; it refuses a second key unless `--force` is given.
 - A critical `flag_supplier_risk` is refused with `review-required` even on a work branch.
 - Webhooks deliver events committed after the webhook was registered.

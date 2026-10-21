@@ -6,7 +6,7 @@ decided by the caller. A key is found by its public `prefix`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -139,4 +139,15 @@ class ApiKeyRepository:
         )
         if after is not None:
             statement = statement.where(tuple_(ApiKey.created_at, ApiKey.id) > after)
+        return [_record(row) for row in (await self._session.execute(statement)).scalars()]
+
+    async def list_for_principals(self, principal_ids: Collection[str]) -> list[ApiKeyRecord]:
+        """Every key of these principals, revoked and expired ones included, oldest first."""
+        if not principal_ids:
+            return []
+        statement = (
+            select(ApiKey)
+            .where(ApiKey.principal_id.in_(list(principal_ids)))
+            .order_by(ApiKey.created_at, ApiKey.id)
+        )
         return [_record(row) for row in (await self._session.execute(statement)).scalars()]

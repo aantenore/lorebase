@@ -86,6 +86,8 @@ class ApiKeysPort(Protocol):
         self, scope: str, *, limit: int, after: tuple[datetime, str] | None = None
     ) -> list[ApiKeyRecord]: ...
 
+    async def list_for_principals(self, principal_ids: Collection[str]) -> list[ApiKeyRecord]: ...
+
 
 class GrantsPort(Protocol):
     """Grants."""
