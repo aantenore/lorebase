@@ -1,11 +1,13 @@
 """Change feed of a branch (`agents.feed`): Server-Sent Events and the polling fallback.
 
 Both are history reads: they need `data.read` on the branch through a grant not narrowed to a
-Kind, like the branch log.
+Kind, like the branch log. An open stream repeats that check (authentication included) every
+`agents.feed.reauthorize_interval_s` and closes when it fails.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -19,7 +21,9 @@ from lorebase_keeper.agents.feed import (
     parse_sequence,
     stream,
 )
-from lorebase_keeper.errors import Problem, ValidationProblem
+from lorebase_keeper.auth.deps import AuthDep
+from lorebase_keeper.client_address import client_address
+from lorebase_keeper.errors import Problem, ProblemError, ValidationProblem
 from lorebase_keeper.reading.caching import respond
 from lorebase_keeper.reading.points import (
     REVISION_HEADER,
@@ -70,6 +74,7 @@ async def branch_events(
     access: DataRead,
     runtime: ReadRuntimeDep,
     settings: AgentSettingsDep,
+    auth: AuthDep,
     request: Request,
     kinds: Kinds = None,
     last_event_id: Annotated[
@@ -87,6 +92,22 @@ async def branch_events(
         start = parse_sequence(last_event_header or last_event_id)
         if start is None:
             start = await OutboxRepository(session).latest(domain.id)
+
+    async def still_allowed() -> bool:
+        """The checks above, again: the credential (revoked or expired keys and tokens, the
+        networks of a key), then `data.read` on the branch. Grants come through the
+        authorizer's cache."""
+        try:
+            principal = await auth.authenticator.authenticate(
+                request.headers, client_address(request)
+            )
+            guard = replace(access, principal=principal)
+            await guard.precheck()
+            await guard.require_branch(ref.name)
+        except ProblemError:
+            return False
+        return True
+
     return StreamingResponse(
         stream(
             runtime,
@@ -96,6 +117,7 @@ async def branch_events(
             wanted,
             settings.feed,
             request.is_disconnected,
+            still_allowed,
         ),
         media_type=EVENT_STREAM,
         headers={

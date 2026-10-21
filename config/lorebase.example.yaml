@@ -599,6 +599,8 @@ agents:
     poll_interval_s: 1.0         # how often an open stream looks for new events
     heartbeat_s: 15.0            # comment line after this much silence
     max_connection_s: 300.0      # streams close after this long; clients resume with Last-Event-ID
+    reauthorize_interval_s: 60.0 # open streams check credential and grants again this often and
+                                 # close when refused (grants seen after keeper.auth.authz cache)
     retry_ms: 3000               # reconnection delay advised to clients
     batch_events: 100            # events read per poll
     changed_keys_max: 100        # changed Record keys listed per event
