@@ -1,45 +1,29 @@
 /**
  * Documents and extraction items (docs/extraction.md, design 9.2 and 12.3).
  *
- * NOTE: typed by hand. The routes (`/documents`, `/proposals/{p}/items`, `items:decide`) are
- * not in `docs/openapi.json` on the default branch yet; once they are, replace these with
- * aliases of `./generated/keeper.ts` (`DocumentOut`, `DocumentDetailOut`, `DocumentUploaded`,
- * `ExtractionJobOut`, `ItemOut`, `DecideIn`, `DecideOut`). The shapes below follow the models
- * of the Keeper routes `documents.py` and `proposal_items.py`.
+ * The wire shapes are the generated ones of `./generated/keeper.ts`; the view models below
+ * alias them, with the members Keeper may leave out made explicit (`null`) by the mappers in
+ * `./live/extraction.ts`. Item evidence, match and edits are free-form objects on the wire,
+ * so `ExtractionItem` and its parts stay typed here.
  */
+import type { components } from './generated/keeper';
 import type { JsonValue, PageParams } from './types';
+
+type S = components['schemas'];
+
+/** Members Keeper may leave out, made explicit. */
+type Explicit<T, K extends keyof T> = Omit<T, K> & { [P in K]-?: Exclude<T[P], undefined> };
 
 // ---------------------------------------------------------------- documents
 
-export interface DocumentInfo {
-  id: string;
-  filename: string;
-  media_type: string;
-  /** Hex SHA-256 of the stored bytes. */
-  sha256: string;
-  size: number;
-  /** Set once Scribe parsed the text. */
-  text_sha256: string | null;
-  metadata: Record<string, unknown>;
-  created_at: string | null;
-  created_by: string;
-}
+export type DocumentInfo = Explicit<S['DocumentOut'], 'text_sha256' | 'created_at'>;
 
 export type ExtractionJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | (string & {});
 
-export interface ExtractionJob {
-  id: string;
-  status: ExtractionJobStatus;
-  model: string;
-  prompt_version: string;
-  branch: string | null;
-  proposal_id: string | null;
-  created_at: string | null;
-  finished_at: string | null;
-  usage: Record<string, unknown>;
-  stats: Record<string, unknown>;
-  error: Record<string, unknown> | null;
-}
+export type ExtractionJob = Omit<
+  Explicit<S['ExtractionJobOut'], 'branch' | 'proposal_id' | 'created_at' | 'finished_at' | 'error'>,
+  'status'
+> & { status: ExtractionJobStatus };
 
 /** A document with its extraction jobs, newest first. */
 export interface DocumentDetail extends DocumentInfo {
@@ -54,17 +38,21 @@ export type UploadDocumentInput = {
   tiers?: number[];
 } & ({ file: File } | { url: string; filename?: string });
 
-export interface DocumentUploaded {
+export type DocumentUploaded = Omit<S['DocumentUploaded'], 'document' | 'job_id'> & {
   document: DocumentInfo;
-  /** The same bytes were stored before. */
-  duplicate: boolean;
   job_id: number | null;
-}
+};
+
+/**
+ * The parsed text the item offsets index (`GET .../documents/{id}/text`); offsets count
+ * Unicode code points. `truncated`: Keeper cut it at `keeper.documents.max_text_chars`.
+ */
+export type DocumentText = Pick<S['DocumentTextOut'], 'text' | 'length' | 'truncated'>;
 
 // -------------------------------------------------------------------- items
 
-export type ItemType = 'record' | 'value' | 'link';
-export type ItemDecision = 'pending' | 'accepted' | 'rejected';
+export type ItemType = S['ItemOut']['type'];
+export type ItemDecision = S['ItemOut']['decision'];
 export type MatchStatus = 'matched' | 'new' | 'ambiguous' | 'unresolved';
 
 export interface ItemEvidence {
@@ -174,12 +162,7 @@ export interface ExtractionSummary {
   revision?: string | null;
 }
 
-export interface Materialized {
-  revision: string | null;
-  changes: number;
-  applied: number;
-  skipped: Record<string, string>;
-}
+export type Materialized = S['MaterializedOut'];
 
 export interface DecideItemsResult {
   proposal_id: string;

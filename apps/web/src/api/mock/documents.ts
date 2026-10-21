@@ -231,7 +231,9 @@ export function createDocumentsMock(
     text: (domain, id) => {
       const found = library(domain).find((d) => d.detail.id === id);
       if (found === undefined) return Promise.reject(notFound(`Document ${id}`));
-      return Promise.resolve(found.text);
+      const text = found.text;
+      if (text === null) return Promise.resolve(null);
+      return Promise.resolve({ text, length: Array.from(text).length, truncated: false });
     },
   };
   return { api };

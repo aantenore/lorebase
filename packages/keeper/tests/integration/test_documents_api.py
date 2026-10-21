@@ -101,6 +101,10 @@ async def test_upload_stores_documents_once_and_queues_extraction(
         assert detail["sha256"] == document["sha256"]
         assert detail["extraction_jobs"] == []
         assert (await http.get(f"{BASE}/documents/doc_missing")).status_code == 404
+        unparsed = await http.get(f"{BASE}/documents/{document['id']}/text")
+        assert unparsed.status_code == 404
+        assert "not been parsed" in unparsed.json()["detail"]
+        assert (await http.get(f"{BASE}/documents/doc_missing/text")).status_code == 404
 
         fake_pdf = tmp_path / "scan.pdf"
         fake_pdf.write_bytes(b"not a pdf")
@@ -161,6 +165,7 @@ async def test_items_are_listed_and_decided(seeded: Seeded) -> None:
         document_id = uploaded.json()["document"]["id"]
     proposal_id = await extract(seeded, document_id)
     items_url = f"{BASE}/proposals/{proposal_id}/items"
+    text_url = f"{BASE}/documents/{document_id}/text"
     async with keeper(seeded.app_url) as http:
         page = (await http.get(items_url, params={"type": "link", "kind": "supplied_by"})).json()
         links = page["items"]
@@ -169,6 +174,18 @@ async def test_items_are_listed_and_decided(seeded: Seeded) -> None:
         first = next(i for i in links if (i["from"], i["to"]) == ("P-10012", "S-1025"))
         assert first["decision"] == "accepted"
         assert first["evidence"]["quote"]
+        served = await http.get(text_url)
+        assert served.status_code == 200, served.text
+        parsed = served.json()
+        evidence = first["evidence"]
+        assert parsed["document_id"] == document_id
+        assert (parsed["truncated"], parsed["length"]) == (False, len(parsed["text"]))
+        quoted = parsed["text"][evidence["start"] : evidence["end"]]
+        assert quoted.split() == evidence["quote"].split()
+        tag = served.headers["etag"]
+        assert parsed["text_sha256"] in tag
+        again = await http.get(text_url, headers={"If-None-Match": tag})
+        assert again.status_code == 304
         pending = (await http.get(items_url, params={"status": "pending"})).json()["items"]
         assert pending
         assert all(i["decision"] == "pending" for i in pending)
@@ -199,3 +216,7 @@ async def test_items_are_listed_and_decided(seeded: Seeded) -> None:
         assert unknown.status_code == 422
         empty = await http.post(f"{items_url}:decide", json={})
         assert empty.status_code == 422
+    async with keeper(seeded.app_url, {"documents": {"max_text_chars": 10}}) as http:
+        cut = (await http.get(text_url)).json()
+    assert (len(cut["text"]), cut["truncated"]) == (10, True)
+    assert cut["length"] == len(parsed["text"])

@@ -1044,3 +1044,12 @@ def get_document(domain: str, document_id: str) -> Call[m.DocumentDetail]:
         parse_model(m.DocumentDetail),
         safe=True,
     )
+
+
+def get_document_text(domain: str, document_id: str) -> Call[m.DocumentText]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/documents/{_seg(document_id)}/text",
+        parse_model(m.DocumentText),
+        safe=True,
+    )

@@ -5,6 +5,7 @@
 | `POST /domains/{d}/documents` | `document.write` | 201 new, 200 same bytes stored before |
 | `GET /domains/{d}/documents` | `document.read` | newest first |
 | `GET /domains/{d}/documents/{id}` | `document.read` | with its extraction jobs |
+| `GET /domains/{d}/documents/{id}/text` | `document.read` | parsed text, cached by its hash |
 
 Both permissions need a Domain-wide grant: documents are raw input, not Records of a Kind.
 
@@ -18,6 +19,11 @@ the content (PDF and DOCX signatures, UTF-8 text). Documents are stored content 
 same bytes uploaded again return the stored document. Unless `extract` is false (default
 `keeper.documents.extract_on_upload`), an `extraction` job is queued for Scribe; its id is in
 the answer. Uploads are audited (`document.upload`).
+
+The text route serves the text Scribe parsed, which the evidence offsets of extraction items
+index (Unicode code points). It answers 404 until Scribe parsed the document, is cut at
+`keeper.documents.max_text_chars` (`truncated`), and is cached under the text's hash: the
+`ETag` changes only when the text does.
 """
 
 from __future__ import annotations
@@ -50,8 +56,10 @@ from lorebase_keeper.errors import (
     ProblemError,
 )
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
+from lorebase_keeper.reading.caching import respond
+from lorebase_keeper.reading.runtime import ReadRuntimeDep
 from lorebase_keeper.services.config import DocumentSettings
-from lorebase_store.blobs import PostgresBlobStore, sha256
+from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, PostgresBlobStore, sha256
 from lorebase_store.jobs import EXTRACTION_JOB, enqueue_job, extraction_payload
 from lorebase_store.repositories import (
     DocumentRepository,
@@ -146,6 +154,14 @@ class DocumentOut(BaseModel):
 
 class DocumentDetailOut(DocumentOut):
     extraction_jobs: list[ExtractionJobOut] = Field(description="Newest first.")
+
+
+class DocumentTextOut(BaseModel):
+    document_id: str
+    text_sha256: str = Field(description="SHA-256 of the whole parsed text (UTF-8).")
+    text: str = Field(description="The parsed text, cut at `keeper.documents.max_text_chars`.")
+    length: int = Field(description="Characters (code points) of the whole parsed text.")
+    truncated: bool = Field(description="`text` holds only the first characters.")
 
 
 class DocumentUploaded(BaseModel):
@@ -431,3 +447,65 @@ async def get_document(
             document_id, limit=keeper.documents.jobs_listed
         )
     return DocumentDetailOut(**_document(row).model_dump(), extraction_jobs=[_job(j) for j in jobs])
+
+
+@router.get(
+    DOCUMENTS + "/{document_id}/text",
+    summary="Get the parsed text of a document",
+    responses={
+        200: {"model": DocumentTextOut},
+        304: {"description": "Not modified (`If-None-Match`)."},
+        403: _ERRORS[403],
+        404: {"model": Problem, "description": "Domain or document not found, or not parsed."},
+    },
+    response_model=DocumentTextOut,
+)
+async def get_document_text(
+    request: Request,
+    domain_id: str,
+    document_id: str,
+    access: Read,
+    store: StoreDep,
+    runtime: ReadRuntimeDep,
+    keeper: KeeperSettingsDep,
+) -> Response:
+    """The text Scribe parsed from the document; extraction evidence offsets index it."""
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        row = await DocumentRepository(session, domain_id).get(document_id)
+    if row is None:
+        raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
+    ref = row.metadata.get(TEXT_REF_KEY)
+    if row.text_hash is None or not isinstance(ref, str):
+        raise ProblemError(
+            NOT_FOUND, f"The text of document {document_id!r} has not been parsed yet."
+        )
+    text_hash = row.text_hash.hex()
+    limit = keeper.documents.max_text_chars
+
+    async def produce() -> DocumentTextOut:
+        async with store.sessions() as session, session.begin():
+            await require_domain(session, domain_id)
+            try:
+                data = await PostgresBlobStore().get(session, domain_id, ref)
+            except BlobNotFoundError:
+                raise ProblemError(
+                    NOT_FOUND, f"The text of document {document_id!r} is not stored."
+                ) from None
+        text = data.decode("utf-8")
+        return DocumentTextOut(
+            document_id=document_id,
+            text_sha256=text_hash,
+            text=text[:limit],
+            length=len(text),
+            truncated=len(text) > limit,
+        )
+
+    return await respond(
+        request,
+        runtime.cache,
+        domain_id=domain_id,
+        revision=text_hash,
+        produce=produce,
+        variant=f"chars={limit}",
+    )

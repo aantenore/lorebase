@@ -52,7 +52,7 @@ describe('mock extraction items', () => {
         const evidence = item.evidence;
         if (evidence === null) throw new Error(`${item.id} has no evidence`);
         const text = await api.documents.text('supply', evidence.document_id);
-        expect(text?.slice(evidence.start, evidence.end)).toBe(evidence.quote);
+        expect(text?.text.slice(evidence.start, evidence.end)).toBe(evidence.quote);
       }
     }
   });
@@ -272,7 +272,11 @@ describe('mock documents', () => {
       file: new File(['# Hello'], 'hello.md'),
       extract: false,
     });
-    expect(await api.documents.text('supply', document.id)).toBe('# Hello');
+    expect(await api.documents.text('supply', document.id)).toEqual({
+      text: '# Hello',
+      length: 7,
+      truncated: false,
+    });
     expect((await api.documents.get('supply', document.id)).extraction_jobs).toEqual([]);
   });
 });

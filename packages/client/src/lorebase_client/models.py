@@ -1120,6 +1120,16 @@ class DocumentDetail(Document):
     extraction_jobs: list[ExtractionJob]
 
 
+class DocumentText(Model):
+    """The parsed text of a document; extraction evidence offsets index it."""
+
+    document_id: str
+    text_sha256: str
+    text: str
+    length: int
+    truncated: bool
+
+
 class DocumentUploaded(Model):
     """The stored document; `duplicate` when the same bytes were stored before."""
 

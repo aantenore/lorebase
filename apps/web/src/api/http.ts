@@ -38,12 +38,7 @@ import {
   mapItem,
 } from './live/extraction';
 import { splitRecordRef } from './refs';
-import type {
-  DocumentDetail,
-  DocumentInfo,
-  DocumentUploaded,
-  UploadDocumentInput,
-} from './extraction-types';
+import type { DocumentText, UploadDocumentInput } from './extraction-types';
 import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
   Branch,
@@ -433,22 +428,24 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
 
     documents: {
       list: async (domain, params) => {
-        const page = await get<{ items: DocumentInfo[]; next_cursor?: string | null }>(
+        const page = await get<S['Page_DocumentOut_']>(
           `${d(domain)}/documents`,
           pageParams(params),
         );
         return { items: page.items.map(mapDocument), next_cursor: page.next_cursor ?? null };
       },
       get: async (domain, document) =>
-        mapDocumentDetail(await get<DocumentDetail>(`${d(domain)}/documents/${enc(document)}`)),
+        mapDocumentDetail(
+          await get<S['DocumentDetailOut']>(`${d(domain)}/documents/${enc(document)}`),
+        ),
       upload: async (domain, input) => {
         const answer =
           'file' in input
-            ? await postForm<DocumentUploaded>(
+            ? await postForm<S['DocumentUploaded']>(
                 `${d(domain)}/documents`,
                 documentForm(input.file, input),
               )
-            : await post<DocumentUploaded>(`${d(domain)}/documents`, {
+            : await post<S['DocumentUploaded']>(`${d(domain)}/documents`, {
                 url: input.url,
                 ...(input.filename === undefined ? {} : { filename: input.filename }),
                 ...(input.extract === undefined ? {} : { extract: input.extract }),
@@ -456,8 +453,18 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
               });
         return { ...answer, document: mapDocument(answer.document), job_id: answer.job_id ?? null };
       },
-      // Keeper serves the metadata of a document, not its parsed text.
-      text: () => Promise.resolve(null),
+      // 404 until Scribe parsed the document.
+      text: async (domain, document): Promise<DocumentText | null> => {
+        try {
+          const found = await get<S['DocumentTextOut']>(
+            `${d(domain)}/documents/${enc(document)}/text`,
+          );
+          return { text: found.text, length: found.length, truncated: found.truncated };
+        } catch (error) {
+          if (error instanceof NotFoundError) return null;
+          throw error;
+        }
+      },
     },
 
     conflicts: {

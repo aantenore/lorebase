@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { cn } from '@/ui/cn';
 import { segment, type Segment, type Span } from './document-spans';
 
@@ -27,7 +27,9 @@ export function DocumentText({
   onSelect: (item: string) => void;
 }) {
   const container = useRef<HTMLPreElement>(null);
-  const segments = segment(text.length, spans, active);
+  // Span offsets count code points (Keeper's offsets), so the text is cut by code point.
+  const chars = useMemo(() => Array.from(text), [text]);
+  const segments = segment(chars.length, spans, active);
 
   useEffect(() => {
     // jsdom has no layout and no scrollIntoView.
@@ -44,7 +46,7 @@ export function DocumentText({
       className="max-h-[70vh] overflow-auto rounded-md border border-line bg-surface p-3 font-mono text-sm whitespace-pre-wrap focus-visible:outline-2 focus-visible:outline-ring"
     >
       {segments.map((part) => {
-        const piece = text.slice(part.start, part.end);
+        const piece = chars.slice(part.start, part.end).join('');
         if (part.items.length === 0) return piece;
         const first = part.items[0] ?? '';
         return (

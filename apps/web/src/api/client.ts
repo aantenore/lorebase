@@ -66,6 +66,7 @@ import type {
   DecideItemsResult,
   DocumentDetail,
   DocumentInfo,
+  DocumentText,
   DocumentUploaded,
   ExtractionItem,
   ItemListParams,
@@ -195,10 +196,10 @@ export interface KeeperApi {
      */
     upload(domain: DomainId, input: UploadDocumentInput): Promise<DocumentUploaded>;
     /**
-     * The parsed text the item offsets index, or `null` when this Keeper does not serve it
-     * (the REST API has no route for it yet); the viewer then shows the evidence passages.
+     * The parsed text the item offsets index (`GET .../documents/{id}/text`), or `null` while
+     * it is not parsed; the viewer then shows the evidence passages.
      */
-    text(domain: DomainId, document: string): Promise<string | null>;
+    text(domain: DomainId, document: string): Promise<DocumentText | null>;
   };
 
   readonly conflicts: {

@@ -170,7 +170,7 @@ function Viewer({
   end: number | undefined;
   onSelect: (item: ExtractionItem | null, proposal: string) => void;
 }) {
-  const text = useDocumentText(domain, document);
+  const text = useDocumentText(domain, document, detail.text_sha256);
   const proposal = detail.extraction_jobs.find((job) => job.proposal_id !== null)?.proposal_id;
   const items = useProposalItems(domain, proposal ?? '', proposal != null);
   const mine = (items.data ?? []).filter((i) => i.evidence?.document_id === document);
@@ -197,33 +197,37 @@ function Viewer({
   }
   const body = text.data;
   if (body === null && mine.length === 0) {
-    return (
-      <EmptyState>
-        {detail.text_sha256 === null
-          ? 'The text of this document has not been parsed yet.'
-          : 'This Keeper does not serve the parsed text, and no item quotes this document.'}
-      </EmptyState>
-    );
+    return <EmptyState>The text of this document has not been parsed yet.</EmptyState>;
   }
+  // Keeper's offsets count code points, not UTF-16 units.
+  const shown = body === null ? 0 : Array.from(body.text).length;
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[1fr_minmax(16rem,24rem)]">
       <div>
         {body === null ? (
           <>
             <p className="mb-2 text-sm text-muted">
-              This Keeper does not serve the parsed text; the passages the items quote are shown.
+              The parsed text is not available yet; the passages the items quote are shown.
             </p>
             <Passages items={mine} active={active} />
           </>
         ) : (
-          <DocumentText
-            text={body}
-            spans={spansOf(mine, document, body.length)}
-            active={active}
-            onSelect={(id) => {
-              onSelect(mine.find((item) => item.id === id) ?? null, proposal ?? '');
-            }}
-          />
+          <>
+            {body.truncated && (
+              <p className="mb-2 text-sm text-muted">
+                The text is long: the first {shown.toLocaleString()} of{' '}
+                {body.length.toLocaleString()} characters are shown.
+              </p>
+            )}
+            <DocumentText
+              text={body.text}
+              spans={spansOf(mine, document, shown)}
+              active={active}
+              onSelect={(id) => {
+                onSelect(mine.find((item) => item.id === id) ?? null, proposal ?? '');
+              }}
+            />
+          </>
         )}
       </div>
       {proposal != null && mine.length > 0 && (

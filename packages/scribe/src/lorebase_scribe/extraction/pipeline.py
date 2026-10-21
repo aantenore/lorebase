@@ -74,7 +74,7 @@ from lorebase_scribe.extraction.text import (
 from lorebase_scribe.extraction.tier2 import run_tier2
 from lorebase_scribe.extraction.values import heading_title, sentence_values
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
-from lorebase_store.blobs import BlobNotFoundError, BlobStore, PostgresBlobStore
+from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, BlobStore, PostgresBlobStore
 from lorebase_store.commit import ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.extraction import (
@@ -527,16 +527,19 @@ class ExtractionRun:
         chunks = chunk_text(
             text, max_chars=chunking.max_chars, overlap_chars=chunking.overlap_chars
         )
+        encoded = text.encode("utf-8")
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
             await ChunkRepository(session, domain_id).replace(
                 document.id,
                 [ChunkRow(c.seq, c.start, c.end, c.text, c.hash) for c in chunks],
             )
+            # The parsed text the evidence offsets index, served by Keeper's document text route.
+            text_ref = await self._blobs.put(session, domain_id, encoded)
             await DocumentRepository(session, domain_id).set_text(
                 document.id,
-                text_hash=hashlib.sha256(text.encode("utf-8")).digest(),
-                metadata={**parsed.metadata(), "chunks": len(chunks)},
+                text_hash=hashlib.sha256(encoded).digest(),
+                metadata={**parsed.metadata(), "chunks": len(chunks), TEXT_REF_KEY: text_ref},
             )
         report.count("chunks", len(chunks))
         sentences = sentence_bounds(text)

@@ -34,7 +34,10 @@ flowchart LR
 2. **Parse and chunk** (Scribe). Markdown and text natively; PDF with `pypdf` and DOCX with
    `python-docx` (the `documents` extra of `lorebase-scribe`). Chunks follow the structure
    (headings, paragraphs, list items, table rows) with overlap; chunk offsets index the parsed
-   text and are stored in `document_chunks`.
+   text and are stored in `document_chunks`. The parsed text itself goes to the blob store;
+   `GET /api/v1/domains/{d}/documents/{id}/text` (permission `document.read`) serves it, 404
+   until it is parsed, cut at `keeper.documents.max_text_chars` (`truncated`, `length`), with
+   an `ETag` that changes only with the text. Offsets count Unicode code points.
 3. **Mentions and entity resolution.** Keys found by the `pattern` constraint of a Kind's key
    Attribute, titles of existing Records by dictionary matching (tier 0), spans of a local
    model (tier 1). Each mention is resolved against the default branch: exact key, exact
@@ -122,7 +125,7 @@ The Proposal's `checks.extraction` holds the item counts per decision, type and 
 accepted items that could not be applied; Proposal details show it as the `extraction` check.
 
 With the client: `client.documents.upload(...)`, `client.proposals.items(...)`,
-`client.proposals.decide_items(...)`; with the CLI: `lorebase documents upload|list|get`,
+`client.proposals.decide_items(...)`; with the CLI: `lorebase documents upload|list|get|text`,
 `lorebase proposal items|decide`.
 
 ## Example
@@ -147,7 +150,7 @@ pointing at the evidence offsets.
 
 `scribe.extraction` (tiers, auto-accept threshold, chunking, matching thresholds, confidence
 per technique, budgets, prompt version, cache) and `keeper.documents` (size limit, accepted
-suffixes, URL allowlist, extraction on upload) are documented with their defaults in
+suffixes, URL allowlist, extraction on upload, longest text served) are documented with their defaults in
 [config/lorebase.example.yaml](../config/lorebase.example.yaml). Models are configured in the
 `inference` section ([inference.md](inference.md)).
 

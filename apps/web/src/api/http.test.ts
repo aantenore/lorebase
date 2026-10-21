@@ -819,7 +819,7 @@ describe('live adapter: documents and extraction items', () => {
     });
   });
 
-  it('lists documents and reads one with its jobs; the parsed text is not served', async () => {
+  it('lists documents and reads one with its jobs and its parsed text', async () => {
     const job = {
       id: 'job_1',
       status: 'succeeded',
@@ -836,6 +836,13 @@ describe('live adapter: documents and extraction items', () => {
     const { api, calls } = fakeKeeper({
       'GET /domains/supply/documents': { items: [document], next_cursor: 'c2' },
       'GET /domains/supply/documents/doc_1': { ...document, extraction_jobs: [job] },
+      'GET /domains/supply/documents/doc_1/text': {
+        document_id: 'doc_1',
+        text_sha256: 'ab'.repeat(32),
+        text: 'Supplier S-1025',
+        length: 40,
+        truncated: true,
+      },
     });
     const page = await api.documents.list('supply', { limit: 1 });
     expect(page).toEqual({ items: [document], next_cursor: 'c2' });
@@ -843,8 +850,14 @@ describe('live adapter: documents and extraction items', () => {
     expect((await api.documents.get('supply', 'doc_1')).extraction_jobs[0]?.proposal_id).toBe(
       'prp_1',
     );
-    expect(await api.documents.text('supply', 'doc_1')).toBeNull();
-    expect(calls).toHaveLength(2);
+    expect(await api.documents.text('supply', 'doc_1')).toEqual({
+      text: 'Supplier S-1025',
+      length: 40,
+      truncated: true,
+    });
+    // 404 until Scribe parsed the document.
+    expect(await api.documents.text('supply', 'doc_2')).toBeNull();
+    expect(calls).toHaveLength(4);
   });
 
   const itemOut = {

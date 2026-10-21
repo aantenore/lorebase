@@ -303,6 +303,7 @@ def sample_calls() -> list[Any]:
         ep.upload_document_url(d, m.DocumentFromUrl(url="https://example.test/a.pdf")),
         ep.list_documents(d),
         ep.get_document(d, "doc_1"),
+        ep.get_document_text(d, "doc_1"),
         ep.list_proposal_items(d, "prp_1", status=["pending"], min_confidence=0.5),
         ep.decide_proposal_items(d, "prp_1", m.DecideItems()),
     ]

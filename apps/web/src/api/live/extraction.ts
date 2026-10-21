@@ -10,7 +10,10 @@ import type {
   ItemMatch,
   MatchCandidate,
 } from '../extraction-types';
+import type { components } from '../generated/keeper';
 import type { JsonValue } from '../types';
+
+type S = components['schemas'];
 
 /**
  * Mappers between Keeper's extraction routes (`documents.py`, `proposal_items.py`) and the
@@ -110,13 +113,13 @@ export function mapDecided(raw: Raw): DecideItemsResult {
   };
 }
 
-export const mapDocument = (raw: DocumentInfo): DocumentInfo => ({
+export const mapDocument = (raw: S['DocumentOut']): DocumentInfo => ({
   ...raw,
   text_sha256: raw.text_sha256 ?? null,
   created_at: raw.created_at ?? null,
 });
 
-const mapJob = (raw: ExtractionJob): ExtractionJob => ({
+const mapJob = (raw: S['ExtractionJobOut']): ExtractionJob => ({
   ...raw,
   branch: raw.branch ?? null,
   proposal_id: raw.proposal_id ?? null,
@@ -125,7 +128,7 @@ const mapJob = (raw: ExtractionJob): ExtractionJob => ({
   error: raw.error ?? null,
 });
 
-export const mapDocumentDetail = (raw: DocumentDetail): DocumentDetail => ({
+export const mapDocumentDetail = (raw: S['DocumentDetailOut']): DocumentDetail => ({
   ...mapDocument(raw),
   extraction_jobs: raw.extraction_jobs.map(mapJob),
 });
