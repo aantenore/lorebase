@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 import typer
 
-from lorebase_cli import importing, sources
+from lorebase_cli import batch_import, importing, sources
 from lorebase_cli.context import AppContext, app_of
 from lorebase_cli.failures import CliError
 from lorebase_cli.options import AllOpt, AtOpt, BranchOpt, DomainOpt, JsonOpt, LimitOpt
@@ -51,6 +51,7 @@ def _import(
     dry_run: bool,
     message: str | None,
     json_out: bool,
+    link_columns: list[str] | None = None,
 ) -> None:
     app = app_of(ctx, json_out)
     client = app.client()
@@ -60,7 +61,11 @@ def _import(
     kind = sources.detect_format(file, fmt)
     schema = client.schema.get(domain_id, branch=chosen_branch).schema_
     prepared = importing.prepare(
-        schema, target, name, renames=importing.parse_renames(mapping or [])
+        schema,
+        target,
+        name,
+        renames=importing.parse_renames(mapping or []),
+        link_columns=importing.parse_link_columns(link_columns or []),
     )
 
     def rows() -> Any:
@@ -75,16 +80,7 @@ def _import(
         total = sum(1 for _ in rows())
     expected_batches = None if total is None else -(-total // size)
 
-    def progress(batch: importing.BatchResult) -> None:
-        if app.json_mode or app.quiet:
-            return
-        of = f"/{expected_batches}" if expected_batches else ""
-        end = batch.first_row + batch.rows - 1
-        app.out.info(
-            f"batch {batch.number}{of}: rows {batch.first_row}-{end} {batch.status}, "
-            f"{batch.edits} edits"
-        )
-
+    progress = _progress(app, expected_batches)
     note = message or f"Import {name} from {Path(file).name if file != sources.STDIN else 'stdin'}"
     report = importing.run_import(
         client,
@@ -101,10 +97,24 @@ def _import(
     app.out.emit(report.summary(), lambda: _report_import(app, report))
 
 
+def _progress(app: AppContext, expected_batches: int | None) -> importing.Progress:
+    def progress(batch: importing.BatchResult) -> None:
+        if app.json_mode or app.quiet:
+            return
+        of = f"/{expected_batches}" if expected_batches else ""
+        end = batch.first_row + batch.rows - 1
+        app.out.info(
+            f"batch {batch.number}{of}: rows {batch.first_row}-{end} {batch.status}, "
+            f"{batch.edits} edits"
+        )
+
+    return progress
+
+
 def _report_import(app: AppContext, report: importing.ImportReport) -> None:
     app.out.pairs(
         [
-            (report.target[:-1], report.name),
+            (report.target.removesuffix("s"), report.name),
             ("branch", report.branch or "(default)"),
             ("mode", "dry run" if report.dry_run else "committed"),
             ("rows", report.rows),
@@ -138,6 +148,16 @@ DelimiterOpt = Annotated[
 ]
 
 
+LinkOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--link",
+        help="Send a file column as Links of the row: --link relation=column, the cell holding "
+        "the key at the other end. Repeatable.",
+    ),
+]
+
+
 @import_app.command("records")
 def import_records(
     ctx: typer.Context,
@@ -150,6 +170,7 @@ def import_records(
     fmt: FormatOpt = None,
     delimiter: DelimiterOpt = None,
     mapping: MapOpt = None,
+    link: LinkOpt = None,
     ignore_unknown: IgnoreOpt = False,
     batch_size: BatchOpt = None,
     dry_run: DryRunOpt = False,
@@ -161,6 +182,10 @@ def import_records(
     Columns are Attribute api names; values are converted to each Attribute's type (true and
     false become booleans, numbers and decimals stay exact, empty cells leave an Attribute
     unset). Kinds without a natural key take a `key` column.
+
+    A Kind whose Records need a Link when they are created takes it from a column:
+    `--link with_supplier=supplier_code` creates each Record together with its Link to the
+    Record whose key is in that column (JSON Lines and Parquet cells may hold a list of keys).
     """
     _import(
         ctx,
@@ -177,6 +202,7 @@ def import_records(
         dry_run=dry_run,
         message=message,
         json_out=json_out,
+        link_columns=link,
     )
 
 
@@ -219,6 +245,83 @@ def import_links(
         message=message,
         json_out=json_out,
     )
+
+
+@import_app.command("batch")
+def import_batch(
+    ctx: typer.Context,
+    records: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--records",
+            help="Records of a Kind from a file: --records Kind=file. Repeatable; list the Kinds "
+            "others point to first.",
+        ),
+    ] = None,
+    links: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--links", help="Links of a Relation from a file: --links relation=file. Repeatable."
+        ),
+    ] = None,
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    fmt: FormatOpt = None,
+    delimiter: DelimiterOpt = None,
+    mapping: MapOpt = None,
+    ignore_unknown: IgnoreOpt = False,
+    batch_size: BatchOpt = None,
+    dry_run: DryRunOpt = False,
+    message: MessageOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Upsert Records of several Kinds together with their Links.
+
+    Files are read as `import records` and `import links` read them (`--map` applies to every
+    file). Each request carries Records with the Links at their ends, so Kinds that need a Link
+    when they are created (a Relation marked required_from) load without a Link column. Links
+    go with the Record at their `from` end, or at their `to` end when that one is not in the
+    import. Records without Links go first, then Records with Links, then the other Links;
+    --batch-size counts Records and Links together.
+
+    Example: lorebase import batch --records Supplier=supplier.csv --records
+    Contract=contract.csv --links with_supplier=with_supplier.csv
+    """
+    app = app_of(ctx, json_out)
+    record_sources = batch_import.parse_sources(records or [], "--records", "Kind=file")
+    link_sources = batch_import.parse_sources(links or [], "--links", "relation=file")
+    if not record_sources and not link_sources:
+        raise CliError("give at least one --records Kind=file or --links relation=file")
+    client = app.client()
+    domain_id = app.domain(domain)
+    chosen_branch = app.branch(branch)
+    size = batch_size or app.settings.batch_size
+    schema = client.schema.get(domain_id, branch=chosen_branch).schema_
+    plan = (
+        batch_import.BatchImport(  # reads and checks every row, so a bad one stops before any write
+            schema,
+            record_sources,
+            link_sources,
+            fmt=fmt,
+            delimiter=delimiter,
+            renames=importing.parse_renames(mapping or []),
+            ignore_unknown=ignore_unknown,
+        )
+    )
+    names = [s.name for s in (*record_sources, *link_sources)]
+    note = message or f"Import {len(record_sources)} Kinds and {len(link_sources)} Relations"
+    report = batch_import.run_batch_import(
+        client,
+        plan,
+        domain=domain_id,
+        branch=chosen_branch,
+        name=", ".join(names),
+        batch_size=size,
+        dry_run=dry_run,
+        message=note,
+        progress=_progress(app, plan.expected_requests(size)),
+    )
+    app.out.emit(report.summary(), lambda: _report_import(app, report))
 
 
 # Records ----------------------------------------------------------------------------------
