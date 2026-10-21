@@ -13,6 +13,7 @@ from pydantic import Field, field_validator, model_validator
 
 from lorebase_platform.settings import SectionModel, Settings, register_section
 from lorebase_scribe.cron import CronError, parse_cron
+from lorebase_scribe.extraction.settings import ExtractionSettings
 
 SECTION = "scribe"
 
@@ -166,6 +167,7 @@ class ScribeSettings(SectionModel):
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     sources: SourceSettings = Field(default_factory=SourceSettings)
+    extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

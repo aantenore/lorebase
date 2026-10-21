@@ -76,6 +76,34 @@ class Span:
             raise ValueError(f"invalid span offsets {self.start}..{self.end}")
 
 
+@dataclass(frozen=True, slots=True)
+class RelationLabel:
+    """A relation type a relation extractor should look for between spans."""
+
+    name: str
+    description: str = ""
+    head_labels: tuple[str, ...] = field(default_factory=tuple)
+    """Span labels allowed as head; empty allows any."""
+    tail_labels: tuple[str, ...] = field(default_factory=tuple)
+    """Span labels allowed as tail; empty allows any."""
+
+    def allows(self, head: Span, tail: Span) -> bool:
+        """True when the span labels satisfy the head and tail constraints."""
+        return (not self.head_labels or head.label in self.head_labels) and (
+            not self.tail_labels or tail.label in self.tail_labels
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SpanRelation:
+    """A candidate relation `label` between two spans of the same text."""
+
+    label: str
+    head: Span
+    tail: Span
+    score: float = 1.0
+
+
 @runtime_checkable
 class ChatModel(Protocol):
     """Chat completion constrained to a JSON schema."""
@@ -109,4 +137,15 @@ class SpanExtractor(Protocol):
 
     async def extract(self, text: str, labels: Sequence[Label]) -> list[Span]:
         """Spans found in `text` for the given labels, ordered by start offset."""
+        ...
+
+
+@runtime_checkable
+class RelationExtractor(Protocol):
+    """Tier-1 extraction of candidate relations between already extracted spans."""
+
+    async def extract(
+        self, text: str, spans: Sequence[Span], labels: Sequence[RelationLabel]
+    ) -> list[SpanRelation]:
+        """Relations between `spans` (offsets into `text`), ordered by head then tail start."""
         ...

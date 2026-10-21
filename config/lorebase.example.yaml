@@ -625,3 +625,34 @@ scribe:
       statement_timeout_ms: 60000  # statement_timeout of the read-only transaction
       connect_timeout_s: 10.0
       fetch_rows: 5000           # rows fetched per round trip
+  extraction:                    # documents into reviewable Proposals (docs/extraction.md)
+    tiers: [0, 1]                # 0 rules, 1 local span and relation models, 2 the chat model
+                                 # of inference.llm; add 2 once a model is configured
+    auto_accept_threshold: 0.9   # items at or above are accepted at once (above 1: none)
+    min_confidence: 0.3          # weaker candidates are dropped
+    new_record_kinds: null       # Kinds that may get new Records; null: every natural-key Kind
+    value_cue_words: 8           # a rule-found value needs a cue word this close before it
+    max_items_per_job: 5000
+    max_document_chars: 2000000  # parsed text beyond this is not extracted
+    prompt_version: extract-v1   # recorded in Lineage and the cache key; bump with prompts
+    relation_extractor: model    # model (falls back to co-occurrence when none) | cooccurrence
+    cache: true                  # reuse tier 2 answers for unchanged chunk, schema and model
+    max_tokens_per_job: 2000000  # tier 2 stops after this many tokens; 0: no limit
+    chunking:
+      max_chars: 2000            # largest chunk of parsed text
+      overlap_chars: 200         # repeated from the previous chunk (< max_chars / 2)
+    matching:                    # entity resolution against existing Records
+      trigram_threshold: 0.45    # least trigram similarity of a fuzzy title match
+      match_threshold: 0.6       # least score of a match; below: new Record or dropped
+      ambiguity_margin: 0.05     # candidates this close to the best make the match ambiguous
+      candidates: 5              # candidates kept per mention
+      dictionary_max_titles: 20000   # titles loaded per job for dictionary matching
+      min_title_chars: 4         # shorter titles are not matched by dictionary
+    confidence:                  # confidence given by each technique
+      key: 1.0                   # a key found by its pattern
+      title: 0.95                # an exact title
+      normalized_title: 0.9      # a title equal after case and punctuation folding
+      value_max: 0.85            # ceiling of rule-found values
+      cooccurrence_max: 0.7      # ceiling of Links from co-occurrence in a sentence
+      heading: 0.6               # Links between a heading's Record and those of its section
+      tier2: 0.8                 # facts from the chat model with verified evidence

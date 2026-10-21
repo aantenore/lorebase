@@ -19,6 +19,13 @@ dependencies = [
   "opentelemetry-api>=1.25",
 ]
 
+[project.optional-dependencies]
+# documents: parsers for extraction jobs (design 9.2 step 2). Markdown and plain text need
+# nothing; pypdf reads the text layer of PDF files (BSD-3-Clause, pure Python) and python-docx
+# reads Word documents (MIT). Without them those media types fail with a message naming this
+# extra.
+documents = ["pypdf>=4.2", "python-docx>=1.1"]
+
 [project.scripts]
 lorebase-scribe = "lorebase_scribe.__main__:main"
 
