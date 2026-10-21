@@ -31,8 +31,9 @@ def _review(error: KeeperError) -> str:
     proposals = error.extensions.get("proposals")
     where = f" ({proposals})" if proposals else ""
     return (
-        "this change needs review: run it on a work branch, then open a Proposal for that "
-        f"branch{where}; do not retry here"
+        "this change needs review: call again with task and intent so that Keeper runs it on "
+        "a task branch and opens the Proposal, or run it on a work branch yourself and open a "
+        f"Proposal for that branch{where}; do not retry here as it is"
     )
 
 

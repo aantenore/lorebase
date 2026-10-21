@@ -9,7 +9,8 @@ on branches of immutable Revisions. Workflow:
 2. Read narrowly: lorebase_get, lorebase_query, lorebase_search, lorebase_neighborhood;
    lorebase_explain for where a value came from; lorebase_changes / lorebase_diff for history.
 3. Write only with lorebase_execute: dry_run first (the default), then dry_run=false with
-   expected_head. Some Operations need review: run them on a work branch and open a Proposal.
+   expected_head. Some Operations need review: pass task and intent and Keeper opens the
+   Proposal on a task branch for you.
 Outputs carry the Revision they were read at and say when they were cut."""
 
 GUIDE = """\
@@ -28,7 +29,8 @@ How to use Lorebase:
 - Writes go only through governed Operations with lorebase_execute. Always dry-run first
   (dry_run is true by default), check edits and violations, then commit with dry_run=false and
   expected_head set to the head the dry run reported. A `review-required` or
-  `protected-branch` error means the change must go through a Proposal on a work branch.
+  `protected-branch` error means the change must go through a Proposal: repeat the call with
+  `task` and `intent` and send an `idempotency_key`; Keeper opens the Proposal on a task branch.
 - Errors start with `[code]` and end with `next:`; follow that step instead of retrying blindly.
 - Outputs are cut at a size limit and say so; narrow the request or follow `next_cursor`.
 {task}"""

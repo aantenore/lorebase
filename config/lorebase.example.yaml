@@ -271,6 +271,29 @@ keeper:
     attempt_retention: 5         # merge attempts kept per Proposal (merged ones always kept)
     preview_on_create: true      # compute the merge preview (Conflict count) on creation
     max_resolutions: 1000        # resolutions accepted by one bulk request
+  agent_writes:                  # Operations that need review, written by agents (docs/agents.md)
+                                 # A request that names a `task` runs on the branch
+                                 # {branch_prefix}/{principal}/{task} and opens or updates a
+                                 # Proposal instead of answering 409 review-required. A Domain
+                                 # overrides any member with its own `agent_writes` setting.
+    enabled: true                # false: review-required stays a plain 409
+    principal_types: [service]   # principal types that are agents (user, service, api_key); the
+                                 # others must send auto_propose: true
+    auto_propose: true           # default of agents when a request leaves auto_propose out
+    auto_merge: false            # default when a request leaves auto_merge out
+    allowed_roles_for_auto_merge: []   # roles whose agents may be merged automatically (the
+                                       # role is granted in the Domain and covers the branch);
+                                       # empty: nobody. Required approvals are never skipped
+    max_open_branches_per_principal: 10   # task branches one principal may hold at a time
+    branch_prefix: agent         # first part of task branch names
+    delete_branch_on_merge: true # delete the task branch when its Proposal merged or closed
+                                 # (not while another open Proposal uses it)
+    max_task_length: 60          # longest task slug (after normalization)
+    title_template: "Agent {principal}: {task}"   # title of the Proposal
+    summary_parameter_values: true   # list parameter values in the Proposal description;
+                                     # false: names only (values may be sensitive)
+    summary_value_chars: 80      # characters of a parameter value kept in the description
+    max_summary_operations: 20   # executions listed in one Proposal description
 
 # Model inference, used by Scribe only. Lorebase never imports a model vendor library: every
 # chat model is an OpenAI-compatible HTTP endpoint, local or hosted.
