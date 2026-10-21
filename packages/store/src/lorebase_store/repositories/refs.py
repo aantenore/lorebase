@@ -15,6 +15,7 @@ from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_store.jobs import INDEX_JOB, cancel_queued_jobs
 from lorebase_store.layout import BranchLayout, layout_from
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
@@ -168,13 +169,26 @@ class RefRepository:
         return await self.get(name)
 
     async def delete(self, name: str) -> bool:
-        """Remove a ref. Materialized rows of a branch go with it; the ref log is kept."""
+        """Remove a ref. Materialized rows of a branch go with it; the ref log is kept.
+
+        In the same transaction, the queued index builds of the branch are cancelled: there
+        is nothing left to index. Queued drops stay, they clean up the branch's indexes.
+        """
         result = await self._session.execute(
             delete(REFS)
             .where(REFS.c.domain_id == self._domain, REFS.c.name == name)
             .returning(REFS.c.name)
         )
-        return result.scalar_one_or_none() is not None
+        if result.scalar_one_or_none() is None:
+            return False
+        await cancel_queued_jobs(
+            self._session,
+            INDEX_JOB,
+            domain_id=self._domain,
+            match={"branch": name, "action": "create"},
+            reason="branch deleted",
+        )
+        return True
 
     async def create(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Kind, Relation, RelationBacking, Schema
 from lorebase_core.types import AttributeType, TypeSpec
+from lorebase_store import indexes as indexes_module
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.indexes import (
     INDEX_JOB_TYPE,
@@ -35,9 +37,9 @@ from lorebase_store.indexes import (
     run_index_jobs,
     sql_literal,
 )
-from lorebase_store.jobs import INDEX_JOB, JobRow, run_jobs
-from lorebase_store.materialize import create_branch, promote, verify
-from lorebase_store.repositories import scope_to_domain
+from lorebase_store.jobs import INDEX_JOB, JobRow, claim_jobs, enqueue_job, run_jobs
+from lorebase_store.materialize import create_branch, promote, refork, verify
+from lorebase_store.repositories import RefRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, IndexSettings, StoreSettings
 
@@ -407,6 +409,178 @@ async def test_overlay_indexes_are_queued_and_replaced_on_promotion(
         await scope_to_domain(session, DOMAIN)
         found = [i for i in await existing_indexes(session, DOMAIN) if i.branch == overlay]
     assert [(i.attribute_id, i.unique, i.valid) for i in found] == [(VAT, True, True)]
+
+
+async def seed_main(sessions: Sessions, runtime: StoreRuntime) -> None:
+    async with sessions() as session:
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            [supplier("S-1", "Alpha", vat="IT1")],
+            schema_changes=schema_changes(),
+            author=AUTHOR,
+            message="schema",
+            origin=ORIGIN,
+            runtime=runtime,
+        )
+
+
+async def add_overlay(sessions: Sessions, runtime: StoreRuntime, name: str) -> None:
+    """An overlay of `main`; its per-Attribute index builds are queued."""
+    async with sessions() as session:
+        await create_branch(
+            session, DOMAIN, name, created_by="usr_test", mode="overlay", runtime=runtime
+        )
+
+
+async def index_jobs_of(sessions: Sessions, branch: str) -> list[tuple[str, str]]:
+    """(action, status) of every index job of `branch`, oldest first."""
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        found = await session.execute(
+            text(
+                "SELECT payload ->> 'action', CAST(status AS text) FROM jobs "
+                "WHERE type = :t AND payload ->> 'branch' = :b ORDER BY id"
+            ),
+            {"t": INDEX_JOB_TYPE, "b": branch},
+        )
+        return [(action, status) for action, status in found]
+
+
+async def delete_branch(sessions: Sessions, branch: str) -> None:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        refs = RefRepository(session, DOMAIN)
+        await refs.lock(branch, timeout_ms=0)
+        assert await refs.delete(branch)
+
+
+@pytestmark_integration
+async def test_a_build_job_for_a_deleted_branch_completes_as_a_no_op(
+    engine: AsyncEngine,
+    sessions: Sessions,
+    runtime: StoreRuntime,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    overlay = "agent/gone"
+    await seed_main(sessions, runtime)
+    await add_overlay(sessions, runtime, overlay)
+    async with sessions() as session, session.begin():
+        claimed = await claim_jobs(session, "w", types=[INDEX_JOB], limit=10)
+    assert [j.payload["action"] for j in claimed] == ["create"]
+    # The branch goes after a worker claimed the build (a queued one is cancelled with it).
+    await delete_branch(sessions, overlay)
+    assert await index_jobs_of(sessions, overlay) == [("create", "running")]
+
+    with caplog.at_level(logging.DEBUG, logger=indexes_module.log.name):
+        result = await run_index_job(engine, claimed[0])
+    assert result["status"] == "cancelled"
+    assert result["detail"] == "the branch no longer exists"
+    assert [r.levelno for r in caplog.records if r.name == indexes_module.log.name] == [
+        logging.DEBUG
+    ]
+    assert await indexes_of(sessions, overlay) == {}
+
+    # Queued by hand for a branch that never existed: the worker completes it at once,
+    # without a failure or a retry.
+    async with sessions() as session, session.begin():
+        job_id = await enqueue_job(
+            session,
+            INDEX_JOB,
+            domain_id=DOMAIN,
+            payload={
+                "action": "create",
+                "name": INDEX_PREFIX + "0" * 24,
+                "branch": "never",
+                "kind": SUPPLIER,
+            },
+        )
+    worker = {INDEX_JOB: lambda job: run_index_job(engine, job)}
+    assert await run_jobs(sessions, worker) == 1
+    async with engine.connect() as connection:
+        row = (
+            await connection.execute(
+                text(
+                    "SELECT CAST(status AS text), attempts, result ->> 'status' "
+                    "FROM jobs WHERE id = :i"
+                ),
+                {"i": job_id},
+            )
+        ).one()
+    assert tuple(row) == ("succeeded", 1, "cancelled")
+
+
+@pytestmark_integration
+async def test_a_build_that_outlives_its_branch_leaves_no_index(
+    engine: AsyncEngine,
+    sessions: Sessions,
+    runtime: StoreRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    overlay = "agent/short-lived"
+    await seed_main(sessions, runtime)
+    await add_overlay(sessions, runtime, overlay)
+
+    async def gone(*_: Any) -> bool:
+        return False
+
+    # The branch exists when the build starts and is deleted while it runs.
+    monkeypatch.setattr(indexes_module, "_branch_still_exists", gone)
+    outcomes = await run_index_jobs(engine, runtime.settings.indexes)
+    assert [(o.action, o.status) for o in outcomes] == [("create", "cancelled")]
+    assert outcomes[0].detail == "the branch was deleted during the build"
+    assert await indexes_of(sessions, overlay) == {}
+
+
+@pytestmark_integration
+async def test_deleting_a_branch_cancels_its_queued_index_builds_only(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    doomed, kept = "agent/doomed", "agent/kept"
+    await seed_main(sessions, runtime)
+    await add_overlay(sessions, runtime, doomed)
+    await add_overlay(sessions, runtime, kept)
+    assert await index_jobs_of(sessions, doomed) == [("create", "queued")]
+    assert await index_jobs_of(sessions, kept) == [("create", "queued")]
+
+    # A drop of the branch's index is cleanup the worker still has to do: it stays.
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await enqueue_job(
+            session,
+            INDEX_JOB,
+            domain_id=DOMAIN,
+            payload={"action": "drop", "name": INDEX_PREFIX + "1" * 24, "branch": doomed},
+        )
+    await delete_branch(sessions, doomed)
+    assert await index_jobs_of(sessions, doomed) == [("create", "cancelled"), ("drop", "queued")]
+    assert await index_jobs_of(sessions, kept) == [("create", "queued")]
+
+    async with sessions() as session, session.begin():
+        claimed = await claim_jobs(session, "w", types=[INDEX_JOB], limit=10)
+    assert sorted((j.payload["branch"], j.payload["action"]) for j in claimed) == [
+        (doomed, "drop"),
+        (kept, "create"),
+    ]
+
+
+@pytestmark_integration
+async def test_queueing_an_overlay_again_keeps_one_pending_job_per_index(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    """Index jobs are coalesced by (Domain, index name, action) while queued or running, and
+    an index name pins branch, Kind and Attribute: re-forking a merged overlay before its
+    builds ran queues nothing new."""
+    overlay = "agent/refork"
+    await seed_main(sessions, runtime)
+    await add_overlay(sessions, runtime, overlay)
+    before = await index_jobs_of(sessions, overlay)
+    assert before == [("create", "queued")]
+    async with sessions() as session:
+        await refork(session, DOMAIN, overlay, actor="usr_test", runtime=runtime)
+        await session.commit()
+    assert await index_jobs_of(sessions, overlay) == before
 
 
 @pytestmark_integration
