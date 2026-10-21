@@ -6,11 +6,10 @@ Lorebase is pre-alpha. Nothing is released, no tag exists and interfaces may cha
 
 ## Next up
 
-1. Source connectors for JSON and JSON Lines files, Parquet files and HTTP JSON endpoints (M2 and M5, in progress).
-2. Lineage and history endpoints (M1, T23).
-3. The performance baseline on the 1M-Record fixture (M1, T28).
-4. OIDC login with BFF sessions for the web app (M2).
-5. Release v0.1.0 ([release](release.md)).
+1. Lineage and history endpoints (M1, T23).
+2. The performance baseline on the 1M-Record fixture (M1, T28).
+3. OIDC login with BFF sessions for the web app (M2).
+4. Release v0.1.0 ([release](release.md)).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -63,8 +62,8 @@ Acceptance (design 18): a Domain applied from YAML, filled by CLI import of 1M R
 Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario) run end to end.
 
 - [x] Scribe job runner on the Postgres job queue, with a leader-elected scheduler ([scribe](scribe.md))
-- [ ] CSV, Parquet and Postgres Sources, snapshot and incremental sync (CSV and Postgres are done; Parquet files load only through `lorebase import`; the Parquet Source connector is in progress)
-- [x] Schema inference from CSV files and Postgres tables, with a golden test on the example `supply` schema ([inference](inference.md)); Sources do not run it yet
+- [x] CSV, Parquet and Postgres Sources, snapshot and incremental sync, plus JSON and JSON Lines file Sources ([scribe](scribe.md#sources)); Parquet Sources need the `lorebase-scribe[parquet]` extra
+- [x] Schema inference from CSV, JSON, JSON Lines and Parquet files and Postgres tables, with a golden test on the example `supply` schema ([inference](inference.md)); any Source can be profiled through its connector, but syncs do not run inference
 - [x] Source branches, merge policies and Lineage for syncs
 - [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
 - [x] Web app shell, Explorer, Canvas (graph and schema graph) and Review screens on the mock API
@@ -106,7 +105,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] Observability: a catalogue of every metric with explicit histogram buckets, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks and the OpenTelemetry Collector configuration, in compose and the Helm chart ([metrics](metrics.md), [operations](operations.md#dashboards-and-alerts)); landed early
 - [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
 - [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md); the release workflow signs the images with cosign, [release](release.md); the audit chain check exists in the store, `AuditRepository.verify`, but no command or endpoint runs it)
-- [ ] HTTP JSON Source (in progress)
+- [x] HTTP JSON Source with cursor, page, offset and Link header pagination ([scribe](scribe.md#sources)); landed early
 - [ ] LinkML schema import and export
 - [x] Documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built with `mkdocs build --strict` (`make docs`) and published by the Docs workflow
 - [ ] API stability guarantees for `/api/v1` (no stability policy is written yet)

@@ -108,7 +108,7 @@ The read path has no model in it. This is enforced by the build: the API service
 
 Lorebase is pre-alpha. The engine you just watched, the Postgres store, and a REST API with Domains, branches, schema change sets, schema inference, governed Operations, Proposals with merge and Conflict resolution, Records, a query DSL, traversal, neighborhood, search, log and diff are built and tested. Authentication supports API keys and OIDC, and reads can be served from Postgres replicas behind a freshness guard. The `lorebase` CLI, a Python client, an MCP server, CSV and Postgres Source syncs and document extraction into reviewed Proposals are built too, and the web app, including the conflict resolver in the GIF in the README, is tested against a live Keeper. A read baseline on 100k Records is published in [docs/performance.md](https://github.com/aantenore/lorebase/blob/main/docs/performance.md): every agent read is within its budget, under row-level security too.
 
-Not built: lineage and history endpoints, Parquet and HTTP Sources (in progress), jobs that compute embeddings, sensitivity masking, and the 1M-Record baseline. The documentation is at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/).
+Not built: lineage and history endpoints, jobs that compute embeddings, sensitivity masking, and the 1M-Record baseline. The documentation is at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/).
 
 ## Try it
 
