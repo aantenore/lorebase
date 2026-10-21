@@ -1,8 +1,10 @@
-"""`POST /domains/{d}/schema:infer` with small CSV files and a Postgres source reference."""
+"""`POST /domains/{d}/schema:infer` with small data files and a Postgres source reference."""
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
@@ -59,6 +61,118 @@ async def test_supply_files(client: httpx.AsyncClient) -> None:
     schema = response.json()["schema"]
     assert len(schema["kinds"]) == 6
     assert len(schema["relations"]) == 7
+
+
+def _parquet(rows: list[dict[str, Any]]) -> bytes:
+    import pyarrow
+    import pyarrow.parquet as parquet
+
+    sink = io.BytesIO()
+    parquet.write_table(pyarrow.Table.from_pylist(rows), sink)
+    return sink.getvalue()
+
+
+SUPPLIER_ROWS = [
+    {"supplier_code": "S-1", "legal_name": "Kavsen", "country": "PL"},
+    {"supplier_code": "S-2", "legal_name": "Sundello", "country": "PL"},
+    {"supplier_code": "S-3", "legal_name": "Velkrix", "country": "CZ"},
+]
+ORDER_ROWS = [
+    {"po_number": "PO-1", "supplier_id": "S-1", "qty": 5},
+    {"po_number": "PO-2", "supplier_id": "S-1", "qty": 7},
+    {"po_number": "PO-3", "supplier_id": "S-3", "qty": 1},
+]
+
+
+def _jsonl(rows: list[dict[str, Any]]) -> bytes:
+    return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("supplier", "orders"),
+    [
+        (("supplier.json", json.dumps(SUPPLIER_ROWS).encode()), ("purchase_orders.csv", ORDERS)),
+        (("supplier.csv", SUPPLIER), ("purchase_orders.jsonl", _jsonl(ORDER_ROWS))),
+        (("supplier.ndjson", _jsonl(SUPPLIER_ROWS)), ("purchase_orders.json", b"[]")),
+    ],
+)
+async def test_json_and_json_lines_files_give_a_proposal(
+    client: httpx.AsyncClient, supplier: tuple[str, bytes], orders: tuple[str, bytes]
+) -> None:
+    response = await client.post(URL, files=files(supplier, orders))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    kinds = {k["api_name"] for k in body["schema"]["kinds"].values()}
+    assert "Supplier" in kinds
+    assert {t["table"] for t in body["tables"]} == {"supplier", "purchase_orders"}
+
+
+async def test_json_values_keep_their_types(client: httpx.AsyncClient) -> None:
+    response = await client.post(URL, files=files(("purchase_orders.jsonl", _jsonl(ORDER_ROWS))))
+    assert response.status_code == 200, response.text
+    (kind,) = response.json()["schema"]["kinds"].values()
+    types = {a["api_name"]: a["type"]["name"] for a in kind["attributes"].values()}
+    assert types["qty"] == "integer"
+
+
+async def test_parquet_files_give_a_proposal(client: httpx.AsyncClient) -> None:
+    uploads = files(
+        ("supplier.parquet", _parquet(SUPPLIER_ROWS)),
+        ("purchase_orders.parquet", _parquet(ORDER_ROWS)),
+    )
+    response = await client.post(URL, files=uploads)
+    assert response.status_code == 200, response.text
+    schema = response.json()["schema"]
+    kinds = {k["api_name"] for k in schema["kinds"].values()}
+    assert kinds == {"PurchaseOrder", "Supplier"}
+    relations = [r["api_name"] for r in schema["relations"].values()]
+    assert relations == ["supplier"]
+
+
+async def test_parquet_without_pyarrow_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _parquet(SUPPLIER_ROWS)
+    monkeypatch.setitem(sys.modules, "pyarrow", None)
+    response = await client.post(URL, files=files(("supplier.parquet", data)))
+    assert response.status_code == 422, response.text
+    error = response.json()["errors"][0]
+    assert error["pointer"] == "/body/files/0"
+    assert "lorebase-keeper[parquet]" in error["message"]
+
+
+@pytest.mark.parametrize(
+    ("upload", "message"),
+    [
+        (("a.json", b"{not json"), "not valid JSON"),
+        (("a.json", b'{"items": []}'), "not an array of records"),
+        (("a.json", b"[1, 2]"), "record 1 is not an object"),
+        (("a.jsonl", b'{"a": 1}\n[2]\n'), "line 2 is not an object"),
+        (("a.jsonl", b'{"a": 1}\n{oops\n'), "line 2 is not valid JSON"),
+        (("a.json", b"\xff\xfe["), "not UTF-8"),
+        (("a.parquet", b"PAR1 not really"), "not a readable Parquet file"),
+    ],
+)
+async def test_invalid_record_files(
+    client: httpx.AsyncClient, upload: tuple[str, bytes], message: str
+) -> None:
+    response = await client.post(URL, files=files(upload))
+    assert response.status_code == 422, response.text
+    error = response.json()["errors"][0]
+    assert error["pointer"] == "/body/files/0"
+    assert message in error["message"]
+
+
+async def test_file_formats_are_configured_by_suffix(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    app = make_app(
+        {"schema_inference": {"file_suffixes": [".data"], "file_formats": {".DATA": "jsonl"}}}
+    )
+    async with client_for(app) as http:
+        response = await http.post(URL, files=files(("orders.data", _jsonl(ORDER_ROWS))))
+    assert response.status_code == 200, response.text
+    assert [t["table"] for t in response.json()["tables"]] == ["orders"]
 
 
 @pytest.mark.parametrize(

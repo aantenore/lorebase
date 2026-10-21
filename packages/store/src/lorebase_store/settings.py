@@ -383,6 +383,9 @@ class RecordProfilingSettings(SectionModel):
     max_columns: int = Field(
         default=500, ge=1, description="Tables with more distinct columns are refused."
     )
+    batch_rows: int = Field(
+        default=10000, ge=1, description="Rows decoded per batch of an uploaded Parquet file."
+    )
 
 
 class PostgresProfilingSettings(SectionModel):
