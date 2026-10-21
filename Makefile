@@ -10,7 +10,7 @@ STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/
 	packages/client/src packages/cli/src packages/scribe/src
 OTHER_SRC := packages/platform/src packages/inference/src
 
-.PHONY: help sync fmt lint type openapi test-unit test-int test-changed test-perf security
+.PHONY: help sync fmt lint type openapi test-unit test-int test-changed test-perf security demo demo-down
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -45,6 +45,12 @@ test-perf: ## Performance harness at a small scale (needs Docker); bench.py writ
 
 test-changed: ## Run only the tests impacted by the current diff
 	$(UV) run python scripts/test_changed.py
+
+demo: ## Five-day demo on its own compose stack (project lorebase-demo; KEEP=1 leaves it running)
+	@examples/five_day_demo/stack.sh demo
+
+demo-down: ## Stop the demo stack and delete its data
+	@examples/five_day_demo/stack.sh down
 
 # Fails only on advisories that have a fixed version; unfixable ones are listed as warnings.
 define AUDIT_CHECK

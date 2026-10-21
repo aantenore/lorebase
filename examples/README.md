@@ -6,6 +6,7 @@ Run everything from the repository root after `uv sync --all-packages`.
 |------|---------------|-------|
 | [merge_demo.py](merge_demo.py) | The core engine on the supply Domain, in memory: load the schema and CSV data into `main`, branch `model/risk` and `source/erp`, change both, three-way merge, list the Conflicts by kind, resolve them, merge again, diff two Revisions. Deterministic output. | nothing (no Postgres, no network) |
 | [schema_as_code.md](schema_as_code.md) | Editing `schema.yaml` as code: add a Kind, rename an Attribute and keep its id, validate with the loader, write it back. Every snippet runs. | nothing |
+| [five_day_demo/](five_day_demo) | The 5-day proof scenario of [design 3.2](../docs/design.md#32-the-5-day-proof-scenario) with the `lorebase` CLI against a running stack: schema inference, branches, Conflicts, a Source sync, a webhook, an agent over MCP, a backup. `make demo` brings the stack up, runs it and removes it. Narrative and transcript: [docs/demo.md](../docs/demo.md). | Docker (`make demo`), or any Keeper |
 | [supply/](supply/README.md) | The sample Domain: schema, hand-sized CSV data, a generator for larger datasets and sample documents. Load it into Keeper with the CLI (below). | nothing to read; Keeper and Postgres to load |
 
 ```bash
