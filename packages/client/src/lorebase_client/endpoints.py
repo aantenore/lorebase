@@ -224,6 +224,36 @@ def apply_schema(
     )
 
 
+def infer_schema_postgres(domain: str, body: Mapping[str, Any]) -> Call[dict[str, Any]]:
+    """Propose a schema from Postgres tables: `body` is `{"postgres": {...}, "options": {...}}`.
+
+    The answer carries the proposal as YAML in `yaml`; nothing is written.
+    """
+    return Call(
+        "POST",
+        f"{_domain(domain)}/schema:infer",
+        parse_json,
+        params={"format": "json"},
+        body=dict(body),
+        safe=True,
+    )
+
+
+def infer_schema_files(
+    domain: str, files: Mapping[str, bytes], *, options: Mapping[str, Any] | None = None
+) -> Call[dict[str, Any]]:
+    """Propose a schema from CSV or TSV files (file name to content); the name is the table."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/schema:infer",
+        parse_json,
+        params={"format": "json"},
+        files=tuple(("files", name, data) for name, data in files.items()),
+        form={} if not options else {"options": json.dumps(options, separators=(",", ":"))},
+        safe=True,
+    )
+
+
 # Operations -------------------------------------------------------------------------------
 
 
@@ -553,3 +583,252 @@ def list_audit(
         params={"limit": limit, "cursor": cursor},
         safe=True,
     )
+
+
+# Proposals --------------------------------------------------------------------------------
+
+
+def create_proposal(
+    domain: str, body: m.ProposalCreate, *, idempotency_key: str | None = None
+) -> Call[m.ProposalDetail]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals",
+        parse_model(m.ProposalDetail),
+        body=body.payload(),
+        accepts_key=True,
+        idempotency_key=idempotency_key,
+    )
+
+
+def list_proposals(
+    domain: str,
+    *,
+    status: m.ProposalStatus | None = None,
+    origin: m.ProposalOrigin | None = None,
+    source: str | None = None,
+    target: str | None = None,
+    author: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.Page[m.Proposal]]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/proposals",
+        parse_model(m.Page[m.Proposal]),
+        params={
+            "status": status,
+            "origin": origin,
+            "source": source,
+            "target": target,
+            "author": author,
+            "limit": limit,
+            "cursor": cursor,
+        },
+        safe=True,
+    )
+
+
+def get_proposal(domain: str, proposal_id: str) -> Call[m.ProposalDetail]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}",
+        parse_model(m.ProposalDetail),
+        safe=True,
+    )
+
+
+def update_proposal(
+    domain: str, proposal_id: str, body: m.ProposalUpdate
+) -> Call[m.ProposalDetail]:
+    return Call(
+        "PATCH",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}",
+        parse_model(m.ProposalDetail),
+        body=body.payload(),
+        safe=True,
+    )
+
+
+def close_proposal(domain: str, proposal_id: str) -> Call[m.ProposalDetail]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/close",
+        parse_model(m.ProposalDetail),
+    )
+
+
+def review_proposal(domain: str, proposal_id: str, body: m.ReviewIn) -> Call[m.ReviewResult]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/reviews",
+        parse_model(m.ReviewResult),
+        body=body.payload(),
+    )
+
+
+def merge_proposal(
+    domain: str,
+    proposal_id: str,
+    body: m.MergeIn | None = None,
+    *,
+    idempotency_key: str | None = None,
+) -> Call[m.MergeResult]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/merge",
+        parse_model(m.MergeResult),
+        body=None if body is None else body.payload(),
+        accepts_key=True,
+        idempotency_key=idempotency_key,
+    )
+
+
+def list_conflicts(
+    domain: str,
+    proposal_id: str,
+    *,
+    kind: str | None = None,
+    status: m.ConflictStatus | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.Conflicts]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/conflicts",
+        parse_model(m.Conflicts),
+        params={"kind": kind, "status": status, "limit": limit, "cursor": cursor},
+        safe=True,
+    )
+
+
+def resolve_conflict(
+    domain: str, proposal_id: str, conflict_id: str, body: m.ResolutionIn
+) -> Call[m.Resolution]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/conflicts/{_seg(conflict_id)}/resolution",
+        parse_model(m.Resolution),
+        body=body.payload(),
+        safe=True,
+    )
+
+
+def resolve_conflicts(domain: str, proposal_id: str, body: m.ResolveManyIn) -> Call[m.Conflicts]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/conflicts:resolve",
+        parse_model(m.Conflicts),
+        body=body.payload(),
+        safe=True,
+    )
+
+
+# Agents -----------------------------------------------------------------------------------
+
+
+def context_pack(domain: str, body: m.ContextRequest) -> Call[m.ContextPack]:
+    request = body.model_copy(update={"format": "json"})
+    return Call(
+        "POST",
+        f"{_domain(domain)}/context",
+        parse_model(m.ContextPack),
+        body=request.payload(),
+        safe=True,
+    )
+
+
+def context_pack_markdown(domain: str, body: m.ContextRequest) -> Call[str]:
+    request = body.model_copy(update={"format": "markdown"})
+    return Call(
+        "POST",
+        f"{_domain(domain)}/context",
+        parse_text,
+        body=request.payload(),
+        accept="text/markdown",
+        safe=True,
+    )
+
+
+def explain_record(
+    domain: str, kind: str, key: str, *, branch: str | None = None
+) -> Call[m.Explain]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/explain",
+        parse_model(m.Explain),
+        params={"branch": branch, "format": "json"},
+        safe=True,
+        cacheable=True,
+    )
+
+
+def explain_record_markdown(
+    domain: str, kind: str, key: str, *, branch: str | None = None
+) -> Call[str]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/explain",
+        parse_text,
+        params={"branch": branch, "format": "markdown"},
+        accept="text/markdown",
+        safe=True,
+        cacheable=True,
+    )
+
+
+def branch_changes(
+    domain: str,
+    branch: str,
+    *,
+    since: str | None = None,
+    kinds: Sequence[str] | None = None,
+    limit: int | None = None,
+) -> Call[m.ChangesFeed]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/branches/{_branch(branch)}/changes",
+        parse_model(m.ChangesFeed),
+        params={"since": since, "kinds": list(kinds) if kinds else None, "limit": limit},
+        safe=True,
+        cacheable=True,
+    )
+
+
+def branch_events(
+    domain: str,
+    branch: str,
+    *,
+    kinds: Sequence[str] | None = None,
+    last_event_id: str | None = None,
+) -> Call[str]:
+    """The Server-Sent Events stream of a branch, as text.
+
+    The answer is read until the server closes the stream, so the call returns only then (or
+    fails at the client timeout); use `last_event_id` to resume after the last event seen.
+    """
+    return Call(
+        "GET",
+        f"{_domain(domain)}/branches/{_branch(branch)}/events",
+        parse_text,
+        params={"kinds": list(kinds) if kinds else None, "last_event_id": last_event_id},
+        accept="text/event-stream",
+        safe=True,
+    )
+
+
+# Webhooks ---------------------------------------------------------------------------------
+
+
+def create_webhook(domain: str, body: m.CreateWebhook) -> Call[m.WebhookCreated]:
+    return Call(
+        "POST", f"{_domain(domain)}/webhooks", parse_model(m.WebhookCreated), body=body.payload()
+    )
+
+
+def list_webhooks(domain: str) -> Call[m.WebhookList]:
+    return Call("GET", f"{_domain(domain)}/webhooks", parse_model(m.WebhookList), safe=True)
+
+
+def delete_webhook(domain: str, webhook_id: str) -> Call[None]:
+    return Call("DELETE", f"{_domain(domain)}/webhooks/{_seg(webhook_id)}", parse_none, safe=True)

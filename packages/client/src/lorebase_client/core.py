@@ -77,6 +77,10 @@ class Call[T]:
     content: str | None = None
     """Raw text body (used instead of `body`) with `content_type`."""
     content_type: str | None = None
+    files: tuple[tuple[str, str, bytes], ...] | None = None
+    """Multipart upload (used instead of `body`): form field, file name and content."""
+    form: Mapping[str, str] = field(default_factory=dict)
+    """Text fields sent along with `files`."""
     accept: str = "application/json"
     safe: bool = False
     """True when sending the request twice is harmless (reads, deletes)."""
@@ -237,7 +241,11 @@ class Exchange[T]:
             "params": _query(call.params),
             "headers": headers,
         }
-        if call.content is not None:
+        if call.files is not None:
+            args["files"] = [(name, (filename, data)) for name, filename, data in call.files]
+            if call.form:
+                args["data"] = dict(call.form)
+        elif call.content is not None:
             args["content"] = call.content.encode()
         elif call.body is not None:
             args["json"] = call.body

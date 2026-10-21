@@ -71,6 +71,25 @@ RESPONSES: dict[type[m.Model], str] = {
     m.Page[m.Principal]: "Page_PrincipalOut_",
     m.Page[m.Grant]: "Page_GrantOut_",
     m.Page[m.AuditEntry]: "Page_AuditEntryOut_",
+    m.Check: "CheckOut",
+    m.Review: "ReviewOut",
+    m.Approval: "ApprovalOut",
+    m.Resolution: "ResolutionOut",
+    m.Attempt: "AttemptOut",
+    m.ConflictItem: "ConflictOut",
+    m.Conflicts: "ConflictsOut",
+    m.Proposal: "lorebase_keeper__routes__proposals__ProposalOut",
+    m.ProposalDetail: "ProposalDetailOut",
+    m.ReviewResult: "ReviewResult",
+    m.MergeResult: "MergeOut",
+    m.Page[m.Proposal]: "Page_ProposalOut_",
+    m.ContextPack: "ContextPackOut",
+    m.Explain: "ExplainOut",
+    m.RevisionEvent: "RevisionEventOut",
+    m.ChangesFeed: "ChangesFeedPage",
+    m.Webhook: "WebhookOut",
+    m.WebhookCreated: "WebhookCreated",
+    m.WebhookList: "WebhookList",
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
     m.DomainCreate: "DomainCreate",
@@ -90,6 +109,15 @@ REQUESTS: dict[type[m.RequestModel], str] = {
     m.SearchRequest: "SearchRequest",
     m.CreateApiKey: "CreateApiKey",
     m.CreateGrant: "CreateGrant",
+    m.ProposalCreate: "ProposalCreate",
+    m.ProposalUpdate: "ProposalUpdate",
+    m.ReviewIn: "ReviewIn",
+    m.MergeIn: "MergeIn",
+    m.ResolutionIn: "ResolutionIn",
+    m.FingerprintedResolutionIn: "FingerprintedResolutionIn",
+    m.ResolveManyIn: "ResolveManyIn",
+    m.ContextRequest: "ContextRequest",
+    m.CreateWebhook: "CreateWebhook",
 }
 # Members the server accepts through a Python-only alias or computes; none today.
 IGNORED: dict[str, set[str]] = {}
@@ -138,6 +166,19 @@ def test_enumerations_the_client_checks_match_the_document() -> None:
     assert set(modes) == set(get_args(m.SearchMode))
     assert set(SCHEMAS["GrantScope"]["enum"]) == set(
         get_args(m.CreateGrant.model_fields["scope_type"].annotation)
+    )
+    for literal, name in [
+        (m.ProposalStatus, "ProposalStatus"),
+        (m.ProposalOrigin, "ProposalOrigin"),
+        (m.ReviewVerdict, "ReviewVerdict"),
+    ]:
+        assert set(SCHEMAS[name]["enum"]) == set(get_args(literal)), name
+    assert set(SCHEMAS["CheckOut"]["properties"]["status"]["enum"]) == set(get_args(m.CheckStatus))
+    assert set(SCHEMAS["ConflictOut"]["properties"]["status"]["enum"]) == set(
+        get_args(m.ConflictStatus)
+    )
+    assert set(SCHEMAS["ContextRequest"]["properties"]["format"]["enum"]) == set(
+        get_args(m.ContextFormat)
     )
 
 
@@ -194,6 +235,27 @@ def sample_calls() -> list[Any]:
         ep.list_grants(d),
         ep.revoke_grant(d, "g"),
         ep.list_audit(d),
+        ep.infer_schema_postgres(d, {"postgres": {"dsn": "secret://env/ERP_DSN"}}),
+        ep.infer_schema_files(d, {"parts.csv": b"id\n1\n"}),
+        ep.create_proposal(d, m.ProposalCreate(source_ref="a", target_ref="b", title="t")),
+        ep.list_proposals(d),
+        ep.get_proposal(d, "p"),
+        ep.update_proposal(d, "p", m.ProposalUpdate(title="t")),
+        ep.close_proposal(d, "p"),
+        ep.review_proposal(d, "p", m.ReviewIn(verdict="approve")),
+        ep.merge_proposal(d, "p"),
+        ep.list_conflicts(d, "p"),
+        ep.resolve_conflict(d, "p", "c", m.ResolutionIn(choice="ours")),
+        ep.resolve_conflicts(d, "p", m.ResolveManyIn(resolutions=[])),
+        ep.context_pack(d, m.ContextRequest(search="x")),
+        ep.context_pack_markdown(d, m.ContextRequest(search="x")),
+        ep.explain_record(d, "Part", "P-1"),
+        ep.explain_record_markdown(d, "Part", "P-1"),
+        ep.branch_changes(d, "agent/x"),
+        ep.branch_events(d, "agent/x"),
+        ep.create_webhook(d, m.CreateWebhook(url="https://example.test/hook")),
+        ep.list_webhooks(d),
+        ep.delete_webhook(d, "w"),
     ]
 
 

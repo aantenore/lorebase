@@ -16,6 +16,7 @@ from types import TracebackType
 from typing import Any, Self
 
 import httpx
+from pydantic import JsonValue
 
 from lorebase_client import endpoints as ep
 from lorebase_client import models as m
@@ -73,6 +74,9 @@ class AsyncLorebaseClient:
         self.grants = Grants(self)
         self.principals = Principals(self)
         self.audit = Audit(self)
+        self.proposals = Proposals(self)
+        self.agents = Agents(self)
+        self.webhooks = Webhooks(self)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -302,6 +306,26 @@ class SchemaApi(_Resource):
             cascade=cascade,
         )
         return await self._c.send(ep.apply_schema(domain, branch, body))
+
+    async def infer_postgres(
+        self,
+        domain: str,
+        dsn: str,
+        *,
+        schema: str | None = None,
+        tables: Sequence[str] | None = None,
+        options: JsonObject | None = None,
+    ) -> dict[str, Any]:
+        """Propose a schema from Postgres tables (`dsn` may be a `secret://` reference)."""
+        return await self._c.send(
+            ep.infer_schema_postgres(domain, _infer_body(dsn, schema, tables, options))
+        )
+
+    async def infer_files(
+        self, domain: str, files: Mapping[str, bytes], *, options: JsonObject | None = None
+    ) -> dict[str, Any]:
+        """Propose a schema from CSV or TSV files (file name to content)."""
+        return await self._c.send(ep.infer_schema_files(domain, files, options=options))
 
 
 class Operations(_Resource):
@@ -553,6 +577,24 @@ def _query_request(query: m.QueryRequest | JsonObject) -> m.QueryRequest:
     return query if isinstance(query, m.QueryRequest) else m.QueryRequest(**query)
 
 
+def _context_request(request: m.ContextRequest | JsonObject) -> m.ContextRequest:
+    return request if isinstance(request, m.ContextRequest) else m.ContextRequest(**request)
+
+
+def _infer_body(
+    dsn: str, schema: str | None, tables: Sequence[str] | None, options: JsonObject | None
+) -> dict[str, Any]:
+    postgres: dict[str, Any] = {"dsn": dsn}
+    if schema is not None:
+        postgres["schema"] = schema
+    if tables is not None:
+        postgres["tables"] = list(tables)
+    body: dict[str, Any] = {"postgres": postgres}
+    if options:
+        body["options"] = dict(options)
+    return body
+
+
 class Revisions(_Resource):
     async def log(
         self,
@@ -736,3 +778,245 @@ class Audit(_Resource):
 
     def iterate(self, domain: str, *, page_size: int | None = None) -> AsyncIterator[m.AuditEntry]:
         return self._c.iterate(ep.list_audit(domain, limit=page_size))
+
+
+class Proposals(_Resource):
+    async def create(
+        self,
+        domain: str,
+        source_ref: str,
+        target_ref: str,
+        *,
+        title: str,
+        description: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.ProposalDetail:
+        """Propose merging `source_ref` into `target_ref`."""
+        body = m.ProposalCreate(
+            source_ref=source_ref, target_ref=target_ref, title=title, description=description
+        )
+        return await self._c.send(ep.create_proposal(domain, body, idempotency_key=idempotency_key))
+
+    async def list(
+        self,
+        domain: str,
+        *,
+        status: m.ProposalStatus | None = None,
+        origin: m.ProposalOrigin | None = None,
+        source: str | None = None,
+        target: str | None = None,
+        author: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.Page[m.Proposal]:
+        return await self._c.send(
+            ep.list_proposals(
+                domain,
+                status=status,
+                origin=origin,
+                source=source,
+                target=target,
+                author=author,
+                limit=limit,
+                cursor=cursor,
+            )
+        )
+
+    def iterate(
+        self,
+        domain: str,
+        *,
+        status: m.ProposalStatus | None = None,
+        origin: m.ProposalOrigin | None = None,
+        source: str | None = None,
+        target: str | None = None,
+        author: str | None = None,
+        page_size: int | None = None,
+    ) -> AsyncIterator[m.Proposal]:
+        call = ep.list_proposals(
+            domain,
+            status=status,
+            origin=origin,
+            source=source,
+            target=target,
+            author=author,
+            limit=page_size,
+        )
+        return self._c.iterate(call)
+
+    async def get(self, domain: str, proposal_id: str) -> m.ProposalDetail:
+        return await self._c.send(ep.get_proposal(domain, proposal_id))
+
+    async def update(
+        self,
+        domain: str,
+        proposal_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> m.ProposalDetail:
+        body = m.ProposalUpdate(title=title, description=description)
+        return await self._c.send(ep.update_proposal(domain, proposal_id, body))
+
+    async def close(self, domain: str, proposal_id: str) -> m.ProposalDetail:
+        return await self._c.send(ep.close_proposal(domain, proposal_id))
+
+    async def review(
+        self,
+        domain: str,
+        proposal_id: str,
+        verdict: m.ReviewVerdict,
+        *,
+        comment: str | None = None,
+    ) -> m.ReviewResult:
+        body = m.ReviewIn(verdict=verdict, comment=comment)
+        return await self._c.send(ep.review_proposal(domain, proposal_id, body))
+
+    async def merge(
+        self,
+        domain: str,
+        proposal_id: str,
+        *,
+        message: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.MergeResult:
+        body = m.MergeIn(message=message)
+        return await self._c.send(
+            ep.merge_proposal(domain, proposal_id, body, idempotency_key=idempotency_key)
+        )
+
+    async def conflicts(
+        self,
+        domain: str,
+        proposal_id: str,
+        *,
+        kind: str | None = None,
+        status: m.ConflictStatus | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.Conflicts:
+        """One page of the Conflicts of the latest merge attempt; `kind` is a code list."""
+        return await self._c.send(
+            ep.list_conflicts(
+                domain, proposal_id, kind=kind, status=status, limit=limit, cursor=cursor
+            )
+        )
+
+    def iterate_conflicts(
+        self,
+        domain: str,
+        proposal_id: str,
+        *,
+        kind: str | None = None,
+        status: m.ConflictStatus | None = None,
+        page_size: int | None = None,
+    ) -> AsyncIterator[m.ConflictItem]:
+        call = ep.list_conflicts(domain, proposal_id, kind=kind, status=status, limit=page_size)
+        return self._c.iterate(call)
+
+    async def resolve(
+        self,
+        domain: str,
+        proposal_id: str,
+        conflict_id: str,
+        choice: str,
+        *,
+        value: JsonValue = None,
+        values: JsonObject | None = None,
+    ) -> m.Resolution:
+        """Decide one Conflict; `value` or `values` go with the `custom` choice."""
+        body = m.ResolutionIn(
+            choice=choice, value=value, values=None if values is None else dict(values)
+        )
+        return await self._c.send(ep.resolve_conflict(domain, proposal_id, conflict_id, body))
+
+    async def resolve_many(
+        self,
+        domain: str,
+        proposal_id: str,
+        resolutions: Sequence[m.FingerprintedResolutionIn | JsonObject],
+    ) -> m.Conflicts:
+        """Decide several Conflicts, each named by its fingerprint."""
+        body = m.ResolveManyIn(
+            resolutions=[
+                r
+                if isinstance(r, m.FingerprintedResolutionIn)
+                else m.FingerprintedResolutionIn(**r)
+                for r in resolutions
+            ]
+        )
+        return await self._c.send(ep.resolve_conflicts(domain, proposal_id, body))
+
+
+class Agents(_Resource):
+    async def context(self, domain: str, request: m.ContextRequest | JsonObject) -> m.ContextPack:
+        """A context pack as JSON (a `ContextRequest` or its JSON object)."""
+        return await self._c.send(ep.context_pack(domain, _context_request(request)))
+
+    async def context_markdown(self, domain: str, request: m.ContextRequest | JsonObject) -> str:
+        """The same context pack rendered as Markdown."""
+        return await self._c.send(ep.context_pack_markdown(domain, _context_request(request)))
+
+    async def explain(
+        self, domain: str, kind: str, key: str, *, branch: str | None = None
+    ) -> m.Explain:
+        """Where the values and Links of a Record came from."""
+        return await self._c.send(ep.explain_record(domain, kind, key, branch=branch))
+
+    async def explain_markdown(
+        self, domain: str, kind: str, key: str, *, branch: str | None = None
+    ) -> str:
+        return await self._c.send(ep.explain_record_markdown(domain, kind, key, branch=branch))
+
+    async def changes(
+        self,
+        domain: str,
+        branch: str,
+        *,
+        since: str | None = None,
+        kinds: Sequence[str] | None = None,
+        limit: int | None = None,
+    ) -> m.ChangesFeed:
+        """Revision events of a branch after `since` (a Revision id or tag)."""
+        return await self._c.send(
+            ep.branch_changes(domain, branch, since=since, kinds=kinds, limit=limit)
+        )
+
+    async def events(
+        self,
+        domain: str,
+        branch: str,
+        *,
+        kinds: Sequence[str] | None = None,
+        last_event_id: str | None = None,
+    ) -> str:
+        """The event stream of a branch as text, read until the server closes it."""
+        return await self._c.send(
+            ep.branch_events(domain, branch, kinds=kinds, last_event_id=last_event_id)
+        )
+
+
+class Webhooks(_Resource):
+    async def create(
+        self,
+        domain: str,
+        url: str,
+        *,
+        events: Sequence[str] | None = None,
+        branches: Sequence[str] | None = None,
+        description: str | None = None,
+    ) -> m.WebhookCreated:
+        """Register a webhook; the signing secret is in `secret` and is not shown again."""
+        body = m.CreateWebhook(
+            url=url,
+            events=None if events is None else list(events),
+            branches=None if branches is None else list(branches),
+            description=description,
+        )
+        return await self._c.send(ep.create_webhook(domain, body))
+
+    async def list(self, domain: str) -> m.WebhookList:
+        return await self._c.send(ep.list_webhooks(domain))
+
+    async def delete(self, domain: str, webhook_id: str) -> None:
+        await self._c.send(ep.delete_webhook(domain, webhook_id))
