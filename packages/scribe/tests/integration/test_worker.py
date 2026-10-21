@@ -164,7 +164,12 @@ async def test_worker_runs_a_source_sync_job(
     shutil.copy(EXAMPLE / "data" / "supplier.csv", path)
     monkeypatch.setenv("SUPPLY_APPROVED_SUPPLIERS_CSV", str(path))
     settings = ScribeSettings.model_validate(
-        {"sources": {"csv": {"allowed_roots": [str(tmp_path)]}}}
+        {
+            "sources": {
+                "allowed_connections": ["secret://env/SUPPLY_APPROVED_SUPPLIERS_CSV"],
+                "csv": {"allowed_roots": [str(tmp_path)]},
+            }
+        }
     )
     job_id = await enqueue(
         sessions,
