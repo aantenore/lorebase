@@ -22,9 +22,10 @@ from lorebase_store.models import Domain, Job, Ref, Revision, metadata
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 
+from .support import wait_for_lock_waiter
+
 pytestmark = pytest.mark.integration
 
-LOCK_WAIT_TIMEOUT_S = 10.0
 NOW = datetime(2026, 10, 20, tzinfo=UTC)
 
 
@@ -198,23 +199,6 @@ CAS = (
 )
 
 
-async def wait_for_lock_waiter(engine: AsyncEngine) -> None:
-    """Return once another session is blocked on a lock."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + LOCK_WAIT_TIMEOUT_S
-    async with engine.connect() as connection:
-        while loop.time() < deadline:
-            waiting = await scalars(
-                connection,
-                "SELECT count(*) FROM pg_stat_activity "
-                "WHERE wait_event_type = 'Lock' AND datname = current_database()",
-            )
-            if waiting[0]:
-                return
-            await asyncio.sleep(0.05)
-    raise AssertionError("no session waited on the ref row lock")
-
-
 async def test_ref_compare_and_swap(database_url: str) -> None:
     async with admin_engine(database_url) as engine:
         async with engine.begin() as connection:
@@ -257,7 +241,9 @@ async def test_ref_compare_and_swap(database_url: str) -> None:
             racing = asyncio.create_task(
                 loser.execute(text(CAS), {**expected, "new": h32("d-rev-3")})
             )
-            await wait_for_lock_waiter(engine)
+            await wait_for_lock_waiter(
+                engine, racing, locktype="transactionid", what="ref row lock"
+            )
             await winner.commit()
             assert (await racing).rowcount == 0
             await loser.rollback()
