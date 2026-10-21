@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_store.auth.scope import checked_domain_id
+
 DOMAIN_IDS_SETTING = "lorebase.domain_ids"
 """Transaction setting listing, comma-separated, the Domains the transaction may touch."""
 
@@ -26,6 +28,6 @@ _ADD_DOMAIN = text(
 
 async def scope_to_domain(session: AsyncSession, domain_id: str) -> None:
     """Add `domain_id` to the Domains visible in the current transaction."""
-    if "," in domain_id:
-        raise ValueError("Domain ids cannot contain commas")
-    await session.execute(_ADD_DOMAIN, {"name": DOMAIN_IDS_SETTING, "domain": domain_id})
+    await session.execute(
+        _ADD_DOMAIN, {"name": DOMAIN_IDS_SETTING, "domain": checked_domain_id(domain_id)}
+    )
