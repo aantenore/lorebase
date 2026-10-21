@@ -45,6 +45,7 @@ class AsyncLorebaseClient:
         cache: bool | int = False,
         headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        trust_env: bool = True,
         env: Mapping[str, str] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -62,7 +63,9 @@ class AsyncLorebaseClient:
         )
         self._core = RequestCore(self.config)
         self._sleep = sleep
-        self._http = httpx.AsyncClient(timeout=self.config.timeout_s, transport=transport)
+        self._http = httpx.AsyncClient(
+            timeout=self.config.timeout_s, transport=transport, trust_env=trust_env
+        )
         self.domains = Domains(self)
         self.branches = Branches(self)
         self.tags = Tags(self)

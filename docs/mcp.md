@@ -51,6 +51,7 @@ usually set only the short variables:
 | `LOREBASE__HERALD__OUTPUT__MAX_CHARS` | `herald.output.max_chars` | longest tool output, default 12000 |
 | `LOREBASE__HERALD__KEEPER__MAX_RETRIES` | `herald.keeper.max_retries` | resends after 429, 503 or an unreachable Keeper, default `2`; `0` turns retries off |
 | `LOREBASE__HERALD__KEEPER__RETRY_MAX_WAIT_S` | `herald.keeper.retry_max_wait_s` | longest pause before a retry, default `5`; `Retry-After` is capped to it |
+| `LOREBASE__HERALD__KEEPER__TRUST_ENV` | `herald.keeper.trust_env` | default `false`: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are ignored; `true` honors them (not with `verify_tls: false`) |
 
 Credentials: with stdio, every Keeper call carries `herald.keeper.api_key`. With Streamable
 HTTP, every call forwards the caller's `Authorization: Bearer <api key>` header unchanged and
