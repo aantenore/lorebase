@@ -412,6 +412,31 @@ class Operations(_Resource):
             idempotency_key=idempotency_key,
         )
 
+    def import_batch(
+        self,
+        domain: str,
+        records: Sequence[JsonObject] = (),
+        links: Sequence[JsonObject] = (),
+        *,
+        branch: str | None = None,
+        dry_run: bool = False,
+        expected_head: str | None = None,
+        message: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.Execution:
+        """Upsert Records (rows with `kind`) and Links (rows with `relation`, `from`, `to`) in
+        one call; a Link goes in the same Revision as the Record at one of its ends."""
+        return self.execute(
+            domain,
+            "import_batch",
+            {"records": list(records), "links": list(links)},
+            branch=branch,
+            dry_run=dry_run,
+            expected_head=expected_head,
+            message=message,
+            idempotency_key=idempotency_key,
+        )
+
 
 class Records(_Resource):
     def list(

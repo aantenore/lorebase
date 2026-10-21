@@ -12,7 +12,17 @@ from pathlib import Path
 
 import pytest
 from keeper_harness import RunningKeeper
-from supply_example import DATA, DOMAIN, KIND_FILES, LINK_FILES, WORK, write_stripped_schema
+from supply_example import (
+    BATCH_KIND_FILES,
+    BATCH_LINK_FILES,
+    DATA,
+    DOMAIN,
+    EXAMPLE,
+    KIND_FILES,
+    LINK_FILES,
+    WORK,
+    write_stripped_schema,
+)
 from typer.testing import CliRunner, Result
 
 from lorebase_cli.main import app
@@ -118,6 +128,59 @@ def test_quickstart_flow(lorebase, tmp_path: Path) -> None:  # type: ignore[no-u
         k["id"] for k in json.loads(lorebase("apikey", "list", "-d", DOMAIN, "--json").stdout)
     ] == [created["id"]]
     lorebase("apikey", "revoke", created["id"], "-d", DOMAIN)
+
+
+def test_import_batch_loads_the_full_supply_set(lorebase, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """Contract, PurchaseOrder and RiskFlag need a Link when they are created, so all six
+    Kinds go through one `import batch`, in requests that keep each Record with its Links."""
+    lorebase("domain", "create", DOMAIN)
+    lorebase("branch", "create", WORK, "-d", DOMAIN)
+    lorebase("schema", "apply", str(EXAMPLE / "schema.yaml"), "-d", DOMAIN, "-b", WORK)
+
+    arguments = ["import", "batch", "-d", DOMAIN, "-b", WORK, "--json"]
+    for kind, file in BATCH_KIND_FILES.items():
+        arguments += ["--records", f"{kind}={DATA / file}"]
+    for relation, file in BATCH_LINK_FILES.items():
+        arguments += ["--links", f"{relation}={DATA / file}"]
+
+    # a request of 60 rows has to cut the set into several, none of which splits a unit
+    loaded = json.loads(lorebase(*arguments, "--batch-size", "60").stdout)
+    assert loaded["batches"] > 1
+    assert loaded["rows"] == 185 + 241  # 185 Records and 241 Links in the CSV files
+    again = json.loads(lorebase(*arguments).stdout)  # imports upsert: one request this time
+    assert (again["batches"], again["rows"]) == (1, loaded["rows"])
+
+    counts = {
+        kind: len(
+            json.loads(
+                lorebase("record", "list", kind, "-d", DOMAIN, "-b", WORK, "--all", "--json").stdout
+            )
+        )
+        for kind in BATCH_KIND_FILES
+    }
+    assert counts == {
+        "Supplier": 30,
+        "Part": 40,
+        "Plant": 20,
+        "Contract": 25,
+        "PurchaseOrder": 50,
+        "RiskFlag": 20,
+    }
+    contract = json.loads(
+        lorebase(
+            "record", "get", "Contract", "C-3001", "-d", DOMAIN, "-b", WORK, "--links", "--json"
+        ).stdout
+    )
+    assert {c["relation"]: c["count"] for c in contract["record"]["links"]}["with_supplier"] == 1
+
+    # a Contract without its Link is refused by the server and the CLI says where
+    broken = tmp_path / "contract.csv"
+    broken.write_text("contract_number,title,status\nC-9999,No supplier,active\n")
+    refused = lorebase(
+        "import", "batch", "-d", DOMAIN, "-b", WORK, "--records", f"Contract={broken}", expect=2
+    )
+    assert f"{broken} row 1" in refused.stderr
+    assert "was rejected; 0 earlier rows are committed" in refused.stderr
 
 
 def test_errors_map_to_exit_codes_against_a_real_server(lorebase, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]

@@ -290,6 +290,10 @@ def test_preconditions_are_refused_unless_skipping_is_allowed() -> None:
     with pytest.raises(ProblemError) as raised:
         expressions_gate(operation, DISABLED)
     assert raised.value.problem.code == "expressions-not-enabled"
+    assert (
+        "expressions are disabled by configuration (schema.expressions_enabled)"
+        in raised.value.problem_detail
+    )
     warnings = expressions_gate(
         operation,
         OperationSettings(expressions_enabled=False, skip_expression_preconditions=True),
