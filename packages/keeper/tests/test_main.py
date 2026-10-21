@@ -18,6 +18,7 @@ def test_main_serves_the_app_on_host_and_port_from_settings(
     served: dict[str, Any] = {}
     monkeypatch.setattr(entrypoint.uvicorn, "run", lambda app, **kwargs: served.update(kwargs))
     monkeypatch.setenv("LOREBASE__KEEPER__HOST", "0.0.0.0")
+    monkeypatch.setenv("LOREBASE__KEEPER__AUTH__ALLOW_INSECURE", "true")
     monkeypatch.setenv("LOREBASE__KEEPER__PORT", "9191")
 
     entrypoint.main()

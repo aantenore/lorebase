@@ -107,6 +107,8 @@ keeper:
     mode: none                   # none | api_key | oidc | api_key+oidc. `none` accepts every
                                  # request as an administrator: local development only. The
                                  # other modes need the `database` section below
+    allow_insecure: false        # true: allow mode `none` with a host other than loopback;
+                                 # otherwise Keeper refuses to start with that combination
     installation_admins: []      # principal ids, identity provider subjects or group ids allowed
                                  # to administer the installation (list principals). They get
                                  # no access to Domain data

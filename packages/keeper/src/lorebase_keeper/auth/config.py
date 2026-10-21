@@ -210,6 +210,11 @@ class AuthSettings(SectionModel):
         description="none | api_key | oidc | api_key+oidc. `none` accepts every request as an "
         "administrator and is for local development only.",
     )
+    allow_insecure: bool = Field(
+        default=False,
+        description="Allow mode `none` on a bind address other than loopback (`keeper.host`). "
+        "Without it such a configuration is refused at start.",
+    )
     installation_admins: tuple[str, ...] = Field(
         default=(),
         description="Principals allowed to administer the installation (list principals). "
