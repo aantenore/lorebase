@@ -62,6 +62,11 @@ x-keeper: &keeper
     <<: *database
     LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
     LOREBASE__KEEPER__HOST: 0.0.0.0
+    # The container listens on all its interfaces so that the published port works; with the
+    # example configuration (auth.mode none) Keeper refuses that unless this flag is set. Only
+    # safe while KEEPER_BIND keeps the port on 127.0.0.1: set it to false and choose an auth
+    # mode before publishing Keeper anywhere else.
+    LOREBASE__KEEPER__AUTH__ALLOW_INSECURE: ${KEEPER_ALLOW_INSECURE:-true}
     LOREBASE__KEEPER__PORT: ${KEEPER_PORT:-8080}
     LOREBASE__KEEPER__READS__PREFER_REPLICA: ${KEEPER_PREFER_REPLICA:-false}
     LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
