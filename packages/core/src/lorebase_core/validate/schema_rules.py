@@ -829,17 +829,30 @@ class _Checker:
             )
 
     def check_derivation_cycles(self) -> None:
-        """Aggregates over derived attributes must not depend on themselves."""
+        """Derivations must not depend on themselves through derived Attributes: an aggregate
+        over a derived ``source_attribute``, or (with expressions enabled) an expression or
+        filter that reads a derived Attribute of its Record or of a Record one hop away."""
         edges: dict[str, set[str]] = defaultdict(set)
         owner: dict[str, str] = {}
+        inputs_of = None
+        if self.rules.allow_expressions:
+            from lorebase_core.expr.derivations import derivation_inputs
+
+            inputs_of = derivation_inputs
         for derivation in self.schema.derivations.values():
             definition = derivation.definition
+            if not isinstance(definition, AggregateDerivation | ExpressionDerivation):
+                continue
+            owner[definition.attribute] = derivation.id
+            if inputs_of is not None:
+                inputs = inputs_of(self.schema, derivation, self.rules.expression_limits)
+                edges[definition.attribute].update(inputs)
+                continue
             if (
                 not isinstance(definition, AggregateDerivation)
                 or definition.source_attribute is None
             ):
                 continue
-            owner[definition.attribute] = derivation.id
             relation = self.schema.relations.get(definition.relation)
             if relation is None:
                 continue

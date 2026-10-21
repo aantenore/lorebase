@@ -65,7 +65,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Area | Feature | Status | Milestone |
 |------|---------|--------|-----------|
 | Modeling | Typed ontology as YAML: Kinds, Attributes, Relations with cardinality, Traits, Operations, Derivations, Sources, with static validation | Done | M1 |
-| Modeling | Expressions (CEL) in Operations and Derivations | In progress: the engine and its schema checks are done and stored Operations evaluate CEL behind `keeper.operations.expressions_enabled` (off by default), but schema change sets still refuse schemas that use expressions and Derivations are not computed | M3, M4 |
+| Modeling | Expressions (CEL) in Operations and Derivations: type checked when a schema is applied, Operations executed with preconditions, steps and review policies, `expression` and `aggregate` Derivations recomputed in the materialized head | Done (path Derivations are not computed) | M3, M4 |
 | Versioning | Content-addressed Revisions, branches, tags, diff, time travel reads | Done | M1 |
 | Versioning | Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies (`prefer`, cascade, defaults) | Done | M1 |
 | Versioning | Proposals, reviews, required approvals, merge and Conflict resolution over REST | Done | M1 |
@@ -74,7 +74,7 @@ The analysts say 80, the ERP says 45, and someone has to decide. That decision i
 | Reads | Semantic and hybrid search with caller-supplied vectors | Planned (nothing computes embeddings yet) | M4 |
 | Governance | Built-in Operations (create, update, delete, link, unlink, bulk import) with dry run and idempotency | Done | M1 |
 | Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
-| Governance | Custom Operations, review policies, sensitivity masking | Partly: the executor and the review policy gate exist, custom Operations wait on the CEL item above; masking is planned | M3 |
+| Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies; side effects (outbox, webhooks) and masking are planned | M3 |
 | Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
 | Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
 | Operations | Garbage collection, Domain backup and restore bundles, a Postgres job queue ([docs/operations.md](docs/operations.md)) | Done | M5, landed early |
@@ -196,9 +196,9 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 Pre-alpha. Nothing is released and interfaces may change. M1 (engine and API) is in progress: the engine, the REST API (Proposals included), the Python client and the CLI are done; lineage and history endpoints and the 1M-Record performance baseline are not.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; the CEL expression engine; the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
+Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; CEL expressions end to end (schema validation, custom Operations, derived values in the materialized head); the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; a performance harness with a 100k-Record baseline; docker compose; CI with CodeQL; the web app on a mock API.
 
-Next: lineage and history endpoints and the 1M-Record baseline (finishing M1), expressions accepted in schema change sets, Source ingestion (M2), custom Operations (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
+Next: lineage and history endpoints and the 1M-Record baseline (finishing M1), Source ingestion (M2), the Operation outbox (M3), document extraction and semantic search (M4), and hardening to 1.0 (M5).
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|

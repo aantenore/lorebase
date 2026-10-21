@@ -28,7 +28,7 @@ from lorebase_core.model import (
     validate_schema,
 )
 from lorebase_core.revision import Origin
-from lorebase_core.validate import Issue
+from lorebase_core.validate import Issue, SchemaRules
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.context import (
     StoreAccess,
@@ -213,9 +213,12 @@ def target_schema(current: Schema, change: ChangeSetInput) -> Schema:
     return target
 
 
-def static_issues(target: Schema) -> list[Finding]:
-    """Errors of static validation, located in the document (api names, YAML paths)."""
-    return located(target, [i for i in validate_schema(target) if i.is_error])
+def static_issues(target: Schema, rules: SchemaRules) -> list[Finding]:
+    """Errors of static validation, located in the document (api names, YAML paths).
+
+    `rules` come from the `schema` settings (`StoreRuntime.schema`), the same the commit
+    pipeline applies."""
+    return located(target, [i for i in validate_schema(target, rules) if i.is_error])
 
 
 def located(target: Schema, issues: Sequence[Issue]) -> list[Finding]:
@@ -261,7 +264,7 @@ async def validate(
     except ChangeSetInvalidError as invalid:
         return invalid.issues, []
     _, described = diff_schemas(current, target)
-    return static_issues(target), described
+    return static_issues(target, store.runtime.schema.rules()), described
 
 
 async def apply(
@@ -292,7 +295,7 @@ async def apply(
             head_revision = await require_revision(session, domain_id, ref.head)
             current = await schema_at(session, domain_id, head_revision, store.runtime)
             target = target_schema(current, change)
-            issues = static_issues(target)
+            issues = static_issues(target, store.runtime.schema.rules())
             if issues:
                 raise ChangeSetInvalidError(issues)
             changes, described = diff_schemas(current, target)

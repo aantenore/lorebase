@@ -58,7 +58,10 @@ def keeper(app_database_url: str, installation_admin: InstallationAdmin) -> Keep
     """Open a client bound to a Keeper that runs as the application role (RLS applies)."""
 
     @asynccontextmanager
-    async def running(**keeper_settings: Any) -> AsyncIterator[httpx.AsyncClient]:
+    async def running(
+        sections: dict[str, Any] | None = None, **keeper_settings: Any
+    ) -> AsyncIterator[httpx.AsyncClient]:
+        """`keeper_settings` are `keeper` sub-sections; `sections` other top-level sections."""
         settings = Settings(
             keeper={
                 "auth": {
@@ -70,6 +73,7 @@ def keeper(app_database_url: str, installation_admin: InstallationAdmin) -> Keep
                 **keeper_settings,
             },
             database={"dsn": app_database_url},
+            **(sections or {}),
         )
         app = create_app(settings)
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)

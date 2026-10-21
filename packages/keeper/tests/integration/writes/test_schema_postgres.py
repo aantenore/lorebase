@@ -16,12 +16,8 @@ SUPPLY_SCHEMA = Path(__file__).resolve().parents[5] / "examples" / "supply" / "s
 
 
 def supply_yaml() -> str:
-    """The example schema without the elements that need expressions (not enabled yet)."""
-    document: dict[str, Any] = yaml.safe_load(SUPPLY_SCHEMA.read_text())
-    del document["operations"]
-    del document["derivations"]["single_sourced"]
-    del document["kinds"]["Part"]["attributes"]["single_sourced"]
-    return yaml.safe_dump(document, sort_keys=False)
+    """The example schema, CEL Operations and Derivations included."""
+    return SUPPLY_SCHEMA.read_text()
 
 
 async def test_schema_change_sets(keeper: Any, installation_admin: Any, role_key: Any) -> None:
@@ -46,10 +42,15 @@ async def test_schema_change_sets(keeper: Any, installation_admin: Any, role_key
         assert protected.json()["code"] == "protected-branch"
         assert protected.json()["proposals"] == f"{DOMAIN}/proposals"
 
-        full = yaml.safe_load(SUPPLY_SCHEMA.read_text())
-        refused = await http.post(changes, json={"yaml": yaml.safe_dump(full)}, headers=modeler)
+        broken: dict[str, Any] = yaml.safe_load(supply_yaml())
+        broken["operations"]["approve_contract"]["preconditions"][0]["expression"] = (
+            'record(contract).status == "signed"'
+        )
+        refused = await http.post(changes, json={"yaml": yaml.safe_dump(broken)}, headers=modeler)
         assert refused.status_code == 422
-        assert {i["code"] for i in refused.json()["issues"]} == {"schema.expressions_disabled"}
+        (issue,) = refused.json()["issues"]
+        assert issue["code"] == "schema.expression_invalid"
+        assert issue["path"][:2] == ["operations", "approve_contract"]
 
         dry = await http.post(
             changes, json={"yaml": supply_yaml(), "dry_run": True}, headers=modeler
@@ -121,3 +122,24 @@ async def test_schema_change_sets(keeper: Any, installation_admin: Any, role_key
         )
         assert removal.json()["status"] == "committed"
         assert removal.json()["changes"][0]["op"] == "delete"
+
+
+async def test_schema_expressions_can_be_disabled(
+    keeper: Any, installation_admin: Any, role_key: Any
+) -> None:
+    async with keeper(sections={"schema": {"expressions_enabled": False}}) as http:
+        assert (
+            await http.post(
+                f"{API}/domains", json={"id": "supply"}, headers=installation_admin.headers
+            )
+        ).status_code == 201
+        modeler = await role_key(http, "supply", "modeler")
+        editor = await role_key(http, "supply", "editor")
+        await http.post(f"{DOMAIN}/branches", json={"name": "model"}, headers=editor)
+        refused = await http.post(
+            f"{DOMAIN}/branches/model/schema/changes",
+            json={"yaml": supply_yaml(), "dry_run": True},
+            headers=modeler,
+        )
+        assert refused.status_code == 422
+        assert {i["code"] for i in refused.json()["issues"]} == {"schema.expressions_disabled"}

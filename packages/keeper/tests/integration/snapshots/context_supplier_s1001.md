@@ -1,5 +1,5 @@
 # Context: supply/main
-revision f4d229169a37fa73e83df368ea2c035fead80d809b908cf236c013a0dd23066b; estimated 1487 of 1500 tokens; trimmed: lineage(2), recent_changes(6)
+revision e3bb4431a01856c433032fc114ec85db2b3569b8f8f31b5c5b4919e9a8fd6c8f; estimated 1458 of 1500 tokens; trimmed: lineage(2), recent_changes(7)
 
 ## Records
 ### Supplier/S-1001: Kavsen Alloys Sp. z o.o.
@@ -12,7 +12,7 @@ revision f4d229169a37fa73e83df368ea2c035fead80d809b908cf236c013a0dd23066b; estim
 - status: active
 - tier: 1
 - vat_number: PL000007919
-- (last changed in f4d229169a37)
+- (last changed in e3bb4431a018)
 
 ## Neighbors
 | ref | title | depth | values |
@@ -55,6 +55,7 @@ key: part_number; title: name
 - category (enum(bearing|fastener|seal|gasket|valve|filter|sensor|motor|hose), required): Commodity group of the part.
 - hazardous (boolean): True when shipping the part needs dangerous goods handling.
 - lifecycle (enum(active|phase_out|obsolete)): Lifecycle stage of the part.
+- single_sourced (boolean, derived): True when exactly one supplier can supply the part. Derived.
 - summary (text): One sentence on what the part is used for.
 - supplier_count (integer, derived): Number of suppliers that can supply the part. Derived.
 - unit_cost (decimal(10,2)): Standard unit cost in euro.
@@ -92,5 +93,4 @@ key: supplier_code; title: legal_name
 ## Recent changes
 | revision | at | record | change | attributes | by | origin | message |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 97ce9a2ce272 | 2026-10-01T08:00:03Z | Supplier/S-1001 | added | supplier_code, legal_name, city, country, onboarded_on, risk_score, status, tier, vat_number | usr_loader | import | Import the supply example data |
-| f4d229169a37 | 2026-10-01T08:00:04Z | Supplier/S-1001 | modified | risk_score | usr_editor | operation | Raise the risk of S-1001 |
+| e3bb4431a018 | 2026-10-01T08:00:04Z | Supplier/S-1001 | modified | risk_score | usr_editor | operation | Raise the risk of S-1001 |

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BindParameter,
     ColumnElement,
     Table,
+    Text,
     and_,
     bindparam,
     cast,
@@ -23,7 +25,7 @@ from sqlalchemy import (
     tuple_,
     update,
 )
-from sqlalchemy.dialects.postgresql import REGCONFIG
+from sqlalchemy.dialects.postgresql import JSONB, REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.bulk import OnConflict, bulk_write, chunks
@@ -73,6 +75,9 @@ _REBUILD_HISTORY = text(
 
 @dataclass(frozen=True, slots=True)
 class RecordRow:
+    """A materialized Record. `derived` holds derived values by Attribute id (AC-07): they are
+    written by the materializer only, never by `upsert_records`."""
+
     kind_id: str
     key: str
     values: dict[str, Any]
@@ -81,6 +86,12 @@ class RecordRow:
     lineage: dict[str, str]
     updated_revision: bytes
     updated_at: datetime
+    derived: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def inputs(self) -> dict[str, Any]:
+        """Stored and derived values together, as expressions read them."""
+        return {**self.values, **self.derived}
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +135,8 @@ class HistoryStep:
 def search_vector(config: str, weights: Sequence[tuple[str, str]]) -> ColumnElement[Any]:
     """Search vector of a Record row: its title at weight A plus searchable Attributes.
 
-    `weights` lists `(attribute_id, weight)`; values are read as text from `values`.
+    `weights` lists `(attribute_id, weight)`; values are read as text from `values`, or from
+    `derived` for derived Attributes.
     """
     regconfig = cast(literal(config), REGCONFIG)
     vector: ColumnElement[Any] = func.setweight(
@@ -134,8 +146,9 @@ def search_vector(config: str, weights: Sequence[tuple[str, str]]) -> ColumnElem
     for position, (attribute_id, weight) in enumerate(weights):
         if weight not in SEARCH_WEIGHTS:
             raise ValueError(f"invalid search weight {weight!r}")
-        value = MAT_RECORDS.c["values"].op("->>")(
-            bindparam(f"search_attr_{position}", attribute_id)
+        name: BindParameter[str] = bindparam(f"search_attr_{position}", attribute_id)
+        value = func.coalesce(
+            MAT_RECORDS.c["values"].op("->>")(name), MAT_RECORDS.c.derived.op("->>")(name)
         )
         part = func.setweight(
             func.to_tsvector(regconfig, func.coalesce(value, "")), literal_column(f"'{weight}'")
@@ -246,8 +259,10 @@ class MaterializedRepository:
         *,
         config: str,
         revision: bytes | None = None,
+        keys: Sequence[str] | None = None,
     ) -> None:
-        """Recompute search vectors of a Kind's rows (only those of `revision` when given)."""
+        """Recompute search vectors of a Kind's rows (only those of `revision`, or of `keys`,
+        when given)."""
         statement = (
             update(MAT_RECORDS)
             .where(self._scope(MAT_RECORDS), MAT_RECORDS.c.kind_id == kind_id)
@@ -255,7 +270,115 @@ class MaterializedRepository:
         )
         if revision is not None:
             statement = statement.where(MAT_RECORDS.c.updated_revision == revision)
-        await self._session.execute(statement)
+        if keys is None:
+            await self._session.execute(statement)
+            return
+        for chunk in chunks(list(keys), self._writes.insert_batch_rows):
+            await self._session.execute(statement.where(MAT_RECORDS.c.key.in_(chunk)))
+
+    # Derived values -------------------------------------------------------------------
+
+    async def set_derived(
+        self, kind_id: str, attribute_id: str, values: Sequence[tuple[str, Any]]
+    ) -> None:
+        """Set one derived Attribute of Records by key; a `None` value removes it."""
+        statement = (
+            update(MAT_RECORDS)
+            .where(
+                self._scope(MAT_RECORDS),
+                MAT_RECORDS.c.kind_id == kind_id,
+                MAT_RECORDS.c.key == bindparam("record_key"),
+            )
+            .values(
+                derived=MAT_RECORDS.c.derived.op("-")(
+                    bindparam("derived_attribute", type_=Text)
+                ).op("||")(bindparam("derived_patch", type_=JSONB))
+            )
+        )
+        for chunk in chunks(list(values), self._writes.insert_batch_rows):
+            await self._session.execute(
+                statement,
+                [
+                    {
+                        "record_key": key,
+                        "derived_attribute": attribute_id,
+                        "derived_patch": {} if value is None else {attribute_id: value},
+                    }
+                    for key, value in chunk
+                ],
+            )
+
+    async def prune_derived(self, kind_id: str, keep: Sequence[str]) -> None:
+        """Remove derived values of a Kind's Records except those of the `keep` Attributes."""
+        kept = text(
+            "COALESCE((SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(derived) e "
+            "WHERE e.key = ANY(:keep)), '{}'::jsonb)"
+        ).bindparams(bindparam("keep", list(keep)))
+        await self._session.execute(
+            update(MAT_RECORDS)
+            .where(
+                self._scope(MAT_RECORDS),
+                MAT_RECORDS.c.kind_id == kind_id,
+                MAT_RECORDS.c.derived != literal({}, JSONB),
+            )
+            .values(derived=kept)
+        )
+
+    async def clear_derived(self, keep_kinds: Sequence[str]) -> None:
+        """Remove every derived value of Records of Kinds other than `keep_kinds`."""
+        await self._session.execute(
+            update(MAT_RECORDS)
+            .where(
+                self._scope(MAT_RECORDS),
+                MAT_RECORDS.c.kind_id.not_in(list(keep_kinds)),
+                MAT_RECORDS.c.derived != literal({}, JSONB),
+            )
+            .values(derived=literal({}, JSONB))
+        )
+
+    async def linked_keys(
+        self, relation_id: str, *, near: str, keys: Sequence[str]
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        """Stored Links of a Relation whose `near` end (`from_key` or `to_key`) is in `keys`:
+        `(near key, far key, link values)`."""
+        near_column = MAT_LINKS.c[near]
+        far_column = MAT_LINKS.c["to_key" if near == "from_key" else "from_key"]
+        found: list[tuple[str, str, dict[str, Any]]] = []
+        for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
+            result = await self._session.execute(
+                select(near_column, far_column, MAT_LINKS.c["values"])
+                .where(
+                    self._scope(MAT_LINKS),
+                    MAT_LINKS.c.relation_id == relation_id,
+                    near_column.in_(chunk),
+                )
+                .order_by(near_column, far_column)
+            )
+            found.extend((a, b, dict(v or {})) for a, b, v in result)
+        return found
+
+    async def foreign_key_links(
+        self, kind_id: str, attribute_id: str, *, keys: Sequence[str], by_target: bool
+    ) -> list[tuple[str, str]]:
+        """`(from key, to key)` of a foreign-key Relation: Records of `kind_id` (the `from`
+        Kind) whose key is in `keys`, or whose `attribute_id` value is in `keys` when
+        `by_target`."""
+        target = MAT_RECORDS.c["values"].op("->>")(literal(attribute_id))
+        found: list[tuple[str, str]] = []
+        for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
+            condition = target.in_(chunk) if by_target else MAT_RECORDS.c.key.in_(chunk)
+            result = await self._session.execute(
+                select(MAT_RECORDS.c.key, target)
+                .where(
+                    self._scope(MAT_RECORDS),
+                    MAT_RECORDS.c.kind_id == kind_id,
+                    target.is_not(None),
+                    condition,
+                )
+                .order_by(MAT_RECORDS.c.key)
+            )
+            found.extend((key, value) for key, value in result)
+        return found
 
     async def stream_records(self, kind_id: str, *, batch: int) -> AsyncIterator[list[RecordRow]]:
         """All Records of a Kind in key order, `batch` rows at a time."""
@@ -487,6 +610,7 @@ class MaterializedRepository:
             c.lineage,
             c.updated_revision,
             c.updated_at,
+            c.derived,
         )
 
     @staticmethod

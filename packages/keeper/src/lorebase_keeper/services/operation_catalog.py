@@ -2,8 +2,8 @@
 
 For every Kind with the built-in enabled: `create_{kind}`, `update_{kind}`, `delete_{kind}`;
 for every explicit Relation: `link_{relation}`, `unlink_{relation}`; and the bulk upserts
-`import_records` and `import_links`. Their parameters are derived from the schema, so a
-definition always matches the Revision it is read from:
+`import_records`, `import_links` and `import_batch`. Their parameters are derived from the
+schema, so a definition always matches the Revision it is read from:
 
 | Operation | Parameters |
 |-----------|------------|
@@ -12,8 +12,17 @@ definition always matches the Revision it is read from:
 | `delete_{kind}` | `key` |
 | `link_{relation}` | `from`, `to` (Record keys), then the link Attributes |
 | `unlink_{relation}` | `from`, `to` |
-| `import_records` | `kind` (api name), `rows` (objects keyed by Attribute api name) |
+| `import_records` | `kind` (api name), `rows` (objects keyed by Attribute api name; `links`) |
 | `import_links` | `relation` (forward api name), `rows` (`from`, `to` and link Attributes) |
+| `import_batch` | `records` (Record rows with `kind`), `links` (Link rows with `relation`) |
+
+A Record row's `links` maps a Relation name (forward from the Record's Kind, or inverse when the
+Kind is its `to` end) to the key at the other end, an object with `key` and link Attributes, or
+a list of these. A Record and its Links are one unit: bulk imports commit in batches of whole
+units, so a Relation that is `required_from` is satisfied in the Revision that creates the
+Record. Units of Records without Links come first, then Records with Links, then Links of
+Records not in the import, so Links usually point to Records committed in an earlier or the
+same batch.
 
 Everything here is pure: reads of existing Records go through `RecordReader`.
 """
@@ -31,6 +40,7 @@ from lorebase_core.model import (
     Attribute,
     Kind,
     Link,
+    LinkDirection,
     Record,
     Relation,
     RelationBacking,
@@ -54,9 +64,13 @@ from lorebase_keeper.services.errors import Finding
 
 IMPORT_RECORDS = "import_records"
 IMPORT_LINKS = "import_links"
+IMPORT_BATCH = "import_batch"
 KEY = "key"
 FROM = "from"
 TO = "to"
+LINKS = "links"
+KIND = "kind"
+RELATION = "relation"
 
 PARAMETER_UNKNOWN = "parameter.unknown"
 PARAMETER_REQUIRED = "parameter.required"
@@ -76,6 +90,7 @@ class Action(StrEnum):
     UNLINK = "unlink"
     IMPORT_RECORDS = "import_records"
     IMPORT_LINKS = "import_links"
+    IMPORT_BATCH = "import_batch"
 
 
 @dataclass(frozen=True)
@@ -112,7 +127,7 @@ class BuiltinOperation:
 
     @property
     def is_import(self) -> bool:
-        return self.action in (Action.IMPORT_RECORDS, Action.IMPORT_LINKS)
+        return self.action in (Action.IMPORT_RECORDS, Action.IMPORT_LINKS, Action.IMPORT_BATCH)
 
     def document(self) -> dict[str, Any]:
         """Description served by the schema API, shaped like a stored Operation."""
@@ -149,7 +164,8 @@ def builtin_definition(schema: Schema, name: str) -> BuiltinOperation | None:
             name,
             Action.IMPORT_RECORDS,
             "Create or replace many Records of one Kind. Rows are objects keyed by Attribute "
-            "api name; large imports are committed in batches.",
+            "api name; a row's `links` maps Relation names to the keys at the other end, "
+            "committed with the Record. Large imports are committed in batches.",
             (
                 Parameter("kind", _STRING, True, "Kind api name."),
                 Parameter("rows", None, True, "Records to upsert."),
@@ -164,6 +180,18 @@ def builtin_definition(schema: Schema, name: str) -> BuiltinOperation | None:
             (
                 Parameter("relation", _STRING, True, "Forward api name of the Relation."),
                 Parameter("rows", None, True, "Links to upsert."),
+            ),
+        )
+    if name == IMPORT_BATCH:
+        return BuiltinOperation(
+            name,
+            Action.IMPORT_BATCH,
+            "Create or replace Records of several Kinds and Links of several Relations in one "
+            "call. `records` rows name their `kind` and may hold `links`; `links` rows name "
+            "their `relation`. A Record is committed in the same Revision as its Links.",
+            (
+                Parameter("records", None, False, "Records to upsert, each with `kind`."),
+                Parameter("links", None, False, "Links to upsert, each with `relation`."),
             ),
         )
     for kind in schema.kinds.values():
@@ -265,10 +293,15 @@ def bind(
 
 @dataclass
 class Plan:
-    """Data changes computed from bound parameters, or the findings preventing them."""
+    """Data changes computed from bound parameters, or the findings preventing them.
+
+    `units` lists the sizes of consecutive runs of `changes` that must be committed in the
+    same Revision (a Record and its Links); empty means every change stands alone.
+    """
 
     changes: list[DataChange] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    units: list[int] = field(default_factory=list)
 
 
 def _values(
@@ -373,17 +406,59 @@ def _link_edit(
 
 # Bulk imports ---------------------------------------------------------------------------------
 
+Path = tuple[str | int, ...]
+
+
+def _rows(value: JsonValue, path: Path, plan: Plan) -> list[dict[str, JsonValue]] | None:
+    if not isinstance(value, list) or not all(isinstance(r, dict) for r in value):
+        plan.findings.append(Finding(PARAMETER_INVALID, "must be a list of objects", path))
+        return None
+    return [r for r in value if isinstance(r, dict)]
+
 
 def import_rows(
     schema: Schema, definition: BuiltinOperation, bound: Mapping[str, JsonValue], *, max_rows: int
 ) -> Plan:
-    """Upserts of `import_records` or `import_links` rows, or the findings of bad rows."""
+    """Upserts of `import_records`, `import_links` or `import_batch` rows grouped in units (a
+    Record with its Links), or the findings of bad rows."""
     plan = Plan()
-    rows = bound.get("rows")
-    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
-        plan.findings.append(
-            Finding(PARAMETER_INVALID, "must be a list of objects", ("parameters", "rows"))
-        )
+    importer = _Importer(schema, plan)
+    if definition.action is Action.IMPORT_BATCH:
+        records = bound.get("records") or []
+        links = bound.get("links") or []
+        record_rows = _rows(records, ("parameters", "records"), plan)
+        link_rows = _rows(links, ("parameters", "links"), plan)
+        if record_rows is None or link_rows is None:
+            return plan
+        if not record_rows and not link_rows:
+            plan.findings.append(
+                Finding(PARAMETER_REQUIRED, "records or links are required", ("parameters",))
+            )
+            return plan
+        if len(record_rows) + len(link_rows) > max_rows:
+            plan.findings.append(
+                Finding(LIMIT_EXCEEDED, f"at most {max_rows} rows per call", ("parameters",))
+            )
+            return plan
+        for index, row in enumerate(record_rows):
+            path: Path = ("parameters", "records", index)
+            kind = schema.kind_by_api_name(str(row.get(KIND)))
+            if kind is None:
+                plan.findings.append(Finding(PARAMETER_INVALID, "unknown Kind", (*path, KIND)))
+                continue
+            importer.record(kind, {k: v for k, v in row.items() if k != KIND}, path)
+        for index, row in enumerate(link_rows):
+            path = ("parameters", "links", index)
+            relation = _stored_relation(schema, str(row.get(RELATION)))
+            if relation is None:
+                plan.findings.append(
+                    Finding(PARAMETER_INVALID, "unknown or derived Relation", (*path, RELATION))
+                )
+                continue
+            importer.link(relation, {k: v for k, v in row.items() if k != RELATION}, path)
+        return importer.finish(max_rows)
+    rows = _rows(bound.get("rows"), ("parameters", "rows"), plan)
+    if rows is None:
         return plan
     if len(rows) > max_rows:
         plan.findings.append(
@@ -395,22 +470,38 @@ def import_rows(
         if kind is None:
             plan.findings.append(Finding(PARAMETER_INVALID, "unknown Kind", ("parameters", "kind")))
             return plan
-        parameters = _attribute_parameters(kind.attributes, required=True)
-        if not kind.has_natural_key:
-            parameters.insert(0, Parameter(KEY, _STRING, False))
-        create = BuiltinOperation("", Action.CREATE, "", tuple(parameters), kind=kind)
         for index, row in enumerate(rows):
-            assert isinstance(row, dict)
-            _import_record(kind, create, row, index, plan)
-        return plan
-    found = schema.relation_by_api_name(str(bound.get("relation")))
-    relation = None if found is None else found[0]
-    if relation is None or relation.backing is not RelationBacking.EXPLICIT:
+            importer.record(kind, row, ("parameters", "rows", index))
+        return importer.finish(max_rows)
+    relation = _stored_relation(schema, str(bound.get("relation")))
+    if relation is None:
         plan.findings.append(
             Finding(PARAMETER_INVALID, "unknown or derived Relation", ("parameters", "relation"))
         )
         return plan
-    link = BuiltinOperation(
+    for index, row in enumerate(rows):
+        importer.link(relation, row, ("parameters", "rows", index))
+    return importer.finish(max_rows)
+
+
+def _stored_relation(schema: Schema, name: str) -> Relation | None:
+    """The explicit Relation with that forward api name."""
+    found = schema.relation_by_api_name(name)
+    if found is None or found[1] is not LinkDirection.FORWARD:
+        return None
+    relation = found[0]
+    return relation if relation.backing is RelationBacking.EXPLICIT else None
+
+
+def _relocate(findings: Sequence[Finding], path: Path, plan: Plan) -> bool:
+    """Move parameter findings of a row under `path`; true when there were any."""
+    for finding in findings:
+        plan.findings.append(Finding(finding.code, finding.message, (*path, *finding.path[1:])))
+    return bool(findings)
+
+
+def _link_definition(relation: Relation) -> BuiltinOperation:
+    return BuiltinOperation(
         "",
         Action.LINK,
         "",
@@ -421,36 +512,164 @@ def import_rows(
         ),
         relation=relation,
     )
-    for index, row in enumerate(rows):
-        assert isinstance(row, dict)
-        row_bound = bind(link, row)
-        if _relocate(row_bound.findings, index, plan):
-            continue
-        _link_edit(link, relation, row_bound.values, plan)
-    return plan
 
 
-def _relocate(findings: Sequence[Finding], index: int, plan: Plan) -> bool:
-    """Move row findings under `parameters/rows/{index}`; true when there were any."""
-    for finding in findings:
-        path = ("parameters", "rows", index, *finding.path[1:])
-        plan.findings.append(Finding(finding.code, finding.message, path))
-    return bool(findings)
+class _Importer:
+    """Collects the units of a bulk import: Records with the Links of their rows, Links."""
+
+    def __init__(self, schema: Schema, plan: Plan) -> None:
+        self.schema = schema
+        self.plan = plan
+        self.records: dict[tuple[str, str], list[DataChange]] = {}
+        self.loose: list[DataChange] = []
+        self._creates: dict[str, BuiltinOperation] = {}
+        self._links: dict[str, BuiltinOperation] = {}
+
+    def create(self, kind: Kind) -> BuiltinOperation:
+        definition = self._creates.get(kind.id)
+        if definition is None:
+            parameters = _attribute_parameters(kind.attributes, required=True)
+            if not kind.has_natural_key:
+                parameters.insert(0, Parameter(KEY, _STRING, False))
+            definition = BuiltinOperation("", Action.CREATE, "", tuple(parameters), kind=kind)
+            self._creates[kind.id] = definition
+        return definition
+
+    def link_definition(self, relation: Relation) -> BuiltinOperation:
+        definition = self._links.get(relation.id)
+        if definition is None:
+            definition = self._links[relation.id] = _link_definition(relation)
+        return definition
+
+    def record(self, kind: Kind, row: Mapping[str, JsonValue], path: Path) -> None:
+        links = None
+        if LINKS in row and kind.attribute_by_api_name(LINKS) is None:
+            links = row[LINKS]
+            row = {k: v for k, v in row.items() if k != LINKS}
+        row_bound = bind(self.create(kind), row)
+        if _relocate(row_bound.findings, path, self.plan):
+            return
+        values = _values(kind.attributes, row_bound.values)
+        key = record_key(kind, values) if kind.has_natural_key else None
+        if key is None:
+            given = row_bound.values.get(KEY)
+            key = _key(given, (*path, KEY), self.plan) if given else new_ulid()
+        if key is None:
+            return
+        unit: list[DataChange] = [RecordUpsert(record=Record(kind=kind.id, key=key, values=values))]
+        if links is not None:
+            unit.extend(self.row_links(kind, key, links, (*path, LINKS)))
+        self.records[(kind.id, key)] = unit
+
+    def row_links(self, kind: Kind, key: str, links: JsonValue, path: Path) -> list[DataChange]:
+        if not isinstance(links, dict):
+            self.plan.findings.append(
+                Finding(PARAMETER_INVALID, "must be an object keyed by Relation name", path)
+            )
+            return []
+        changes: list[DataChange] = []
+        for name, targets in links.items():
+            found = self.schema.relation_by_api_name(name)
+            if (
+                found is None
+                or found[0].backing is not RelationBacking.EXPLICIT
+                or found[0].endpoint(found[1]) != kind.id
+            ):
+                self.plan.findings.append(
+                    Finding(
+                        PARAMETER_INVALID,
+                        f"{name!r} is not a stored Relation of {kind.api_name}",
+                        (*path, name),
+                    )
+                )
+                continue
+            relation, direction = found
+            many = isinstance(targets, list)
+            items = targets if isinstance(targets, list) else [targets]
+            for position, target in enumerate(items):
+                where: Path = (*path, name, position) if many else (*path, name)
+                attributes: dict[str, JsonValue] = {}
+                other: JsonValue = target
+                if isinstance(target, dict):
+                    other = target.get(KEY)
+                    attributes = {k: v for k, v in target.items() if k != KEY}
+                ends = (
+                    {FROM: key, TO: other}
+                    if direction is LinkDirection.FORWARD
+                    else {FROM: other, TO: key}
+                )
+                link = self.build_link(relation, {**attributes, **ends}, where)
+                if link is not None:
+                    changes.append(link)
+        return changes
+
+    def build_link(
+        self, relation: Relation, row: Mapping[str, JsonValue], path: Path
+    ) -> DataChange | None:
+        definition = self.link_definition(relation)
+        row_bound = bind(definition, row)
+        if _relocate(row_bound.findings, path, self.plan):
+            return None
+        plan = Plan()
+        _link_edit(definition, relation, row_bound.values, plan)
+        self.plan.findings.extend(
+            Finding(f.code, f.message, (*path, *f.path[1:])) for f in plan.findings
+        )
+        return plan.changes[0] if plan.changes else None
+
+    def link(self, relation: Relation, row: Mapping[str, JsonValue], path: Path) -> None:
+        link = self.build_link(relation, row, path)
+        if link is None:
+            return
+        assert isinstance(link, LinkUpsert)
+        owner = self.records.get((relation.from_kind, link.link.from_key)) or self.records.get(
+            (relation.to_kind, link.link.to_key)
+        )
+        if owner is None:
+            self.loose.append(link)
+        else:
+            owner.append(link)
+
+    def finish(self, max_rows: int) -> Plan:
+        """Units in commit order: lone Records, Records with Links, then lone Links."""
+        units = [u for u in self.records.values() if len(u) == 1]
+        units += [u for u in self.records.values() if len(u) > 1]
+        units += [[link] for link in self.loose]
+        total = sum(len(u) for u in units)
+        if total > max_rows:
+            self.plan.findings.append(
+                Finding(
+                    LIMIT_EXCEEDED,
+                    f"at most {max_rows} Records and Links per call",
+                    ("parameters",),
+                )
+            )
+            return self.plan
+        for unit in units:
+            self.plan.changes.extend(unit)
+            self.plan.units.append(len(unit))
+        return self.plan
 
 
-def _import_record(
-    kind: Kind, create: BuiltinOperation, row: Mapping[str, JsonValue], index: int, plan: Plan
-) -> None:
-    row_bound = bind(create, row)
-    if _relocate(row_bound.findings, index, plan):
-        return
-    values = _values(kind.attributes, row_bound.values)
-    key = record_key(kind, values) if kind.has_natural_key else None
-    if key is None:
-        given = row_bound.values.get(KEY)
-        key = _key(given, ("parameters", "rows", index, KEY), plan) if given else new_ulid()
-    if key is not None:
-        plan.changes.append(RecordUpsert(record=Record(kind=kind.id, key=key, values=values)))
+def batches(
+    changes: Sequence[DataChange], units: Sequence[int], size: int
+) -> list[list[DataChange]]:
+    """`changes` in batches of about `size`, never splitting a unit (a unit larger than `size`
+    is a batch of its own). Without `units` every change is its own unit."""
+    sizes = list(units) or [1] * len(changes)
+    out: list[list[DataChange]] = []
+    current: list[DataChange] = []
+    position = 0
+    for count in sizes:
+        unit = list(changes[position : position + count])
+        position += count
+        if current and len(current) + len(unit) > size:
+            out.append(current)
+            current = []
+        current.extend(unit)
+    if current:
+        out.append(current)
+    return out
 
 
 # Responses ------------------------------------------------------------------------------------

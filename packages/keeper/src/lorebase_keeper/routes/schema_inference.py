@@ -26,7 +26,7 @@ from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.deps import KeeperSettingsDep, SettingsDep
 from lorebase_keeper.errors import BAD_REQUEST, Problem, ProblemError
 from lorebase_keeper.services import schema_inference as service
-from lorebase_store.settings import database_settings, store_settings
+from lorebase_store.settings import database_settings, schema_settings, store_settings
 
 router = APIRouter(tags=["schema"])
 
@@ -204,13 +204,16 @@ async def infer(
     keys and Relations with evidence. Deterministic and model-free; nothing is written."""
     config = keeper.schema_inference
     profiling = store_settings(settings).profiling
+    rules = schema_settings(settings).rules()
     content_type = request.headers.get("content-type", "")
     if content_type.startswith(MULTIPART):
         # One file over the limit still parses, so the answer names the limit (422); the
         # parser refuses bodies beyond that (400).
         files, overrides = await _uploads(request, config.max_files + 1, config.max_file_bytes)
         options = service.merged_options(config, overrides, "/body/options")
-        proposal = await service.infer_from_files(domain_id, files, config, profiling.csv, options)
+        proposal = await service.infer_from_files(
+            domain_id, files, config, profiling.csv, options, rules
+        )
         source = "csv"
     else:
         body = await _json_source(request)
@@ -224,6 +227,7 @@ async def infer(
             database_settings(settings),
             profiling.postgres,
             options,
+            rules,
         )
         source = "postgres"
     annotate(

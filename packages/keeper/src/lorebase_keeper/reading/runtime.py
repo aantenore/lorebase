@@ -29,7 +29,7 @@ from lorebase_keeper.reading.settings import (
 from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import Settings
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import StoreSettings, store_settings
+from lorebase_store.settings import StoreSettings
 
 _STATE_KEY = "read_runtime"
 
@@ -82,7 +82,7 @@ class ReadRuntime:
             sessions=sessions,
             read=read_settings(settings),
             search=search_settings(settings),
-            store=StoreRuntime.from_settings(store_settings(settings)),
+            store=StoreRuntime.from_loaded(settings),
             cache=build_cache(keeper_settings(settings).reads.cache),
         )
 

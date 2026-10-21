@@ -206,16 +206,18 @@ keeper:
                                         # directly to protected branches
     skip_expression_preconditions: false   # with expressions off: true skips CEL
                                            # preconditions (reported) instead of refusing
-    expressions_enabled: false   # true: stored Operations evaluate CEL preconditions, review
-                                 # policies and steps (lorebase_core.expr); false: refused
-    expression_limits:           # budget of one expression (lorebase_core.expr.ExprLimits)
+    expressions_enabled: true    # stored Operations evaluate CEL preconditions, review
+                                 # policies and steps (lorebase_core.expr: sandboxed, no I/O,
+                                 # deterministic, bounded below); false: refused. Whether
+                                 # schemas may hold CEL is schema.expressions_enabled
+    expression_limits:           # budget of one Operation expression (ExprLimits)
       max_source_length: 4096    # characters of expression source
       max_depth: 48              # nesting depth of the expression tree
       max_steps: 10000           # evaluation steps, comprehension iterations included
       max_duration_ms: 250       # wall-clock safety net behind max_steps
       max_list_size: 10000       # elements of a list or map built during evaluation
       max_string_length: 65536   # characters of a string built during evaluation
-      max_record_lookups: 100    # Records read through record() in one evaluation
+      max_record_lookups: 100    # Records and link lists read through record(), links()
       decimal_precision: 34      # significant digits of decimal arithmetic
   proposals:                     # a Domain overrides required_approvals with its own
                                  # `required_approvals` setting; its `merge_policy` setting
@@ -327,6 +329,10 @@ store:
     text_search_config: simple   # Postgres text search configuration of Record search vectors
     read_batch_rows: 5000        # rows or object bodies per query in rebuild and verification
     verify_max_divergences: 1000 # divergences listed by a verification report
+    derivations_enabled: true    # recompute expression and aggregate Derivations on every
+                                 # commit, merge and rebuild (derived column, not the tree)
+    derivation_max_incremental_records: 10000   # Records one Derivation recomputes per
+                                 # commit; above, every Record of its Kind
   gc:                            # garbage collection (docs/operations.md)
     grace_seconds: 3600          # Revisions younger than this are kept with all they reach
     mark_batch: 1000             # tree node hashes per query while marking
@@ -376,6 +382,23 @@ store:
     max_fanout: 50               # Links followed per Record and hop
     max_links: 2000              # Links walked, breadth first
     max_nodes: 200               # Records returned, nearest first
+
+# Static validation of schemas, shared by Keeper and the store: schema change sets, the commit
+# pipeline, merges and schema inference apply the same rules.
+schema:
+  expressions_enabled: true      # accept Operations and Derivations written in CEL (parsed and
+                                 # type checked); false refuses them (schema.expressions_disabled)
+  expression_limits:             # budget of one schema expression: compiled at validation,
+                                 # evaluated by the materializer for Derivations
+    max_source_length: 4096
+    max_depth: 48
+    max_steps: 10000
+    max_duration_ms: 250
+    max_list_size: 10000
+    max_string_length: 65536
+    max_record_lookups: 100
+    decimal_precision: 34
+
 # Read path of Keeper (design 8). Reads hit the materialized head of a branch; `at=<revision>`
 # reads go through the Revision tree.
 read:
