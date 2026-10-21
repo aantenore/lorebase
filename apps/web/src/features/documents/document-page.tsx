@@ -65,7 +65,7 @@ function Jobs({ detail, domain }: { detail: DocumentDetail; domain: string }) {
                 <Link
                   to="/$domain/review/$proposal"
                   params={{ domain, proposal: job.proposal_id }}
-                  search={scopeSearch}
+                  search={{ ...scopeSearch, tab: 'items' }}
                   className="text-accent hover:underline"
                 >
                   #{job.proposal_id}
@@ -119,7 +119,7 @@ function EvidenceList({
           <Link
             to="/$domain/review/$proposal"
             params={{ domain: scope.domain, proposal }}
-            search={scopeSearch}
+            search={{ ...scopeSearch, tab: 'items', item: item.id }}
             className="mt-1 inline-block text-xs text-accent hover:underline"
           >
             Review this item

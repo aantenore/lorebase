@@ -15,6 +15,8 @@
  * CORS settings. Keeper must accept the setup's own review and merge of one Proposal, so run it
  * with `keeper.proposals.allow_self_approval: true` (authentication off, as in development).
  *
+ * `--only documents,review-items` takes just the named pictures.
+ *
  * `pnpm screenshots flow` records a short walk through the app instead (Explorer, Canvas, the
  * Review resolver) and writes docs/images/tour.gif. It encodes the video with ffmpeg when it is
  * installed, otherwise it stitches PNG frames with Pillow (`uv run --with pillow`).
@@ -168,6 +170,24 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
       { click: '[role=listbox][aria-label="Conflicts"] [role=option]' },
       { wait: 400 },
       { scrollToTop: 'text=Merge attempt', offset: 80 },
+    ],
+  },
+  {
+    name: 'documents',
+    path: `/${domain}/documents`,
+    ready: 'text=contract-c-3025-kavvik-filtration.md',
+    steps: [{ waitFor: 'text=scan-contract-1999.pdf' }, { wait: 300 }],
+  },
+  {
+    name: 'review-items',
+    path: `/${domain}/review/44?tab=items`,
+    ready: '[role=grid] tr[aria-selected]',
+    steps: [
+      { click: '[role=grid] tr:has-text("Contract C-3025") button:has-text("Accept")' },
+      { click: '[role=grid] tr:has-text("with_supplier: C-3025") button:has-text("Accept")' },
+      { click: '[role=grid] tr:has-text("S-1013 to PL-14")' },
+      { wait: 400 },
+      { scrollToTop: '[role=tablist]', offset: 80 },
     ],
   },
   {
@@ -554,7 +574,9 @@ async function main(): Promise<void> {
     throw new Error('The walk behind tour.gif is recorded in mock mode; drop --live.');
   }
   await mkdir(CONFIG.outputDir, { recursive: true });
-  const { keeper, shots, done } = await target();
+  const { keeper, shots: all, done } = await target();
+  const only = option('only')?.split(',');
+  const shots = only === undefined ? all : all.filter((shot) => only.includes(shot.name));
   const { server, origin } = await startServer(keeper);
   const browser = await chromium.launch({ args: CONFIG.browserArgs });
   try {
