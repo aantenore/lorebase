@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from lorebase_keeper.services.webhooks import HttpxSender
+from lorebase_scribe.webhooks import HttpxSender
 
 
 class Transport(httpx.AsyncBaseTransport):

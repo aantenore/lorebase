@@ -32,6 +32,8 @@ log = logging.getLogger(__name__)
 
 GC_JOB = "gc"
 """Job type of a garbage collection (see `lorebase_store.gc.run_gc_job`)."""
+SOURCE_SYNC_JOB = "source_sync"
+"""Job type of a Source synchronization run by Scribe; payload `{"source": id, "dry_run"}`."""
 
 INDEX_JOB = "store.index"
 """Job type of a per-Attribute index build or drop (see `lorebase_store.indexes`)."""
@@ -65,8 +67,8 @@ _ENQUEUE = text(
 _PENDING = text(
     """
     SELECT id FROM jobs
-    WHERE type = :type AND domain_id = :domain AND status IN ('queued', 'running')
-      AND payload = CAST(:payload AS jsonb)
+    WHERE type = :type AND domain_id IS NOT DISTINCT FROM CAST(:domain AS text)
+      AND status IN ('queued', 'running') AND payload = CAST(:payload AS jsonb)
     ORDER BY id LIMIT 1
     """
 )
@@ -84,6 +86,16 @@ _RETRY = text(
 _FAIL = text(
     "UPDATE jobs SET status = 'failed', result = CAST(:result AS jsonb), "
     "locked_by = NULL, locked_at = NULL WHERE id = :id"
+)
+
+_TOUCH = text(
+    "UPDATE jobs SET locked_at = :now "
+    "WHERE id = ANY(CAST(:ids AS bigint[])) AND locked_by = :worker AND status = 'running'"
+)
+
+_RELEASE = text(
+    "UPDATE jobs SET status = 'queued', run_after = :now, attempts = greatest(attempts - 1, 0), "
+    "locked_by = NULL, locked_at = NULL WHERE id = :id AND status = 'running'"
 )
 
 _STALE = text(
@@ -113,6 +125,12 @@ JobHandler = Callable[[JobRow], Awaitable[Mapping[str, Any]]]
 """Runs a job and returns its JSON result; an exception fails the attempt."""
 
 
+def source_sync_payload(source_id: str, *, dry_run: bool = False) -> dict[str, Any]:
+    """Payload of a `source_sync` job. Everything that queues one (Keeper's trigger, Scribe's
+    scheduler) builds it here, so identical requests are recognized by `enqueue_job(unique)`."""
+    return {"source": source_id, "dry_run": dry_run}
+
+
 def default_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
@@ -132,10 +150,10 @@ async def enqueue_job(
     unique: bool = False,
 ) -> int:
     """Queue a job and return its id. With `unique`, an identical queued or running job of the
-    same type, Domain and payload is returned instead of adding a duplicate."""
+    same type, Domain (or no Domain) and payload is returned instead of adding a duplicate."""
     body = json.dumps(dict(payload or {}), sort_keys=True)
     async with rls_scope(session, bypass=True):
-        if unique and domain_id is not None:
+        if unique:
             found = (
                 await session.execute(
                     _PENDING, {"type": job_type, "domain": domain_id, "payload": body}
@@ -206,6 +224,26 @@ async def finish_job(
             return "queued"
         await session.execute(_FAIL, {"id": job.id, "result": body})
         return "failed"
+
+
+async def touch_jobs(
+    session: AsyncSession, worker_id: str, job_ids: Sequence[int], *, now: datetime | None = None
+) -> int:
+    """Heartbeat: refresh the lock time of running jobs held by `worker_id`, so that long jobs
+    are not taken for lost by `requeue_stale`. Returns the number of jobs touched."""
+    if not job_ids:
+        return 0
+    async with rls_scope(session, bypass=True):
+        result = await session.execute(
+            _TOUCH, {"ids": list(job_ids), "worker": worker_id, "now": now or _now()}
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def release_job(session: AsyncSession, job: JobRow, *, now: datetime | None = None) -> None:
+    """Put a claimed job back in the queue without counting the attempt (worker shutdown)."""
+    async with rls_scope(session, bypass=True):
+        await session.execute(_RELEASE, {"id": job.id, "now": now or _now()})
 
 
 async def requeue_stale(

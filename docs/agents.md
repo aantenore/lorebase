@@ -284,8 +284,9 @@ def verified(secret: str, header: str, body: bytes, tolerance_s: int = 300) -> b
 
 Answer 2xx to acknowledge. Other answers and timeouts are retried with exponential backoff
 (`webhooks.backoff_*`) up to `webhooks.max_attempts`, then the delivery is marked dead.
-Deliveries are made by `lorebase_store.webhooks.deliver_pending`, which a worker runs
-periodically with an HTTP sender (`lorebase_keeper.services.webhooks.HttpxSender`); targets
+Deliveries are made by `lorebase_store.webhooks.deliver_pending`, which Scribe runs
+periodically (`webhook_delivery` jobs, see [scribe.md](scribe.md)) with its HTTP sender
+(`lorebase_scribe.webhooks.HttpxSender`); targets
 must use `webhooks.allowed_schemes` and, unless `webhooks.allow_private_targets`, must not
 resolve to private, loopback or link-local addresses. The host is resolved once per attempt,
 every address is checked, and the sender connects to those addresses only (the `Host` header
