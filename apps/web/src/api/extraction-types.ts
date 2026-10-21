@@ -21,7 +21,10 @@ export type DocumentInfo = Explicit<S['DocumentOut'], 'text_sha256' | 'created_a
 export type ExtractionJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | (string & {});
 
 export type ExtractionJob = Omit<
-  Explicit<S['ExtractionJobOut'], 'branch' | 'proposal_id' | 'created_at' | 'finished_at' | 'error'>,
+  Explicit<
+    S['ExtractionJobOut'],
+    'branch' | 'proposal_id' | 'created_at' | 'finished_at' | 'error'
+  >,
   'status'
 > & { status: ExtractionJobStatus };
 
