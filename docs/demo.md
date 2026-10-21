@@ -313,6 +313,7 @@ Governed write on a work branch, dry run first (the default of lorebase_execute)
   [ok, 20 ms through Herald and Keeper]
 > lorebase_execute {... "severity":"critical","dry_run":false}
   Error executing tool lorebase_execute: [review-required] Edits of 'flag_supplier_risk' on branch 'agent/flags' need review ...
+  next: this change needs review: call again with task and intent so that Keeper runs it on a task branch and opens the Proposal, or run it o...
   [error, 9 ms through Herald and Keeper]
 ```
 
