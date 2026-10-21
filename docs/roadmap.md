@@ -6,8 +6,11 @@ Lorebase is pre-alpha. Nothing is released, no tag exists and interfaces may cha
 
 ## Next up
 
-1. Lineage and history endpoints, then the 1M-Record performance baseline (M1, T23 and T28).
-2. Parquet Sources and the web app against a live Keeper (M2).
+1. Source connectors for JSON and JSON Lines files, Parquet files and HTTP JSON endpoints (M2 and M5, in progress).
+2. Lineage and history endpoints (M1, T23).
+3. The performance baseline on the 1M-Record fixture (M1, T28).
+4. OIDC login with BFF sessions for the web app (M2).
+5. Release v0.1.0 ([release](release.md)).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -50,7 +53,7 @@ Clients and operations
 - [x] CI: lint, types, import contracts, unit and integration tests; CodeQL, Scorecard, SBOM and pinned actions
 - [x] Inference interfaces and a deterministic fake provider (no model calls in M1; the read path cannot import them)
 - [x] Read replica routing with a freshness guard and a `scale-out` compose profile ([deployment](deployment.md)). The design lists this under M5; it landed early. Individual read endpoints adopt it incrementally.
-- [ ] Performance baseline on the 1M-Record fixture (the harness and a 100k-Record baseline are in [performance](performance.md): every read is within budget for a role not subject to row-level security; under RLS, Links of a Record, the neighborhood and search are not)
+- [ ] Performance baseline on the 1M-Record fixture (the harness and a 100k-Record baseline are in [performance](performance.md): every read is within budget for both a role not subject to row-level security and one subject to it, through the security definer read functions and the branch-scoped search index of migration `0011`; the 1M-Record run is not done)
 - [x] M1 documentation and release checklist ([release](release.md), [CHANGELOG](../CHANGELOG.md))
 
 Acceptance (design 18): a Domain applied from YAML, filled by CLI import of 1M Records, branched, merged with Conflicts resolved through the API and diffed, with property tests for hashing, merge and diff laws, and the read targets met on the 1M fixture. Not met yet.
@@ -60,7 +63,7 @@ Acceptance (design 18): a Domain applied from YAML, filled by CLI import of 1M R
 Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario) run end to end.
 
 - [x] Scribe job runner on the Postgres job queue, with a leader-elected scheduler ([scribe](scribe.md))
-- [ ] CSV, Parquet and Postgres Sources, snapshot and incremental sync (CSV and Postgres are done; Parquet is not)
+- [ ] CSV, Parquet and Postgres Sources, snapshot and incremental sync (CSV and Postgres are done; Parquet files load only through `lorebase import`; the Parquet Source connector is in progress)
 - [x] Schema inference from CSV files and Postgres tables, with a golden test on the example `supply` schema ([inference](inference.md)); Sources do not run it yet
 - [x] Source branches, merge policies and Lineage for syncs
 - [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
@@ -74,14 +77,14 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 
 Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
-- [ ] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP
-- [ ] Custom Operations with CEL, review policies, outbox and webhooks (CEL and review policies work, see M1; signed webhooks on Revision events are built, see [agents](agents.md); the Operation outbox is not)
-- [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (Kind-scoped grants on reads are already enforced)
+- [x] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP ([MCP server](mcp.md))
+- [ ] Custom Operations with CEL, review policies, outbox and webhooks (CEL and review policies work, see M1; the outbox and signed webhooks carry Revision events only, see [agents](agents.md); Operations cannot declare their own events)
+- [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (groups from the OIDC groups claim and Kind-scoped grants on reads are done; sensitivity masking is not)
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals
 - [ ] Modeler with every editor (schema editing exists on the mock API; Operation, Derivation and Source editors are not built)
 - [x] Conflict resolver against live data
-- [ ] Traits in queries
+- [ ] Traits in queries (they work at branch heads; time-travel reads do not support them)
 
 ## M4: Documents, extraction and semantic search
 
@@ -89,23 +92,25 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 
 - [x] Document store interface and parsers (Postgres blob backend; Markdown, text, PDF, DOCX)
 - [ ] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions (all but schema suggestions done, [docs/extraction.md](extraction.md))
-- [ ] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles for local models and a LiteLLM proxy
-- [ ] Extraction Proposal items and evidence Review UI (items and the review API are done; the UI is not)
-- [ ] Embedding jobs and hybrid search (the read path already ranks stored vectors by caller-supplied query vectors; nothing computes embeddings)
-- [ ] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path is not)
+- [x] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles `local-models` and `litellm` ([inference providers](inference-providers.md))
+- [x] Extraction Proposal items and evidence Review UI (an Items tab in Review accepts, edits or rejects items one by one or by filter; the Documents viewer highlights the evidence)
+- [ ] Embedding jobs and hybrid search (semantic and hybrid search rank stored vectors against a query vector the caller supplies; no job computes embeddings)
+- [ ] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path Derivations are defined in the schema but not materialized)
 
 ## M5: Enterprise hardening and 1.0
 
-- [x] Overlay branch materialization (AC-16 implemented, migration `0010`, [store schema notes](store-schema-notes.md#overlay-branches)); landed early, `copy` stays the default mode outside the `agent/`, `extract/` and `source/` prefixes, and agent task branches are overlays (`keeper.agent_writes.branch_mode`)
+- [x] Overlay branch materialization (AC-16 implemented, migration `0010`, [store schema notes](store-schema-notes.md#overlay-branches)); landed early, `copy` stays the default mode outside the `agent/`, `extract/` and `source/` prefixes, and agent task branches are overlays (`keeper.agent_writes.branch_mode`). Overlays get their own per-Attribute indexes, and migrations `0011` (branch-scoped search index) and `0012` (overlay neighborhood lookups) keep overlay reads within 30% of a copy at p50 ([performance](performance.md#overlay-branches-milliseconds))
 - [ ] PII vault storage and erasure
 - [x] Helm chart ([kubernetes](kubernetes.md)); landed early, validated by lint, template and kubeconform, not yet on a live cluster
 - [x] Garbage collection of unreachable objects ([operations](operations.md)); landed early
+- [x] Observability: a catalogue of every metric with explicit histogram buckets, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks and the OpenTelemetry Collector configuration, in compose and the Helm chart ([metrics](metrics.md), [operations](operations.md#dashboards-and-alerts)); landed early
 - [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
-- [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md); the release workflow signs the images with cosign, [release](release.md))
-- [ ] HTTP JSON Source
+- [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md); the release workflow signs the images with cosign, [release](release.md); the audit chain check exists in the store, `AuditRepository.verify`, but no command or endpoint runs it)
+- [ ] HTTP JSON Source (in progress)
 - [ ] LinkML schema import and export
-- [ ] Documentation site and API stability guarantees for `/api/v1`
-- [ ] Threat model published and the security review checklist completed (the review of the trust boundaries is done, with nine findings fixed and twelve open: [security review](security-review.md))
+- [x] Documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built with `mkdocs build --strict` (`make docs`) and published by the Docs workflow
+- [ ] API stability guarantees for `/api/v1` (no stability policy is written yet)
+- [ ] Threat model published and the security review checklist completed (the review of the trust boundaries is done: 23 findings, all fixed, none open, [security review](security-review.md); the threat model document is not written)
 - [ ] Full proof scenario (days 1 to 5) as an automated end-to-end test (`make demo` runs the scenario against a real stack, [demo](demo.md); it is not part of CI)
 
 ## Not on the roadmap

@@ -2,6 +2,35 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
+## Unreleased
+
+Changes merged on `main` after the 0.1.0 notes below were written; there is no tag yet, so they ship with the first release. Search now reads an index scoped by branch, overlay branches get their own indexes, and the documentation is published as a site. Two migrations are added, `0011` and `0012`.
+
+### Added
+
+- A documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built from `docs/` with Material for MkDocs (`make docs`, `make docs-serve`). The Docs workflow publishes it on every push to `main` and builds it with `mkdocs build --strict` on pull requests that touch the documentation. The command line and configuration reference pages are generated from the code (`make docs-generate`; `scripts/docs/generate.py --check` fails on a stale page) and the REST API page renders the committed `docs/openapi.json`.
+- An observability bundle in `deploy/observability`: Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with a runbook per alert and the OpenTelemetry Collector configuration ([operations](docs/operations.md#dashboards-and-alerts)). The compose `observability` profile loads them; the Helm chart renders them as ConfigMaps with `observability.enabled=true`.
+- A metrics catalogue ([docs/metrics.md](docs/metrics.md)) with the Prometheus series, labels and source of every metric. A test fails when a dashboard or alert rule names a series that is not emitted, or when an instrument is missing from the catalogue. Latency histograms declare explicit bucket boundaries from 5 ms to 10 s, so p50 and p95 panels read real quantiles.
+- New metrics for the response cache, authentication failures, commit duration, merge attempts, security definer read calls, jobs claimed and queue depth, webhook deliveries, garbage collection runs and bytes freed, and extraction items.
+- `lorebase branch create --mode copy|overlay` chooses how a branch stores its rows; without it `store.materialize.branch_mode` applies.
+- `keeper.limits.rate.auth_failures.per_key_prefix_enabled` (default `true`). Set it to `false` to count failed authentications per client address only, so that someone who knows a key prefix cannot keep that key throttled.
+
+### Changed
+
+- Full-text search reads GIN indexes on `(domain_id, branch, search)` and `(domain_id, branch, title gin_trgm_ops)` (migration `0011`, `btree_gin`), so a search reads only its own branch's matches, however many branches share the partition.
+- Overlay branches get the per-Attribute indexes of their schema on their own rows, built as `store.index` jobs when the overlay is created, and the overlay neighborhood looks Links and Records up with one index scan over both branches (migration `0012`). On the 100k-Record baseline, search on an overlay went from +93 to +101% over a copy at p50 to within 30%, and every overlay read stays within its budget ([performance](docs/performance.md)).
+- Herald's `lorebase_execute` passes `intent`, `auto_propose` and `auto_merge` to Keeper also when the call names no `task`, and returns Keeper's problem text unchanged; `auto_propose: true` without a `task` is refused as `validation-failed` ([MCP](docs/mcp.md)).
+- The web app loads each screen on demand. The main chunk went from 507 kB to 193 kB, vendor libraries sit in their own chunks, and `pnpm build` fails when the main chunk or the first load exceeds `apps/web/bundle-budget.json`.
+- The Helm chart sets the Postgres parameters of the CloudNativePG cluster explicitly (`postgresql.cluster.postgresql.parameters`, `max_connections: "100"` by default); size it above Keepers x (`pool_size` + `max_overflow`) plus Scribe, migrations and administration.
+
+### Fixed
+
+- CI: the Helm job validates the chart with kubeconform v0.8.0, and the web, Helm and observability jobs run the checks added with the changes above.
+
+### Upgrade notes
+
+Run the migrations (`alembic upgrade head`, now up to `0012`) before the new Keeper starts; the compose `migrate` service and the Helm hook do it. `0011` creates the `btree_gin` extension if it is missing (it ships with Postgres contrib), builds the new search indexes concurrently per partition and drops the old ones once the new ones are valid; writes are not blocked during the build, which on a large Domain takes as long as building two GIN indexes.
+
 ## 0.1.0
 
 First release. Lorebase keeps a typed ontology in Postgres and lets teams change it on branches, review the change in a Proposal and merge schema and data together, with Conflicts resolved per Attribute. Agents read through a REST API that never calls a model, or through the MCP server, and write only through Operations; a write that needs review becomes a task branch and a Proposal. Documents are extracted into Proposals whose items reviewers accept or reject. Pre-1.0: `/api/v1` is not frozen and interfaces may change in a minor version.
