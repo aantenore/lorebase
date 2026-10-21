@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Protocol
 
 from lorebase_store.auth import (
@@ -17,6 +17,7 @@ from lorebase_store.auth import (
     GrantRecord,
     NewAuditEntry,
     PrincipalRecord,
+    UsageRecord,
 )
 from lorebase_store.models.enums import GrantScope, PrincipalType
 
@@ -127,6 +128,16 @@ class AuditPort(Protocol):
     ) -> list[AuditRecord]: ...
 
 
+class UsagePort(Protocol):
+    """Daily usage counters of API keys."""
+
+    async def get(self, api_key_id: str, day: date) -> UsageRecord: ...
+
+    async def add(
+        self, api_key_id: str, day: date, *, requests: int, context_tokens: int, at: datetime
+    ) -> UsageRecord: ...
+
+
 class AuthUnitPort(Protocol):
     """Repositories sharing one transaction."""
 
@@ -144,6 +155,9 @@ class AuthUnitPort(Protocol):
 
     @property
     def audit(self) -> AuditPort: ...
+
+    @property
+    def usage(self) -> UsagePort: ...
 
 
 class AuthStore(Protocol):

@@ -25,6 +25,8 @@ PREFIX = "/api/v1"
 
 RESPONSES: dict[type[m.Model], str] = {
     m.WhoAmI: "WhoAmI",
+    m.QuotaReport: "QuotaReport",
+    m.QuotaUse: "QuotaUse",
     m.Domain: "DomainOut",
     m.Branch: "BranchOut",
     m.BranchDetail: "BranchDetail",

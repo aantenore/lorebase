@@ -17,6 +17,7 @@ from lorebase_store.auth.principals import (
 )
 from lorebase_store.auth.scope import new_id, rls_scope
 from lorebase_store.auth.unit import AuthUnit, SqlAuthStore
+from lorebase_store.auth.usage import UsageRecord, UsageRepository
 
 __all__ = [
     "ApiKeyRecord",
@@ -33,6 +34,8 @@ __all__ = [
     "PrincipalRecord",
     "PrincipalRepository",
     "SqlAuthStore",
+    "UsageRecord",
+    "UsageRepository",
     "audit_lock_key",
     "entry_digest",
     "new_id",

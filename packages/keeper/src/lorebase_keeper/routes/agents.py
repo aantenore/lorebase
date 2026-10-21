@@ -21,6 +21,7 @@ from lorebase_keeper.agents.explain import ExplainOut, explain_markdown, explain
 from lorebase_keeper.agents.pack import ContextPackOut, ContextRequest, dumps
 from lorebase_keeper.agents.settings import AgentSettings, agent_settings
 from lorebase_keeper.errors import Problem, ValidationProblem
+from lorebase_keeper.ratelimit.enforce import charge_context_tokens, check_context_quota
 from lorebase_keeper.reading.caching import CacheKey, cache_key, entity_tag, respond_with
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, open_revision, read_guard, resolve_point
@@ -71,6 +72,7 @@ async def context_pack(
     request: Request,
 ) -> Response:
     """Seed Records, their neighborhood, schema, recent changes and lineage within a budget."""
+    await check_context_quota(request, access.principal)
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     since: str | None = None
     floor: int | None = None
@@ -90,9 +92,13 @@ async def context_pack(
     async def produce() -> tuple[bytes, str]:
         return await build_pack(session, runtime, context, body, settings.context)
 
-    return await respond_with(
+    response = await respond_with(
         request, runtime.cache, key, produce, headers={REVISION_HEADER: point.revision_hex}
     )
+    await charge_context_tokens(
+        request, access.principal, response, settings.context.chars_per_token
+    )
+    return response
 
 
 @router.get(

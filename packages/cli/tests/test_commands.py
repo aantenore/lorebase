@@ -261,6 +261,33 @@ def test_whoami(http: respx.MockRouter) -> None:
     assert json.loads(run("whoami", "--json").stdout)["id"] == "usr_1"
 
 
+def test_whoami_shows_the_quota_of_an_api_key(http: respx.MockRouter) -> None:
+    http.get("/auth/whoami").respond(
+        200,
+        json={
+            "id": "svc_1",
+            "type": "service",
+            "display_name": "Bot",
+            "method": "api_key",
+            "subjects": ["svc_1"],
+            "key_scopes": [],
+            "installation_admin": False,
+            "quota": {
+                "period": "day",
+                "resets_at": "2026-10-21T00:00:00Z",
+                "requests": {"limit": 1000, "used": 12, "remaining": 988},
+                "context_tokens": {"limit": None, "used": 40, "remaining": None},
+            },
+        },
+    )
+    result = run("whoami")
+    assert result.exit_code == 0
+    assert "requests today" in result.stdout
+    assert "12 of 1000" in result.stdout
+    assert "40 of unlimited" in result.stdout
+    assert json.loads(run("whoami", "--json").stdout)["quota"]["requests"]["remaining"] == 988
+
+
 def test_domain_create_list_get(http: respx.MockRouter) -> None:
     create = http.post("/domains").respond(201, json=domain())
     http.get("/domains").respond(
