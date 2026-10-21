@@ -87,15 +87,16 @@ async def resolve_host(host: str) -> Sequence[str]:
 
 
 def _private(address: str) -> bool:
+    """Whether an address is not a plain public unicast one.
+
+    Anything outside the globally routable ranges is refused, not only RFC 1918 and loopback:
+    shared address space (100.64.0.0/10, where some clouds serve instance metadata), IPv6
+    forms that wrap an IPv4 address (mapped, 6to4, Teredo, NAT64 under the reserved ::/8),
+    site-local, multicast and reserved ranges.
+    """
     ip = ipaddress.ip_address(address.split("%", 1)[0])
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
+    site_local = isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local
+    return not ip.is_global or ip.is_multicast or ip.is_reserved or site_local
 
 
 def scheme_problem(url: str, settings: WebhookSettings) -> str | None:
