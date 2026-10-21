@@ -24,6 +24,11 @@ a queued job. `BranchIndexes.ensure` runs after the rows are written and creates
 indexes inside the transaction when the Kind is small (`store.indexes.inline_max_rows`),
 otherwise it queues a job that `run_index_jobs` builds with `CREATE INDEX CONCURRENTLY`.
 
+An overlay branch (`lorebase_store.layout`) gets the same indexes on its own rows, none unique
+(`plan_indexes(..., overlay=True)`), when it is created or re-forked; they are always queued,
+since even an index on few rows is built by scanning the whole partition. Until they are
+built, the overlay half of a read scans the overlay's rows of the Kind by primary key.
+
 Index DDL needs the role that owns `mat_records`. For a session role that does not own it (the
 least-privileged application role subject to row-level security):
 
@@ -49,7 +54,7 @@ import logging
 import re
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -59,6 +64,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from lorebase_core.model import Attribute, Kind, RelationBacking, Schema
 from lorebase_core.types import AttributeType
 from lorebase_store.jobs import INDEX_JOB, JobRow
+from lorebase_store.layout import load_layout
 from lorebase_store.models.enums import JobStatus
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.settings import IndexSettings
@@ -252,8 +258,14 @@ def attribute_expression(attribute: Attribute, *, unique: bool) -> tuple[str, st
     return None
 
 
-def plan_indexes(schema: Schema) -> IndexPlan:
-    """Indexes the materialized head of a branch with `schema` needs; pure and deterministic."""
+def plan_indexes(schema: Schema, *, overlay: bool = False) -> IndexPlan:
+    """Indexes the materialized head of a branch with `schema` needs; pure and deterministic.
+
+    With `overlay`, those of an overlay branch's own rows: the same expressions and
+    predicates, so the overlay half of its reads uses them as the base half uses the base's,
+    but none unique. Uniqueness on an overlay holds for its resolved rows, which the commit
+    checks; its own rows alone include tombstones, which keep their values.
+    """
     foreign_keys = {
         (relation.from_kind, relation.foreign_key_attribute)
         for relation in schema.relations.values()
@@ -271,7 +283,7 @@ def plan_indexes(schema: Schema) -> IndexPlan:
             if spec is None:
                 skipped.append(SkippedAttribute(kind.id, attribute.id, attribute.type.name))
             else:
-                indexes.append(spec)
+                indexes.append(replace(spec, unique=False) if overlay else spec)
     return IndexPlan(tuple(indexes), tuple(skipped))
 
 
@@ -523,6 +535,7 @@ class BranchIndexes:
         self._existing: list[ExistingIndex] | None = None
         self._locked = False
         self._mode: IndexMode | None = None
+        self._overlay: bool | None = None
 
     async def sync(self, schema: Schema) -> IndexSync:
         result = await self.retire(schema)
@@ -542,7 +555,8 @@ class BranchIndexes:
         mode = await self.mode()
         if mode is IndexMode.OFF:
             return result
-        wanted = {spec.name(self._domain, self._branch) for spec in plan_indexes(schema).indexes}
+        planned = (await self._plan(schema)).indexes
+        wanted = {spec.name(self._domain, self._branch) for spec in planned}
         branches = set((await self._session.execute(_BRANCHES, {"domain": self._domain})).scalars())
         for index in await self._indexes():
             if index.branch == self._branch:
@@ -571,19 +585,21 @@ class BranchIndexes:
 
     async def ensure(self, schema: Schema) -> IndexSync:
         """Create the planned indexes that do not exist yet: inline for small Kinds when the
-        role owns `mat_records`, otherwise queued."""
+        role owns `mat_records`, otherwise queued. An overlay's are always queued: building
+        an index scans the whole partition, which an overlay's creation must not pay."""
         result = IndexSync()
         mode = await self.mode()
         if mode is IndexMode.OFF:
             return result
         present = {index.name for index in await self._indexes() if index.valid}
         partition = await partition_of(self._session, self._domain)
+        queue_all = mode is IndexMode.QUEUE or await self.overlay()
         rows: dict[str, int] = {}
-        for spec in plan_indexes(schema).indexes:
+        for spec in (await self._plan(schema)).indexes:
             name = spec.name(self._domain, self._branch)
             if name in present:
                 continue
-            if mode is IndexMode.QUEUE:
+            if queue_all:
                 await self._queue(IndexAction.CREATE, name, spec.kind_id, result)
                 continue
             if spec.kind_id not in rows:
@@ -633,6 +649,15 @@ class BranchIndexes:
                     )
             self._mode = mode
         return self._mode
+
+    async def overlay(self) -> bool:
+        """Whether the branch is an overlay (read from its ref once)."""
+        if self._overlay is None:
+            self._overlay = (await load_layout(self._session, self._domain, self._branch)).overlay
+        return self._overlay
+
+    async def _plan(self, schema: Schema) -> IndexPlan:
+        return plan_indexes(schema, overlay=await self.overlay())
 
     async def _indexes(self) -> list[ExistingIndex]:
         if self._existing is None:
@@ -789,9 +814,10 @@ async def _run_job(
         ).scalar_one_or_none()
         partition = await partition_of(session, domain_id)
         existing = {i.name: i for i in await existing_indexes(session, domain_id)}
+        overlay = (await load_layout(session, domain_id, branch)).overlay
     spec = None
     if compiled is not None:
-        planned = plan_indexes(Schema.model_validate(compiled)).indexes
+        planned = plan_indexes(Schema.model_validate(compiled), overlay=overlay).indexes
         spec = next((s for s in planned if s.name(domain_id, branch) == name), None)
     statements: list[str] = []
     if action is IndexAction.DROP:
@@ -837,7 +863,7 @@ async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:
 # Pending plan -----------------------------------------------------------------------------------
 
 _SCHEMAS = text(
-    "SELECT r.name, s.compiled FROM refs r "
+    "SELECT r.name, s.compiled, r.materialization = 'overlay' FROM refs r "
     "JOIN mat_schema s ON s.domain_id = r.domain_id AND s.branch = r.name "
     "WHERE r.domain_id = :domain ORDER BY r.name"
 )
@@ -856,8 +882,8 @@ async def pending_index_plan(
     """
     found = (await session.execute(_SCHEMAS, {"domain": domain_id})).all()
     schemas = {
-        name: Schema.model_validate(compiled)
-        for name, compiled in found
+        name: (Schema.model_validate(compiled), bool(overlay))
+        for name, compiled, overlay in found
         if branch is None or name == branch
     }
     existing = {index.name: index for index in await existing_indexes(session, domain_id)}
@@ -865,8 +891,8 @@ async def pending_index_plan(
     partition = await partition_of(session, domain_id)
     statements: list[str] = []
     wanted: set[str] = set()
-    for name, schema in schemas.items():
-        for spec in plan_indexes(schema).indexes:
+    for name, (schema, overlay) in schemas.items():
+        for spec in plan_indexes(schema, overlay=overlay).indexes:
             index_name = spec.name(domain_id, name)
             wanted.add(index_name)
             current = existing.get(index_name)

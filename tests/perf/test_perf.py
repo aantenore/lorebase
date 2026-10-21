@@ -1,7 +1,8 @@
 """Performance harness at a small scale (`pytest -m perf`; skipped otherwise).
 
 Checks that the harness runs end to end and that every read stays index-driven for the owner
-role; latency targets are asserted only by the full baseline run (`bench.py`), not here.
+role; latency targets are asserted only by the full baseline run (`bench.py`), not here, except
+the overhead of full-text search on an overlay branch over a copy.
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ from . import bench
 
 pytestmark = pytest.mark.perf
 
+MAX_OVERLAY_SEARCH_OVERHEAD = 0.25
+"""Overlay p50 over copy p50, minus one, for full-text search (docs/performance.md)."""
+
 
 def test_small_scale_baseline() -> None:
     report = bench.main(
@@ -21,9 +25,9 @@ def test_small_scale_baseline() -> None:
             "--extra-links",
             "2",
             "--iterations",
-            "20",
+            "60",
             "--warmup",
-            "5",
+            "10",
             "--branch-iterations",
             "1",
             "--commit-iterations",
@@ -49,3 +53,7 @@ def test_small_scale_baseline() -> None:
         assert set(report.overlay_reads[role]) == set(bench.harness.TARGETS_MS)
         assert all(m.samples_ms for m in report.copy_reads[role].values())
     assert report.overlay_branch.samples_ms
+    for role in ("owner", "rls"):
+        copy = report.copy_reads[role]["full-text search"].p50
+        overlay = report.overlay_reads[role]["full-text search"].p50
+        assert overlay / copy - 1 < MAX_OVERLAY_SEARCH_OVERHEAD, (role, copy, overlay)

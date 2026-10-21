@@ -97,8 +97,71 @@ difference).
   security and sets `LOREBASE_DB_MAINTENANCE_DSN` to the owner role that runs the migrations,
   its Postgres superuser ([deployment.md](deployment.md#database-roles)); production uses a
   dedicated owner role instead of a superuser.
-- Extensions `pg_trgm` and `vector` are created if missing and never dropped on downgrade. Where
-  the migration role cannot create extensions, an administrator creates them first.
+- Extensions `pg_trgm` and `vector` (revision `0001`) and `btree_gin` (revision `0011`) are
+  created if missing and never dropped on downgrade. Where the migration role cannot create
+  extensions, an administrator creates them first.
+
+### Search indexes
+
+Revision `0011` replaces the GIN indexes of revision `0001` on `search`
+(`ix_mat_records_search`) and on trigrams of `title` (`ix_mat_records_title`) with
+`ix_mat_records_branch_search` on `(domain_id, branch, search)` and
+`ix_mat_records_branch_title` on `(domain_id, branch, title gin_trgm_ops)`; `btree_gin`
+(contrib) provides the GIN operator classes of the two text columns. The old indexes were
+shared by every Domain and branch of a hash partition: a search read the matches of all of
+them and dropped the others' rows on recheck, and a search on an overlay did so once per half
+(its rows and its base's). Now the Domain and branch of a search are index conditions. The
+revision builds each index per partition with `CREATE INDEX CONCURRENTLY`, attaches each to
+an index created `ON ONLY` the parent, and drops the old index only once the new one is valid
+(about 1.4 s for the search index of a partition of 201,800 rows); a re-run rebuilds an
+invalid leftover.
+
+The alternative was a partial GIN index per branch (`WHERE domain_id = '<d>' AND branch =
+'<b>'`) managed like the per-Attribute indexes. Measured on the dataset of
+[performance.md](performance.md) (one partition with `main`, the copy `perf-copy` and the
+overlay `agent/perf`: 201,800 rows), as the role subject to row-level security, execution of
+the statement inside `lb_search` / `lb_search_overlay` (`auto_explain`, warm, milliseconds;
+matches per branch in brackets):
+
+| Query | Branch | shared GIN (`0001`) | partial per branch | `btree_gin` composite |
+|-------|--------|--------------------:|-------------------:|----------------------:|
+| `hydraulic` (4,064) | copy | 8.37 | 1.49 | 2.28 |
+| `needle` (774) | copy | 2.46 | 1.34 | 1.74 |
+| `stock` (21,600) | copy | 3.21 | 1.80 | 2.64 |
+| `hydraulic` | overlay | 11.70 | 3.30 | 3.19 |
+| `needle` | overlay | 4.18 | 3.04 | 2.36 |
+| `stock` | overlay | 3.12 | 1.02 | 1.15 |
+
+- Shared GIN: the bitmap of `search @@` holds the matches of both full branches (8,484 for
+  `hydraulic`); for some terms the planner adds a `BitmapAnd` with the primary key over the
+  branch's 99,900 rows (6.5 ms of the 8.4).
+- Partial per branch: the bitmap holds the branch's matches only and the index is small
+  (3 MB per 100k Records, 80 kB for the overlay). Every branch needs its own index (built
+  with a copy, queued for an overlay, dropped with the branch); a branch whose index is not
+  built yet, or an installation where the index manager is off, needs the shared index, so
+  every row write would update two GIN indexes; and every partial index of a partition adds
+  to the planning of each statement on it.
+- `btree_gin` composite: the bitmap holds the branch's matches (`Index Cond: domain_id =
+  'supply' AND branch = 'perf-copy' AND search @@ 'needle'`); intersecting the posting lists
+  of `domain_id` and `branch` costs about 0.3 ms more than a partial index at 100k Records per
+  branch (68 index pages read instead of 4 for `needle`). One index replaces the shared one,
+  serves every branch and Domain from its first row with no index management, and is
+  smaller (6 MB against 9 MB for the shared index of the same partition).
+
+**Chosen: the `btree_gin` composite.** Its overlay rows were measured with the other change
+of `0011` (the other columns with the probe below; the composite with the probe measured
+3.79, 3.45 and 1.17): `lb_overlay_rows(..., p_probe => false)` lets `lb_search_overlay` (and
+the plain SQL search) hash the overlay's keys (`Hash Anti Join` over an index-only scan of its
+2,000 rows) instead of probing its primary key once per base match (2,221 buffer hits for
+`needle`, 1.1 ms); other reads keep the probe.
+
+The trigram index on titles had the same problem, worse on an overlay: for typo-tolerant
+search (`titles`, Keeper's lexical search) the planner estimates `title % 'price'` at 14 rows
+and reads the shared trigram index in each half, which returned 16,421 rows of the partition
+(35 ms of recheck in the overlay half, which holds none of them). Scoped by branch, it returns
+the branch's 8,075 rows, and 271 in the overlay half. Warm calls of `lb_search` /
+`lb_search_overlay` with titles, p50 over 200 random title words: copy 17.1 ms and overlay
+30.0 ms with the shared index, 10.3 and 10.6 ms with the composite.
 
 ## Row-level security
 
@@ -214,7 +277,8 @@ changed; every other row is read from its base branch as it was at the fork poin
   for a table work unchanged on the resolved rows: store primitives, the Keeper query
   compiler, health scans, IndexView validation, derived recomputation, `verify`. History is
   the overlay's entries plus `B`'s entries of Revisions up to generation `g`. The anti-join is
-  a primary-key probe per base row read (`NOT EXISTS (... OFFSET 0)`).
+  a primary-key probe per base row read (`NOT EXISTS (... OFFSET 0)`), except in search, where
+  the planner may hash the overlay's keys (`probe=False`, revision `0011`).
 - **Plans.** Postgres does not flatten a `UNION ALL` whose members have `WHERE` clauses, so
   the two halves stay subqueries. Restriction conditions (key, Kind, attribute expressions,
   `@@`) and lateral references are pushed into both halves and use the indexes of each
@@ -222,7 +286,16 @@ changed; every other row is read from its base branch as it was at the fork poin
   `ORDER BY ... LIMIT` inside each half for keyset pages and attribute queries
   (`BranchLayout.records_arms`, the `p_tail` argument of `lb_overlay_rows`), and look Records
   and Links up by key through `LATERAL` subqueries (hydration, the neighborhood walk and its
-  final hydration). Keeper's query compiler uses the resolved rows as a table: its results
+  final hydration). The neighborhood's lookups (stored Link hops, foreign-key hops out of a
+  Record, final hydration) read both branches in one index scan instead of one per half
+  (`BranchLayout.records_lookup` / `links_lookup`, `lb_overlay_lookup` of revision `0012`):
+  `branch IN (O, B)` with the generation and ref conditions on the base rows, `DISTINCT ON`
+  the identity with the overlay's row first, tombstones dropped last. That removes the
+  primary-key probe of the overlay per base row and shrinks the statement to plan: measured
+  on the dataset of [performance.md](performance.md) as the role subject to row-level
+  security, one call of `lb_neighborhood_overlay` went from 5.65 to 4.86 ms (the statement
+  inside it from 2.44 to 2.11 ms; the copy: 3.39 and 1.63). Inbound foreign-key hops keep
+  both halves, so each half uses its branch's per-Attribute partial index. Keeper's query compiler uses the resolved rows as a table: its results
   are the same, but on an overlay an ordered page or a join on a large Kind sorts or scans
   that Kind's rows (a follow-up). The base half also requires the ref to still be that overlay
   (`base_branch` and `base_generation` unchanged), so a READ COMMITTED reader that resolved
@@ -232,9 +305,12 @@ changed; every other row is read from its base branch as it was at the fork poin
   overlay's base and generation from `refs` themselves (no SQL text crosses the boundary) and
   run the same statements over the resolved rows; on a branch that is not an overlay they
   read its own rows. They start with the argument, scope and search_path checks of revision
-  `0008` (the same SQLSTATEs) and resolve the overlay's rows only after them. The `0005`
-  functions are unchanged and still serve full branches. `grant_read_functions` grants both
-  sets.
+  `0008` (the same SQLSTATEs) and resolve the overlay's rows only after them. Revision `0011`
+  replaces `lb_search_overlay` (hashed anti-join) and revision `0012`
+  `lb_neighborhood_overlay` (lookups), with the same signatures, checks and grants. The
+  helpers `lb_overlay_rows` and `lb_overlay_lookup` take SQL text and are executable by their
+  owner only. The `0005` functions are unchanged and still serve full branches.
+  `grant_read_functions` grants both sets.
 - **Snapshot, not freeze (option b).** The base keeps committing. Before a base commit changes
   or removes a row (values, title, search vector, derived values, Links), it copies the
   previous row into every overlay of the base that does not hold that key yet
@@ -247,8 +323,22 @@ changed; every other row is read from its base branch as it was at the fork poin
   bounds that copy work; further branches are created as copies.
 - **Writes on an overlay.** A row about to change is first copied up from the base (so it
   keeps its derived values and search vector), then changed; a delete leaves a tombstone; an
-  upsert of a tombstoned key starts like a new row. Per-Attribute indexes are not built for
-  overlays (their own rows are few); the base's indexes serve the base half.
+  upsert of a tombstoned key starts like a new row.
+- **Per-Attribute indexes.** An overlay gets the per-Attribute indexes its schema plans, on its
+  own rows (`plan_indexes(schema, overlay=True)`): the same expressions and predicates as a
+  full branch's, with the overlay's name as the `branch` literal, so the overlay half of an
+  attribute query, an inbound foreign-key Link read or a neighborhood hop uses them as the
+  base half uses the base's. None is unique: uniqueness on an overlay holds for its resolved
+  rows and is checked by the commit (`MaterializedIndexView`), while its own rows include
+  tombstones, which keep their values. Creating or re-forking an overlay queues them as
+  `store.index` jobs in every index mode (an index on a few rows is still built by scanning
+  the partition, which the creation must not pay); until the worker builds them, the overlay
+  half scans the overlay's rows of the Kind by primary key. A promotion plans the full set: the
+  unique indexes are created and the overlay's non-unique variants of them dropped. No
+  `revision_generation` condition is needed in the plan: the overlay half reads every own row,
+  and in the base half `revision_generation <= g` is a filter on the rows the base's index
+  returns, which only drops rows the base inserted after the fork (a row it updated since is
+  shadowed by the overlay's copy anyway).
 - **Promotion.** `materialize.promote` turns an overlay into a full copy: it copies the base
   rows it reads and the base history up to the fork, drops its tombstones, sets
   `materialization = 'full'` (head and ref version unchanged) and builds the per-Attribute
