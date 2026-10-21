@@ -14,6 +14,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from lorebase_core.query import QueryLimits
+from lorebase_keeper.kindhealth.config import HealthSettings
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 READ_SECTION = "read"
@@ -94,6 +95,7 @@ class ReadSettings(SectionModel):
     traverse: TraverseSettings = Field(default_factory=TraverseSettings)
     time_travel: TimeTravelSettings = Field(default_factory=TimeTravelSettings)
     diff: DiffSettings = Field(default_factory=DiffSettings)
+    health: HealthSettings = Field(default_factory=HealthSettings)
 
     def query_limits(self) -> QueryLimits:
         """Limits handed to the DSL resolver."""

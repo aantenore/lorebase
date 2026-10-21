@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Collection, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -28,6 +28,7 @@ from lorebase_store.auth import (
     NewAuditEntry,
     PrefixTakenError,
     PrincipalRecord,
+    UsageRecord,
 )
 from lorebase_store.models.enums import GrantScope, PrincipalType
 
@@ -234,6 +235,30 @@ class MemAudit:
         return rows[:limit]
 
 
+class MemUsage:
+    def __init__(self, store: MemoryStore) -> None:
+        self.s = store
+
+    async def get(self, api_key_id: str, day: date) -> UsageRecord:
+        self.s.usage_reads += 1
+        if self.s.usage_failure is not None:
+            raise self.s.usage_failure
+        return self.s.usage_rows.get((api_key_id, day), UsageRecord(api_key_id, day, 0, 0))
+
+    async def add(
+        self, api_key_id: str, day: date, *, requests: int, context_tokens: int, at: datetime
+    ) -> UsageRecord:
+        self.s.usage_writes += 1
+        if self.s.usage_failure is not None:
+            raise self.s.usage_failure
+        before = await self.get(api_key_id, day)
+        row = UsageRecord(
+            api_key_id, day, before.requests + requests, before.context_tokens + context_tokens
+        )
+        self.s.usage_rows[(api_key_id, day)] = row
+        return row
+
+
 class MemoryUnit:
     """Auth repositories over a `MemoryStore`; there are no transactions."""
 
@@ -243,6 +268,7 @@ class MemoryUnit:
         self.api_keys = MemKeys(store)
         self.grants = MemGrants(store)
         self.audit = MemAudit(store)
+        self.usage = MemUsage(store)
 
 
 class MemoryStore:
@@ -258,6 +284,10 @@ class MemoryStore:
         self.audit_failure: Exception | None = None
         self.audit_delay = 0.0
         self.touch_failure: Exception | None = None
+        self.usage_rows: dict[tuple[str, date], UsageRecord] = {}
+        self.usage_failure: Exception | None = None
+        self.usage_reads = 0
+        self.usage_writes = 0
         self.domains: set[str] = {"acme", "globex"}
         self.touches = 0
         self.grant_lookups = 0
