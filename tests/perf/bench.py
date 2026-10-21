@@ -37,8 +37,9 @@ DOC_TITLE = "# Performance baseline"
 ANALYSIS = """\
 - Both roles run the defaults: search, incoming Links, the neighborhood and attribute queries
   go through the security definer functions of revision `0005` (`lb_search`, `lb_links_in`,
-  `lb_neighborhood`, `lb_query_by_attribute`; store schema notes). The `rls` role gets the
-  owner's index plans inside them, and every read of both roles is within its budget.
+  `lb_neighborhood`, `lb_query_by_attribute`; store schema notes), on an overlay their
+  `_overlay` variants. The `rls` role gets the owner's index plans inside them, and every read
+  of both roles is within its budget.
 - With plain SQL (`store.reads.use_definer_functions: false`), a role subject to RLS cannot use
   conditions built from functions Postgres does not mark leakproof (`->>`, casts, `@@`, `%`)
   as index conditions: the policy is applied first. The plain SQL baseline of 2026-10-20
@@ -50,23 +51,37 @@ ANALYSIS = """\
 - The functions build each statement with the Domain, branch and Kind as literals, so every
   call is planned with them (partial index predicates match) and runs without JIT; the
   planning time is part of the numbers above.
-- Search ranks at most `store.reads.search_candidates` matches, so very common terms cost a
-  bounded amount. Typo-tolerant titles (trigram similarity, Keeper's lexical search) add the
-  matches of the trigram index on titles to the candidates.
+- Search reads the GIN indexes on `(domain_id, branch, search)` and `(domain_id, branch,
+  title gin_trgm_ops)` (revision `0011`, `btree_gin`): the Domain and branch are index
+  conditions, so a search reads its branch's matches only, however many branches share the
+  partition (here `main`, a copy and an overlay). It ranks at most
+  `store.reads.search_candidates` matches, so very common terms cost a bounded amount.
+  Typo-tolerant titles (trigram similarity, Keeper's lexical search) add the branch's
+  trigram matches on titles to the candidates.
 - Times come from a laptop shared with other work; repeated runs differ by a few milliseconds
   at p95, up to ten for typo-tolerant search.
 - Branch creation copies the Records, Links and history rows of `main` (about twice the Records
   and Links) and builds the new branch's per-Attribute indexes in the same transaction.
-- An overlay branch (AC-16, store schema notes) is created by inserting its ref and copying
-  the compiled schema row: its cost does not depend on the size of the Domain.
+- An overlay branch (AC-16, store schema notes) is created by inserting its ref, copying the
+  compiled schema row and queuing the builds of its per-Attribute indexes (`store.index`
+  jobs, one per index): its cost does not depend on the size of the Domain. The job worker
+  builds them concurrently; this run builds them before the reads below.
 - Overlay reads resolve the overlay's own rows over the base rows as of the fork point in one
-  statement: an index scan of each branch, a primary-key probe of the overlay per base row
-  read and a one-row check that the ref is still that overlay. Keyset pages and attribute
-  queries are cut per half, lookups by key are lateral (store schema notes), so the plans are
-  those of the copy run twice on few rows; `test_overlay_reads_keep_index_plans` checks them.
-- Full-text search on an overlay pays twice for the GIN index on `search`, which is shared by
-  every branch of the partition: each half reads all matches of the partition and keeps its
-  branch's. The neighborhood plans one lateral lookup per hop and half.
+  statement: an index scan of each branch (the overlay's own per-Attribute indexes for its
+  half), a primary-key probe of the overlay per base row read (search hashes the overlay's
+  keys instead) and a one-row check that the ref is still that overlay. Keyset pages and
+  attribute queries are cut per half; the neighborhood looks Links and Records up by key with
+  one index scan over both branches (revision `0012`). `test_overlay_reads_keep_index_plans`
+  checks the plans.
+- Much of the overlay overhead left is planning: an overlay statement plans two or three
+  scans of the partition where the copy plans one, and the planner checks each scan against
+  every partial index of the partition (the per-Attribute indexes of `main`, the copy and the
+  overlay: 42 here), about 0.2 ms more per statement. Search, attribute queries, Links of a
+  Record and the neighborhood stay within 30% of the copy at p50, and every read far within
+  its budget of design 8.7; `tests/perf/test_perf.py` asserts that search on the overlay
+  stays within 25% of the copy at p50 at a small scale. Before revisions `0011` and `0012`
+  and the overlay's own indexes, search cost +93 to +101% at p50 (+73 to +132% at p95) and
+  the neighborhood +50%.
 - The overlay and the copy below got the same commits; `main` then moved, and its commit
   copied the previous state of the rows it changed into the overlay (copy on write).
 """
@@ -195,17 +210,19 @@ async def benchmark(options: Options, url: str) -> Report:
         pair = await harness.overlay_pair(engine, runtime, work, changes=options.overlay_changes)
         copy_reads: dict[str, dict[str, harness.Measurement]] = {}
         overlay_reads: dict[str, dict[str, harness.Measurement]] = {}
+        copy_ops = harness.read_operations(work, runtime, pair.copy)
+        overlay_ops = harness.read_operations(work, runtime, pair.overlay)
         for label, role in (("owner", None), ("rls", harness.READER_ROLE)):
-            # Interleaved per operation so both branches see the same machine load.
+            # Alternating call by call, with the same keys, so both branches see the same
+            # machine load.
             copy_reads[label], overlay_reads[label] = {}, {}
-            copy_ops = harness.read_operations(work, runtime, pair.copy)
-            overlay_ops = harness.read_operations(work, runtime, pair.overlay)
             for name in copy_ops:
-                for target, ops in ((copy_reads, copy_ops), (overlay_reads, overlay_ops)):
-                    found = await harness.measure_reads(
-                        engine, {name: ops[name]}, role=role, **common
-                    )
-                    target[label][name] = found[name]
+                (
+                    copy_reads[label][name],
+                    overlay_reads[label][name],
+                ) = await harness.measure_alternating(
+                    engine, name, [copy_ops[name], overlay_ops[name]], role=role, **common
+                )
         server = await harness.server_notes(engine)
         await harness.drop_reader(engine)
     finally:
@@ -328,8 +345,8 @@ def _overlay_section(report: Report) -> list[str]:
         f"`main` and got the same commit of {o.overlay_changes} Part updates; `main` then "
         f"committed {o.overlay_changes} other Part updates. The overlay stores "
         f"{pair.overlay_rows:,} rows (its changes, its derived and copied-on-write rows), the "
-        f"copy {pair.copy_rows:,}. Reads alternate between the two branches per operation, "
-        f"{o.iterations} timed calls each.",
+        f"copy {pair.copy_rows:,}. Reads alternate between the two branches call by call, "
+        f"with the same random keys, {o.iterations} timed calls each.",
         "",
         "| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | overhead p50 "
         "| overhead p95 |",

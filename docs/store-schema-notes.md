@@ -286,7 +286,16 @@ changed; every other row is read from its base branch as it was at the fork poin
   `ORDER BY ... LIMIT` inside each half for keyset pages and attribute queries
   (`BranchLayout.records_arms`, the `p_tail` argument of `lb_overlay_rows`), and look Records
   and Links up by key through `LATERAL` subqueries (hydration, the neighborhood walk and its
-  final hydration). Keeper's query compiler uses the resolved rows as a table: its results
+  final hydration). The neighborhood's lookups (stored Link hops, foreign-key hops out of a
+  Record, final hydration) read both branches in one index scan instead of one per half
+  (`BranchLayout.records_lookup` / `links_lookup`, `lb_overlay_lookup` of revision `0012`):
+  `branch IN (O, B)` with the generation and ref conditions on the base rows, `DISTINCT ON`
+  the identity with the overlay's row first, tombstones dropped last. That removes the
+  primary-key probe of the overlay per base row and shrinks the statement to plan: measured
+  on the dataset of [performance.md](performance.md) as the role subject to row-level
+  security, one call of `lb_neighborhood_overlay` went from 5.65 to 4.86 ms (the statement
+  inside it from 2.44 to 2.11 ms; the copy: 3.39 and 1.63). Inbound foreign-key hops keep
+  both halves, so each half uses its branch's per-Attribute partial index. Keeper's query compiler uses the resolved rows as a table: its results
   are the same, but on an overlay an ordered page or a join on a large Kind sorts or scans
   that Kind's rows (a follow-up). The base half also requires the ref to still be that overlay
   (`base_branch` and `base_generation` unchanged), so a READ COMMITTED reader that resolved
@@ -296,9 +305,12 @@ changed; every other row is read from its base branch as it was at the fork poin
   overlay's base and generation from `refs` themselves (no SQL text crosses the boundary) and
   run the same statements over the resolved rows; on a branch that is not an overlay they
   read its own rows. They start with the argument, scope and search_path checks of revision
-  `0008` (the same SQLSTATEs) and resolve the overlay's rows only after them. The `0005`
-  functions are unchanged and still serve full branches. `grant_read_functions` grants both
-  sets.
+  `0008` (the same SQLSTATEs) and resolve the overlay's rows only after them. Revision `0011`
+  replaces `lb_search_overlay` (hashed anti-join) and revision `0012`
+  `lb_neighborhood_overlay` (lookups), with the same signatures, checks and grants. The
+  helpers `lb_overlay_rows` and `lb_overlay_lookup` take SQL text and are executable by their
+  owner only. The `0005` functions are unchanged and still serve full branches.
+  `grant_read_functions` grants both sets.
 - **Snapshot, not freeze (option b).** The base keeps committing. Before a base commit changes
   or removes a row (values, title, search vector, derived values, Links), it copies the
   previous row into every overlay of the base that does not hold that key yet

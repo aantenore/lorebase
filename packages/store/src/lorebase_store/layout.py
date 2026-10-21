@@ -23,6 +23,10 @@ The base half also checks that the ref is still an overlay forked at that genera
 reader that resolved the layout before a promotion or a re-fork (READ COMMITTED) then reads
 only the overlay rows, which a promotion has completed. Revision `0010` renders the same text
 inside the security definer read functions (`lb_overlay_rows`).
+
+For lookups by identity (`records_lookup`, `links_lookup`) one index scan reads both
+branches and the overlay's row of an identity wins; revision `0012` renders the same text
+(`lb_overlay_lookup`).
 """
 
 from __future__ import annotations
@@ -111,6 +115,24 @@ class BranchLayout:
     def history_from(self, alias: str | None = None) -> str:
         return self._from_item("mat_history", alias, self.history_sql)
 
+    def records_lookup(self, where: str) -> str:
+        """The resolved Record rows of an overlay that match `where`, as a parenthesized
+        subquery for a lateral lookup by identity (conditions on alias `x` that pin one
+        identity or a few, without bind parameters).
+
+        One index scan reads the overlay's and the base's rows together (`branch IN
+        (overlay, base)`), and the overlay's row of an identity, tombstone included, wins
+        over the base's (`DISTINCT ON`): one scan per lookup instead of one per half plus a
+        primary-key probe of the overlay per base row. Revision `0012` renders the same
+        text inside the read functions (`lb_overlay_lookup`).
+        """
+        return self._lookup("mat_records", RECORD_COLUMNS, ("kind_id", "key"), where)
+
+    def links_lookup(self, where: str) -> str:
+        """The resolved Link rows of an overlay that match `where` (see `records_lookup`)."""
+        key = ("relation_id", "from_key", "to_key")
+        return self._lookup("mat_links", LINK_COLUMNS, key, where)
+
     # SQLAlchemy ---------------------------------------------------------------------
 
     def records(self, name: str | None = None) -> FromClause:
@@ -183,6 +205,29 @@ class BranchLayout:
             )
         )
         return f"(({own}{tail}) UNION ALL ({base}{tail})) AS {alias}"
+
+    def _lookup(
+        self, table: str, columns: tuple[str, ...], key: tuple[str, ...], where: str
+    ) -> str:
+        if not self.overlay:
+            raise ValueError("lookups over both branches apply to overlay branches")
+        domain, branch, base = (
+            _literal(self.domain_id),
+            _literal(self.branch),
+            _literal(self._base()),
+        )
+        select = ", ".join(
+            f"CAST({branch} AS text) AS branch" if c == "branch" else f"x.{_quoted(c)}"
+            for c in columns
+        )
+        identity = ", ".join(f"x.{c}" for c in key)
+        return escape_colons(
+            f"(SELECT {select} FROM (SELECT DISTINCT ON ({identity}) * FROM {table} x "
+            f"WHERE x.domain_id = {domain} AND x.branch IN ({branch}, {base}) "
+            f"AND (x.branch = {branch} OR (x.revision_generation <= {self._generation()} "
+            f"AND {self._guard()})) AND {where} "
+            f"ORDER BY {identity}, x.branch = {branch} DESC) x WHERE NOT x.deleted)"
+        )
 
     def _guard(self) -> str:
         return (
