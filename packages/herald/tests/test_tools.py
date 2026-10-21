@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
 from mcp import Client
 from mcp.types import CallToolResult, TextContent
@@ -110,6 +111,8 @@ async def test_execute_description_states_governed_writes(connect: Connect) -> N
     assert "Operation" in description
     assert "Proposal" in description
     assert "dry_run defaults to true" in description
+    assert "task" in description
+    assert "auto_merge" in description
 
 
 # Reads ---------------------------------------------------------------------------------------
@@ -535,6 +538,92 @@ async def test_execute_commit_carries_expected_head(connect: Connect, fake: Fake
     }
     assert fake.last().headers["idempotency-key"] == "k-1"
     assert json.loads(out)["revision"] == PARENT
+
+
+PROPOSED = {
+    "status": "proposed",
+    "operation": "flag_supplier_risk",
+    "branch": "agent/svc_1/audit",
+    "target": "main",
+    "invocation_id": "inv_1",
+    "parameters_hash": "h",
+    "revision": PARENT,
+    "revisions": [PARENT],
+    "edit_count": 2,
+    "replayed": False,
+    "proposal": {
+        "id": "prp_1",
+        "title": "Agent svc_1: audit",
+        "status": "open",
+        "source_ref": "agent/svc_1/audit",
+        "target_ref": "main",
+        "url": "/api/v1/domains/supply/proposals/prp_1",
+        "created": True,
+    },
+    "approval": {"required": 1, "approvals": 0, "satisfied": False},
+    "attempt": {
+        "id": "mat_1",
+        "result": None,
+        "open_conflicts": 0,
+        "resolved_conflicts": 0,
+        "counts": {},
+    },
+    "merge": {
+        "requested": True,
+        "allowed": True,
+        "performed": False,
+        "blockers": ["approvals-pending"],
+    },
+    "merged_revision": None,
+    "branch_created": True,
+    "branch_deleted": False,
+    "warnings": [],
+    "next": [
+        {
+            "action": "await_review",
+            "detail": "Waiting for approval (0 of 1 required).",
+            "method": "POST",
+            "href": "/api/v1/domains/supply/proposals/prp_1/reviews",
+        }
+    ],
+}
+
+
+async def test_execute_with_a_task_reports_the_proposal(connect: Connect, fake: FakeKeeper) -> None:
+    fake.on(
+        "POST",
+        f"{API}/operations/flag_supplier_risk/execute",
+        httpx.Response(202, json=PROPOSED),
+    )
+    async with connect() as client:
+        out = text(
+            await client.call_tool(
+                "lorebase_execute",
+                {
+                    "operation": "flag_supplier_risk",
+                    "parameters": {"supplier": "S-1"},
+                    "dry_run": False,
+                    "task": "audit",
+                    "intent": "Flag S-1 after the audit",
+                    "auto_merge": True,
+                },
+            )
+        )
+    assert fake.last_body() == {
+        "parameters": {"supplier": "S-1"},
+        "dry_run": False,
+        "task": "audit",
+        "intent": "Flag S-1 after the audit",
+        "auto_merge": True,
+    }
+    lines = out.splitlines()
+    assert lines[0] == (
+        "proposed flag_supplier_risk on agent/svc_1/audit -> main: Proposal prp_1 (open), 2 edits"
+    )
+    assert "approvals 0 of 1 required" in lines
+    assert "auto_merge requested, not performed: approvals-pending" in lines
+    assert lines[-1].startswith("next: await_review: Waiting for approval")
+    assert lines[-1].endswith("[POST /api/v1/domains/supply/proposals/prp_1/reviews]")
 
 
 # Size caps -----------------------------------------------------------------------------------

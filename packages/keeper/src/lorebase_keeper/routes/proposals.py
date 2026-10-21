@@ -49,6 +49,7 @@ from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, Val
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.points import read_guard
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
+from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import proposals as service
 from lorebase_keeper.services.errors import commit_problem
 from lorebase_keeper.services.proposal_reads import (
@@ -652,7 +653,8 @@ async def close_proposal(
     """Close without merging; the merge attempt is discarded and the target is unchanged."""
     await _author_or_merger(request, auth, principal, store, domain_id, proposal_id)
     view = await service.close(store, domain_id, proposal_id, keeper.proposals)
-    annotate(request, action="proposal.close", target=proposal_id)
+    released = await agent_writes.release_branch(store, domain_id, view.proposal, keeper)
+    annotate(request, action="proposal.close", target=proposal_id, branch_deleted=released)
     scope = await visible_scope(guard, view.proposal)
     return _detail(await service.scoped(store, domain_id, view, scope), scope)
 
@@ -747,6 +749,12 @@ async def merge_proposal(
             f"{attempt.open_conflicts} Conflict(s) remain; resolve them and merge again.",
             extensions={"attempt": attempt.model_dump(mode="json")},
         )
+    source_deleted = outcome.source_deleted
+    if not outcome.replayed and not source_deleted:
+        source_deleted = await agent_writes.release_branch(
+            store, domain_id, outcome.proposal, keeper
+        )
+        annotate(request, branch_deleted=source_deleted)
     if outcome.replayed:
         response.headers[REPLAYED_HEADER] = "true"
     return MergeOut(
@@ -754,7 +762,7 @@ async def merge_proposal(
         revision=hex(outcome.head),
         proposal=_proposal(outcome.proposal, counted=scope.everything),
         attempt=attempt,
-        source_deleted=outcome.source_deleted,
+        source_deleted=source_deleted,
         replayed=outcome.replayed,
     )
 

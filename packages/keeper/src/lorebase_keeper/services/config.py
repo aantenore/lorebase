@@ -7,12 +7,13 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from lorebase_core.expr import ExprLimits
 from lorebase_core.infer import InferenceOptions
 from lorebase_core.tree import DEFAULT_LEAF_SIZE
 from lorebase_platform.settings import SectionModel
+from lorebase_store.models.enums import PrincipalType
 
 DEFAULT_REF_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
 
@@ -182,3 +183,79 @@ class SchemaInferenceSettings(SectionModel):
         default_factory=InferenceOptions,
         description="Thresholds and naming rules; a request may override some of them.",
     )
+
+
+class AgentWriteSettings(SectionModel):
+    """Writes of external agents through governed Operations (design 10.1, 11.1, 13.2).
+
+    When an Operation needs review (protected target branch, or its review policy) and the
+    caller named a `task`, Keeper runs it on the task branch `{branch_prefix}/{principal}/
+    {task}` and opens or updates a Proposal instead of answering `review-required`. A Domain
+    overrides any member here with the same name in its `agent_writes` setting.
+    """
+
+    enabled: bool = Field(
+        default=True, description="Turn Operations that need review into task branches."
+    )
+    principal_types: tuple[PrincipalType, ...] = Field(
+        default=(PrincipalType.SERVICE,),
+        description="Principal types that are agents: for them `auto_propose` applies when a "
+        "request leaves it out; other principals must ask with `auto_propose: true`.",
+    )
+    auto_propose: bool = Field(
+        default=True,
+        description="Open a Proposal when a request of an agent that names a `task` needs "
+        "review and does not set `auto_propose`.",
+    )
+    auto_merge: bool = Field(
+        default=False,
+        description="Merge the Proposal at once when a request does not set `auto_merge`. "
+        "Needs a role in `allowed_roles_for_auto_merge`.",
+    )
+    allowed_roles_for_auto_merge: tuple[str, ...] = Field(
+        default=(),
+        description="Roles (granted in the Domain, covering the task branch) whose agents may "
+        "have their Proposals merged automatically; empty: nobody. Approvals the target "
+        "branch requires are never skipped.",
+    )
+    max_open_branches_per_principal: int = Field(
+        default=10, ge=1, description="Task branches one principal may hold at a time."
+    )
+    branch_prefix: str = Field(
+        default="agent",
+        pattern=DEFAULT_REF_NAME_PATTERN,
+        description="First part of task branch names.",
+    )
+    delete_branch_on_merge: bool = Field(
+        default=True,
+        description="Delete a task branch when its Proposal merged or was closed and no other "
+        "open Proposal uses it.",
+    )
+    max_task_length: int = Field(
+        default=60, ge=1, description="Longest `task` (after normalization) accepted."
+    )
+    title_template: str = Field(
+        default="Agent {principal}: {task}",
+        min_length=1,
+        description="Title of the Proposal; `{principal}` and `{task}` are replaced.",
+    )
+    summary_parameter_values: bool = Field(
+        default=True,
+        description="List parameter values in the Proposal description; false lists names only "
+        "(values may be sensitive).",
+    )
+    summary_value_chars: int = Field(
+        default=80, ge=1, description="Characters of a parameter value kept in the description."
+    )
+    max_summary_operations: int = Field(
+        default=20, ge=1, description="Executions listed in the description of one Proposal."
+    )
+
+    @field_validator("title_template")
+    @classmethod
+    def _known_placeholders(cls, value: str) -> str:
+        try:
+            value.format(principal="p", task="t")
+        except (KeyError, IndexError, ValueError):
+            raise ValueError("only {principal} and {task} may be used as placeholders") from None
+        return value

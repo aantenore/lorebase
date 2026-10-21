@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
 
+import httpx
+
 from lorebase_client import models as m
 from lorebase_client.core import (
     Call,
@@ -20,6 +22,8 @@ from lorebase_client.core import (
     parse_none,
     parse_text,
 )
+
+_ACCEPTED = 202
 
 
 def _seg(value: str) -> str:
@@ -268,6 +272,31 @@ def execute_operation(
         "POST",
         f"{_domain(domain)}/operations/{_seg(operation)}/execute",
         parse_model(m.Execution),
+        body=body.payload(),
+        accepts_key=True,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _execution_or_proposal(response: httpx.Response) -> m.Execution | m.AgentWrite:
+    """202 answers an Operation that needed review: the Proposal it opened."""
+    if response.status_code == _ACCEPTED:
+        return m.AgentWrite.model_validate_json(response.content)
+    return m.Execution.model_validate_json(response.content)
+
+
+def execute_operation_as_agent(
+    domain: str,
+    operation: str,
+    body: m.ExecuteRequest,
+    *,
+    idempotency_key: str | None = None,
+) -> Call[m.Execution | m.AgentWrite]:
+    """Like `execute_operation`, for requests that may come back as a Proposal."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/operations/{_seg(operation)}/execute",
+        _execution_or_proposal,
         body=body.payload(),
         accepts_key=True,
         idempotency_key=idempotency_key,

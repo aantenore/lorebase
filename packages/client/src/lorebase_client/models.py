@@ -276,6 +276,10 @@ class ExecuteRequest(RequestModel):
     idempotency_key: str | None = None
     expected_head: str | None = None
     message: str | None = Field(default=None, max_length=2000)
+    task: str | None = Field(default=None, min_length=1, max_length=200)
+    intent: str | None = Field(default=None, max_length=4000)
+    auto_propose: bool | None = None
+    auto_merge: bool | None = None
 
 
 class Execution(Model):
@@ -297,6 +301,75 @@ class Execution(Model):
     warnings: list[dict[str, Any]]
     review_required: bool
     replayed: bool
+
+
+class ProposalRef(Model):
+    """The Proposal carrying the edits of an agent write."""
+
+    id: str
+    title: str
+    status: str
+    source_ref: str
+    target_ref: str
+    url: str
+    created: bool
+
+
+class AgentApproval(Model):
+    required: int
+    approvals: int
+    satisfied: bool
+
+
+class AgentAttempt(Model):
+    """Conflicts between the task branch and the target."""
+
+    id: str
+    result: str | None = None
+    open_conflicts: int
+    resolved_conflicts: int
+    counts: dict[str, dict[str, int]]
+
+
+class AgentMerge(Model):
+    requested: bool
+    allowed: bool
+    performed: bool
+    blockers: list[str]
+
+
+class NextHint(Model):
+    """A next step: what to do, and the call that does it when there is one."""
+
+    action: str
+    detail: str
+    method: str | None = None
+    href: str | None = None
+    permission: str | None = None
+
+
+class AgentWrite(Model):
+    """An Operation that needed review, run on a task branch and proposed (HTTP 202)."""
+
+    status: Literal["proposed", "merged", "conflicts"]
+    operation: str
+    branch: str
+    target: str
+    invocation_id: str
+    parameters_hash: str
+    revision: str | None = None
+    revisions: list[str]
+    edit_count: int
+    replayed: bool
+    proposal: ProposalRef
+    approval: AgentApproval
+    attempt: AgentAttempt | None = None
+    merge: AgentMerge
+    merged_revision: str | None = None
+    branch_created: bool
+    branch_deleted: bool
+    warnings: list[dict[str, Any]]
+    next: list[NextHint]
 
 
 # Reads ------------------------------------------------------------------------------------
