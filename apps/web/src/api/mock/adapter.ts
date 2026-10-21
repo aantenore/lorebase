@@ -130,8 +130,9 @@ export function createMockApi(options: MockOptions): KeeperApi {
     author: detail.author,
     created_at: detail.created_at,
     merged_revision: detail.merged_revision,
+    updated_at: detail.updated_at,
+    policy: detail.policy,
     checks: detail.checks,
-    policies: detail.policies,
   });
 
   const nextRevisionId = () => {
@@ -181,6 +182,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
             settings: {},
             created_at: new Date().toISOString(),
             created_by: 'usr_mock',
+            head: null,
           },
           branches: new Map([
             [
@@ -231,7 +233,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
         if (domain.branches.has(input.name)) {
           return Promise.reject(stateError(`Branch ${input.name} exists.`, 'branch_exists'));
         }
-        const source = resolveRef(domain, input.from ?? domain.domain.default_branch);
+        const source = resolveRef(domain, input.source ?? domain.domain.default_branch);
         const copy = structuredClone(source);
         copy.protected = false;
         domain.branches.set(input.name, copy);
@@ -245,7 +247,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
         const domain = domainOf(id);
         const data = branchOf(domain, name);
         if (data.protected)
-          return Promise.reject(stateError(`Branch ${name} is protected.`, 'branch_protected'));
+          return Promise.reject(stateError(`Branch ${name} is protected.`, 'protected-branch'));
         domain.branches.delete(name);
         return Promise.resolve();
       },
@@ -297,7 +299,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
           return Promise.reject(
             stateError(
               `Branch ${name} is protected. Commit the schema changes on another Branch and open a Proposal.`,
-              'branch_protected',
+              'protected-branch',
             ),
           );
         }
@@ -446,7 +448,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
         branchOf(domain, input.source_ref);
         branchOf(domain, input.target_ref);
         proposalCounter += 1;
-        const detail = {
+        const detail: ProposalDetail = {
           id: String(proposalCounter),
           title: input.title,
           description: input.description ?? '',
@@ -456,10 +458,20 @@ export function createMockApi(options: MockOptions): KeeperApi {
           status: 'open' as const,
           author: 'usr_mock',
           created_at: new Date().toISOString(),
+          updated_at: null,
           merged_revision: null,
+          policy: {},
           checks: [],
-          policies: [],
           reviews: [],
+          approval: {
+            protected: false,
+            required: 0,
+            approvals: 0,
+            approvers: [],
+            changes_requested: [],
+            satisfied: true,
+          },
+          attempt: null,
         };
         domain.proposals.set(detail.id, {
           detail,
@@ -470,7 +482,9 @@ export function createMockApi(options: MockOptions): KeeperApi {
         });
         return Promise.resolve(summary(detail));
       },
-      get: (id, proposal) => Promise.resolve(proposalOf(domainOf(id), proposal).detail),
+      // A copy, as over the wire: the review form changes the stored Proposal in place.
+      get: (id, proposal) =>
+        Promise.resolve(structuredClone(proposalOf(domainOf(id), proposal).detail)),
       diff: (id, proposal) => {
         const domain = domainOf(id);
         const { detail } = proposalOf(domain, proposal);
@@ -492,13 +506,20 @@ export function createMockApi(options: MockOptions): KeeperApi {
       review: (id, proposal, input) => {
         const state = proposalOf(domainOf(id), proposal);
         const review = {
+          id: `rev_${state.detail.reviews.length + 1}`,
           reviewer: 'usr_mock',
           verdict: input.verdict,
-          comment: input.comment ?? '',
+          comment: input.comment ?? null,
           at: new Date().toISOString(),
         };
         state.detail.reviews.push(review);
-        return Promise.resolve(review);
+        const approvers = state.detail.reviews.filter((r) => r.verdict === 'approve');
+        state.detail.approval = {
+          ...state.detail.approval,
+          approvals: approvers.length,
+          approvers: approvers.map((r) => r.reviewer),
+        };
+        return Promise.resolve({ review, approval: state.detail.approval });
       },
       merge: (id, proposal) => {
         const domain = domainOf(id);
