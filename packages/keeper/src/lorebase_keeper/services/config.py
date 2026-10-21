@@ -154,6 +154,12 @@ class ProposalSettings(SectionModel):
     max_resolutions: int = Field(
         default=1000, ge=1, description="Resolutions accepted by one bulk request."
     )
+    max_item_decisions: int = Field(
+        default=5000,
+        ge=1,
+        description="Extraction items one `items:decide` request may decide (listed or "
+        "selected by filter).",
+    )
 
 
 class SchemaInferenceSettings(SectionModel):

@@ -8,7 +8,9 @@ carry an ETag are marked `cacheable`.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -724,6 +726,49 @@ def resolve_conflicts(domain: str, proposal_id: str, body: m.ResolveManyIn) -> C
     )
 
 
+def list_proposal_items(
+    domain: str,
+    proposal_id: str,
+    *,
+    status: Sequence[m.ItemDecisionValue] | None = None,
+    kind: Sequence[str] | None = None,
+    type: Sequence[m.ItemType] | None = None,
+    min_confidence: float | None = None,
+    max_confidence: float | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.Page[m.ProposalItem]]:
+    """Items of an extraction Proposal; a filter given several values matches any of them."""
+    return Call(
+        "GET",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/items",
+        parse_model(m.Page[m.ProposalItem]),
+        params={
+            "status": list(status or ()),
+            "kind": list(kind or ()),
+            "type": list(type or ()),
+            "min_confidence": min_confidence,
+            "max_confidence": max_confidence,
+            "limit": limit,
+            "cursor": cursor,
+        },
+        safe=True,
+    )
+
+
+def decide_proposal_items(
+    domain: str, proposal_id: str, body: m.DecideItems
+) -> Call[m.ItemsDecided]:
+    """Safe to repeat: the same decisions leave the same state."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/proposals/{_seg(proposal_id)}/items:decide",
+        parse_model(m.ItemsDecided),
+        body=body.payload(),
+        safe=True,
+    )
+
+
 # Agents -----------------------------------------------------------------------------------
 
 
@@ -855,5 +900,72 @@ def list_source_runs(
         f"{_domain(domain)}/sources/{_seg(source)}/runs",
         parse_model(m.Page[m.SourceRun]),
         params={"limit": limit, "cursor": cursor},
+        safe=True,
+    )
+
+
+# Documents --------------------------------------------------------------------------------
+
+
+def upload_document(
+    domain: str,
+    file: str | os.PathLike[str] | bytes,
+    *,
+    filename: str | None = None,
+    extract: bool | None = None,
+    tiers: Sequence[int] | None = None,
+) -> Call[m.DocumentUploaded]:
+    """Upload a document: a path (read here, named after the file) or bytes with a `filename`.
+
+    Not marked safe: a retry may queue a second extraction job.
+    """
+    if isinstance(file, bytes):
+        if not filename:
+            raise ValueError("a filename is required to upload bytes")
+        name, content = filename, file
+    else:
+        path = Path(file)
+        name, content = filename or path.name, path.read_bytes()
+    form: dict[str, str] = {}
+    if extract is not None:
+        form["extract"] = "true" if extract else "false"
+    if tiers is not None:
+        form["tiers"] = json.dumps(list(tiers), separators=(",", ":"))
+    return Call(
+        "POST",
+        f"{_domain(domain)}/documents",
+        parse_model(m.DocumentUploaded),
+        files=(("file", name, content),),
+        form=form,
+    )
+
+
+def upload_document_url(domain: str, body: m.DocumentFromUrl) -> Call[m.DocumentUploaded]:
+    """Have the server fetch the document from an allowlisted URL. Not marked safe."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/documents",
+        parse_model(m.DocumentUploaded),
+        body=body.payload(),
+    )
+
+
+def list_documents(
+    domain: str, *, limit: int | None = None, cursor: str | None = None
+) -> Call[m.Page[m.Document]]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/documents",
+        parse_model(m.Page[m.Document]),
+        params={"limit": limit, "cursor": cursor},
+        safe=True,
+    )
+
+
+def get_document(domain: str, document_id: str) -> Call[m.DocumentDetail]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/documents/{_seg(document_id)}",
+        parse_model(m.DocumentDetail),
         safe=True,
     )

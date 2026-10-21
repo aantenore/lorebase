@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 from lorebase_client import (
     AsyncLorebaseClient,
@@ -27,6 +29,7 @@ from lorebase_client import (
     UnavailableError,
     new_idempotency_key,
 )
+from lorebase_client import models as m
 
 BASE = "http://keeper.test"
 API = f"{BASE}/api/v1"
@@ -201,8 +204,6 @@ def test_booleans_and_repeated_parameters(http: respx.MockRouter, sleeps: Sleeps
 def test_request_models_are_validated_before_sending(
     http: respx.MockRouter, sleeps: Sleeps
 ) -> None:
-    from pydantic import ValidationError
-
     with make(sleeps) as client, pytest.raises(ValidationError):
         client.domains.create("Not A Slug")
     assert http.calls.call_count == 0
@@ -961,6 +962,219 @@ def test_sources_sync_and_runs(http: respx.MockRouter, sleeps: Sleeps) -> None:
     assert page.items[0].stats == {"counts": {"added": 2}}
     assert runs.calls[0].request.url.params["limit"] == "5"
     assert listed == ["srn_1"]
+
+
+DOCUMENT_ROW = {
+    "id": "doc_1",
+    "filename": "spec.txt",
+    "media_type": "text/plain",
+    "sha256": "ab" * 32,
+    "size": 5,
+    "text_sha256": None,
+    "metadata": {},
+    "created_at": "2026-10-01T08:00:00Z",
+    "created_by": "usr_1",
+}
+ITEM_ROW = {
+    "id": "itm_1",
+    "type": "link",
+    "seq": 1,
+    "decision": "pending",
+    "confidence": 0.9,
+    "tier": 1,
+    "model": "m",
+    "relation": "supplies",
+    "from": "S-1",
+    "to": "P-1",
+    "subject": {},
+    "evidence": None,
+    "match": None,
+    "edits": None,
+    "decided_by": None,
+    "decided_at": None,
+}
+
+
+def test_documents_upload_sends_multipart_and_is_not_retried(
+    http: respx.MockRouter, sleeps: Sleeps, tmp_path: Path
+) -> None:
+    answer = {"document": DOCUMENT_ROW, "duplicate": False, "job_id": 4}
+    route = http.post("/domains/supply/documents").respond(201, json=answer)
+    spec = tmp_path / "spec.txt"
+    spec.write_bytes(b"hello")
+    with make(sleeps) as client:
+        stored = client.documents.upload("supply", spec, extract=False, tiers=[0, 1])
+        client.documents.upload("supply", b"raw", filename="raw.bin")
+    assert stored.job_id == 4
+    assert stored.duplicate is False
+    named, raw = (c.request for c in route.calls)
+    assert named.headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert b'name="file"; filename="spec.txt"' in named.content
+    assert b"hello" in named.content
+    assert b'name="extract"\r\n\r\nfalse' in named.content
+    assert b'name="tiers"\r\n\r\n[0,1]' in named.content
+    assert b'filename="raw.bin"' in raw.content
+    assert b'name="extract"' not in raw.content
+    with make(sleeps) as client, pytest.raises(ValueError, match="filename"):
+        client.documents.upload("supply", b"raw")
+
+
+def test_documents_upload_is_not_repeated_after_a_read_failure(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    route = http.post("/domains/supply/documents").mock(side_effect=httpx.ReadTimeout("slow"))
+    with make(sleeps) as client, pytest.raises(LorebaseConnectionError):
+        client.documents.upload("supply", b"raw", filename="raw.bin")
+    assert route.call_count == 1
+
+
+def test_documents_upload_url_list_and_get(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    answer = {"document": DOCUMENT_ROW, "duplicate": True, "job_id": None}
+    upload = http.post("/domains/supply/documents").respond(200, json=answer)
+    listing = http.get("/domains/supply/documents").respond(
+        200, json={"items": [DOCUMENT_ROW], "next_cursor": None}
+    )
+    job = {
+        "id": "ext_1",
+        "status": "succeeded",
+        "model": "m",
+        "prompt_version": "v1",
+        "branch": "extraction/x",
+        "proposal_id": "prp_1",
+        "created_at": "2026-10-01T08:00:00Z",
+        "finished_at": None,
+        "usage": {},
+        "stats": {"items": 3},
+        "error": None,
+    }
+    http.get("/domains/supply/documents/doc_1").respond(
+        200, json={**DOCUMENT_ROW, "extraction_jobs": [job]}
+    )
+    with make(sleeps) as client:
+        again = client.documents.upload_url(
+            "supply", "https://example.test/a.pdf", extract=True, tiers=(2,)
+        )
+        page = client.documents.list("supply", limit=5)
+        listed = [d.id for d in client.documents.iterate("supply")]
+        detail = client.documents.get("supply", "doc_1")
+    assert again.duplicate is True
+    assert json.loads(upload.calls.last.request.content) == {
+        "url": "https://example.test/a.pdf",
+        "extract": True,
+        "tiers": [2],
+    }
+    assert page.items[0].filename == "spec.txt"
+    assert listing.calls[0].request.url.params["limit"] == "5"
+    assert listed == ["doc_1"]
+    assert detail.extraction_jobs[0].proposal_id == "prp_1"
+
+
+async def test_async_documents_upload_and_decide(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    upload = http.post("/domains/supply/documents").respond(
+        201, json={"document": DOCUMENT_ROW, "duplicate": False, "job_id": None}
+    )
+    decided = {
+        "proposal_id": "prp_1",
+        "title": "Extraction",
+        "checks": {},
+        "items": [ITEM_ROW],
+        "materialized": {"revision": None, "changes": 0, "applied": 0, "skipped": {}},
+    }
+    decide = http.post("/domains/supply/proposals/prp_1/items:decide").respond(200, json=decided)
+    async with amake(sleeps) as client:
+        stored = await client.documents.upload("supply", b"raw", filename="raw.bin")
+        result = await client.proposals.decide_items(
+            "supply", "prp_1", [m.ItemDecision(item="itm_1", decision="accepted")]
+        )
+    assert stored.document.id == "doc_1"
+    assert b'filename="raw.bin"' in upload.calls.last.request.content
+    assert result.items[0].from_key == "S-1"
+    assert json.loads(decide.calls.last.request.content) == {
+        "decisions": [{"item": "itm_1", "decision": "accepted"}]
+    }
+
+
+def test_proposal_items_filters_and_pages(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.get("/domains/supply/proposals/prp_1/items").mock(
+        side_effect=[
+            httpx.Response(200, json={"items": [ITEM_ROW], "next_cursor": "c2"}),
+            httpx.Response(200, json={"items": [{**ITEM_ROW, "id": "itm_2"}], "next_cursor": None}),
+        ]
+    )
+    with make(sleeps) as client:
+        listed = list(
+            client.proposals.iterate_items(
+                "supply",
+                "prp_1",
+                status=["pending", "rejected"],
+                kind=["supplies"],
+                type=["link"],
+                min_confidence=0.5,
+                max_confidence=1.01,
+                page_size=1,
+            )
+        )
+    assert [i.id for i in listed] == ["itm_1", "itm_2"]
+    assert listed[0].from_key == "S-1"
+    assert listed[0].to_key == "P-1"
+    first = route.calls[0].request.url
+    assert first.params.get_list("status") == ["pending", "rejected"]
+    assert first.params.get_list("kind") == ["supplies"]
+    assert first.params.get_list("type") == ["link"]
+    assert first.params["min_confidence"] == "0.5"
+    assert first.params["max_confidence"] == "1.01"
+    assert first.params["limit"] == "1"
+    assert route.calls[1].request.url.params["cursor"] == "c2"
+
+
+def test_proposal_items_without_filters_sends_none(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.get("/domains/supply/proposals/prp_1/items").respond(
+        200, json={"items": [], "next_cursor": None}
+    )
+    with make(sleeps) as client:
+        client.proposals.items("supply", "prp_1")
+    assert dict(route.calls.last.request.url.params) == {}
+
+
+def test_proposal_decide_items_sends_decisions_and_selection(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    decided = {
+        "proposal_id": "prp_1",
+        "title": "Extraction",
+        "checks": {"merge": {"conflicts": 0}},
+        "items": [{**ITEM_ROW, "decision": "accepted"}],
+        "materialized": {
+            "revision": "aa",
+            "changes": 2,
+            "applied": 1,
+            "skipped": {"itm_9": "stale"},
+        },
+    }
+    route = http.post("/domains/supply/proposals/prp_1/items:decide").respond(200, json=decided)
+    with make(sleeps) as client:
+        result = client.proposals.decide_items(
+            "supply",
+            "prp_1",
+            [
+                m.ItemDecision(item="itm_1", decision="rejected", edits={}),
+                {"item": "itm_2", "decision": "accepted"},
+            ],
+            where={"status": ["pending"], "min_confidence": 0.9},
+            decision="accepted",
+        )
+    assert json.loads(route.calls.last.request.content) == {
+        "decisions": [
+            {"item": "itm_1", "decision": "rejected", "edits": {}},
+            {"item": "itm_2", "decision": "accepted"},
+        ],
+        "where": {"status": ["pending"], "min_confidence": 0.9},
+        "decision": "accepted",
+    }
+    assert result.materialized.skipped == {"itm_9": "stale"}
+    assert result.items[0].decision == "accepted"
+    with make(sleeps) as client, pytest.raises(ValidationError):
+        client.proposals.decide_items("supply", "prp_1", where={"status": ["done"]})
 
 
 def test_schema_inference_from_postgres_and_files(http: respx.MockRouter, sleeps: Sleeps) -> None:

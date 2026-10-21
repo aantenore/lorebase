@@ -17,6 +17,7 @@ from lorebase_keeper.routes import (
     domains,
     events,
     operations,
+    proposal_items,
     proposals,
     read,
     revisions,
@@ -40,6 +41,7 @@ def domain_routers() -> list[APIRouter]:
         sources.router,
         documents.router,
         events.router,  # `/branches/{branch:path}/events` and `/changes` before the catch-all
+        proposal_items.router,
         proposals.router,
         revisions.router,  # `/branches/{branch:path}/log` before the branch catch-all
         branches.router,

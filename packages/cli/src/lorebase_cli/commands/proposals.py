@@ -1,4 +1,4 @@
-"""`proposal create|list|get|review|merge|close|conflicts|resolve`: Proposals between branches."""
+"""`proposal create|list|get|review|merge|close|conflicts|resolve|items|decide`: Proposals."""
 
 from __future__ import annotations
 
@@ -35,6 +35,15 @@ CONFLICT_COLUMNS = [
     Column("where", "partition"),
     Column("key", "key"),
     Column("message", "message"),
+]
+ITEM_COLUMNS = [
+    Column("id", "id"),
+    Column("type", "type"),
+    Column("decision", "decision"),
+    Column("confidence", "confidence"),
+    Column("kind", "target"),
+    Column("key", "key"),
+    Column("attribute", "attribute"),
 ]
 
 
@@ -323,3 +332,145 @@ def _resolutions(file: str) -> list[dict[str, Any]]:
     if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
         raise CliError("the resolutions file is a JSON array of objects")
     return parsed
+
+
+@proposal_app.command("items")
+def proposal_items(
+    ctx: typer.Context,
+    proposal_id: ProposalArg,
+    status: Annotated[
+        list[str] | None,
+        typer.Option("--status", help="pending, accepted or rejected (repeatable)."),
+    ] = None,
+    kind: Annotated[
+        list[str] | None, typer.Option("--kind", help="Kind or Relation (repeatable).")
+    ] = None,
+    item_type: Annotated[
+        list[str] | None,
+        typer.Option("--type", help="record, value or link (repeatable)."),
+    ] = None,
+    min_confidence: Annotated[
+        float | None, typer.Option("--min-confidence", min=0, max=1, help="Lowest confidence.")
+    ] = None,
+    max_confidence: Annotated[
+        float | None,
+        typer.Option("--max-confidence", min=0, max=1.01, help="Confidence below this."),
+    ] = None,
+    domain: DomainOpt = None,
+    limit: LimitOpt = None,
+    everything: AllOpt = False,
+    json_out: JsonOpt = False,
+) -> None:
+    """List the items an extraction Proposal proposes, in Proposal order."""
+    app = app_of(ctx, json_out)
+    items, more = app.take(
+        app.client().proposals.iterate_items(
+            app.domain(domain),
+            proposal_id,
+            status=_choices(status, m.ItemDecisionValue, "--status"),
+            kind=kind,
+            type=_choices(item_type, m.ItemType, "--type"),
+            min_confidence=min_confidence,
+            max_confidence=max_confidence,
+        ),
+        limit,
+        everything,
+    )
+    app.out.emit(
+        items,
+        lambda: app.out.table(
+            [{**i.model_dump(), "target": i.kind or i.relation} for i in items], ITEM_COLUMNS
+        ),
+    )
+    if more:
+        app.note_truncated(len(items))
+
+
+@proposal_app.command("decide")
+def proposal_decide(
+    ctx: typer.Context,
+    proposal_id: ProposalArg,
+    accept: Annotated[
+        list[str] | None, typer.Option("--accept", help="Item id to accept (repeatable).")
+    ] = None,
+    reject: Annotated[
+        list[str] | None, typer.Option("--reject", help="Item id to reject (repeatable).")
+    ] = None,
+    where_status: Annotated[
+        list[str] | None,
+        typer.Option("--where-status", help="Decide every item in this status (repeatable)."),
+    ] = None,
+    where_kind: Annotated[
+        list[str] | None,
+        typer.Option("--where-kind", help="Decide every item of this Kind or Relation."),
+    ] = None,
+    where_type: Annotated[
+        list[str] | None,
+        typer.Option("--where-type", help="Decide every item of this type."),
+    ] = None,
+    where_min_confidence: Annotated[
+        float | None,
+        typer.Option("--where-min-confidence", min=0, max=1, help="Only items from this."),
+    ] = None,
+    where_max_confidence: Annotated[
+        float | None,
+        typer.Option("--where-max-confidence", min=0, max=1.01, help="Only items below this."),
+    ] = None,
+    decision: Annotated[
+        str | None,
+        typer.Option("--decision", help="pending, accepted or rejected, for the --where-* items."),
+    ] = None,
+    domain: DomainOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Accept or reject items, by id and or by filter; the extraction branch is rebuilt."""
+    selection = m.ItemSelection(
+        status=_choices(where_status, m.ItemDecisionValue, "--where-status"),
+        kind=where_kind,
+        type=_choices(where_type, m.ItemType, "--where-type"),
+        min_confidence=where_min_confidence,
+        max_confidence=where_max_confidence,
+    )
+    filtered = bool(selection.payload())
+    chosen = _choices([decision] if decision else None, m.ItemDecisionValue, "--decision")
+    if filtered != (chosen is not None):
+        raise CliError("--decision and the --where-* filters go together")
+    decisions = [
+        *(m.ItemDecision(item=item, decision="accepted") for item in accept or []),
+        *(m.ItemDecision(item=item, decision="rejected") for item in reject or []),
+    ]
+    if not decisions and not filtered:
+        raise CliError("give --accept or --reject items, or --decision with --where-* filters")
+    app = app_of(ctx, json_out)
+    decided = app.client().proposals.decide_items(
+        app.domain(domain),
+        proposal_id,
+        decisions,
+        where=selection if filtered else None,
+        decision=chosen[0] if chosen else None,
+    )
+    done = decided.materialized
+    app.out.emit(
+        decided,
+        lambda: app.out.pairs(
+            [
+                ("proposal", decided.proposal_id),
+                ("title", decided.title),
+                ("items decided", len(decided.items)),
+                ("revision", done.revision),
+                ("changes", done.changes),
+                ("applied", done.applied),
+                ("skipped", [f"{item}: {why}" for item, why in done.skipped.items()]),
+            ]
+        ),
+    )
+
+
+def _choices(values: list[str] | None, allowed: Any, option: str) -> list[Any] | None:
+    """`values` checked against the members of a Literal type."""
+    if not values:
+        return None
+    wrong = [v for v in values if v not in get_args(allowed)]
+    if wrong:
+        raise CliError(f"{option}: unknown {wrong[0]!r}, use {', '.join(get_args(allowed))}")
+    return values

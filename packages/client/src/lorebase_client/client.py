@@ -7,7 +7,7 @@
 
 Resources group the endpoints (`domains`, `branches`, `tags`, `schema`, `operations`, `records`,
 `revisions`, `api_keys`, `grants`, `principals`, `audit`, `proposals`, `agents`, `webhooks`,
-`sources`).
+`sources`, `documents`).
 Every list endpoint has a `list` method (one page) and an `iterate` method (all items; pages
 are fetched on demand). Errors
 raise subclasses of `LorebaseError`. The request layer is shared with `AsyncLorebaseClient`
@@ -16,6 +16,7 @@ raise subclasses of `LorebaseError`. The request layer is shared with `AsyncLore
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import TracebackType
@@ -96,6 +97,7 @@ class LorebaseClient:
         self.agents = Agents(self)
         self.webhooks = Webhooks(self)
         self.sources = Sources(self)
+        self.documents = Documents(self)
 
     def close(self) -> None:
         self._http.close()
@@ -954,6 +956,81 @@ class Proposals(_Resource):
         )
         return self._c.send(ep.resolve_conflicts(domain, proposal_id, body))
 
+    def items(
+        self,
+        domain: str,
+        proposal_id: str,
+        *,
+        status: Sequence[m.ItemDecisionValue] | None = None,
+        kind: Sequence[str] | None = None,
+        type: Sequence[m.ItemType] | None = None,
+        min_confidence: float | None = None,
+        max_confidence: float | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.Page[m.ProposalItem]:
+        """One page of the items of an extraction Proposal; a filter given several values
+        matches any of them."""
+        return self._c.send(
+            ep.list_proposal_items(
+                domain,
+                proposal_id,
+                status=status,
+                kind=kind,
+                type=type,
+                min_confidence=min_confidence,
+                max_confidence=max_confidence,
+                limit=limit,
+                cursor=cursor,
+            )
+        )
+
+    def iterate_items(
+        self,
+        domain: str,
+        proposal_id: str,
+        *,
+        status: Sequence[m.ItemDecisionValue] | None = None,
+        kind: Sequence[str] | None = None,
+        type: Sequence[m.ItemType] | None = None,
+        min_confidence: float | None = None,
+        max_confidence: float | None = None,
+        page_size: int | None = None,
+    ) -> Iterator[m.ProposalItem]:
+        call = ep.list_proposal_items(
+            domain,
+            proposal_id,
+            status=status,
+            kind=kind,
+            type=type,
+            min_confidence=min_confidence,
+            max_confidence=max_confidence,
+            limit=page_size,
+        )
+        return self._c.iterate(call)
+
+    def decide_items(
+        self,
+        domain: str,
+        proposal_id: str,
+        decisions: Sequence[m.ItemDecision | JsonObject] = (),
+        *,
+        where: m.ItemSelection | JsonObject | None = None,
+        decision: m.ItemDecisionValue | None = None,
+    ) -> m.ItemsDecided:
+        """Record decisions by item, and or one `decision` for every item matching `where`;
+        the extraction branch and the Proposal are refreshed."""
+        body = m.DecideItems(
+            decisions=[
+                d if isinstance(d, m.ItemDecision) else m.ItemDecision(**d) for d in decisions
+            ],
+            where=where
+            if where is None or isinstance(where, m.ItemSelection)
+            else m.ItemSelection(**where),
+            decision=decision,
+        )
+        return self._c.send(ep.decide_proposal_items(domain, proposal_id, body))
+
 
 class Agents(_Resource):
     def context(self, domain: str, request: m.ContextRequest | JsonObject) -> m.ContextPack:
@@ -1042,3 +1119,52 @@ class Sources(_Resource):
         self, domain: str, source: str, *, page_size: int | None = None
     ) -> Iterator[m.SourceRun]:
         return self._c.iterate(ep.list_source_runs(domain, source, limit=page_size))
+
+
+class Documents(_Resource):
+    def upload(
+        self,
+        domain: str,
+        file: str | os.PathLike[str] | bytes,
+        *,
+        filename: str | None = None,
+        extract: bool | None = None,
+        tiers: Sequence[int] | None = None,
+    ) -> m.DocumentUploaded:
+        """Upload a document: a path (named after the file) or bytes with a `filename`.
+
+        `extract` (server default: true) queues an extraction job on the given `tiers`.
+        """
+        call = ep.upload_document(domain, file, filename=filename, extract=extract, tiers=tiers)
+        return self._c.send(call)
+
+    def upload_url(
+        self,
+        domain: str,
+        url: str,
+        *,
+        filename: str | None = None,
+        extract: bool | None = None,
+        tiers: Sequence[int] | None = None,
+    ) -> m.DocumentUploaded:
+        """Have the server fetch the document from an allowlisted URL."""
+        body = m.DocumentFromUrl(
+            url=url,
+            filename=filename,
+            extract=extract,
+            tiers=None if tiers is None else list(tiers),
+        )
+        return self._c.send(ep.upload_document_url(domain, body))
+
+    def list(
+        self, domain: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> m.Page[m.Document]:
+        """Documents of the Domain, newest first."""
+        return self._c.send(ep.list_documents(domain, limit=limit, cursor=cursor))
+
+    def iterate(self, domain: str, *, page_size: int | None = None) -> Iterator[m.Document]:
+        return self._c.iterate(ep.list_documents(domain, limit=page_size))
+
+    def get(self, domain: str, document_id: str) -> m.DocumentDetail:
+        """A document with its extraction jobs."""
+        return self._c.send(ep.get_document(domain, document_id))

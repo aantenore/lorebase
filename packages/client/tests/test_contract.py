@@ -21,6 +21,10 @@ from lorebase_client import models as m
 
 DOCUMENT = json.loads((Path(__file__).resolve().parents[3] / "docs" / "openapi.json").read_text())
 SCHEMAS: dict[str, Any] = DOCUMENT["components"]["schemas"]
+# The JSON body of the document upload is declared inline, not as a component.
+SCHEMAS["DocumentFromUrl"] = DOCUMENT["paths"]["/api/v1/domains/{domain_id}/documents"]["post"][
+    "requestBody"
+]["content"]["application/json"]["schema"]
 PREFIX = "/api/v1"
 
 RESPONSES: dict[type[m.Model], str] = {
@@ -93,6 +97,15 @@ RESPONSES: dict[type[m.Model], str] = {
     m.SyncQueued: "SyncQueued",
     m.SourceRun: "SourceRunOut",
     m.Page[m.SourceRun]: "Page_SourceRunOut_",
+    m.Document: "DocumentOut",
+    m.ExtractionJob: "ExtractionJobOut",
+    m.DocumentDetail: "DocumentDetailOut",
+    m.DocumentUploaded: "DocumentUploaded",
+    m.Page[m.Document]: "Page_DocumentOut_",
+    m.ProposalItem: "ItemOut",
+    m.Page[m.ProposalItem]: "Page_ItemOut_",
+    m.MaterializedItems: "MaterializedOut",
+    m.ItemsDecided: "DecideOut",
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
     m.DomainCreate: "DomainCreate",
@@ -122,6 +135,10 @@ REQUESTS: dict[type[m.RequestModel], str] = {
     m.ContextRequest: "ContextRequest",
     m.CreateWebhook: "CreateWebhook",
     m.SyncRequest: "SyncRequest",
+    m.DocumentFromUrl: "DocumentFromUrl",
+    m.ItemSelection: "ItemSelection",
+    m.ItemDecision: "ItemDecisionIn",
+    m.DecideItems: "DecideIn",
 }
 # Members the server accepts through a Python-only alias or computes; none today.
 IGNORED: dict[str, set[str]] = {}
@@ -177,6 +194,10 @@ def test_enumerations_the_client_checks_match_the_document() -> None:
         (m.ReviewVerdict, "ReviewVerdict"),
     ]:
         assert set(SCHEMAS[name]["enum"]) == set(get_args(literal)), name
+    assert set(SCHEMAS["ItemOut"]["properties"]["decision"]["enum"]) == set(
+        get_args(m.ItemDecisionValue)
+    )
+    assert set(SCHEMAS["ItemOut"]["properties"]["type"]["enum"]) == set(get_args(m.ItemType))
     assert set(SCHEMAS["CheckOut"]["properties"]["status"]["enum"]) == set(get_args(m.CheckStatus))
     assert set(SCHEMAS["ConflictOut"]["properties"]["status"]["enum"]) == set(
         get_args(m.ConflictStatus)
@@ -262,6 +283,12 @@ def sample_calls() -> list[Any]:
         ep.delete_webhook(d, "w"),
         ep.sync_source(d, "erp.parts", m.SyncRequest()),
         ep.list_source_runs(d, "erp.parts"),
+        ep.upload_document(d, b"x", filename="a.txt"),
+        ep.upload_document_url(d, m.DocumentFromUrl(url="https://example.test/a.pdf")),
+        ep.list_documents(d),
+        ep.get_document(d, "doc_1"),
+        ep.list_proposal_items(d, "prp_1", status=["pending"], min_confidence=0.5),
+        ep.decide_proposal_items(d, "prp_1", m.DecideItems()),
     ]
 
 

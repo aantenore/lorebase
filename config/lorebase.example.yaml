@@ -230,6 +230,7 @@ keeper:
     attempt_retention: 5         # merge attempts kept per Proposal (merged ones always kept)
     preview_on_create: true      # compute the merge preview (Conflict count) on creation
     max_resolutions: 1000        # resolutions accepted by one bulk request
+    max_item_decisions: 5000     # extraction items one items:decide request may decide
   documents:                     # document intake for extraction (docs/extraction.md)
     max_bytes: 20971520          # largest document (20 MiB); the upload route allows this much
     multipart_overhead_bytes: 65536  # plus this, whatever limits.max_request_body_bytes says

@@ -4932,6 +4932,373 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/items": {
+      "get": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "List the items of an extraction Proposal",
+        "description": "Items in proposal order (Records, values, Links), with evidence and match details.",
+        "operationId": "list_items_api_v1_domains__domain_id__proposals__proposal_id__items_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "pending",
+                      "accepted",
+                      "rejected"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Kind or Relation api names (or ids).",
+              "title": "Kind"
+            },
+            "description": "Kind or Relation api names (or ids)."
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "record",
+                      "value",
+                      "link"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Confidence"
+            }
+          },
+          {
+            "name": "max_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.01,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Confidence"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ItemOut_"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or Proposal not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not an extraction Proposal, or not open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, unknown items, invalid edits, or the branch rejects the accepted items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The extraction branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/proposals/{proposal_id}/items:decide": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Accept or reject extraction items",
+        "description": "Record decisions, re-materialize the extraction branch and refresh the Proposal.",
+        "operationId": "decide_api_v1_domains__domain_id__proposals__proposal_id__items_decide_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecideOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or Proposal not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not an extraction Proposal, or not open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, unknown items, invalid edits, or the branch rejects the accepted items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The extraction branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/proposals": {
       "post": {
         "tags": [
@@ -9869,6 +10236,86 @@
         "type": "object",
         "title": "CreatedOut"
       },
+      "DecideIn": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ItemDecisionIn"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ItemSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "accepted",
+                  "rejected"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision",
+            "description": "Decision for `where`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DecideIn",
+        "description": "Decisions by item, and or one decision for every item matching `where`."
+      },
+      "DecideOut": {
+        "properties": {
+          "proposal_id": {
+            "type": "string",
+            "title": "Proposal Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "checks": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Checks",
+            "description": "The `extraction` summary and `merge` preview."
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemOut"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "The decided items."
+          },
+          "materialized": {
+            "$ref": "#/components/schemas/MaterializedOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "proposal_id",
+          "title",
+          "checks",
+          "items",
+          "materialized"
+        ],
+        "title": "DecideOut"
+      },
       "DerivedCondition": {
         "properties": {
           "derived": {
@@ -10953,6 +11400,352 @@
         "title": "Include",
         "description": "Neighbors to return with each Record, through one Relation."
       },
+      "ItemDecisionIn": {
+        "properties": {
+          "item": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Item"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "rejected"
+            ],
+            "title": "Decision"
+          },
+          "edits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edits",
+            "description": "Reviewer edits; omitted keeps the stored ones, {} clears."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "item",
+          "decision"
+        ],
+        "title": "ItemDecisionIn"
+      },
+      "ItemOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "record",
+              "value",
+              "link"
+            ],
+            "title": "Type"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "rejected"
+            ],
+            "title": "Decision"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "description": "Kind api name (record, value items)."
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation",
+            "description": "Relation api name (link items)."
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Attribute api name (value items)."
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "current": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "The value on the target branch."
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To"
+          },
+          "values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Values",
+            "description": "Proposed values by Attribute api name, edits applied."
+          },
+          "subject": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Subject",
+            "description": "What the item proposes, by ids, before edits."
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match"
+          },
+          "edits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edits"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "not_applied": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Applied",
+            "description": "Why an accepted item is not on the branch."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "seq",
+          "decision",
+          "confidence",
+          "tier",
+          "model",
+          "subject",
+          "evidence",
+          "match",
+          "edits",
+          "decided_by",
+          "decided_at"
+        ],
+        "title": "ItemOut"
+      },
+      "ItemSelection": {
+        "properties": {
+          "status": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "accepted",
+                "rejected"
+              ]
+            },
+            "type": "array",
+            "title": "Status"
+          },
+          "kind": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kind",
+            "description": "Kind or Relation api names (or ids)."
+          },
+          "type": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "record",
+                "value",
+                "link"
+              ]
+            },
+            "type": "array",
+            "title": "Type"
+          },
+          "min_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Confidence"
+          },
+          "max_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.01,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Confidence",
+            "description": "Exclusive upper bound."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ItemSelection",
+        "description": "Items matching every given filter."
+      },
       "JsonValue": {},
       "LineageOut": {
         "properties": {
@@ -11312,6 +12105,44 @@
         ],
         "title": "Materialization",
         "description": "Branch materialization mode (design 6.11)."
+      },
+      "MaterializedOut": {
+        "properties": {
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "changes": {
+            "type": "integer",
+            "title": "Changes"
+          },
+          "applied": {
+            "type": "integer",
+            "title": "Applied"
+          },
+          "skipped": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "changes",
+          "applied",
+          "skipped"
+        ],
+        "title": "MaterializedOut"
       },
       "MergeIn": {
         "properties": {
@@ -11970,6 +12801,33 @@
           "items"
         ],
         "title": "Page[GrantOut]"
+      },
+      "Page_ItemOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "Page[ItemOut]"
       },
       "Page_PrincipalOut_": {
         "properties": {
