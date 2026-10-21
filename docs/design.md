@@ -1168,7 +1168,7 @@ request -> authenticate -> resolve principal and grants
         -> audit entry, outbox events, invocation record
 ```
 
-Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run`), the computed edits, violations if any, and the Revision or Proposal id.
+Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run`), the computed edits, violations if any, and the Revision or Proposal id. A caller that names a `task` gets the Proposal in one 202 response: the Operation runs on `agent/{principal}/{task}`, the Proposal is opened or updated and, where the Domain allows it for the caller's role, merged ([agents](agents.md#writes-that-need-review)).
 
 ### 10.2 RBAC
 
