@@ -220,7 +220,7 @@ describe('Start from data: applying', () => {
     });
     // The Branch checks the change against its Records and refuses what they break.
     expect(
-      await within(issues).findByText(/3 Records violate Plant.plant_type: A value is required/),
+      await within(issues).findByText(/6 Records violate Plant.plant_type: A value is required/),
     ).toBeInTheDocument();
     expect(within(change).getByText('main reports violations.')).toBeInTheDocument();
     expect(within(change).getByRole('button', { name: /^Apply as schema change/ })).toBeDisabled();

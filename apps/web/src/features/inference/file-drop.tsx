@@ -3,14 +3,34 @@ import { Button } from '@/ui/button';
 import { cn } from '@/ui/cn';
 import { addFiles, formatBytes, type Rejected, type UploadCaps } from './files';
 
+/** What the drop zone says; the defaults are those of the CSV upload of "Start from data". */
+export interface FileDropWording {
+  /** Accessible name of the drop zone. */
+  zoneLabel: string;
+  /** Invitation above the button. */
+  prompt: string;
+  /** Accessible name of the hidden file input. */
+  inputLabel: string;
+  /** Sentence before the caps. */
+  note: string;
+}
+
+const CSV_WORDING: FileDropWording = {
+  zoneLabel: 'Drop zone for CSV files',
+  prompt: 'Drop CSV or TSV files here, or',
+  inputLabel: 'Upload CSV or TSV files',
+  note: 'The file name is the table name.',
+};
+
 export interface FileDropProps {
   files: File[];
   caps: UploadCaps;
   onChange: (files: File[]) => void;
+  wording?: FileDropWording;
 }
 
-/** Drop zone and file picker for the CSV files, with the caps stated and enforced. */
-export function FileDrop({ files, caps, onChange }: FileDropProps) {
+/** Drop zone and file picker, with the caps stated and enforced. */
+export function FileDrop({ files, caps, onChange, wording = CSV_WORDING }: FileDropProps) {
   const input = useRef<HTMLInputElement>(null);
   const hintId = useId();
   const [over, setOver] = useState(false);
@@ -34,7 +54,7 @@ export function FileDrop({ files, caps, onChange }: FileDropProps) {
     <div className="flex flex-col gap-3">
       <div
         role="group"
-        aria-label="Drop zone for CSV files"
+        aria-label={wording.zoneLabel}
         onDragOver={(event) => {
           event.preventDefault();
           setOver(true);
@@ -48,7 +68,7 @@ export function FileDrop({ files, caps, onChange }: FileDropProps) {
           over ? 'border-accent bg-surface-2' : 'border-line bg-surface',
         )}
       >
-        <p className="text-sm">Drop CSV or TSV files here, or</p>
+        <p className="text-sm">{wording.prompt}</p>
         <Button
           onClick={() => {
             input.current?.click();
@@ -61,7 +81,7 @@ export function FileDrop({ files, caps, onChange }: FileDropProps) {
           type="file"
           multiple
           hidden
-          aria-label="Upload CSV or TSV files"
+          aria-label={wording.inputLabel}
           aria-describedby={hintId}
           accept={caps.fileSuffixes.join(',')}
           onChange={(event) => {
@@ -70,9 +90,10 @@ export function FileDrop({ files, caps, onChange }: FileDropProps) {
           }}
         />
         <p id={hintId} className="text-xs text-muted">
-          The file name is the table name. Up to {caps.maxFiles} files,{' '}
-          {formatBytes(caps.maxFileBytes)} each and {formatBytes(caps.maxTotalBytes)} together (
-          {caps.fileSuffixes.join(', ')}).
+          {wording.note} Up to {caps.maxFiles} files, {formatBytes(caps.maxFileBytes)} each
+          {Number.isFinite(caps.maxTotalBytes) &&
+            ` and ${formatBytes(caps.maxTotalBytes)} together`}{' '}
+          ({caps.fileSuffixes.join(', ')}).
         </p>
       </div>
 

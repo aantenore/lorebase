@@ -1,10 +1,11 @@
+import type { ExtractionItem } from '../extraction-types';
+import type { MockDocument } from './sample/documents';
 import type {
   AutoResolution,
   BranchName,
   Conflict,
   Domain,
   ProposalDetail,
-  ProposalItem,
   RecordRef,
   Resolution,
   Revision,
@@ -48,13 +49,26 @@ export interface ProposalState {
   autoResolutions: AutoResolution[];
   /** Base, target and source heads, frozen once the merge Revision exists. */
   mergedHeads?: { base: RevisionId; ours: RevisionId; theirs: RevisionId };
-  items: ProposalItem[];
+  items: ExtractionItem[];
+  /** Set on extraction Proposals: what the extraction Branch is rebuilt from. */
+  extraction?: ExtractionState;
+}
+
+export interface ExtractionState {
+  /** The target Branch as it was when the items were proposed. */
+  base: BranchData;
+  /** Extraction Revisions made so far, for their ids. */
+  revisions: number;
+  /** Accepted items the last materialization left out, with the reason. */
+  skipped: Record<string, string>;
 }
 
 export interface DomainData {
   domain: Domain;
   branches: Map<BranchName, BranchData>;
   proposals: Map<string, ProposalState>;
+  /** The document library; Domains without one have none. */
+  documents?: MockDocument[];
 }
 
 export interface MockSeed {

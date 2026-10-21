@@ -1,5 +1,7 @@
 import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import type { PrincipalListParams } from './admin-types';
+import { useConfig } from '@/config/context';
+import type { DocumentDetail, ExtractionItem } from './extraction-types';
 import { useKeeperApi } from './provider';
 import type { SourceRunListParams } from './sources-types';
 import type {
@@ -65,6 +67,11 @@ export const keys = {
   proposalDiff: (domain: DomainId, id: string) => ['keeper', 'proposal-diff', domain, id] as const,
   conflicts: (domain: DomainId, id: string) => ['keeper', 'conflicts', domain, id] as const,
   revision: (domain: DomainId, id: RevisionId) => ['keeper', 'revision', domain, id] as const,
+  documents: (domain: DomainId) => ['keeper', 'documents', domain] as const,
+  document: (domain: DomainId, id: string) => ['keeper', 'document', domain, id] as const,
+  documentText: (domain: DomainId, id: string) => ['keeper', 'document-text', domain, id] as const,
+  proposalItems: (domain: DomainId, id: string) =>
+    ['keeper', 'proposal-items', domain, id] as const,
   sourceRuns: (domain: DomainId, params: SourceRunListParams | undefined) =>
     ['keeper', 'source-runs', domain, params ?? null] as const,
   apiKeys: (domain: DomainId) => ['keeper', 'api-keys', domain] as const,
@@ -309,5 +316,71 @@ export function useAuditLog(domain: DomainId, pageSize: number) {
     queryFn: ({ pageParam }) =>
       api.admin.audit.list(domain, { limit: pageSize, cursor: pageParam }),
     getNextPageParam: (last) => last.next_cursor,
+  });
+}
+
+// ------------------------------------------------------ Documents and extraction
+
+/** Whether the extraction job of a document is still on its way. */
+export const jobIsActive = (detail: DocumentDetail | undefined): boolean =>
+  detail?.extraction_jobs.some((job) => job.status === 'queued' || job.status === 'running') ??
+  false;
+
+/** The library, newest first, one page more each time `fetchNextPage` is called. */
+export function useDocuments(domain: DomainId) {
+  const api = useKeeperApi();
+  const { pageSize } = useConfig();
+  return useInfiniteQuery({
+    queryKey: keys.documents(domain),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => api.documents.list(domain, { limit: pageSize, cursor: pageParam }),
+    getNextPageParam: (last) => last.next_cursor,
+    // The library needs a Domain-wide `document.read`; asking again does not change a 403.
+    retry: false,
+  });
+}
+
+/** A document with its jobs; asks again every `jobPollMs` while a job is queued or running. */
+export function useDocument(domain: DomainId, id: string) {
+  const api = useKeeperApi();
+  const { documents } = useConfig();
+  return useQuery({
+    queryKey: keys.document(domain, id),
+    queryFn: () => api.documents.get(domain, id),
+    refetchInterval: (query) =>
+      documents.jobPollMs > 0 && jobIsActive(query.state.data) ? documents.jobPollMs : false,
+  });
+}
+
+/** The parsed text of a document, or `null` when this Keeper does not serve it. */
+export function useDocumentText(domain: DomainId, id: string) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.documentText(domain, id),
+    queryFn: () => api.documents.text(domain, id),
+    staleTime: Infinity,
+  });
+}
+
+/** Every extraction item of a Proposal (all pages), in proposal order. */
+export function useProposalItems(domain: DomainId, proposal: string, enabled = true) {
+  const api = useKeeperApi();
+  const { extraction } = useConfig();
+  return useQuery({
+    queryKey: keys.proposalItems(domain, proposal),
+    enabled,
+    queryFn: async (): Promise<ExtractionItem[]> => {
+      const items: ExtractionItem[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = await api.proposals.items(domain, proposal, {
+          limit: extraction.itemsPageSize,
+          cursor,
+        });
+        items.push(...page.items);
+        cursor = page.next_cursor;
+      } while (cursor !== null);
+      return items;
+    },
   });
 }

@@ -8,7 +8,6 @@ import type {
   CreateDomainInput,
   CreateProposalInput,
   CreateWebhookInput,
-  DecideItemsInput,
   DiffParams,
   DiffResponse,
   Domain,
@@ -27,7 +26,6 @@ import type {
   PageParams,
   Proposal,
   ProposalDetail,
-  ProposalItem,
   ProposalListParams,
   Query,
   QueryResponse,
@@ -63,6 +61,16 @@ import type {
   Principal,
   PrincipalListParams,
 } from './admin-types';
+import type {
+  DecideItemsInput,
+  DecideItemsResult,
+  DocumentDetail,
+  DocumentInfo,
+  DocumentUploaded,
+  ExtractionItem,
+  ItemListParams,
+  UploadDocumentInput,
+} from './extraction-types';
 import type { InferRequest, SchemaProposalDraft } from './inference-types';
 import type { SourceRun, SourceRunListParams, SourceSyncQueued } from './sources-types';
 
@@ -155,12 +163,42 @@ export interface KeeperApi {
      */
     merge(domain: DomainId, proposal: string): Promise<MergeOutcome>;
     close(domain: DomainId, proposal: string): Promise<Proposal>;
-    items(domain: DomainId, proposal: string, params?: PageParams): Promise<Page<ProposalItem>>;
+    /**
+     * Extraction items of a Proposal in proposal order (`GET .../items`), filtered by status,
+     * Kind or Relation, type and confidence. Empty for a Proposal that has none.
+     */
+    items(
+      domain: DomainId,
+      proposal: string,
+      params?: ItemListParams,
+    ): Promise<Page<ExtractionItem>>;
+    /**
+     * Accepts, rejects or resets items, one by one with edits or all that match a filter
+     * (`POST .../items:decide`). Keeper re-materializes the extraction Branch; a set of accepted
+     * items the Branch cannot take is a 422 `ValidationError` and nothing changes.
+     */
     decideItems(
       domain: DomainId,
       proposal: string,
       input: DecideItemsInput,
-    ): Promise<Page<ProposalItem>>;
+    ): Promise<DecideItemsResult>;
+  };
+
+  readonly documents: {
+    /** Newest first (`GET .../documents`). */
+    list(domain: DomainId, params?: PageParams): Promise<Page<DocumentInfo>>;
+    /** The document with its extraction jobs, newest first. */
+    get(domain: DomainId, document: string): Promise<DocumentDetail>;
+    /**
+     * Stores a document and queues its extraction (`POST .../documents`, multipart or a JSON
+     * URL). The same bytes twice answer with the stored document and `duplicate: true`.
+     */
+    upload(domain: DomainId, input: UploadDocumentInput): Promise<DocumentUploaded>;
+    /**
+     * The parsed text the item offsets index, or `null` when this Keeper does not serve it
+     * (the REST API has no route for it yet); the viewer then shows the evidence passages.
+     */
+    text(domain: DomainId, document: string): Promise<string | null>;
   };
 
   readonly conflicts: {

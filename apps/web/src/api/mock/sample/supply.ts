@@ -5,7 +5,6 @@ import type {
   Operation,
   ProposalDetail,
   ReviewVerdict,
-  ProposalItem,
 } from '../../types';
 import {
   attr,
@@ -19,7 +18,10 @@ import {
   trait,
 } from '../builders';
 import { digest, makeConflict } from '../conflicts';
+import { extractionCheck, seedBranch } from '../extraction';
 import type { BranchData, DomainData, ProposalState, SchemaBody } from '../state';
+import { supplyDocuments } from './documents';
+import { octoberItems, supplyItems } from './extraction';
 
 const DOMAIN = 'supply';
 
@@ -127,6 +129,13 @@ const contract = kind(
     attr('contract', 'contract_id', 'string', { required: true, unique: true }),
     attr('contract', 'title', 'string', { required: true, searchable: 'A' }),
     attr('contract', 'expiry_date', 'date', { indexed: true }),
+    attr('contract', 'start_date', 'date'),
+    attr('contract', 'annual_value', 'decimal(12,2)', { constraints: { min: 0 } }),
+    attr('contract', 'currency', 'string', { constraints: { pattern: '^[A-Z]{3}$' } }),
+    attr('contract', 'incoterm', 'enum', {
+      constraints: { enum_values: ['DAP', 'DDP', 'EXW', 'FCA'] },
+    }),
+    attr('contract', 'payment_terms_days', 'integer', { constraints: { min: 0 } }),
   ],
   {
     description: 'A framework agreement with a Supplier.',
@@ -275,6 +284,9 @@ function mainData(): BranchData {
     ['S-1004', 'Orlova Seals Sp. z o.o.', 'PL', 'Gliwice', '2', 48],
     ['S-1005', 'Tamura Precision KK', 'JP', 'Nagoya', '1', 20],
     ['S-1006', 'Valmora Hydraulics S.A.', 'ES', 'Bilbao', '3', 64],
+    ['S-1013', 'Wexrix Filtration Sp. z o.o.', 'PL', 'Wroclaw', '2', 12],
+    ['S-1019', 'Ulmton Castings S.L.', 'ES', 'Zaragoza', '3', 18],
+    ['S-1025', 'Kavvik Filtration A.S.', 'TR', 'Izmir', '2', 30],
   ];
   const parts: [string, string, string, number][] = [
     ['P-77812', 'Deep groove bearing 6204', 'bearing', 21],
@@ -285,6 +297,7 @@ function mainData(): BranchData {
     ['P-90311', 'O-ring kit', 'seal', 10],
     ['P-55120', 'Gearbox housing', 'casting', 56],
     ['P-66001', 'Proportional valve', 'valve', 42],
+    ['P-10033', 'Needle roller bearing NK25', 'bearing', 28],
   ];
   const supplies: [string, string, boolean][] = [
     ['P-77812', 'S-1001', true],
@@ -297,6 +310,7 @@ function mainData(): BranchData {
     ['P-55120', 'S-1003', true],
     ['P-66001', 'S-1006', true],
     ['P-66001', 'S-1005', false],
+    ['P-10033', 'S-1025', true],
   ];
   const sourcesPerPart = (number: string) => supplies.filter(([p]) => p === number).length;
 
@@ -340,6 +354,37 @@ function mainData(): BranchData {
         country: 'IT',
         city: 'Monza',
       }),
+      record('Plant', 'PL-12', {
+        plant_code: 'PL-12',
+        name: 'Ostrava Assembly',
+        country: 'CZ',
+        city: 'Ostrava',
+      }),
+      record('Plant', 'PL-14', {
+        plant_code: 'PL-14',
+        name: 'Dresden Assembly',
+        country: 'DE',
+        city: 'Dresden',
+      }),
+      record('Plant', 'PL-15', {
+        plant_code: 'PL-15',
+        name: 'Dresden Warehouse',
+        country: 'DE',
+        city: 'Dresden',
+      }),
+      record('Contract', 'C-3013', {
+        contract_id: 'C-3013',
+        title: 'Framework supply agreement C-3013 - Wexrix Filtration',
+        start_date: '2023-04-13',
+        expiry_date: '2026-04-12',
+        currency: 'PLN',
+      }),
+      record('Contract', 'C-3019', {
+        contract_id: 'C-3019',
+        title: 'Framework supply agreement C-3019 - Ulmton Castings',
+        expiry_date: '2026-02-09',
+        currency: 'EUR',
+      }),
       record('Contract', 'C-2231', {
         contract_id: 'C-2231',
         title: 'Brevik master supply agreement',
@@ -372,6 +417,8 @@ function mainData(): BranchData {
       link('feeds', ['Supplier', 'S-1004'], ['Plant', 'GLW']),
       link('feeds', ['Supplier', 'S-1005'], ['Plant', 'TRN']),
       link('feeds', ['Supplier', 'S-1006'], ['Plant', 'MNZ']),
+      link('with_supplier', ['Contract', 'C-3013'], ['Supplier', 'S-1013']),
+      link('with_supplier', ['Contract', 'C-3019'], ['Supplier', 'S-1019']),
       link('with_supplier', ['Contract', 'C-2231'], ['Supplier', 'S-1001']),
       link('with_supplier', ['Contract', 'C-2232'], ['Supplier', 'S-1002']),
       link('with_supplier', ['Contract', 'C-2233'], ['Supplier', 'S-1003']),
@@ -703,52 +750,8 @@ function proposal({ reviews = [], ...detail }: ProposalInput): ProposalDetail {
 }
 
 function proposals(): Map<string, ProposalState> {
-  const items: ProposalItem[] = [
-    [
-      'i1',
-      'C-2235',
-      'att_contract_expiry_date',
-      'This Agreement expires on 30 September 2027 unless renewed.',
-      [1280, 1342],
-      0.96,
-      'new',
-    ],
-    [
-      'i2',
-      'C-2235',
-      'att_contract_title',
-      'Orlova Seals sealing framework agreement',
-      [12, 52],
-      0.91,
-      'matched',
-    ],
-    [
-      'i3',
-      'C-2236',
-      'att_contract_expiry_date',
-      'Term ends 31 January 2028.',
-      [904, 930],
-      0.78,
-      'ambiguous',
-    ],
-    ['i4', 'C-2236', 'att_contract_title', 'Valmora hydraulics supply terms', [8, 40], 0.88, 'new'],
-  ].map(([item_id, element_key, attribute_id, quote, span, confidence, match]) => ({
-    item_id: item_id as string,
-    partition: 'Contract',
-    element_key: element_key as string,
-    attribute_id: attribute_id as string,
-    evidence: {
-      document_id: 'doc_contracts_oct',
-      page: 4,
-      span: span as [number, number],
-      quote: quote as string,
-    },
-    confidence: confidence as number,
-    match_status: match as ProposalItem['match_status'],
-    decision: 'pending',
-    decided_by: null,
-    decided_at: null,
-  }));
+  const october = octoberItems();
+  const extracted = supplyItems();
 
   const states: ProposalState[] = [
     {
@@ -800,12 +803,32 @@ function proposals(): Map<string, ProposalState> {
         checks: [
           { name: 'Schema validation', status: 'passed' },
           { name: 'Data consistency', status: 'passed' },
+          extractionCheck(october),
         ],
       }),
       conflicts: [],
       resolutions: [],
       autoResolutions: [],
-      items,
+      items: october,
+    },
+    {
+      detail: proposal({
+        id: '44',
+        title: 'Extract 4 documents: 13 item(s), 1 accepted, 11 pending',
+        description:
+          'Proposed from 4 document(s). Items by type: link 5, record 2, value 6. Review the items, then merge.',
+        source_ref: 'extract/job-44',
+        target_ref: 'main',
+        origin: 'extraction',
+        status: 'open',
+        author: 'svc_scribe',
+        created_at: '2026-10-20T08:01:12Z',
+        checks: [{ name: 'Schema validation', status: 'passed' }, extractionCheck(extracted)],
+      }),
+      conflicts: [],
+      resolutions: [],
+      autoResolutions: [],
+      items: extracted,
     },
     {
       detail: proposal({
@@ -863,6 +886,16 @@ function proposals(): Map<string, ProposalState> {
 
 export function buildSupplyDomain(): DomainData {
   const main = mainData();
+  const proposalStates = proposals();
+  const jobBranch = derivedBranch(main, [], () => undefined);
+  // Extraction Proposals rebuild their Branch from the accepted items over the main of now.
+  for (const id of ['42', '44']) {
+    const state = proposalStates.get(id);
+    if (state !== undefined)
+      state.extraction = { base: structuredClone(main), revisions: 0, skipped: {} };
+  }
+  const forty4 = proposalStates.get('44');
+  if (forty4 !== undefined) seedBranch(forty4, DOMAIN, jobBranch);
   return {
     domain: {
       id: DOMAIN,
@@ -879,7 +912,9 @@ export function buildSupplyDomain(): DomainData {
       ['model/risk', riskBranch(main)],
       ['extract/job-42', extractionBranch(main)],
       ['cleanup/tiers', cleanupBranch(main)],
+      ['extract/job-44', jobBranch],
     ]),
-    proposals: proposals(),
+    proposals: proposalStates,
+    documents: supplyDocuments(),
   };
 }
