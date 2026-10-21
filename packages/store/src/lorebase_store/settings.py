@@ -56,6 +56,14 @@ class DatabaseSettings(SectionModel):
     application_name: str = Field(
         default="lorebase", min_length=1, description="Reported in pg_stat_activity."
     )
+    application_role: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Database role the services connect as (subject to row-level security). "
+        "Read by migrations only: revision 0004 grants it EXECUTE on the security definer "
+        "read functions, which are revoked from PUBLIC. Empty grants nothing (the owner role "
+        "can still call them).",
+    )
     read_dsn: tuple[SecretValue, ...] = Field(
         default=(),
         description="Read replicas (design 15.3): one URL, a comma-separated string or a list "
@@ -344,6 +352,12 @@ class ReadSettings(SectionModel):
     )
     max_hydrate_keys: int = Field(
         default=1000, ge=1, description="Records fetched by one batched hydration."
+    )
+    use_definer_functions: bool = Field(
+        default=True,
+        description="Run search, incoming Links, neighborhoods and attribute queries through "
+        "the security definer functions of revision 0004, whose index plans survive row-level "
+        "security; false runs the same statements as plain SQL.",
     )
 
 

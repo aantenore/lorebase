@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -10,15 +12,16 @@ from lorebase_store.commit import create_domain
 from lorebase_store.reads import Direction, head_schema
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import StoreSettings, TraverseSettings
+from lorebase_store.settings import ReadSettings, StoreSettings, TraverseSettings
 from lorebase_store.traverse import (
     Neighborhood,
     TraversalLimitError,
     neighborhood,
     neighborhood_sql,
+    plan_hops,
 )
 
-from .read_support import SOURCED_FROM, seed_graph, sourced_from, sourced_part
+from .read_support import MAIN_SUPPLIER, SOURCED_FROM, seed_graph, sourced_from, sourced_part
 from .support import AUTHOR, DOMAIN, PART, SUPPLIED_BY, SUPPLIER, Clock, domain, supplied_by
 
 pytestmark = pytest.mark.integration
@@ -45,6 +48,32 @@ def test_statement_follows_the_schema() -> None:
     sql, params = neighborhood_sql(schema, DOMAIN, "main", Direction.IN, [SOURCED_FROM])
     assert params["out_ids"] == params["in_ids"] == params["fk_ids"] == []
     assert f"w.kind_id = '{SUPPLIER}'" in sql
+    _, params = neighborhood_sql(
+        schema,
+        DOMAIN,
+        "main",
+        Direction.OUT,
+        None,
+        follow=[(SUPPLIED_BY, Direction.IN), (SOURCED_FROM, Direction.OUT)],
+    )
+    assert (params["out_ids"], params["in_ids"], params["fk_ids"]) == (
+        [],
+        [SUPPLIED_BY],
+        [SOURCED_FROM],
+    )
+    hops = plan_hops(schema, follow=[(SOURCED_FROM, Direction.BOTH)])
+    assert json.loads(hops.as_json()) == {
+        "out": [],
+        "in": [],
+        "fk_out": [[SOURCED_FROM, PART, SUPPLIER, MAIN_SUPPLIER]],
+        "fk_in": [[SOURCED_FROM, PART, SUPPLIER, MAIN_SUPPLIER]],
+    }
+
+
+@pytest.fixture(params=[True, False], ids=["definer", "plain"])
+def store(request: pytest.FixtureRequest) -> StoreSettings:
+    """Every walk runs through `lb_neighborhood` and as plain SQL, with the same results."""
+    return StoreSettings(reads=ReadSettings(use_definer_functions=request.param))
 
 
 @pytest.fixture
@@ -105,9 +134,31 @@ async def test_direction_relations_and_foreign_keys(walk: Sessions, runtime: Sto
     assert missing.links == []
 
 
-async def test_caps(walk: Sessions, engine: AsyncEngine) -> None:
+async def test_follow_names_relation_and_direction(walk: Sessions, runtime: StoreRuntime) -> None:
+    forward = await around(
+        walk, runtime, [(PART, "P-1")], depth=2, follow=[(SUPPLIED_BY, Direction.OUT)]
+    )
+    assert nodes(forward) == [(0, "P-1"), (1, "S-1")]
+    both = await around(
+        walk,
+        runtime,
+        [(PART, "P-1")],
+        depth=2,
+        follow=[(SUPPLIED_BY, Direction.OUT), (SUPPLIED_BY, Direction.IN)],
+    )
+    assert nodes(both) == [(0, "P-1"), (1, "S-1"), (2, "P-2"), (2, "P-3")]
+    backward = await around(
+        walk, runtime, [(SUPPLIER, "S-2")], depth=1, follow=[(SOURCED_FROM, Direction.IN)]
+    )
+    assert nodes(backward) == [(0, "S-2"), (1, "P-1")]
+    assert not backward.truncated
+
+
+async def test_caps(walk: Sessions, engine: AsyncEngine, store: StoreSettings) -> None:
     runtime = StoreRuntime.from_settings(
-        StoreSettings(traverse=TraverseSettings(max_depth=2, max_nodes=3, max_fanout=5))
+        StoreSettings(
+            traverse=TraverseSettings(max_depth=2, max_nodes=3, max_fanout=5), reads=store.reads
+        )
     )
     capped = await around(walk, runtime, [(PART, "P-1")], depth=2)
     assert nodes(capped) == [(0, "P-1"), (1, "S-1"), (1, "S-2")]
@@ -118,6 +169,10 @@ async def test_caps(walk: Sessions, engine: AsyncEngine) -> None:
     }
     narrow = await around(walk, runtime, [(SUPPLIER, "S-1")], depth=1, fanout=1)
     assert len(narrow.records) == 2
+    assert narrow.truncated, "S-1 has three Links, one was followed"
+    exact = await around(walk, runtime, [(SUPPLIER, "S-2")], depth=1, fanout=3)
+    assert len(exact.records) == 3
+    assert not exact.truncated, "S-2 has two Links, both followed"
     few_links = await around(walk, runtime, [(SUPPLIER, "S-1")], depth=2, max_links=2)
     assert few_links.truncated
     assert len(few_links.records) == 3

@@ -136,6 +136,14 @@ class IndexSpec:
         """Whether the index holds a digest of the value (unique long text)."""
         return self.expression.startswith("md5(")
 
+    @property
+    def value_type(self) -> str:
+        """How values compare: `md5` (digest), the cast type, or `text`; the `p_type`
+        argument of `lb_query_by_attribute`."""
+        if self.digest:
+            return "md5"
+        return self.cast or "text"
+
     def value_sql(self, placeholder: str) -> str:
         """SQL of a value compared with `expression`; `placeholder` binds its canonical text."""
         value = f"CAST({placeholder} AS text)"
@@ -144,6 +152,10 @@ class IndexSpec:
         if self.cast is not None:
             return f"CAST({value} AS {self.cast})"
         return value
+
+    def predicate_sql(self, domain_id: str, branch: str) -> str:
+        """The index predicate for one Domain and branch (see `predicate_sql`)."""
+        return predicate_sql(domain_id, branch, self.kind_id)
 
     def name(self, domain_id: str, branch: str) -> str:
         digest = hashlib.sha256(

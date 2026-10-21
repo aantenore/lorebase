@@ -296,7 +296,10 @@ database:
   statement_timeout_ms: 30000    # per statement; 0 disables
   migration_statement_timeout_ms: 0   # while migrations run; 0 disables
   application_name: lorebase     # shown in pg_stat_activity
-  read_dsn: []                   # read replicas (docs/deployment.md): one URL, a comma-separated
+  application_role: null         # role the services connect as; revision 0004 grants it EXECUTE
+                                 # on the security definer read functions (store schema notes).
+                                 # null grants nothing; the role must exist before migrating
+  read_dsn: []                 # read replicas (docs/deployment.md): one URL, a comma-separated
                                  # string or a list; literals or secret references, e.g.
                                  # [secret://env/LOREBASE_DB_READ_DSN]. Alias LOREBASE_DB_READ_DSN.
                                  # Reads are spread round-robin; empty keeps every read on the
@@ -370,6 +373,9 @@ store:
     max_search_rows: 100         # largest full-text search result
     search_candidates: 1000      # matches ranked per search (bounds very common terms)
     max_hydrate_keys: 1000       # Records per batched hydration
+    use_definer_functions: true  # search, incoming Links, neighborhoods and attribute queries
+                                 # through the security definer functions, whose index plans
+                                 # survive row-level security; false: the same SQL, plain
   traverse:                      # neighborhood caps
     max_depth: 3                 # hops
     max_seeds: 50                # seed Records

@@ -22,6 +22,8 @@ difference).
   `dsn`.
 - `store.layout.hash_partitions` and `store.embeddings.dims` are read when revision `0001` runs.
   Changing them later needs a new migration.
+- `application_role` (optional) is read when revision `0004` runs: the role the services
+  connect as gets EXECUTE on the security definer read functions (see Row-level security).
 
 ## Types and keys
 
@@ -88,6 +90,58 @@ difference).
   `extraction_cache`) are installation-wide and have no policy.
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
+
+### Security definer read functions
+
+Postgres applies the `domain_isolation` policy before any condition built from functions it
+does not mark leakproof (`->>`, casts, `@@`, `%`), so under row-level security those conditions
+cannot be index conditions (design 8.7). Revision `0004` adds four functions for exactly the
+read paths that depend on them; `lorebase_store.reads` and `lorebase_store.traverse` call them
+when `store.reads.use_definer_functions` is true (the default) and run the same statements as
+plain SQL otherwise:
+
+| Function | Read path |
+|----------|-----------|
+| `lb_search(domain, branch, kinds, config, query, candidates, limit, trigram_threshold, trigram_weight)` | full-text search over a bounded candidate set, optional trigram title matches |
+| `lb_links_in(domain, branch, relation, to_key, limit, after, from_kind, attribute)` | Links pointing at a Record along one Relation, stored or foreign-key backed |
+| `lb_neighborhood(domain, branch, seeds, depth, relations, fanout, max_steps, max_nodes)` | the recursive neighborhood walk |
+| `lb_query_by_attribute(domain, branch, kind, attribute, type, op, value, limit, after_value, after_key)` | comparisons on a per-Attribute partial index |
+
+Why this keeps Domains isolated:
+
+- **What RLS protects against.** The policy reads `lorebase.domain_ids`, a setting any role can
+  set in its own transaction. It is a second line of defense against query bugs (a statement
+  that forgets its Domain), not against a compromised application role, which can scope
+  itself to any Domain. Authorization happens in Keeper before any read (design 13.3).
+- **Fixed statements, Domain pinned.** Each function takes the Domain as its first argument
+  and puts it, as a literal, in the predicate of every table it reads (`mat_records`,
+  `mat_links`), joins included. The statement text is fixed: arguments reach it as `%L`
+  literals or `EXECUTE ... USING` parameters, keywords (comparison, cast type) come from
+  whitelists, and malformed arguments raise. A query bug in a caller cannot widen the Domain.
+- **No ambient scope.** The functions never read `lorebase.domain_ids`: their result depends
+  on their arguments only. The callers are store primitives that receive a Domain their
+  caller has already authorized and also scope the transaction to it with `scope_to_domain`.
+- **Least privilege.** `SECURITY DEFINER`, `STABLE` (read only), a fixed `search_path`
+  (`pg_catalog`, the schema of the tables, the schema of `pg_trgm`, `pg_temp` last). EXECUTE
+  is revoked from PUBLIC and granted to `database.application_role` by the migration (an
+  error if the role does not exist), or later with `lorebase_store.definer.grant_read_functions`.
+  The schema of the tables must not be writable by the application role (the default since
+  Postgres 15).
+- **Owner.** A function skips the policies only when its owner does: a superuser or a role
+  with `BYPASSRLS`. The owner is the migration role, which never serves requests; no login
+  role used for reads bypasses RLS. If the migration role is subject to RLS, the migration logs
+  a warning and the functions still return the right rows, with the policy applied and the
+  slower plans. `ALTER FUNCTION ... OWNER TO` a `NOLOGIN` role with `BYPASSRLS` is the
+  alternative where the migration role must not have it.
+- **Tests.** `test_read_functions_read_only_the_domain_they_are_given` reads one Domain while
+  the transaction is scoped to another and checks that no row of the other comes back, and
+  that a role without the grant is refused. `test_definer_functions_keep_index_plans_under_row_level_security`
+  checks with `auto_explain` that the statements run inside the functions, by a role subject
+  to RLS, are index scans.
+
+The functions build their statements per call with the Domain, branch and Kind as literals, so
+each call is planned with them and matches the partial index predicates; the planning time is
+part of the measured latency ([performance.md](performance.md)).
 
 ## Concurrency contracts
 
