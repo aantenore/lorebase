@@ -6,7 +6,8 @@
             print(record.key, record.title)
 
 Resources group the endpoints (`domains`, `branches`, `tags`, `schema`, `operations`, `records`,
-`revisions`, `api_keys`, `grants`, `principals`, `audit`, `proposals`, `agents`, `webhooks`).
+`revisions`, `api_keys`, `grants`, `principals`, `audit`, `proposals`, `agents`, `webhooks`,
+`sources`).
 Every list endpoint has a `list` method (one page) and an `iterate` method (all items; pages
 are fetched on demand). Errors
 raise subclasses of `LorebaseError`. The request layer is shared with `AsyncLorebaseClient`
@@ -94,6 +95,7 @@ class LorebaseClient:
         self.proposals = Proposals(self)
         self.agents = Agents(self)
         self.webhooks = Webhooks(self)
+        self.sources = Sources(self)
 
     def close(self) -> None:
         self._http.close()
@@ -1023,3 +1025,20 @@ class Webhooks(_Resource):
 
     def delete(self, domain: str, webhook_id: str) -> None:
         self._c.send(ep.delete_webhook(domain, webhook_id))
+
+
+class Sources(_Resource):
+    def sync(self, domain: str, source: str, *, dry_run: bool = False) -> m.SyncQueued:
+        """Queue a synchronization of the Source (id or api name) for Scribe."""
+        return self._c.send(ep.sync_source(domain, source, m.SyncRequest(dry_run=dry_run)))
+
+    def runs(
+        self, domain: str, source: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> m.Page[m.SourceRun]:
+        """Runs of the Source, newest first (needs a Domain-wide `data.read` grant)."""
+        return self._c.send(ep.list_source_runs(domain, source, limit=limit, cursor=cursor))
+
+    def iterate_runs(
+        self, domain: str, source: str, *, page_size: int | None = None
+    ) -> Iterator[m.SourceRun]:
+        return self._c.iterate(ep.list_source_runs(domain, source, limit=page_size))

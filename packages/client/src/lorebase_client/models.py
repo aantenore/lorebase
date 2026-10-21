@@ -909,4 +909,34 @@ class WebhookList(Model):
     items: list[Webhook]
 
 
+# Sources ----------------------------------------------------------------------------------
+
+
+class SyncRequest(RequestModel):
+    """A synchronization of a Source; a dry run records the delta without writing."""
+
+    dry_run: bool = False
+
+
+class SyncQueued(Model):
+    """The queued (or already pending) synchronization job."""
+
+    job_id: int
+    source: str
+    api_name: str
+    dry_run: bool
+
+
+class SourceRun(Model):
+    id: str
+    source: str
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    stats: dict[str, JsonValue]
+    revision: str | None = None
+    proposal_id: str | None = None
+    error: dict[str, JsonValue] | None = None
+
+
 RecordItem.model_rebuild()

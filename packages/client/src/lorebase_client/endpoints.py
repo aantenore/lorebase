@@ -832,3 +832,28 @@ def list_webhooks(domain: str) -> Call[m.WebhookList]:
 
 def delete_webhook(domain: str, webhook_id: str) -> Call[None]:
     return Call("DELETE", f"{_domain(domain)}/webhooks/{_seg(webhook_id)}", parse_none, safe=True)
+
+
+# Sources ----------------------------------------------------------------------------------
+
+
+def sync_source(domain: str, source: str, body: m.SyncRequest) -> Call[m.SyncQueued]:
+    """Not marked safe: a retry may queue a second job once the first one has finished."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/sources/{_seg(source)}/sync",
+        parse_model(m.SyncQueued),
+        body=body.payload(),
+    )
+
+
+def list_source_runs(
+    domain: str, source: str, *, limit: int | None = None, cursor: str | None = None
+) -> Call[m.Page[m.SourceRun]]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/sources/{_seg(source)}/runs",
+        parse_model(m.Page[m.SourceRun]),
+        params={"limit": limit, "cursor": cursor},
+        safe=True,
+    )
