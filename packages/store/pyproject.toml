@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "Lorebase store: persistence, repositories, migrations and materializer"
 requires-python = ">=3.12"
 dependencies = [
-  "lorebase-core",
-  "lorebase-platform",
+  "lorebase-core>=0.1,<0.2",
+  "lorebase-platform>=0.1,<0.2",
   "sqlalchemy[asyncio]>=2.0.30",
   "asyncpg>=0.29",
   "alembic>=1.13",

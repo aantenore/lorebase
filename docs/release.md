@@ -12,7 +12,8 @@ Work through it on a branch, merge it, then tag. Items marked with a command hav
 
 - [ ] Choose the version. Before 1.0 a minor version may change interfaces; say so in the notes.
 - [ ] Set it everywhere it lives: `version` in the root and in each `packages/*/pyproject.toml`, `__version__` in each `packages/*/src/*/__init__.py`, `version` in `apps/web/package.json`, and `appVersion` (and `version`) in `deploy/helm/lorebase/Chart.yaml`.
-- [ ] `uv run python scripts/release_tool.py check --tag vX.Y.Z` prints `all 21 versions agree`. The workflow runs the same check first and stops on a mismatch.
+- [ ] On a new minor version, move the ranges of the dependencies between workspace packages in each `packages/*/pyproject.toml` (`lorebase-core>=0.1,<0.2` becomes `>=0.2,<0.3`; for a pre-release the lower bound may be the pre-release, `>=0.2.0rc1,<0.3`) and run `uv lock`. In a checkout the workspace resolves them from source; on PyPI they keep `pip install lorebase-keeper` from taking a `lorebase-store` of another minor.
+- [ ] `uv run python scripts/release_tool.py check --tag vX.Y.Z` prints `all 21 versions and 12 internal ranges agree`. The workflow runs the same check first and stops on a mismatch.
 - [ ] Write the `## X.Y.Z` section of CHANGELOG.md: summary, breaking changes first, then added, changed, fixed, security, not done yet, upgrade notes. Link the pull request or issue of each line. `uv run python scripts/release_tool.py notes X.Y.Z` prints what the GitHub release will say.
 - [ ] A migration, a configuration key or an API response that changed is named in the first lines of the section.
 - [ ] Update the status wording that a release makes false: the "Pre-alpha" banner and "Nothing is released" in [README.md](../README.md) and [roadmap.md](roadmap.md).
@@ -135,5 +136,4 @@ uv run --with "lorebase-cli==$VERSION" lorebase --version     # only when publis
 
 State these in the notes of each release until they are closed.
 
-- **Python packages depend on each other without a version range.** `lorebase-keeper` requires `lorebase-store` and so on, resolved from the workspace in a checkout. On PyPI, `pip install lorebase-keeper` would take the newest `lorebase-store`. Before publishing a release that changes an interface between packages, give the internal dependencies a compatible range (`~=X.Y.0`) and refresh `uv.lock`.
 - **No pull request links in the first changelog.** The first section is written from the merged work on `main`, so its lines link the documentation of each feature. From the next release, link the pull request or issue of every line.

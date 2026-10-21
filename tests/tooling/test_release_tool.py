@@ -29,10 +29,27 @@ def test_every_version_of_the_repository_agrees() -> None:
     assert tool.check(None) == []
 
 
-def test_a_tag_other_than_the_versions_is_reported_for_every_file() -> None:
+def test_a_tag_other_than_the_versions_is_reported_for_every_file_and_range() -> None:
     problems = tool.check("v9.9.9")
-    assert len(problems) == len(tool.versions())
-    assert all("expected 9.9.9" in p for p in problems)
+    assert len(problems) == len(tool.versions()) + len(tool.internal_ranges())
+    assert sum("expected 9.9.9" in p for p in problems) == len(tool.versions())
+    assert sum("expected >=9.9,<9.10" in p for p in problems) == len(tool.internal_ranges())
+
+
+def test_internal_ranges_stop_before_the_next_minor(tmp_path: Path) -> None:
+    package = tmp_path / "packages" / "keeper"
+    package.mkdir(parents=True)
+    (package / "pyproject.toml").write_text(
+        '[project]\nname = "lorebase-keeper"\nversion = "0.2.0rc1"\n'
+        'dependencies = ["lorebase-store>=0.2.0rc1,<0.3", "lorebase-core", "fastapi>=0.1"]\n'
+    )
+    assert tool.internal_ranges(tmp_path) == {
+        "packages/keeper/pyproject.toml lorebase-store": ">=0.2.0rc1,<0.3",
+        "packages/keeper/pyproject.toml lorebase-core": "",
+    }
+    assert tool.range_problems("0.2.0-rc.1", tmp_path) == [
+        "packages/keeper/pyproject.toml lorebase-core: (no range), expected >=0.2,<0.3"
+    ]
 
 
 @pytest.mark.parametrize("tag", ["0.1.0", "v1.2", "v1.2.3-rc1", "vx.y.z"])
