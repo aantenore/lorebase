@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import subprocess
+import sys
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -22,15 +27,18 @@ from lorebase_store.indexes import (
     IndexReason,
     create_index_sql,
     existing_indexes,
+    pending_index_plan,
     plan_indexes,
     predicate_sql,
+    run_index_job,
     run_index_jobs,
     sql_literal,
 )
+from lorebase_store.jobs import INDEX_JOB, run_jobs
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import IndexSettings, StoreSettings
+from lorebase_store.settings import DatabaseSettings, IndexSettings, StoreSettings
 
 from .support import (
     AUTHOR,
@@ -356,3 +364,139 @@ async def test_roles_that_do_not_own_mat_records_skip_index_management(
             await auto.exec_driver_sql(f"DROP OWNED BY {role}")
             await auto.exec_driver_sql(f"DROP ROLE {role}")
     assert await indexes_of(sessions) == {}
+
+
+@asynccontextmanager
+async def writer_role(engine: AsyncEngine) -> AsyncIterator[str]:
+    """A role that commits but does not own mat_records, like the application role."""
+    role = f"lorebase_writer_{uuid.uuid4().hex[:8]}"
+    async with engine.connect() as connection:
+        auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        await auto.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
+        await auto.exec_driver_sql(
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}"
+        )
+        await auto.exec_driver_sql(f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {role}")
+    try:
+        yield role
+    finally:
+        async with engine.connect() as connection:
+            auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
+            await auto.exec_driver_sql(f"DROP OWNED BY {role}")
+            await auto.exec_driver_sql(f"DROP ROLE {role}")
+
+
+async def commit_as(
+    sessions: Sessions, role: str, runtime: StoreRuntime, *changes: Any, schema: Any = ()
+) -> None:
+    async with sessions() as session, session.begin():
+        await session.execute(text(f"SET LOCAL ROLE {role}"))
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            list(changes),
+            schema_changes=list(schema),
+            author=AUTHOR,
+            message="change",
+            origin=ORIGIN,
+            runtime=runtime,
+        )
+
+
+async def queued_jobs(sessions: Sessions) -> list[dict[str, Any]]:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        found = await session.execute(
+            text("SELECT payload FROM jobs WHERE type = :t AND status = 'queued' ORDER BY id"),
+            {"t": INDEX_JOB_TYPE},
+        )
+        return [dict(payload) for payload in found.scalars()]
+
+
+@pytestmark_integration
+async def test_a_maintenance_role_builds_the_indexes_queued_by_the_application_role(
+    engine: AsyncEngine, sessions: Sessions, database_url: str
+) -> None:
+    """With `database.maintenance_dsn`, a commit role that does not own mat_records queues
+    its index changes; the job worker runs them as the maintenance role (here the test's
+    owner engine)."""
+    database = DatabaseSettings(maintenance_dsn=database_url)
+    runtime = StoreRuntime.from_settings(StoreSettings(), database=database)
+    assert runtime.index_maintenance
+    worker = {INDEX_JOB: lambda job: run_index_job(engine, job)}
+    async with writer_role(engine) as role:
+        await commit_as(
+            sessions,
+            role,
+            runtime,
+            supplier("S-1", "Alpha", vat="IT1"),
+            supplier("S-2", "Beta", vat="IT2"),
+            schema=schema_changes(),
+        )
+        assert await indexes_of(sessions) == {}
+        assert [job["action"] for job in await queued_jobs(sessions)] == ["create"]
+        assert await run_jobs(sessions, worker) == 1
+        (name, valid) = (await indexes_of(sessions))[VAT]
+        assert valid
+
+        # VAT stops being unique and a duplicate arrives in the same commit: the unique index
+        # rejects it, so its drop is queued (forced) in a transaction of its own; the commit
+        # succeeds once the worker has dropped it.
+        relaxed = with_attributes(supplier_kind(), **{VAT: {"unique": False}})
+        duplicate = supplier("S-3", "Gamma", vat="IT1")
+        with pytest.raises(IntegrityError):
+            await commit_as(sessions, role, runtime, duplicate, schema=(SchemaUpsert(relaxed),))
+        assert [(j["action"], j["name"], j.get("force")) for j in await queued_jobs(sessions)] == [
+            ("drop", name, True)
+        ]
+        assert await run_jobs(sessions, worker) == 1
+        await commit_as(sessions, role, runtime, duplicate, schema=(SchemaUpsert(relaxed),))
+        assert await indexes_of(sessions) == {}
+        assert await queued_jobs(sessions) == []
+
+
+@pytestmark_integration
+async def test_the_pending_plan_prints_the_ddl_an_administrator_applies(
+    engine: AsyncEngine, sessions: Sessions, database_url: str
+) -> None:
+    """Without ownership or a maintenance role nothing is built; `python -m
+    lorebase_store.indexes plan` prints the DDL, and applying it leaves nothing pending."""
+    async with writer_role(engine) as role:
+        await commit_as(
+            sessions,
+            role,
+            StoreRuntime.from_settings(StoreSettings()),
+            supplier("S-1", "Alpha", vat="IT1"),
+            schema=schema_changes(),
+        )
+    assert await indexes_of(sessions) == {}
+    assert await queued_jobs(sessions) == []
+
+    environment = {
+        **{k: v for k, v in os.environ.items() if not k.startswith("LOREBASE")},
+        "LOREBASE__DATABASE__DSN": database_url,
+    }
+    done = await asyncio.to_thread(
+        subprocess.run,
+        [sys.executable, "-m", "lorebase_store.indexes", "plan", "--domain", DOMAIN],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=True,
+    )
+    statements = [line.removesuffix(";") for line in done.stdout.splitlines()]
+    assert len(statements) == 2
+    assert statements[0].startswith("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ")
+    assert f"kind_id = '{SUPPLIER}'" in statements[0]
+    assert statements[1].startswith("COMMENT ON INDEX ")
+
+    async with engine.connect() as connection:
+        auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        for statement in statements:
+            await auto.exec_driver_sql(statement)
+    assert [valid for _, valid in (await indexes_of(sessions)).values()] == [True]
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        assert await pending_index_plan(session, DOMAIN) == []
+        assert await pending_index_plan(session, DOMAIN, branch="nope") == []

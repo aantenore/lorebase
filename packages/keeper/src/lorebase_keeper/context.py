@@ -43,7 +43,7 @@ from lorebase_store.repositories import (
     scope_to_domain,
 )
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import store_settings
+from lorebase_store.settings import database_settings, store_settings
 
 _RUNTIME_STATE = "store_runtime"
 _REVISION_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -66,7 +66,10 @@ def get_store(request: Request) -> StoreAccess:
         raise ProblemError(UNAVAILABLE, "This operation needs a configured database.")
     runtime = cast(StoreRuntime | None, getattr(state, _RUNTIME_STATE, None))
     if runtime is None:
-        runtime = StoreRuntime.from_settings(store_settings(cast(Settings, state.settings)))
+        settings = cast(Settings, state.settings)
+        runtime = StoreRuntime.from_settings(
+            store_settings(settings), database=database_settings(settings)
+        )
         setattr(state, _RUNTIME_STATE, runtime)
     auth = cast(AuthRuntime, state.auth)
     return StoreAccess(sessions=database.sessions, runtime=runtime, clock=auth.clock)

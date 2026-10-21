@@ -24,19 +24,31 @@ a queued job. `BranchIndexes.ensure` runs after the rows are written and creates
 indexes inside the transaction when the Kind is small (`store.indexes.inline_max_rows`),
 otherwise it queues a job that `run_index_jobs` builds with `CREATE INDEX CONCURRENTLY`.
 
-Index DDL needs the role that owns `mat_records`. A role that does not own it (the
-least-privileged application role subject to row-level security) skips index management, as
-with `store.indexes.enabled: false`, and logs a warning once per process; an administrator
-then manages the indexes, or an owner role runs the commits.
+Index DDL needs the role that owns `mat_records`. For a session role that does not own it (the
+least-privileged application role subject to row-level security):
+
+- with a maintenance role configured (`database.maintenance_dsn`, `StoreRuntime.
+  index_maintenance`), every change is queued as a job, and the job worker
+  (`python -m lorebase_store.jobs work`) runs `run_index_job` with the maintenance engine.
+  Indexes that would reject the new rows cannot be dropped before they are written: their
+  drops are queued, forced, in a transaction of their own (a warning names them), so a commit
+  that fails on them succeeds when retried after the worker has run (if it is never retried,
+  the next schema change or `pending_index_plan` brings the index back);
+- otherwise index management is skipped, as with `store.indexes.enabled: false`, with a
+  warning once per process; `pending_index_plan` (`python -m lorebase_store.indexes plan
+  --domain <id>`) prints the DDL an administrator applies.
 """
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import hashlib
 import json
 import logging
 import re
-from collections.abc import Mapping
+import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -46,6 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from lorebase_core.model import Attribute, Kind, RelationBacking, Schema
 from lorebase_core.types import AttributeType
+from lorebase_store.jobs import INDEX_JOB, JobRow
 from lorebase_store.models.enums import JobStatus
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.settings import IndexSettings
@@ -55,7 +68,7 @@ log = logging.getLogger(__name__)
 INDEX_PREFIX = "mat_records_attr_"
 """Prefix of runtime-managed per-Attribute indexes (store schema notes)."""
 
-INDEX_JOB_TYPE = "store.index"
+INDEX_JOB_TYPE = INDEX_JOB
 """`jobs.type` of queued index builds and drops."""
 
 PARENT_TABLE = "mat_records"
@@ -460,6 +473,17 @@ class IndexAction(StrEnum):
     DROP = "drop"
 
 
+class IndexMode(StrEnum):
+    """How a session manages the indexes of a branch."""
+
+    INLINE = "inline"
+    """The role owns `mat_records`: DDL in the transaction, large Kinds queued."""
+    QUEUE = "queue"
+    """A maintenance role is configured: every change is queued for the job worker."""
+    OFF = "off"
+    """Disabled, or nobody may run the DDL: see `pending_index_plan`."""
+
+
 async def _ddl(session: AsyncSession, statement: str) -> None:
     """Run DDL text as is: literals in it may hold colons that bind parsing would misread."""
     connection = await session.connection()
@@ -472,18 +496,29 @@ class BranchIndexes:
     Runs in the caller's transaction, after `scope_to_domain`. `retire` goes before the
     materialized rows of a schema change are written, `ensure` after them; `sync` does both
     for a branch whose rows are already in place.
+
+    With `maintenance` (a maintenance role is configured, `database.maintenance_dsn`), a
+    session role that does not own `mat_records` queues every change instead of skipping it;
+    the job worker runs the jobs as the maintenance role.
     """
 
     def __init__(
-        self, session: AsyncSession, domain_id: str, branch: str, *, settings: IndexSettings
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        branch: str,
+        *,
+        settings: IndexSettings,
+        maintenance: bool = False,
     ) -> None:
         self._session = session
         self._domain = domain_id
         self._branch = branch
         self._settings = settings
+        self._maintenance = maintenance
         self._existing: list[ExistingIndex] | None = None
         self._locked = False
-        self._manages: bool | None = None
+        self._mode: IndexMode | None = None
 
     async def sync(self, schema: Schema) -> IndexSync:
         result = await self.retire(schema)
@@ -500,7 +535,8 @@ class BranchIndexes:
         deleted branches of the Domain are queued too.
         """
         result = IndexSync()
-        if not await self._may_manage():
+        mode = await self.mode()
+        if mode is IndexMode.OFF:
             return result
         wanted = {spec.name(self._domain, self._branch) for spec in plan_indexes(schema).indexes}
         branches = set((await self._session.execute(_BRANCHES, {"domain": self._domain})).scalars())
@@ -508,21 +544,33 @@ class BranchIndexes:
             if index.branch == self._branch:
                 if index.name in wanted and index.valid:
                     continue
-                if index.name in wanted:
-                    # An invalid leftover of a failed concurrent build: rebuild it.
+                inline = index.name in wanted or self._blocks_writes(index, schema)
+                # An invalid leftover of a failed concurrent build is rebuilt; an index that
+                # would reject the new rows goes before they are written.
+                if inline and mode is IndexMode.INLINE:
                     await self._drop_inline(index, result)
-                elif self._blocks_writes(index, schema):
-                    await self._drop_inline(index, result)
-                else:
+                    continue
+                if inline and index.name not in wanted:
+                    log.warning(
+                        "index %s may reject the rows of this change until the job worker "
+                        "drops it (queued in its own transaction)",
+                        index.name,
+                    )
+                    await self._queue(
+                        IndexAction.DROP, index.name, index.kind_id, result, separately=True
+                    )
+                elif index.name not in wanted:
                     await self._queue(IndexAction.DROP, index.name, index.kind_id, result)
             elif index.branch not in branches:
                 await self._queue(IndexAction.DROP, index.name, index.kind_id, result)
         return result
 
     async def ensure(self, schema: Schema) -> IndexSync:
-        """Create the planned indexes that do not exist yet, inline for small Kinds."""
+        """Create the planned indexes that do not exist yet: inline for small Kinds when the
+        role owns `mat_records`, otherwise queued."""
         result = IndexSync()
-        if not await self._may_manage():
+        mode = await self.mode()
+        if mode is IndexMode.OFF:
             return result
         present = {index.name for index in await self._indexes() if index.valid}
         partition = await partition_of(self._session, self._domain)
@@ -530,6 +578,9 @@ class BranchIndexes:
         for spec in plan_indexes(schema).indexes:
             name = spec.name(self._domain, self._branch)
             if name in present:
+                continue
+            if mode is IndexMode.QUEUE:
+                await self._queue(IndexAction.CREATE, name, spec.kind_id, result)
                 continue
             if spec.kind_id not in rows:
                 rows[spec.kind_id] = await self._kind_rows(spec.kind_id)
@@ -556,23 +607,28 @@ class BranchIndexes:
 
     # Internals -----------------------------------------------------------------------------
 
-    async def _may_manage(self) -> bool:
-        """Whether index management is on and the session role owns `mat_records`."""
+    async def mode(self) -> IndexMode:
+        """Inline when the session role owns `mat_records`, queued when it does not but a
+        maintenance role is configured, off otherwise (or when disabled)."""
         global _warned_not_owner
-        if self._manages is None:
-            owner = False
+        if self._mode is None:
+            mode = IndexMode.OFF
             if self._settings.enabled:
                 found = await self._session.execute(_OWNS_TABLE, {"table": PARENT_TABLE})
-                owner = bool(found.scalar_one_or_none())
-                if not owner and not _warned_not_owner:
+                if found.scalar_one_or_none():
+                    mode = IndexMode.INLINE
+                elif self._maintenance:
+                    mode = IndexMode.QUEUE
+                elif not _warned_not_owner:
                     _warned_not_owner = True
                     log.warning(
                         "per-Attribute indexes are not managed: the database role does not own "
-                        "%s (store.indexes.enabled is true)",
+                        "%s and no database.maintenance_dsn is set; an administrator applies "
+                        "`python -m lorebase_store.indexes plan --domain <id>`",
                         PARENT_TABLE,
                     )
-            self._manages = owner
-        return self._manages
+            self._mode = mode
+        return self._mode
 
     async def _indexes(self) -> list[ExistingIndex]:
         if self._existing is None:
@@ -607,20 +663,49 @@ class BranchIndexes:
         params = {"domain": self._domain, "branch": self._branch, "kind": kind_id}
         return int((await self._session.execute(_KIND_ROWS, params)).scalar_one())
 
-    async def _queue(self, action: IndexAction, name: str, kind_id: str, result: IndexSync) -> None:
+    async def _queue(
+        self,
+        action: IndexAction,
+        name: str,
+        kind_id: str,
+        result: IndexSync,
+        *,
+        separately: bool = False,
+    ) -> None:
+        """Queue a job in the caller's transaction, or with `separately` in a transaction of
+        its own that commits now (it must outlive a commit that fails)."""
+        if separately:
+            engine = (await self._session.connection()).engine
+            async with AsyncSession(bind=engine) as other, other.begin():
+                await scope_to_domain(other, self._domain)
+                await self._insert_job(other, action, name, kind_id, force=True)
+        else:
+            await self._insert_job(self._session, action, name, kind_id)
+        result.queued.append(name)
+
+    async def _insert_job(
+        self,
+        session: AsyncSession,
+        action: IndexAction,
+        name: str,
+        kind_id: str,
+        *,
+        force: bool = False,
+    ) -> None:
         params = {"domain": self._domain, "type": INDEX_JOB_TYPE, "name": name, "action": action}
-        if (await self._session.execute(_PENDING_JOB, params)).first() is None:
-            payload = {
+        if (await session.execute(_PENDING_JOB, params)).first() is None:
+            payload: dict[str, Any] = {
                 "action": action.value,
                 "name": name,
                 "branch": self._branch,
                 "kind": kind_id,
             }
-            await self._session.execute(
+            if force:
+                payload["force"] = True
+            await session.execute(
                 _QUEUE_JOB,
                 {"type": INDEX_JOB_TYPE, "domain": self._domain, "payload": json.dumps(payload)},
             )
-        result.queued.append(name)
 
 
 # Queued jobs ------------------------------------------------------------------------------------
@@ -706,7 +791,10 @@ async def _run_job(
         spec = next((s for s in planned if s.name(domain_id, branch) == name), None)
     statements: list[str] = []
     if action is IndexAction.DROP:
-        if spec is not None and name in existing and existing[name].valid:
+        # Forced: an index that would reject the rows of a pending schema change, whose
+        # commit cannot land (and change the plan) while the index exists.
+        forced = bool(payload.get("force"))
+        if not forced and spec is not None and name in existing and existing[name].valid:
             return JobStatus.CANCELLED, "the branch still plans this index"
         statements.append(drop_index_sql(name, concurrently=True))
     else:
@@ -723,3 +811,106 @@ async def _run_job(
         for statement in statements:
             await auto.exec_driver_sql(statement)
     return JobStatus.SUCCEEDED, action.value
+
+
+async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:
+    """Handler of `store.index` jobs for `lorebase_store.jobs.run_jobs`.
+
+    `engine` runs the DDL: the maintenance engine (`database.maintenance_dsn`) where the
+    application role does not own `mat_records`. A failure raises, so the queue retries it.
+    """
+    if job.domain_id is None:
+        raise ValueError(f"index job {job.id} has no Domain")
+    action = IndexAction(job.payload["action"])
+    status, detail = await _run_job(engine, job.domain_id, action, job.payload)
+    return {"status": status.value, "detail": detail, "name": job.payload["name"]}
+
+
+# Pending plan -----------------------------------------------------------------------------------
+
+_SCHEMAS = text(
+    "SELECT r.name, s.compiled FROM refs r "
+    "JOIN mat_schema s ON s.domain_id = r.domain_id AND s.branch = r.name "
+    "WHERE r.domain_id = :domain ORDER BY r.name"
+)
+
+
+async def pending_index_plan(
+    session: AsyncSession, domain_id: str, *, branch: str | None = None
+) -> list[str]:
+    """DDL that brings the per-Attribute indexes of a Domain (or of one branch) in line with
+    the materialized schemas: concurrent builds of missing or invalid indexes with their
+    comments, and concurrent drops of indexes that no branch plans.
+
+    For an administrator where no role that may run the DDL manages the indexes; each
+    statement runs outside a transaction. Runs in the caller's transaction, after
+    `scope_to_domain`, and only reads.
+    """
+    found = (await session.execute(_SCHEMAS, {"domain": domain_id})).all()
+    schemas = {
+        name: Schema.model_validate(compiled)
+        for name, compiled in found
+        if branch is None or name == branch
+    }
+    existing = {index.name: index for index in await existing_indexes(session, domain_id)}
+    branches = set((await session.execute(_BRANCHES, {"domain": domain_id})).scalars())
+    partition = await partition_of(session, domain_id)
+    statements: list[str] = []
+    wanted: set[str] = set()
+    for name, schema in schemas.items():
+        for spec in plan_indexes(schema).indexes:
+            index_name = spec.name(domain_id, name)
+            wanted.add(index_name)
+            current = existing.get(index_name)
+            if current is not None and current.valid:
+                continue
+            if current is not None:
+                statements.append(drop_index_sql(index_name, concurrently=True))
+            statements.append(create_index_sql(spec, domain_id, name, partition, concurrently=True))
+            statements.append(comment_sql(spec, domain_id, name))
+    for index in existing.values():
+        if index.name in wanted:
+            continue
+        if index.branch in schemas or (branch is None and index.branch not in branches):
+            statements.append(drop_index_sql(index.name, concurrently=True))
+    return statements
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m lorebase_store.indexes",
+        description="Per-Attribute indexes of mat_records.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    plan = commands.add_parser(
+        "plan", help="Print the DDL that brings a Domain's indexes in line with its schemas."
+    )
+    plan.add_argument("--domain", required=True, help="Domain id.")
+    plan.add_argument("--branch", default=None, help="Only this branch (default: every one).")
+    return parser
+
+
+async def _plan(domain_id: str, branch: str | None) -> list[str]:
+    from lorebase_platform.settings import load_settings
+    from lorebase_store.db import create_engine
+    from lorebase_store.settings import database_settings
+
+    engine = create_engine(database_settings(load_settings()), pooled=False)
+    try:
+        async with engine.begin() as connection, AsyncSession(bind=connection) as session:
+            await scope_to_domain(session, domain_id)
+            return await pending_index_plan(session, domain_id, branch=branch)
+    finally:
+        await engine.dispose()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """`plan`: print the pending DDL, one statement per line, for psql."""
+    args = _parser().parse_args(argv)
+    for statement in asyncio.run(_plan(args.domain, args.branch)):
+        sys.stdout.write(statement + ";\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

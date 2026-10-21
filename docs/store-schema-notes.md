@@ -73,6 +73,19 @@ difference).
   `domain_id`, `branch` and `kind_id`, so a query must repeat those literals to use it; a JSON
   comment on the index (`domain`, `branch`, `kind`, `attribute`, `unique`, `cast`) is how
   existing indexes are found again. Index jobs use `jobs.type = 'store.index'`.
+- Index DDL needs a role that owns `mat_records`. A commit role that owns it changes the
+  indexes in the commit (large Kinds through queued concurrent builds). A role that does not
+  (the application role) queues every change when `database.maintenance_dsn` names a
+  maintenance role; the job worker (`python -m lorebase_store.jobs work`, types `gc` and
+  `store.index` by default) runs index jobs with that role. An index that would reject the
+  rows of a schema change (unique, or a cast of a retyped Attribute) cannot be dropped before
+  they are written: its drop is queued, forced, in its own transaction, and the commit
+  succeeds when retried after the worker ran. Without either, index management is skipped
+  with a warning and `python -m lorebase_store.indexes plan --domain <id> [--branch <name>]`
+  prints the pending DDL (`CREATE INDEX CONCURRENTLY`, `COMMENT ON INDEX`, `DROP INDEX
+  CONCURRENTLY`, one statement per line) for an administrator to run outside a transaction.
+- The dev compose stack sets `LOREBASE_DB_MAINTENANCE_DSN` to its Postgres superuser; that
+  is for development only.
 - Extensions `pg_trgm` and `vector` are created if missing and never dropped on downgrade. Where
   the migration role cannot create extensions, an administrator creates them first.
 
