@@ -15,6 +15,7 @@ from lorebase_platform.settings import Settings
 from lorebase_scribe.jobs import PERMANENT_JOB_ERRORS, JobContext, build_handlers
 from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import ScribeSettings, scribe_settings
+from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
 from lorebase_scribe.worker import Worker
 from lorebase_store.db import create_engine
 from lorebase_store.jobs import default_worker_id
@@ -49,6 +50,7 @@ async def open_scribe(
     *,
     url: str | None = None,
     worker_id: str | None = None,
+    connectors: ConnectorFactory = default_connector,
 ) -> AsyncIterator[Scribe]:
     """Build a Scribe from loaded settings (`url` overrides `database.dsn`); disposes of the
     engine and the HTTP client on exit."""
@@ -71,6 +73,7 @@ async def open_scribe(
                 webhooks=webhook_settings(settings),
                 http=http,
                 worker_id=worker_name,
+                connectors=connectors,
             )
             worker = Worker(
                 sessions,

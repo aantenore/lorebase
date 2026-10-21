@@ -82,6 +82,11 @@ class Source(SchemaElement):
     id: SourceId
     type: SourceType
     connection: str
+    #: Table of a ``postgres_table`` Source, optionally schema-qualified (``erp.orders``);
+    #: ``None`` reads the table named by the last segment of the api name.
+    table: str | None = None
+    #: Read-only ``SELECT`` of a ``postgres_query`` Source.
+    query: str | None = None
     target_kind: KindId
     #: Source columns producing the primary key, in primary key order.
     key_mapping: tuple[str, ...] = ()

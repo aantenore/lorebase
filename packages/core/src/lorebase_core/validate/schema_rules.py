@@ -31,7 +31,7 @@ from lorebase_core.model.operation import (
 )
 from lorebase_core.model.relation import Relation, RelationBacking
 from lorebase_core.model.schema import Schema
-from lorebase_core.model.source import SECRET_REFERENCE_PREFIX, Source, SyncMode
+from lorebase_core.model.source import SECRET_REFERENCE_PREFIX, Source, SourceType, SyncMode
 from lorebase_core.types import (
     TEXTUAL_TYPES,
     AttributeType,
@@ -892,6 +892,12 @@ class _Checker:
                 (*base, "connection"),
                 f"connection must be a secret reference ({SECRET_REFERENCE_PREFIX}...), "
                 "never a literal",
+            )
+        if source.type is SourceType.POSTGRES_QUERY and not (source.query or "").strip():
+            self.add(
+                IssueCode.SCHEMA_SOURCE_INVALID,
+                (*base, "query"),
+                "postgres_query Sources need a query",
             )
         if source.sync_mode is SyncMode.INCREMENTAL and source.watermark_column is None:
             self.add(

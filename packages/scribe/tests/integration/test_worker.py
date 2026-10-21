@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import shutil
 import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -17,16 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from lorebase_scribe.jobs import (
     EXTRACTION_JOB,
     INDEX_BUILD_JOB,
-    PERMANENT_JOB_ERRORS,
     WEBHOOK_DELIVERY_JOB,
     JobContext,
     build_handlers,
 )
 from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import SchedulerSettings, ScribeSettings, WorkerSettings
+from lorebase_scribe.sources import PERMANENT_ERRORS
 from lorebase_scribe.worker import Worker
 from lorebase_store.gc import enqueue_gc
-from lorebase_store.jobs import JobRow, enqueue_job
+from lorebase_store.jobs import SOURCE_SYNC_JOB, JobRow, enqueue_job, source_sync_payload
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import JobSettings
@@ -34,6 +37,7 @@ from lorebase_store.webhooks import WebhookRepository, WebhookSettings, signing_
 
 from .support import (
     DOMAIN,
+    EXAMPLE,
     Clock,
     commit_on,
     fetch,
@@ -92,7 +96,7 @@ def worker_for(
         settings=WorkerSettings(**settings),
         jobs=JobSettings(retry_delay_seconds=0),
         worker_id="test-worker",
-        permanent=PERMANENT_JOB_ERRORS,
+        permanent=PERMANENT_ERRORS,
     )
 
 
@@ -142,18 +146,49 @@ async def test_worker_runs_a_gc_job(
     assert result["dry_run"] is True
 
 
+async def test_worker_runs_a_source_sync_job(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await load_domain(sessions, runtime, clock, example_schema())
+    path = tmp_path / "suppliers.csv"
+    shutil.copy(EXAMPLE / "data" / "supplier.csv", path)
+    monkeypatch.setenv("SUPPLY_APPROVED_SUPPLIERS_CSV", str(path))
+    settings = ScribeSettings.model_validate(
+        {"sources": {"csv": {"allowed_roots": [str(tmp_path)]}}}
+    )
+    job_id = await enqueue(
+        sessions,
+        SOURCE_SYNC_JOB,
+        domain_id=DOMAIN,
+        payload=source_sync_payload("approved.suppliers"),
+    )
+    worker = worker_for(dataclasses.replace(context, settings=settings, clock=clock), sessions)
+    assert await worker.run_once() == 1
+    status, attempts, result = await job_state(sessions, job_id)
+    assert (status, attempts) == ("succeeded", 1)
+    assert result["counts"]["added"] == 30
+    assert result["proposal_status"] == "merged"
+
+
 async def test_permanent_failures_are_not_retried(
     context: JobContext, sessions: async_sessionmaker[AsyncSession]
 ) -> None:
     extraction = await enqueue(sessions, EXTRACTION_JOB, domain_id=DOMAIN)
-    gc = await enqueue(sessions, "gc")
+    sync = await enqueue(
+        sessions, SOURCE_SYNC_JOB, domain_id="nowhere", payload=source_sync_payload("x")
+    )
     assert await worker_for(context, sessions).run_once() == 2
     status, attempts, result = await job_state(sessions, extraction)
     assert (status, attempts) == ("failed", 1)
     assert "not implemented" in result["error"]
-    status, attempts, result = await job_state(sessions, gc)
+    status, attempts, result = await job_state(sessions, sync)
     assert (status, attempts) == ("failed", 1)
-    assert "needs a Domain" in result["error"]
+    assert result["error"].startswith("SourceNotFoundError")
 
 
 async def test_concurrent_slots_heartbeat_and_graceful_shutdown(

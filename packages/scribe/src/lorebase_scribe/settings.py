@@ -1,4 +1,4 @@
-"""The `scribe` settings section: worker loop and scheduler.
+"""The `scribe` settings section: worker loop, scheduler and Source synchronization.
 
 Every value has a documented default (see `config/lorebase.example.yaml`); deployments override
 them in the YAML file or with `LOREBASE__SCRIBE__...` variables. Job retries and stale locks
@@ -42,7 +42,8 @@ class WorkerSettings(SectionModel):
         default=0,
         ge=0,
         description="statement_timeout of Scribe's own database connections; 0 disables it "
-        "(collections and index builds run long).",
+        "(collections and index builds run long). Postgres Sources use "
+        "scribe.sources.postgres.statement_timeout_ms.",
     )
     principal: str = Field(
         default="svc_scribe",
@@ -98,11 +99,78 @@ class SchedulerSettings(SectionModel):
         return value
 
 
+class CsvSourceSettings(SectionModel):
+    """Reading CSV Sources from local files or HTTP(S) URLs."""
+
+    allowed_roots: tuple[str, ...] = Field(
+        default=(),
+        description="Directories local CSV files may be read from; empty refuses local files.",
+    )
+    allowed_hosts: tuple[str, ...] = Field(
+        default=(),
+        description="Host names CSV URLs may point at; empty refuses URLs.",
+    )
+    allowed_schemes: tuple[str, ...] = Field(
+        default=("https",), min_length=1, description="URL schemes CSV URLs may use."
+    )
+    max_bytes: int = Field(
+        default=100 * 1024 * 1024, ge=1, description="Larger files or downloads are refused."
+    )
+    timeout_s: float = Field(default=60.0, gt=0, description="Time budget of one download.")
+    encodings: tuple[str, ...] = Field(
+        default=("utf-8-sig", "cp1252"),
+        min_length=1,
+        description="Encodings tried in order; the first that decodes the file wins.",
+    )
+    delimiters: str = Field(
+        default=",;\t|", min_length=1, description="Delimiters the dialect sniffer may pick."
+    )
+    sniff_bytes: int = Field(
+        default=65536, ge=1024, description="Leading bytes used to detect the delimiter."
+    )
+
+
+class PostgresSourceSettings(SectionModel):
+    """Reading Postgres Sources: read-only transaction, bounded statements."""
+
+    statement_timeout_ms: int = Field(
+        default=60000, ge=1, description="statement_timeout of the read transaction."
+    )
+    connect_timeout_s: float = Field(default=10.0, gt=0, description="Connection timeout.")
+    fetch_rows: int = Field(default=5000, ge=1, description="Rows fetched per round trip.")
+
+
+class SourceSettings(SectionModel):
+    """Source synchronization (design 9.1)."""
+
+    commit_batch: int = Field(
+        default=5000,
+        ge=1,
+        description="Changes per Revision on the Source branch; the changes of one row are "
+        "never split across Revisions.",
+    )
+    max_row_errors: int = Field(
+        default=100,
+        ge=0,
+        description="Rows that fail mapping are skipped and reported; a run with more failed "
+        "rows than this commits nothing.",
+    )
+    error_samples: int = Field(default=20, ge=1, description="Row errors kept in the run record.")
+    auto_merge_protected: bool = Field(
+        default=True,
+        description="Sources with an automatic merge policy merge into protected target "
+        "branches too; false leaves those Proposals open for review.",
+    )
+    csv: CsvSourceSettings = Field(default_factory=CsvSourceSettings)
+    postgres: PostgresSourceSettings = Field(default_factory=PostgresSourceSettings)
+
+
 class ScribeSettings(SectionModel):
     """Scribe, the ingestion and maintenance worker."""
 
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
+    sources: SourceSettings = Field(default_factory=SourceSettings)
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

@@ -1,1 +1,1 @@
-"""Lorebase Scribe: job worker and scheduler."""
+"""Lorebase Scribe: job worker, scheduler and Source synchronization."""

@@ -24,6 +24,7 @@ from lorebase_core.model import (
     RelationBacking,
     RelationMapping,
     Schema,
+    SourceType,
     SyncMode,
     TraitAttribute,
     TraitImplementation,
@@ -681,6 +682,12 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
     (
         "source-incremental-without-watermark",
         lambda s: set_source(s, sync_mode=SyncMode.INCREMENTAL),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-query-without-query",
+        lambda s: set_source(s, type=SourceType.POSTGRES_QUERY),
         {C.SCHEMA_SOURCE_INVALID},
         None,
     ),

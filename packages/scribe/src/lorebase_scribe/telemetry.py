@@ -19,3 +19,11 @@ JOB_DURATION = meter.create_histogram(
 SCHEDULED = meter.create_counter(
     "lorebase.scribe.scheduled", unit="{job}", description="Jobs queued by the scheduler."
 )
+SOURCE_ROWS = meter.create_counter(
+    "lorebase.scribe.source.rows", unit="{row}", description="Source rows read."
+)
+SOURCE_CHANGES = meter.create_counter(
+    "lorebase.scribe.source.changes",
+    unit="{change}",
+    description="Data changes computed by Source runs (committed unless dry_run).",
+)

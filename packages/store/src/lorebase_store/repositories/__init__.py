@@ -54,6 +54,7 @@ from lorebase_store.repositories.revisions import (
     RevisionRow,
 )
 from lorebase_store.repositories.scope import scope_to_domain
+from lorebase_store.repositories.source_runs import SourceRunRepository, SourceRunRow
 
 __all__ = [
     "EVERY_PARTITION",
@@ -96,6 +97,8 @@ __all__ = [
     "RevisionRepository",
     "RevisionRow",
     "SchemaRow",
+    "SourceRunRepository",
+    "SourceRunRow",
     "advisory_lock_key",
     "scope_to_domain",
 ]
