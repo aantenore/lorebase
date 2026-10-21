@@ -4,9 +4,10 @@ Nothing is committed: the proposal is returned for review, and a modeler applies
 through a schema change set on a branch. CPU-bound profiling and inference run in a worker
 thread so the event loop stays free.
 
-Postgres sources are named by secret reference only, and only references listed in
-`keeper.schema_inference.allowed_sources` are accepted: callers never send connection strings,
-and errors never echo the resolved value.
+Postgres sources are named by secret reference only, and only references listed for the Domain
+in `keeper.schema_inference.domain_sources` (or, for Domains not listed there, in
+`keeper.schema_inference.allowed_sources`) are accepted: callers never send connection strings,
+and errors never echo the resolved value nor the sources of other Domains.
 """
 
 from __future__ import annotations
@@ -141,14 +142,13 @@ async def infer_from_files(
     return await run_in_threadpool(run)
 
 
-def _resolve_source(source: PostgresSource, settings: SchemaInferenceSettings) -> str:
+def _resolve_source(
+    domain: Domain, source: PostgresSource, settings: SchemaInferenceSettings
+) -> str:
     if not source.dsn.startswith(SECRET_REFERENCE_PREFIX):
         raise invalid("/body/postgres/dsn", "must be a secret reference such as secret://env/NAME")
-    if source.dsn not in settings.allowed_sources:
-        raise invalid(
-            "/body/postgres/dsn",
-            "is not an allowed source (keeper.schema_inference.allowed_sources)",
-        )
+    if source.dsn not in settings.sources_for(domain.id):
+        raise invalid("/body/postgres/dsn", "is not an allowed source for this Domain")
     try:
         return resolve_secret(source.dsn)
     except SecretResolutionError:
@@ -167,7 +167,7 @@ async def infer_from_postgres(
     """Profile tables of an allowed Postgres source (read-only) and propose a schema
     (validated with `rules`)."""
     domain = domain_of(domain_id)
-    url = _resolve_source(source, settings)
+    url = _resolve_source(domain, source, settings)
     try:
         engine = create_engine(database, url=url, pooled=False)
     except Exception:  # the message of a URL parse error may contain the URL

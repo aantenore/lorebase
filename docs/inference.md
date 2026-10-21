@@ -26,7 +26,11 @@ curl -X POST "$LOREBASE/api/v1/domains/supply/schema:infer" \
 
 Or name a Postgres source. The connection is a secret reference that an administrator listed in
 `keeper.schema_inference.allowed_sources`; callers never send connection strings, and the
-tables are read in a read-only transaction with a statement timeout:
+tables are read in a read-only transaction with a statement timeout. `allowed_sources` applies to
+every Domain, so `schema.write` in any Domain may profile those sources. To bind sources to
+Domains, list them in `keeper.schema_inference.domain_sources` (Domain id to secret references):
+a listed Domain may name only its own references (`[]` names none) and `allowed_sources` no
+longer applies to it. A refused source is reported without naming the sources of other Domains:
 
 ```bash
 curl -X POST "$LOREBASE/api/v1/domains/supply/schema:infer" \
