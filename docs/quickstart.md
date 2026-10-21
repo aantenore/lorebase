@@ -83,15 +83,17 @@ need Docker.
 cp .env.example .env
 ```
 
-Edit `.env` and set `POSTGRES_PASSWORD` (URL-safe characters only; it is embedded in the
-connection string). The other values have working defaults. Then:
+Edit `.env` and set `POSTGRES_PASSWORD` and `LOREBASE_APP_PASSWORD` (URL-safe characters
+only, for example `openssl rand -hex 24`; they are embedded in the connection strings). The
+other values have working defaults. Then:
 
 ```bash
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postgres migrate keeper
 ```
 
 The first run builds the backend image, which takes a few minutes. Compose starts Postgres 16,
-runs the Alembic migrations once (`migrate` exits when done) and starts Keeper on
+creates the application role Keeper connects as (`db-roles`), runs the Alembic migrations once
+(`migrate` exits when done) and starts Keeper on
 `127.0.0.1:8080`. Check it:
 
 ```bash

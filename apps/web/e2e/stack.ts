@@ -1,7 +1,7 @@
 /**
- * The compose stack of the run: Postgres, the migrations and Keeper, from
- * deploy/compose/docker-compose.yaml under a project name of its own (`lorebase-e2e`), its own
- * image name and its own host ports, so it never touches a stack the developer already has.
+ * The compose stack of the run: Postgres, its application role, the migrations and Keeper,
+ * from deploy/compose/docker-compose.yaml under a project name of its own (`lorebase-e2e`), its
+ * own image name and its own host ports, so it never touches a stack the developer already has.
  */
 import { spawnSync } from 'node:child_process';
 import type { E2eEnv } from './env';
@@ -14,6 +14,9 @@ function composeEnv(env: E2eEnv): NodeJS.ProcessEnv {
     ...process.env,
     // Throwaway database of the run; the port is bound to loopback by the compose file.
     POSTGRES_PASSWORD: process.env['LOREBASE_E2E_POSTGRES_PASSWORD'] ?? 'lorebase-e2e',
+    // Keeper connects as the application role, subject to row-level security.
+    LOREBASE_APP_USER: 'lorebase_app',
+    LOREBASE_APP_PASSWORD: process.env['LOREBASE_E2E_APP_PASSWORD'] ?? 'lorebase-e2e-app',
     POSTGRES_HOST_PORT: String(env.postgresPort),
     KEEPER_HOST_PORT: String(env.keeperPort),
     LOREBASE_IMAGE: process.env['LOREBASE_E2E_IMAGE'] ?? 'lorebase-e2e',
@@ -48,7 +51,7 @@ export async function startStack(env: E2eEnv): Promise<void> {
   try {
     await waitForKeeper(env.keeperUrl, READY_TIMEOUT_MS);
   } catch (error) {
-    compose(env, ['logs', '--tail', '80', 'keeper', 'migrate'], true);
+    compose(env, ['logs', '--tail', '80', 'keeper', 'migrate', 'db-roles'], true);
     throw error;
   }
 }

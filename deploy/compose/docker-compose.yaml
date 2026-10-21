@@ -32,14 +32,18 @@ x-backend: &backend
 x-database: &database
   # The connection string is passed as a secret reference (design 16): the value of
   # LOREBASE_DB_DSN is read from the environment and never written to the YAML or the logs.
+  # Keeper and Scribe connect as the application role (LOREBASE_APP_USER, kept by `db-roles`):
+  # no superuser, no BYPASSRLS, so row-level security applies to them (design 13.3).
   LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
-  LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
-  # Read replicas (design 15.3); empty keeps every read on the primary.
+  LOREBASE_DB_DSN: postgresql+asyncpg://${LOREBASE_APP_USER:-lorebase_app}:${LOREBASE_APP_PASSWORD:?set LOREBASE_APP_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
+  # Read replicas (design 15.3); empty keeps every read on the primary. Use the application
+  # role here too (see .env.example).
   LOREBASE_DB_READ_DSN: ${LOREBASE_DB_READ_DSN:-}
   # Maintenance role for per-Attribute index DDL run by the job worker (Scribe, or
-  # `python -m lorebase_store.jobs work`). DEV ONLY: this is the Postgres superuser of the
-  # dev stack. In production point it at a dedicated role that owns mat_records, or leave it
-  # unset and apply `python -m lorebase_store.indexes plan` (docs/store-schema-notes.md).
+  # `python -m lorebase_store.jobs work`): the owner of the tables, here the Postgres superuser
+  # of the stack, which also runs the migrations. In production point it at a dedicated role
+  # that owns mat_records, or leave it unset and apply `python -m lorebase_store.indexes plan`
+  # (docs/store-schema-notes.md).
   LOREBASE__DATABASE__MAINTENANCE_DSN: secret://env/LOREBASE_DB_MAINTENANCE_DSN
   LOREBASE_DB_MAINTENANCE_DSN: ${LOREBASE_DB_MAINTENANCE_DSN:-postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}}
 
@@ -110,6 +114,30 @@ services:
       retries: 12
       start_period: 10s
 
+  # Creates or updates the application role on every start (postgres/app-role.sh). It is
+  # idempotent, so a volume created before the role existed gets it too.
+  db-roles:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    restart: "no"
+    user: postgres
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    entrypoint: ["sh", "/scripts/app-role.sh"]
+    environment:
+      PGHOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-lorebase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}
+      POSTGRES_DB: ${POSTGRES_DB:-lorebase}
+      APP_USER: ${LOREBASE_APP_USER:-lorebase_app}
+      APP_PASSWORD: ${LOREBASE_APP_PASSWORD:?set LOREBASE_APP_PASSWORD in the environment file}
+    volumes:
+      - ./postgres/app-role.sh:/scripts/app-role.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   migrate:
     <<: *backend
     restart: "no"
@@ -117,11 +145,17 @@ services:
     # migration scripts, are copied to this path in the image.
     working_dir: ${MIGRATIONS_DIR:-/opt/lorebase/store}
     command: ["alembic", "upgrade", "head"]
+    # Migrations run as the owner role; revision 0005 grants the application role EXECUTE on
+    # the security definer read functions (database.application_role).
     environment:
-      <<: *database
+      LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
+      LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
+      LOREBASE__DATABASE__APPLICATION_ROLE: ${LOREBASE_APP_USER:-lorebase_app}
     depends_on:
       postgres:
         condition: service_healthy
+      db-roles:
+        condition: service_completed_successfully
 
   keeper:
     <<: *keeper
