@@ -760,6 +760,31 @@ serviceMonitor:
   interval: 30s
   scrapeTimeout: 10s
 
+observability:
+  # Create ConfigMaps from deploy/observability (docs/metrics.md, docs/operations.md "Dashboards
+  # and alerts"). They only carry files: mount them into your Grafana, Prometheus and collector.
+  enabled: false
+  dashboards:
+    # The Grafana dashboards (Keeper, Store, Scribe), as one ConfigMap for the Grafana sidecar.
+    enabled: true
+    # Namespace of the ConfigMap. Empty: the release namespace. Use the sidecar's namespace if it
+    # does not watch all of them.
+    namespace: ""
+    # Label the sidecar selects ConfigMaps by (grafana's `sidecar.dashboards.label`).
+    labels:
+      grafana_dashboard: "1"
+  alertRules:
+    # The Prometheus alert rules file. Mount it where Prometheus reads `rule_files`, or load it
+    # with your Prometheus Operator tooling.
+    enabled: true
+    namespace: ""
+    labels: {}
+  collector:
+    # The OpenTelemetry Collector configuration (OTLP in, Prometheus metrics on :8889, traces to
+    # an OTLP backend; set LOREBASE_TRACES_OTLP_ENDPOINT on the collector for Jaeger or Tempo).
+    enabled: true
+    namespace: ""
+
 # -- Tests -------------------------------------------------------------------------------------
 
 tests:

@@ -173,3 +173,109 @@ The client address is the socket peer. When the peer is in `keeper.trusted_proxi
 `X-Forwarded-For` is read from right to left, trusted hops are skipped and the first other
 address is the client; entries further left are written by the client and never believed. A hop
 that is not an address ends the walk with no client address, which no allowlist matches.
+
+## Dashboards and alerts
+
+`deploy/observability` holds the whole bundle: the collector configuration, Prometheus, three Grafana
+dashboards and the alert rules. The series they use are listed in [metrics](metrics.md), which also says
+which signals the code does not record yet.
+
+Switch telemetry on with `telemetry.otlp_endpoint` (`LOREBASE__TELEMETRY__OTLP_ENDPOINT`); without it
+nothing is exported. The services send OTLP/gRPC to the collector, which exposes metrics on `:8889` for
+Prometheus and sends traces to an OTLP backend (Jaeger in the compose profile; set
+`LOREBASE_TRACES_OTLP_ENDPOINT` on the collector for Tempo or another one).
+
+- **docker compose.** `docker compose --profile observability up` starts the collector, Prometheus, Jaeger and
+  Grafana. Prometheus loads `deploy/observability/alerts/*.yml`; Grafana provisions the dashboards from
+  `deploy/observability/grafana/dashboards` and the Prometheus and Jaeger data sources (`GRAFANA_ADMIN_PASSWORD` is
+  required). There is no Alertmanager: firing alerts show in the Prometheus and Grafana UIs.
+- **Kubernetes.** `observability.enabled=true` renders ConfigMaps from the same files: `-dashboards` (labelled for
+  the Grafana sidecar, `observability.dashboards.labels`), `-alert-rules` and `-otel-collector`. Mount them into
+  your Prometheus (`rule_files`), Grafana and collector. Scraping the collector is `serviceMonitor`
+  ([kubernetes](kubernetes.md#observability)). The chart folder links to `deploy/observability`, so the files
+  have one source.
+- **Dashboards** use a `datasource` variable, so they work with any Prometheus data source.
+
+| Dashboard | Shows |
+|-----------|-------|
+| Lorebase Keeper | Requests per second, mean, p50 and p95 latency per route class, 4xx and 5xx, rate limited, quota exceeded, authentication failures |
+| Lorebase Store | Replica lag and reachability, reads by serving database and reason, write and merge requests, garbage collection and index jobs |
+| Lorebase Scribe | Jobs by type and status, failure ratio, retries, durations, scheduler against finished jobs, webhook delivery passes, Source sync rows and changes, extraction runs |
+
+Latency quantiles need histogram buckets in seconds, which the code does not declare yet (see
+[metrics](metrics.md#histogram-buckets)); until then the p50 and p95 panels are not meaningful and the
+latency alert stays silent. Thresholds are written into the rule expressions; edit
+`deploy/observability/alerts/lorebase.rules.yml`.
+
+### Alert runbook
+
+Every alert's `runbook_url` points to its entry here.
+
+#### LorebaseKeeperLatencyOverBudget
+
+The p95 of a route class (label `route_class`) has been over its budget for 10 minutes: reads 100 ms, queries
+and searches 250 ms, context packs 1 s, writes 2.5 s. Compare with the baseline in
+[performance](performance.md). Check the Keeper dashboard for the class and routes involved, then the database:
+slow statements (`pg_stat_statements`), locks, a missing per-Attribute index (`python -m lorebase_store.indexes
+plan --domain <id>`), and whether reads are going to a lagging replica (Store dashboard). A single slow route in
+Jaeger (spans `GET /route`) shows where the time goes.
+
+#### LorebaseKeeperHighErrorRatio
+
+More than 5% of responses are 5xx. The 5xx per route panel names the routes; the Keeper logs hold the stack trace
+of each, keyed by the `request_id` returned to the client. Typical causes: the database is unreachable or out of
+connections (`/readyz`), a migration is missing (`migrate` job), a failing dependency of a route.
+
+#### LorebaseKeeperMetricsMissing
+
+Prometheus has no request metric from Keeper for 15 minutes. Keeper may be down, idle, or not exporting: check
+`telemetry.otlp_endpoint` on Keeper, the collector logs and `:8889/metrics` on the collector, and that Prometheus
+scrapes it.
+
+#### LorebaseAuthFailuresThrottled
+
+Clients keep failing to authenticate and Keeper answers their requests 429 (class `auth_failures`, see [rate
+limits](#rate-limits-and-quotas)). Look at the `api key rejected` INFO lines for the key prefix and client address.
+A valid key whose prefix is being attacked is held off too: raise `keeper.limits.rate.auth_failures.burst`, or
+block the address in front of Keeper. A misconfigured integration shows as one prefix with a steady rate.
+
+#### LorebaseReplicaLagHigh
+
+A replica replays more than 5 s behind the primary. Keeper already sends reads to the primary above
+`database.read_max_lag_ms`, so the effect is load on the primary rather than stale reads. On the replica:
+`SELECT now() - pg_last_xact_replay_timestamp()`; on the primary: `pg_stat_replication`. Look for long
+transactions on the replica, I/O saturation or a network problem. Without `database.read_fallback_to_primary`
+reads fail instead (`ReplicaUnavailableError`).
+
+#### LorebaseReplicaDown
+
+A replica did not answer its probe for 5 minutes. Check the replica's Postgres and the network path from Keeper;
+`/readyz` reports `database_replicas`. Reads fall back to the primary meanwhile.
+
+#### LorebaseJobFailureRatio
+
+More than 20% of the runs of a job type (label `type`) ended `failed`, that is, used all `store.jobs.max_attempts`
+or hit a permanent error. Rows: `SELECT id, domain_id, attempts, result FROM jobs WHERE type = '<type>' AND status =
+'failed' ORDER BY id DESC LIMIT 20` (`result.error` holds the last error); Scribe logs `job failed` with the
+exception. Fix the cause, then requeue the rows with `status = 'queued', attempts = 0`.
+
+#### LorebaseJobQueueStalled
+
+The scheduler queued jobs in the last 15 minutes and no job run was recorded. Scribe workers are not running, cannot
+claim (database down), or every job hangs. Check the Scribe pods and logs, `SELECT type, status, count(*) FROM jobs
+GROUP BY 1, 2`, and rows locked for longer than `store.jobs.stale_after_seconds` (the scheduler requeues those).
+`python -m lorebase_store.jobs work` drains the queue from a shell.
+
+#### LorebaseWebhookDeliveryFailing
+
+The `webhook_delivery` job itself ended `failed`. Dead letters are rows of `webhook_deliveries`:
+`SELECT webhook_id, count(*), max(last_error) FROM webhook_deliveries WHERE status = 'dead' GROUP BY 1`. A target
+refused (scheme, private address) is dead at once; others after `webhooks.max_attempts`. Fix or disable the
+webhook; the pass retries what is still pending.
+
+#### LorebaseGcNotRun
+
+No `gc` job succeeded in 3 days although Scribe is scheduling work. Check `scribe.scheduler.gc_schedule` (null
+disables the schedule; change the window in the rule if you collect less often), the `gc` rows of `jobs` and the
+Scribe logs; a collection that never ends makes the next ones fail with `GcBusyError`. Run one by hand with
+`python -m lorebase_store.gc --all` ([garbage collection](#garbage-collection)).
