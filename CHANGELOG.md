@@ -21,6 +21,7 @@ Reads for people and agents ([agents](docs/agents.md), [performance](docs/perfor
 - Records, Links, the JSON query DSL, traversal, neighborhoods and lexical search over REST (`lorebase record`, `query`, `search`), with ETags and the serving Revision in every response. Semantic search takes vectors supplied by the caller; nothing computes embeddings.
 - Context packs within a token budget (`POST .../context`, `lorebase context`), Record explanations with the origin of each value (`GET .../records/{key}/explain`, `lorebase explain`) and data health reports (`GET .../health`, `lorebase health`), all computed without a model.
 - A change feed as Server-Sent Events and as polling (`GET .../branches/{branch}/events`, `.../changes`) and signed webhooks (`POST .../webhooks`, `Lorebase-Signature` HMAC).
+- Overlay branches ([store schema notes](docs/store-schema-notes.md#overlay-branches), migration `0010`): a branch created with `mode: overlay` (`POST .../branches`, default `store.materialize.branch_mode`, always for names under `agent/`, `extract/` and `source/`, and for agent task branches per `keeper.agent_writes.branch_mode`) stores only the rows it changes and reads its base as of the fork point. Creating one does not depend on the size of the Domain; it is promoted to a full copy above `store.materialize.overlay_max_rows` rows or `overlay_max_base_lag_revisions` generations of base lag, before a schema change and before its base is deleted. Overlay reads go through `_overlay` variants of the security definer functions with the same argument and scope checks; attribute queries, neighborhoods and full-text search cost 0.3 to 5 ms more at p95 than on a copy ([performance](docs/performance.md)).
 - Per-Attribute indexes and security definer read functions that keep Domain isolation under row-level security. At 99,900 Records and 302,940 Links on one laptop, the measured p95 of every agent read stays within its budget ([performance](docs/performance.md)); the 1M-Record baseline is not measured.
 
 Writes and ingestion ([quickstart](docs/quickstart.md), [scribe](docs/scribe.md), [inference](docs/inference.md))
@@ -65,10 +66,10 @@ Deployment ([deployment](docs/deployment.md), [kubernetes](docs/kubernetes.md))
 - The 1M-Record performance baseline and the 10M-Record targets of the design.
 - Merge policies `authority` and `newest_wins`.
 - Parquet and HTTP JSON Sources; embedding-based entity resolution, schema suggestions and OCR for documents; embedding jobs and hybrid search; `path` Derivations.
-- Groups, sensitivity masking, the Operation outbox, overlay branches and the PII vault.
+- Groups, sensitivity masking, the Operation outbox and the PII vault.
 - Web app: OIDC login.
 - A documentation site, LinkML import and export, and the stability promise for `/api/v1` that comes with 1.0.
 
 ### Upgrade notes
 
-There is no earlier release. For a new installation, run the migrations (`alembic upgrade head`, migrations `0001` to `0009`) before Keeper starts: the compose `migrate` service and the Helm hook do it. Keeper's shipped configuration accepts every request as an administrator (`keeper.auth.mode: none`); use `api_key` or `oidc` for anything shared, give `api_key` modes a pepper of at least 32 characters, list the administrator in `keeper.auth.installation_admins` and create the first key with `python -m lorebase_keeper bootstrap`.
+There is no earlier release. For a new installation, run the migrations (`alembic upgrade head`, migrations `0001` to `0010`) before Keeper starts: the compose `migrate` service and the Helm hook do it. Keeper's shipped configuration accepts every request as an administrator (`keeper.auth.mode: none`); use `api_key` or `oidc` for anything shared, give `api_key` modes a pepper of at least 32 characters, list the administrator in `keeper.auth.installation_admins` and create the first key with `python -m lorebase_keeper bootstrap`.
