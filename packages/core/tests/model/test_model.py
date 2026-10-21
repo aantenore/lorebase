@@ -9,6 +9,8 @@ from lorebase_core.model import (
     Attribute,
     AttributeMapping,
     Domain,
+    HttpOptions,
+    HttpPagination,
     IdPrefix,
     ImportOrigin,
     Kind,
@@ -16,6 +18,7 @@ from lorebase_core.model import (
     LinkDirection,
     OperationOrigin,
     OriginType,
+    PaginationType,
     ProvenanceEntry,
     Record,
     ReviewMode,
@@ -279,3 +282,14 @@ def test_schema_copy_refreshes_lookups() -> None:
 def test_schema_round_trips_through_json() -> None:
     schema = supply_schema(with_operation=True)
     assert Schema.model_validate_json(schema.model_dump_json(by_alias=True)) == schema
+
+
+def test_http_options_refuse_reserved_and_literal_credential_headers() -> None:
+    assert HttpOptions(headers={"Accept-Language": "en", "Authorization": "secret://env/T"})
+    for headers in ({"Host": "x"}, {"Authorization": "Bearer x"}, {"X-Api-Key": "k"}):
+        with pytest.raises(ValidationError):
+            HttpOptions(headers=headers)
+    with pytest.raises(ValidationError, match="cursor_path"):
+        HttpPagination(type=PaginationType.CURSOR)
+    with pytest.raises(ValidationError, match="page_size"):
+        HttpPagination(size_param="limit")

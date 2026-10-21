@@ -14,6 +14,7 @@ from lorebase_core.model import (
     CreateRecordStep,
     Derivation,
     ElementStatus,
+    HttpOptions,
     LinkDirection,
     OperationParameter,
     OperationStep,
@@ -688,6 +689,18 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
     (
         "source-query-without-query",
         lambda s: set_source(s, type=SourceType.POSTGRES_QUERY),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-records-path-on-postgres",
+        lambda s: set_source(s, records_path="data.items"),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-http-options-on-csv",
+        lambda s: set_source(s, type=SourceType.CSV, http=HttpOptions()),
         {C.SCHEMA_SOURCE_INVALID},
         None,
     ),

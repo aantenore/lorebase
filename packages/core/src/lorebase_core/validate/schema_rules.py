@@ -79,6 +79,17 @@ SEARCHABLE_TYPES = TEXTUAL_TYPES | {AttributeType.ENUM}
 #: Aggregates that need a numeric source Attribute.
 _NUMERIC_AGGREGATES = frozenset({AggregateFunction.SUM, AggregateFunction.AVG})
 _NUMERIC_TYPES = frozenset({AttributeType.INTEGER, AttributeType.DECIMAL, AttributeType.FLOAT})
+#: Source fields that only some Source types read.
+_SOURCE_TYPE_FIELDS: dict[str, tuple[SourceType, ...]] = {
+    "records_path": (SourceType.JSON, SourceType.HTTP_JSON),
+    "flatten_separator": (
+        SourceType.JSON,
+        SourceType.JSONL,
+        SourceType.PARQUET,
+        SourceType.HTTP_JSON,
+    ),
+    "http": (SourceType.HTTP_JSON,),
+}
 
 
 def _where(path: tuple[PathPart, ...]) -> str:
@@ -912,6 +923,13 @@ class _Checker:
                 (*base, "query"),
                 "postgres_query Sources need a query",
             )
+        for name, types in _SOURCE_TYPE_FIELDS.items():
+            if getattr(source, name) is not None and source.type not in types:
+                self.add(
+                    IssueCode.SCHEMA_SOURCE_INVALID,
+                    (*base, name),
+                    f"{name} applies to {', '.join(t.value for t in types)} Sources only",
+                )
         if source.sync_mode is SyncMode.INCREMENTAL and source.watermark_column is None:
             self.add(
                 IssueCode.SCHEMA_SOURCE_INVALID,
