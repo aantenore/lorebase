@@ -8,7 +8,10 @@ search.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import asyncio
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -346,3 +349,100 @@ async def test_source_runs_need_a_domain_wide_grant(seeded: Seeded) -> None:
         assert await _status(http, seeded.facts["kind_key"], runs) == 403
         # Narrowed callers are not told whether a Source exists either.
         assert await _status(http, seeded.facts["kind_key"], "/sources/nowhere/runs") == 403
+
+
+# Event streams are authorized again while open ---------------------------------------------
+
+
+@asynccontextmanager
+async def _owner_store(owner_url: str) -> AsyncIterator[SqlAuthStore]:
+    engine = create_engine(DatabaseSettings(), url=owner_url, pooled=False)
+    try:
+        yield SqlAuthStore(async_sessionmaker(engine, expire_on_commit=False))
+    finally:
+        await engine.dispose()
+
+
+async def _stream_reader(
+    owner_url: str, name: str, networks: tuple[str, ...] = ()
+) -> tuple[str, str, str]:
+    """A reader of the whole Domain: its API key (usable from `networks` only, when given),
+    the key id and the grant id."""
+    async with _owner_store(owner_url) as store, store.unit() as unit:
+        principal = await unit.principals.add(PrincipalType.SERVICE, name)
+        grant = await unit.grants.add(
+            domain_id=DOMAIN, subject=principal.id, role="viewer", created_by="usr_seed"
+        )
+        generated = CODEC.generate()
+        key = await unit.api_keys.add(
+            principal_id=principal.id,
+            prefix=generated.prefix,
+            key_hash=generated.key_hash,
+            allowed_networks=networks,
+        )
+    return generated.token, key.id, grant.id
+
+
+async def _timed_stream(
+    seeded: Seeded,
+    token: str,
+    reauthorize_s: float,
+    max_s: float,
+    during: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[httpx.Response, float]:
+    """Open the main branch stream, run `during` while it is open, and time the stream."""
+    section = _auth_section()
+    section["auth"]["authz"] = {"grants_cache_ttl_s": 0.2}
+    feed = {
+        "poll_interval_s": 0.05,
+        "heartbeat_s": 30,
+        "reauthorize_interval_s": reauthorize_s,
+        "max_connection_s": max_s,
+    }
+    async with keeper(seeded.app_url, section, agents={"feed": feed}) as http:
+        started = time.monotonic()
+        listening = asyncio.create_task(
+            http.get(f"{BASE}/branches/main/events", headers={"Authorization": f"Bearer {token}"})
+        )
+        await asyncio.sleep(0.5)  # connected and authorized
+        assert not listening.done()
+        if during is not None:
+            await during()
+        response = await asyncio.wait_for(listening, timeout=max_s + 5)
+    return response, time.monotonic() - started
+
+
+@pytest.mark.parametrize("withdrawn", ["grant", "key"])
+async def test_a_stream_closes_once_its_access_is_withdrawn(seeded: Seeded, withdrawn: str) -> None:
+    token, key_id, grant_id = await _stream_reader(seeded.owner_url, f"stream reader ({withdrawn})")
+
+    async def withdraw() -> None:
+        async with _owner_store(seeded.owner_url) as store, store.unit() as unit:
+            if withdrawn == "grant":
+                assert await unit.grants.delete(DOMAIN, grant_id)
+            else:
+                assert await unit.api_keys.revoke(key_id, datetime.now(UTC))
+
+    response, elapsed = await _timed_stream(seeded, token, 0.3, 8, withdraw)
+    assert response.status_code == 200
+    assert response.text.startswith("retry: ")
+    # within the interval plus the grants cache, far before max_connection_s
+    assert elapsed < 3, elapsed
+    async with keeper(seeded.app_url, _auth_section()) as http:
+        assert await _status(http, token, "/branches/main/events") in (401, 403)
+
+
+async def test_an_authorized_stream_stays_open(seeded: Seeded) -> None:
+    token, _, _ = await _stream_reader(seeded.owner_url, "steady stream reader")
+    response, elapsed = await _timed_stream(seeded, token, 0.2, 1.5)
+    assert response.status_code == 200
+    # several checks passed: the stream ran until max_connection_s
+    assert elapsed >= 1.4, elapsed
+
+
+async def test_a_stream_of_a_key_bound_to_networks_stays_open(seeded: Seeded) -> None:
+    # The in-process client connects from 127.0.0.1: each check must see that address.
+    token, _, _ = await _stream_reader(seeded.owner_url, "local stream reader", ("127.0.0.1/32",))
+    response, elapsed = await _timed_stream(seeded, token, 0.2, 1.5)
+    assert response.status_code == 200
+    assert elapsed >= 1.4, elapsed

@@ -7,6 +7,13 @@ client reconnecting with `Last-Event-ID` resumes after the last event it saw; wi
 stream starts with the next commit. The stream sends a comment line after `heartbeat_s` of
 silence and closes after `max_connection_s`.
 
+Every `reauthorize_interval_s` the stream runs the authentication and authorization of its
+request again and closes when they fail, so a revoked API key, an expired token or a withdrawn
+grant ends it without waiting for `max_connection_s`. The check goes through the usual caches:
+a grant changed through another Keeper process is seen after at most
+`keeper.auth.authz.grants_cache_ttl_s` more, OIDC group changes after
+`keeper.auth.oidc.principal_cache_ttl_s`.
+
 `GET .../changes?since=<revision>` reads the same events from the first-parent history of the
 branch instead of the outbox: the Revisions after `since`, oldest first, a page at a time,
 with `next_since` to continue. Use it to catch up after a gap or where streams are not
@@ -18,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -155,16 +162,29 @@ async def stream(
     wanted: KindFilter,
     settings: FeedSettings,
     disconnected: Any,
+    still_allowed: Callable[[], Awaitable[bool]],
 ) -> AsyncIterator[bytes]:
-    """The SSE body: events as they are committed, heartbeats, closed after the max time."""
+    """The SSE body: events as they are committed, heartbeats, closed after the max time or
+    once `still_allowed` (called every `reauthorize_interval_s`) answers false."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + settings.max_connection_s
+    next_check = loop.time() + settings.reauthorize_interval_s
     quiet_since = loop.time()
     cursor = start
     yield f"retry: {settings.retry_ms}\n\n".encode()
     while loop.time() < deadline:
         if await disconnected():
             return
+        if loop.time() >= next_check:
+            try:
+                allowed = await still_allowed()
+            except Exception:
+                logger.exception("change feed authorization failed", extra={"domain": domain_id})
+                return
+            if not allowed:
+                logger.info("change feed closed: access withdrawn", extra={"domain": domain_id})
+                return
+            next_check = loop.time() + settings.reauthorize_interval_s
         try:
             async with runtime.sessions() as session, session.begin():
                 await begin_read(session, runtime)
