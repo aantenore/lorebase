@@ -23,7 +23,7 @@ Scribe is off (scribe.enabled=false): jobs such as Source syncs are queued but n
 {{- end }}
 {{- if eq (dig "keeper" "auth" "mode" "none" .Values.config) "none" }}
 
-WARNING: config.keeper.auth.mode is "none": every request is accepted as an administrator. Development only.
+WARNING: config.keeper.auth.mode is "none": every request is accepted as an administrator. Development only. Keeper starts only with config.keeper.auth.allow_insecure: true.
 {{- end }}
 {{- if .Values.postgresql.enabled }}
 

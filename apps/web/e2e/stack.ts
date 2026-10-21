@@ -19,6 +19,10 @@ function composeEnv(env: E2eEnv): NodeJS.ProcessEnv {
     LOREBASE_IMAGE: process.env['LOREBASE_E2E_IMAGE'] ?? 'lorebase-e2e',
     LOREBASE_TAG: 'run',
     LOREBASE_CONFIG_FILE: env.keeperConfigFile,
+    // auth.mode none on 0.0.0.0 inside the container, published on loopback only: both set here
+    // so a developer's own values never apply to the run.
+    KEEPER_BIND: '127.0.0.1',
+    KEEPER_ALLOW_INSECURE: 'true',
   };
 }
 

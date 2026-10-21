@@ -109,7 +109,8 @@ docs.
 > **Development only.** The shipped `config/lorebase.example.yaml` sets `keeper.auth.mode:
 > none`: Keeper accepts every request as an administrator
 > (`curl http://localhost:8080/api/v1/auth/whoami` answers `"anonymous"` with
-> `"installation_admin":true`). Compose publishes the port on `127.0.0.1` only. Do not expose it,
+> `"installation_admin":true`). Compose publishes the port on `127.0.0.1` only and sets
+> `KEEPER_ALLOW_INSECURE=true`, without which Keeper refuses that mode off loopback. Do not expose it,
 > and use `api_key` or `oidc` modes (they need the `database` section and further settings,
 > see the comments in the file) for anything shared.
 

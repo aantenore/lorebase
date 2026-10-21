@@ -5,6 +5,8 @@ keeper:
   host: 0.0.0.0
   auth:
     mode: none # every request is the same administrator; development only
+    # The container listens on 0.0.0.0 and compose publishes the port on 127.0.0.1 only.
+    allow_insecure: true
   proposals:
     # With authentication off the author, the reviewer and the merger are one principal, so the
     # flows that review and merge a Proposal need this.
