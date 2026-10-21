@@ -28,6 +28,7 @@ import harness
 
 from lorebase_store import migrations, testing
 from lorebase_store.db import create_engine
+from lorebase_store.layout import BranchLayout
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
@@ -56,6 +57,18 @@ ANALYSIS = """\
   at p95, up to ten for typo-tolerant search.
 - Branch creation copies the Records, Links and history rows of `main` (about twice the Records
   and Links) and builds the new branch's per-Attribute indexes in the same transaction.
+- An overlay branch (AC-16, store schema notes) is created by inserting its ref and copying
+  the compiled schema row: its cost does not depend on the size of the Domain.
+- Overlay reads resolve the overlay's own rows over the base rows as of the fork point in one
+  statement: an index scan of each branch, a primary-key probe of the overlay per base row
+  read and a one-row check that the ref is still that overlay. Keyset pages and attribute
+  queries are cut per half, lookups by key are lateral (store schema notes), so the plans are
+  those of the copy run twice on few rows; `test_overlay_reads_keep_index_plans` checks them.
+- Full-text search on an overlay pays twice for the GIN index on `search`, which is shared by
+  every branch of the partition: each half reads all matches of the partition and keeps its
+  branch's. The neighborhood plans one lateral lookup per hop and half.
+- The overlay and the copy below got the same commits; `main` then moved, and its commit
+  copied the previous state of the rows it changed into the overlay (copy on write).
 """
 
 
@@ -68,6 +81,8 @@ class Options:
     branch_iterations: int
     commit_iterations: int
     commit_changes: int
+    overlay_iterations: int
+    overlay_changes: int
     out: Path | None
 
 
@@ -78,7 +93,11 @@ class Report:
     owner: dict[str, harness.Measurement]
     reader: dict[str, harness.Measurement]
     branch: harness.Measurement
+    overlay_branch: harness.Measurement
     commits: harness.Measurement
+    pair: harness.OverlayPair
+    copy_reads: dict[str, dict[str, harness.Measurement]]
+    overlay_reads: dict[str, dict[str, harness.Measurement]]
     plans: dict[str, dict[str, list[str]]]
     hardware: dict[str, str]
     server: dict[str, str]
@@ -93,6 +112,10 @@ def parse(argv: Sequence[str] | None = None) -> Options:
     parser.add_argument("--branch-iterations", type=int, default=3)
     parser.add_argument("--commit-iterations", type=int, default=5)
     parser.add_argument("--commit-changes", type=int, default=1000)
+    parser.add_argument("--overlay-iterations", type=int, default=20)
+    parser.add_argument(
+        "--overlay-changes", type=int, default=1000, help="Part updates on each side of the fork"
+    )
     parser.add_argument("--out", type=Path, default=None, help="write the markdown report here")
     args = parser.parse_args(argv)
     return Options(
@@ -103,6 +126,8 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         args.branch_iterations,
         args.commit_iterations,
         args.commit_changes,
+        args.overlay_iterations,
+        args.overlay_changes,
         args.out,
     )
 
@@ -144,7 +169,8 @@ async def benchmark(options: Options, url: str) -> Report:
         scale = harness.Scale(options.scale, options.extra_links)
         seeded = await harness.seed(engine, runtime, scale)
         work = await harness.workload(engine, runtime)
-        operations = harness.read_operations(work, runtime)
+        main = BranchLayout(harness.DOMAIN, "main")
+        operations = harness.read_operations(work, runtime, main)
         await harness.create_reader(engine)
         common = {"iterations": options.iterations, "warmup": options.warmup}
         owner = await harness.measure_reads(engine, operations, role=None, **common)
@@ -163,6 +189,23 @@ async def benchmark(options: Options, url: str) -> Report:
             changes=options.commit_changes,
             iterations=options.commit_iterations,
         )
+        overlay_branch = await harness.measure_branch_overlay(
+            engine, runtime, iterations=options.overlay_iterations
+        )
+        pair = await harness.overlay_pair(engine, runtime, work, changes=options.overlay_changes)
+        copy_reads: dict[str, dict[str, harness.Measurement]] = {}
+        overlay_reads: dict[str, dict[str, harness.Measurement]] = {}
+        for label, role in (("owner", None), ("rls", harness.READER_ROLE)):
+            # Interleaved per operation so both branches see the same machine load.
+            copy_reads[label], overlay_reads[label] = {}, {}
+            copy_ops = harness.read_operations(work, runtime, pair.copy)
+            overlay_ops = harness.read_operations(work, runtime, pair.overlay)
+            for name in copy_ops:
+                for target, ops in ((copy_reads, copy_ops), (overlay_reads, overlay_ops)):
+                    found = await harness.measure_reads(
+                        engine, {name: ops[name]}, role=role, **common
+                    )
+                    target[label][name] = found[name]
         server = await harness.server_notes(engine)
         await harness.drop_reader(engine)
     finally:
@@ -171,7 +214,19 @@ async def benchmark(options: Options, url: str) -> Report:
         name: {role: plans[role][name] for role in plans} for name in operations
     }
     return Report(
-        options, seeded, owner, reader, branch, commits, by_op, harness.hardware(), server
+        options,
+        seeded,
+        owner,
+        reader,
+        branch,
+        overlay_branch,
+        commits,
+        pair,
+        copy_reads,
+        overlay_reads,
+        by_op,
+        harness.hardware(),
+        server,
     )
 
 
@@ -229,9 +284,10 @@ def render(report: Report) -> str:
         "|-----------|-----:|----:|----:|",
         *(
             f"| {m.name} | {len(m.samples_ms)} | {_ms(m.p50)} | {_ms(m.p95)} |"
-            for m in (report.branch, report.commits)
+            for m in (report.branch, report.overlay_branch, report.commits)
         ),
         "",
+        *_overlay_section(report),
         "## Plans",
         "",
         "Scan nodes of the statements of one call of each read, statements run inside the "
@@ -257,6 +313,37 @@ def render(report: Report) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _overhead(copy: float, overlay: float) -> str:
+    return f"{(overlay / copy - 1) * 100:+.0f}%"
+
+
+def _overlay_section(report: Report) -> list[str]:
+    o, pair = report.options, report.pair
+    lines = [
+        "## Overlay branches (milliseconds)",
+        "",
+        f"`{harness.OVERLAY_BRANCH}` (overlay) and `{harness.COPY_BRANCH}` (copy) forked from "
+        f"`main` and got the same commit of {o.overlay_changes} Part updates; `main` then "
+        f"committed {o.overlay_changes} other Part updates. The overlay stores "
+        f"{pair.overlay_rows:,} rows (its changes, its derived and copied-on-write rows), the "
+        f"copy {pair.copy_rows:,}. Reads alternate between the two branches per operation, "
+        f"{o.iterations} timed calls each.",
+        "",
+        "| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | overhead p50 "
+        "| overhead p95 |",
+        "|-----------|------|---------:|------------:|---------:|------------:|-------------:"
+        "|-------------:|",
+    ]
+    for name in harness.TARGETS_MS:
+        for role in ("owner", "rls"):
+            c, v = report.copy_reads[role][name], report.overlay_reads[role][name]
+            lines.append(
+                f"| {name} | {role} | {_ms(c.p50)} | {_ms(v.p50)} | {_ms(c.p95)} | {_ms(v.p95)} "
+                f"| {_overhead(c.p50, v.p50)} | {_overhead(c.p95, v.p95)} |"
+            )
+    return [*lines, ""]
 
 
 def main(argv: Sequence[str] | None = None) -> Report:

@@ -5,7 +5,7 @@ Latency of the agent read paths on a materialized head (design 8, "Agent read bu
 ## Dataset
 
 - `supply` Domain from `examples/supply/scripts/make_supply_data.py --scale 540`, plus 4 extra `supplied_by` and `stocked_at` Links per Part.
-- 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (151 s, then `VACUUM ANALYZE`).
+- 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (145 s, then `VACUUM ANALYZE`).
 - 300 timed calls per read after 30 warm-up calls, random keys from the dataset.
 
 ## Environment
@@ -26,20 +26,42 @@ Latency of the agent read paths on a materialized head (design 8, "Agent read bu
 
 | Operation | Target p95 | owner p50 | owner p95 | rls p50 | rls p95 |
 |-----------|-----------:|----------:|----------:|--------:|--------:|
-| get by key | 5.00 | 1.21 | 1.63 | 1.54 | 1.86 |
-| list page of 50 | 20.00 | 1.63 | 1.87 | 3.62 | 5.41 |
-| links of a record | 10.00 | 1.58 | 2.34 | 3.00 | 4.54 |
-| 2-hop neighborhood | 30.00 | 5.05 | 7.19 | 5.90 | 8.29 |
-| query by indexed attribute | 25.00 | 2.00 | 3.02 | 1.80 | 2.40 |
-| full-text search | 50.00 | 2.38 | 3.46 | 2.58 | 4.02 |
-| full-text search with typo-tolerant titles | 50.00 | 10.86 | 28.66 | 11.27 | 32.10 |
+| get by key | 5.00 | 1.01 | 1.09 | 1.17 | 1.26 |
+| list page of 50 | 20.00 | 1.39 | 1.48 | 1.52 | 1.87 |
+| links of a record | 10.00 | 1.22 | 1.37 | 1.36 | 1.65 |
+| 2-hop neighborhood | 30.00 | 4.39 | 5.58 | 4.52 | 5.05 |
+| query by indexed attribute | 25.00 | 1.61 | 1.74 | 1.58 | 1.84 |
+| full-text search | 50.00 | 1.96 | 2.33 | 1.88 | 2.32 |
+| full-text search with typo-tolerant titles | 50.00 | 9.13 | 20.92 | 9.57 | 21.59 |
 
 ## Writes (milliseconds)
 
 | Operation | Runs | p50 | p95 |
 |-----------|-----:|----:|----:|
-| branch creation (copy) | 3 | 8008.24 | 8275.43 |
-| commit of 1000 changes | 5 | 416.94 | 501.41 |
+| branch creation (copy) | 3 | 7175.49 | 7314.06 |
+| branch creation (overlay) | 20 | 5.53 | 6.71 |
+| commit of 1000 changes | 5 | 383.66 | 485.97 |
+
+## Overlay branches (milliseconds)
+
+`agent/perf` (overlay) and `perf-copy` (copy) forked from `main` and got the same commit of 1000 Part updates; `main` then committed 1000 other Part updates. The overlay stores 2,000 rows (its changes, its derived and copied-on-write rows), the copy 402,840. Reads alternate between the two branches per operation, 300 timed calls each.
+
+| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | overhead p50 | overhead p95 |
+|-----------|------|---------:|------------:|---------:|------------:|-------------:|-------------:|
+| get by key | owner | 1.01 | 1.03 | 1.10 | 1.24 | +2% | +13% |
+| get by key | rls | 1.17 | 1.20 | 1.32 | 1.27 | +2% | -3% |
+| list page of 50 | owner | 1.42 | 1.45 | 1.55 | 1.57 | +2% | +1% |
+| list page of 50 | rls | 1.61 | 1.59 | 1.75 | 1.69 | -2% | -4% |
+| links of a record | owner | 1.24 | 1.56 | 1.46 | 1.74 | +26% | +19% |
+| links of a record | rls | 1.40 | 1.61 | 1.57 | 1.75 | +15% | +12% |
+| 2-hop neighborhood | owner | 4.46 | 6.71 | 6.13 | 8.21 | +50% | +34% |
+| 2-hop neighborhood | rls | 4.60 | 6.91 | 5.25 | 8.36 | +50% | +59% |
+| query by indexed attribute | owner | 1.64 | 1.94 | 1.78 | 2.37 | +19% | +34% |
+| query by indexed attribute | rls | 1.82 | 2.15 | 1.99 | 2.58 | +18% | +30% |
+| full-text search | owner | 2.35 | 4.72 | 2.99 | 5.18 | +101% | +73% |
+| full-text search | rls | 2.71 | 5.22 | 3.67 | 8.51 | +93% | +132% |
+| full-text search with typo-tolerant titles | owner | 15.88 | 18.03 | 42.70 | 49.08 | +14% | +15% |
+| full-text search with typo-tolerant titles | rls | 17.67 | 19.09 | 45.80 | 52.80 | +8% | +15% |
 
 ## Plans
 
@@ -79,6 +101,22 @@ Scan nodes of the statements of one call of each read, statements run inside the
   at p95, up to ten for typo-tolerant search.
 - Branch creation copies the Records, Links and history rows of `main` (about twice the Records
   and Links) and builds the new branch's per-Attribute indexes in the same transaction.
+- An overlay branch (AC-16, store schema notes) is created by inserting its ref and copying
+  the compiled schema row: its cost does not depend on the size of the Domain.
+- Overlay reads resolve the overlay's own rows over the base rows as of the fork point in one
+  statement: an index scan of each branch, a primary-key probe of the overlay per base row
+  read and a one-row check that the ref is still that overlay. Keyset pages and attribute
+  queries are cut per half, lookups by key are lateral (store schema notes), so the plans are
+  those of the copy run twice on few rows; `test_overlay_reads_keep_index_plans` checks them.
+- Against the 20% overhead target: key reads, pages, Links of a Record (p95) and typo-tolerant
+  search are within it; attribute queries (+0.3 to 0.6 ms), the neighborhood (+2 to 3 ms) and
+  plain full-text search (+2.5 to 5 ms) are above it, and every read stays far within its
+  budget of design 8.7. Search pays twice for the GIN index on `search`, which is shared by
+  every branch of the partition: each half reads all matches of the partition and keeps its
+  branch's (the composite `(domain_id, branch, search)` index of design 8.7 "Deferred" would
+  remove that). The neighborhood plans one lateral lookup per hop and half.
+- The overlay and the copy below got the same commits; `main` then moved, and its commit
+  copied the previous state of the rows it changed into the overlay (copy on write).
 
 Regenerate with:
 
