@@ -424,6 +424,10 @@ store:
     compression: gzip            # gzip | none, applied to the .jsonl files
     compression_level: 6         # gzip level 1-9
     verify_after_import: true    # verify rebuilt branches against their trees
+    max_member_bytes: 17179869184   # import: largest file, counted as read after gzip (16 GiB)
+    max_total_bytes: 68719476736    # import: largest sum of file sizes (64 GiB)
+    max_entries: 100000          # import: most files and directories in a bundle
+    max_line_bytes: 67108864     # import: longest .jsonl record and largest .json file (64 MiB)
   profiling:                     # profilers feeding schema inference (docs/inference.md)
     csv:
       sample_rows: 10000         # rows kept per file; every row is still counted
