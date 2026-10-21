@@ -96,7 +96,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 
 ## M5: Enterprise hardening and 1.0
 
-- [x] Overlay branch materialization ([store schema notes](store-schema-notes.md#overlay-branches)); landed early, `copy` stays the default mode outside the `agent/`, `extract/` and `source/` prefixes
+- [x] Overlay branch materialization (AC-16 implemented, migration `0010`, [store schema notes](store-schema-notes.md#overlay-branches)); landed early, `copy` stays the default mode outside the `agent/`, `extract/` and `source/` prefixes, and agent task branches are overlays (`keeper.agent_writes.branch_mode`)
 - [ ] PII vault storage and erasure
 - [x] Helm chart ([kubernetes](kubernetes.md)); landed early, validated by lint, template and kubeconform, not yet on a live cluster
 - [x] Garbage collection of unreachable objects ([operations](operations.md)); landed early
