@@ -231,7 +231,7 @@ every one can be set as `LOREBASE__INFERENCE__...` in the environment.
 | `llm.temperature`, `llm.max_tokens` | 0, unset | per call overridable through `ChatOptions` |
 | `llm.max_concurrency`, `llm.timeout_s` | 2, 120 | |
 | `llm.retry.max_retries` / `backoff_base_s` / `backoff_max_s` | 3 / 0.5 / 30 | |
-| `llm.tasks.<name>.*` | none | any of the `llm` keys above, per task |
+| `llm.tasks.<name>.*` | none | any of the `llm` keys above, per task; a task with another `base_url` uses only its own `api_key` |
 | `embeddings.provider` / `model` / `dims` | `fastembed` / `BAAI/bge-small-en-v1.5` / 384 | |
 | `embeddings.batch_size` | 32 | texts per model call or request |
 | `embeddings.cache_dir`, `threads` | library defaults | fastembed |

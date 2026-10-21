@@ -118,7 +118,11 @@ sources:
 ```
 
 **Connections** are secret references, never literals. Scribe resolves them in its own
-environment: for CSV the value is a local path or an `http(s)` URL, for Postgres a DSN.
+environment: for CSV the value is a local path or an `http(s)` URL, for Postgres a DSN. Only
+the references listed in `scribe.sources.allowed_connections` are resolved (empty by default):
+Sources are written by schema authors, and without the list any of them could name a reference
+meant for something else, such as the DSN of the Lorebase database. Errors name the reference,
+never the value behind it.
 
 - CSV files must lie under `scribe.sources.csv.allowed_roots`; URLs need a scheme in
   `allowed_schemes` and a host in `allowed_hosts`, are fetched without following redirects and

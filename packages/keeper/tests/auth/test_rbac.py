@@ -481,3 +481,27 @@ async def test_narrowed_or_ungranted_callers_get_403_for_a_missing_domain(
         # the same answer as for a Domain that exists and is not theirs
         existing = await http.get("/api/v1/domains/acme/probe/data", headers=narrowed)
         assert existing.status_code == 403
+
+
+async def test_a_wildcard_domain_id_is_not_every_domain(store: Any) -> None:
+    # "*" is how the authorizer asks for grants in any Domain (installation permissions);
+    # a Domain id taken from a request path must never select that lookup.
+    store.add_grant("acme", "usr_u", "admin")
+    store.add_grant("globex", "usr_u", "editor", GrantScope.KIND, "Supplier")
+    subject = authorizer(store)
+    assert not await subject.allows(user(), P.GRANT_MANAGE, "*")
+    assert not await subject.allows_anywhere(user(), P.GRANT_MANAGE, "*")
+    assert await subject.granted_kinds(user(), P.BRANCH_CREATE, "*") == frozenset()
+    assert await subject.allows(user(), P.GRANT_MANAGE, "acme")
+    assert await subject.allows_installation(user(), P.DOMAIN_CREATE)
+
+
+async def test_a_wildcard_domain_in_the_path_is_forbidden(
+    routed: Callable[..., FastAPI], client_for: ClientFor, store: Any, codec: Any
+) -> None:
+    store.add_principal("svc_a", PrincipalType.SERVICE)
+    store.add_grant("acme", "svc_a", "viewer")
+    headers = auth_header(store, codec, "svc_a")
+    async with client_for(routed()) as http:
+        response = await http.get("/api/v1/domains/*/probe/data", headers=headers)
+    assert response.status_code == 403

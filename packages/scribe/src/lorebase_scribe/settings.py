@@ -138,6 +138,12 @@ class PostgresSourceSettings(SectionModel):
 class SourceSettings(SectionModel):
     """Source synchronization (design 9.1)."""
 
+    allowed_connections: tuple[str, ...] = Field(
+        default=(),
+        description="Secret references (secret://env/NAME, secret://file/PATH) a Source "
+        "`connection` may name. Sources are defined by schema authors, so any other reference "
+        "is refused rather than resolved on this host. Empty: no Source can be synchronized.",
+    )
     commit_batch: int = Field(
         default=5000,
         ge=1,

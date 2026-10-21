@@ -9,6 +9,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -34,7 +35,7 @@ from lorebase_store.indexes import (
     run_index_jobs,
     sql_literal,
 )
-from lorebase_store.jobs import INDEX_JOB, run_jobs
+from lorebase_store.jobs import INDEX_JOB, JobRow, run_jobs
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
@@ -500,3 +501,27 @@ async def test_the_pending_plan_prints_the_ddl_an_administrator_applies(
         await scope_to_domain(session, DOMAIN)
         assert await pending_index_plan(session, DOMAIN) == []
         assert await pending_index_plan(session, DOMAIN, branch="nope") == []
+
+
+@pytestmark_integration
+async def test_a_drop_job_only_drops_managed_indexes_of_its_domain(
+    engine: AsyncEngine, sessions: Sessions
+) -> None:
+    # The application role may queue jobs; the maintenance role runs them. A queued name must
+    # not let the first drop what the second owns beyond this Domain's managed indexes.
+    job = JobRow(
+        id=1,
+        type=INDEX_JOB,
+        domain_id=DOMAIN,
+        payload={"action": "drop", "name": "ix_jobs_claimable", "branch": "main"},
+        priority=0,
+        attempts=0,
+        run_after=datetime.now(UTC),
+        locked_by=None,
+        created_at=datetime.now(UTC),
+    )
+    result = await run_index_job(engine, job)
+    assert result["status"] == "cancelled"
+    async with engine.connect() as connection:
+        found = await connection.execute(text("SELECT to_regclass('ix_jobs_claimable')"))
+        assert found.scalar_one() is not None

@@ -102,6 +102,38 @@ async def test_every_resolved_address_is_checked() -> None:
     assert checked == Target(None, ("93.184.215.14",))
 
 
+@pytest.mark.parametrize(
+    "address",
+    [
+        "100.100.100.200",  # shared address space (100.64.0.0/10), a cloud metadata service
+        "100.64.0.1",
+        "192.0.0.8",  # IETF protocol assignments
+        "198.18.0.1",  # benchmarking
+        "::ffff:10.0.0.1",  # IPv4-mapped
+        "64:ff9b::a00:5",  # NAT64 well-known prefix wrapping 10.0.0.5
+        "64:ff9b:1::a00:5",  # NAT64 local-use prefix
+        "2002:a00:1::",  # 6to4 wrapping 10.0.0.1
+        "2001:0:4136:e378:8000:63bf:f5ff:fffe",  # Teredo, client 10.0.0.1
+        "fec0::1",  # deprecated site-local
+        "fc00::1",
+        "224.0.1.1",  # multicast
+    ],
+)
+async def test_non_global_addresses_are_refused(address: str) -> None:
+    async def resolve(host: str) -> list[str]:
+        return [address]
+
+    url = "https://hooks.example.com/x"
+    assert await target_problem(url, WebhookSettings(), resolve) == "resolves to a private address"
+
+
+async def test_global_ipv6_addresses_are_accepted() -> None:
+    async def resolve(host: str) -> list[str]:
+        return ["2606:4700:4700::1111"]
+
+    assert await target_problem("https://hooks.example.com/x", WebhookSettings(), resolve) is None
+
+
 async def _public(host: str) -> list[str]:
     return ["93.184.215.14"]
 

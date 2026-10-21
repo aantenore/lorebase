@@ -25,7 +25,6 @@ from lorebase_keeper.auth.principals import Principal
 from lorebase_store.auth import GrantRecord
 from lorebase_store.models.enums import GrantScope
 
-ANY_DOMAIN = "*"
 DOMAIN_SCOPE_PREFIX = "domain:"
 
 
@@ -58,8 +57,8 @@ class Authorizer:
     ) -> None:
         self._roles = role_catalog(settings.custom_roles)
         self._store = store
-        self._cache: TtlCache[tuple[str, tuple[str, ...]], tuple[GrantRecord, ...]] = TtlCache(
-            settings.grants_cache_ttl_s, settings.grants_cache_max_entries, monotonic
+        self._cache: TtlCache[tuple[str | None, tuple[str, ...]], tuple[GrantRecord, ...]] = (
+            TtlCache(settings.grants_cache_ttl_s, settings.grants_cache_max_entries, monotonic)
         )
 
     @property
@@ -154,14 +153,19 @@ class Authorizer:
             return False
         if principal.installation_admin:
             return True
-        grants = await self._grants(principal, ANY_DOMAIN)
+        grants = await self._grants(principal, None)
         return any(
             grant.scope_type is GrantScope.DOMAIN
             and self._grant_allows(grant, permission, AccessContext())
             for grant in grants
         )
 
-    async def _grants(self, principal: Principal, domain_id: str) -> tuple[GrantRecord, ...]:
+    async def _grants(self, principal: Principal, domain_id: str | None) -> tuple[GrantRecord, ...]:
+        """Grants of the principal in a Domain, or in every Domain when `domain_id` is None.
+
+        Only None selects every Domain: a Domain id comes from the request and is compared as
+        it is, so no value of it (such as "*") can widen the lookup.
+        """
         key = (domain_id, principal.subjects)
         cached = self._cache.get(key)
         if cached is not None:
@@ -170,7 +174,7 @@ class Authorizer:
         async with self._store.unit() as unit:
             found = (
                 await unit.grants.for_subjects_anywhere(principal.subjects)
-                if domain_id == ANY_DOMAIN
+                if domain_id is None
                 else await unit.grants.for_subjects(domain_id, principal.subjects)
             )
         grants = tuple(found)

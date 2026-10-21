@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
 
@@ -65,3 +68,45 @@ async def test_without_checked_addresses_the_url_is_used_as_given() -> None:
     (request,) = transport.requests
     assert str(request.url) == "http://127.0.0.1:8080/hook"
     assert "sni_hostname" not in request.extensions
+
+
+class EndlessBody(httpx.AsyncByteStream):
+    """A response body that never ends, one small chunk at a time."""
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        while True:
+            await asyncio.sleep(0.01)
+            yield b"x" * 1024
+
+
+class Stalling(httpx.AsyncBaseTransport):
+    """Answers 200 with an endless body, or waits before answering at all."""
+
+    def __init__(self, *, delay_s: float = 0.0) -> None:
+        self.delay_s = delay_s
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(self.delay_s)
+        return httpx.Response(200, stream=EndlessBody())
+
+
+async def test_the_response_body_is_never_read() -> None:
+    # A target streaming an endless body must not hold the worker nor grow its memory.
+    async with httpx.AsyncClient(transport=Stalling()) as client:
+        status = await asyncio.wait_for(
+            HttpxSender(client)("https://hooks.example.com/x", b"{}", {}, 1.0, []), 3
+        )
+    assert status == 200
+
+
+async def test_the_timeout_bounds_the_whole_request() -> None:
+    # httpx timeouts apply to each read, so a target answering slowly could hold the sender
+    # far beyond `timeout_s`; the sender bounds the whole exchange itself.
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async with httpx.AsyncClient(transport=Stalling(delay_s=30)) as client:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                HttpxSender(client)("https://hooks.example.com/x", b"{}", {}, 0.2, []), 5
+            )
+    assert loop.time() - started < 2

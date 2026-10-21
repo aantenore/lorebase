@@ -107,6 +107,8 @@ keeper:
     mode: none                   # none | api_key | oidc | api_key+oidc. `none` accepts every
                                  # request as an administrator: local development only. The
                                  # other modes need the `database` section below
+    allow_insecure: false        # true: allow mode `none` with a host other than loopback;
+                                 # otherwise Keeper refuses to start with that combination
     installation_admins: []      # principal ids, identity provider subjects or group ids allowed
                                  # to administer the installation (list principals). They get
                                  # no access to Domain data
@@ -665,6 +667,8 @@ scribe:
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
     domain_batch: 100            # Domains read per query
   sources:                       # Source synchronization (design 9.1)
+    allowed_connections: []      # secret references a Source `connection` may name, e.g.
+                                 # secret://env/ERP_DSN; empty: no Source can be synchronized
     commit_batch: 5000           # changes per Revision; one row's changes are never split
     max_row_errors: 100          # skipped rows tolerated; more fail the run without committing
     error_samples: 20            # row errors kept in the run record
