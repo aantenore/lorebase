@@ -89,7 +89,10 @@ export function SourcesPage() {
           </>
         )}
       </QueryBoundary>
-      <PlannedScreens area="Sources" built={['Source list and detail']} />
+      <PlannedScreens
+        area="Sources"
+        built={['Source list and detail', 'Documents and extraction jobs']}
+      />
     </>
   );
 }

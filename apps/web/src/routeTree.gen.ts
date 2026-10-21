@@ -15,6 +15,8 @@ import { Route as DomainCanvasRouteImport } from './routes/$domain.canvas'
 import { Route as DomainModelerRouteImport } from './routes/$domain.modeler'
 import { Route as DomainSettingsRouteImport } from './routes/$domain.settings'
 import { Route as DomainSourcesRouteImport } from './routes/$domain.sources'
+import { Route as DomainDocumentsIndexRouteImport } from './routes/$domain.documents.index'
+import { Route as DomainDocumentsDocumentRouteImport } from './routes/$domain.documents.$document'
 import { Route as DomainExplorerIndexRouteImport } from './routes/$domain.explorer.index'
 import { Route as DomainReviewIndexRouteImport } from './routes/$domain.review.index'
 import { Route as DomainReviewProposalRouteImport } from './routes/$domain.review.$proposal'
@@ -51,6 +53,16 @@ const DomainSourcesRoute = DomainSourcesRouteImport.update({
   path: '/sources',
   getParentRoute: () => DomainRoute,
 } as any)
+const DomainDocumentsIndexRoute = DomainDocumentsIndexRouteImport.update({
+  id: '/documents/',
+  path: '/documents/',
+  getParentRoute: () => DomainRoute,
+} as any)
+const DomainDocumentsDocumentRoute = DomainDocumentsDocumentRouteImport.update({
+  id: '/documents/$document',
+  path: '/documents/$document',
+  getParentRoute: () => DomainRoute,
+} as any)
 const DomainExplorerIndexRoute = DomainExplorerIndexRouteImport.update({
   id: '/explorer/',
   path: '/explorer/',
@@ -84,7 +96,9 @@ export interface FileRoutesByFullPath {
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
+  '/$domain/documents/$document': typeof DomainDocumentsDocumentRoute
   '/$domain/review/$proposal': typeof DomainReviewProposalRoute
+  '/$domain/documents/': typeof DomainDocumentsIndexRoute
   '/$domain/explorer/': typeof DomainExplorerIndexRoute
   '/$domain/review/': typeof DomainReviewIndexRoute
   '/$domain/explorer/$kind/$key': typeof DomainExplorerKindKeyRoute
@@ -97,7 +111,9 @@ export interface FileRoutesByTo {
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
+  '/$domain/documents/$document': typeof DomainDocumentsDocumentRoute
   '/$domain/review/$proposal': typeof DomainReviewProposalRoute
+  '/$domain/documents': typeof DomainDocumentsIndexRoute
   '/$domain/explorer': typeof DomainExplorerIndexRoute
   '/$domain/review': typeof DomainReviewIndexRoute
   '/$domain/explorer/$kind/$key': typeof DomainExplorerKindKeyRoute
@@ -111,7 +127,9 @@ export interface FileRoutesById {
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
+  '/$domain/documents/$document': typeof DomainDocumentsDocumentRoute
   '/$domain/review/$proposal': typeof DomainReviewProposalRoute
+  '/$domain/documents/': typeof DomainDocumentsIndexRoute
   '/$domain/explorer/': typeof DomainExplorerIndexRoute
   '/$domain/review/': typeof DomainReviewIndexRoute
   '/$domain/explorer/$kind/$key': typeof DomainExplorerKindKeyRoute
@@ -126,7 +144,9 @@ export interface FileRouteTypes {
     | '/$domain/modeler'
     | '/$domain/settings'
     | '/$domain/sources'
+    | '/$domain/documents/$document'
     | '/$domain/review/$proposal'
+    | '/$domain/documents/'
     | '/$domain/explorer/'
     | '/$domain/review/'
     | '/$domain/explorer/$kind/$key'
@@ -139,7 +159,9 @@ export interface FileRouteTypes {
     | '/$domain/modeler'
     | '/$domain/settings'
     | '/$domain/sources'
+    | '/$domain/documents/$document'
     | '/$domain/review/$proposal'
+    | '/$domain/documents'
     | '/$domain/explorer'
     | '/$domain/review'
     | '/$domain/explorer/$kind/$key'
@@ -152,7 +174,9 @@ export interface FileRouteTypes {
     | '/$domain/modeler'
     | '/$domain/settings'
     | '/$domain/sources'
+    | '/$domain/documents/$document'
     | '/$domain/review/$proposal'
+    | '/$domain/documents/'
     | '/$domain/explorer/'
     | '/$domain/review/'
     | '/$domain/explorer/$kind/$key'
@@ -208,6 +232,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DomainSourcesRouteImport
       parentRoute: typeof DomainRoute
     }
+    '/$domain/documents/': {
+      id: '/$domain/documents/'
+      path: '/documents'
+      fullPath: '/$domain/documents/'
+      preLoaderRoute: typeof DomainDocumentsIndexRouteImport
+      parentRoute: typeof DomainRoute
+    }
+    '/$domain/documents/$document': {
+      id: '/$domain/documents/$document'
+      path: '/documents/$document'
+      fullPath: '/$domain/documents/$document'
+      preLoaderRoute: typeof DomainDocumentsDocumentRouteImport
+      parentRoute: typeof DomainRoute
+    }
     '/$domain/explorer/': {
       id: '/$domain/explorer/'
       path: '/explorer'
@@ -251,7 +289,9 @@ interface DomainRouteChildren {
   DomainModelerRoute: typeof DomainModelerRoute
   DomainSettingsRoute: typeof DomainSettingsRoute
   DomainSourcesRoute: typeof DomainSourcesRoute
+  DomainDocumentsDocumentRoute: typeof DomainDocumentsDocumentRoute
   DomainReviewProposalRoute: typeof DomainReviewProposalRoute
+  DomainDocumentsIndexRoute: typeof DomainDocumentsIndexRoute
   DomainExplorerIndexRoute: typeof DomainExplorerIndexRoute
   DomainReviewIndexRoute: typeof DomainReviewIndexRoute
   DomainExplorerKindKeyRoute: typeof DomainExplorerKindKeyRoute
@@ -263,7 +303,9 @@ const DomainRouteChildren: DomainRouteChildren = {
   DomainModelerRoute: DomainModelerRoute,
   DomainSettingsRoute: DomainSettingsRoute,
   DomainSourcesRoute: DomainSourcesRoute,
+  DomainDocumentsDocumentRoute: DomainDocumentsDocumentRoute,
   DomainReviewProposalRoute: DomainReviewProposalRoute,
+  DomainDocumentsIndexRoute: DomainDocumentsIndexRoute,
   DomainExplorerIndexRoute: DomainExplorerIndexRoute,
   DomainReviewIndexRoute: DomainReviewIndexRoute,
   DomainExplorerKindKeyRoute: DomainExplorerKindKeyRoute,

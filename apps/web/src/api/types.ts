@@ -699,33 +699,6 @@ export interface ProposalListParams extends PageParams {
   origin?: ProposalOrigin;
 }
 
-export interface ExtractionEvidence {
-  document_id: string;
-  page: number | null;
-  span: [number, number];
-  quote: string;
-}
-
-export type ItemDecision = 'pending' | 'accepted' | 'rejected';
-
-export interface ProposalItem {
-  item_id: string;
-  partition: string;
-  element_key: string;
-  attribute_id: ElementId | null;
-  evidence: ExtractionEvidence | null;
-  confidence: number | null;
-  match_status: 'matched' | 'new' | 'ambiguous' | null;
-  decision: ItemDecision;
-  decided_by: string | null;
-  decided_at: string | null;
-}
-
-export interface DecideItemsInput {
-  item_ids: string[];
-  decision: Exclude<ItemDecision, 'pending'>;
-}
-
 // ----------------------------------------------------------------- Conflicts
 // Mirrors packages/core/src/lorebase_core/merge/conflicts.py (design 6.8 to 6.10).
 

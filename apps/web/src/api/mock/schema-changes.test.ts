@@ -114,7 +114,7 @@ describe('mock schema change sets', () => {
     const result = await api.schema.applyChanges('supply', BRANCH, { changes });
     expect(result.valid).toBe(true);
     expect(result.migrations).toEqual([
-      expect.objectContaining({ affected_values: 6, failing_values: 0 }),
+      expect.objectContaining({ affected_values: 9, failing_values: 0 }),
     ]);
     expect(result.migrations[0]?.description).toContain('Supplier.risk_score');
   });
@@ -128,7 +128,7 @@ describe('mock schema change sets', () => {
     const result = await api.schema.applyChanges('supply', BRANCH, { changes });
     expect(result.valid).toBe(false);
     expect(result.revision).toBeNull();
-    expect(result.migrations[0]).toMatchObject({ affected_values: 6, failing_values: 6 });
+    expect(result.migrations[0]).toMatchObject({ affected_values: 9, failing_values: 9 });
     expect(result.violations).toEqual([
       expect.objectContaining({
         code: 'cast_failed',
@@ -149,7 +149,7 @@ describe('mock schema change sets', () => {
     const result = await api.schema.applyChanges('supply', BRANCH, { changes });
     expect(result.valid).toBe(true);
     expect(result.migrations[0]?.description).toBe(
-      'Drop 6 values of removed Attribute Supplier.city',
+      'Drop 9 values of removed Attribute Supplier.city',
     );
     const record = await api.records.get(
       { domain: 'supply', branch: BRANCH },
@@ -196,7 +196,7 @@ describe('mock schema change sets', () => {
     });
     const accepted = await api.schema.applyChanges('supply', BRANCH, { changes: withDefault });
     expect(accepted.valid).toBe(true);
-    expect(accepted.migrations[0]).toMatchObject({ affected_values: 8 });
+    expect(accepted.migrations[0]).toMatchObject({ affected_values: 9 });
   });
 
   it('reports structural rule violations with their YAML path', async () => {
