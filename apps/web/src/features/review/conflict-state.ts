@@ -5,7 +5,7 @@ import type {
   Resolution,
   ResolutionChoice,
 } from '@/api/types';
-import { locationOf, type Names } from './conflict-meta';
+import { locationOf, messageOf, type Names } from './conflict-meta';
 
 /** The stored Resolution of a Conflict, if any. */
 export function resolutionOf(attempt: MergeAttempt, conflict: Conflict): Resolution | undefined {
@@ -40,7 +40,7 @@ export function filterConflicts(
     if (filter.status === 'open' && resolved.has(conflict.fingerprint)) return false;
     if (filter.status === 'resolved' && !resolved.has(conflict.fingerprint)) return false;
     if (needle === '') return true;
-    const haystack = [locationOf(conflict, names), conflict.message, ...conflict.sample];
+    const haystack = [locationOf(conflict, names), messageOf(conflict, names), ...conflict.sample];
     return haystack.some((text) => text.toLowerCase().includes(needle));
   });
 }

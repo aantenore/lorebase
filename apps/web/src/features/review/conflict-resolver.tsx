@@ -11,6 +11,7 @@ import {
   choiceLabel,
   isGrouped,
   locationOf,
+  messageOf,
   type Names,
 } from './conflict-meta';
 import { SideBySide } from './side-by-side';
@@ -230,7 +231,7 @@ export function ConflictResolver({
           {resolution !== undefined && <Badge tone="success">resolved: {resolution.choice}</Badge>}
         </div>
         <p className="font-mono text-xs text-muted">{locationOf(conflict, names)}</p>
-        <p className="text-sm">{conflict.message}</p>
+        <p className="text-sm">{messageOf(conflict, names)}</p>
       </header>
 
       {typeof rejected === 'string' && (

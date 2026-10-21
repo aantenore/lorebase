@@ -2,6 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useBranches, useDomain } from '@/api/queries';
 import { Badge } from '@/ui/layout';
 import { Select } from '@/ui/field';
+import { NewBranch } from './new-branch';
 import type { ScopeSearch } from './scope';
 
 const SHORT_REVISION_LENGTH = 8;
@@ -42,6 +43,7 @@ export function BranchSwitcher({ domain, search }: { domain: string; search: Sco
           });
         }}
       />
+      <NewBranch domain={domain} from={current} defaultBranch={defaultBranch} />
       {selected !== undefined && (
         <Badge tone="accent">Revision {selected.head.slice(0, SHORT_REVISION_LENGTH)}</Badge>
       )}

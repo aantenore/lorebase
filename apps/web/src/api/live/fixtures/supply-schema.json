@@ -1,0 +1,1088 @@
+{
+  "domain": "supply",
+  "branch": "main",
+  "revision": "43eb6848f9b828c91b223fa97e697322cd7a9b62af1609254719e5fb239f47bb",
+  "schema": {
+    "domain": {
+      "id": "supply",
+      "display_name": "Supply chain",
+      "description": "Suppliers, parts, plants, purchase orders and supplier contracts.",
+      "default_branch": "main",
+      "settings": { "search_language": "english" }
+    },
+    "kinds": {
+      "knd_01KEZF7C00WBDCAD84MRED7WQV": {
+        "id": "knd_01KEZF7C00WBDCAD84MRED7WQV",
+        "api_name": "Part",
+        "display_name": "",
+        "description": "A component bought from suppliers and held in stock.",
+        "primary_key": ["att_01KEZF7C00V0MZ56VTARJ76YAC"],
+        "title_attribute": "att_01KEZF7C00J7TH66AHX4NEB2AP",
+        "attributes": {
+          "att_01KEZF7C006G1G3TGKRKJW1ZB6": {
+            "id": "att_01KEZF7C006G1G3TGKRKJW1ZB6",
+            "api_name": "hazardous",
+            "display_name": "",
+            "description": "True when shipping the part needs dangerous goods handling.",
+            "type": { "name": "boolean" },
+            "required": false,
+            "unique": false,
+            "default": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C008N7SZ6W62PVEXNPQ": {
+            "id": "att_01KEZF7C008N7SZ6W62PVEXNPQ",
+            "api_name": "supplier_count",
+            "display_name": "",
+            "description": "Number of suppliers that can supply the part. Derived.",
+            "type": { "name": "integer" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false,
+            "derivation_id": "drv_01KEZF7C00MMX6MTB4YG6XW54X"
+          },
+          "att_01KEZF7C00DFFAK6XAMCQEDBDJ": {
+            "id": "att_01KEZF7C00DFFAK6XAMCQEDBDJ",
+            "api_name": "category",
+            "display_name": "",
+            "description": "Commodity group of the part.",
+            "type": {
+              "name": "enum",
+              "enum_values": [
+                "bearing",
+                "fastener",
+                "seal",
+                "gasket",
+                "valve",
+                "filter",
+                "sensor",
+                "motor",
+                "hose"
+              ]
+            },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00E3M1JDMAG6KQJH02": {
+            "id": "att_01KEZF7C00E3M1JDMAG6KQJH02",
+            "api_name": "summary",
+            "display_name": "",
+            "description": "One sentence on what the part is used for.",
+            "type": { "name": "text" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": true,
+            "search_weight": "B"
+          },
+          "att_01KEZF7C00J7TH66AHX4NEB2AP": {
+            "id": "att_01KEZF7C00J7TH66AHX4NEB2AP",
+            "api_name": "name",
+            "display_name": "",
+            "description": "Short catalogue name including the main size or rating.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": true,
+            "search_weight": "A"
+          },
+          "att_01KEZF7C00JFDYDNGH9ZXPWFB6": {
+            "id": "att_01KEZF7C00JFDYDNGH9ZXPWFB6",
+            "api_name": "lifecycle",
+            "display_name": "",
+            "description": "Lifecycle stage of the part.",
+            "type": { "name": "enum", "enum_values": ["active", "phase_out", "obsolete"] },
+            "required": false,
+            "unique": false,
+            "default": "active",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00JHNXEZYX47QP6TY8": {
+            "id": "att_01KEZF7C00JHNXEZYX47QP6TY8",
+            "api_name": "unit_cost",
+            "display_name": "",
+            "description": "Standard unit cost in euro.",
+            "type": { "name": "decimal", "precision": 10, "scale": 2 },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00V0MZ56VTARJ76YAC": {
+            "id": "att_01KEZF7C00V0MZ56VTARJ76YAC",
+            "api_name": "part_number",
+            "display_name": "",
+            "description": "Part number, for example P-10001.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^P-[0-9]{5,}$" },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00ZEX82XM0N3DGHD4Q": {
+            "id": "att_01KEZF7C00ZEX82XM0N3DGHD4Q",
+            "api_name": "weight_kg",
+            "display_name": "",
+            "description": "Unit weight in kilograms.",
+            "type": { "name": "decimal", "precision": 8, "scale": 3 },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          }
+        },
+        "traits": [],
+        "status": "active",
+        "search": {},
+        "icon": "cog",
+        "color": "#6a994e",
+        "operations_builtin": ["create", "update", "delete"]
+      },
+      "knd_01KEZF7C00M11T0RH8CAVBW897": {
+        "id": "knd_01KEZF7C00M11T0RH8CAVBW897",
+        "api_name": "PurchaseOrder",
+        "display_name": "",
+        "description": "An order placed with a supplier for one part, delivered to one plant.",
+        "primary_key": ["att_01KEZF7C00A7ZA9X9YZ121SJ3M"],
+        "title_attribute": "att_01KEZF7C00A7ZA9X9YZ121SJ3M",
+        "attributes": {
+          "att_01KEZF7C000WEBH0WCJQB4RVDY": {
+            "id": "att_01KEZF7C000WEBH0WCJQB4RVDY",
+            "api_name": "unit_price",
+            "display_name": "",
+            "description": "Agreed unit price in the order currency.",
+            "type": { "name": "decimal", "precision": 10, "scale": 2 },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          },
+          "att_01KEZF7C002MCFVSZ1DAVJF0GX": {
+            "id": "att_01KEZF7C002MCFVSZ1DAVJF0GX",
+            "api_name": "quantity",
+            "display_name": "",
+            "description": "Ordered quantity in units.",
+            "type": { "name": "integer" },
+            "required": true,
+            "unique": false,
+            "constraints": { "min": 1 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          },
+          "att_01KEZF7C00537ZFFD1EAF7VVNY": {
+            "id": "att_01KEZF7C00537ZFFD1EAF7VVNY",
+            "api_name": "due_on",
+            "display_name": "",
+            "description": "Date the goods are due at the plant.",
+            "type": { "name": "date" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          },
+          "att_01KEZF7C007AC0DF84HCQRX9ZT": {
+            "id": "att_01KEZF7C007AC0DF84HCQRX9ZT",
+            "api_name": "supplier",
+            "display_name": "",
+            "description": "Key of the supplier the order is issued to. Backs the Relation issued_to.",
+            "type": { "name": "ref", "kind_ref": "knd_01KEZF7C007ZDX8SK1DZP7MXFF" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          },
+          "att_01KEZF7C00A7ZA9X9YZ121SJ3M": {
+            "id": "att_01KEZF7C00A7ZA9X9YZ121SJ3M",
+            "api_name": "po_number",
+            "display_name": "",
+            "description": "Purchase order number, for example PO-200001.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^PO-[0-9]{6,}$" },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00FJSCTF8SM9V93CCN": {
+            "id": "att_01KEZF7C00FJSCTF8SM9V93CCN",
+            "api_name": "status",
+            "display_name": "",
+            "description": "Order lifecycle stage.",
+            "type": {
+              "name": "enum",
+              "enum_values": ["draft", "issued", "shipped", "received", "cancelled"]
+            },
+            "required": true,
+            "unique": false,
+            "default": "draft",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          },
+          "att_01KEZF7C00G50HMR04NHDPXS30": {
+            "id": "att_01KEZF7C00G50HMR04NHDPXS30",
+            "api_name": "ordered_on",
+            "display_name": "",
+            "description": "Date the order was placed.",
+            "type": { "name": "date" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          },
+          "att_01KEZF7C00J5R88XKX6ADBZZNB": {
+            "id": "att_01KEZF7C00J5R88XKX6ADBZZNB",
+            "api_name": "currency",
+            "display_name": "",
+            "description": "ISO 4217 currency code of the order.",
+            "type": { "name": "enum", "enum_values": ["EUR", "USD", "GBP", "PLN", "CZK", "SEK"] },
+            "required": false,
+            "unique": false,
+            "default": "EUR",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false,
+            "authority": "src_01KEZF7C00PMKRJJ98PAYYB4SX"
+          }
+        },
+        "traits": [],
+        "status": "active",
+        "search": {},
+        "icon": "file-text",
+        "color": "#f2a541",
+        "operations_builtin": ["create", "update", "delete"]
+      },
+      "knd_01KEZF7C00PHQ0PFYPZECGNE96": {
+        "id": "knd_01KEZF7C00PHQ0PFYPZECGNE96",
+        "api_name": "Plant",
+        "display_name": "",
+        "description": "A Corvane production or distribution site that stocks and consumes parts.",
+        "primary_key": ["att_01KEZF7C009JW6DCQJZM00STP8"],
+        "title_attribute": "att_01KEZF7C00F94YAC49PH6QGNMH",
+        "attributes": {
+          "att_01KEZF7C009JW6DCQJZM00STP8": {
+            "id": "att_01KEZF7C009JW6DCQJZM00STP8",
+            "api_name": "plant_code",
+            "display_name": "",
+            "description": "Plant code, for example PL-01.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^PL-[0-9]{2,}$" },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00EPAKJ5RH34T1XBB0": {
+            "id": "att_01KEZF7C00EPAKJ5RH34T1XBB0",
+            "api_name": "country",
+            "display_name": "",
+            "description": "ISO 3166-1 alpha-2 country code of the site.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^[A-Z]{2}$" },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00F94YAC49PH6QGNMH": {
+            "id": "att_01KEZF7C00F94YAC49PH6QGNMH",
+            "api_name": "name",
+            "display_name": "",
+            "description": "Site name.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": true,
+            "search_weight": "A"
+          },
+          "att_01KEZF7C00H48J07NBG96J0Q2S": {
+            "id": "att_01KEZF7C00H48J07NBG96J0Q2S",
+            "api_name": "city",
+            "display_name": "",
+            "description": "City of the site.",
+            "type": { "name": "string" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00YDQ4EA8M0WV3KJ8T": {
+            "id": "att_01KEZF7C00YDQ4EA8M0WV3KJ8T",
+            "api_name": "plant_type",
+            "display_name": "",
+            "description": "Main activity of the site.",
+            "type": {
+              "name": "enum",
+              "enum_values": ["assembly", "machining", "distribution_hub", "warehouse"]
+            },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00ZF1HB73ZWGJ6CRPF": {
+            "id": "att_01KEZF7C00ZF1HB73ZWGJ6CRPF",
+            "api_name": "capacity_per_month",
+            "display_name": "",
+            "description": "Handling capacity in units per month.",
+            "type": { "name": "integer" },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          }
+        },
+        "traits": [
+          {
+            "trait_id": "trt_01KEZF7C00E1SNG0SW6QRM5904",
+            "attribute_map": {
+              "att_01KEZF7C001DBRJSZYG5XGV125": "att_01KEZF7C00EPAKJ5RH34T1XBB0",
+              "att_01KEZF7C00ZT5A7MS0JQBKHA0Y": "att_01KEZF7C00H48J07NBG96J0Q2S"
+            }
+          }
+        ],
+        "status": "active",
+        "search": {},
+        "icon": "warehouse",
+        "color": "#bc4749",
+        "operations_builtin": ["create", "update", "delete"]
+      },
+      "knd_01KEZF7C007ZDX8SK1DZP7MXFF": {
+        "id": "knd_01KEZF7C007ZDX8SK1DZP7MXFF",
+        "api_name": "Supplier",
+        "display_name": "",
+        "description": "A company that supplies parts to Corvane Industries.",
+        "primary_key": ["att_01KEZF7C00HDZZHMNS4181SKMX"],
+        "title_attribute": "att_01KEZF7C00H73NVMMGX4KPCH9W",
+        "attributes": {
+          "att_01KEZF7C002QQWMATS9QHMWRAF": {
+            "id": "att_01KEZF7C002QQWMATS9QHMWRAF",
+            "api_name": "status",
+            "display_name": "",
+            "description": "Commercial status of the supplier relationship.",
+            "type": { "name": "enum", "enum_values": ["active", "on_hold", "terminated"] },
+            "required": false,
+            "unique": false,
+            "default": "active",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C008DMTQHN3YMSQJH1N": {
+            "id": "att_01KEZF7C008DMTQHN3YMSQJH1N",
+            "api_name": "tier",
+            "display_name": "",
+            "description": "Sourcing tier, 1 strategic, 2 preferred, 3 transactional.",
+            "type": { "name": "enum", "enum_values": ["1", "2", "3"] },
+            "required": false,
+            "unique": false,
+            "default": "3",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C009AT17WTRXEX9MT8Y": {
+            "id": "att_01KEZF7C009AT17WTRXEX9MT8Y",
+            "api_name": "city",
+            "display_name": "",
+            "description": "City of the registered office.",
+            "type": { "name": "string" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false,
+            "authority": "src_01KEZF7C00EDDEFRGSAXSHCWJ2"
+          },
+          "att_01KEZF7C00H73NVMMGX4KPCH9W": {
+            "id": "att_01KEZF7C00H73NVMMGX4KPCH9W",
+            "api_name": "legal_name",
+            "display_name": "",
+            "description": "Registered legal name including the legal form.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": true,
+            "search_weight": "A",
+            "authority": "src_01KEZF7C00EDDEFRGSAXSHCWJ2"
+          },
+          "att_01KEZF7C00HDZZHMNS4181SKMX": {
+            "id": "att_01KEZF7C00HDZZHMNS4181SKMX",
+            "api_name": "supplier_code",
+            "display_name": "",
+            "description": "Supplier code as issued by the ERP, for example S-1001.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^S-[0-9]{4,}$" },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00N37SV7HXQT83TCAG": {
+            "id": "att_01KEZF7C00N37SV7HXQT83TCAG",
+            "api_name": "onboarded_on",
+            "display_name": "",
+            "description": "Date the supplier was approved for purchasing.",
+            "type": { "name": "date" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00NAFHVPJ4YPMXSH3H": {
+            "id": "att_01KEZF7C00NAFHVPJ4YPMXSH3H",
+            "api_name": "vat_number",
+            "display_name": "",
+            "description": "VAT registration number.",
+            "type": { "name": "string" },
+            "required": false,
+            "unique": true,
+            "constraints": {},
+            "sensitivity": ["confidential"],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00NK9JAYQ84CSTKF4C": {
+            "id": "att_01KEZF7C00NK9JAYQ84CSTKF4C",
+            "api_name": "risk_score",
+            "display_name": "",
+            "description": "Supplier risk score from 0 (safe) to 100 (critical), maintained by risk analysts.",
+            "type": { "name": "integer" },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0, "max": 100 },
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00Z60FEN5RNWEENNX2": {
+            "id": "att_01KEZF7C00Z60FEN5RNWEENNX2",
+            "api_name": "country",
+            "display_name": "",
+            "description": "ISO 3166-1 alpha-2 country code of the registered office.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^[A-Z]{2}$" },
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false,
+            "authority": "src_01KEZF7C00EDDEFRGSAXSHCWJ2"
+          }
+        },
+        "traits": [
+          {
+            "trait_id": "trt_01KEZF7C00E1SNG0SW6QRM5904",
+            "attribute_map": {
+              "att_01KEZF7C001DBRJSZYG5XGV125": "att_01KEZF7C00Z60FEN5RNWEENNX2",
+              "att_01KEZF7C00ZT5A7MS0JQBKHA0Y": "att_01KEZF7C009AT17WTRXEX9MT8Y"
+            }
+          }
+        ],
+        "status": "active",
+        "search": {},
+        "icon": "factory",
+        "color": "#2a6f97",
+        "operations_builtin": ["create", "update", "delete"]
+      },
+      "knd_01KEZF7C0063DPT7NYQNXBHB1M": {
+        "id": "knd_01KEZF7C0063DPT7NYQNXBHB1M",
+        "api_name": "RiskFlag",
+        "display_name": "",
+        "description": "A risk raised on a supplier. Keys are minted when the flag is created.",
+        "primary_key": [],
+        "title_attribute": "att_01KEZF7C0034YSH4VMTCR4FJ7H",
+        "attributes": {
+          "att_01KEZF7C0034YSH4VMTCR4FJ7H": {
+            "id": "att_01KEZF7C0034YSH4VMTCR4FJ7H",
+            "api_name": "reason",
+            "display_name": "",
+            "description": "Evidence-based reason for the flag.",
+            "type": { "name": "text" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": true,
+            "search_weight": "B"
+          },
+          "att_01KEZF7C00B79MRF0NBF18SAA0": {
+            "id": "att_01KEZF7C00B79MRF0NBF18SAA0",
+            "api_name": "raised_by",
+            "display_name": "",
+            "description": "Principal that raised the flag.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00E1JP033T92691HJE": {
+            "id": "att_01KEZF7C00E1JP033T92691HJE",
+            "api_name": "severity",
+            "display_name": "",
+            "description": "How serious the risk is.",
+            "type": { "name": "enum", "enum_values": ["low", "medium", "high", "critical"] },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00YF1GG38RVRAS4KAG": {
+            "id": "att_01KEZF7C00YF1GG38RVRAS4KAG",
+            "api_name": "raised_at",
+            "display_name": "",
+            "description": "When the flag was raised.",
+            "type": { "name": "timestamp" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          }
+        },
+        "traits": [],
+        "status": "active",
+        "search": {},
+        "icon": "flag",
+        "color": "#d00000",
+        "operations_builtin": ["create", "update", "delete"]
+      },
+      "knd_01KEZF7C009ABD2QEAXC8GGK0S": {
+        "id": "knd_01KEZF7C009ABD2QEAXC8GGK0S",
+        "api_name": "Contract",
+        "display_name": "",
+        "description": "A framework supply agreement with a supplier.",
+        "primary_key": ["att_01KEZF7C003FE2Q3EQFW24DZEH"],
+        "title_attribute": "att_01KEZF7C00CFZFWA9G1XT79MPS",
+        "attributes": {
+          "att_01KEZF7C003FE2Q3EQFW24DZEH": {
+            "id": "att_01KEZF7C003FE2Q3EQFW24DZEH",
+            "api_name": "contract_number",
+            "display_name": "",
+            "description": "Contract number, for example C-3001.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": { "pattern": "^C-[0-9]{4,}$" },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C003X199DJHX5644F1Z": {
+            "id": "att_01KEZF7C003X199DJHX5644F1Z",
+            "api_name": "payment_terms_days",
+            "display_name": "",
+            "description": "Days from invoice to payment.",
+            "type": { "name": "integer" },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0, "max": 180 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C005PHCTDV9BNJ7WX24": {
+            "id": "att_01KEZF7C005PHCTDV9BNJ7WX24",
+            "api_name": "auto_renew",
+            "display_name": "",
+            "description": "True when the contract renews unless a party gives notice.",
+            "type": { "name": "boolean" },
+            "required": false,
+            "unique": false,
+            "default": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C007VD02SKT2KXJ9PCG": {
+            "id": "att_01KEZF7C007VD02SKT2KXJ9PCG",
+            "api_name": "start_date",
+            "display_name": "",
+            "description": "First day of validity.",
+            "type": { "name": "date" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00CFZFWA9G1XT79MPS": {
+            "id": "att_01KEZF7C00CFZFWA9G1XT79MPS",
+            "api_name": "title",
+            "display_name": "",
+            "description": "Contract title.",
+            "type": { "name": "string" },
+            "required": true,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": true,
+            "search_weight": "A"
+          },
+          "att_01KEZF7C00CR3SH2H824DWQR0F": {
+            "id": "att_01KEZF7C00CR3SH2H824DWQR0F",
+            "api_name": "end_date",
+            "display_name": "",
+            "description": "Last day of validity.",
+            "type": { "name": "date" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00CS1T7RWHANT46NE1": {
+            "id": "att_01KEZF7C00CS1T7RWHANT46NE1",
+            "api_name": "currency",
+            "display_name": "",
+            "description": "ISO 4217 currency code of the contract.",
+            "type": { "name": "enum", "enum_values": ["EUR", "USD", "GBP", "PLN", "CZK", "SEK"] },
+            "required": false,
+            "unique": false,
+            "default": "EUR",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00NTAVMNCH8895162V": {
+            "id": "att_01KEZF7C00NTAVMNCH8895162V",
+            "api_name": "annual_value",
+            "display_name": "",
+            "description": "Expected yearly spend in the contract currency.",
+            "type": { "name": "decimal", "precision": 12, "scale": 2 },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00WNHWFARKGZ8W29BW": {
+            "id": "att_01KEZF7C00WNHWFARKGZ8W29BW",
+            "api_name": "approved_by",
+            "display_name": "",
+            "description": "Principal that approved the contract.",
+            "type": { "name": "string" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00WYPD04ZX3X2PZ1DG": {
+            "id": "att_01KEZF7C00WYPD04ZX3X2PZ1DG",
+            "api_name": "approved_at",
+            "display_name": "",
+            "description": "When the contract was approved.",
+            "type": { "name": "timestamp" },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00YD0EG06JDWR08E41": {
+            "id": "att_01KEZF7C00YD0EG06JDWR08E41",
+            "api_name": "status",
+            "display_name": "",
+            "description": "Contract lifecycle stage.",
+            "type": { "name": "enum", "enum_values": ["draft", "active", "expired", "terminated"] },
+            "required": false,
+            "unique": false,
+            "default": "draft",
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": true,
+            "searchable": false
+          },
+          "att_01KEZF7C00ZFG9PEEA1M6HFMBJ": {
+            "id": "att_01KEZF7C00ZFG9PEEA1M6HFMBJ",
+            "api_name": "incoterm",
+            "display_name": "",
+            "description": "Delivery terms (Incoterms 2020).",
+            "type": { "name": "enum", "enum_values": ["EXW", "FCA", "DAP", "DDP"] },
+            "required": false,
+            "unique": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          }
+        },
+        "traits": [],
+        "status": "active",
+        "search": {},
+        "icon": "file-signature",
+        "color": "#7b2cbf",
+        "operations_builtin": ["create", "update", "delete"]
+      }
+    },
+    "relations": {
+      "rel_01KEZF7C00QJBDQPR4Z2R5BEJP": {
+        "id": "rel_01KEZF7C00QJBDQPR4Z2R5BEJP",
+        "api_name": "flags",
+        "display_name": "",
+        "description": "The supplier a risk flag is raised on.",
+        "inverse_api_name": "risk_flags",
+        "from_kind": "knd_01KEZF7C0063DPT7NYQNXBHB1M",
+        "to_kind": "knd_01KEZF7C007ZDX8SK1DZP7MXFF",
+        "cardinality": "many_to_one",
+        "required_from": true,
+        "attributes": {},
+        "on_delete": "cascade",
+        "backing": "explicit",
+        "status": "active"
+      },
+      "rel_01KEZF7C00Q2XMMMZWZ79AQCME": {
+        "id": "rel_01KEZF7C00Q2XMMMZWZ79AQCME",
+        "api_name": "stocked_at",
+        "display_name": "",
+        "description": "A plant keeps the part in stock.",
+        "inverse_api_name": "stocks",
+        "from_kind": "knd_01KEZF7C00WBDCAD84MRED7WQV",
+        "to_kind": "knd_01KEZF7C00PHQ0PFYPZECGNE96",
+        "cardinality": "many_to_many",
+        "required_from": false,
+        "attributes": {
+          "att_01KEZF7C00H9KNFH2WET35SM5Q": {
+            "id": "att_01KEZF7C00H9KNFH2WET35SM5Q",
+            "api_name": "quantity",
+            "display_name": "",
+            "description": "Units on hand.",
+            "type": { "name": "integer" },
+            "required": true,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          }
+        },
+        "on_delete": "cascade",
+        "backing": "explicit",
+        "status": "active"
+      },
+      "rel_01KEZF7C007EYQRE3Q2ADNS3FF": {
+        "id": "rel_01KEZF7C007EYQRE3Q2ADNS3FF",
+        "api_name": "delivered_to",
+        "display_name": "",
+        "description": "The plant an order is delivered to.",
+        "inverse_api_name": "receives",
+        "from_kind": "knd_01KEZF7C00M11T0RH8CAVBW897",
+        "to_kind": "knd_01KEZF7C00PHQ0PFYPZECGNE96",
+        "cardinality": "many_to_one",
+        "required_from": false,
+        "attributes": {},
+        "on_delete": "cascade",
+        "backing": "explicit",
+        "status": "active"
+      },
+      "rel_01KEZF7C0046ZA6Z11PH3MARM5": {
+        "id": "rel_01KEZF7C0046ZA6Z11PH3MARM5",
+        "api_name": "issued_to",
+        "display_name": "",
+        "description": "The supplier an order is issued to; derived from PurchaseOrder.supplier.",
+        "inverse_api_name": "purchase_orders",
+        "from_kind": "knd_01KEZF7C00M11T0RH8CAVBW897",
+        "to_kind": "knd_01KEZF7C007ZDX8SK1DZP7MXFF",
+        "cardinality": "many_to_one",
+        "required_from": true,
+        "attributes": {},
+        "on_delete": "restrict",
+        "backing": "foreign_key",
+        "foreign_key_attribute": "att_01KEZF7C007AC0DF84HCQRX9ZT",
+        "status": "active"
+      },
+      "rel_01KEZF7C00BJEFSY9EWW9CM2SA": {
+        "id": "rel_01KEZF7C00BJEFSY9EWW9CM2SA",
+        "api_name": "with_supplier",
+        "display_name": "",
+        "description": "The supplier party to a contract.",
+        "inverse_api_name": "contracts",
+        "from_kind": "knd_01KEZF7C009ABD2QEAXC8GGK0S",
+        "to_kind": "knd_01KEZF7C007ZDX8SK1DZP7MXFF",
+        "cardinality": "many_to_one",
+        "required_from": true,
+        "attributes": {},
+        "on_delete": "restrict",
+        "backing": "explicit",
+        "status": "active"
+      },
+      "rel_01KEZF7C00F4CJ0YEKSMQT6PC0": {
+        "id": "rel_01KEZF7C00F4CJ0YEKSMQT6PC0",
+        "api_name": "supplied_by",
+        "display_name": "",
+        "description": "A supplier can supply the part.",
+        "inverse_api_name": "supplies",
+        "from_kind": "knd_01KEZF7C00WBDCAD84MRED7WQV",
+        "to_kind": "knd_01KEZF7C007ZDX8SK1DZP7MXFF",
+        "cardinality": "many_to_many",
+        "required_from": false,
+        "attributes": {
+          "att_01KEZF7C006T6ZF8E6CK1PE4XY": {
+            "id": "att_01KEZF7C006T6ZF8E6CK1PE4XY",
+            "api_name": "is_primary",
+            "display_name": "",
+            "description": "True for the preferred supplier of the part.",
+            "type": { "name": "boolean" },
+            "required": false,
+            "unique": false,
+            "default": false,
+            "constraints": {},
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          },
+          "att_01KEZF7C00A7JKVNZEGB5RZ5R1": {
+            "id": "att_01KEZF7C00A7JKVNZEGB5RZ5R1",
+            "api_name": "lead_time_days",
+            "display_name": "",
+            "description": "Typical days from order to delivery.",
+            "type": { "name": "integer" },
+            "required": false,
+            "unique": false,
+            "constraints": { "min": 0 },
+            "sensitivity": [],
+            "indexed": false,
+            "searchable": false
+          }
+        },
+        "on_delete": "cascade",
+        "backing": "explicit",
+        "status": "active"
+      },
+      "rel_01KEZF7C00C8CSM7KQZ0J1EY0T": {
+        "id": "rel_01KEZF7C00C8CSM7KQZ0J1EY0T",
+        "api_name": "for_part",
+        "display_name": "",
+        "description": "The part an order buys.",
+        "inverse_api_name": "ordered_in",
+        "from_kind": "knd_01KEZF7C00M11T0RH8CAVBW897",
+        "to_kind": "knd_01KEZF7C00WBDCAD84MRED7WQV",
+        "cardinality": "many_to_one",
+        "required_from": true,
+        "attributes": {},
+        "on_delete": "restrict",
+        "backing": "explicit",
+        "status": "active"
+      }
+    },
+    "traits": {
+      "trt_01KEZF7C00E1SNG0SW6QRM5904": {
+        "id": "trt_01KEZF7C00E1SNG0SW6QRM5904",
+        "api_name": "Located",
+        "display_name": "",
+        "description": "Something with a physical location.",
+        "attributes": {
+          "att_01KEZF7C001DBRJSZYG5XGV125": {
+            "id": "att_01KEZF7C001DBRJSZYG5XGV125",
+            "api_name": "country",
+            "display_name": "",
+            "description": "ISO 3166-1 alpha-2 country code.",
+            "type": { "name": "string" },
+            "required": true
+          },
+          "att_01KEZF7C00ZT5A7MS0JQBKHA0Y": {
+            "id": "att_01KEZF7C00ZT5A7MS0JQBKHA0Y",
+            "api_name": "city",
+            "display_name": "",
+            "description": "City.",
+            "type": { "name": "string" },
+            "required": false
+          }
+        },
+        "status": "active"
+      }
+    },
+    "operations": {},
+    "derivations": {
+      "drv_01KEZF7C00MMX6MTB4YG6XW54X": {
+        "id": "drv_01KEZF7C00MMX6MTB4YG6XW54X",
+        "api_name": "supplier_count",
+        "display_name": "",
+        "description": "Count of suppliers linked to a part through supplied_by.",
+        "definition": {
+          "variant": "aggregate",
+          "kind": "knd_01KEZF7C00WBDCAD84MRED7WQV",
+          "attribute": "att_01KEZF7C008N7SZ6W62PVEXNPQ",
+          "relation": "rel_01KEZF7C00F4CJ0YEKSMQT6PC0",
+          "direction": "forward",
+          "function": "count"
+        },
+        "status": "active"
+      }
+    },
+    "sources": {
+      "src_01KEZF7C00EDDEFRGSAXSHCWJ2": {
+        "id": "src_01KEZF7C00EDDEFRGSAXSHCWJ2",
+        "api_name": "approved.suppliers",
+        "display_name": "",
+        "description": "CSV list of approved suppliers maintained by procurement.",
+        "type": "csv",
+        "connection": "secret://env/SUPPLY_APPROVED_SUPPLIERS_CSV",
+        "target_kind": "knd_01KEZF7C007ZDX8SK1DZP7MXFF",
+        "key_mapping": ["supplier_code"],
+        "attribute_mapping": {
+          "att_01KEZF7C008DMTQHN3YMSQJH1N": { "column": "tier", "transforms": [] },
+          "att_01KEZF7C009AT17WTRXEX9MT8Y": {
+            "column": "city",
+            "transforms": [{ "name": "trim", "args": {} }]
+          },
+          "att_01KEZF7C00H73NVMMGX4KPCH9W": {
+            "column": "legal_name",
+            "transforms": [{ "name": "trim", "args": {} }]
+          },
+          "att_01KEZF7C00N37SV7HXQT83TCAG": {
+            "column": "onboarded_on",
+            "transforms": [{ "name": "parse_date", "args": { "format": "%Y-%m-%d" } }]
+          },
+          "att_01KEZF7C00NK9JAYQ84CSTKF4C": {
+            "column": "risk_score",
+            "transforms": [{ "name": "cast", "args": { "to": "integer" } }]
+          },
+          "att_01KEZF7C00Z60FEN5RNWEENNX2": {
+            "column": "country",
+            "transforms": [
+              { "name": "trim", "args": {} },
+              { "name": "upper", "args": {} }
+            ]
+          }
+        },
+        "relation_mapping": [],
+        "sync_mode": "snapshot",
+        "target_branch_policy": {
+          "branch_template": "source/{source}",
+          "merge_policy": "auto_when_clean"
+        },
+        "status": "active"
+      },
+      "src_01KEZF7C00PMKRJJ98PAYYB4SX": {
+        "id": "src_01KEZF7C00PMKRJJ98PAYYB4SX",
+        "api_name": "erp.purchase_orders",
+        "display_name": "",
+        "description": "Purchase orders in the ERP table purchase_orders.",
+        "type": "postgres_table",
+        "connection": "secret://env/ERP_DSN",
+        "target_kind": "knd_01KEZF7C00M11T0RH8CAVBW897",
+        "key_mapping": ["po_no"],
+        "attribute_mapping": {
+          "att_01KEZF7C000WEBH0WCJQB4RVDY": {
+            "column": "price",
+            "transforms": [{ "name": "cast", "args": { "to": "decimal" } }]
+          },
+          "att_01KEZF7C002MCFVSZ1DAVJF0GX": {
+            "column": "qty",
+            "transforms": [{ "name": "cast", "args": { "to": "integer" } }]
+          },
+          "att_01KEZF7C00537ZFFD1EAF7VVNY": {
+            "column": "due",
+            "transforms": [{ "name": "parse_date", "args": { "format": "%Y-%m-%d" } }]
+          },
+          "att_01KEZF7C007AC0DF84HCQRX9ZT": { "column": "vendor_id", "transforms": [] },
+          "att_01KEZF7C00FJSCTF8SM9V93CCN": {
+            "column": "state",
+            "transforms": [{ "name": "lower", "args": {} }]
+          },
+          "att_01KEZF7C00G50HMR04NHDPXS30": {
+            "column": "ordered",
+            "transforms": [{ "name": "parse_date", "args": { "format": "%Y-%m-%d" } }]
+          },
+          "att_01KEZF7C00J5R88XKX6ADBZZNB": {
+            "column": "currency",
+            "transforms": [{ "name": "upper", "args": {} }]
+          }
+        },
+        "relation_mapping": [
+          { "relation": "rel_01KEZF7C00C8CSM7KQZ0J1EY0T", "columns": ["part_no"] },
+          { "relation": "rel_01KEZF7C007EYQRE3Q2ADNS3FF", "columns": ["plant_code"] }
+        ],
+        "scope_filter": "state <> 'archived'",
+        "sync_mode": "incremental",
+        "watermark_column": "updated_at",
+        "tombstone_column": "deleted_at",
+        "schedule": "0 2 * * *",
+        "target_branch_policy": {
+          "branch_template": "source/{source}",
+          "merge_policy": "auto_with_authority"
+        },
+        "status": "active"
+      }
+    }
+  }
+}

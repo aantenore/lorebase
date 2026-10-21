@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import { isApiError } from '@/api';
 import { useKeeperApi } from '@/api/provider';
 import type { Schema, SchemaChange, SchemaChangeResult } from '@/api/types';
 import { useScope } from '@/app/scope';
 import { useConfig } from '@/config/context';
 import { buildNames } from '@/features/review/conflict-meta';
+import type { SchemaDocument } from './document';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
 import { Badge, EmptyState, Section } from '@/ui/layout';
@@ -38,6 +38,8 @@ export interface ChangeSetPanelProps {
   base: Schema;
   next: Schema;
   changes: SchemaChange[];
+  /** The whole edited schema; Keeper takes a change set in this form. */
+  document: SchemaDocument;
   /** Why the change set cannot be saved yet, or `null`. */
   blocked: string | null;
   /** Result of the dry run on the Branch, while there is one. */
@@ -82,7 +84,14 @@ function slugOf(message: string): string {
  * says they imply, and how to keep them. An unprotected Branch takes the change set as a
  * schema Revision; a protected one needs a new Branch and a Proposal.
  */
-export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSetPanelProps) {
+export function ChangeSetPanel({
+  base,
+  next,
+  changes,
+  document,
+  blocked,
+  check,
+}: ChangeSetPanelProps) {
   const api = useKeeperApi();
   const scope = useScope();
   const config = useConfig();
@@ -100,19 +109,19 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
       : branchName.trim();
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['keeper'] });
-  const onError = (error: Error) => {
-    toast.notify(isApiError(error) ? error.message : 'The request failed.', 'error');
-  };
 
   const save = useMutation({
     mutationFn: () =>
-      api.schema.applyChanges(scope.domain, scope.branch, { changes, message: revisionMessage }),
+      api.schema.applyChanges(scope.domain, scope.branch, {
+        changes,
+        document,
+        message: revisionMessage,
+      }),
     onSuccess: (result) => {
       if (result.valid) toast.notify(`Schema change set saved on ${scope.branch}.`, 'success');
       else toast.notify('The Branch refused the change set.', 'error');
       return refresh();
     },
-    onError,
   });
 
   const propose = useMutation({
@@ -120,6 +129,7 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
       await api.branches.create(scope.domain, { name: proposedBranch, source: scope.branch });
       const result = await api.schema.applyChanges(scope.domain, proposedBranch, {
         changes,
+        document,
         message: revisionMessage,
       });
       if (!result.valid) throw new Error('The Branch refused the change set.');
@@ -138,7 +148,6 @@ export function ChangeSetPanel({ base, next, changes, blocked, check }: ChangeSe
         search: {},
       });
     },
-    onError,
   });
 
   const working = save.isPending || propose.isPending;

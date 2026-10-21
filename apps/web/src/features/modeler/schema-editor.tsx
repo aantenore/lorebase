@@ -33,6 +33,7 @@ export function SchemaEditor({ base }: { base: Schema }) {
     queryFn: () =>
       api.schema.applyChanges(scope.domain, scope.branch, {
         changes: editor.changes,
+        document: editor.document,
         dry_run: true,
       }),
     enabled: documentIsValid && hasChanges,
@@ -102,6 +103,7 @@ export function SchemaEditor({ base }: { base: Schema }) {
         base={base}
         next={editor.schema}
         changes={editor.changes}
+        document={editor.document}
         blocked={blocked}
         check={{ pending: check.isFetching, result: check.data }}
       />

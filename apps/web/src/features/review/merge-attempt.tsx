@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { isApiError } from '@/api';
 import { useKeeperApi } from '@/api/provider';
 import { useBranchSchema, useConflicts } from '@/api/queries';
 import type {
@@ -16,7 +15,7 @@ import { Badge, EmptyState, QueryBoundary, Section } from '@/ui/layout';
 import { useToast } from '@/ui/toast';
 import { BulkBar, FilterBar } from './attempt-toolbar';
 import { ConflictList, listOrder, neighbor } from './conflict-list';
-import { buildNames, specOf } from './conflict-meta';
+import { buildNames, partitionName, specOf, type Names } from './conflict-meta';
 import { ConflictResolver } from './conflict-resolver';
 import {
   filterConflicts,
@@ -48,7 +47,7 @@ function Progress({ attempt }: { attempt: MergeAttempt }) {
   );
 }
 
-function AutoResolutions({ attempt }: { attempt: MergeAttempt }) {
+function AutoResolutions({ attempt, names }: { attempt: MergeAttempt; names: Names }) {
   if (attempt.auto_resolutions.length === 0) return null;
   return (
     <details className="text-sm">
@@ -58,7 +57,7 @@ function AutoResolutions({ attempt }: { attempt: MergeAttempt }) {
       <ul className="mt-1 list-disc pl-5 text-muted">
         {attempt.auto_resolutions.map((auto) => (
           <li key={auto.fingerprint}>
-            {auto.kind} {auto.partition}
+            {auto.kind} {partitionName(auto.partition, names)}
             {auto.key === null ? '' : `/${auto.key}`}: {auto.choice} by {auto.resolver}
           </li>
         ))}
@@ -104,9 +103,6 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
   const readOnly = proposal.status !== 'open';
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['keeper'] });
-  const onError = (error: Error) => {
-    toast.notify(isApiError(error) ? error.message : 'The request failed.', 'error');
-  };
 
   const save = useMutation({
     mutationFn: (resolution: Resolution) => api.conflicts.resolve(domain, proposal.id, resolution),
@@ -114,7 +110,6 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
       toast.notify('Resolution saved.', 'success');
       return refresh();
     },
-    onError,
   });
   const saveMany = useMutation({
     mutationFn: (resolutions: Resolution[]) =>
@@ -123,7 +118,6 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
       toast.notify(`${updated.resolutions.length} resolutions stored.`, 'success');
       return refresh();
     },
-    onError,
   });
   const apply = useMutation({
     mutationFn: () => api.proposals.merge(domain, proposal.id),
@@ -139,7 +133,6 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
       }
       return refresh();
     },
-    onError,
   });
 
   const open = filtered.filter((c) => resolutionOf(attempt, c) === undefined);
@@ -190,7 +183,7 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
           </div>
         )}
       </div>
-      <AutoResolutions attempt={attempt} />
+      <AutoResolutions attempt={attempt} names={names} />
       <RunStatus report={report} />
       <FilterBar conflicts={attempt.conflicts} filter={filter} onChange={setFilter} />
       {!readOnly && <BulkBar open={open} disabled={saveMany.isPending} onApply={applyBulk} />}
