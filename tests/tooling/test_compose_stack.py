@@ -94,3 +94,55 @@ def test_the_application_role_is_created_without_privileges_that_skip_rls() -> N
     roles = services(BASE_ENV)["db-roles"]
     assert roles["environment"]["APP_USER"] == "app"
     assert roles["environment"]["POSTGRES_USER"] == "owner"
+
+
+GUARD_SCRIPT = ROOT / "deploy" / "compose" / "require-secrets.sh"
+PROFILE_SECRETS = {
+    # profile: service, the variable it reads the secret from, the guard, the secret
+    "litellm": ("litellm", "LITELLM_MASTER_KEY", "litellm-secrets", "LITELLM_MASTER_KEY"),
+    "observability": (
+        "grafana",
+        "GF_SECURITY_ADMIN_PASSWORD",
+        "grafana-secrets",
+        "GRAFANA_ADMIN_PASSWORD",
+    ),
+}
+
+
+@pytest.mark.parametrize("profile", sorted(PROFILE_SECRETS))
+def test_profile_secrets_have_no_default_and_are_guarded(profile: str) -> None:
+    service, variable, guard_service, secret = PROFILE_SECRETS[profile]
+    found = services(BASE_ENV, profile)
+    assert found[service]["environment"][variable] in ("", None)
+    condition = found[service]["depends_on"][guard_service]["condition"]
+    assert condition == "service_completed_successfully"
+    assert found[guard_service]["command"] == [secret]
+    assert found[guard_service]["environment"][secret] in ("", None)
+
+
+def guard(value: str | None) -> subprocess.CompletedProcess[str]:
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("no POSIX shell")
+    env = {"PATH": os.environ.get("PATH", "")}
+    if value is not None:
+        env["SOME_SECRET"] = value
+    return subprocess.run(
+        [sh, str(GUARD_SCRIPT), "SOME_SECRET"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("value", [None, "", "change-me", "short-secret"])
+def test_the_guard_refuses_missing_placeholder_and_short_secrets(value: str | None) -> None:
+    result = guard(value)
+    assert result.returncode == 1
+    assert "SOME_SECRET" in result.stderr
+
+
+def test_the_guard_accepts_a_generated_secret() -> None:
+    assert guard("sk-" + "0123456789abcdef" * 3).returncode == 0
