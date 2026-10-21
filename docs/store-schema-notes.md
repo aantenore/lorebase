@@ -115,6 +115,8 @@ difference).
   (revision `0006`) holds one row per API key and UTC day with the requests served and the
   context-pack tokens delivered, the counters of the daily quotas (`docs/operations.md`); rows go
   with their key.
+- `api_keys.allowed_networks` (revision `0008`, `cidr[]`) lists the client networks a key may be
+  used from; null, the value of keys created before it, allows any address.
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
 

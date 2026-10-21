@@ -15,6 +15,7 @@ from lorebase_keeper import __version__
 from lorebase_keeper.auth.audit import AuditMiddleware
 from lorebase_keeper.auth.ports import AuthStore
 from lorebase_keeper.auth.runtime import build_runtime
+from lorebase_keeper.client_address import install as install_client_addresses
 from lorebase_keeper.db import create_database
 from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handlers
 from lorebase_keeper.health import router as health_router
@@ -158,6 +159,7 @@ def create_app(
     app.state.auth = auth
     app.state.database = database
     app.state.limits = limits
+    install_client_addresses(app.state, keeper.trusted_proxies)
 
     install_error_handlers(app, renderer)
     app.include_router(health_router)

@@ -33,6 +33,8 @@ def main() -> None:
             log_config=None,
             access_log=False,
             server_header=False,
+            # The client address comes from `keeper.trusted_proxies` (client_address.py) only.
+            proxy_headers=False,
         )
     finally:
         telemetry.shutdown()

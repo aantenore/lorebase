@@ -13,7 +13,7 @@ from sqlalchemy import (
     Integer,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, CIDR, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lorebase_store.models.base import H32, Base, DomainKey, domain_fk, h32_check
@@ -112,6 +112,8 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None]
     revoked_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    # Client networks the key may be used from; null: any address.
+    allowed_networks: Mapped[list[Any] | None] = mapped_column(ARRAY(CIDR))
 
 
 class ApiKeyUsage(Base):

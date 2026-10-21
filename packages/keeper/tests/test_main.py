@@ -25,6 +25,7 @@ def test_main_serves_the_app_on_host_and_port_from_settings(
 
     assert (served["host"], served["port"]) == ("0.0.0.0", 9191)
     assert served["log_config"] is None
+    assert served["proxy_headers"] is False
 
 
 def test_main_exits_with_the_configuration_problem(monkeypatch: pytest.MonkeyPatch) -> None:

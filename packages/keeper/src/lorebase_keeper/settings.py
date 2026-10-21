@@ -13,6 +13,7 @@ from typing import Self
 from pydantic import Field, field_validator, model_validator
 
 from lorebase_keeper.auth.config import AuthSettings
+from lorebase_keeper.client_address import normalize_networks
 from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings
 from lorebase_keeper.services.config import (
     BranchSettings,
@@ -153,6 +154,13 @@ class KeeperSettings(SectionModel):
         description="Prefix of the stable `type` URI of problem details; the error code is "
         "appended.",
     )
+    trusted_proxies: tuple[str, ...] = Field(
+        default=(),
+        description="Networks of the reverse proxies in front of Keeper, e.g. 10.0.0.0/8. Only "
+        "when the socket peer is in one of them is X-Forwarded-For read (right to left, "
+        "skipping trusted hops) to find the client address used by API key allowlists and "
+        "failed authentication limits. Empty: the socket peer is the client.",
+    )
     cors: CorsSettings = Field(default_factory=CorsSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
@@ -166,6 +174,11 @@ class KeeperSettings(SectionModel):
     schema_inference: SchemaInferenceSettings = Field(default_factory=SchemaInferenceSettings)
     operations: OperationSettings = Field(default_factory=OperationSettings)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _proxy_networks(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return normalize_networks(value)
 
     @field_validator("api_prefix")
     @classmethod

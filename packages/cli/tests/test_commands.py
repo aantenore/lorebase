@@ -962,6 +962,42 @@ def test_apikey_commands(http: respx.MockRouter) -> None:
     assert json.loads(run("apikey", "list", "-d", "supply", "--json").stdout)[0]["id"] == "key_1"
 
 
+def test_apikey_create_and_list_show_allowed_networks(http: respx.MockRouter) -> None:
+    key = {
+        "id": "key_2",
+        "principal_id": "svc_2",
+        "prefix": "def",
+        "scopes": ["domain:supply"],
+        "expires_at": None,
+        "last_used_at": None,
+        "revoked_at": None,
+        "created_at": NOW,
+        "allowed_networks": ["203.0.113.0/24", "2001:db8::/48"],
+    }
+    create = http.post("/domains/supply/api-keys").respond(
+        201, json={**key, "key": "lbk_def_secret", "role": "viewer"}
+    )
+    http.get("/domains/supply/api-keys").respond(200, json={"items": [key], "next_cursor": None})
+    created = run(
+        "apikey",
+        "create",
+        "bot",
+        "--allow-network",
+        "203.0.113.0/24",
+        "--allow-network",
+        "2001:db8::/48",
+        "-d",
+        "supply",
+    )
+    assert created.exit_code == 0, created.output
+    assert request_bodies(create) == [
+        {"name": "bot", "allowed_networks": ["203.0.113.0/24", "2001:db8::/48"]}
+    ]
+    assert "203.0.113.0/24, 2001:db8::/48" in created.stdout
+    listed = run("apikey", "list", "-d", "supply")
+    assert "203.0.113.0/24, 2001:db8::/48" in listed.stdout
+
+
 # Sources ------------------------------------------------------------------------------------
 
 

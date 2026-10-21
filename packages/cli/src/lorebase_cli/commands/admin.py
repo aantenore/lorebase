@@ -19,6 +19,7 @@ KEY_COLUMNS = [
     Column("expires", "expires_at"),
     Column("last used", "last_used_at"),
     Column("revoked", "revoked_at"),
+    Column("networks", "allowed_networks"),
 ]
 
 
@@ -41,12 +42,26 @@ def apikey_create(
         str | None,
         typer.Option("--principal-id", help="Add a key to an existing service principal."),
     ] = None,
+    allow_network: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--allow-network",
+            metavar="CIDR",
+            help="Client network the key may be used from, e.g. 203.0.113.0/24; repeatable. "
+            "Without it the key works from any address.",
+        ),
+    ] = None,
     json_out: JsonOpt = False,
 ) -> None:
     """Create an API key. The secret is shown once; store it right away."""
     app = app_of(ctx, json_out)
     created = app.client().api_keys.create(
-        app.domain(domain), name, role=role, ttl_days=ttl_days, principal_id=principal_id
+        app.domain(domain),
+        name,
+        role=role,
+        ttl_days=ttl_days,
+        principal_id=principal_id,
+        allowed_networks=allow_network,
     )
 
     def human() -> None:
@@ -57,6 +72,7 @@ def apikey_create(
                 ("principal", created.principal_id),
                 ("role", created.role),
                 ("expires", created.expires_at),
+                ("networks", ", ".join(created.allowed_networks) or "any"),
             ]
         )
         app.out.info("This is the only time the key is shown: store it now.")
