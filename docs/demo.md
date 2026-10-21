@@ -316,7 +316,7 @@ Governed write on a work branch, dry run first (the default of lorebase_execute)
   [error, 9 ms through Herald and Keeper]
 ```
 
-A high flag commits on the agent's work branch. The Operation's review policy refuses a critical one outright: it is not turned into a Proposal automatically, and a person has to take that change through review.
+A high flag commits on the agent's work branch. The Operation's review policy refuses a critical one on any branch. The call names no `task`, so it is not turned into a Proposal: the refusal lists the next steps, and with a `task` Keeper would open a task branch and a Proposal that needs a person's approval.
 
 Rate limits are per principal and request class. The demo's configuration gives the Domain a small bucket for context packs, so the limit is visible in a few calls; the quota counts per UTC day.
 
@@ -381,5 +381,5 @@ Things the script works around or states, found while writing it:
 - Imports replace whole rows; there is no partial update through `lorebase import`.
 - An Operation restricted by `permissions` is open to the principal ids and groups named there. API-key principals have no groups and the API cannot create them, so the demo issues the agent's key on a service principal named like the permitted subject.
 - The first administrator key comes from `python -m lorebase_keeper bootstrap`, run inside the Keeper container with its settings; it refuses a second key unless `--force` is given.
-- A critical `flag_supplier_risk` is refused with `review-required` even on a work branch.
+- A critical `flag_supplier_risk` is refused with `review-required` even on a work branch: its review policy counts on every branch. A call that names a `task` gets a task branch and a Proposal instead ([agents](agents.md#writes-that-need-review)).
 - Webhooks deliver events committed after the webhook was registered.
