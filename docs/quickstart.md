@@ -213,8 +213,8 @@ Revision as its Links. Imports upsert, so running one twice is safe.
 The CLI does the conversions for you: it reads the schema of the branch, turns `true` and
 `false` into booleans, keeps integers and decimals exact, leaves empty cells unset, maps
 `from_key` and `to_key` to `from` and `to`, and sends the file in batches (one Revision each,
-`--batch-size`) with progress on standard error. It loads the Kinds that need no Link on
-creation and the Link files:
+`--batch-size`) with progress on standard error. `import records` and `import links` load the
+Kinds that need no Link on creation and the Link files:
 
 ```bash
 # CLI
@@ -237,87 +237,57 @@ batches    1
 revisions  3403d8d356d9
 ```
 
-Files can be CSV, TSV, JSON Lines, a JSON array or Parquet (`pip install 'lorebase-cli[parquet]'`);
-`--map file_column=attribute` renames columns, `--dry-run` computes without committing.
-
-The full sample, `Contract`, `PurchaseOrder` and `RiskFlag` with their Links included, goes
-through the REST API: this script posts the CSV files to the `work` branch, doing the conversions
-itself (Records already imported by the CLI are upserted unchanged):
+`Contract`, `PurchaseOrder` and `RiskFlag` need a Link when they are created, so their Link
+files travel with them. `import batch` takes a Kind file per `--records` and a Relation file per
+`--links` (same formats and conversions) and cuts them into requests that never separate a
+Record from its Links: a Link goes with the Record at its `from` end, or at its `to` end when
+that Record is not in the import. Records without Links go first, so name the Kinds that others
+point to before the ones that point to them. `--batch-size` counts Records and Links together:
 
 ```bash
-# curl (Python standard library)
-uv run python - <<'EOF'
-import csv
-import json
-import urllib.request
-
-FLAGS = {"true": True, "false": False}  # JSON booleans, not text
-KEYS = {"from_key": "from", "to_key": "to"}  # Link endpoints
-API = "http://localhost:8080/api/v1/domains/supply"
-
-
-def execute(operation, parameters):
-    request = urllib.request.Request(
-        f"{API}/operations/{operation}/execute",
-        data=json.dumps({"branch": "work", "parameters": parameters}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request) as response:
-        return json.load(response)
-
-
-def rows(name):
-    with open(f"examples/supply/data/{name}.csv", newline="") as handle:
-        return [
-            {KEYS.get(k, k): FLAGS.get(v, v) for k, v in row.items() if v != ""}
-            for row in csv.DictReader(handle)
-        ]
-
-
-def with_links(name, key, *relations):
-    """Record rows with the targets of their Links of `relations`."""
-    targets = {r: {} for r in relations}
-    for relation in relations:
-        for link in rows(relation):
-            targets[relation].setdefault(link["from"], []).append(link["to"])
-    return [
-        {**row, "links": {r: targets[r][row[key]] for r in relations if row[key] in targets[r]}}
-        for row in rows(name)
-    ]
-
-
-for kind, file in (("Supplier", "supplier"), ("Part", "part"), ("Plant", "plant")):
-    result = execute("import_records", {"kind": kind, "rows": rows(file)})
-    print(kind, result["status"], result["edit_count"], "edits")
-contracts = with_links("contract", "contract_number", "with_supplier")
-result = execute("import_records", {"kind": "Contract", "rows": contracts})
-print("Contract", result["status"], result["edit_count"], "edits")
-orders = with_links("purchase_order", "po_number", "for_part", "delivered_to")
-result = execute("import_records", {"kind": "PurchaseOrder", "rows": orders})
-print("PurchaseOrder", result["status"], result["edit_count"], "edits")
-result = execute(
-    "import_batch",
-    {
-        "records": [{"kind": "RiskFlag", **row} for row in rows("risk_flag")],
-        "links": [
-            {"relation": relation, **row}
-            for relation in ("flags", "supplied_by", "stocked_at")
-            for row in rows(relation)
-        ],
-    },
-)
-print("RiskFlag and Links", result["status"], result["edit_count"], "edits")
-EOF
+# CLI
+uv run lorebase import batch -b work \
+  --records Contract=examples/supply/data/contract.csv \
+  --records PurchaseOrder=examples/supply/data/purchase_order.csv \
+  --records RiskFlag=examples/supply/data/risk_flag.csv \
+  --links with_supplier=examples/supply/data/with_supplier.csv \
+  --links for_part=examples/supply/data/for_part.csv \
+  --links delivered_to=examples/supply/data/delivered_to.csv \
+  --links flags=examples/supply/data/flags.csv
 ```
 
 ```text
-Supplier committed 30 edits
-Part committed 40 edits
-Plant committed 20 edits
-Contract committed 50 edits
-PurchaseOrder committed 150 edits
-RiskFlag and Links committed 136 edits
+batch 1/1: rows 1-240 committed, 240 edits
+field      value
+batch      Contract, PurchaseOrder, RiskFlag, with_supplier, for_part, delivered_to, flags
+branch     work
+mode       committed
+rows       240
+edits      240
+batches    1
+revisions  2d84947d8d75
 ```
+
+The same call exists as the `import_batch` Operation, which takes `records` (rows with a `kind`)
+and `links` (rows with a `relation`, `from` and `to`) and commits a Record with its Links in one
+Revision. This one only computes the edits (`dry_run`):
+
+```bash
+# curl
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/operations/import_batch/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"branch": "work", "dry_run": true, "parameters": {
+        "records": [{"kind": "Contract", "contract_number": "C-3999", "title": "Spot buy",
+                     "start_date": "2026-02-01"}],
+        "links": [{"relation": "with_supplier", "from": "C-3999", "to": "S-1001"}]}}'
+```
+
+When a file already has a column with the key at the other end, `import records` sends it as the
+Link of each row: `import records Contract contracts.csv --link with_supplier=supplier_code`
+(repeatable; JSON Lines and Parquet cells may hold a list of keys). Files can be CSV, TSV, JSON
+Lines, a JSON array or Parquet (`pip install 'lorebase-cli[parquet]'`); `--map
+file_column=attribute` renames columns, `--dry-run` computes without committing. A rejected
+request names the file and row of each issue and how many rows are already committed.
 
 Add `"dry_run": true` next to `"branch"` (CLI: `--dry-run`) to compute the edits and
 violations without committing. Rows that break the schema are rejected as a whole with `422` and
@@ -387,8 +357,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml exec -T pos
   -c "select key, title from mat_records where key = 'S-1001'"
 ```
 
-You should see 30 Suppliers, 40 Parts and 20 Plants on `work`, and `S-1001` titled
-`Kavsen Alloys Sp. z o.o.`.
+You should see 30 Suppliers, 40 Parts, 20 Plants, 25 Contracts, 50 PurchaseOrders and 20
+RiskFlags on `work`, and `S-1001` titled `Kavsen Alloys Sp. z o.o.`.
 
 ### Propose the changes to `main`
 
