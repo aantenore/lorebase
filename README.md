@@ -91,18 +91,19 @@ The milestone breakdown with checkboxes is in the [roadmap](docs/roadmap.md).
 
 ### Read performance
 
-p95 latency in milliseconds of the agent reads on a materialized head of 99,900 Records and 302,940 Links, one laptop with Postgres in Docker, measured by `tests/perf/bench.py` for a database role not subject to row-level security ([docs/performance.md](docs/performance.md)):
+p95 latency in milliseconds of the agent reads on a materialized head of 99,900 Records and 302,940 Links, one laptop with Postgres in Docker, measured by `tests/perf/bench.py` ([docs/performance.md](docs/performance.md)). `owner` is a database role not subject to row-level security; `rls` is subject to it, like the role Keeper runs as in production:
 
-| Read | Budget | p95 |
-|------|-------:|----:|
-| Record by key | 5 | 2.43 |
-| Page of 50 | 20 | 5.64 |
-| Links of a Record | 10 | 4.25 |
-| Neighborhood, 2 hops | 30 | 20.46 |
-| Query on an indexed Attribute | 25 | 4.61 |
-| Full-text search | 50 | 6.39 |
+| Read | Budget | owner p95 | rls p95 |
+|------|-------:|----------:|--------:|
+| Record by key | 5 | 1.63 | 1.86 |
+| Page of 50 | 20 | 1.87 | 5.41 |
+| Links of a Record | 10 | 2.34 | 4.54 |
+| Neighborhood, 2 hops | 30 | 7.19 | 8.29 |
+| Query on an indexed Attribute | 25 | 3.02 | 2.40 |
+| Full-text search | 50 | 3.46 | 4.02 |
+| Full-text search, typo-tolerant titles | 50 | 28.66 | 32.10 |
 
-Caveat: production runs Keeper as a role subject to row-level security, and there Links of a Record (28 ms), the neighborhood (137 ms) and search (68 ms) are over budget, because Postgres cannot use non-leakproof operators as index conditions under RLS. The [performance page](docs/performance.md) has both columns and the plans; the 1M-Record baseline is still to do.
+Under row-level security Postgres cannot use non-leakproof operators (`->>`, casts, `@@`) as index conditions, so search, incoming Links, neighborhoods and attribute queries run inside security definer functions that pin the Domain they are given ([store schema notes](docs/store-schema-notes.md#security-definer-read-functions)); as plain SQL the `rls` role measured 28 ms, 137 ms and 68 ms for Links of a Record, the neighborhood and search. The 1M-Record baseline is still to do.
 
 ## See it
 

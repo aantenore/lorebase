@@ -8,10 +8,16 @@ re-enters a Record already on its own path (`CYCLE`), and it is consumed lazily:
 `LIMIT` on Links walked stops the recursion, so caps bound the work, not only the result.
 The same statement hydrates the Records reached, nearest first up to the node cap, and returns
 the Links walked between them: one round trip.
+
+Inbound foreign-key hops compare a JSON value, which row-level security keeps from being an
+index condition; with `store.reads.use_definer_functions` the statement runs inside the
+security definer function `lb_neighborhood` (revision 0005), which builds the same statement
+from the Domain, branch and Relations it is given.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -35,7 +41,12 @@ from lorebase_store.repositories.materialized import RecordRow
 from lorebase_store.runtime import StoreRuntime, default_runtime
 
 _STEP_COLUMNS = (
-    "kind_id, key, relation_id, from_kind, from_key, to_kind, to_key, link_values, link_hash"
+    "via_kind, via_key, kind_id, key, relation_id, from_kind, from_key, to_kind, to_key, "
+    "link_values, link_hash"
+)
+_NULL_LINK = (
+    "CAST(NULL AS text), CAST(NULL AS text), CAST(NULL AS text), CAST(NULL AS text), "
+    "CAST(NULL AS text), CAST(NULL AS jsonb), CAST(NULL AS bytea)"
 )
 
 
@@ -49,13 +60,42 @@ class Neighbor:
 class Neighborhood:
     """Records reached (nearest first) and the Links walked between them.
 
-    `truncated` is true when the Link or node cap cut the walk; the per-Record fan-out cap
-    is not reported.
+    `truncated` is true when a cap may have cut the walk: the Link or node cap, or a Record
+    that had `fanout` Links followed in one hop.
     """
 
     records: list[Neighbor]
     links: list[LinkRef]
     truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Hops:
+    """Relations one neighborhood follows: forward (out) and backward (in), each stored or
+    foreign-key backed."""
+
+    stored_out: tuple[Relation, ...]
+    stored_in: tuple[Relation, ...]
+    foreign_out: tuple[Relation, ...]
+    foreign_in: tuple[Relation, ...]
+
+    def as_json(self) -> str:
+        """The `p_relations` argument of `lb_neighborhood`."""
+
+        def rows(relations: Sequence[Relation], attribute: bool) -> list[list[str | None]]:
+            return [
+                [r.id, r.from_kind, r.to_kind, *([r.foreign_key_attribute] if attribute else [])]
+                for r in relations
+            ]
+
+        return json.dumps(
+            {
+                "out": rows(self.stored_out, False),
+                "in": rows(self.stored_in, False),
+                "fk_out": rows(self.foreign_out, True),
+                "fk_in": rows(self.foreign_in, True),
+            }
+        )
 
 
 class TraversalLimitError(ValueError):
@@ -70,33 +110,54 @@ def _within(name: str, value: int, maximum: int) -> int:
     return value
 
 
-def _branches(
-    stored_out: bool,
-    stored_in: bool,
-    foreign_out: bool,
-    foreign_in: Sequence[Relation],
-    domain_id: str,
-    branch: str,
-) -> list[str]:
+def plan_hops(
+    schema: Schema,
+    direction: Direction = Direction.BOTH,
+    relation_ids: Sequence[str] | None = None,
+    *,
+    follow: Mapping[str, Direction] | None = None,
+) -> Hops:
+    """The Relations to follow: `direction` over `relation_ids` (all when `None`), or each
+    Relation of `follow` (Relation id to direction) in its own direction only when given."""
+    relations = sorted(schema.relations.values(), key=lambda r: r.id)
+    if follow is not None:
+        outgoing = {rid for rid, way in follow.items() if way.outgoing}
+        incoming = {rid for rid, way in follow.items() if way.incoming}
+    else:
+        wanted = {r.id for r in relations} if relation_ids is None else set(relation_ids)
+        outgoing = wanted if direction.outgoing else set()
+        incoming = wanted if direction.incoming else set()
+    out = [r for r in relations if r.id in outgoing]
+    into = [r for r in relations if r.id in incoming]
+    stored = set(stored_relation_ids(relations))
+    return Hops(
+        stored_out=tuple(r for r in out if r.id in stored),
+        stored_in=tuple(r for r in into if r.id in stored),
+        foreign_out=tuple(foreign_key_relations(out)),
+        foreign_in=tuple(foreign_key_relations(into)),
+    )
+
+
+def _branches(hops: Hops, domain_id: str, branch: str) -> list[str]:
     """Lateral sources of one hop from the frontier Record `w`."""
     links = (
         "JOIN mat_links l ON l.domain_id = :domain AND l.branch = :branch "
         "AND l.relation_id = r.relation_id"
     )
     parts: list[str] = []
-    if stored_out:
+    if hops.stored_out:
         parts.append(
             "SELECT r.to_kind, l.to_key, l.relation_id, r.from_kind, l.from_key, r.to_kind, "
             f'l.to_key, l."values", l.object_hash FROM out_rels r {links} '
             "AND l.from_key = w.key WHERE r.from_kind = w.kind_id LIMIT :fanout"
         )
-    if stored_in:
+    if hops.stored_in:
         parts.append(
             "SELECT r.from_kind, l.from_key, l.relation_id, r.from_kind, l.from_key, r.to_kind, "
             f'l.to_key, l."values", l.object_hash FROM in_rels r {links} '
             "AND l.to_key = w.key WHERE r.to_kind = w.kind_id LIMIT :fanout"
         )
-    if foreign_out:
+    if hops.foreign_out:
         parts.append(
             'SELECT f.to_kind, m."values" ->> f.attribute, f.relation_id, f.from_kind, m.key, '
             "f.to_kind, m.\"values\" ->> f.attribute, CAST('{}' AS jsonb), CAST(NULL AS bytea) "
@@ -105,7 +166,7 @@ def _branches(
             'WHERE f.from_kind = w.kind_id AND m."values" ->> f.attribute IS NOT NULL '
             "LIMIT :fanout"
         )
-    for relation in foreign_in:
+    for relation in hops.foreign_in:
         assert relation.foreign_key_attribute is not None
         from_kind = sql_literal(relation.from_kind)
         to_kind = sql_literal(relation.to_kind)
@@ -126,56 +187,40 @@ def neighborhood_sql(
     branch: str,
     direction: Direction,
     relation_ids: Sequence[str] | None,
+    *,
     follow: Mapping[str, Direction] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """The neighborhood statement and its schema-derived parameters.
+    """The neighborhood statement and its schema-derived parameters (see `plan_hops`).
 
     `follow` (Relation id to direction), when given, replaces `direction` and
     `relation_ids`: each Relation is followed in its own direction only.
 
     Other parameters: `:domain`, `:branch`, `:seed_kinds`, `:seed_keys`, `:depth`,
-    `:fanout`, `:max_steps` (Links walked plus seeds) and `:max_nodes`.
+    `:fanout`, `:max_steps` (Links walked plus seeds) and `:max_nodes`. `lb_neighborhood`
+    builds the same statement.
     """
-    if follow is None:
-        wanted = None if relation_ids is None else set(relation_ids)
-        follow = {
-            r.id: direction for r in schema.relations.values() if wanted is None or r.id in wanted
-        }
-    relations = [r for r in sorted(schema.relations.values(), key=lambda r: r.id) if r.id in follow]
-    outgoing = [r for r in relations if follow[r.id].outgoing]
-    incoming = [r for r in relations if follow[r.id].incoming]
-    out_rels = stored_relation_ids(outgoing)
-    in_rels = stored_relation_ids(incoming)
-    foreign_out = foreign_key_relations(outgoing)
-    by_id = {r.id: r for r in relations}
+    hops = plan_hops(schema, direction, relation_ids, follow=follow)
     params: dict[str, Any] = {
-        "out_ids": out_rels,
-        "out_from": [by_id[r].from_kind for r in out_rels],
-        "out_to": [by_id[r].to_kind for r in out_rels],
-        "in_ids": in_rels,
-        "in_from": [by_id[r].from_kind for r in in_rels],
-        "in_to": [by_id[r].to_kind for r in in_rels],
-        "fk_ids": [r.id for r in foreign_out],
-        "fk_from": [r.from_kind for r in foreign_out],
-        "fk_to": [r.to_kind for r in foreign_out],
-        "fk_attributes": [r.foreign_key_attribute for r in foreign_out],
+        "out_ids": [r.id for r in hops.stored_out],
+        "out_from": [r.from_kind for r in hops.stored_out],
+        "out_to": [r.to_kind for r in hops.stored_out],
+        "in_ids": [r.id for r in hops.stored_in],
+        "in_from": [r.from_kind for r in hops.stored_in],
+        "in_to": [r.to_kind for r in hops.stored_in],
+        "fk_ids": [r.id for r in hops.foreign_out],
+        "fk_from": [r.from_kind for r in hops.foreign_out],
+        "fk_to": [r.to_kind for r in hops.foreign_out],
+        "fk_attributes": [r.foreign_key_attribute for r in hops.foreign_out],
     }
-    parts = _branches(
-        bool(out_rels),
-        bool(in_rels),
-        bool(foreign_out),
-        foreign_key_relations(incoming),
-        domain_id,
-        branch,
-    )
+    parts = _branches(hops, domain_id, branch)
     step = (
-        "SELECT w.depth + 1, n.* FROM walk w CROSS JOIN LATERAL (SELECT * FROM ("
+        "SELECT w.depth + 1, w.kind_id, w.key, n.* FROM walk w CROSS JOIN LATERAL "
+        "(SELECT * FROM ("
         + " UNION ALL ".join(f"({part})" for part in parts)
         + ") AS hop LIMIT :fanout) AS n WHERE w.depth < :depth"
         if parts
-        else "SELECT w.depth + 1, w.kind_id, w.key, CAST(NULL AS text), CAST(NULL AS text), "
-        "CAST(NULL AS text), CAST(NULL AS text), CAST(NULL AS text), CAST(NULL AS jsonb), "
-        "CAST(NULL AS bytea) FROM walk w WHERE false"
+        else f"SELECT w.depth + 1, w.kind_id, w.key, w.kind_id, w.key, {_NULL_LINK} "
+        "FROM walk w WHERE false"
     )
     record_columns = ", ".join(f'm."{c}"' for c in RECORD_NAMES)
     sql = f"""
@@ -190,8 +235,7 @@ def neighborhood_sql(
         SELECT * FROM unnest(CAST(:fk_ids AS text[]), CAST(:fk_from AS text[]),
                              CAST(:fk_to AS text[]), CAST(:fk_attributes AS text[]))),
     walk(depth, {_STEP_COLUMNS}) AS (
-        SELECT 0, s.kind_id, s.key, CAST(NULL AS text), CAST(NULL AS text), CAST(NULL AS text),
-               CAST(NULL AS text), CAST(NULL AS text), CAST(NULL AS jsonb), CAST(NULL AS bytea)
+        SELECT 0, CAST(NULL AS text), CAST(NULL AS text), s.kind_id, s.key, {_NULL_LINK}
         FROM unnest(CAST(:seed_kinds AS text[]), CAST(:seed_keys AS text[])) AS s(kind_id, key)
         UNION ALL
         {step}
@@ -220,6 +264,12 @@ def neighborhood_sql(
     UNION ALL
     SELECT 'steps', (SELECT count(*) FROM walked), NULL, NULL, NULL, NULL, NULL, NULL, NULL,
            NULL, NULL, NULL, NULL, NULL, NULL
+    UNION ALL
+    SELECT 'fanout', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+           NULL, NULL
+    WHERE EXISTS (
+        SELECT 1 FROM walked WHERE depth > 0 GROUP BY depth, via_kind, via_key
+        HAVING count(DISTINCT (relation_id, from_key, to_key)) >= :fanout)
     """
     return sql, params
 
@@ -234,6 +284,11 @@ _RESULT_COLUMNS: tuple[ColumnElement[Any], ...] = (
     column("link_values", JSONB),
     column("link_hash", LargeBinary),
 )
+_DEFINER = text(
+    "SELECT * FROM lb_neighborhood(:domain, :branch, CAST(:seeds AS jsonb), "
+    "CAST(:depth AS integer), CAST(:relations AS jsonb), CAST(:fanout AS integer), "
+    "CAST(:max_steps AS integer), CAST(:max_nodes AS integer))"
+).columns(*_RESULT_COLUMNS)
 
 
 async def neighborhood(
@@ -254,30 +309,46 @@ async def neighborhood(
 ) -> Neighborhood:
     """Records within `depth` hops of `seeds` (`(kind_id, key)` pairs) and the Links between.
 
-    Links of every Relation in `relation_ids` (default: all) are followed in `direction`;
-    `follow` (Relation id to direction) replaces both. Caps default to and may not exceed
+    Follows `direction` over `relation_ids` (every Relation when `None`), or exactly the
+    `(relation id, direction)` pairs of `follow`. Caps default to and may not exceed
     `store.traverse`. Seeds that do not exist are absent from the result.
     """
-    caps = (runtime or default_runtime()).settings.traverse
+    settings = (runtime or default_runtime()).settings
+    caps = settings.traverse
     seeds = list(dict.fromkeys(seeds))
     _within("seed count", len(seeds), caps.max_seeds)
     nodes_cap = _within("max_nodes", max_nodes or caps.max_nodes, caps.max_nodes)
     links_cap = _within("max_links", max_links or caps.max_links, caps.max_links)
-    sql, params = neighborhood_sql(schema, domain_id, branch, direction, relation_ids, follow)
-    params.update(
-        domain=domain_id,
-        branch=branch,
-        seed_kinds=[kind for kind, _ in seeds],
-        seed_keys=[key for _, key in seeds],
-        depth=_within("depth", depth, caps.max_depth),
-        fanout=_within("fanout", fanout or caps.max_fanout, caps.max_fanout),
-        max_steps=links_cap + len(seeds),
-        max_nodes=nodes_cap,
-    )
-    statement = text(sql).columns(*_RESULT_COLUMNS)
+    bounds: dict[str, Any] = {
+        "domain": domain_id,
+        "branch": branch,
+        "depth": _within("depth", depth, caps.max_depth),
+        "fanout": _within("fanout", fanout or caps.max_fanout, caps.max_fanout),
+        "max_steps": links_cap + len(seeds),
+        "max_nodes": nodes_cap,
+    }
+    if settings.reads.use_definer_functions:
+        hops = plan_hops(schema, direction, relation_ids, follow=follow)
+        params = {
+            **bounds,
+            "seeds": json.dumps([list(seed) for seed in seeds]),
+            "relations": hops.as_json(),
+        }
+        statement = _DEFINER
+    else:
+        sql, params = neighborhood_sql(
+            schema, domain_id, branch, direction, relation_ids, follow=follow
+        )
+        params.update(
+            bounds,
+            seed_kinds=[kind for kind, _ in seeds],
+            seed_keys=[key for _, key in seeds],
+        )
+        statement = text(sql).columns(*_RESULT_COLUMNS)
     records: list[Neighbor] = []
     links: list[LinkRef] = []
     steps = 0
+    saturated = False
     for row in (await session.execute(statement, params)).mappings():
         if row["item"] == "record":
             record = RecordRow(**{name: row[name] for name in RECORD_NAMES})
@@ -292,10 +363,12 @@ async def neighborhood(
                     row["link_hash"],
                 )
             )
+        elif row["item"] == "fanout":
+            saturated = True
         else:
             steps = row["depth"]
     records.sort(key=lambda n: (n.depth, n.record.kind_id, n.record.key))
-    truncated = steps >= params["max_steps"] or len(records) > nodes_cap
+    truncated = saturated or steps >= bounds["max_steps"] or len(records) > nodes_cap
     if len(records) > nodes_cap:
         records = records[:nodes_cap]
     kept = {(n.record.kind_id, n.record.key) for n in records}

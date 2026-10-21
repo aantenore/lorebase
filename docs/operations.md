@@ -21,7 +21,14 @@ python -m lorebase_store.gc --domain supply               # collect
 python -m lorebase_store.gc --all --grace-seconds 86400   # every Domain, longer grace
 python -m lorebase_store.gc --domain supply --enqueue     # queue a `gc` job instead
 python -m lorebase_store.jobs work                        # run queued jobs (SKIP LOCKED)
+python -m lorebase_store.indexes plan --domain supply     # pending per-Attribute index DDL
 ```
+
+`jobs work` runs `gc` and `store.index` jobs by default (`--types` narrows it). Index jobs
+build and drop per-Attribute indexes; they run as `database.maintenance_dsn` when it is set,
+because their DDL needs a role that owns `mat_records` ([store schema
+notes](store-schema-notes.md#physical-layout)). `indexes plan` prints that DDL for an
+administrator where no such role is configured.
 
 The report is one JSON object per Domain (`revisions`, `changesets`, `history_rows`,
 `provenance`, `nodes`, `node_bytes`, `objects`, `object_bytes`, mark and sweep seconds). In

@@ -33,6 +33,12 @@ x-database: &database
   LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
   # Read replicas (design 15.3); empty keeps every read on the primary.
   LOREBASE_DB_READ_DSN: ${LOREBASE_DB_READ_DSN:-}
+  # Maintenance role for per-Attribute index DDL run by the job worker
+  # (`python -m lorebase_store.jobs work`). DEV ONLY: this is the Postgres superuser of the
+  # dev stack. In production point it at a dedicated role that owns mat_records, or leave it
+  # unset and apply `python -m lorebase_store.indexes plan` (docs/store-schema-notes.md).
+  LOREBASE__DATABASE__MAINTENANCE_DSN: secret://env/LOREBASE_DB_MAINTENANCE_DSN
+  LOREBASE_DB_MAINTENANCE_DSN: ${LOREBASE_DB_MAINTENANCE_DSN:-postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}}
 
 x-keeper: &keeper
   <<: *backend

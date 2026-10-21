@@ -63,6 +63,20 @@ async def _execute(url: str, *statements: str) -> None:
         await engine.dispose()
 
 
+async def _grant_read_functions(url: str, role: str) -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from lorebase_store.definer import grant_read_functions
+
+    engine = create_async_engine(url, poolclass=NullPool, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as connection:
+            await grant_read_functions(connection, role)
+    finally:
+        await engine.dispose()
+
+
 async def _create_admin(database_url: str) -> tuple[str, str]:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -116,6 +130,7 @@ def keeper_database(keeper_postgres_url: str) -> Iterator[KeeperDatabase]:
                 f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {role}",
             )
         )
+        asyncio.run(_grant_read_functions(url, role))
         admin_id, admin_key = asyncio.run(_create_admin(url))
         app_url = (
             make_url(url)
