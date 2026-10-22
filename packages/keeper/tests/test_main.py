@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from lorebase_keeper import __main__ as entrypoint
+from lorebase_keeper.services.pii_import import VaultSource
 from lorebase_store.auth import AuditStream, ChainHead, Chains, ChainVerification
 from lorebase_store.auth.checkpoints import Checkpoint, signed_document
 
@@ -240,3 +241,34 @@ def test_audit_verify_needs_recent_checkpoints(
         entrypoint.main([*argv, *extra])
     assert caught.value.code == 1
     assert problem in capsys.readouterr().out
+
+
+def test_sources_vault_lists_the_sources_and_fails_the_check_when_any(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("LOREBASE__DATABASE__DSN", "postgresql://app:pw@db:5432/lorebase")
+
+    class _Engine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(entrypoint, "create_engine", lambda *_a, **_k: _Engine())
+    listed = [
+        VaultSource("acme", "src_1", "crm.contacts", "Person", ("email",), "0 * * * *", "active")
+    ]
+
+    async def found(*_a: Any, **_k: Any) -> list[VaultSource]:
+        return listed
+
+    monkeypatch.setattr(entrypoint, "installation_vault_sources", found)
+    with pytest.raises(SystemExit) as failed:
+        entrypoint.main(["sources", "vault", "--check"])
+    assert failed.value.code == 1
+    assert capsys.readouterr().out.strip() == (
+        "acme crm.contacts (src_1): Person.email; schedule 0 * * * *; active"
+    )
+    entrypoint.main(["sources", "vault", "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["attributes"] == ["email"]
+    listed.clear()
+    entrypoint.main(["sources", "vault", "--check"])
+    assert capsys.readouterr().out.strip() == "no Source maps vault Attributes"

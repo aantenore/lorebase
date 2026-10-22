@@ -13,6 +13,9 @@ python -m lorebase_keeper audit verify (DOMAIN | --installation | --all) [--afte
     Scribe published (files or directories of them) to detect removed or rewritten entries.
     The exit status is 1 when an entry does not verify, a checkpointed entry is missing or
     changed, or a checkpoint is invalid.
+python -m lorebase_keeper sources vault [--json] [--check]
+    List the Sources of every Domain's default branch that map vault Attributes (upgrade
+    check for pii.import, design 13.5); with --check the exit status is 1 when any is listed.
 
 The installation commands connect with `database.maintenance_dsn` when it is set, else with
 `database.dsn`.
@@ -40,6 +43,7 @@ from lorebase_keeper.bootstrap import (
     bootstrap,
     create_service_principal,
 )
+from lorebase_keeper.services.pii_import import installation_vault_sources
 from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.logging import configure_logging
 from lorebase_platform.settings import ConfigError, Settings, load_settings
@@ -54,7 +58,7 @@ from lorebase_store.auth.checkpoints import (
     parse_document,
 )
 from lorebase_store.db import create_engine
-from lorebase_store.settings import DatabaseSettings
+from lorebase_store.settings import DatabaseSettings, store_settings
 
 SERVICE_NAME = "keeper"
 
@@ -143,6 +147,20 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="fail when the newest checkpoint is older (publication stopped)",
     )
+    sources = commands.add_parser("sources", help="check Sources")
+    sources_commands = sources.add_subparsers(dest="sources_command", required=True)
+    vault = sources_commands.add_parser(
+        "vault",
+        help="list the Sources that map vault Attributes",
+        description="List the Sources of every Domain's default branch that map columns to "
+        "vault Attributes. Defining, changing or triggering such a Source needs pii.import; "
+        "Sources defined before that permission existed still sync on their schedule: confirm "
+        "each, or disable it (remove its schedule or deprecate it) with a schema change.",
+    )
+    vault.add_argument("--json", action="store_true", help="print the Sources as JSON")
+    vault.add_argument(
+        "--check", action="store_true", help="exit with status 1 when any Source is listed"
+    )
     return parser
 
 
@@ -155,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         _run_admin(lambda settings: _create_principal(settings, args))
     elif args.command == "audit":
         _run_admin(lambda settings: _verify_audit(settings, args))
+    elif args.command == "sources":
+        _run_admin(lambda settings: _vault_sources(settings, args))
     else:
         serve()
 
@@ -401,6 +421,34 @@ async def _verify_audit(settings: Settings, args: argparse.Namespace) -> None:
                 f"{finding.checkpoint_at.isoformat()} is {finding.problem}"
             )
     if not result.ok or (anchored is not None and not anchored.ok):
+        sys.exit(1)
+
+
+async def _vault_sources(settings: Settings, args: argparse.Namespace) -> None:
+    database = settings.section("database", DatabaseSettings)
+    owner = database.maintenance_dsn
+    engine = create_engine(
+        database, url=None if owner is None else owner.get_secret_value(), pooled=False
+    )
+    try:
+        found = await installation_vault_sources(
+            async_sessionmaker(engine, expire_on_commit=False),
+            store_settings(settings).writes,
+        )
+    finally:
+        await engine.dispose()
+    if args.json:
+        print(json.dumps([source.document() for source in found]))
+    elif not found:
+        print("no Source maps vault Attributes")
+    else:
+        for source in found:
+            schedule = source.schedule or "manual"
+            print(
+                f"{source.domain} {source.api_name} ({source.source}): {source.kind}."
+                f"{', '.join(source.attributes)}; schedule {schedule}; {source.status}"
+            )
+    if args.check and found:
         sys.exit(1)
 
 

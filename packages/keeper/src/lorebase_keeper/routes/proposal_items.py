@@ -12,6 +12,8 @@ A decision accepts, rejects or resets (`pending`) items, by id with optional rev
 or all items matching `where` with one `decision`. Edits by item type: `record` takes
 `{"values": {attribute: value}}`, `value` takes `{"value": v, "key": k}` (`key` picks another
 Record, for ambiguous matches), `link` takes `{"from": key, "to": key, "values": {...}}`.
+Edits that set a value of a vault Attribute also need `pii.import` on the whole Domain
+(`services.pii_import`), checked before anything is decided.
 After the decisions, the extraction branch is re-materialized to hold exactly the accepted
 items (with `extraction` Lineage) and the Proposal's summary and merge preview are refreshed,
 in one transaction: when the branch rejects the accepted set (a new Record missing a required
@@ -54,6 +56,7 @@ from lorebase_keeper.reading.sensitivity import (
     relation_kinds,
 )
 from lorebase_keeper.services.errors import commit_problem, findings_of
+from lorebase_keeper.services.pii_import import item_edits_vault_attributes, require_pii_import
 from lorebase_store.commit import CommitError
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.extraction import (
@@ -450,6 +453,30 @@ async def list_items(
     return Page[ItemOut](items=items, next_cursor=next_cursor)
 
 
+async def _check_vault_edits(
+    store: StoreDep,
+    auth: AuthRuntime,
+    principal: Principal,
+    domain_id: str,
+    proposal_id: str,
+    schema: Schema,
+    decisions: list[Decision],
+) -> None:
+    """Edits setting a value of a vault Attribute need `pii.import` Domain-wide, before
+    anything is decided: the extraction commit checks vault values against erased ones."""
+    edited = {d.item_id: d.edits for d in decisions if d.edits}
+    if not edited:
+        return
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        rows = await ProposalItemRepository(session, domain_id).all(proposal_id)
+    for row in rows:
+        edits = edited.get(row.item_id)
+        if edits and item_edits_vault_attributes(schema, row, edits):
+            await require_pii_import(auth.authorizer, principal, domain_id)
+            return
+
+
 @router.post(ITEMS + ":decide", summary="Accept or reject extraction items", responses=_ERRORS)
 async def decide(
     domain_id: str,
@@ -473,6 +500,7 @@ async def decide(
     )
     schema = await _schema(store, domain_id, proposal)
     decisions = [Decision(d.item, ItemDecision(d.decision), d.edits) for d in body.decisions]
+    await _check_vault_edits(store, auth, principal, domain_id, proposal_id, schema, decisions)
     listed = {d.item_id for d in decisions}
     if body.where is not None and body.decision is not None:
         async with store.sessions() as session, session.begin():
