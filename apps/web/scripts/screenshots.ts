@@ -18,7 +18,7 @@
  * `--only documents,review-items` takes just the named pictures.
  *
  * `pnpm screenshots flow` records a short walk through the app instead (Explorer, Canvas, the
- * Review resolver) and writes docs/images/tour.gif. It encodes the video with ffmpeg when it is
+ * Modeler Source mapping and its preview, the Review resolver) and writes docs/images/tour.gif. It encodes the video with ffmpeg when it is
  * installed, otherwise it stitches PNG frames with Pillow (`uv run --with pillow`).
  */
 import { spawnSync } from 'node:child_process';
@@ -40,7 +40,7 @@ type Step =
   | { wait: number }
   | { waitFor: string }
   | { check: string; nth: number }
-  | { upload: string; files: string[] };
+  | { upload: string; files: string[]; from?: 'sourceSample' };
 
 interface Shot {
   /** File name without extension: docs/images/<name>.png. */
@@ -67,6 +67,8 @@ const CONFIG = {
   outputDir: resolve(import.meta.dirname, '../../../docs/images'),
   /** CSV files the "Start from data" shot uploads: the demo Domain of examples/supply. */
   sampleDataDir: resolve(import.meta.dirname, '../../../examples/supply/data'),
+  /** Sample file the Source preview shot reads: columns of the mock Source erp.vendors. */
+  sourceSampleDir: resolve(import.meta.dirname, 'screenshot-data'),
   buildDir: resolve(import.meta.dirname, '../node_modules/.cache/screenshots-dist'),
   /** Live builds bake in other variables, so they get their own folder. */
   liveBuildDir: resolve(import.meta.dirname, '../node_modules/.cache/screenshots-dist-live'),
@@ -149,6 +151,40 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
       { click: 'button:has-text("Accept all at or above")' },
       { wait: 400 },
       { scrollToTop: 'h1', offset: 80 },
+    ],
+  },
+  {
+    name: 'modeler-source-mapping',
+    path: `/${domain}/modeler?view=edit`,
+    ready: '.cm-content',
+    steps: [
+      { click: '[role=tab]:has-text("Sources")' },
+      { waitFor: 'text=Transforms of legal_name' },
+      { scrollToTop: 'text=Attribute mapping', offset: 120 },
+      { wait: 300 },
+    ],
+  },
+  {
+    name: 'modeler-source-preview',
+    path: `/${domain}/modeler?view=edit`,
+    ready: '.cm-content',
+    steps: [
+      { click: '[role=tab]:has-text("Sources")' },
+      { upload: 'input[type=file]', files: ['vendors.csv'], from: 'sourceSample' },
+      { waitFor: 'table[aria-label^="Sample rows"]' },
+      { scrollToTop: 'table[aria-label^="Sample rows"]', offset: 260 },
+      { wait: 300 },
+    ],
+  },
+  {
+    name: 'modeler-operation-steps',
+    path: `/${domain}/modeler?view=edit&branch=model%2Frisk`,
+    ready: '.cm-content',
+    steps: [
+      { click: '[role=tab]:has-text("Operations")' },
+      { waitFor: 'text=The effects of the Operation' },
+      { scrollToTop: 'text=The effects of the Operation', offset: 120 },
+      { wait: 300 },
     ],
   },
   {
@@ -312,7 +348,8 @@ async function runStep(page: Page, step: Step): Promise<void> {
   } else if ('check' in step) {
     await page.locator(step.check).nth(step.nth).check();
   } else if ('upload' in step) {
-    const files = step.files.map((name) => resolve(CONFIG.sampleDataDir, name));
+    const dir = step.from === 'sourceSample' ? CONFIG.sourceSampleDir : CONFIG.sampleDataDir;
+    const files = step.files.map((name) => resolve(dir, name));
     await page.locator(step.upload).setInputFiles(files);
   } else {
     await page.waitForTimeout(step.wait);
@@ -372,8 +409,8 @@ async function capture(browser: Browser, origin: string, shot: Shot): Promise<st
 }
 
 /**
- * The scripted walk behind docs/images/tour.gif: Explorer, a Record, the Canvas and the Review
- * resolver on Proposal 41. Every step reads like a user action; waits let the picture settle.
+ * The scripted walk behind docs/images/tour.gif: Explorer, a Record, the Canvas, the Source
+ * mapping and its sample preview in the Modeler, and the Review resolver on Proposal 41. Every step reads like a user action; waits let the picture settle.
  */
 const FLOW = {
   start: `/${MOCK_DOMAIN}/explorer`,
@@ -395,6 +432,17 @@ const FLOW = {
     { click: 'a:has-text("Open in Canvas")' },
     { waitFor: '[role=img][aria-label^="Records graph"]' },
     { wait: 2600 },
+    { click: '[aria-label="Main"] >> text=Modeler' },
+    { click: '[role=tab]:has-text("Edit schema")' },
+    { waitFor: '.cm-content' },
+    { click: '[role=tab]:has-text("Sources")' },
+    { waitFor: 'text=Transforms of legal_name' },
+    { scrollToTop: 'text=Attribute mapping', offset: 120 },
+    { wait: 1800 },
+    { upload: 'input[type=file]', files: ['vendors.csv'], from: 'sourceSample' },
+    { waitFor: 'table[aria-label^="Sample rows"]' },
+    { scrollToTop: 'table[aria-label^="Sample rows"]', offset: 260 },
+    { wait: 2200 },
     { click: '[aria-label="Main"] >> text=Review' },
     { waitFor: 'text=Risk model' },
     { wait: 1200 },

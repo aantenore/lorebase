@@ -4,7 +4,7 @@ Screenshots of the Lorebase web app (`apps/web`), taken at 1440x900 in the light
 
 **Live and mock.** Except `documents.png` and `review-items.png`, which come from the mock (a live run does not load documents into Keeper), the pictures below come from the app in live mode against a running Keeper: Postgres and Keeper from `deploy/compose`, the `examples/supply` sample loaded through the REST API (30 Suppliers, 40 Parts, 20 Plants and their Links), and a Proposal with two Conflicts left open. They were taken with `pnpm screenshots --live`. The same screens run on an in-memory mock of the Keeper API when `VITE_API_MODE=mock` (two sample Domains, no backend), which is what the unit tests and `pnpm screenshots` without `--live` use. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change; see [Status](../README.md#status-and-roadmap) for what is still planned. Not everything is served yet: Keeper has no derived values and no extraction items, and the screens say so where it matters. The Start from data and Sources pictures (sample runs) and the animation below were recorded in mock mode.
 
-![Explorer, a Record, the Canvas and the Review resolver in one pass](images/tour.gif)
+![Explorer, a Record, the Canvas, a Source mapping with its sample preview and the Review resolver in one pass](images/tour.gif)
 
 The images are regenerated with `pnpm screenshots --live --keeper <url>` in `apps/web` (without `--live`, from the mock), and the animation above with `pnpm screenshots flow`; see [apps/web/README.md](../apps/web/README.md#screenshots).
 
@@ -54,7 +54,21 @@ The schema of the current Branch as lists: Kinds, Attributes, Relations, Traits,
 
 ![Modeler, schema editor](images/modeler-edit.png)
 
-The schema as one document in two synchronized views: a form with a tab per element type and a YAML editor (CodeMirror). The Operation tab edits parameters, preconditions, steps and the review policy, with CEL expressions in their own editor, and dry-runs the Operation as saved on the Branch. The Derivation tab edits the `expression`, `aggregate` and `path` variants and picks the computed Attribute from the schema. The Source tab shows the fields of each Source type, accepts only `secret://` references for the connection and for credential headers, and edits the mapping to the target Kind, HTTP pagination, sync mode and merge policy. A form edit changes only the keys it is about; anything else in the YAML stays. Validation issues point at the field and the YAML line, and include Keeper's own: the editor asks Keeper to dry-run the edited document, so an Attribute without a description, an unknown reference or an expression that does not type check (with `schema.expressions_enabled`) is refused there and shown next to the field. The change set summary shows the commands and the data migrations the dry run reports. On a protected Branch "Open Proposal" creates a Branch, commits the document on it and opens the Proposal against `main`; on any other Branch "Save change set" commits a schema Revision. An untouched schema produces an empty change set.
+The schema as one document in two synchronized views: a form with a tab per element type and a YAML editor (CodeMirror). The Operation tab edits parameters, preconditions, steps and the review policy, with CEL expressions in their own editor, and dry-runs the Operation as saved on the Branch. The Derivation tab edits the `expression`, `aggregate` and `path` variants and picks the computed Attribute from the schema. The Source tab shows the fields of each Source type, accepts only `secret://` references for the connection and for credential headers, and edits the mapping to the target Kind with the transforms of each Attribute (`cast`, `trim`, `lower`, `upper`, `parse_date`, `concat`, `constant`, `map`, `null_if`: a field set per type, in the order they run), HTTP pagination, sync mode and merge policy. The steps of an Operation are reordered by dragging the handle or with the Up and Down buttons (the move is announced, and the `$step[n]` references renumber so they keep pointing at the same step). A form edit changes only the keys it is about; anything else in the YAML stays. Validation issues point at the field and the YAML line, and include Keeper's own: the editor asks Keeper to dry-run the edited document, so an Attribute without a description, an unknown reference or an expression that does not type check (with `schema.expressions_enabled`) is refused there and shown next to the field. The change set summary shows the commands and the data migrations the dry run reports. On a protected Branch "Open Proposal" creates a Branch, commits the document on it and opens the Proposal against `main`; on any other Branch "Save change set" commits a schema Revision. An untouched schema produces an empty change set.
+
+![Modeler, Source transforms](images/modeler-source-mapping.png)
+
+The mapping of a Source: per Attribute a column, a chain of transforms with the arguments each one takes (the target type of a `cast`, the format of `parse_date`, the table of a `map`), and the order of the chain.
+
+![Modeler, sample rows of a Source](images/modeler-source-preview.png)
+
+The preview at the end of the Source tab takes a sample file (CSV, TSV, JSON or JSON Lines) and shows its first five rows as the mapping, as currently edited, would map them onto the target Kind: the key, the Attributes after their transforms and the coercion to their type, with the reason next to a value that does not fit. The file is read in the browser and not uploaded, so no credential, secret reference or masking rule is involved; the engine of the preview follows the mapper of Scribe, which stays the reference (expression mappings and Parquet are not read). Keeper has no endpoint that reads a Source without writing, and the schema inference of the next section profiles tables and files into a schema, not rows into a mapping, so a trial of the real connection is a dry run sync of the Source.
+
+![Modeler, Operation steps](images/modeler-operation-steps.png)
+
+The steps of an Operation with their drag handle and the Up, Down and Remove buttons.
+
+The Derivation tab ends with a preview too: the computed Attribute on the first five Records of the target Kind on the current Branch, read through the ordinary Record read, so Keeper's masking and permissions apply. It shows the Derivation as saved: after an edit the preview asks for the change set to be saved first, because Keeper has no endpoint that evaluates an unsaved Derivation. (Keeper does not serve derived values in every setup yet; a value it does not return shows as empty.)
 
 ### Start from data
 
@@ -66,7 +80,7 @@ The wizard for a Domain that starts from tables, not from a blank schema. Upload
 
 ![Sources](images/sources.png)
 
-The Sources of the schema with their connection reference, mapping summary, sync mode and merge policy, schedule, last run and its counts, a "Sync now" button, the run history with the error of a failed run and a link to the Proposal a run opened (run 6 opened Proposal 40), and the `sources` section of the schema as a YAML editor with validation and a change set. Mock: runs are sample data and a manual sync finds nothing new. Live: runs come from Keeper's Source routes and "Sync now" queues a job for Scribe. The mapping editor is planned.
+The Sources of the schema with their connection reference, mapping summary, sync mode and merge policy, schedule, last run and its counts, a "Sync now" button, the run history with the error of a failed run and a link to the Proposal a run opened (run 6 opened Proposal 40), and the `sources` section of the schema as a YAML editor with validation and a change set. Mock: runs are sample data and a manual sync finds nothing new. Live: runs come from Keeper's Source routes and "Sync now" queues a job for Scribe. The mapping is edited in the Modeler (Edit schema, Source tab).
 
 ## Documents
 
