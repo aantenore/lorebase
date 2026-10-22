@@ -20,8 +20,9 @@
     -> dry run: commit inside a transaction that is rolled back; report edits and violations
     -> commit (imports in batches of whole units, a Record with its Links, one Revision
        each), then the invocation record, an `operation.invoke` audit entry and the outbox
-       events of the Operation's side effects (`services.operation_events`) in the
-       transaction of the last Revision.
+       events of the Operation's side effects (`services.operation_events`; deferred to the
+       merge of the Proposal with `reviewed_by_proposal`) in the transaction of the last
+       Revision.
 
 Every Revision has origin `operation` (or `import` for bulk imports) with the invocation id as
 reference; every changed Attribute is attributed to a provenance entry naming the invocation,
@@ -620,7 +621,7 @@ async def _execute(
         await _record(
             session, domain_id, request, principal, outcome, resolved, store, started, head
         )
-        if resolved.custom is not None and not request.reviewed_by_proposal:
+        if resolved.custom is not None:
             events = await write_side_effects(
                 session,
                 domain_id,
@@ -638,6 +639,7 @@ async def _execute(
                     parameters=outcome.parameters,
                 ),
                 max_edits=settings.side_effect_max_edits,
+                defer=request.reviewed_by_proposal,
             )
         await session.commit()
     except IntegrityError:

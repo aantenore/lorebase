@@ -10,9 +10,10 @@ against moved heads keeps the resolutions whose Conflicts did not change.
 `merge` runs under the target branch lock and, when no Conflict remains, writes the outcome
 like the commit pipeline (design 6.6): objects, nodes, the merge Revision with parents
 `[target head, source head]`, changeset and provenance, materialization of the changeset on the
-target branch, compare-and-swap of the ref, audit entry and outbox event. A fast-forward moves
-the ref to the source head and materializes the difference; an up-to-date merge writes
-nothing. Everything runs in the caller's transaction.
+target branch, compare-and-swap of the ref, audit entry and outbox events (`revision.committed`
+and the Operation events deferred on the source branch, `repositories.deferred_events`). A
+fast-forward moves the ref to the source head and materializes the difference; an up-to-date
+merge writes no Revision. Everything runs in the caller's transaction.
 """
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ from lorebase_store.merging.lineage import BranchLineage, MergeLineage
 from lorebase_store.models.enums import MergeAttemptStatus, ProposalStatus, RefKind
 from lorebase_store.nodestore import PgNodeStore
 from lorebase_store.objectstore import EncodedObject, SessionObjectStore
+from lorebase_store.repositories.deferred_events import DeferredEventRepository
 from lorebase_store.repositories.domains import DomainRepository
 from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.repositories.index_view import MaterializedIndexView
@@ -151,6 +153,8 @@ class AttemptResult:
     previous: MergeAttemptRow | None = None
     head: bytes | None = None
     source_deleted: bool = False
+    events: tuple[int, ...] = ()
+    """Outbox ids of the deferred Operation events this merge wrote (`release`)."""
 
     @property
     def merged(self) -> bool:
@@ -316,8 +320,19 @@ class MergeService:
         computation = computed.computation
         head: bytes | None = None
         source_deleted = False
+        events: list[int] = []
         if commit and computation.clean:
             head = await self._commit(request, target, source, computed, created_at)
+            events = await DeferredEventRepository(session, domain_id).release(
+                source.name,
+                source.head,
+                {
+                    "branch": target.name,
+                    "head": hex(head),
+                    "source_branch": source.name,
+                    "proposal": request.proposal.id,
+                },
+            )
             if request.delete_source and source.name != target.name:
                 # A large source (promoted to a full copy) is hidden now and its rows are
                 # deleted by a background job.
@@ -373,6 +388,7 @@ class MergeService:
             previous=previous,
             head=head,
             source_deleted=source_deleted,
+            events=tuple(events),
         )
 
     async def _commit(

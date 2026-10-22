@@ -39,6 +39,7 @@ DESIGN_TABLES = {
     "api_key_usage",
     "web_sessions",
     "operation_invocations",
+    "operation_deferred_events",
     "audit_log",
     "audit_read_log",
     "rate_limit_buckets",
@@ -109,5 +110,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_vault_rotation_migration() -> None:
-    assert head_revisions() == ("0027",)
+def test_head_revision_is_the_latest_migration() -> None:
+    assert head_revisions() == ("0028",)

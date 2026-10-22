@@ -3,9 +3,11 @@
 An Operation names its side effects (`side_effects: [risk_flag_raised]`). A committed execution
 writes one `operation.<name>` event per name to the outbox, in the transaction of its last
 Revision, its invocation record and its audit entry: the events exist if and only if the
-execution committed. Dry runs, refused executions, executions sent to review (agent writes on a
-task branch whose Proposal reviews them included) and replays of an idempotency key write none.
-Consumers of the outbox (the webhook worker) deliver them later.
+execution committed. An execution on a task branch whose Proposal is its review (agent writes)
+defers its events instead (`lorebase_store.repositories.deferred_events`): the merge of the
+Proposal writes them, once, in its transaction, naming the target branch, the merged head, the
+source branch and the Proposal. Dry runs, refused executions and replays of an idempotency key
+write none. Consumers of the outbox (the webhook worker) deliver them later.
 
 The payload names the execution (Operation, invocation, principal, branch, Revisions, head),
 carries the parameters as recorded in the invocation (`recorded_parameters`: values that may be
@@ -27,13 +29,14 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.canonical import hex
+from lorebase_core.canonical import from_hex, hex
 from lorebase_core.model import Attribute, Operation, Schema, Sensitivity, looks_like_reference
 from lorebase_core.validate import DataChange, RecordUpsert
 from lorebase_keeper.reading.sensitivity import Clearance, Masking
 from lorebase_keeper.services.operation_catalog import edit_document
 from lorebase_store.outbox_events import carries_markers, operation_event_type, sensitive_value
 from lorebase_store.repositories import MaterializedRepository
+from lorebase_store.repositories.deferred_events import DeferredEventRepository
 from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.telemetry import OPERATION_EVENTS
 
@@ -131,10 +134,13 @@ async def write_side_effects(
     changes: Sequence[DataChange],
     execution: Mapping[str, Any],
     max_edits: int,
+    defer: bool = False,
 ) -> list[int]:
     """Write the outbox events of a committed execution of `operation` in the caller's
     transaction; the event ids. `execution` holds the fields every event carries (branch,
-    invocation, principal, Revisions, recorded parameters)."""
+    invocation, principal, Revisions, head, recorded parameters). With `defer` (the branch's
+    Proposal is the review) the events wait for the merge of the Proposal: none is written
+    now and the result is empty."""
     if not operation.side_effects:
         return []
     listed = await _committed(schema, changes[:max_edits], rows)
@@ -148,6 +154,17 @@ async def write_side_effects(
         "edits": [edit_document(schema, change, shown) for change in listed],
         "edits_truncated": len(changes) > max_edits,
     }
+    if defer:
+        deferred = DeferredEventRepository(session, domain_id)
+        for name in operation.side_effects:
+            await deferred.defer(
+                branch=str(execution["branch"]),
+                revision=from_hex(str(execution["head"])),
+                invocation_id=str(execution["invocation_id"]),
+                event_type=operation_event_type(name),
+                payload={**body, "side_effect": name},
+            )
+        return []
     outbox = OutboxRepository(session)
     ids = [
         await outbox.enqueue(domain_id, operation_event_type(name), {**body, "side_effect": name})

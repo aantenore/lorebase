@@ -184,6 +184,25 @@ class OperationInvocation(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
 
 
+class OperationDeferredEvent(Base):
+    """An `operation.<side effect>` event of an execution committed on a branch whose
+    Proposal is its review (agent writes): written to the outbox, and deleted here, in the
+    transaction of the merge that brings `revision` (the head after the execution) into the
+    target. Deleted with its branch when the branch is deleted unmerged."""
+
+    __tablename__ = "operation_deferred_events"
+    __table_args__ = (domain_fk(), Index(None, "domain_id", "branch"))
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    domain_id: Mapped[str]
+    branch: Mapped[str]
+    revision_id: Mapped[H32]
+    invocation_id: Mapped[str]
+    event_type: Mapped[str]
+    payload: Mapped[dict[str, Any]]
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
 class _AuditColumns:
     """Columns of a hash-chained audit table."""
 

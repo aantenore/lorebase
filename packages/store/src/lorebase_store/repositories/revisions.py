@@ -37,6 +37,23 @@ _FIRST_PARENT_CHAIN = text(
 )
 
 
+_CONTAINED = text(
+    """
+    WITH RECURSIVE walk(id) AS (
+        SELECT CAST(:head AS bytea)
+        UNION
+        SELECT p.parent_id
+        FROM walk
+        JOIN revision_parents p ON p.domain_id = :domain AND p.revision_id = walk.id
+        JOIN revisions r
+          ON r.domain_id = :domain AND r.id = p.parent_id AND r.generation >= :generation
+    )
+    SELECT id FROM walk WHERE id = ANY(CAST(:candidates AS bytea[]))
+    """
+)
+"""Candidates reachable from a head; the walk stops below the lowest candidate generation."""
+
+
 _AHEAD_BEHIND = text(
     """
     WITH RECURSIVE
@@ -181,6 +198,24 @@ class RevisionRepository:
         )
         ahead, behind = result.one()
         return int(ahead), int(behind)
+
+    async def contained(self, head: bytes, candidates: Iterable[bytes]) -> set[bytes]:
+        """The candidates reachable from `head` (`head` included): its ancestors or itself.
+        Only Revisions at least as recent (by generation) as the oldest candidate are
+        walked."""
+        generations = await self.generations(candidates)
+        if not generations:
+            return set()
+        result = await self._session.execute(
+            _CONTAINED,
+            {
+                "head": head,
+                "domain": self._domain,
+                "generation": min(generations.values()),
+                "candidates": list(generations),
+            },
+        )
+        return set(result.scalars())
 
     async def first_parent_chain(self, head: bytes) -> list[bytes]:
         """`head` and its first-parent ancestors, newest first."""
