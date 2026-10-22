@@ -141,6 +141,8 @@ Typo-tolerant search went from 116 to 123 ms to 7.6 to 14 ms at p95, 15 times le
 | A copy branch at 1M Records took 85 to 95 s and its deletion more than 30 s, so both failed through the API at the default statement timeout | Copies and deletions of large branches run as jobs in batches (migration `0017`); measured at 100k. The 1M run has not been repeated since |
 | A semi-join in the history phase of the background copy scanned every Revision of the Domain per row and made that phase four times slower | The batch probes `revisions` by primary key per row |
 | Search on an overlay cost +93 to +101% at p50; the neighborhood +50% | Revisions `0011` (GIN index on domain, branch and search vector) and `0012`, plus the overlay's own per-Attribute indexes; `test_overlay_reads_keep_index_plans` checks the plans |
+| At 10M Records commits slowed with the Links and the Kinds they wrote: Link lookups by `(from, to)` planned one index scan per pair, cardinality checks were quadratic in the batch, search vectors were refreshed by scanning the Kind and unique values bypassed their index | A semi-join on two arrays, counts per key, refresh by key, the unique index's expression; 67 to 48 s for a 28,000-Record load, and statements of 7 s and a minute at 10M down to milliseconds |
+| The background copy of a branch failed at 10M Records: its first step counted the base's 85 million rows, past the statement timeout | The planner's estimate until the switch, then the rows read |
 | Plain SQL under row-level security lost its index plans | Reads go through the security definer functions by default (revision `0005`) |
 
 ### Open at 1M Records
@@ -153,6 +155,50 @@ those read from outside shared buffers on branches by a third, but it was withdr
 `0026` restores the plain index): a B-tree entry is limited to about 2.7 KB, so Links with large
 `values` could no longer be written, and without `values` the hop reads the heap anyway. What
 remains is the heap read of the Records the neighborhood returns, about one page each.
+
+### 10M Records
+
+- **Date:** 2026-10-22.
+- **Environment:** the same machine, shared with other test workloads throughout (load average
+  14 to 209 on 15 cores, median 116); Postgres of `tests/perf/compose.yaml` (`shared_buffers`
+  2GB, `effective_cache_size` 6GB) in the 8 GiB Docker VM; database 64 GB.
+- **Method:** `make perf-10m`. 10,001,100 Records and 30,327,660 Links: the 1M fixture loaded
+  through the commit pipeline, its materialized head copied nine times with renumbered keys
+  (`--replicas 10`; the commit pipeline alone needed about ten hours here). 1,000 timed calls
+  per read and role after 100 warm-up calls; the measured branch copy stops after 200 batches
+  and the overlay is compared with `main`.
+
+p95 in milliseconds:
+
+| Read | Budget | owner | rls |
+|------|-------:|------:|----:|
+| get by key | 5 | 6.08 | 7.15 |
+| list page of 50 | 20 | 9.59 | 15.85 |
+| links of a Record | 10 | 9.15 | 15.97 |
+| 2-hop neighborhood | 30 | 95.64 | 152.84 |
+| query by indexed attribute | 25 | 5.10 | 11.99 |
+| full-text search | 50 | 58.72 | 110.92 |
+| typo-tolerant full-text search | 50 | 97.44 | 127.35 |
+| partial-match full-text search | 50 | 262.83 | 272.95 |
+| record history page | 10\* | 17.36 | 27.75 |
+| record lineage | 10\* | 16.70 | 23.66 |
+
+Writes: an overlay branch in 42 ms and a copy request in 147 ms at p50, the background copy at
+4,855 rows per second (batches 90 ms at p50, 294 ms at p95), deletion a 74 ms request; a commit
+of 1,000 changes 3.3 s at p50. The agent trace adds nothing measurable through Keeper (+1 to
++6% at 1M with fair alternation, within noise at 10M).
+
+Not met: the neighborhood, full-text search (all three variants), history and lineage, and get
+by key by 1 to 2 ms; the roadmap item stays open. The neighborhood reads about 400 pages per
+call that are not in memory at 0.26 ms each (warm: 15.5 ms at p50, 29.6 at p95); search
+enumerates every GIN match of a frequent term before ranking a bounded number (the generator's
+titles use 695 distinct words). Detail, the neighborhood options evaluated at 1M and 10M, and
+the commit and copy fixes found on the way: [performance](performance.md#10m-records).
+
+**Re-run at 1M Records** with the same harness, the same evening (load average median 21):
+search, typo tolerance and partial matching within budget (14 to 37 ms at p95 on all branches),
+the neighborhood 20 ms at p95 warm and 65 to 77 ms on the copy and the overlay, get by key 7.5
+to 8.3 ms. Detail: [performance](performance.md#1m-records-run-with-the-10m-harness).
 
 ### Canvas, 5,000 nodes and 10,000 edges
 
