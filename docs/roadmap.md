@@ -78,7 +78,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 - [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (groups from the OIDC groups claim and Kind-scoped grants on reads are done; sensitivity masking is not)
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals
-- [ ] Modeler with every editor (schema editing exists on the mock API; Operation, Derivation and Source editors are not built)
+- [x] Modeler with every editor: Kinds, Relations, Traits, Operations (with dry run), Derivations and Sources in one form and YAML document, with Keeper's validation and CEL type check next to the fields
 - [x] Conflict resolver against live data
 - [ ] Traits in queries (they work at branch heads; time-travel reads do not support them)
 

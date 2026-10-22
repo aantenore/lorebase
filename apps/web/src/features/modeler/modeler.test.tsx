@@ -40,10 +40,10 @@ describe('Modeler', () => {
     );
   });
 
-  it('lists the planned editors from the screen inventory', async () => {
+  it('has no planned editors left in the screen inventory', async () => {
     renderApp('/supply/modeler');
-    expect(
-      await screen.findByRole('region', { name: 'Modeler: Operation editor' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'Kinds' })).toBeInTheDocument();
+    expect(screen.queryByText('Modeler: planned screens')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Modeler: Operation editor' })).toBeNull();
   });
 });

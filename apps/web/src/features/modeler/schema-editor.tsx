@@ -14,6 +14,8 @@ import type { Jump } from './yaml-editor';
 // CodeMirror is the heavy part of the Modeler; it loads when the editor opens.
 const YamlEditor = lazy(() => import('./yaml-editor'));
 
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 /**
  * Schema editing on a Branch: a form and a YAML editor over one document, validation
  * issues with paths, and the change set the edits add up to.
@@ -35,6 +37,13 @@ export function SchemaEditor({ base }: { base: Schema }) {
   if (editor.syntaxIssues.length > 0) blocked = 'Fix the YAML syntax errors first.';
   else if (editor.issues.length > 0) blocked = 'Fix the validation issues first.';
 
+  // Keeper's findings (its CEL type check among them) sit next to the fields they are about.
+  const formIssues = remote.length === 0 ? editor.issues : [...editor.issues, ...remote];
+  const savedOperation = (name: string) => {
+    const saved = editor.baseDocument.operations?.[name];
+    return saved !== undefined && sameJson(saved, editor.document.operations?.[name]);
+  };
+
   const goTo = (position: Position) => {
     setJump((previous) => ({ ...position, nonce: (previous?.nonce ?? 0) + 1 }));
   };
@@ -54,10 +63,11 @@ export function SchemaEditor({ base }: { base: Schema }) {
         <Section title="Form" className="mb-0 min-w-0">
           <FormEditor
             document={editor.document}
-            issues={editor.issues}
+            issues={formIssues}
             edit={editor.edit}
             ids={editor.ids}
             locked={editor.syntaxIssues.length > 0}
+            savedOperation={savedOperation}
           />
         </Section>
         <Section title="YAML" className="mb-0 min-w-0">

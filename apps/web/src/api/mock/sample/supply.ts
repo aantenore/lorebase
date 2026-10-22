@@ -243,9 +243,9 @@ const mainSchema: SchemaBody = {
       api_name: 'single_sourced',
       display_name: 'Single sourced',
       description: 'True when the Part has exactly one supplied_by Link.',
-      variant: 'aggregate',
+      variant: 'expression',
       target: { type: 'attribute', kind_id: part.id, api_name: 'single_sourced' },
-      definition: { relation: 'supplied_by', aggregate: 'count', equals: 1 },
+      definition: { expression: 'size(supplied_by) == 1' },
     },
   ],
   sources: [

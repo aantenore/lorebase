@@ -28,8 +28,16 @@ const document = (): SchemaDocument => ({
       foreign_key_attribute: 'supplier',
     },
   },
-  derivations: { d: { target: { type: 'attribute', kind: 'Part', name: 'x' } } },
-  sources: { s: { target_kind: 'Part' } },
+  derivations: {
+    d: { definition: { variant: 'expression', kind: 'Part', attribute: 'part_number' } },
+  },
+  sources: { s: { target_kind: 'Part', attribute_mapping: { part_number: { column: 'pn' } } } },
+  operations: {
+    o: {
+      parameters: [{ name: 'supplier', type: 'ref(Supplier)' }],
+      steps: [{ step: 'update_record', kind: 'Part', values: { part_number: 'x' } }],
+    },
+  },
 });
 
 describe('form helpers', () => {
@@ -42,8 +50,22 @@ describe('form helpers', () => {
 
     renameKind(draft, 'Part', 'Component');
     expect(draft.relations?.['supplied_by']?.from_kind).toBe('Component');
-    expect(draft.derivations?.['d']?.['target']).toMatchObject({ kind: 'Component' });
+    expect(draft.derivations?.['d']?.['definition']).toMatchObject({ kind: 'Component' });
     expect(draft.sources?.['s']?.['target_kind']).toBe('Component');
+    expect(draft.operations?.['o']).toMatchObject({
+      parameters: [{ type: 'ref(Vendor)' }],
+      steps: [{ kind: 'Component' }],
+    });
+  });
+
+  it('renames an Attribute in the Derivations, Sources and Operation steps that name it', () => {
+    const draft = document();
+    renameAttribute(draft, 'Part', 'part_number', 'number');
+    expect(draft.derivations?.['d']?.['definition']).toMatchObject({ attribute: 'number' });
+    expect(draft.sources?.['s']?.['attribute_mapping']).toEqual({ number: { column: 'pn' } });
+    expect(draft.operations?.['o']?.['steps']).toEqual([
+      { step: 'update_record', kind: 'Part', values: { number: 'x' } },
+    ]);
   });
 
   it('renames an Attribute inside its Kind, keeping order and references', () => {

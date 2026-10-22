@@ -2,6 +2,7 @@ import { EditorView } from '@codemirror/view';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '@/test/render';
+import { typeCel } from './form-harness';
 
 const UNPROTECTED = '/supply/modeler?view=edit&branch=cleanup%2Ftiers';
 
@@ -13,7 +14,9 @@ async function openEditor(path = UNPROTECTED) {
 }
 
 function yamlView(): EditorView {
-  const dom = document.querySelector<HTMLElement>('.cm-editor');
+  const dom = screen
+    .getByRole('textbox', { name: 'Schema YAML' })
+    .closest<HTMLElement>('.cm-editor');
   const view = dom === null ? null : EditorView.findFromDOM(dom);
   if (view === null) throw new Error('The YAML editor is not mounted.');
   return view;
@@ -95,12 +98,48 @@ describe('Modeler schema editor: two synchronized views', () => {
     expect(screen.getByRole('combobox', { name: 'Kind' })).toHaveValue('Warehouse');
   });
 
-  it('lists Operations as YAML only', async () => {
+  it('edits an Operation in the form and writes it into the YAML', async () => {
     const { user } = await openEditor('/supply/modeler?view=edit&branch=model%2Frisk');
     await user.click(screen.getByRole('tab', { name: /^Operations/ }));
-    const table = await screen.findByRole('table', { name: 'Operations in the document' });
-    expect(within(table).getByText('flag_supplier_risk')).toBeInTheDocument();
-    expect(screen.getByText(/edited in the YAML view for now/)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Operation' })).toHaveValue('flag_supplier_risk');
+    await typeCel('Precondition 1 expression', 'record(params.supplier).status == "active"');
+    await waitFor(() => {
+      expect(yamlText()).toContain('expression: record(params.supplier).status == "active"');
+    });
+    // The saved Operation can be dry run only once the change set is saved.
+    expect(screen.getByText(/Save the change set first/)).toBeInTheDocument();
+  });
+
+  it("shows Keeper's expression type check next to the expression", async () => {
+    const { user } = await openEditor('/supply/modeler?view=edit&branch=model%2Frisk');
+    await user.click(screen.getByRole('tab', { name: /^Operations/ }));
+    await typeCel('Precondition 1 expression', 'params.suppler != null');
+    const field = await screen.findByRole('group', { name: 'Precondition 1 expression' });
+    expect(
+      await within(field).findByText("expression: undeclared reference to 'params.suppler'"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save change set' })).toBeDisabled();
+  });
+
+  it('dry runs a saved Operation on the Branch', async () => {
+    const { user } = await openEditor('/supply/modeler?view=edit&branch=model%2Frisk');
+    await user.click(screen.getByRole('tab', { name: /^Operations/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Dry run value of supplier' }), 'S-1001');
+    await user.click(screen.getByRole('button', { name: 'Dry run on model/risk' }));
+    const result = await screen.findByText(/2 edits, 0 violations/);
+    expect(result).toBeInTheDocument();
+  });
+
+  it('refuses a literal Source connection next to the field', async () => {
+    const { user } = await openEditor();
+    await user.click(screen.getByRole('tab', { name: /^Sources/ }));
+    const connection = screen.getByRole('textbox', { name: 'Connection' });
+    await user.clear(connection);
+    await user.type(connection, 'postgres://erp@db/erp');
+    expect(
+      await screen.findAllByText('A connection is a secret:// reference, never a literal.'),
+    ).not.toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Save change set' })).toBeDisabled();
   });
 });
 
@@ -179,9 +218,10 @@ describe('Modeler change sets', () => {
       screen.getByRole('combobox', { name: 'Type of legal_name' }),
       'integer',
     );
+    // In the issues list and, from the dry run, under the Type select of the Attribute.
     expect(
-      await screen.findByText(/values of Supplier\.legal_name cannot be cast/),
-    ).toBeInTheDocument();
+      await screen.findAllByText(/values of Supplier\.legal_name cannot be cast/),
+    ).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Save change set' })).toBeDisabled();
   });
 

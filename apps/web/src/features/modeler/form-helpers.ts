@@ -14,6 +14,13 @@ export type Edit = (change: (draft: SchemaDocument) => void) => void;
 
 export type ElementIds = (prefix: string, key: string) => string;
 
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+export const asText = (value: unknown): string => (typeof value === 'string' ? value : '');
+
 // ------------------------------------------------------------------ types
 
 /** The select value of a type: `string`, `enum`, `array<enum>`, `ref(Kind)`. */
@@ -61,6 +68,12 @@ export function errorAt(issues: SchemaIssue[], path: string): string | undefined
   return found.length === 0 ? undefined : found.join(' ');
 }
 
+/** Errors at any of `paths`, joined. */
+export function errorsAt(issues: SchemaIssue[], ...paths: string[]): string | undefined {
+  const found = paths.map((p) => errorAt(issues, p)).filter((e) => e !== undefined);
+  return found.length === 0 ? undefined : found.join(' ');
+}
+
 /** Whether any issue sits at or under `path`. */
 export function hasIssuesUnder(issues: SchemaIssue[], path: string): boolean {
   return issues.some((i) => i.path === path || i.path.startsWith(`${path}/`));
@@ -104,13 +117,21 @@ export function renameKind(draft: SchemaDocument, from: string, to: string) {
     attribute.type = withRef(attribute.type, from, to) ?? attribute.type;
   });
   for (const derivation of Object.values(draft.derivations ?? {})) {
-    const target = derivation['target'];
-    if (typeof target === 'object' && target !== null && 'kind' in target && target.kind === from) {
-      (target as Record<string, unknown>)['kind'] = to;
-    }
+    const definition = derivation['definition'];
+    if (isRecord(definition) && definition['kind'] === from) definition['kind'] = to;
   }
   for (const source of Object.values(draft.sources ?? {})) {
     if (source['target_kind'] === from) source['target_kind'] = to;
+  }
+  for (const operation of Object.values(draft.operations ?? {})) {
+    for (const parameter of asList(operation['parameters'])) {
+      if (isRecord(parameter) && parameter['type'] === `ref(${from})`) {
+        parameter['type'] = `ref(${to})`;
+      }
+    }
+    for (const step of asList(operation['steps'])) {
+      if (isRecord(step) && step['kind'] === from) step['kind'] = to;
+    }
   }
 }
 
@@ -129,6 +150,25 @@ export function renameAttribute(draft: SchemaDocument, kind: string, from: strin
   for (const relation of Object.values(draft.relations ?? {})) {
     if (relation.from_kind === kind && relation.foreign_key_attribute === from) {
       relation.foreign_key_attribute = to;
+    }
+  }
+  for (const derivation of Object.values(draft.derivations ?? {})) {
+    const definition = derivation['definition'];
+    if (isRecord(definition) && definition['kind'] === kind && definition['attribute'] === from) {
+      definition['attribute'] = to;
+    }
+  }
+  for (const source of Object.values(draft.sources ?? {})) {
+    const mapping = source['attribute_mapping'];
+    if (source['target_kind'] === kind && isRecord(mapping)) {
+      source['attribute_mapping'] = renameKey(mapping, from, to);
+    }
+  }
+  for (const operation of Object.values(draft.operations ?? {})) {
+    for (const step of asList(operation['steps'])) {
+      if (isRecord(step) && step['kind'] === kind && isRecord(step['values'])) {
+        step['values'] = renameKey(step['values'], from, to);
+      }
     }
   }
 }
