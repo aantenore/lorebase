@@ -118,7 +118,7 @@ what Scribe connects to. Code: `packages/scribe/src/lorebase_scribe/sources/conn
 | I | SSRF through CSV URLs and local files | URL hosts pass the same `check_target` and the download is pinned (F18); local paths must be under the allowed roots, opened component by component with `O_NOFOLLOW` | The `O_NOFOLLOW` walk is POSIX only |
 | I | Secret values in errors and run records | Errors name the setting or reference, never the value (F2); HTTP JSON credential headers must come from `secret://` references in `allowed_connections`, literal values for headers named like credentials are refused (`packages/core/src/lorebase_core/model/source.py`) | HTTP JSON errors name the host (`sources/http_json.py`), which a Source run record shows to Domain readers |
 | D | A slow or huge remote | `timeout_s` per request (30 s), `max_bytes` per response (50 MiB), `max_pages` per run (1000, a Source can only lower it), bounded retries honoring `Retry-After` | A Source within its limits can still keep one worker slot busy for the whole run |
-| I | SSRF through document URL intake in Keeper | Off unless `keeper.documents.url_hosts` lists hosts (exact match); https only, no redirects, no proxies, streamed size cap (`routes/documents.py`, `_fetch`) | The allowed host's addresses are not checked: if an allowed name resolves to an internal address, Keeper fetches it. Keep the list to hosts you control |
+| I | SSRF through document URL intake in Keeper | Off unless `keeper.documents.url_hosts` lists hosts (exact match); https only; the host resolved once and refused unless every address is global unicast (`check_target`), the connection pinned to the checked addresses with the host name kept for TLS; no redirects, no proxies, streamed size cap (`packages/keeper/src/lorebase_keeper/services/document_urls.py`) | `keeper.documents.url_allow_private_targets: true` turns the address check and the pinning off |
 | D | Malicious document files | Size cap `keeper.documents.max_bytes` (20 MiB), one file per upload, suffix allowlist (`.md`, `.txt`, `.pdf`, `.docx`) | Type is checked by suffix only; PDF and DOCX are parsed in the Scribe process by pypdf and python-docx (`packages/scribe/src/lorebase_scribe/extraction/parsing.py`) without a sandbox or parse timeout, so a crafted file can cost CPU and memory in a worker |
 
 ## TB5: Herald and MCP agents
@@ -200,8 +200,9 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
    review action) to CI and enable Dependabot or Renovate (TB9).
 3. **Document parsing in the worker.** Parse PDF and DOCX in a subprocess with CPU, memory and
    time limits, and check content types beyond the suffix (TB4).
-4. **Document URL intake trusts the allowed host's DNS.** Apply `check_target` and address pinning
-   as the Source connectors do (TB4).
+4. **Document URL intake trusts the allowed host's DNS.** Fixed: addresses checked with
+   `check_target` and connections pinned to them
+   (`packages/keeper/src/lorebase_keeper/services/document_urls.py`) (TB4).
 5. **Rate limits per process.** A shared backend would make limits hold across Keeper replicas
    (TB2).
 6. **Webhook signing keys stored usable.** Encrypt them with a configured key, as provider tokens

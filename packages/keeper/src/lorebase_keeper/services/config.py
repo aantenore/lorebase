@@ -357,10 +357,17 @@ class DocumentSettings(SectionModel):
     url_hosts: tuple[str, ...] = Field(
         default=(),
         description="Host names documents may be fetched from (exact match); empty disables "
-        "URL intake. Keeper fetches them itself, without following redirects.",
+        "URL intake. Keeper fetches them itself, without following redirects, from addresses "
+        "checked as for webhook targets.",
     )
     url_schemes: tuple[str, ...] = Field(
         default=("https",), min_length=1, description="URL schemes allowed for URL intake."
+    )
+    url_allow_private_targets: bool = Field(
+        default=False,
+        description="Fetch from hosts resolving to loopback, private, link-local or other "
+        "non-global addresses, and resolve the host again for the connection. Off: every "
+        "address must be global unicast and the connection is pinned to the checked ones.",
     )
     url_timeout_s: float = Field(default=30.0, gt=0, description="Time budget of one fetch.")
     extract_on_upload: bool = Field(

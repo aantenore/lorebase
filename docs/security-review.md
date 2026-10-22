@@ -307,6 +307,18 @@ audit entries, so no maintenance-role or definer function was needed. Test:
 and reads, and gets SQLSTATE 42501 on `UPDATE`, `DELETE` and `TRUNCATE`; the downgrade gives the
 rights back).
 
+**Document URL intake checks and pins addresses**
+(`packages/keeper/src/lorebase_keeper/services/document_urls.py`). After the scheme and the
+`keeper.documents.url_hosts` allowlist, the host is resolved once and refused unless every
+address is global unicast, with the `check_target` of webhook targets and Sources; the GET then
+connects to the checked addresses only (the `Host` header and the TLS server name keep the host
+name), trying the next one on a connection failure, never a new lookup. Redirects, proxies from
+the environment and bodies above `max_bytes` stay refused. A resolution failure answers 502, a
+private address 422. `keeper.documents.url_allow_private_targets` (false) turns the check off.
+Test: `packages/keeper/tests/test_document_urls.py` (loopback, RFC 1918, link-local, shared
+address space, IPv6 unique local and IPv4-mapped loopback refused before any request; the
+request goes to the checked address with the original `Host` and SNI).
+
 ## Other observations
 
 - **Prompt injection.** The extraction model gets no tools, its output is validated against a

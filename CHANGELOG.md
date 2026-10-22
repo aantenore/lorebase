@@ -29,6 +29,7 @@ What changed in each release, newest first. The notes are written for the person
 ### Security
 
 - The application role can no longer change the audit log: migration `0015` revokes `UPDATE`, `DELETE` and `TRUNCATE` on `audit_log` from `PUBLIC`, from `database.application_role` and from every other role but the table owner, and the compose `db-roles` script no longer grants them. Entries are still appended and read as before; nothing in Lorebase prunes the audit log, and an operator who must do so works as the owner ([deployment](docs/deployment.md#database-roles)).
+- Document intake by URL no longer trusts the allowlisted host's DNS: Keeper resolves the host once, refuses it with 422 unless every address is global unicast (loopback, private, link-local, shared and other non-global ranges are refused, as for webhook targets), and connects only to the checked addresses, so a changed DNS answer cannot reach an internal service. `keeper.documents.url_allow_private_targets` (false) turns the check off for hosts on an internal network.
 
 ## 0.1.0 - 2026-10-21
 

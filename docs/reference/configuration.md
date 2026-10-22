@@ -453,6 +453,7 @@ Accepted file name suffixes and their stored media type
 |---------|---------|-------------|
 | `keeper.documents.url_hosts` | `[]` | hosts documents may be fetched from (exact); empty: no URLs |
 | `keeper.documents.url_schemes` | `[https]` |  |
+| `keeper.documents.url_allow_private_targets` | `false` | true: skip the global-address check and the pinning |
 | `keeper.documents.url_timeout_s` | `30.0` | time budget of one fetch (redirects are not followed) |
 | `keeper.documents.extract_on_upload` | `true` | queue an extraction job per upload unless the request says no |
 | `keeper.documents.jobs_listed` | `20` | extraction jobs shown with a document |

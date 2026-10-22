@@ -13,7 +13,8 @@ The upload is `multipart/form-data` with the bytes in `file` (optional fields `e
 `true` or `false`, and `tiers`, a JSON list such as `[0, 1]`), or JSON naming a URL:
 `{"url": "https://docs.example.com/c.pdf", "filename": "c.pdf", "extract": true, "tiers":
 [0, 1, 2]}`. URLs must use an allowed scheme and an allowlisted host
-(`keeper.documents.url_hosts`); Keeper fetches them without following redirects. The media
+(`keeper.documents.url_hosts`) that resolves to global unicast addresses only; Keeper connects
+to those checked addresses without following redirects (`services/document_urls.py`). The media
 type comes from the file name suffix (`keeper.documents.media_types`) and is checked against
 the content (PDF and DOCX signatures, UTF-8 text). Documents are stored content addressed: the
 same bytes uploaded again return the stored document. Unless `extract` is false (default
@@ -35,7 +36,6 @@ from pathlib import PurePosixPath
 from typing import Annotated, Any
 from urllib.parse import unquote, urlsplit
 
-import httpx
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile
@@ -58,6 +58,7 @@ from lorebase_keeper.errors import (
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.caching import respond
 from lorebase_keeper.reading.runtime import ReadRuntimeDep
+from lorebase_keeper.services import document_urls
 from lorebase_keeper.services.config import DocumentSettings
 from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, PostgresBlobStore, sha256
 from lorebase_store.jobs import EXTRACTION_JOB, enqueue_job, extraction_payload
@@ -291,33 +292,18 @@ async def _upload(
 
 
 async def _fetch(body: DocumentFromUrl, settings: DocumentSettings) -> tuple[str, bytes]:
-    parts = urlsplit(body.url)
-    if parts.scheme not in settings.url_schemes:
-        raise _invalid("/body/url", f"scheme must be one of {', '.join(settings.url_schemes)}")
-    if not parts.hostname or parts.hostname.lower() not in {h.lower() for h in settings.url_hosts}:
-        raise _invalid("/body/url", "the host is not in keeper.documents.url_hosts")
-    name = body.filename or unquote(PurePosixPath(parts.path).name)
-    data = bytearray()
     try:
-        async with (
-            httpx.AsyncClient(
-                follow_redirects=False, timeout=settings.url_timeout_s, trust_env=False
-            ) as client,
-            client.stream("GET", body.url) as response,
-        ):
-            if response.status_code != 200:
-                raise ProblemError(
-                    BAD_GATEWAY, f"The URL answered {response.status_code}; nothing was stored."
-                )
-            async for block in response.aiter_bytes():
-                data.extend(block)
-                if len(data) > settings.max_bytes:
-                    raise ProblemError(
-                        PAYLOAD_TOO_LARGE, f"The document exceeds {settings.max_bytes} bytes."
-                    )
-    except httpx.HTTPError as error:
-        raise ProblemError(BAD_GATEWAY, f"The URL could not be fetched: {error}") from None
-    return _safe_name(name), bytes(data)
+        data = await document_urls.fetch(body.url, settings)
+    except document_urls.UrlRefusedError as error:
+        raise _invalid("/body/url", str(error)) from None
+    except document_urls.DocumentTooLargeError:
+        raise ProblemError(
+            PAYLOAD_TOO_LARGE, f"The document exceeds {settings.max_bytes} bytes."
+        ) from None
+    except document_urls.UrlUnavailableError as error:
+        raise ProblemError(BAD_GATEWAY, f"{str(error).capitalize()}; nothing was stored.") from None
+    name = body.filename or unquote(PurePosixPath(urlsplit(body.url).path).name)
+    return _safe_name(name), data
 
 
 @router.post(
