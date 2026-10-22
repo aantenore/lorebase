@@ -64,6 +64,7 @@ a job that finds every slot taken, or that waits, queues itself again after
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -78,7 +79,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.tree import PARTITION_SCHEMA
-from lorebase_store.indexes import BranchIndexes
+from lorebase_store.indexes import BranchIndexes, sql_literal
 from lorebase_store.jobs import BRANCH_DELETE_JOB, MATERIALIZE_JOB, JobRow, enqueue_job
 from lorebase_store.layout import MAT_HISTORY, MAT_LINKS, MAT_RECORDS
 from lorebase_store.materialize import build
@@ -759,11 +760,13 @@ async def _copy_step(
             at=now,
         )
     if state.rows_total is None:
-        total = await _base_rows(session, domain_id, ref.base_branch, ref.base_generation)
+        total = await _base_rows(session, domain_id, ref.base_branch)
         await states.update(branch, at=now, rows_total=total)
     if state.status is not MaterializationStatus.RUNNING:
         await states.update(branch, at=now, status=MaterializationStatus.RUNNING)
     if state.phase is MaterializationPhase.SWITCH:
+        # The total was an estimate (`_base_rows`); every row has been read now.
+        await states.update(branch, at=now, rows_total=state.rows_done)
         await _switch(session, domain_id, branch, runtime)
         run.promoted = True
         log.info("branch %s of Domain %s is now a full copy", branch, domain_id)
@@ -954,26 +957,24 @@ async def _reconcile_step(
     return _Step(rows=max(batch.rows, 1))
 
 
-async def _base_rows(session: AsyncSession, domain_id: str, base: str, generation: int) -> int:
-    """Rows a copy reads: the base branch's Records, Links and history entries as of the
-    fork point."""
+async def _base_rows(session: AsyncSession, domain_id: str, base: str) -> int:
+    """Rows a copy reads (the base branch's Records, Links and history entries), as the
+    planner estimates them from the table statistics: counting them reads every row of the
+    base, which at 10M Records takes longer than the statement timeout. The total feeds the
+    progress report only, and is set to the rows read when the copy switches. Rows written
+    after the fork point, which the copy skips, are few."""
     total = 0
     for copied in _COPIED:
-        if copied.table is MAT_HISTORY:
-            visible = (
-                "EXISTS (SELECT 1 FROM revisions r WHERE r.domain_id = :domain "
-                "AND r.id = s.revision_id AND r.generation <= :generation OFFSET 0)"
-            )
-        else:
-            visible = "s.revision_generation <= :generation"
-        found = await session.execute(
+        # Literals rather than parameters: the estimate is of a plan for these values.
+        plan = await session.execute(
             text(
-                f"SELECT count(*) FROM {copied.table.name} s "
-                f"WHERE s.domain_id = :domain AND s.branch = :base AND {visible}"
-            ),
-            {"domain": domain_id, "base": base, "generation": generation},
+                f"EXPLAIN (FORMAT JSON) SELECT 1 FROM {copied.table.name} "
+                f"WHERE domain_id = {sql_literal(domain_id)} AND branch = {sql_literal(base)}"
+            )
         )
-        total += int(found.scalar_one())
+        found = plan.scalar_one()
+        found = json.loads(found) if isinstance(found, str) else found
+        total += int(found[0]["Plan"]["Plan Rows"])
     return total
 
 
