@@ -193,32 +193,43 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 
 ## Residual risks, by priority
 
-1. **No off-database anchor of the audit chain.** Fixed in part: revision `0015` revokes
-   `UPDATE, DELETE, TRUNCATE` on `audit_log` from the application role
-   (`packages/store/migrations/versions/0015_append_only_audit_log.py`). The owner can still cut
-   the tail of a chain; ship a recent `entry_hash` outside the database (TB6).
-2. **No dependency audit in CI.** Fixed: `.github/workflows/audit.yaml` with the allowlist
-   `.github/audit-allowlist.yaml`. Version updates stay manual on purpose (TB9).
-3. **Document parsing in the worker.** Fixed: PDF and DOCX are parsed in a child process with
-   time, CPU, memory and size limits and no network
-   (`packages/scribe/src/lorebase_scribe/extraction/sandbox.py`); Keeper checks content
-   signatures besides the suffix (TB4).
-4. **Document URL intake trusts the allowed host's DNS.** Fixed: addresses checked with
-   `check_target` and connections pinned to them
-   (`packages/keeper/src/lorebase_keeper/services/document_urls.py`) (TB4).
-5. **Rate limits per process.** A shared backend would make limits hold across Keeper replicas
+Remaining:
+
+1. **No off-database anchor of the audit chain.** The application role can no longer change
+   `audit_log` (fixed, below), but its owner can still cut the tail of a chain without the chain
+   showing it. Keep a recent `entry_hash` outside the database (TB6).
+2. **Rate limits per process.** A shared backend would make limits hold across Keeper replicas
    (TB2).
-6. **Webhook signing keys stored usable.** Fixed when `webhooks.encryption_key` is set: keys are
-   sealed with AES-256-GCM (`packages/store/src/lorebase_store/webhooks/keys.py`, revision
-   `0016`); it is unset by default (TB6, TB7).
-7. **Reads are not audited and sensitivity masking is not enforced.** Both are in the design
+3. **Reads are not audited and sensitivity masking is not enforced.** Both are in the design
    ([13.6](design.md#136-threats-and-mitigations)) and not in the code; until then, use
    Kind-narrowed grants for sensitive Kinds (TB2, TB3).
-8. **Transport security headers.** Fixed: Keeper and the web image send them
-   (`packages/keeper/src/lorebase_keeper/middleware.py`, `deploy/docker/web/40-lorebase-config.sh`);
-   HSTS for the web app is the TLS proxy's or `LOREBASE_WEB_HSTS` (TB1).
-9. **Base images by tag.** Fixed: pinned by digest (`deploy/docker/*.Dockerfile`); digests are
-   bumped by hand ([release](release.md#base-images)) (TB9).
+4. **Webhook signing keys stored usable by default.** `webhooks.encryption_key` is unset by
+   default; set it (TB6, TB7).
+
+Fixed since this page was first published, in the order of the original list (each with tests,
+see the [security review](security-review.md#hardening-from-the-threat-model)):
+
+- **Application role could change `audit_log`.** Revision `0015` revokes `UPDATE, DELETE,
+  TRUNCATE` from it (`packages/store/migrations/versions/0015_append_only_audit_log.py`,
+  `deploy/compose/postgres/app-role.sh`) (TB6).
+- **No dependency audit in CI.** `.github/workflows/audit.yaml` with the reviewed allowlist
+  `.github/audit-allowlist.yaml` (`scripts/audit_check.py`). Version updates stay manual on
+  purpose (TB9).
+- **Document parsing in the worker.** PDF and DOCX are parsed in a child process with time,
+  CPU, memory and size limits and no network
+  (`packages/scribe/src/lorebase_scribe/extraction/sandbox.py`); Keeper checks content
+  signatures besides the suffix (TB4).
+- **Document URL intake trusted the allowed host's DNS.** Addresses checked with `check_target`
+  and connections pinned to them (`packages/keeper/src/lorebase_keeper/services/document_urls.py`)
+  (TB4).
+- **Webhook signing keys stored usable.** Sealed with AES-256-GCM under
+  `webhooks.encryption_key` (`packages/store/src/lorebase_store/webhooks/keys.py`, revision
+  `0016`) (TB6, TB7).
+- **Transport security headers.** Keeper and the web image send them
+  (`packages/keeper/src/lorebase_keeper/middleware.py`, `deploy/docker/web/40-lorebase-config.sh`);
+  HSTS for the web app comes from the TLS proxy or `LOREBASE_WEB_HSTS` (TB1).
+- **Base images by tag.** Pinned by digest (`deploy/docker/*.Dockerfile`), bumped by hand
+  ([release](release.md#base-images)) (TB9).
 
 ## Keeping this page current
 
