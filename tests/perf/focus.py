@@ -63,6 +63,8 @@ SEARCH_LIMIT = 20
 COMMON_WORDS = 30
 
 Query = Callable[[random.Random], str]
+#: The `search` settings measured (`--common-term-docs`, `--common-term-candidates`).
+SETTINGS = SearchSettings()
 
 
 @dataclass
@@ -117,7 +119,7 @@ async def measure_search(
     seed: int = 11,
 ) -> dict[str, tuple[Sample, Sample]]:
     """Each query kind with `search.common_term_*` (lexicon-sized ranking) and without it."""
-    settings = SearchSettings()
+    settings = SETTINGS
     reading = ReadRuntime(
         sessions=async_sessionmaker(), read=ReadSettings(), search=settings, store=runtime
     )
@@ -278,7 +280,7 @@ def render(
     hood: dict[tuple[str, str], tuple[Sample, Sample]],
     iterations: int,
 ) -> str:
-    settings = SearchSettings()
+    settings = SETTINGS
     lines = [
         f"# Focused reads: {database}",
         "",
@@ -326,7 +328,7 @@ async def run(args: argparse.Namespace, url: str) -> str:
     try:
         await harness.remove_perf_branches(engine, runtime)
         work = await harness.workload(engine, runtime)
-        common = await common_words(engine, SearchSettings().common_term_docs)
+        common = await common_words(engine, SETTINGS.common_term_docs)
         search: dict[str, tuple[Sample, Sample]] = {}
         if not args.skip_search:
             search = await measure_search(
@@ -360,10 +362,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--database", required=True, help="a database bench.py seeded")
     parser.add_argument("--iterations", type=int, default=300)
     parser.add_argument("--warmup", type=int, default=20)
+    parser.add_argument("--common-term-docs", type=int, default=None)
+    parser.add_argument("--common-term-candidates", type=int, default=None)
     parser.add_argument("--skip-search", action="store_true")
     parser.add_argument("--skip-neighborhood", action="store_true")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
+    global SETTINGS
+    given = {
+        "common_term_docs": args.common_term_docs,
+        "common_term_candidates": args.common_term_candidates,
+    }
+    SETTINGS = SearchSettings(**{k: v for k, v in given.items() if v is not None})
     with testing.postgres_server() as server:
         url = async_url(server).set(database=args.database).render_as_string(hide_password=False)
         migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
