@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind, LinkDirection
 from lorebase_core.query import (
+    Condition,
     Hop,
     QueryError,
     Target,
@@ -59,19 +60,14 @@ def _edge(point: ReadPoint, hop: Hop, row: Mapping[Any, Any]) -> Edge:
 async def traverse(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, request: TraverseRequest
 ) -> TraverseResponse:
-    """Follow `request.path` from the start Record; each hop keeps at most its limit."""
-    point = await with_rows(session, runtime, point, "Traversal")
+    """Follow `request.path` from the start Record; each hop keeps at most its limit. The
+    whole path is validated and authorized before any row is read."""
     caps = runtime.read.traverse
     if len(request.path) > caps.max_hops:
         raise invalid("/body/path", f"a path has at most {caps.max_hops} steps", "limit_exceeded")
     kind = require_kind(point, request.start.kind)
-    start, _ = await get_record(
-        session, runtime, point, kind, request.start.key, links=False, lineage=False
-    )
-    compiler = compiler_for(point, runtime)
     current = Target(kind.api_name, (kind,))
-    frontier = [request.start.key]
-    hops: list[TraverseHopOut] = []
+    steps: list[tuple[Hop, int, Condition | None]] = []
     for index, step in enumerate(request.path):
         pointer = f"/body/path/{index}"
         hop = resolve_hop(point.schema, current, step.relation)
@@ -97,6 +93,16 @@ async def traverse(
         require_comparable(
             point.schema, point.masking, condition_fields(where, hop.far.kinds), f"{pointer}/where"
         )
+        steps.append((hop, limit, where))
+        current = hop.far
+    point = await with_rows(session, runtime, point, "Traversal")
+    start, _ = await get_record(
+        session, runtime, point, kind, request.start.key, links=False, lineage=False
+    )
+    compiler = compiler_for(point, runtime)
+    frontier = [request.start.key]
+    hops: list[TraverseHopOut] = []
+    for hop, limit, where in steps:
         rows: list[Mapping[Any, Any]] = []
         if frontier:
             query = compiler.neighbors(hop, frontier, where=where, limit=limit + 1)
@@ -115,7 +121,6 @@ async def traverse(
             )
         )
         frontier = list(reached)
-        current = hop.far
     return TraverseResponse(**served(point), start=start, hops=hops)
 
 
@@ -129,7 +134,6 @@ async def neighborhood(
     once, by its forward name, from its `from` Record to its `to` Record. Path Derivations are
     followed when named in `relations`.
     """
-    point = await with_rows(session, runtime, point, "Neighborhoods")
     caps, store = runtime.read.traverse, runtime.store_settings.traverse
     max_seeds = min(caps.max_seeds, store.max_seeds)
     if len(request.seeds) > max_seeds:
@@ -147,6 +151,7 @@ async def neighborhood(
         raise invalid("/body/max_edges", f"must not exceed {edges_cap}", "limit_exceeded")
     follow = _follow(point, _followed(point, request.relations))
     seeds = [(require_kind(point, seed.kind).id, seed.key) for seed in request.seeds]
+    point = await with_rows(session, runtime, point, "Neighborhoods")
     found = await hydrate_records(
         session, point.domain.id, point.layout, seeds, runtime=runtime.store
     )

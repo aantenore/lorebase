@@ -43,6 +43,14 @@ async def seed(
         [record_change(supplier, {**original, "risk_score": "90", "legal_name": "Kavsen Steel"})],
         message="Raise the risk of S-1001 and rename it",
     )
+    other = next(r for r in rows("supplier.csv") if r["supplier_code"] == "S-1002")
+    await commit_changes(
+        session,
+        runtime,
+        clock,
+        [record_change(supplier, {**other, "risk_score": "11"})],
+        message="Lower the risk of S-1002",
+    )
     await create_branch(
         session,
         DOMAIN,
@@ -262,29 +270,86 @@ async def test_health_context_and_explain(http: httpx.AsyncClient, seeded: Seede
     assert _content(explained) == _content(reference)
 
 
-async def test_snapshots_are_shared_capped_and_hidden(
+async def _clear_snapshots(seeded: Seeded) -> None:
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        await session.execute(
+            text("DELETE FROM refs WHERE domain_id = :d AND kind = 'snapshot'"), {"d": DOMAIN}
+        )
+
+
+def _time_travel(**settings: Any) -> dict[str, Any]:
+    return {"time_travel": settings}
+
+
+async def test_snapshots_are_shared_hidden_and_dropped_when_unused(
     http: httpx.AsyncClient, seeded: Seeded
 ) -> None:
+    await _clear_snapshots(seeded)
+    data = f"~snapshot/{seeded.revisions['data']}"
     where = '{"attr":"country","op":"eq","value":"PL"}'
     await _get(http, "/kinds/Supplier/records", at=seeded.revisions["data"], where=where)
     await _get(http, "/kinds/Supplier/records", at=seeded.revisions["data"], where=where)
-    assert f"~snapshot/{seeded.revisions['data']}" in await _snapshots(seeded)
+    assert await _snapshots(seeded) == [data]
     branches = await _get(http, "/branches")
     assert all(not b["name"].startswith("~") for b in branches["items"])
-    unknown = await http.get(
-        f"{BASE}/kinds/Supplier/records/S-1001",
-        params={"at": f"~snapshot/{seeded.revisions['data']}"},
-    )
+    unknown = await http.get(f"{BASE}/kinds/Supplier/records/S-1001", params={"at": data})
     assert unknown.status_code == 404
+    tag = await http.post(f"{BASE}/tags", json={"name": "from-snapshot", "source": data})
+    assert tag.status_code == 404, tag.text
 
-    async with keeper(seeded.app_url, read={"time_travel": {"snapshot_max_per_domain": 1}}) as one:
-        response = await one.post(
-            f"{BASE}/query",
-            json={**TIER_ONE, "at": seeded.revisions["schema"]},
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["items"] == []
+    # a recent snapshot is not dropped for another one: the Domain is full
+    full = _time_travel(snapshot_max_per_domain=1, snapshot_min_age_s=3600)
+    async with keeper(seeded.app_url, read=full) as one:
+        busy = await one.post(f"{BASE}/query", json={**TIER_ONE, "at": seeded.revisions["schema"]})
+        assert busy.status_code == 503, busy.text
+        assert int(busy.headers["Retry-After"]) >= 1
+    assert await _snapshots(seeded) == [data]
+
+    # past its grace period the unused one goes
+    replaced = _time_travel(snapshot_max_per_domain=1, snapshot_min_age_s=0)
+    async with keeper(seeded.app_url, read=replaced) as one:
+        read = await one.post(f"{BASE}/query", json={**TIER_ONE, "at": seeded.revisions["schema"]})
+        assert read.status_code == 200, read.text
+        assert read.json()["items"] == []
     assert await _snapshots(seeded) == [f"~snapshot/{seeded.revisions['schema']}"]
+
+
+async def test_snapshot_builds_are_rate_limited_per_principal(seeded: Seeded) -> None:
+    await _clear_snapshots(seeded)
+    limited = _time_travel(snapshot_builds_per_minute=0.01, snapshot_build_burst=1)
+    async with keeper(seeded.app_url, read=limited) as http:
+        body = {**TIER_ONE, "at": seeded.revisions["data"]}
+        assert (await http.post(f"{BASE}/query", json=body)).status_code == 200
+        assert (await http.post(f"{BASE}/query", json=body)).status_code == 200  # no build
+        second = await http.post(
+            f"{BASE}/query", json={**TIER_ONE, "at": seeded.revisions["updated"]}
+        )
+        assert second.status_code == 429, second.text
+        assert int(second.headers["Retry-After"]) >= 1
+
+
+async def test_requests_are_validated_before_a_snapshot_is_built(
+    http: httpx.AsyncClient, seeded: Seeded
+) -> None:
+    await _clear_snapshots(seeded)
+    at = seeded.revisions["updated"]
+    start = {"kind": "Part", "key": "P-10001"}
+    bad_hop = await http.post(
+        f"{BASE}/traverse", json={"start": start, "path": [{"relation": "nope"}], "at": at}
+    )
+    assert bad_hop.status_code == 422
+    two_kinds = {"q": "x", "kinds": ["Supplier", "Part"], "where": TIER_ONE["where"], "at": at}
+    assert (await http.post(f"{BASE}/search", json=two_kinds)).status_code == 422
+    hood = {"seeds": [{"kind": "Nope", "key": "x"}], "at": at}
+    assert (await http.post(f"{BASE}/neighborhood", json=hood)).status_code == 404
+    assert await _snapshots(seeded) == []
+
+
+async def test_snapshot_names_are_reserved(seeded: Seeded) -> None:
+    permissive = {"branches": {"name_pattern": "^.+$"}}
+    async with keeper(seeded.app_url, permissive) as http:
+        response = await http.post(f"{BASE}/branches", json={"name": "~snapshot/abc"})
+        assert response.status_code == 422, response.text
 
 
 async def test_snapshot_cap_refuses_large_revisions(seeded: Seeded) -> None:
@@ -306,6 +371,14 @@ async def test_snapshot_cap_refuses_large_revisions(seeded: Seeded) -> None:
             await http.get(f"{BASE}/kinds/Supplier/records/S-1001", params={"at": at})
         ).is_success
         assert (await http.get(f"{BASE}/kinds/Supplier/records", params={"at": at})).is_success
+    deep = _time_travel(snapshot_max_history_revisions=1)
+    async with keeper(seeded.app_url, read=deep) as http:
+        refused = await http.post(f"{BASE}/query", json={**TIER_ONE, "at": at})
+        assert refused.status_code == 422
+        assert "snapshot_max_history_revisions" in refused.json()["detail"]
+    async with keeper(seeded.app_url, read=_time_travel(snapshot_max_entries=0)) as http:
+        refused = await http.post(f"{BASE}/query", json={**TIER_ONE, "at": at})
+        assert refused.status_code == 422
         # at the head nothing needs a snapshot
         head = await http.post(
             f"{BASE}/query",

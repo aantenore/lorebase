@@ -7,6 +7,7 @@ The Domain is added to the row-level security scope when the read point is resol
 
 from __future__ import annotations
 
+import asyncio
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
 from lorebase_keeper.errors import UNAVAILABLE, ProblemError
+from lorebase_keeper.ratelimit.bucket import InMemoryRateStore
 from lorebase_keeper.reading.caching import ResponseCache, build_cache
 from lorebase_keeper.reading.settings import (
     ReadSettings,
@@ -59,6 +61,10 @@ class SchemaCache:
                 self._entries.popitem(last=False)
 
 
+SNAPSHOT_RATE_BUCKETS = 10_000
+"""Principals whose snapshot build buckets are kept (the least recently used are dropped)."""
+
+
 @dataclass
 class ReadRuntime:
     """Settings, sessions and caches shared by the reads of one application."""
@@ -70,9 +76,17 @@ class ReadRuntime:
     cache: ResponseCache | None = None
     sensitivity: SensitivitySettings = field(default_factory=SensitivitySettings)
     schemas: SchemaCache = field(init=False)
+    snapshot_builds: asyncio.Semaphore = field(init=False)
+    """Snapshot builds running in this process (`read.time_travel`)."""
+    snapshot_rates: InMemoryRateStore = field(init=False)
+    """Snapshot builds started per principal in this process."""
 
     def __post_init__(self) -> None:
         self.schemas = SchemaCache(self.read.schema_cache_entries)
+        self.snapshot_builds = asyncio.Semaphore(
+            self.read.time_travel.snapshot_max_concurrent_builds
+        )
+        self.snapshot_rates = InMemoryRateStore(SNAPSHOT_RATE_BUCKETS)
 
     @property
     def store_settings(self) -> StoreSettings:

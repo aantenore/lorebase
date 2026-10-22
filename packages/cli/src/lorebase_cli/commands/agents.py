@@ -10,7 +10,7 @@ import typer
 from lorebase_cli.commands.data import json_argument
 from lorebase_cli.context import app_of
 from lorebase_cli.failures import CliError
-from lorebase_cli.options import BranchOpt, DomainOpt, JsonOpt
+from lorebase_cli.options import AtOpt, BranchOpt, DomainOpt, JsonOpt
 from lorebase_cli.output import Column, short_id
 from lorebase_client import models as m
 
@@ -59,6 +59,7 @@ def context_command(
     ] = None,
     domain: DomainOpt = None,
     branch: BranchOpt = None,
+    at: AtOpt = None,
     markdown: MarkdownOpt = False,
     json_out: JsonOpt = False,
 ) -> None:
@@ -72,6 +73,7 @@ def context_command(
         raise CliError("a query is a JSON object")
     request = m.ContextRequest(
         branch=app.branch(branch),
+        at=at,
         refs=ref or None,
         query=parsed,
         search=search,
@@ -112,6 +114,7 @@ def explain_command(
     key: Annotated[str, typer.Argument(help="Record key.", metavar="KEY")],
     domain: DomainOpt = None,
     branch: BranchOpt = None,
+    at: AtOpt = None,
     markdown: MarkdownOpt = False,
     json_out: JsonOpt = False,
 ) -> None:
@@ -121,9 +124,9 @@ def explain_command(
     name = app.domain(domain)
     chosen = app.branch(branch)
     if markdown:
-        app.out.text(agents.explain_markdown(name, kind, key, branch=chosen))
+        app.out.text(agents.explain_markdown(name, kind, key, branch=chosen, at=at))
         return
-    found = agents.explain(name, kind, key, branch=chosen)
+    found = agents.explain(name, kind, key, branch=chosen, at=at)
 
     def human() -> None:
         record = found.record
@@ -195,6 +198,7 @@ def health_command(
     ] = None,
     domain: DomainOpt = None,
     branch: BranchOpt = None,
+    at: AtOpt = None,
     markdown: MarkdownOpt = False,
     json_out: JsonOpt = False,
 ) -> None:
@@ -205,15 +209,15 @@ def health_command(
     chosen = app.branch(branch)
     if markdown:
         app.out.text(
-            agents.kind_health_markdown(name, kind, branch=chosen)
+            agents.kind_health_markdown(name, kind, branch=chosen, at=at)
             if kind
-            else agents.health_markdown(name, branch=chosen)
+            else agents.health_markdown(name, branch=chosen, at=at)
         )
         return
     found = (
-        agents.kind_health(name, kind, branch=chosen)
+        agents.kind_health(name, kind, branch=chosen, at=at)
         if kind
-        else agents.health(name, branch=chosen)
+        else agents.health(name, branch=chosen, at=at)
     )
     kinds = [found.health] if isinstance(found, m.KindHealthReport) else found.kinds
 

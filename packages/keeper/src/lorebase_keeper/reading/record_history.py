@@ -387,7 +387,6 @@ async def record_history(
     shape: str,
 ) -> RecordHistoryOut:
     """A page of the changes of `kind/key` on the branch, newest first (see module doc)."""
-    point = await with_rows(session, runtime, point, "Record history")
     position = position_of(cursor, shape, "/cursor")
     before = None
     if position is not None:
@@ -396,6 +395,7 @@ async def record_history(
         except (IndexError, TypeError, ValueError):
             raise invalid_cursor("/cursor") from None
         before = (generation, revision)
+    point = await with_rows(session, runtime, point, "Record history")
     changes = await _changes(session, point, kind, key, limit=limit + 1, before=before)
     if not changes and position is None:
         raise not_found(f"Record {kind.api_name}/{key}")

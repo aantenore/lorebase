@@ -682,6 +682,7 @@ class Records(_Resource):
         key: str,
         *,
         branch: str | None = None,
+        at: str | None = None,
         values: bool = False,
         limit: int | None = None,
         cursor: str | None = None,
@@ -689,7 +690,7 @@ class Records(_Resource):
         """One page of the changes of a Record, newest first."""
         return await self._c.send(
             ep.record_history(
-                domain, kind, key, branch=branch, values=values, limit=limit, cursor=cursor
+                domain, kind, key, branch=branch, at=at, values=values, limit=limit, cursor=cursor
             )
         )
 
@@ -700,10 +701,13 @@ class Records(_Resource):
         key: str,
         *,
         branch: str | None = None,
+        at: str | None = None,
         values: bool = False,
         page_size: int | None = None,
     ) -> AsyncIterator[m.RecordChange]:
-        call = ep.record_history(domain, kind, key, branch=branch, values=values, limit=page_size)
+        call = ep.record_history(
+            domain, kind, key, branch=branch, at=at, values=values, limit=page_size
+        )
         return self._c.iterate(call)
 
     async def lineage(
@@ -1383,34 +1387,40 @@ class Agents(_Resource):
         return await self._c.send(ep.context_pack_markdown(domain, _context_request(request)))
 
     async def explain(
-        self, domain: str, kind: str, key: str, *, branch: str | None = None
+        self, domain: str, kind: str, key: str, *, branch: str | None = None, at: str | None = None
     ) -> m.Explain:
         """Where the values and Links of a Record came from."""
-        return await self._c.send(ep.explain_record(domain, kind, key, branch=branch))
+        return await self._c.send(ep.explain_record(domain, kind, key, branch=branch, at=at))
 
     async def explain_markdown(
-        self, domain: str, kind: str, key: str, *, branch: str | None = None
+        self, domain: str, kind: str, key: str, *, branch: str | None = None, at: str | None = None
     ) -> str:
-        return await self._c.send(ep.explain_record_markdown(domain, kind, key, branch=branch))
+        return await self._c.send(
+            ep.explain_record_markdown(domain, kind, key, branch=branch, at=at)
+        )
 
-    async def health(self, domain: str, *, branch: str | None = None) -> m.DomainHealth:
+    async def health(
+        self, domain: str, *, branch: str | None = None, at: str | None = None
+    ) -> m.DomainHealth:
         """Violations, orphan Links, gaps and duplicates per Kind and Relation of a Domain."""
-        return await self._c.send(ep.domain_health(domain, branch=branch))
+        return await self._c.send(ep.domain_health(domain, branch=branch, at=at))
 
-    async def health_markdown(self, domain: str, *, branch: str | None = None) -> str:
+    async def health_markdown(
+        self, domain: str, *, branch: str | None = None, at: str | None = None
+    ) -> str:
         """The Domain health report rendered as Markdown."""
-        return await self._c.send(ep.domain_health_markdown(domain, branch=branch))
+        return await self._c.send(ep.domain_health_markdown(domain, branch=branch, at=at))
 
     async def kind_health(
-        self, domain: str, kind: str, *, branch: str | None = None
+        self, domain: str, kind: str, *, branch: str | None = None, at: str | None = None
     ) -> m.KindHealthReport:
         """The health of one Kind with the Relations it takes part in."""
-        return await self._c.send(ep.kind_health(domain, kind, branch=branch))
+        return await self._c.send(ep.kind_health(domain, kind, branch=branch, at=at))
 
     async def kind_health_markdown(
-        self, domain: str, kind: str, *, branch: str | None = None
+        self, domain: str, kind: str, *, branch: str | None = None, at: str | None = None
     ) -> str:
-        return await self._c.send(ep.kind_health_markdown(domain, kind, branch=branch))
+        return await self._c.send(ep.kind_health_markdown(domain, kind, branch=branch, at=at))
 
     async def changes(
         self,

@@ -398,6 +398,7 @@ def record_history(
     key: Annotated[str, typer.Argument(help="Record key.", metavar="KEY")],
     domain: DomainOpt = None,
     branch: BranchOpt = None,
+    at: AtOpt = None,
     values: Annotated[
         bool, typer.Option("--values", help="Add the value before and after each change.")
     ] = False,
@@ -414,6 +415,7 @@ def record_history(
         kind,
         key,
         branch=app.branch(branch),
+        at=at,
         values=values,
         limit=limit or app.settings.list_limit,
         cursor=cursor,
@@ -643,6 +645,7 @@ def search_command(
     ] = None,
     domain: DomainOpt = None,
     branch: BranchOpt = None,
+    at: AtOpt = None,
     limit: LimitOpt = None,
     json_out: JsonOpt = False,
 ) -> None:
@@ -656,6 +659,7 @@ def search_command(
             "mode": mode,
             "query_vector": vector,
             "branch": app.branch(branch),
+            "at": at,
             "limit": limit or app.settings.list_limit,
         }
     )

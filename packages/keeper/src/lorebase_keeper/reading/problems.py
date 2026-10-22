@@ -45,14 +45,13 @@ def tree_unsupported(what: str) -> ProblemError:
     )
 
 
-def snapshot_refused(what: str, entries: int, limit: int) -> ProblemError:
-    """422 for a read at a Revision too large to snapshot (design 6.12)."""
+def snapshot_refused(what: str, reason: str) -> ProblemError:
+    """422 for a read at a Revision too large to snapshot (design 6.12); `reason` says which
+    bound it exceeds."""
     return ProblemError(
         VALIDATION_FAILED,
         f"{what} at a Revision other than the branch head reads a snapshot of that Revision; "
-        f"this one holds {entries} Records and Links, more than the limit of {limit} "
-        "(read.time_travel.snapshot_max_entries). Key lookups and listings ordered by key "
-        "remain available.",
+        f"{reason}. Key lookups and listings ordered by key remain available.",
         extensions={"errors": [{"pointer": "/query/at", "message": what, "code": "time_travel"}]},
     )
 

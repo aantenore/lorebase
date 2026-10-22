@@ -126,6 +126,7 @@ $ lorebase search [OPTIONS] {TEXT}
 * `--vector-file <str>`: Query vector of the Domain&#x27;s embedding model: a JSON array, or the output of `lorebase-inference embed`; `-` reads standard input.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
 * `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
@@ -203,6 +204,7 @@ $ lorebase context [OPTIONS]
 * `--relation <str>`: Follow only this Relation. Repeatable.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
 * `--markdown`: Print the Markdown rendering instead of a summary.
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
@@ -226,6 +228,7 @@ $ lorebase explain [OPTIONS] {KIND} {KEY}
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
 * `--markdown`: Print the Markdown rendering instead of a summary.
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
@@ -248,6 +251,7 @@ $ lorebase health [OPTIONS] [KIND]
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
 * `--markdown`: Print the Markdown rendering instead of a summary.
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
@@ -1038,6 +1042,7 @@ $ lorebase record history [OPTIONS] {KIND} {KEY}
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
 * `--values`: Add the value before and after each change.
 * `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
 * `--cursor <str>`: Continue after this page&#x27;s `next_cursor`.

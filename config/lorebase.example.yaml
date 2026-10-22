@@ -804,7 +804,14 @@ read:
     max_scan_entries: 100000     # largest Kind or Relation partition listed at a Revision
     snapshot_max_entries: 100000 # largest Revision (Records + Links) materialized for filters,
                                  # search, traversal, history and health at it; larger refused
-    snapshot_max_per_domain: 4   # snapshots kept per Domain, oldest unused dropped first
+    snapshot_max_history_revisions: 100000 # deeper histories (generation + 1) are refused
+    snapshot_max_per_domain: 4   # snapshots per Domain (being deleted included); oldest
+                                 # unused dropped first, 503 when none can go
+    snapshot_min_age_s: 60       # grace period before a snapshot may be dropped
+    snapshot_max_concurrent_builds: 2 # per process; each uses a second DB connection
+    snapshot_build_wait_ms: 5000 # wait for a build slot before answering 503
+    snapshot_builds_per_minute: 6 # per principal and process (429 beyond)
+    snapshot_build_burst: 3
   diff:
     max_changes: 100000          # larger diffs are refused; narrow them with kinds/relations
     page:

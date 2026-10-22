@@ -135,7 +135,6 @@ def _target(point: ReadPoint, request: SearchRequest) -> Target:
 async def search(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, request: SearchRequest
 ) -> SearchResponse:
-    point = await with_rows(session, runtime, point, "Search")
     runtime = tuned(runtime, request.tuning)
     settings = runtime.search
     mode = search_mode(request)
@@ -172,6 +171,7 @@ async def search(
             point.schema, point.masking, condition_fields(where, target.kinds), "/body/where"
         )
 
+    point = await with_rows(session, runtime, point, "Search")
     compiler = compiler_for(point, runtime)
     corrections: list[Correction] = []
     if request.q is not None and mode in ("lexical", "hybrid"):

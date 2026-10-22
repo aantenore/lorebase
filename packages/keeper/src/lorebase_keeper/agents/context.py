@@ -438,8 +438,8 @@ async def build_pack(
     settings: ContextSettings,
 ) -> tuple[bytes, str]:
     """The rendered pack and its media type."""
-    point = await with_rows(session, runtime, context.point, "Context packs")
     bounds = effective(request, settings, runtime)
+    point = await with_rows(session, runtime, context.point, "Context packs")
     addresses = await seed_addresses(session, runtime, point, request, settings)
     rows = await fetch_rows(session, point, addresses)
     seeds = [record_out(point.schema, row, masking=point.masking) for row in rows]
