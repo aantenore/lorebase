@@ -5,6 +5,9 @@
 #
 #   examples/five_day_demo/run.sh            # against the stack of `make demo`, or any Keeper
 #
+# Every day ends with assertions (demo.py assert-*): the run exits with a non-zero code at the
+# first one that fails, and ends with a table of the seconds each day took.
+#
 # Environment (all optional):
 #   LOREBASE_URL         Keeper URL                              (http://127.0.0.1:8080)
 #   LOREBASE_API_KEY     administrator key; none: Keeper must run with keeper.auth.mode none
@@ -49,6 +52,8 @@ read -r -a PY <<<"${DEMO_PYTHON:-uv run --quiet python}"
 PY+=("$HERE/demo.py")
 
 mkdir -p "$WORK"
+TIMINGS="$WORK/timings.tsv" # one line per finished day: label, seconds
+: >"$TIMINGS"
 : >"$WORK/cli.toml"
 export LOREBASE_CONFIG="$WORK/cli.toml" # an empty config file: no profile of the user applies
 unset LOREBASE_PROFILE LOREBASE_BRANCH LOREBASE_TOKEN
@@ -62,9 +67,12 @@ fi
 RECEIVER_PID=""
 STARTED=$SECONDS
 DAY_STARTED=$SECONDS
+CURRENT="preparation"
 
 cleanup() {
+  local status=$?
   if [ -n "$RECEIVER_PID" ]; then kill "$RECEIVER_PID" 2>/dev/null || true; fi
+  "${PY[@]}" timings "$TIMINGS" --status "$status" --during "$CURRENT" || true
 }
 trap cleanup EXIT
 
@@ -89,9 +97,13 @@ show() {
 note() { printf '\n%s# %s%s\n' "$DIM" "$*" "$RESET"; }
 banner() {
   printf '\n%s== %s ==%s\n' "$BOLD" "$*" "$RESET"
+  CURRENT="$*"
   DAY_STARTED=$SECONDS
 }
-day_done() { printf '\n%s(%s took %ss)%s\n' "$DIM" "$1" "$((SECONDS - DAY_STARTED))" "$RESET"; }
+day_done() {
+  printf '\n%s(%s took %ss)%s\n' "$DIM" "$1" "$((SECONDS - DAY_STARTED))" "$RESET"
+  printf '%s\t%s\n' "$1" "$((SECONDS - DAY_STARTED))" >>"$TIMINGS"
+}
 
 lb() {
   show lorebase "$@"
@@ -164,6 +176,7 @@ compare_heads() {
   # shellcheck disable=SC2016 # the container's shell expands $POSTGRES_DB
   printf 'live      %s\n' "$(db_summary '$POSTGRES_DB')"
   printf 'restored  %s\n' "$(db_summary "$RESTORE_DB")"
+  py assert-restore "$(db_summary '$POSTGRES_DB')" "$(db_summary "$RESTORE_DB")"
 }
 
 head_of() { # the head Revision of a branch
@@ -174,6 +187,18 @@ new_proposal() { # SOURCE TARGET TITLE -> id
   local id
   id="$(lbc --json proposal create "$1" "$2" --title "$3" | "${PY[@]}" jget id)"
   printf '%s' "$id"
+}
+
+# The Proposal Scribe opens for an uploaded document.
+extraction_proposal() { # FILE NAME -> id
+  show demo.py extraction-proposal "$1"
+  "${PY[@]}" extraction-proposal "$1"
+}
+
+# The one open Proposal the agent's key raised.
+agent_proposal() { # -> id
+  show demo.py agent-proposal
+  "${PY[@]}" agent-proposal
 }
 
 review_and_merge() { # PROPOSAL MESSAGE
@@ -226,11 +251,13 @@ PROPOSAL="$(new_proposal model/initial main "Model the supply Domain")"
 lb proposal get "$PROPOSAL"
 review_and_merge "$PROPOSAL" "Model the supply Domain"
 lb log main -n 3
+note "Checks: main holds the curated schema, through a Proposal, and is protected."
+py assert-day1
 day_done "Day 1"
 
 # --- Day 2 -----------------------------------------------------------------------------------
 
-banner "Day 2: structured ingestion and exploration"
+banner "Day 2: structured ingestion, exploration and a first document"
 note "Dana loads the CSV files with one batch import: Records and their Links travel together, one Revision."
 lb branch create data/initial
 lb import batch -b data/initial \
@@ -255,6 +282,19 @@ note "Where did a Record come from? Each value has its origin, actor and Revisio
 lbw explain Supplier S-1001
 note "Is the data sound?"
 lbw health
+note "Checks: every CSV row is a Record or a Link on main; the derived value, query and search answer."
+py assert-day2
+
+note "Procurement also sends a framework agreement as a document. Scribe reads it with the deterministic tiers (rules, no model) and opens a Proposal of items, each with its evidence."
+lb documents upload examples/five_day_demo/documents/contract-c-3099-wexrix-filtration.md --tiers 0,1
+EXTRACTION="$(extraction_proposal contract-c-3099-wexrix-filtration.md)"
+lbw proposal items "$EXTRACTION"
+py assert-items "$EXTRACTION"
+note "Dana reviews the items and accepts both (a new Contract needs its Link to pass validation), then the Proposal merges like any other."
+lb proposal decide "$EXTRACTION" --where-status pending --decision accepted
+review_and_merge "$EXTRACTION" "Add contract C-3099 from the document"
+lbw explain Contract C-3099
+py assert-extraction "$EXTRACTION"
 day_done "Day 2"
 
 # --- Day 3 -----------------------------------------------------------------------------------
@@ -302,6 +342,8 @@ note "Both teams' work is in main; every resolution is recorded. Time travel: S-
 lb record get Supplier S-1001
 lb record get Supplier S-1001 --at "$DAY2_HEAD"
 lbw diff "$DAY2_HEAD" main --kind Supplier -n 5
+note "Checks: both teams' work is in main, no Conflict is open, time travel still shows day 2."
+py assert-day3 "$TIERS_PROPOSAL" "$DAY2_HEAD"
 day_done "Day 3"
 
 # --- Day 4 -----------------------------------------------------------------------------------
@@ -337,6 +379,8 @@ else
   note "The change feed since the start of the day (polling form), and what the webhook delivered meanwhile."
   py changes main --since "$BEFORE"
   py wait-lines "$WORK/receiver.log" "signature=ok" --count 1 --timeout 30
+  note "Checks: two runs, one Proposal merged by policy, the two cells changed on main, the feed lists them."
+  py assert-day4 --since "$BEFORE"
 fi
 day_done "Day 4"
 
@@ -357,9 +401,14 @@ py agent "$WORK/agent.key"
 note "Rate limits are per principal and class; every response says where the bucket stands."
 py limits "$WORK/agent.key"
 
-note "Sofia takes the agent's flag through a Proposal like any other change; Priya shows the audit log."
+note "Sofia takes the agent's flag through a Proposal like any other change. The critical flag is already a Proposal, opened by the agent's own task branch; she reviews it too. Priya shows the audit log."
 ship agent/flags main "Risk flags raised by the agent"
+AGENT_PROPOSAL="$(agent_proposal)"
+lb proposal get "$AGENT_PROPOSAL"
+review_and_merge "$AGENT_PROPOSAL" "Critical flag raised by the agent"
 py audit --limit 8
+note "Checks: both flags are on main only through merged Proposals, the audit log has them, a direct write to main is refused."
+py assert-day5 "$WORK/agent.key"
 if [ -n "$RECEIVER_PID" ]; then
   note "Deliveries the receiver got so far:"
   py wait-lines "$WORK/receiver.log" "signature=ok" --count 1 --timeout 30
@@ -382,4 +431,4 @@ else
 fi
 day_done "Day 5"
 
-printf '\n%sThe five days took %ss.%s\n' "$BOLD" "$((SECONDS - STARTED))" "$RESET"
+printf '\n%sThe five days took %ss, every check passed.%s\n' "$BOLD" "$((SECONDS - STARTED))" "$RESET"

@@ -11,8 +11,12 @@ Day 1   infer, curate
 Day 3   risk-model, team-csv, conflicts, resolutions, conflict-id
 Day 4   export-suppliers, csv-set, last-run, wait-run, webhook-register, receiver, wait-lines,
         changes
-Day 5   agent-setup, agent, limits, audit
+Day 5   agent-setup, agent, limits, audit, agent-proposal
+Checks  assert-day1 ... assert-day5, extraction-proposal, assert-items, assert-extraction,
+        assert-restore, timings
 Any     jget
+
+A failed assertion exits with code 1 (run.sh stops, `make demo` and the CI job fail).
 """
 
 from __future__ import annotations
@@ -114,6 +118,7 @@ SOURCE_COLUMNS = [
 
 AGENT_OPERATION = "flag_supplier_risk"
 AGENT_PRINCIPAL = "agent-risk"  # created by stack.sh (lorebase_keeper principal create)
+AGENT_BRANCHES = "agent/*"  # where the agent may branch and open Proposals; main stays out of reach
 EXPIRY_WINDOW_DAYS = 90
 REFERENCE_DATE = date(2026, 1, 15)  # the date examples/supply is generated for
 LIMIT_PROBES = 8
@@ -522,7 +527,8 @@ def cmd_changes(args: argparse.Namespace) -> None:
 
 
 def cmd_agent_setup(args: argparse.Namespace) -> None:
-    """A key for the agent: role agent-reader, plus the Operation grant for flag_supplier_risk.
+    """A key for the agent: role agent-reader, the Operation grant for flag_supplier_risk and
+    the editor role on the branches `agent/*` (its task branches and their Proposals).
 
     The Operation is restricted to the subject `agent-risk`; stack.sh created the service
     principal of that name (`python -m lorebase_keeper principal create`), so the key is issued
@@ -533,12 +539,16 @@ def cmd_agent_setup(args: argparse.Namespace) -> None:
         writer = c.grants.create(
             DOMAIN, AGENT_PRINCIPAL, "operator", scope_type="operation", scope_ref=AGENT_OPERATION
         )
+        branches = c.grants.create(
+            DOMAIN, AGENT_PRINCIPAL, "editor", scope_type="branch", scope_ref=AGENT_BRANCHES
+        )
         created = c.api_keys.create(DOMAIN, args.name, principal_id=AGENT_PRINCIPAL, ttl_days=7)
     key_file = Path(args.key_file)
     key_file.touch(mode=0o600)
     key_file.write_text(created.key, encoding="utf-8")
     say(f"service principal {created.principal_id}, key {created.prefix}... (7 days)")
-    say(f"grants: {reader.role} on the Domain, {writer.role} on Operation {writer.scope_ref}")
+    say(f"grants: {reader.role} on the Domain, {writer.role} on Operation {writer.scope_ref},")
+    say(f"        {branches.role} on branches {branches.scope_ref}")
     say(f"the secret is in {rel(args.key_file)} and is not printed")
 
 
@@ -563,7 +573,7 @@ async def agent_session(args: argparse.Namespace) -> None:
     )
     cutoff = REFERENCE_DATE + timedelta(days=EXPIRY_WINDOW_DAYS)
 
-    async def call(tool: str, arguments: dict[str, Any], lines: int = 14) -> str:
+    async def call(tool: str, arguments: dict[str, Any], lines: int = 14) -> tuple[str, bool]:
         say(f"> {tool} {json.dumps(arguments, separators=(',', ':'))}")
         started = time.perf_counter()
         result = await session.call_tool(tool, arguments)
@@ -576,18 +586,20 @@ async def agent_session(args: argparse.Namespace) -> None:
             say(f"  ... {len(shown) - lines} more lines")
         outcome = "error" if result.is_error else "ok"
         say(f"  [{outcome}, {elapsed:.0f} ms through Herald and Keeper]")
-        return text
+        return text, bool(result.is_error)
 
     async with stdio_client(server) as (read, write), ClientSession(read, write) as session:
         await session.initialize()
         listed = await session.list_tools()
-        say(
-            f"Herald over stdio exposes {len(listed.tools)} tools: "
-            + ", ".join(sorted(t.name for t in listed.tools))
+        names = sorted(t.name for t in listed.tools)
+        say(f"Herald over stdio exposes {len(names)} tools: " + ", ".join(names))
+        check(
+            {"lorebase_query", "lorebase_context", "lorebase_execute"} <= set(names),
+            "Herald exposes the query, context and execute tools",
         )
         say()
         say(f"Question: which active contracts end by {cutoff}, and who is the supplier?")
-        await call(
+        found, failed = await call(
             "lorebase_query",
             {
                 "query": {
@@ -603,12 +615,18 @@ async def agent_session(args: argparse.Namespace) -> None:
                 }
             },
         )
+        rows = re.search(r"\b(\d+) rows", found)
+        check(not failed and rows is not None and int(rows[1]) > 0, "the query returns rows")
+        check("with_supplier: Supplier/" in found, "each Contract comes with its supplier")
         say()
         say("Context pack for the first supplier at risk (no model is called):")
-        await call(
+        pack, failed = await call(
             "lorebase_context",
             {"records": [args.supplier], "depth": 1, "token_budget": 1200},
             lines=18,
+        )
+        check(
+            not failed and f"### {args.supplier}" in pack, "the context pack describes the Record"
         )
         say()
         say("Governed write on a work branch, dry run first (the default of lorebase_execute):")
@@ -617,7 +635,7 @@ async def agent_session(args: argparse.Namespace) -> None:
             "severity": "high",
             "reason": "Contract ends within 90 days and the part is single sourced",
         }
-        dry = await call(
+        dry, failed = await call(
             "lorebase_execute",
             {
                 "operation": AGENT_OPERATION,
@@ -626,23 +644,26 @@ async def agent_session(args: argparse.Namespace) -> None:
                 "dry_run": True,
             },
         )
-        found = re.search(r"\bhead ([0-9a-f]{64})", dry)
+        head = re.search(r"\bhead ([0-9a-f]{64})", dry)
+        check(not failed and head is not None and "dry_run" in dry, "the dry run reports the head")
+        check("0 violations" in dry, "the dry run finds no violation")
         say()
         say("Then for real, pinned to the head the dry run reported, safe to retry:")
-        await call(
+        done, failed = await call(
             "lorebase_execute",
             {
                 "operation": AGENT_OPERATION,
                 "parameters": parameters,
                 "branch": args.branch,
                 "dry_run": False,
-                "expected_head": found.group(1) if found else None,
+                "expected_head": head.group(1) if head else None,
                 "idempotency_key": f"demo-{AGENT_OPERATION}-{parameters['supplier']}",
             },
         )
+        check(not failed and done.startswith("committed"), "the flag is committed on the branch")
         say()
         say("A critical flag is a different story: the Operation policy sends it to review.")
-        await call(
+        refused, failed = await call(
             "lorebase_execute",
             {
                 "operation": AGENT_OPERATION,
@@ -650,6 +671,23 @@ async def agent_session(args: argparse.Namespace) -> None:
                 "branch": args.branch,
                 "dry_run": False,
             },
+        )
+        check(failed and "review-required" in refused, "a critical flag is refused: review needed")
+        say()
+        say("The agent asks for a Proposal instead: a task name and its intent.")
+        proposed, failed = await call(
+            "lorebase_execute",
+            {
+                "operation": AGENT_OPERATION,
+                "parameters": {**parameters, "severity": "critical"},
+                "dry_run": False,
+                "task": "critical-flag-s-1001",
+                "intent": "S-1001 is single sourced and its agreement ends soon",
+            },
+        )
+        check(
+            not failed and re.search(r"\bprp_[0-9A-Z]{26}\b", proposed) is not None,
+            "Keeper ran it on the agent's task branch and opened a Proposal",
         )
 
 
@@ -666,7 +704,13 @@ def cmd_audit(args: argparse.Namespace) -> None:
 def cmd_agent(args: argparse.Namespace) -> None:
     """Run Herald over stdio with a scripted MCP client (the `mcp` SDK)."""
     args.key = Path(args.key_file).read_text(encoding="utf-8").strip()
-    asyncio.run(agent_session(args))
+    try:
+        asyncio.run(agent_session(args))
+    except BaseExceptionGroup as group:  # the MCP task group wraps a failed assertion
+        stops = [e for e in group.exceptions if isinstance(e, SystemExit)]
+        if stops:
+            raise stops[0] from None
+        raise
 
 
 def cmd_limits(args: argparse.Namespace) -> None:
@@ -685,7 +729,14 @@ def cmd_limits(args: argparse.Namespace) -> None:
         ):
             say(f"  {name}: {response.headers.get(name, '-')[:16]}")
         say()
+        check(
+            response.status_code == 200 and "RateLimit-Remaining" in response.headers,
+            "a read answers 200 with the rate-limit headers",
+        )
+        say()
         say(f"{LIMIT_PROBES} context packs in a row (this Domain allows a burst of 4 per class):")
+        statuses: list[int] = []
+        retry_after = None
         for number in range(1, LIMIT_PROBES + 1):
             response = http.post(
                 f"{root}/domains/{DOMAIN}/context", json={"refs": [args.supplier], "depth": 0}
@@ -698,6 +749,11 @@ def cmd_limits(args: argparse.Namespace) -> None:
                     f"{response.headers.get('Retry-After')} s, class {body.get('class')}"
                 )
             say(f"  {number}: {response.status_code} {detail}")
+            statuses.append(response.status_code)
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+        check(statuses[0] == 200 and 429 in statuses, "the burst is served, then refused", statuses)
+        check(retry_after is not None, "a refused request says when to retry (Retry-After)")
         say()
         who = http.get(f"{root}/auth/whoami").json()
     quota = who.get("quota") or {}
@@ -706,6 +762,300 @@ def cmd_limits(args: argparse.Namespace) -> None:
         use = quota.get(name, {})
         say(f"  {name} today: {use.get('used')} of {use.get('limit')}")
     say(f"  quota resets at {quota.get('resets_at')} (UTC midnight)")
+    check(
+        who["type"] == "service" and quota.get("requests", {}).get("used", 0) > 0,
+        "whoami shows the agent as a service principal with its quota in use",
+    )
+
+
+# --- Assertions and timings --------------------------------------------------------------------
+#
+# run.sh calls `assert-*` after each day. A failed assertion names what was expected and exits
+# with code 1, so the run fails (the CI workflow relies on it).
+
+RECORD_FILES = {
+    "Supplier": "supplier.csv",
+    "Part": "part.csv",
+    "Plant": "plant.csv",
+    "Contract": "contract.csv",
+    "PurchaseOrder": "purchase_order.csv",
+    "RiskFlag": "risk_flag.csv",
+}
+LINK_FILES = {
+    "supplied_by": "supplied_by.csv",
+    "stocked_at": "stocked_at.csv",
+    "with_supplier": "with_supplier.csv",
+    "for_part": "for_part.csv",
+    "delivered_to": "delivered_to.csv",
+    "flags": "flags.csv",
+}
+# The contract in documents/, as the rules of extraction tier 0 find it.
+EXTRACTED_CONTRACT = {"key": "C-3099", "supplier": "S-1013", "incoterm": "DAP", "currency": "EUR"}
+
+
+def check(condition: bool, label: str, detail: object = "") -> None:
+    """Print a passed assertion, or stop the run with exit code 1."""
+    if not condition:
+        raise SystemExit(
+            f"assertion failed: {label}" + (f" (got {detail})" if detail != "" else "")
+        )
+    say(f"  check ok: {label}")
+
+
+def api_names(items: dict[str, Any]) -> list[str]:
+    return sorted(item.api_name for item in items.values())
+
+
+def merged_proposals(c: LorebaseClient, **filters: Any) -> list[Any]:
+    return list(c.proposals.iterate(DOMAIN, status="merged", **filters))
+
+
+def count_rows(name: str) -> int:
+    return len(read_csv(DATA_DIR / name)[1])
+
+
+def cmd_assert_day1(args: argparse.Namespace) -> None:
+    """Day 1: main holds the curated schema, got it through a Proposal, and is protected."""
+    expected = load_schema(CURATED_SCHEMA.read_text(encoding="utf-8"))
+    with client() as c:
+        main = load_schema(c.schema.get_yaml(DOMAIN, branch="main"))
+        branch = c.branches.get(DOMAIN, "main")
+        proposals = merged_proposals(c, target="main")
+    for section in ("kinds", "relations", "traits", "operations", "derivations", "sources"):
+        got, want = api_names(getattr(main, section)), api_names(getattr(expected, section))
+        check(got == want, f"schema of main: {len(want)} {section}", got)
+    check(branch.protected, "main is protected")
+    check(
+        any(p.source_ref == "model/initial" for p in proposals),
+        "the schema reached main through the merged Proposal of model/initial",
+    )
+
+
+def cmd_assert_day2(args: argparse.Namespace) -> None:
+    """Day 2: every CSV row is a Record or a Link on main; derived values, query and search work."""
+    with client() as c:
+        for kind, name in RECORD_FILES.items():
+            got = sum(1 for _ in c.records.iterate(DOMAIN, kind, branch="main"))
+            check(got == count_rows(name), f"{kind}: {count_rows(name)} Records imported", got)
+        for relation, name in LINK_FILES.items():
+            got = sum(1 for _ in c.records.iterate_relation_links(DOMAIN, relation, branch="main"))
+            check(got == count_rows(name), f"{relation}: {count_rows(name)} Links imported", got)
+        parts = c.records.query(
+            DOMAIN,
+            {
+                "kind": "Part",
+                "where": {"attr": "single_sourced", "op": "eq", "value": True},
+                "aggregate": {"group_by": "category"},
+            },
+        )
+        total = sum(row.count for row in parts.aggregate.counts) if parts.aggregate else 0
+        check(total > 0, "the derived value single_sourced answers a query", total)
+        hits = c.records.search(DOMAIN, {"q": "bearing", "kinds": ["Part"], "limit": 3}).items
+        check(len(hits) > 0, "lexical search finds Parts for 'bearing'", len(hits))
+        loaded = [p for p in merged_proposals(c, target="main") if p.source_ref == "data/initial"]
+        check(len(loaded) == 1, "the data reached main through the Proposal of data/initial")
+
+
+def cmd_extraction_proposal(args: argparse.Namespace) -> None:
+    """Wait for the Proposal Scribe opens for an uploaded document and print its id."""
+    deadline = time.monotonic() + args.timeout
+    with client() as c:
+        while time.monotonic() < deadline:
+            for proposal in c.proposals.iterate(DOMAIN, origin="extraction", status="open"):
+                if args.filename in proposal.title:
+                    say(proposal.id)
+                    return
+            time.sleep(0.5)
+    raise SystemExit(f"no extraction Proposal for {args.filename} after {args.timeout}s")
+
+
+def cmd_assert_items(args: argparse.Namespace) -> None:
+    """The items extracted from the contract: the new Contract and its Link, found by rules."""
+    with client() as c:
+        items = list(c.proposals.iterate_items(DOMAIN, args.proposal))
+    check(len(items) == 2, "two items are proposed: the Contract and its Link", len(items))
+    by_type = {i.type: i for i in items}
+    contract, link = by_type.get("record"), by_type.get("link")
+    check(
+        contract is not None and (contract.kind, contract.key) == ("Contract", "C-3099"),
+        "item 1 is the new Contract C-3099",
+    )
+    check(link is not None and link.relation == "with_supplier", "item 2 is a with_supplier Link")
+    check(all(i.decision == "pending" for i in items), "both items wait for a decision")
+    check(all(i.tier == 0 for i in items), "both come from tier 0 (rules, no model)")
+    check(
+        all(i.confidence is not None and 0 < i.confidence < 1 for i in items),
+        "both carry a confidence below the auto-accept threshold",
+    )
+
+
+def cmd_assert_extraction(args: argparse.Namespace) -> None:
+    """After the merge: the Contract and its Link are on main with extraction lineage."""
+    want = EXTRACTED_CONTRACT
+    with client() as c:
+        found = c.records.get(DOMAIN, "Contract", want["key"], branch="main", lineage=True).record
+        links = list(
+            c.records.iterate_relation_links(
+                DOMAIN, "with_supplier", branch="main", from_key=want["key"]
+            )
+        )
+        proposal = c.proposals.get(DOMAIN, args.proposal)
+    check(found.values.get("incoterm") == want["incoterm"], "Contract C-3099 has incoterm DAP")
+    check(found.values.get("currency") == want["currency"], "Contract C-3099 has currency EUR")
+    targets = [link.to_key for link in links]
+    check(targets == [want["supplier"]], "C-3099 is linked to supplier S-1013", targets)
+    origins = {x.origin_type for x in (found.lineage or {}).values()}
+    check("extraction" in origins, "the values of C-3099 have extraction lineage", origins)
+    check(proposal.status == "merged", "the extraction Proposal is merged", proposal.status)
+    check(proposal.origin == "extraction", "the Proposal has origin extraction", proposal.origin)
+
+
+def cmd_assert_day3(args: argparse.Namespace) -> None:
+    """Day 3: both teams' changes are on main, Conflicts are resolved, history is intact."""
+    original = {row["supplier_code"]: row for row in read_csv(DATA_DIR / "supplier.csv")[1]}
+    added = [RISK_NEW_SUPPLIER["supplier_code"], *(s["supplier_code"] for s in TIER_NEW_SUPPLIERS)]
+    checked = ["S-1001", "S-1003", *added]
+    with client() as c:
+        proposal = c.proposals.get(DOMAIN, args.proposal)
+        conflicts = list(c.proposals.iterate_conflicts(DOMAIN, args.proposal))
+        sources = {p.source_ref for p in merged_proposals(c, target="main")}
+        now = {
+            key: c.records.get(DOMAIN, "Supplier", key, branch="main").record.values
+            for key in checked
+        }
+        before = c.records.get(DOMAIN, "Supplier", "S-1001", at=args.day2_head).record.values
+    check(proposal.status == "merged", "the Proposal of cleanup/tiers is merged", proposal.status)
+    check({"model/risk", "cleanup/tiers"} <= sources, "both teams' branches reached main")
+    check(len(conflicts) > 0, "the merge raised Conflicts", len(conflicts))
+    states = sorted({str(x.status) for x in conflicts})
+    check("open" not in states, "no Conflict is left open", states)
+    s1001 = now["S-1001"]
+    check(
+        str(s1001.get("risk_score")) == HAND_RESOLVED["value"],
+        f"S-1001 risk_score is {HAND_RESOLVED['value']}, the value decided by hand",
+        s1001.get("risk_score"),
+    )
+    check(s1001.get("risk_band") == band(HAND_RESOLVED["value"]), "S-1001 has the risk band")
+    s1003, was = now["S-1003"], original["S-1003"]
+    flipped = "2" if was["tier"] == "1" else "1"
+    check(str(s1003.get("tier")) == flipped, "S-1003 has the tier team procurement set")
+    check(
+        s1003.get("risk_band") == band(was["risk_score"]),
+        "S-1003 has the risk band team risk added, with no Conflict",
+        s1003.get("risk_band"),
+    )
+    for code in (
+        RISK_NEW_SUPPLIER["supplier_code"],
+        *(s["supplier_code"] for s in TIER_NEW_SUPPLIERS),
+    ):
+        check(bool(now[code]), f"supplier {code}, added on a branch, is on main")
+    check(
+        str(before.get("risk_score")) == original["S-1001"]["risk_score"]
+        and "risk_band" not in before,
+        "time travel: S-1001 at the day 2 head has its day 2 score and no risk_band",
+        before.get("risk_score"),
+    )
+
+
+def cmd_assert_day4(args: argparse.Namespace) -> None:
+    """Day 4: the Source synced its changes through a Proposal that merged itself."""
+    with client() as c:
+        runs = c.sources.runs(DOMAIN, "approved.suppliers", limit=5).items
+        proposals = merged_proposals(c, source="source/approved.suppliers")
+        city = c.records.get(DOMAIN, "Supplier", "S-1005", branch="main").record.values
+        tier = c.records.get(DOMAIN, "Supplier", "S-1008", branch="main").record.values
+        feed = c.agents.changes(DOMAIN, "main", since=args.since)
+    check(len(runs) >= 2, "the Source ran twice", len(runs))
+    check(all(r.status == "succeeded" for r in runs), "every run succeeded")
+    counts = runs[0].stats.get("counts", {})
+    check(counts.get("changed") == 2, "the second run found the two changed rows", counts)
+    check(len(proposals) == 1, "that run's Proposal merged by the merge policy", len(proposals))
+    check(city.get("city") == "Madrid", "S-1005 is in Madrid on main", city.get("city"))
+    check(str(tier.get("tier")) == "1", "S-1008 has tier 1 on main", tier.get("tier"))
+    check(
+        any("Supplier" in e.kinds for e in feed.items),
+        "the change feed lists the Supplier changes",
+        len(feed.items),
+    )
+
+
+def cmd_agent_proposal(args: argparse.Namespace) -> None:
+    """Print the id of the one open Proposal an agent raised (the review-required write)."""
+    with client() as c:
+        found = [p for p in c.proposals.iterate(DOMAIN, status="open") if p.author == args.author]
+    if len(found) != 1:
+        raise SystemExit(f"expected one open Proposal by {args.author}, found {len(found)}")
+    say(found[0].id)
+
+
+def cmd_assert_day5(args: argparse.Namespace) -> None:
+    """Day 5: the agent's writes reached main only through merged Proposals, and are audited."""
+    key = Path(args.key_file).read_text(encoding="utf-8").strip()
+    with client() as c:
+        flags = list(c.records.iterate(DOMAIN, "RiskFlag", branch="main"))
+        merged = merged_proposals(c, target="main")
+        actions = {e.action for e in c.audit.iterate(DOMAIN)}
+        open_proposals = [p.title for p in c.proposals.iterate(DOMAIN, status="open")]
+        head = c.branches.get(DOMAIN, "main").head
+    existing = count_rows("risk_flag.csv")
+    check(
+        len(flags) == existing + 2,
+        f"main holds the {existing} flags of day 2 and the 2 the agent raised",
+        len(flags),
+    )
+    raised = [f for f in flags if f.values.get("raised_by") == AGENT_PRINCIPAL]
+    check(len(raised) == 2, "both new flags are marked raised_by the agent", len(raised))
+    branches = {p.source_ref for p in merged}
+    check("agent/flags" in branches, "the flag on agent/flags reached main through a Proposal")
+    check(
+        any(b.startswith(f"agent/{AGENT_PRINCIPAL}/") for b in branches),
+        "the agent's own Proposal, from its task branch, was reviewed and merged",
+    )
+    check(not open_proposals, "no Proposal is left open", open_proposals)
+    check("operation.execute" in actions, "the audit log has the agent's operation.execute")
+    check(
+        {"proposal.create", "proposal.review", "proposal.merge"} <= actions,
+        "the audit log has Proposal create, review and merge",
+    )
+    refused = httpx.post(
+        os.environ["LOREBASE_URL"].rstrip("/")
+        + f"/api/v1/domains/{DOMAIN}/operations/{AGENT_OPERATION}/execute",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "branch": "main",
+            "dry_run": False,
+            "parameters": {"supplier": "S-1002", "severity": "high", "reason": "direct write"},
+        },
+        timeout=30,
+    )
+    check(
+        refused.status_code in {403, 409},
+        "a direct write by the agent to main is refused",
+        refused.status_code,
+    )
+    with client() as c:
+        check(c.branches.get(DOMAIN, "main").head == head, "main did not move")
+
+
+def cmd_assert_restore(args: argparse.Namespace) -> None:
+    """The restored database has the head and the Record count of the live one."""
+    live, restored = args.live.split(), args.restored.split()
+    check(len(live) == 3 and len(restored) == 3, "both summaries have head, Revisions, Records")
+    check(live[0] == restored[0], "the restored head of main is the live head", restored[0][:12])
+    check(live[2] == restored[2], "the restored Record count is the live count", restored[2])
+
+
+def cmd_timings(args: argparse.Namespace) -> None:
+    """Print the seconds each day took, from a file of `LABEL<TAB>SECONDS` lines."""
+    path = Path(args.file)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    rows = [line.split("\t") for line in lines if line]
+    total = sum(int(seconds) for _, seconds in rows)
+    say()
+    say("Timing per day")
+    table(("day", "seconds"), [*rows, ("total", total)], indent="  ")
+    if args.status != 0:
+        say(f"The run FAILED (exit code {args.status}) during: {args.during or 'preparation'}")
 
 
 # --- Command line ------------------------------------------------------------------------------
@@ -777,6 +1127,28 @@ def build_parser() -> argparse.ArgumentParser:
         ("--branch", {"default": "agent/flags"}),
     )
     add("audit", cmd_audit, ("--limit", {"type": int, "default": 8}))
+    add("agent-proposal", cmd_agent_proposal, ("--author", {"default": AGENT_PRINCIPAL}))
+    add("assert-day1", cmd_assert_day1)
+    add("assert-day2", cmd_assert_day2)
+    add(
+        "extraction-proposal",
+        cmd_extraction_proposal,
+        ("filename", {}),
+        ("--timeout", {"type": float, "default": 60.0}),
+    )
+    add("assert-items", cmd_assert_items, ("proposal", {}))
+    add("assert-extraction", cmd_assert_extraction, ("proposal", {}))
+    add("assert-day3", cmd_assert_day3, ("proposal", {}), ("day2_head", {}))
+    add("assert-day4", cmd_assert_day4, ("--since", {"required": True}))
+    add("assert-day5", cmd_assert_day5, ("key_file", {}))
+    add("assert-restore", cmd_assert_restore, ("live", {}), ("restored", {}))
+    add(
+        "timings",
+        cmd_timings,
+        ("file", {}),
+        ("--status", {"type": int, "default": 0}),
+        ("--during", {"default": ""}),
+    )
     add("limits", cmd_limits, ("key_file", {}), ("--supplier", {"default": "Supplier/S-1001"}))
     return parser
 

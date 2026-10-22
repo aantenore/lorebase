@@ -1,0 +1,109 @@
+name: End-to-end
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - examples/**
+      - packages/**
+      - deploy/compose/**
+      - deploy/docker/**
+      - uv.lock
+      - .github/workflows/e2e.yaml
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The five-day proof scenario (docs/demo.md) against a real stack: Postgres, Keeper and Scribe in
+# docker compose, built from this checkout, and the `lorebase` command line, a scripted MCP
+# client and a webhook receiver on the runner. The stack runs the deterministic fake inference
+# provider (examples/five_day_demo/lorebase.demo.yaml), so no model server and no model download
+# is involved, and no secret is used. Each day ends with assertions (demo.py assert-*); the first
+# one that fails fails the job.
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  five-day-demo:
+    name: Five-day demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Build the backend image
+        # The tag is the one stack.sh gives the stack (LOREBASE_IMAGE:LOREBASE_TAG). The layers of
+        # the Docker workflow's cache are reused when they match.
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/docker/backend.Dockerfile
+          push: false
+          load: true
+          tags: lorebase-demo:local
+          cache-from: |
+            type=gha,scope=e2e-backend
+            type=gha,scope=backend
+          cache-to: type=gha,scope=e2e-backend,mode=max
+      - name: Start the stack
+        env:
+          DEMO_NO_BUILD: "1" # the image above is the one under test
+        run: examples/five_day_demo/stack.sh up
+      - name: Run the five days
+        run: |
+          set -o pipefail
+          mkdir -p build/demo/logs
+          eval "$(examples/five_day_demo/stack.sh env)"
+          examples/five_day_demo/run.sh 2>&1 | tee build/demo/logs/run.log
+      - name: Timing per day
+        if: always()
+        run: |
+          timings=build/demo/work/timings.tsv
+          if [ -s "$timings" ]; then
+            {
+              echo "### Five-day demo, seconds per day"
+              echo
+              echo "| Day | Seconds |"
+              echo "|-----|---------|"
+              awk -F'\t' '{ print "| " $1 " | " $2 " |" }' "$timings"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Collect the logs of the stack
+        if: failure()
+        run: |
+          mkdir -p build/demo/logs
+          examples/five_day_demo/stack.sh compose ps -a > build/demo/logs/ps.txt 2>&1 || true
+          examples/five_day_demo/stack.sh compose logs --no-color --timestamps > build/demo/logs/compose.log 2>&1 || true
+      - name: Keep the logs and the files of the run
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: five-day-demo-logs
+          # The API keys and signing secrets under build/demo are left out.
+          path: |
+            build/demo/logs
+            build/demo/work/*.log
+            build/demo/work/*.yaml
+            build/demo/work/*.json
+            build/demo/work/*.csv
+            build/demo/work/timings.tsv
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Tear down the stack
+        if: always()
+        run: examples/five_day_demo/stack.sh down
