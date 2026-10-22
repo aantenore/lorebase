@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   credentialHeader,
   isSecretReference,
@@ -31,7 +30,10 @@ import {
   type Edit,
   type ElementIds,
 } from './form-helpers';
+import { KeyInput } from './key-input';
 import { ListInput } from './list-input';
+import { TransformsEditor } from './transform-editor';
+import { transformsOf } from './transform-edits';
 
 type Doc = Record<string, unknown>;
 type Change = (mutate: (source: Doc, draft: SchemaDocument) => void) => void;
@@ -188,37 +190,6 @@ function Connection({
   );
 }
 
-/** A header name; the rename applies while the typed name is free, as typed. */
-function HeaderName({
-  label,
-  name,
-  taken,
-  onRename,
-}: {
-  label: string;
-  name: string;
-  taken: (name: string) => boolean;
-  onRename: (name: string) => void;
-}) {
-  const [typed, setTyped] = useState<string | null>(null);
-  const problem = typed !== null && taken(typed) ? `${typed} is set already.` : undefined;
-  return (
-    <Input
-      label={label}
-      value={typed ?? name}
-      error={problem}
-      onChange={(event) => {
-        const next = event.target.value;
-        setTyped(next);
-        if (next.trim() !== '' && !taken(next)) onRename(next);
-      }}
-      onBlur={() => {
-        setTyped(null);
-      }}
-    />
-  );
-}
-
 function Headers({
   http,
   at,
@@ -244,7 +215,7 @@ function Headers({
         const local = credentialHeader(header) ? secretProblem(text || 'x') : undefined;
         return (
           <div key={index} className="flex flex-wrap items-start gap-2">
-            <HeaderName
+            <KeyInput
               label={`Header ${n} name`}
               name={header}
               taken={(candidate) => candidate !== header && candidate in headers}
@@ -537,9 +508,7 @@ function Mapping({
               : typeof entry['expression'] === 'string'
                 ? 'expression'
                 : 'column';
-          const transforms = asList(entry?.['transforms'])
-            .map((t) => (isRecord(t) ? asText(t['name']) : ''))
-            .filter((t) => t !== '');
+          const transforms = transformsOf(entry);
           return (
             <div key={attribute} className="grid gap-2 sm:grid-cols-[1fr_2fr] sm:items-start">
               <Select
@@ -568,16 +537,25 @@ function Mapping({
                   label={
                     mode === 'column' ? `Column for ${attribute}` : `Expression for ${attribute}`
                   }
-                  hint={
-                    transforms.length === 0
-                      ? undefined
-                      : `Transforms (edited in YAML): ${transforms.join(', ')}.`
-                  }
                   value={asText(entry?.[mode])}
                   error={errorAt(issues, `${path}/attribute_mapping/${attribute}`)}
                   onChange={(event) => {
                     const value = event.target.value;
                     changeMapping(attribute, (current) => ({ ...current, [mode]: value }));
+                  }}
+                />
+              )}
+              {mode !== 'none' && (
+                <TransformsEditor
+                  attribute={attribute}
+                  transforms={transforms}
+                  change={(mutate) => {
+                    changeMapping(attribute, (current) => {
+                      const out: Doc = { ...current };
+                      const list = transformsOf(out);
+                      setOrDelete(out, 'transforms', mutate(list) ?? list);
+                      return out;
+                    });
                   }}
                 />
               )}

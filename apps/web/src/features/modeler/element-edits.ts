@@ -6,7 +6,7 @@
 import { SOURCE_TYPE_FIELDS, STEP_FIELDS, type OperationAction } from '@/api/schema-rules';
 import type { DerivationVariant, SourceType } from '@/api/types';
 import type { ElementDocument, SchemaDocument } from './document';
-import { asList, isRecord, removeKey, renameKey, type ElementIds } from './form-helpers';
+import { asList, isRecord, moveItem, removeKey, renameKey, type ElementIds } from './form-helpers';
 
 type Doc = Record<string, unknown>;
 
@@ -69,6 +69,49 @@ export function changeStepAction(step: Doc, action: OperationAction, draft: Sche
   for (const key of ['target', 'from', 'to']) {
     if (fields.includes(key) && typeof step[key] !== 'string') step[key] = '';
   }
+}
+
+const STEP_REFERENCE = /\$step\[(\d+)\]/g;
+const REFERENCE_FIELDS = ['target', 'from', 'to', 'values'];
+
+/** `value` with every `$step[n]` in its text renumbered by `index`; other values as they are. */
+function renumbered(value: unknown, index: number[]): unknown {
+  if (typeof value === 'string') {
+    return value.replace(STEP_REFERENCE, (whole, n: string) => {
+      const next = index[Number(n)];
+      return next === undefined ? whole : `$step[${next}]`;
+    });
+  }
+  if (Array.isArray(value)) return value.map((v) => renumbered(v, index));
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renumbered(v, index)]));
+  }
+  return value;
+}
+
+/**
+ * Move step `from` to position `to`. `$step[n]` counts steps from the top, so the references
+ * of the steps are renumbered to keep pointing at the same step.
+ */
+export function moveStep(operation: Doc, from: number, to: number) {
+  const steps = asList(operation['steps']);
+  const order = moveItem(
+    steps.map((_, i) => i),
+    from,
+    to,
+  );
+  if (order.every((old, i) => old === i)) return;
+  const index: number[] = [];
+  order.forEach((old, next) => {
+    index[old] = next;
+  });
+  operation['steps'] = order.map((old) => {
+    const step = steps[old];
+    if (!isRecord(step)) return step;
+    const copy: Doc = { ...step };
+    for (const key of REFERENCE_FIELDS) if (key in copy) copy[key] = renumbered(copy[key], index);
+    return copy;
+  });
 }
 
 export type ReviewMode = 'never' | 'always' | 'expression';
