@@ -238,12 +238,12 @@ def _timed_engine(url: str) -> AsyncEngine:
     return create_engine(DatabaseSettings(), url=url)
 
 
-async def seed_only(options: Options, url: str) -> harness.SeedReport:
+async def seed_only(options: Options, url: str, *, resume: bool = False) -> harness.SeedReport:
     runtime = StoreRuntime.from_settings(StoreSettings())
     engine = _engine(url)
     try:
         return await harness.seed(
-            engine, runtime, harness.Scale(options.scale, options.extra_links)
+            engine, runtime, harness.Scale(options.scale, options.extra_links), resume=resume
         )
     finally:
         await engine.dispose()
@@ -514,7 +514,9 @@ def _quoted(name: str) -> str:
 
 
 def _seeded_database(options: Options, server: str, name: str) -> harness.SeedReport:
-    """The seed report of database `name`, seeding it first when it does not exist."""
+    """The seed report of database `name`, seeding it first when it does not exist. A
+    database without the report is an interrupted load: seeding resumes there."""
+    exists = asyncio.run(_admin(server, "SELECT 1 FROM pg_database WHERE datname = :n", n=name))
     found = asyncio.run(
         _admin(
             server,
@@ -528,10 +530,11 @@ def _seeded_database(options: Options, server: str, name: str) -> harness.SeedRe
         if kept["scale"] != wanted:
             raise SystemExit(f"database {name} holds {kept['scale']}, not {wanted}")
         return harness.SeedReport(**kept["seeded"])
-    asyncio.run(_admin(server, f"CREATE DATABASE {_quoted(name)}"))
+    if exists is None:
+        asyncio.run(_admin(server, f"CREATE DATABASE {_quoted(name)}"))
     url = async_url(server).set(database=name).render_as_string(hide_password=False)
     migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
-    seeded = asyncio.run(seed_only(options, url))
+    seeded = asyncio.run(seed_only(options, url, resume=exists is not None))
     note = json.dumps({"scale": wanted, "seeded": asdict(seeded)}).replace("'", "''")
     asyncio.run(_admin(server, f"COMMENT ON DATABASE {_quoted(name)} IS '{note}'"))
     return seeded

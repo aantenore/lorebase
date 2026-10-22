@@ -350,12 +350,15 @@ def _densify(tables: dict[str, list[dict[str, str]]], scale: Scale, rng: random.
                 wanted -= 1
 
 
-async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> SeedReport:
+async def seed(
+    engine: AsyncEngine, runtime: StoreRuntime, scale: Scale, *, resume: bool = False
+) -> SeedReport:
     """Create the Domain, its schema and the dataset on `main`; refresh statistics.
 
     The load sends materialized rows through COPY from `LOAD_COPY_THRESHOLD_ROWS` rows on
     (a seed commit writes a few thousand per Kind or Relation); the measurements use
-    `runtime` as given."""
+    `runtime` as given. `resume` continues an interrupted load: the batches are
+    deterministic, so those already committed are skipped (`seconds` then counts this run)."""
     writes = runtime.settings.writes.model_copy(
         update={"copy_threshold_rows": LOAD_COPY_THRESHOLD_ROWS}
     )
@@ -363,26 +366,16 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     schema = perf_schema()
     started = time.perf_counter()
-    async with sessions() as session:
-        await create_domain(session, schema.domain, author=AUTHOR, runtime=runtime)
-    elements = [*schema.kinds.values(), *schema.relations.values(), *schema.traits.values()]
-    elements.extend(schema.sources.values())
-    async with sessions() as session:
-        await commit(
-            session,
-            DOMAIN,
-            "main",
-            [],
-            schema_changes=[SchemaUpsert(e) for e in elements],
-            author=AUTHOR,
-            message="schema",
-            origin=ORIGIN,
-            runtime=runtime,
-        )
-    deferred = await _drop_deferred_indexes(engine)
+    done = await _seed_commits(engine) if resume else None
+    if done is None:
+        await _create_schema(sessions, schema, runtime)
+        done = 0
+    await _drop_deferred_indexes(engine)
     batches = 0
     for batch in build_changes(schema, scale):
         batches += 1
+        if batches <= done:
+            continue
         if batches % 10 == 0:
             _progress(f"seed: {batches} commits, {time.perf_counter() - started:.0f} s")
         async with sessions() as session:
@@ -397,7 +390,7 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
                 runtime=runtime,
             )
     _progress(f"seed: {batches} commits, building indexes")
-    await _create_deferred_indexes(engine, deferred)
+    await _create_deferred_indexes(engine)
     await build_indexes(engine, runtime)
     await _analyze(engine)
     seconds = time.perf_counter() - started
@@ -423,32 +416,76 @@ LOAD_COPY_THRESHOLD_ROWS = 500
 
 #: Indexes no commit reads, dropped while the dataset loads and built once afterwards (a GIN
 #: index is cheaper to build than to maintain row by row): full-text search and values.
-DEFERRED_INDEXES = ("ix_mat_records_branch_search", "ix_mat_records_values")
+DEFERRED_INDEXES = {
+    "ix_mat_records_branch_search": "CREATE INDEX ix_mat_records_branch_search "
+    "ON public.mat_records USING gin (domain_id, branch, search)",
+    "ix_mat_records_values": "CREATE INDEX ix_mat_records_values "
+    'ON public.mat_records USING gin ("values" jsonb_path_ops)',
+}
 
 
-async def _drop_deferred_indexes(engine: AsyncEngine) -> list[str]:
-    """Drop `DEFERRED_INDEXES`; returns the statements that create them again."""
+async def _create_schema(
+    sessions: async_sessionmaker[AsyncSession], schema: Schema, runtime: StoreRuntime
+) -> None:
+    async with sessions() as session:
+        await create_domain(session, schema.domain, author=AUTHOR, runtime=runtime)
+    elements = [*schema.kinds.values(), *schema.relations.values(), *schema.traits.values()]
+    elements.extend(schema.sources.values())
+    async with sessions() as session:
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            [],
+            schema_changes=[SchemaUpsert(e) for e in elements],
+            author=AUTHOR,
+            message="schema",
+            origin=ORIGIN,
+            runtime=runtime,
+        )
+
+
+async def _seed_commits(engine: AsyncEngine) -> int | None:
+    """Seed commits already on `main`, `None` when the Domain does not exist yet."""
+    async with engine.connect() as connection:
+        exists = (
+            await connection.execute(text("SELECT 1 FROM domains WHERE id = :d"), {"d": DOMAIN})
+        ).first()
+        if exists is None:
+            return None
+        found = await connection.execute(
+            text("SELECT count(*) FROM revisions WHERE domain_id = :d AND message = 'seed'"),
+            {"d": DOMAIN},
+        )
+        return int(found.scalar_one())
+
+
+async def _drop_deferred_indexes(engine: AsyncEngine) -> None:
+    """Drop `DEFERRED_INDEXES`, checking that the migrations still define them as here."""
     async with engine.begin() as connection:
         found = (
             await connection.execute(
                 text(
                     "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' "
-                    "AND indexname = ANY(CAST(:names AS text[])) ORDER BY indexname"
+                    "AND indexname = ANY(CAST(:names AS text[]))"
                 ),
                 {"names": list(DEFERRED_INDEXES)},
             )
         ).all()
-        for name, _ in found:
+        for name, definition in found:
+            # Defined on the partitioned table: pg_indexes shows ON ONLY, while CREATE INDEX
+            # without it builds every partition.
+            assert definition.replace(" ON ONLY ", " ON ") == DEFERRED_INDEXES[name], definition
             await connection.exec_driver_sql(f"DROP INDEX {name}")
-    # Defined on the partitioned table: without ONLY, CREATE INDEX builds every partition.
-    return [definition.replace(" ON ONLY ", " ON ") for _, definition in found]
 
 
-async def _create_deferred_indexes(engine: AsyncEngine, statements: Sequence[str]) -> None:
+async def _create_deferred_indexes(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.exec_driver_sql("SET LOCAL maintenance_work_mem = '1GB'")
-        for statement in statements:
-            await connection.exec_driver_sql(statement)
+        for statement in DEFERRED_INDEXES.values():
+            await connection.exec_driver_sql(
+                statement.replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1)
+            )
 
 
 def _progress(message: str) -> None:
