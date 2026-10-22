@@ -44,8 +44,13 @@ from lorebase_keeper.routes.admin import router as admin_router
 from lorebase_keeper.routes.documents import document_upload_path
 from lorebase_keeper.routes.domain_api import domain_routers
 from lorebase_keeper.routes.sessions import router as sessions_router
+from lorebase_keeper.routes.trace import router as trace_router
 from lorebase_keeper.routes.whoami import router as whoami_router
 from lorebase_keeper.settings import keeper_settings
+from lorebase_keeper.tracing.config import TraceSettings
+from lorebase_keeper.tracing.middleware import TraceMiddleware
+from lorebase_keeper.tracing.recorder import TraceRecorder, TraceSink
+from lorebase_keeper.tracing.recorder import database_sink as trace_database_sink
 from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import Telemetry
 
@@ -67,6 +72,7 @@ def create_app(
     http_client: httpx.AsyncClient | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     read_audit_sink: ReadSink | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> FastAPI:
     """Build the Keeper ASGI application.
 
@@ -81,7 +87,8 @@ def create_app(
     none` the database is optional and only enables the audit log. `http_client` serves
     identity provider requests (default: a client built from the OIDC settings) and `clock` the
     expiry checks. `read_audit_sink` replaces the database as the writer of read records
-    (`keeper.auth.audit.reads`).
+    (`keeper.auth.audit.reads`) and `trace_sink` as the writer of agent trace steps
+    (`keeper.trace`).
     """
     settings = settings or load_settings()
     keeper = keeper_settings(settings)
@@ -144,6 +151,7 @@ def create_app(
     reads = _read_auditor(
         keeper.auth.audit, auth.audit_writer is not None, database, read_audit_sink, telemetry
     )
+    traces = _trace_recorder(keeper.trace, database, trace_sink, telemetry)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -152,6 +160,8 @@ def create_app(
         finally:
             if reads is not None:
                 await reads.aclose()
+            if traces is not None:
+                await traces.aclose()
             if limits is not None:
                 await limits.aclose()
             await auth.aclose()
@@ -178,6 +188,7 @@ def create_app(
     app.state.database = database
     app.state.limits = limits
     app.state.read_audit = reads
+    app.state.trace = traces
     install_client_addresses(app.state, keeper.trusted_proxies)
 
     install_error_handlers(app, renderer)
@@ -187,6 +198,7 @@ def create_app(
     app.include_router(admin_router, prefix=keeper.api_prefix)
     for router in domain_routers():  # last: branch routes match hierarchical names
         app.include_router(router, prefix=keeper.api_prefix)
+    app.include_router(trace_router, prefix=keeper.api_prefix)
 
     # Innermost first: the last middleware added is the outermost one.
     documents = keeper.documents
@@ -202,6 +214,13 @@ def create_app(
             )
         ],
     )
+    if traces is not None:
+        app.add_middleware(
+            TraceMiddleware,
+            recorder=traces,
+            api_prefix=keeper.api_prefix,
+            is_read=keeper.limits.rate.routes.only_reads,
+        )
     if limits is not None:
         app.add_middleware(RateLimitHeadersMiddleware)
     if keeper.cors.allow_origins:
@@ -213,6 +232,15 @@ def create_app(
                 *keeper.cors.allow_headers,
                 keeper.request_id_header,
                 *([keeper.auth.sessions.csrf_header] if keeper.auth.sessions.enabled else []),
+                *(
+                    [
+                        keeper.trace.session_header,
+                        keeper.trace.tool_header,
+                        keeper.trace.opt_in_header,
+                    ]
+                    if keeper.trace.enabled
+                    else []
+                ),
             ],
             expose_headers=[keeper.request_id_header, *EXPOSED_HEADERS],
             allow_credentials=keeper.cors.allow_credentials,
@@ -265,4 +293,22 @@ def _read_auditor(
         )
     return ReadAuditor(
         audit.reads, sink, meter_provider=telemetry.meter_provider if telemetry else None
+    )
+
+
+def _trace_recorder(
+    trace: TraceSettings,
+    database: Database | None,
+    sink: TraceSink | None,
+    telemetry: Telemetry | None,
+) -> TraceRecorder | None:
+    """The agent trace recorder when `keeper.trace.enabled` (it needs a database)."""
+    if not trace.enabled:
+        return None
+    if sink is None and database is not None:
+        sink = trace_database_sink(database.sessions, trace)
+    if sink is None:
+        raise ConfigError(["keeper.trace.enabled needs the database section"])
+    return TraceRecorder(
+        trace, sink, meter_provider=telemetry.meter_provider if telemetry else None
     )

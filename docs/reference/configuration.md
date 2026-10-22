@@ -258,7 +258,7 @@ Bearer tokens of any OpenID Connect provider
 |---------|---------|-------------|
 | `keeper.auth.authz.grants_cache_ttl_s` | `15` | grants are cached this long; other processes see changes after at most this; 0 disables |
 | `keeper.auth.authz.grants_cache_max_entries` | `2048` |  |
-| `keeper.auth.authz.custom_roles` | `{}` | extra roles, name -&gt; permissions. Built-in roles: viewer, explorer, editor, operator, modeler, reviewer, maintainer, admin, agent-reader. Example: contributor: [schema.read, data.read, branch.create] Permissions: schema.read data.read views.write branch.create operation.execute operation.execute_custom schema.write source.map proposal.review conflict.resolve proposal.merge source.manage job.manage grant.manage apikey.manage domain.settings domain.delete audit.read principal.read domain.create (the last two are installation-level) |
+| `keeper.auth.authz.custom_roles` | `{}` | extra roles, name -&gt; permissions. Built-in roles: viewer, explorer, editor, operator, modeler, reviewer, maintainer, admin, agent-reader. Example: contributor: [schema.read, data.read, branch.create] Permissions: schema.read data.read views.write branch.create operation.execute operation.execute_custom schema.write source.map proposal.review conflict.resolve proposal.merge source.manage job.manage grant.manage apikey.manage domain.settings domain.delete audit.read trace.read trace.explain principal.read domain.create (the last two are installation-level) |
 
 #### `keeper.auth.audit`
 
@@ -521,6 +521,37 @@ Accepted file name suffixes and their stored media type
 | `keeper.documents.extract_on_upload` | `true` | queue an extraction job per upload unless the request says no |
 | `keeper.documents.jobs_listed` | `20` | extraction jobs shown with a document |
 | `keeper.documents.max_text_chars` | `2000000` | parsed text served by GET .../documents/{id}/text (cut above) |
+
+### `keeper.trace`
+
+Agent trace (docs/agent-trace.md): steps of agent sessions (query, counts, refs, latency; never values), written off the request path to agent_trace_steps. Needs the `database` section
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.trace.enabled` | `false` |  |
+| `keeper.trace.session_header` | `X-Lorebase-Session` | names the session; without it a traced request joins an inferred session (malformed: not traced) |
+| `keeper.trace.tool_header` | `X-Lorebase-Tool` | agent tool (MCP tool name) that made the request |
+| `keeper.trace.opt_in_header` | `X-Lorebase-Trace` | per request opt-in: `on`, or `debug` for query plans (callers holding trace.explain) |
+| `keeper.trace.allow_header_opt_in` | `true` |  |
+| `keeper.trace.trace_all` | `false` | trace every authenticated request |
+| `keeper.trace.principals` | `[]` | principal ids whose requests are traced |
+| `keeper.trace.api_keys` | `[]` | API key ids whose requests are traced |
+| `keeper.trace.inferred_session_idle_s` | `300.0` | requests without a session id are grouped per principal and client (API key or web session, user agent) while they come within this gap; marked inferred |
+| `keeper.trace.capture_literals` | `false` | keep the values compared by filters; false: their type only |
+| `keeper.trace.capture_search_text` | `true` | keep search text (q, search, match); false: its length only |
+| `keeper.trace.max_query_bytes` | `16384` | larger request bodies are recorded as truncated |
+| `keeper.trace.max_text_chars` | `500` | longest string kept in a recorded query |
+| `keeper.trace.max_response_bytes` | `1048576` | larger responses are recorded without counts and refs |
+| `keeper.trace.max_refs` | `500` | Record and Link refs kept per step |
+| `keeper.trace.max_note_chars` | `4000` | longest note an agent attaches |
+| `keeper.trace.max_steps_per_session` | `2000` | per session and principal; later steps are not written |
+| `keeper.trace.retention_days` | `7.0` | steps older than this are deleted |
+| `keeper.trace.prune_interval_s` | `300.0` |  |
+| `keeper.trace.prune_batch` | `10000` | steps deleted per pass at most |
+| `keeper.trace.queue_size` | `10000` | past it steps are dropped (lorebase.trace.steps.dropped) |
+| `keeper.trace.batch_size` | `200` | steps per transaction |
+| `keeper.trace.flush_interval_s` | `1.0` | longest wait before queued steps are written |
+| `keeper.trace.write_timeout_s` | `5.0` | a failed batch is dropped and counted |
 
 ## `inference`
 
@@ -1240,6 +1271,19 @@ Lorebase_context packs
 |---------|---------|-------------|
 | `herald.changes.page_size` | `50` |  |
 | `herald.changes.max_pages` | `10` |  |
+
+### `herald.trace`
+
+Agent trace headers on every Keeper call (keeper.trace)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `herald.trace.enabled` | `true` | false: send no session, tool or traceparent header |
+| `herald.trace.session_header` | `X-Lorebase-Session` |  |
+| `herald.trace.tool_header` | `X-Lorebase-Tool` |  |
+| `herald.trace.trace_header` | `X-Lorebase-Trace` |  |
+| `herald.trace.opt_in` | `false` | true: send "&lt;trace_header&gt;: on" on every call |
+| `herald.trace.session_id` | `null` | session when the caller names none; null: MCP session id, else none (Keeper infers) |
 
 ## `guide`
 

@@ -60,6 +60,7 @@ from lorebase_keeper.reading.views import (
     record_ref,
     relation_name,
 )
+from lorebase_keeper.tracing.explain import explain
 from lorebase_store.indexes import plan_indexes
 from lorebase_store.materialize.rows import record_title, split_link_key
 from lorebase_store.reads import hydrate_records, links_to_record
@@ -324,6 +325,7 @@ async def run_query(
         if position is not None:
             query = query.where(after(keys, _decode_position(keys, position, cursor_pointer)))
         query = query.order_by(*order_clauses(keys)).limit(plan.limit + 1)
+        await explain(session, query, point.domain.id, "query")
         rows = list((await session.execute(query)).mappings())
         if len(rows) > plan.limit:
             rows = rows[: plan.limit]

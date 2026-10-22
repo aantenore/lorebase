@@ -12,8 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DomainRouteImport } from './routes/$domain'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as DomainAgentActivityRouteImport } from './routes/$domain.agent-activity'
 import { Route as DomainCanvasRouteImport } from './routes/$domain.canvas'
 import { Route as DomainModelerRouteImport } from './routes/$domain.modeler'
+import { Route as DomainRetrievalLabRouteImport } from './routes/$domain.retrieval-lab'
 import { Route as DomainSettingsRouteImport } from './routes/$domain.settings'
 import { Route as DomainSourcesRouteImport } from './routes/$domain.sources'
 import { Route as DomainDocumentsIndexRouteImport } from './routes/$domain.documents.index'
@@ -39,6 +41,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DomainAgentActivityRoute = DomainAgentActivityRouteImport.update({
+  id: '/agent-activity',
+  path: '/agent-activity',
+  getParentRoute: () => DomainRoute,
+} as any)
 const DomainCanvasRoute = DomainCanvasRouteImport.update({
   id: '/canvas',
   path: '/canvas',
@@ -47,6 +54,11 @@ const DomainCanvasRoute = DomainCanvasRouteImport.update({
 const DomainModelerRoute = DomainModelerRouteImport.update({
   id: '/modeler',
   path: '/modeler',
+  getParentRoute: () => DomainRoute,
+} as any)
+const DomainRetrievalLabRoute = DomainRetrievalLabRouteImport.update({
+  id: '/retrieval-lab',
+  path: '/retrieval-lab',
   getParentRoute: () => DomainRoute,
 } as any)
 const DomainSettingsRoute = DomainSettingsRouteImport.update({
@@ -99,8 +111,10 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$domain': typeof DomainRouteWithChildren
   '/login': typeof LoginRoute
+  '/$domain/agent-activity': typeof DomainAgentActivityRoute
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
+  '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
   '/$domain/documents/$document': typeof DomainDocumentsDocumentRoute
@@ -115,8 +129,10 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$domain': typeof DomainRouteWithChildren
   '/login': typeof LoginRoute
+  '/$domain/agent-activity': typeof DomainAgentActivityRoute
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
+  '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
   '/$domain/documents/$document': typeof DomainDocumentsDocumentRoute
@@ -132,8 +148,10 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/$domain': typeof DomainRouteWithChildren
   '/login': typeof LoginRoute
+  '/$domain/agent-activity': typeof DomainAgentActivityRoute
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
+  '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
   '/$domain/documents/$document': typeof DomainDocumentsDocumentRoute
@@ -150,8 +168,10 @@ export interface FileRouteTypes {
     | '/'
     | '/$domain'
     | '/login'
+    | '/$domain/agent-activity'
     | '/$domain/canvas'
     | '/$domain/modeler'
+    | '/$domain/retrieval-lab'
     | '/$domain/settings'
     | '/$domain/sources'
     | '/$domain/documents/$document'
@@ -166,8 +186,10 @@ export interface FileRouteTypes {
     | '/'
     | '/$domain'
     | '/login'
+    | '/$domain/agent-activity'
     | '/$domain/canvas'
     | '/$domain/modeler'
+    | '/$domain/retrieval-lab'
     | '/$domain/settings'
     | '/$domain/sources'
     | '/$domain/documents/$document'
@@ -182,8 +204,10 @@ export interface FileRouteTypes {
     | '/'
     | '/$domain'
     | '/login'
+    | '/$domain/agent-activity'
     | '/$domain/canvas'
     | '/$domain/modeler'
+    | '/$domain/retrieval-lab'
     | '/$domain/settings'
     | '/$domain/sources'
     | '/$domain/documents/$document'
@@ -224,6 +248,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$domain/agent-activity': {
+      id: '/$domain/agent-activity'
+      path: '/agent-activity'
+      fullPath: '/$domain/agent-activity'
+      preLoaderRoute: typeof DomainAgentActivityRouteImport
+      parentRoute: typeof DomainRoute
+    }
     '/$domain/canvas': {
       id: '/$domain/canvas'
       path: '/canvas'
@@ -236,6 +267,13 @@ declare module '@tanstack/react-router' {
       path: '/modeler'
       fullPath: '/$domain/modeler'
       preLoaderRoute: typeof DomainModelerRouteImport
+      parentRoute: typeof DomainRoute
+    }
+    '/$domain/retrieval-lab': {
+      id: '/$domain/retrieval-lab'
+      path: '/retrieval-lab'
+      fullPath: '/$domain/retrieval-lab'
+      preLoaderRoute: typeof DomainRetrievalLabRouteImport
       parentRoute: typeof DomainRoute
     }
     '/$domain/settings': {
@@ -305,8 +343,10 @@ declare module '@tanstack/react-router' {
 }
 
 interface DomainRouteChildren {
+  DomainAgentActivityRoute: typeof DomainAgentActivityRoute
   DomainCanvasRoute: typeof DomainCanvasRoute
   DomainModelerRoute: typeof DomainModelerRoute
+  DomainRetrievalLabRoute: typeof DomainRetrievalLabRoute
   DomainSettingsRoute: typeof DomainSettingsRoute
   DomainSourcesRoute: typeof DomainSourcesRoute
   DomainDocumentsDocumentRoute: typeof DomainDocumentsDocumentRoute
@@ -319,8 +359,10 @@ interface DomainRouteChildren {
 }
 
 const DomainRouteChildren: DomainRouteChildren = {
+  DomainAgentActivityRoute: DomainAgentActivityRoute,
   DomainCanvasRoute: DomainCanvasRoute,
   DomainModelerRoute: DomainModelerRoute,
+  DomainRetrievalLabRoute: DomainRetrievalLabRoute,
   DomainSettingsRoute: DomainSettingsRoute,
   DomainSourcesRoute: DomainSourcesRoute,
   DomainDocumentsDocumentRoute: DomainDocumentsDocumentRoute,

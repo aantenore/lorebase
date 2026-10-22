@@ -225,18 +225,18 @@ class _Ctx:
 
 
 def test_stdio_uses_the_configured_agent_key() -> None:
-    assert Credentials(make_settings())(None) == AGENT_KEY
-    assert Credentials(make_settings(keeper={"api_key": None}))(None) is None
+    assert Credentials(make_settings())(None, "t") == AGENT_KEY
+    assert Credentials(make_settings(keeper={"api_key": None}))(None, "t") is None
 
 
 def test_http_forwards_the_callers_credential_and_never_the_configured_key() -> None:
     credentials = Credentials(make_settings(transport="streamable_http"))
-    forwarded = credentials(_Ctx({"authorization": "Bearer lbk_caller_secret"}))  # type: ignore[arg-type]
+    forwarded = credentials(_Ctx({"authorization": "Bearer lbk_caller_secret"}), "t")  # type: ignore[arg-type]
     assert forwarded == "Bearer lbk_caller_secret"
     with pytest.raises(Exception, match=r"\[unauthorized\]"):
-        credentials(_Ctx({}))  # type: ignore[arg-type]
+        credentials(_Ctx({}), "t")  # type: ignore[arg-type]
     with pytest.raises(Exception, match=r"\[unauthorized\]"):
-        credentials(None)
+        credentials(None, "t")
 
 
 async def test_every_call_carries_the_agent_key(connect: Connect, fake: FakeKeeper) -> None:

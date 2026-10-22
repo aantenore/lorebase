@@ -15,6 +15,7 @@ import httpx
 
 from lorebase_client import AsyncLorebaseClient, RetryPolicy
 from lorebase_herald.settings import KeeperConnection
+from lorebase_herald.tracing import call_headers
 
 
 def bearer_token(credential: str | None) -> str | None:
@@ -42,7 +43,8 @@ class KeeperClients:
     @asynccontextmanager
     async def open(self, credential: str | None) -> AsyncIterator[AsyncLorebaseClient]:
         """A client for one request, closed afterwards. With no credential, requests go out
-        anonymous: the client reads no key from the environment."""
+        anonymous: the client reads no key from the environment. It carries the trace headers of
+        the tool call being served (see `lorebase_herald.tracing`)."""
         connection = self._connection
         async with AsyncLorebaseClient(
             connection.base_url,
@@ -52,7 +54,7 @@ class KeeperClients:
             retry=RetryPolicy(
                 max_retries=connection.max_retries, backoff_max_s=connection.retry_max_wait_s
             ),
-            headers={"User-Agent": connection.user_agent},
+            headers={"User-Agent": connection.user_agent, **(call_headers.get() or {})},
             transport=self._transport_for_request(),
             trust_env=connection.trust_env,
             env={},

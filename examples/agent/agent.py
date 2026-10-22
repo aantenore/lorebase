@@ -246,6 +246,7 @@ async def open_mcp(args: argparse.Namespace, headers: dict[str, str]) -> AsyncIt
     env["LOREBASE_DOMAIN"] = args.domain
     if args.mcp_key:
         env["LOREBASE_API_KEY"] = args.mcp_key
+    env.update(getattr(args, "herald_env", {}))
     params = StdioServerParameters(command=command[0], args=command[1:], env=env)
     async with Client(params) as client:
         yield client
@@ -365,21 +366,33 @@ class Trace:
     """
 
     def __init__(
-        self, http: httpx.AsyncClient | None, url: str, session_header: str, session_id: str
+        self,
+        http: httpx.AsyncClient | None,
+        url: str,
+        session_header: str,
+        session_id: str,
+        domain: str | None = None,
     ) -> None:
         self._http = http
         self._url = url
+        self._domain = domain
         self._headers = {session_header: session_id}
         self.session_id = session_id
         self.active = http is not None
         self.reason = ""
+
+    def _body(self, step: int, text: str) -> dict[str, Any]:
+        body: dict[str, Any] = {"text": text[:4000], "step": step}
+        if self._domain:
+            body["domain_id"] = self._domain
+        return body
 
     async def note(self, step: int, text: str) -> None:
         if not self.active or self._http is None or not text.strip():
             return
         try:
             response = await self._http.post(
-                self._url, json={"text": text[:4000], "step": step}, headers=self._headers
+                self._url, json=self._body(step, text), headers=self._headers
             )
         except httpx.HTTPError:
             self.active, self.reason = False, "unreachable"
@@ -523,7 +536,8 @@ async def run_agent(
                     for pid, status in re.findall(r"Proposal (prp_\w+) \((\w+)\)", observed)
                 ]
             if trace:
-                await trace.note(step, f"{name} {summarize_args(arguments)}")
+                # Argument names only: values may be data the trace readers must not see.
+                await trace.note(step, f"{name}(" + ", ".join(sorted(arguments)) + ")")
             wrapped = wrap_untrusted(name, observed, nonce, limits.max_result_chars)
             messages.append(
                 {"role": "tool", "tool_call_id": call.get("id", name), "content": wrapped}
@@ -644,7 +658,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     t = p.add_argument_group("agent trace (optional)")
     t.add_argument("--no-trace", action="store_true")
     t.add_argument("--trace-url", help="notes endpoint (default: derived from --keeper-url)")
-    t.add_argument("--trace-session-header", default="Lorebase-Agent-Session")
+    t.add_argument("--trace-session-header", default="X-Lorebase-Session")
     t.add_argument("--trace-session", default=None, help="session id (default: random)")
     args = p.parse_args(argv)
     if bool(args.task) == bool(args.prompt):
@@ -688,6 +702,8 @@ async def main_async(args: argparse.Namespace) -> int:
     task_text, spec, task_slug = resolve_task(args)
     mcp_headers = {"Authorization": f"Bearer {args.mcp_key}"} if args.mcp_key else {}
     session_id = args.trace_session or f"agent-{uuid.uuid4().hex[:12]}"
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", session_id):
+        raise SystemExit("--trace-session: 1 to 128 characters of A-Z a-z 0-9 . _ : -")
     guard = (
         WriteGuard(spec.operations, task_slug, intent_for(task_text), spec.max_writes)
         if spec.writes
@@ -714,9 +730,20 @@ async def main_async(args: argparse.Namespace) -> int:
                 httpx.AsyncClient(headers=mcp_headers, timeout=10.0, trust_env=False)
             )
         trace_url = args.trace_url or (
-            f"{args.keeper_url.rstrip('/')}/api/v1/domains/{args.domain}/agent-trace/notes"
+            f"{args.keeper_url.rstrip('/')}/api/v1/trace/sessions/{session_id}/notes"
         )
-        trace = Trace(trace_http, trace_url, args.trace_session_header, session_id)
+        trace = Trace(trace_http, trace_url, args.trace_session_header, session_id, args.domain)
+        if trace.active:
+            # Herald forwards these to Keeper, so the tool calls land in the same session.
+            mcp_headers = {
+                **mcp_headers,
+                args.trace_session_header: session_id,
+                "X-Lorebase-Trace": "on",
+            }
+            args.herald_env = {
+                "LOREBASE__HERALD__TRACE__SESSION_ID": session_id,
+                "LOREBASE__HERALD__TRACE__OPT_IN": "true",
+            }
         try:
             session = await stack.enter_async_context(open_mcp(args, mcp_headers))
             result = await run_agent(
@@ -743,7 +770,11 @@ async def main_async(args: argparse.Namespace) -> int:
     for proposal in result.proposals:
         print(f"Proposal opened: {proposal} (waiting for a reviewer)")
     if trace.active:
-        print(f"trace session: {trace.session_id}")
+        print(
+            f"trace session: {trace.session_id} "
+            f"({args.keeper_url.rstrip('/')}/api/v1/trace/sessions/{trace.session_id}; "
+            f"web app: /{args.domain}/agent-activity?session={trace.session_id})"
+        )
     elif trace_http is not None:
         print(f"trace: skipped ({trace.reason or 'no notes'})")
     return 0 if result.stop == "answer" else 1

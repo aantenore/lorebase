@@ -13,7 +13,6 @@ client with that one credential.
 # No `from __future__ import annotations`: tool signatures are evaluated where they are defined
 # so that the SDK can read bounds taken from settings.
 
-from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -27,6 +26,7 @@ from lorebase_herald.errors import invalid_input
 from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.settings import HeraldSettings
 from lorebase_herald.tools import LorebaseTools
+from lorebase_herald.tracing import Tracing, request_header
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 WRITE = ToolAnnotations(
@@ -53,30 +53,26 @@ CursorArg = Annotated[
 ]
 
 
-def _header(headers: Mapping[str, str] | None, name: str) -> str | None:
-    if not headers:
-        return None
-    wanted = name.lower()
-    for key, value in headers.items():
-        if key.lower() == wanted and value.strip():
-            return value.strip()
-    return None
-
-
 class Credentials:
-    """The credential each Keeper call carries: always the calling agent's own."""
+    """The credential each Keeper call carries: always the calling agent's own.
+
+    Calling it for a tool also sets the trace headers (session, tool, traceparent) of the
+    Keeper calls that tool makes.
+    """
 
     def __init__(self, settings: HeraldSettings) -> None:
         self._settings = settings
+        self._tracing = Tracing(settings.trace)
 
-    def __call__(self, ctx: Context | None) -> str | None:
+    def __call__(self, ctx: Context | None, tool: str) -> str | None:
+        self._tracing.begin(ctx, tool)
         if self._settings.transport == "streamable_http":
             header = self._settings.http.credential_header
             try:
                 headers = ctx.headers if ctx is not None else None
             except ValueError:
                 headers = None
-            value = _header(headers, header)
+            value = request_header(headers, header)
             if value is None:
                 raise invalid_input(
                     "unauthorized",
@@ -125,7 +121,12 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.schema(
-            credential(ctx), domain=domain, branch=branch, kinds=kinds, detail=detail, fmt=format
+            credential(ctx, "lorebase_schema"),
+            domain=domain,
+            branch=branch,
+            kinds=kinds,
+            detail=detail,
+            fmt=format,
         )
 
     @server.tool(
@@ -145,7 +146,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.get(
-            credential(ctx),
+            credential(ctx, "lorebase_get"),
             record=ref,
             domain=domain,
             branch=branch,
@@ -181,7 +182,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.query(
-            credential(ctx),
+            credential(ctx, "lorebase_query"),
             query=query,
             cursor=cursor,
             domain=domain,
@@ -220,7 +221,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.search(
-            credential(ctx),
+            credential(ctx, "lorebase_search"),
             query=query,
             kinds=kinds,
             where=where,
@@ -262,7 +263,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.neighborhood(
-            credential(ctx),
+            credential(ctx, "lorebase_neighborhood"),
             seeds=seeds,
             depth=depth,
             relations=relations,
@@ -306,7 +307,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.context(
-            credential(ctx),
+            credential(ctx, "lorebase_context"),
             records=records,
             question=question,
             depth=depth,
@@ -336,7 +337,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.explain(
-            credential(ctx),
+            credential(ctx, "lorebase_explain"),
             record=ref,
             attributes=attributes,
             domain=domain,
@@ -363,7 +364,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.history(
-            credential(ctx),
+            credential(ctx, "lorebase_history"),
             record=ref,
             values=values,
             limit=limit,
@@ -389,7 +390,11 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.lineage(
-            credential(ctx), record=ref, domain=domain, branch=branch, fmt=format
+            credential(ctx, "lorebase_lineage"),
+            record=ref,
+            domain=domain,
+            branch=branch,
+            fmt=format,
         )
 
     @server.tool(
@@ -417,7 +422,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.changes(
-            credential(ctx),
+            credential(ctx, "lorebase_changes"),
             since=since,
             limit=limit,
             author=author,
@@ -448,7 +453,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.diff(
-            credential(ctx),
+            credential(ctx, "lorebase_diff"),
             from_=from_revision,
             to=to_revision,
             kinds=kinds,
@@ -521,7 +526,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.execute(
-            credential(ctx),
+            credential(ctx, "lorebase_execute"),
             operation=operation,
             parameters=parameters or {},
             dry_run=dry_run,
@@ -552,7 +557,11 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         format: FormatArg = None,
     ) -> str:
         return await tools.branches(
-            credential(ctx), limit=limit, cursor=cursor, domain=domain, fmt=format
+            credential(ctx, "lorebase_branches"),
+            limit=limit,
+            cursor=cursor,
+            domain=domain,
+            fmt=format,
         )
 
     @server.resource(
@@ -564,7 +573,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
     async def schema_resource(domain: str, ctx: Context) -> str:
         try:
             return await tools.schema(
-                credential(ctx),
+                credential(ctx, "lorebase_schema"),
                 domain=domain,
                 branch=None,
                 kinds=None,
@@ -583,7 +592,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
     async def record_resource(domain: str, kind: str, key: str, ctx: Context) -> str:
         try:
             return await tools.get(
-                credential(ctx),
+                credential(ctx, "lorebase_record"),
                 record=f"{kind}/{key}",
                 domain=domain,
                 branch=None,

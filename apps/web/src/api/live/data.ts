@@ -89,6 +89,8 @@ export function mapSearch(out: S['SearchResponse']): SearchResponse {
       snippet: stripMarks(hit.snippet ?? ''),
       score: hit.score,
     })),
+    mode: out.mode,
+    corrections: out.corrections ?? [],
     next_cursor: null,
   };
 }

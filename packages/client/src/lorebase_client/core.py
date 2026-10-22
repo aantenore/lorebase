@@ -40,7 +40,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 
-from lorebase_client.config import ClientConfig
+from lorebase_client.config import SESSION_HEADER, TOOL_HEADER, TRACE_HEADER, ClientConfig
 from lorebase_client.errors import (
     LorebaseConnectionError,
     error_from_response,
@@ -190,7 +190,15 @@ class RequestCore:
         return self.config.root + path
 
     def headers(self, call: Call[Any]) -> dict[str, str]:
-        headers = {"Accept": call.accept, **self.config.headers}
+        config = self.config
+        headers = {"Accept": call.accept, **config.headers}
+        for name, value in (
+            (SESSION_HEADER, config.session_id),
+            (TOOL_HEADER, config.tool),
+            (TRACE_HEADER, config.trace),
+        ):
+            if value:
+                headers[name] = value
         bearer = self.config.bearer()
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"

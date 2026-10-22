@@ -37,6 +37,13 @@ export type CreateWebhookInput = Contract['CreateWebhook'];
 export type ContextRequest = Partial<Contract['ContextRequest']>;
 export type ContextPack = Contract['ContextPackOut'];
 export type ExplainedRecord = Contract['ExplainOut'];
+export type SearchTuning = Contract['SearchTuning'];
+export type SearchCorrection = Contract['SearchCorrection'];
+/** One agent session as the trace lists it (`GET /trace/sessions`). */
+export type TraceSession = Contract['TraceSessionOut'];
+export type TraceStep = Contract['TraceStepOut'];
+export type TraceRefs = Contract['TraceRefs'];
+export type TraceTimeline = Contract['TraceTimeline'];
 /** The schema Keeper proposes from uploaded tables (`POST .../schema:infer`). */
 export type InferredSchema =
   components['schemas']['lorebase_keeper__routes__schema_inference__ProposalOut'];
@@ -635,6 +642,8 @@ export interface SearchRequest {
   mode?: SearchMode;
   query_vector?: number[];
   limit?: number;
+  /** Ranking knobs in place of the Domain's search settings; to compare parameter sets. */
+  tuning?: SearchTuning;
 }
 
 export interface SearchResult {
@@ -648,7 +657,25 @@ export interface SearchResult {
 export interface SearchResponse {
   revision: RevisionId;
   results: SearchResult[];
+  /** The mode that ran, which may differ from the one asked for. */
+  mode?: string;
+  /** Typo corrections applied to the query; hits found only through them come last. */
+  corrections?: SearchCorrection[];
   next_cursor?: string | null;
+}
+
+// --------------------------------------------------------------- Trace
+
+export interface TraceSessionParams extends PageParams {
+  /** Only the sessions of this principal. */
+  actor?: string;
+  /** Only the sessions with a step in this Domain. */
+  domain_id?: string;
+}
+
+/** A page of sessions; `enabled` is false while Keeper traces nothing (`keeper.trace.enabled`). */
+export interface TraceSessionPage extends Page<TraceSession> {
+  enabled: boolean;
 }
 
 // -------------------------------------------------------------- Diff

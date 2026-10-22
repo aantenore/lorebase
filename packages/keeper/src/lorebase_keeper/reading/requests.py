@@ -59,6 +59,20 @@ class NeighborhoodRequest(_Body):
 SearchMode = Literal["lexical", "semantic", "hybrid"]
 
 
+class SearchTuning(_Body):
+    """Ranking knobs of one search in place of the `search` settings (to compare parameter
+    sets). Unset knobs keep their configured value; `candidates` and `typo_candidates` may only
+    be lowered and `trigram_threshold` only raised."""
+
+    lexical_weight: float | None = Field(default=None, ge=0, le=100)
+    semantic_weight: float | None = Field(default=None, ge=0, le=100)
+    rrf_k: int | None = Field(default=None, ge=1, le=10_000)
+    trigram_threshold: float | None = Field(default=None, ge=0.1, le=1)
+    trigram_weight: float | None = Field(default=None, ge=0, le=100)
+    typo_candidates: int | None = Field(default=None, ge=0)
+    candidates: int | None = Field(default=None, ge=1)
+
+
 class SearchRequest(_Body):
     """Full-text, vector or hybrid search (design 8.4). Vectors come from the caller."""
 
@@ -76,3 +90,6 @@ class SearchRequest(_Body):
         default=None, description="Query embedding of the configured model and dimension."
     )
     limit: int | None = Field(default=None, ge=1)
+    tuning: SearchTuning | None = Field(
+        default=None, description="Ranking knobs in place of the `search` settings."
+    )

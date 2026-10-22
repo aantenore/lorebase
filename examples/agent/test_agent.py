@@ -329,9 +329,10 @@ async def test_trace_notes_are_posted_when_available_and_skipped_when_not(
         return httpx.Response(201, json={})
 
     routes = fake_keeper.FakeKeeper()
-    routes.on("POST", f"{API}/agent-trace/notes", accept)
+    notes_path = "/api/v1/trace/sessions/sess-1/notes"
+    routes.on("POST", notes_path, accept)
     http = httpx.AsyncClient(transport=routes.transport(), base_url="http://keeper.test")
-    trace = Trace(http, f"{API}/agent-trace/notes", "Lorebase-Agent-Session", "sess-1")
+    trace = Trace(http, notes_path, "X-Lorebase-Session", "sess-1", "supply")
     thinking = {
         "choices": [
             {
@@ -350,8 +351,10 @@ async def test_trace_notes_are_posted_when_available_and_skipped_when_not(
             session=client, chat=chat_for(stub), task_text="x", trace=trace, out=io.StringIO()
         )
     assert notes
-    assert notes[0].headers["lorebase-agent-session"] == "sess-1"
-    assert "Reading the schema first." in notes[0].content.decode()
+    assert notes[0].headers["x-lorebase-session"] == "sess-1"
+    sent = json.loads(notes[0].content)
+    assert sent["domain_id"] == "supply"
+    assert "Reading the schema first." in sent["text"]
 
     absent = httpx.AsyncClient(transport=fake_keeper.FakeKeeper().transport(), base_url="http://k")
     missing = Trace(absent, "/nope", "H", "s")

@@ -9556,6 +9556,326 @@
           }
         }
       }
+    },
+    "/api/v1/trace/sessions": {
+      "get": {
+        "tags": [
+          "trace"
+        ],
+        "summary": "List agent trace sessions",
+        "description": "Sessions with a step the caller may see, most recent activity first.",
+        "operationId": "list_sessions_api_v1_trace_sessions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "actor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this principal.",
+              "title": "Actor"
+            },
+            "description": "Only this principal."
+          },
+          {
+            "name": "domain_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only steps in this Domain.",
+              "title": "Domain Id"
+            },
+            "description": "Only steps in this Domain."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceSessionPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No visible step of that session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No database is configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trace/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "trace"
+        ],
+        "summary": "Timeline of an agent trace session",
+        "description": "Calls and notes of one principal's session in order, as far as the caller may see\nthem.",
+        "operationId": "get_session_api_v1_trace_sessions__session_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "description": "Session id as sent in the session header.",
+              "title": "Session Id"
+            },
+            "description": "Session id as sent in the session header."
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Principal whose steps are read; default: the caller. A session id names one session per principal.",
+              "title": "Actor"
+            },
+            "description": "Principal whose steps are read; default: the caller. A session id names one session per principal."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceTimeline"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No visible step of that session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No database is configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trace/sessions/{session_id}/notes": {
+      "post": {
+        "tags": [
+          "trace"
+        ],
+        "summary": "Attach a note to an agent trace session",
+        "description": "Queue a note of the caller's session (written off the request path, like calls).",
+        "operationId": "add_note_api_v1_trace_sessions__session_id__notes_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "description": "Session id as sent in the session header.",
+              "title": "Session Id"
+            },
+            "description": "Session id as sent in the session header."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteAccepted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No visible step of that session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No database is configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Empty or too long note, or bad session id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15111,6 +15431,62 @@
         ],
         "title": "NotCondition"
       },
+      "NoteAccepted": {
+        "properties": {
+          "recorded": {
+            "type": "boolean",
+            "title": "Recorded",
+            "description": "False when tracing is disabled or the note was dropped."
+          }
+        },
+        "type": "object",
+        "required": [
+          "recorded"
+        ],
+        "title": "NoteAccepted"
+      },
+      "NoteIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text",
+            "description": "Free text; bounded by keeper.trace.max_note_chars."
+          },
+          "domain_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Id",
+            "description": "Domain the note is about; principals holding trace.read there see it. Needs data.read in that Domain."
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step",
+            "description": "The agent's own step counter, shown with the note."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "NoteIn"
+      },
       "Operator": {
         "type": "string",
         "enum": [
@@ -18305,6 +18681,17 @@
               }
             ],
             "title": "Limit"
+          },
+          "tuning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchTuning"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ranking knobs in place of the `search` settings."
           }
         },
         "additionalProperties": false,
@@ -18350,6 +18737,103 @@
           "items"
         ],
         "title": "SearchResponse"
+      },
+      "SearchTuning": {
+        "properties": {
+          "lexical_weight": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexical Weight"
+          },
+          "semantic_weight": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Weight"
+          },
+          "rrf_k": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rrf K"
+          },
+          "trigram_threshold": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigram Threshold"
+          },
+          "trigram_weight": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigram Weight"
+          },
+          "typo_candidates": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Typo Candidates"
+          },
+          "candidates": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SearchTuning",
+        "description": "Ranking knobs of one search in place of the `search` settings (to compare parameter\nsets). Unset knobs keep their configured value; `candidates` and `typo_candidates` may only\nbe lowered and `trigram_threshold` only raised."
       },
       "ServedFrom": {
         "type": "string",
@@ -18890,6 +19374,454 @@
         ],
         "title": "TagOut",
         "description": "An immutable tag."
+      },
+      "TraceLinkRef": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "from": {
+            "$ref": "#/components/schemas/TraceRecordRef"
+          },
+          "to": {
+            "$ref": "#/components/schemas/TraceRecordRef"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "from",
+          "to"
+        ],
+        "title": "TraceLinkRef"
+      },
+      "TraceRecordRef": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "key"
+        ],
+        "title": "TraceRecordRef"
+      },
+      "TraceRefs": {
+        "properties": {
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/TraceRecordRef"
+            },
+            "type": "array",
+            "title": "Records"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/TraceLinkRef"
+            },
+            "type": "array",
+            "title": "Links"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "More refs were touched than kept or than visible.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "records",
+          "links"
+        ],
+        "title": "TraceRefs"
+      },
+      "TraceSessionOut": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor",
+            "description": "Principal that made the calls."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last At"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "notes": {
+            "type": "integer",
+            "title": "Notes"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "proposals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Proposals",
+            "description": "Proposals the session opened or acted on."
+          },
+          "inferred": {
+            "type": "boolean",
+            "title": "Inferred",
+            "description": "Grouped heuristically: the calls carried no session id and were grouped by principal and client while they kept coming (keeper.trace.inferred_session_idle_s).",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "actor",
+          "started_at",
+          "last_at",
+          "calls",
+          "notes",
+          "domains",
+          "tools",
+          "proposals"
+        ],
+        "title": "TraceSessionOut"
+      },
+      "TraceSessionPage": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Whether new requests are traced (keeper.trace.enabled)."
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSessionOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "items"
+        ],
+        "title": "TraceSessionPage"
+      },
+      "TraceStepOut": {
+        "properties": {
+          "step": {
+            "type": "integer",
+            "title": "Step",
+            "description": "Position in the timeline, from 1."
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "call",
+              "note"
+            ],
+            "title": "Type"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "principal_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal Type"
+          },
+          "domain_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Id"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route",
+            "description": "Route template, values unexpanded."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "cache": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache",
+            "description": "Response cache: hit, miss or bypass."
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query",
+            "description": "The query as sent, filter values redacted by default."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result",
+            "description": "Counts, search mode and corrections, budget; no values."
+          },
+          "refs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TraceRefs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "explain": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explain",
+            "description": "Query plan summaries (`X-Lorebase-Trace: debug`)."
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "Text of a note; opaque, not markup."
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id",
+            "description": "W3C trace id of the request."
+          },
+          "inferred": {
+            "type": "boolean",
+            "title": "Inferred",
+            "description": "The step had no session id; its session was inferred.",
+            "default": false
+          },
+          "withheld": {
+            "type": "boolean",
+            "title": "Withheld",
+            "description": "Another principal's step whose query, corrections and note text the reader may not see (it lacks Domain-wide data.read or a sensitivity clearance).",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "step",
+          "seq",
+          "type",
+          "at",
+          "actor"
+        ],
+        "title": "TraceStepOut"
+      },
+      "TraceTimeline": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TraceStepOut"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "The session has more visible steps than returned."
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "steps",
+          "truncated"
+        ],
+        "title": "TraceTimeline"
       },
       "TraverseHopOut": {
         "properties": {

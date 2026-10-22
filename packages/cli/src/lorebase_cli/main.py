@@ -22,6 +22,7 @@ from lorebase_cli.commands import (
     proposals,
     schema,
     sources,
+    trace,
 )
 from lorebase_cli.context import AppContext
 from lorebase_cli.failures import EXIT_USAGE, CliError, render_failure
@@ -136,6 +137,7 @@ app.add_typer(history.revision_app, name="revision")
 app.add_typer(admin.apikey_app, name="apikey")
 app.add_typer(admin.admin_app, name="admin")
 app.add_typer(audit.audit_app, name="audit")
+app.add_typer(trace.trace_app, name="trace")
 app.add_typer(proposals.proposal_app, name="proposal")
 app.add_typer(sources.sources_app, name="sources")
 app.add_typer(documents.documents_app, name="documents")

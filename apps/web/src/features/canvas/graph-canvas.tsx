@@ -4,6 +4,13 @@ import { useConfig } from '@/config/context';
 import { Button } from '@/ui/button';
 import { useTheme } from '@/ui/theme';
 import { buildGraph, layoutSettings, type GraphData } from './graph-model';
+import {
+  edgeEmphasis,
+  nodeEmphasis,
+  toSets,
+  type GraphHighlight,
+  type HighlightSets,
+} from './highlight';
 import { LayoutController, type LayoutStatus } from './layout-controller';
 import { createForceAtlasRunner, workerLayoutSupported } from './layout-worker';
 import { renderDetail } from './render-detail';
@@ -28,6 +35,11 @@ export interface GraphCanvasProps {
   data: GraphData;
   label: string;
   onSelectNode?: (id: string | null) => void;
+  /**
+   * Nodes and edges (by id) to emphasize; everything else is dimmed. Without it the graph is
+   * drawn as it is. Pass a memoized value: a new object redraws the emphasis.
+   */
+  highlight?: GraphHighlight | undefined;
 }
 
 /**
@@ -35,7 +47,7 @@ export interface GraphCanvasProps {
  * desktops); then a message replaces the canvas and the textual list still describes
  * the graph.
  */
-export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
+export function GraphCanvas({ data, label, onSelectNode, highlight }: GraphCanvasProps) {
   const config = useConfig();
   const { theme } = useTheme();
   const container = useRef<HTMLDivElement>(null);
@@ -52,6 +64,15 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
   useEffect(() => {
     selectNode.current = onSelectNode;
   }, [onSelectNode]);
+
+  // The emphasis is read by the renderer's reducers through a ref, so a new highlight redraws
+  // the graph without rebuilding the renderer or restarting the layout.
+  const emphasis = useRef<HighlightSets | null>(null);
+  const sigma = useRef<Sigma | null>(null);
+  useEffect(() => {
+    emphasis.current = highlight === undefined ? null : toSets(highlight);
+    sigma.current?.refresh();
+  }, [highlight]);
 
   // Small graphs are laid out here, before the first draw; larger ones are laid out in a worker
   // after it, so the first draw does not wait for the layout.
@@ -101,6 +122,8 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
       .then(({ default: SigmaRenderer }) => {
         if (cancelled) return;
         renderer = new SigmaRenderer(graph, element, {
+          nodeReducer: (key) => nodeEmphasis(emphasis.current, key),
+          edgeReducer: (key, display) => edgeEmphasis(emphasis.current, key, display.size),
           settings: {
             itemSizesReference: 'screen',
             autoRescaleContent: 'positions',
@@ -121,6 +144,7 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
             },
           },
         });
+        sigma.current = renderer;
         renderer.on('clickNode', ({ node }) => {
           selectNode.current?.(node);
         });
@@ -135,6 +159,7 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
       });
     return () => {
       cancelled = true;
+      sigma.current = null;
       renderer?.kill();
     };
     // The theme choice is a dependency so colors are re-read when it changes.

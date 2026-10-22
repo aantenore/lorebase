@@ -47,6 +47,9 @@ import type {
   SchemaValidation,
   SearchRequest,
   SearchResponse,
+  TraceSessionPage,
+  TraceSessionParams,
+  TraceTimeline,
   TraverseRequest,
   TraverseResponse,
   Webhook,
@@ -231,6 +234,16 @@ export interface KeeperApi {
     context(scope: ReadScope, request: ContextRequest): Promise<ContextPack>;
     /** Creation, per-Attribute lineage, Links with their origin and Proposals of a Record. */
     explain(scope: ReadScope, kind: string, key: string): Promise<ExplainedRecord>;
+  };
+
+  readonly trace: {
+    /**
+     * Agent sessions, newest activity first (`GET /trace/sessions`). Installation-level: not
+     * scoped to the Domain on screen, though `domain_id` narrows it to one.
+     */
+    sessions(params?: TraceSessionParams): Promise<TraceSessionPage>;
+    /** The steps of one session in order (`GET /trace/sessions/{id}`). */
+    timeline(sessionId: string, params?: { actor?: string }): Promise<TraceTimeline>;
   };
 
   readonly webhooks: {

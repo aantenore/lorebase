@@ -58,6 +58,7 @@ Exit codes: 0 success, 1 usage or configuration error (also not found), 2 valida
 * `apikey`: Manage the API keys of a Domain.
 * `admin`: Administer the personal data of a Domain.
 * `audit`: Check the audit log of a Domain.
+* `trace`: Inspect what agents did in a session.
 * `proposal`: Propose, review and merge changes between...
 * `sources`: Synchronize the Sources of a Domain.
 * `documents`: Upload documents and follow their extraction.
@@ -1165,6 +1166,86 @@ $ lorebase audit verify [OPTIONS]
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--after-seq <int range>`: Start after this entry, trusting it (the last seq of an earlier run).  [x&gt;=0]
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+### `lorebase trace`
+
+Inspect what agents did in a session.
+
+**Usage**:
+
+```console
+$ lorebase trace [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `list`: List the sessions you may see, most recent...
+* `show`: Print the timeline of a session: calls...
+* `note`: Attach a note to a session (written off...
+
+#### `lorebase trace list`
+
+List the sessions you may see, most recent activity first.
+
+**Usage**:
+
+```console
+$ lorebase trace list [OPTIONS]
+```
+
+**Options**:
+
+* `--actor <str>`: Only the calls of this principal.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase trace show`
+
+Print the timeline of a session: calls with their outcome, and notes.
+
+**Usage**:
+
+```console
+$ lorebase trace show [OPTIONS] {SESSION_ID}
+```
+
+**Arguments**:
+
+* `SESSION_ID`: Session id.  [required]
+
+**Options**:
+
+* `--actor <str>`: Only the calls of this principal.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase trace note`
+
+Attach a note to a session (written off the request path).
+
+**Usage**:
+
+```console
+$ lorebase trace note [OPTIONS] {SESSION_ID} {TEXT}
+```
+
+**Arguments**:
+
+* `SESSION_ID`: Session id.  [required]
+* `TEXT`: Text of the note.  [required]
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--step <int range>`: Step counter of the agent.  [x&gt;=0]
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 
