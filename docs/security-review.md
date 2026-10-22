@@ -257,10 +257,22 @@ The `web_sessions` table is installation-wide like `api_keys`: it has no `domain
 row-level security policy, and the application role reaches it through the owner's default
 privileges. A session resolves to the principal a bearer token of the same subject gets, so
 grants, Domain isolation and row-level security apply unchanged; `auth.mode: none` refuses a
-sessions configuration. Sign-in and sign-out routes are not authenticated by the limits
-dependency (a stale cookie must not block them); `POST /auth/logout` checks the CSRF token
-before any lookup, and a bad session cookie elsewhere counts as a failed authentication for
-`auth_failures`.
+sessions configuration. Sign-in and sign-out routes (`/auth/login`, `/auth/callback`,
+`/auth/logout`) are not authenticated by the limits dependency, so a stale cookie never blocks
+them; they take from a bucket per client address instead (the class of the method, `reads` or
+`writes`), before any provider request or session lookup. The limits dependency names routes
+without the API prefix whatever form the router reports, so `exempt_paths` and these routes
+match. The CSRF check runs before the session is looked up, so a forged request neither
+extends nor refreshes a session, and a bad session cookie on other routes counts as a failed
+authentication for `auth_failures`. Refreshed ID tokens are checked like the first one
+(signature, issuer, audience, `azp`, expiry); the subject must not change and a `nonce`, if
+present, must be the sign-in's, which is kept in the encrypted token blob.
+
+The authorization code reaches Keeper in the query string of `/auth/callback`. Keeper's access
+log records the route template, not the query, but reverse proxies and load balancers usually
+log full URLs: such a log holds codes that are single use, short-lived and useless without the
+PKCE verifier, which only the browser's encrypted sign-in cookie carries. Keep proxy logs
+protected anyway, or drop the query of that path from them.
 
 Tests: `packages/keeper/tests/auth/test_sessions.py` (state, nonce, PKCE, audience, tampered
 and expired state cookie, CSRF cases, Origin and `Sec-Fetch-Site`, idle and absolute expiry,

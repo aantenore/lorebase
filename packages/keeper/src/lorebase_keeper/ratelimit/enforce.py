@@ -108,14 +108,49 @@ def principal_label(principal: Principal) -> str:
     return f"key:{principal.key_id}" if principal.key_id else f"sub:{principal.id}"
 
 
+def route_path(request: Request) -> str:
+    """The route template of the request without the API prefix, whether the router reports
+    it with the prefix or not (as `exempt_paths` and `PUBLIC_PATHS` name routes)."""
+    template = getattr(request.scope.get("route"), "path", None)
+    if not isinstance(template, str):
+        template = str(request.scope["path"])
+    keeper = getattr(request.app.state, "keeper_settings", None)
+    prefix = str(getattr(keeper, "api_prefix", "") or "")
+    if prefix and (template == prefix or template.startswith(prefix + "/")):
+        return template[len(prefix) :] or "/"
+    return template
+
+
+async def _limit_by_address(request: Request, runtime: LimitRuntime, path: str) -> None:
+    """Sign-in routes work without a credential: their buckets are per client address."""
+    if runtime.limiter is None:
+        return
+    address = client_address(request)
+    route_class = runtime.limiter.classify(request.method, path)
+    decision = await runtime.limiter.check(f"addr:{address or 'unknown'}", route_class, None)
+    request.scope.setdefault("state", {})[STATE_KEY] = decision
+    if not decision.allowed:
+        suppress(request)
+        raise ProblemError(
+            RATE_LIMITED,
+            f"Rate limit reached for {route_class.value} requests. "
+            f"Retry in {decision.retry_after_s} s.",
+            extensions={"class": route_class.value, "retry_after_s": decision.retry_after_s},
+            headers={RETRY_HEADER: str(decision.retry_after_s)},
+        )
+
+
 async def enforce_limits(request: Request) -> None:
     """Application-wide dependency; see the module documentation."""
     runtime = limits_of(request)
     if runtime is None:
         return
     route = request.scope.get("route")
-    path = str(getattr(route, "path", request.url.path))
-    if runtime.exempt(path) or path in PUBLIC_PATHS:
+    path = route_path(request)
+    if runtime.exempt(path):
+        return
+    if path in PUBLIC_PATHS:
+        await _limit_by_address(request, runtime, path)
         return
     principal = await _authenticate(request, runtime)
     if runtime.limiter is not None:

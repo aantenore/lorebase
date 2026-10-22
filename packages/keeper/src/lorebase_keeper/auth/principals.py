@@ -334,12 +334,13 @@ class Authenticator:
         bearer tokens; unsafe methods must pass the session's CSRF check (403)."""
         assert self._sessions is not None
         assert self._store is not None
+        # CSRF first: a forged request must not reach storage, extend or refresh the session.
+        self._sessions.check_request(session_id, method, headers)
         record = await self._sessions.resolve(session_id)
         if record is None:
             raise self._failed(
                 "invalid_session", _unauthorized("Session expired or unknown.", presented=True)
             )
-        self._sessions.check_request(session_id, method, headers)
         cache_key = (record.principal_id, record.external_groups)
         principal = self._session_cache.get(cache_key)
         if principal is None:

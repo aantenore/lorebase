@@ -166,13 +166,19 @@ class OidcVerifier:
         return self._claims(claims)
 
     async def verify_id_token(
-        self, token: str, *, client_id: str, nonce: str | None = None
+        self,
+        token: str,
+        *,
+        client_id: str,
+        nonce: str | None = None,
+        nonce_required: bool = True,
     ) -> OidcClaims:
         """Claims of a valid ID token issued to `client_id` (OpenID Connect Core 3.1.3.7).
 
         The audience must contain the client id and, with several audiences, `azp` must name it.
-        `nonce`, when given, must equal the token's (sign-in); refreshed ID tokens carry none
-        to compare.
+        `nonce`, when given, must equal the token's. At sign-in the token must carry it; a
+        refreshed ID token (`nonce_required=False`) may omit it but, if present, must carry the
+        sign-in's nonce (Core 12.2).
         """
         claims = await self._decode(token, (client_id,), ("exp", "iat", "iss", "aud"))
         audience = claims.get("aud")
@@ -180,6 +186,8 @@ class OidcVerifier:
             raise InvalidTokenError("azp does not name this client")
         if nonce is not None:
             received = claims.get("nonce")
+            if received is None and not nonce_required:
+                return self._claims(claims)
             if not isinstance(received, str) or not hmac.compare_digest(received, nonce):
                 raise InvalidTokenError("nonce mismatch")
         return self._claims(claims)

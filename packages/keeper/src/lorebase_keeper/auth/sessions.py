@@ -89,11 +89,13 @@ class LoginStart:
 
 @dataclass(frozen=True)
 class LoginResult:
-    """A verified sign-in: the user's claims, the provider's tokens and the return path."""
+    """A verified sign-in: the user's claims, the provider's tokens, the return path and the
+    nonce the ID token was bound to (refreshed ID tokens must repeat it if they carry one)."""
 
     claims: OidcClaims
     tokens: TokenResponse
     return_to: str
+    nonce: str
 
 
 @dataclass(frozen=True)
@@ -214,7 +216,7 @@ class SessionManager:
             raise LoginError("login_failed", f"id_token rejected: {exc}") from None
         except ProviderUnavailableError as exc:
             raise LoginError("provider_unavailable", str(exc)) from None
-        return LoginResult(claims=claims, tokens=tokens, return_to=pending["r"])
+        return LoginResult(claims=claims, tokens=tokens, return_to=pending["r"], nonce=pending["n"])
 
     def _open_login_state(self, cookie: str | None) -> dict[str, str] | None:
         if not cookie or len(cookie) > _MAX_PARAM_LENGTH:
@@ -248,7 +250,7 @@ class SessionManager:
         now = self._clock()
         session_id = random_token()
         refresh_token = login.tokens.refresh_token if settings.refresh_tokens else None
-        sealed = self._seal_tokens(refresh_token, login.tokens.id_token)
+        sealed = self._seal_tokens(refresh_token, login.tokens.id_token, login.nonce)
         async with self._store.unit() as unit:
             if replaces and _SESSION_ID.match(replaces):
                 await unit.sessions.delete(digest(replaces))
@@ -320,7 +322,10 @@ class SessionManager:
             response = await self._provider.refresh(refresh_token)
             claims = (
                 await self._verifier.verify_id_token(
-                    response.id_token, client_id=self._provider.client_id
+                    response.id_token,
+                    client_id=self._provider.client_id,
+                    nonce=tokens.get("nonce"),
+                    nonce_required=False,
                 )
                 if response.id_token
                 else None
@@ -346,7 +351,9 @@ class SessionManager:
             return None
         groups = claims.groups if claims is not None else record.external_groups
         sealed = self._seal_tokens(
-            response.refresh_token or refresh_token, response.id_token or tokens.get("id_token")
+            response.refresh_token or refresh_token,
+            response.id_token or tokens.get("id_token"),
+            tokens.get("nonce"),
         )
         refresh_at = self._next_refresh(now, response)
         async with self._store.unit() as unit:
@@ -365,12 +372,11 @@ class SessionManager:
         )
         return now + timedelta(seconds=interval)
 
-    def _seal_tokens(self, refresh_token: str | None, id_token: str | None) -> bytes | None:
-        values = {
-            name: value
-            for name, value in (("refresh_token", refresh_token), ("id_token", id_token))
-            if value
-        }
+    def _seal_tokens(
+        self, refresh_token: str | None, id_token: str | None, nonce: str | None
+    ) -> bytes | None:
+        pairs = (("refresh_token", refresh_token), ("id_token", id_token), ("nonce", nonce))
+        values = {name: value for name, value in pairs if value}
         if not values:
             return None
         return self._keys.seal(_TOKENS_PURPOSE, json.dumps(values).encode())
@@ -422,6 +428,8 @@ class SessionManager:
         one, and is not marked cross-site by the browser."""
         if method.upper() in SAFE_METHODS:
             return
+        if not _SESSION_ID.match(session_id):
+            raise _csrf_refusal("malformed session id")
         site = headers.get("sec-fetch-site")
         if site is not None and site.lower() not in _ALLOWED_FETCH_SITES:
             raise _csrf_refusal("cross-site request")
