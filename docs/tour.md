@@ -2,7 +2,7 @@
 
 Screenshots of the Lorebase web app (`apps/web`), taken at 1440x900 in the light theme.
 
-**Live and mock.** Except `documents.png` and `review-items.png`, which come from the mock (a live run does not load documents into Keeper), the pictures below come from the app in live mode against a running Keeper: Postgres and Keeper from `deploy/compose`, the `examples/supply` sample loaded through the REST API (30 Suppliers, 40 Parts, 20 Plants and their Links), and a Proposal with two Conflicts left open. They were taken with `pnpm screenshots --live`. The same screens run on an in-memory mock of the Keeper API when `VITE_API_MODE=mock` (two sample Domains, no backend), which is what the unit tests and `pnpm screenshots` without `--live` use. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change; see [Status](../README.md#status-and-roadmap) for what is still planned. Not everything is served yet: Keeper has no derived values and no extraction items, and the screens say so where it matters. The Start from data and Sources pictures (sample runs) and the animation below were recorded in mock mode.
+**Live and mock.** Except `documents.png`, `review-items.png` and `explore.png`, which come from the mock (a live run does not load documents into Keeper), the pictures below come from the app in live mode against a running Keeper: Postgres and Keeper from `deploy/compose`, the `examples/supply` sample loaded through the REST API (30 Suppliers, 40 Parts, 20 Plants and their Links), and a Proposal with two Conflicts left open. They were taken with `pnpm screenshots --live`. The same screens run on an in-memory mock of the Keeper API when `VITE_API_MODE=mock` (two sample Domains, no backend), which is what the unit tests and `pnpm screenshots` without `--live` use. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change; see [Status](../README.md#status-and-roadmap) for what is still planned. Not everything is served yet: Keeper has no derived values and no extraction items, and the screens say so where it matters. The Start from data and Sources pictures (sample runs) and the animation below were recorded in mock mode.
 
 ![Explorer, a Record, the Canvas, a Source mapping with its sample preview and the Review resolver in one pass](images/tour.gif)
 
@@ -107,6 +107,12 @@ The Items tab of an extraction Proposal. Proposal 44 holds 13 items from the fou
 ![Review, Conflict resolver](images/review-conflict.png)
 
 Two Branches changed the same Supplier Attributes (the risk score of S-1001 and the tier of S-1002), and the Proposal that merges the second ends up with two Conflicts of kind `DV1`. Conflicts are grouped by kind, filterable, and one is selected in the URL; they are named by Kind, key and Attribute, not by the ids Keeper uses. The resolver shows base, ours and theirs side by side and offers only the resolutions that fit the Conflict's kind (take ours, take theirs, revert to base, custom value); grouped Conflicts take one value per member. "Apply resolutions" asks Keeper to merge: while Conflicts remain it answers with the attempt, once every Conflict is resolved and the target has its approvals it creates the merge Revision, which the page then shows with its two parents. The merge engine is the one `examples/merge_demo.py` shows.
+
+## Explore
+
+![Explore](images/explore.png)
+
+A question to Guide, the optional exploration assistant, streamed step by step: its reasoning notes, each read it makes in Keeper with the arguments, the result counts, then an answer that cites the Records it was shown, linked to their pages, with "View trace" to the session in Agent activity and the cited Records on the Canvas. On the `supply` Domain preset buttons ask the questions of the example agent. Pictured from the mock, which plays scripted explorations; live, the panel needs `guideUrl` ([guide](guide.md#the-explore-panel-in-the-web-app)).
 
 ## Settings
 

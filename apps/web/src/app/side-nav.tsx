@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router';
+import { useConfig } from '@/config/context';
 import { cn } from '@/ui/cn';
 import { useScopeSearch } from './scope';
 
@@ -10,6 +11,7 @@ const ITEMS = [
   { to: '/$domain/sources', label: 'Sources' },
   { to: '/$domain/agent-activity', label: 'Agent activity' },
   { to: '/$domain/retrieval-lab', label: 'Retrieval lab' },
+  { to: '/$domain/explore', label: 'Explore' },
   { to: '/$domain/documents', label: 'Documents' },
   { to: '/$domain/settings', label: 'Settings' },
 ] as const;
@@ -17,10 +19,15 @@ const ITEMS = [
 /** Left navigation. Branch and Revision context in the URL survive navigation. */
 export function SideNav({ domain }: { domain: string }) {
   const scopeSearch = useScopeSearch();
+  const { apiMode, guideUrl } = useConfig();
+  // Explore needs a guide service, except against the mock API, which plays scripted answers.
+  const items = ITEMS.filter(
+    (item) => item.to !== '/$domain/explore' || apiMode === 'mock' || guideUrl !== null,
+  );
   return (
     <nav aria-label="Main" className="w-44 shrink-0 border-r border-line bg-surface p-2">
       <ul className="flex flex-col gap-1">
-        {ITEMS.map((item) => (
+        {items.map((item) => (
           <li key={item.to}>
             <Link
               to={item.to}

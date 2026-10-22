@@ -14,6 +14,7 @@ import { Route as DomainRouteImport } from './routes/$domain'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DomainAgentActivityRouteImport } from './routes/$domain.agent-activity'
 import { Route as DomainCanvasRouteImport } from './routes/$domain.canvas'
+import { Route as DomainExploreRouteImport } from './routes/$domain.explore'
 import { Route as DomainModelerRouteImport } from './routes/$domain.modeler'
 import { Route as DomainRetrievalLabRouteImport } from './routes/$domain.retrieval-lab'
 import { Route as DomainSettingsRouteImport } from './routes/$domain.settings'
@@ -49,6 +50,11 @@ const DomainAgentActivityRoute = DomainAgentActivityRouteImport.update({
 const DomainCanvasRoute = DomainCanvasRouteImport.update({
   id: '/canvas',
   path: '/canvas',
+  getParentRoute: () => DomainRoute,
+} as any)
+const DomainExploreRoute = DomainExploreRouteImport.update({
+  id: '/explore',
+  path: '/explore',
   getParentRoute: () => DomainRoute,
 } as any)
 const DomainModelerRoute = DomainModelerRouteImport.update({
@@ -113,6 +119,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/$domain/agent-activity': typeof DomainAgentActivityRoute
   '/$domain/canvas': typeof DomainCanvasRoute
+  '/$domain/explore': typeof DomainExploreRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
@@ -131,6 +138,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/$domain/agent-activity': typeof DomainAgentActivityRoute
   '/$domain/canvas': typeof DomainCanvasRoute
+  '/$domain/explore': typeof DomainExploreRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
@@ -150,6 +158,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/$domain/agent-activity': typeof DomainAgentActivityRoute
   '/$domain/canvas': typeof DomainCanvasRoute
+  '/$domain/explore': typeof DomainExploreRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/$domain/agent-activity'
     | '/$domain/canvas'
+    | '/$domain/explore'
     | '/$domain/modeler'
     | '/$domain/retrieval-lab'
     | '/$domain/settings'
@@ -188,6 +198,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/$domain/agent-activity'
     | '/$domain/canvas'
+    | '/$domain/explore'
     | '/$domain/modeler'
     | '/$domain/retrieval-lab'
     | '/$domain/settings'
@@ -206,6 +217,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/$domain/agent-activity'
     | '/$domain/canvas'
+    | '/$domain/explore'
     | '/$domain/modeler'
     | '/$domain/retrieval-lab'
     | '/$domain/settings'
@@ -260,6 +272,13 @@ declare module '@tanstack/react-router' {
       path: '/canvas'
       fullPath: '/$domain/canvas'
       preLoaderRoute: typeof DomainCanvasRouteImport
+      parentRoute: typeof DomainRoute
+    }
+    '/$domain/explore': {
+      id: '/$domain/explore'
+      path: '/explore'
+      fullPath: '/$domain/explore'
+      preLoaderRoute: typeof DomainExploreRouteImport
       parentRoute: typeof DomainRoute
     }
     '/$domain/modeler': {
@@ -345,6 +364,7 @@ declare module '@tanstack/react-router' {
 interface DomainRouteChildren {
   DomainAgentActivityRoute: typeof DomainAgentActivityRoute
   DomainCanvasRoute: typeof DomainCanvasRoute
+  DomainExploreRoute: typeof DomainExploreRoute
   DomainModelerRoute: typeof DomainModelerRoute
   DomainRetrievalLabRoute: typeof DomainRetrievalLabRoute
   DomainSettingsRoute: typeof DomainSettingsRoute
@@ -361,6 +381,7 @@ interface DomainRouteChildren {
 const DomainRouteChildren: DomainRouteChildren = {
   DomainAgentActivityRoute: DomainAgentActivityRoute,
   DomainCanvasRoute: DomainCanvasRoute,
+  DomainExploreRoute: DomainExploreRoute,
   DomainModelerRoute: DomainModelerRoute,
   DomainRetrievalLabRoute: DomainRetrievalLabRoute,
   DomainSettingsRoute: DomainSettingsRoute,

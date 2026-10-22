@@ -29,7 +29,8 @@ export interface AppConfig {
    * when the assistant is not configured. The Retrieval lab then asks `POST {guideUrl}/embed`
    * for the query vector (request `{"text": string}`, answer `{"vector": number[], "model"?:
    * string, "dims"?: number}`); without it the lab searches by words only, or takes a vector
-   * pasted by hand.
+   * pasted by hand. The Explore panel streams `POST {guideUrl}/explore`; in mock mode it plays a
+   * scripted exploration instead, whatever this value.
    */
   guideUrl: string | null;
   /** From `VITE_AUTH_MODE`. Always `token` in mock mode. */
@@ -55,6 +56,8 @@ export interface AppConfig {
   documents: DocumentsConfig;
   /** Extraction item review in Review. */
   extraction: ExtractionConfig;
+  /** The Explore panel (questions to Guide). */
+  explore: ExploreConfig;
 }
 
 export interface CanvasConfig {
@@ -116,6 +119,15 @@ export interface ExtractionConfig {
   itemsPageSize: number;
 }
 
+export interface ExploreConfig {
+  /** Steps preset in the panel; Guide caps them at `guide.agent.max_steps`. */
+  maxSteps: number;
+  /** The panel stops an exploration that streams for longer than this, in milliseconds. */
+  timeoutMs: number;
+  /** Mock API only: pause between two scripted events, in milliseconds. */
+  mockStepMs: number;
+}
+
 export interface InferenceConfig {
   /** Files per request; Keeper's `keeper.schema_inference.max_files`. */
   maxFiles: number;
@@ -175,6 +187,10 @@ const NON_FUNCTIONAL_DEFAULTS = {
   documentsJobPollMs: 3000,
   extractionAcceptThreshold: 0.9,
   extractionItemsPageSize: 200,
+  exploreMaxSteps: 6,
+  // Above guide.agent.timeout_s (120 s), so Guide's own timeout normally ends the stream first.
+  exploreTimeoutMs: 150_000,
+  exploreMockStepMs: 350,
 } as const;
 
 function text(raw: RawEnv, key: string): string | undefined {
@@ -467,6 +483,20 @@ export function loadConfig(raw: RawEnv): AppConfig {
         raw,
         'VITE_EXTRACTION_ITEMS_PAGE_SIZE',
         NON_FUNCTIONAL_DEFAULTS.extractionItemsPageSize,
+      ),
+    },
+    explore: {
+      maxSteps: positiveInt(raw, 'VITE_EXPLORE_MAX_STEPS', NON_FUNCTIONAL_DEFAULTS.exploreMaxSteps),
+      timeoutMs: positiveInt(
+        raw,
+        'VITE_EXPLORE_TIMEOUT_MS',
+        NON_FUNCTIONAL_DEFAULTS.exploreTimeoutMs,
+      ),
+      mockStepMs: positiveInt(
+        raw,
+        'VITE_EXPLORE_MOCK_STEP_MS',
+        NON_FUNCTIONAL_DEFAULTS.exploreMockStepMs,
+        0,
       ),
     },
   };

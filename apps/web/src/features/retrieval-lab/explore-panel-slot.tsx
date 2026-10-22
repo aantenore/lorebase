@@ -1,19 +1,9 @@
-import { useConfig } from '@/config/context';
-import { PlaceholderSection } from '@/ui/layout';
+import { ExplorePanel } from '@/features/explore/explore-panel';
 
 /**
- * Where the Explore chat panel goes. It renders nothing without a guide service
- * (`guideUrl`); with one, a placeholder until the panel exists. The panel will call
- * `{guideUrl}/explore` and show the steps the guide takes as they stream in.
+ * The Explore panel under the Retrieval lab: questions to the guide service, its steps as they
+ * stream in. It renders nothing in live mode without a guide service (`guideUrl`).
  */
 export function ExplorePanelSlot() {
-  const { guideUrl } = useConfig();
-  if (guideUrl === null) return null;
-  return (
-    <PlaceholderSection
-      area="Retrieval lab"
-      screen="Explore (coming soon)"
-      content="Ask the guide to explore the Domain and watch the steps it takes."
-    />
-  );
+  return <ExplorePanel />;
 }

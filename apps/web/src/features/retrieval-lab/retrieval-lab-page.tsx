@@ -1,14 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent } from 'react';
-import { useCredentials, useSession } from '@/api/provider';
 import { useContextPack, useSchema, useSearch } from '@/api/queries';
 import { useScope } from '@/app/scope';
 import { useConfig } from '@/config/context';
+import { useGuideAuth } from '@/features/explore/guide-auth';
 import { Button } from '@/ui/button';
 import { Input, Textarea } from '@/ui/field';
 import { PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { ExplorePanelSlot } from './explore-panel-slot';
-import { embed, parseVector, type GuideAuth } from './guide-client';
+import { embed, parseVector } from './guide-client';
 import { LabCanvas } from './lab-canvas';
 import { involvedRefs } from './lab-graph';
 import { PackPanel } from './pack-panel';
@@ -37,19 +37,8 @@ export function RetrievalLabPage({
   onAsk: (question: string, budget: number | undefined) => void;
 }) {
   const scope = useScope();
-  const { guideUrl, searchLimit, authMode, apiMode } = useConfig();
-  const credentials = useCredentials();
-  const session = useSession();
-  const guideAuth = (): GuideAuth => {
-    if (apiMode === 'live' && authMode === 'session' && session !== null) {
-      return { headers: session.csrfHeaders('POST'), credentials: 'include' };
-    }
-    const token = credentials.token();
-    return {
-      headers: token === null ? {} : { Authorization: `Bearer ${token}` },
-      credentials: 'same-origin',
-    };
-  };
+  const { guideUrl, searchLimit } = useConfig();
+  const guideAuth = useGuideAuth();
   const schema = useSchema(scope);
 
   const [text, setText] = useState(question ?? '');

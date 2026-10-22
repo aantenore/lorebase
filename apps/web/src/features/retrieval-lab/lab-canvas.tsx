@@ -9,7 +9,17 @@ import { EmptyState } from '@/ui/layout';
 import { labHighlight } from './lab-graph';
 
 /** The Records the lab involved, drawn with their immediate neighbors; the involved ones stand out. */
-export function LabCanvas({ involved, kinds }: { involved: string[]; kinds: Kind[] }) {
+export function LabCanvas({
+  involved,
+  kinds,
+  label = 'Involved Records',
+  caption = 'Records involved (search hits of both sets and the pack), drawn with their neighbors.',
+}: {
+  involved: string[];
+  kinds: Kind[];
+  label?: string;
+  caption?: string;
+}) {
   const scope = useScope();
   const { canvas } = useConfig();
   const seeds = involved.slice(0, canvas.maxNodes);
@@ -44,10 +54,9 @@ export function LabCanvas({ involved, kinds }: { involved: string[]; kinds: Kind
   }
   return (
     <>
-      <LazyGraphCanvas data={data} label="Involved Records" highlight={highlight} />
+      <LazyGraphCanvas data={data} label={label} highlight={highlight} />
       <p className="mt-2 text-xs text-muted">
-        {involved.length} Records involved (search hits of both sets and the pack), drawn with their
-        neighbors.
+        {involved.length} {caption}
       </p>
     </>
   );
