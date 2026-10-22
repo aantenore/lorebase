@@ -230,8 +230,8 @@ class JsonLinesConnector:
 def _pyarrow() -> tuple[ModuleType, ModuleType]:
     """`pyarrow` and `pyarrow.parquet`, or a definition error naming the extra."""
     try:
-        import pyarrow
-        import pyarrow.parquet as parquet
+        import pyarrow  # type: ignore[import-untyped]
+        import pyarrow.parquet as parquet  # type: ignore[import-untyped]
     except ImportError:
         raise SourceDefinitionError(
             f"parquet Sources need pyarrow: install {PARQUET_EXTRA}"

@@ -104,7 +104,7 @@ def _json_array(path: str) -> Iterator[dict[str, Any]]:
 
 def _parquet(path: Path) -> Iterator[dict[str, Any]]:
     try:
-        import pyarrow.parquet as parquet
+        import pyarrow.parquet as parquet  # type: ignore[import-untyped]
     except ImportError:
         raise CliError(
             "reading Parquet needs pyarrow: pip install 'lorebase-cli[parquet]'"
