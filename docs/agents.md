@@ -187,7 +187,7 @@ keyed by Revision, so commits never serve a stale pack.
 | where each current value of a Record came from | `GET /kinds/{kind}/records/{key}/lineage` (section 3) |
 | Records matching a filter | `POST /query` (design 8.2) |
 | a path of Relations | `POST /traverse` |
-| the graph around some Records | `POST /neighborhood` |
+| the graph around some Records | `POST /neighborhood` (`values: false` for headers and Link endpoints only) |
 | Records by text or vector | `POST /search` |
 | what changed between two Revisions | `GET /diff?from=&to=` |
 | whether the data is sound | `GET /health`, `GET /kinds/{kind}/health` (section 6) |

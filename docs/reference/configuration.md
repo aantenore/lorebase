@@ -1112,6 +1112,8 @@ Search (design 8.4). Keeper never computes embeddings: semantic and hybrid searc
 | `search.trigram_weight` | `0.5` | weight of ts_rank_cd for hits found only through corrections (they always rank after the hits of q as written) |
 | `search.typo_candidates` | `3` | corrections tried per unknown word; 0 turns typo tolerance off |
 | `search.typo_min_length` | `4` | shortest query word (characters) that is corrected |
+| `search.common_term_docs` | `20000` | Lexical search without filters: the word lexicon bounds the matches of q. Within common_term_docs every match is ranked; when every term is more common, only the first common_term_candidates matches in index order are, and the response says truncated_candidates. 0 ranks store.reads.search_candidates matches whatever the terms. |
+| `search.common_term_candidates` | `5000` |  |
 | `search.headline_options` | `"MaxWords=30, MinWords=10, MaxFragments=2"` | ts_headline of snippets |
 
 ### `search.partial`

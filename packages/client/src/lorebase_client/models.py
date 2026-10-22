@@ -585,6 +585,8 @@ class SearchResult(Served):
     mode: str
     items: list[SearchHit]
     corrections: list[SearchCorrection] = Field(default_factory=list)
+    truncated_candidates: bool = False
+    """Only a sample of the matches was ranked (every term of q is very common): narrow q."""
 
 
 class QueryRequest(RequestModel):
@@ -633,6 +635,9 @@ class NeighborhoodRequest(RequestModel):
     relations: list[str] | None = None
     max_nodes: int | None = Field(default=None, ge=1)
     max_edges: int | None = Field(default=None, ge=1)
+    values: bool | None = None
+    """False: nodes come back as headers (kind, key, title, empty `values`) and edges as
+    endpoints (empty `values`); None keeps the server default (with values)."""
 
 
 class SearchTuning(RequestModel):

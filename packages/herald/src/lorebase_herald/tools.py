@@ -229,6 +229,7 @@ class LorebaseTools:
             max_nodes=max_nodes or self.settings.neighborhood.default_max_nodes,
             relations=list(relations) if relations else None,
             max_edges=max_edges or None,
+            values=values,
             branch=self.branch(branch),
             at=at,
         )

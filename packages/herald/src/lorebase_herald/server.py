@@ -237,7 +237,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
     @server.tool(
         name="lorebase_neighborhood",
         description="Records linked to seed Records, breadth first up to `depth` hops, with "
-        "the Links between them. Values are left out unless `values` is true.",
+        "the Links between them. Values are left out unless `values` is true: Keeper then "
+        "returns only Record headers and Link endpoints.",
         annotations=READ,
         structured_output=False,
     )
@@ -259,7 +260,9 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         ] = None,
         max_nodes: Annotated[int | None, Field(ge=1, le=hood.max_nodes)] = None,
         max_edges: Annotated[int | None, Field(ge=1, le=hood.max_edges)] = None,
-        values: Annotated[bool, Field(description="Include each node's values.")] = False,
+        values: Annotated[
+            bool, Field(description="Include the values of each node and Link.")
+        ] = False,
         at: AtArg = None,
         domain: DomainArg = None,
         branch: BranchArg = None,

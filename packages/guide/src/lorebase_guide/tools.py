@@ -86,6 +86,7 @@ class NeighborhoodArgs(ToolArgs):
     depth: int = Field(default=1, ge=1, le=5)
     relations: list[str] | None = Field(default=None, max_length=20)
     max_nodes: int = Field(default=30, ge=1, le=500)
+    values: bool = True
 
 
 class TraverseHopArgs(ToolArgs):
@@ -262,6 +263,11 @@ async def _search(ctx: ToolContext, args: SearchArgs) -> ToolResult:
         for hit in found.items
     ]
     data: JsonDict = {"mode": found.mode, "hits": hits}
+    if found.truncated_candidates:
+        data["truncated_candidates"] = True
+        note = "; ".join(
+            filter(None, [note, "very common terms: only a sample was ranked, narrow q"])
+        )
     if note:
         data["note"] = note
     summary = f"{len(hits)} hits ({found.mode})"
@@ -328,6 +334,7 @@ async def _neighborhood(ctx: ToolContext, args: NeighborhoodArgs) -> ToolResult:
         depth=min(args.depth, ctx.settings.max_depth),
         relations=args.relations,
         max_nodes=min(args.max_nodes, ctx.settings.max_nodes),
+        values=args.values,
     )
     found = await ctx.client.records.neighborhood(ctx.domain, request)
     nodes = [ctx.record(item) for item in found.nodes[: ctx.settings.max_items]]
@@ -487,7 +494,7 @@ TOOLS: dict[str, Tool] = {
         Tool(
             "neighborhood",
             f"Records around seed Records. args: {{refs: [Kind/key] (1-{_MAX_SEEDS}), depth?: "
-            "1-2, relations?: [relation], max_nodes?}",
+            "1-2, relations?: [relation], max_nodes?, values?: false for headers only}",
             NeighborhoodArgs,
             _neighborhood,
         ),

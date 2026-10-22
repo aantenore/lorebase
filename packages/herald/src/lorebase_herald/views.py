@@ -397,6 +397,8 @@ def search_view(body: m.SearchResult, output: OutputSettings) -> View:
         view["corrections"] = [
             {"word": c.word, "replacements": c.replacements} for c in body.corrections
         ]
+    if body.truncated_candidates:
+        view["truncated_candidates"] = True
     if omitted:
         view["omitted"] = omitted
     return view
@@ -407,6 +409,11 @@ def search_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     for correction in view.get("corrections", []):
         lines.append(
             f"also searched {correction['word']} as {', '.join(correction['replacements'])}"
+        )
+    if view.get("truncated_candidates"):
+        lines.append(
+            "truncated: every term is very common, only a sample of the matches was ranked; "
+            "add a rarer term or narrow `kinds`"
         )
     for index, hit in enumerate(view["items"], start=1):
         snippet = hit.get("snippet")

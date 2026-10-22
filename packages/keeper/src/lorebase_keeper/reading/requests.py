@@ -59,6 +59,12 @@ class NeighborhoodRequest(_Body):
     )
     max_nodes: int | None = Field(default=None, ge=1)
     max_edges: int | None = Field(default=None, ge=1)
+    values: bool = Field(
+        default=True,
+        description="false: nodes are Record headers (kind, key, title) and edges Link "
+        "endpoints (relation, from, to), without values; for callers that need the structure "
+        "only.",
+    )
 
 
 SearchMode = Literal["lexical", "semantic", "hybrid"]
