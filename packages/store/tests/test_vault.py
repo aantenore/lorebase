@@ -63,7 +63,13 @@ EMAIL = ident("att", 190)
 NICKNAME = ident("att", 191)
 PII = (Sensitivity.PII,)
 VAULT = VaultSettings.model_validate(
-    {"token_key": "t" * 32, "encryption_key": "e" * 32, "key_id": "k1"}
+    {
+        "token_key": "t" * 32,
+        "encryption_key": "e" * 32,
+        "key_id": "k1",
+        # The commits of these tests stand for Source syncs: their origin is checked.
+        "tombstone_origins": ["test"],
+    }
 )
 
 
@@ -200,8 +206,8 @@ async def test_erasure_reaches_every_revision_and_is_idempotent(
         await session.execute(
             text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
         )
-        assert await erase_record(session, DOMAIN, SUPPLIER, "S-1") == 2
-        assert await erase_record(session, DOMAIN, SUPPLIER, "S-1") == 0
+        assert (await erase_record(session, DOMAIN, SUPPLIER, "S-1")).erased == 2
+        assert (await erase_record(session, DOMAIN, SUPPLIER, "S-1")).erased == 0
     assert await opened(sessions, runtime, old, new) == {
         old: (VaultState.ERASED, None),
         new: (VaultState.ERASED, None),
@@ -397,7 +403,7 @@ async def erase_value(sessions: Sessions, runtime: StoreRuntime, value: Any) -> 
         await session.execute(
             text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
         )
-        return await erase_matching(session, DOMAIN, SUPPLIER, EMAIL, value, keys)
+        return (await erase_matching(session, DOMAIN, SUPPLIER, EMAIL, value, keys)).erased
 
 
 async def erase_key(sessions: Sessions, key: str) -> int:
@@ -405,7 +411,7 @@ async def erase_key(sessions: Sessions, key: str) -> int:
         await session.execute(
             text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
         )
-        return await erase_record(session, DOMAIN, SUPPLIER, key)
+        return (await erase_record(session, DOMAIN, SUPPLIER, key)).erased
 
 
 async def state_of(sessions: Sessions, runtime: StoreRuntime, code: str) -> VaultState:
@@ -437,6 +443,11 @@ async def test_erasure_by_value_reaches_case_variants(
     with pytest.raises(ValidationFailedError) as raised:
         await write(sessions, refusing, person("S-5", "ada.lovelace@example.com"))
     assert [i.code for i in raised.value.issues] == [IssueCode.VALUE_VAULT_ERASED]
+    # Writes of other origins (people, agents) are not checked: the outcome would tell the
+    # writer that a guessed value was erased.
+    unchecked = with_vault(runtime, erased_values=ErasedValues.REFUSE, tombstone_origins=())
+    await write(sessions, unchecked, person("S-5", "ada.lovelace@example.com"))
+    assert await state_of(sessions, runtime, "S-5") is VaultState.VALUE
 
 
 async def test_erasure_follows_key_changes(sessions: Sessions, runtime: StoreRuntime) -> None:
@@ -446,6 +457,14 @@ async def test_erasure_follows_key_changes(sessions: Sessions, runtime: StoreRun
     # Another Record cannot take the reference; a key change (same change set deletes S-1) can.
     with pytest.raises(ValidationFailedError):
         await write(sessions, runtime, person("S-9", held))
+    # Nor can a key change copy it twice, or into a Record that exists already.
+    await write(sessions, runtime, person("S-7", "other@example.com"))
+    for taking in (
+        [person("S-8", held), person("S-9", held)],
+        [person("S-7", held)],
+    ):
+        with pytest.raises(ValidationFailedError):
+            await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-1"), *taking)
     await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-1"), person("S-9", held))
     moved = vault_token(await stored_email(sessions, "S-9"))
     assert moved not in (None, vault_token(held))
@@ -468,7 +487,7 @@ async def test_an_erasure_waits_for_commits_and_commits_wait_for_it(
         await session.execute(
             text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
         )
-        assert await erase_record(session, DOMAIN, SUPPLIER, "S-1") == 1
+        assert (await erase_record(session, DOMAIN, SUPPLIER, "S-1")).erased == 1
         # The erasure holds the vault lock: a commit writing the value again waits for it.
         racing = asyncio.create_task(write(sessions, runtime, person("S-1", "ada@example.com")))
         await asyncio.sleep(0.5)

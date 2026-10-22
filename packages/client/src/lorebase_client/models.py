@@ -753,6 +753,7 @@ class EraseResult(Model):
     kind: str
     mode: str
     erased: int
+    unopenable: int = 0
 
 
 class VaultKeys(Model):

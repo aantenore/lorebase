@@ -123,7 +123,14 @@ from lorebase_store.repositories.revisions import RevisionRepository, RevisionRo
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import COMMIT_DURATION
-from lorebase_store.vault.store import Lineage, VaultRow, insert_lineage, insert_rows, tokenize
+from lorebase_store.vault.store import (
+    Lineage,
+    VaultLockTimeoutError,
+    VaultRow,
+    insert_lineage,
+    insert_rows,
+    tokenize,
+)
 
 COMMIT_ACTION = "revision.commit"
 COMMITTED_EVENT = "revision.committed"
@@ -299,7 +306,10 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
             sync, request, domain, head.root, old_schema, own.id, created_at, reference_tags
         )
 
-    prepared = await session.run_sync(prepare)
+    try:
+        prepared = await session.run_sync(prepare)
+    except VaultLockTimeoutError as error:
+        raise BranchLockTimeoutError(str(error)) from error
     if not prepared.changeset:
         return CommitResult(
             revision_id=head.id,
@@ -439,6 +449,8 @@ def _prepare(
         request.runtime.vault,
         view,
         erased_values=request.runtime.vault_settings.erased_values,
+        tombstones=request.origin.type in request.runtime.vault_settings.tombstone_origins,
+        lock_timeout_ms=request.runtime.vault_settings.lock_timeout_ms,
     )
     issues.extend(vaulted.issues)
     if issues:

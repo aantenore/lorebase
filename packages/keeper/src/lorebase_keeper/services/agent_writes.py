@@ -574,10 +574,10 @@ def _check_replay(
     found = prepared.invocation
     if found is None:
         return None
-    digest = operations_service.parameters_hash(
+    accepted = operations_service.parameters_hashes(
         request.operation, name, request.parameters, domain_id=domain_id, digests=digests
     )
-    if found.params.get("parameters_hash") != digest:
+    if found.params.get("parameters_hash") not in accepted:
         raise ProblemError(
             IDEMPOTENCY_CONFLICT,
             "This Idempotency-Key was used with another Operation, branch or parameters.",

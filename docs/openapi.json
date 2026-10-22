@@ -14267,6 +14267,12 @@
             "type": "integer",
             "title": "Erased",
             "description": "Vault values erased by this request."
+          },
+          "unopenable": {
+            "type": "integer",
+            "title": "Unopenable",
+            "description": "Rows looked at that are sealed under a key no longer configured: their fingerprints could not be made again, so a case variant among them may be missed.",
+            "default": 0
           }
         },
         "type": "object",

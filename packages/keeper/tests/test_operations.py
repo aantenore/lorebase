@@ -50,6 +50,7 @@ from lorebase_keeper.services.operations import (
     PRECONDITION_FAILED,
     expressions_gate,
     parameters_hash,
+    parameters_hashes,
     plan_custom,
     resolve,
     review_required,
@@ -349,6 +350,17 @@ def test_parameters_hash_is_stable_and_always_keyed() -> None:
         separators=(",", ":"),
     ).encode()
     assert first != hashlib.sha256(plain).hexdigest()
+    # After a token key rotation, digests made under the earlier key are still recognized.
+    old = DigestKeys(Keyring("d" * 32, namespace="vault"))
+    rotated = DigestKeys(
+        Keyring("n" * 32, namespace="vault"), earlier=(Keyring("d" * 32, namespace="vault"),)
+    )
+    stored = digest("work", {"a": 1}, old)
+    assert digest("work", {"a": 1}, rotated) != stored
+    accepted = parameters_hashes(
+        "create_supplier", "work", {"a": 1}, domain_id="d", digests=rotated
+    )
+    assert stored in accepted
     with pytest.raises(DigestKeysNotReadyError):
         digest("work", {}, DigestKeys())
 

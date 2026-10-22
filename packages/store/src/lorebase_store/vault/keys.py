@@ -172,6 +172,12 @@ class VaultKeys:
         """The keyring of the keyed digests when no `vault.digest_key` is set."""
         return self._tokens
 
+    def earlier_digest_keyrings(self) -> tuple[Keyring, ...]:
+        """The keyrings of the previous token keys, which made earlier digests."""
+        return tuple(
+            keyring for key_id, keyring in self._token_keys.items() if key_id != self._token_key_id
+        )
+
     def seal(self, domain_id: str, token: str, value: JsonValue) -> bytes:
         return self._keyrings[self._key_id].seal(
             _VALUE, jcs_bytes(value), context=framed(domain_id, token)

@@ -67,6 +67,18 @@ class VaultSettings(SectionModel):
         description="A later write of an erased value (a Source sync, say): erase stores it "
         "erased, refuse fails the commit, allow stores it again until erased again.",
     )
+    tombstone_origins: tuple[str, ...] = Field(
+        default=("source_sync", "extraction", "import"),
+        description="Commit origins whose writes are checked against the fingerprints of erased "
+        "values (erased_values). Writes of people and agents are not: they choose the value, so "
+        "the outcome would tell them whether a guessed value was erased.",
+    )
+    lock_timeout_ms: int = Field(
+        default=10_000,
+        ge=0,
+        description="How long a commit storing vault values waits for an erasure in the same "
+        "Domain to finish (0: no limit).",
+    )
     rekey_batch: int = Field(
         default=500,
         ge=1,
