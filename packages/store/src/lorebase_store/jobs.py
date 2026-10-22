@@ -477,7 +477,7 @@ async def run_jobs(
             return ran
         job = claimed[0]
         ran += 1
-        beat = asyncio.create_task(_heartbeat(sessions, worker, job.id, settings))
+        beat = asyncio.create_task(heartbeat(sessions, worker, job.id, settings))
         try:
             result = await handlers[job.type](job)
             error = None
@@ -496,7 +496,7 @@ async def run_jobs(
     return ran
 
 
-async def _heartbeat(
+async def heartbeat(
     sessions: async_sessionmaker[AsyncSession], worker: str, job_id: int, settings: JobSettings
 ) -> None:
     """Refresh the lock of a running job three times per `stale_after_seconds`."""

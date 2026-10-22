@@ -59,15 +59,15 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Attribute, Kind, RelationBacking, Schema
 from lorebase_core.types import AttributeType
-from lorebase_store.jobs import INDEX_JOB, JobRow
+from lorebase_store.jobs import INDEX_JOB, JobRow, heartbeat
 from lorebase_store.layout import load_layout
 from lorebase_store.models.enums import JobStatus
 from lorebase_store.repositories.scope import scope_to_domain
-from lorebase_store.settings import IndexSettings
+from lorebase_store.settings import IndexSettings, JobSettings
 
 log = logging.getLogger(__name__)
 
@@ -776,14 +776,22 @@ class IndexJobOutcome:
 
 
 async def run_index_jobs(
-    engine: AsyncEngine, settings: IndexSettings, *, worker: str = "store"
+    engine: AsyncEngine,
+    settings: IndexSettings,
+    *,
+    worker: str = "store",
+    jobs: JobSettings | None = None,
 ) -> list[IndexJobOutcome]:
     """Claim and run up to `settings.job_batch` queued index jobs.
+
+    Each job sends heartbeats (every `jobs.stale_after_seconds / 3`) while it runs, so a long
+    build is not reclaimed as lost.
 
     Builds and drops run with `CONCURRENTLY`, outside any transaction, after checking that
     the branch still wants (or no longer wants) the index.
     """
     outcomes: list[IndexJobOutcome] = []
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
     for _ in range(settings.job_batch):
         async with engine.begin() as connection:
             await connection.execute(_BYPASS)
@@ -794,10 +802,14 @@ async def run_index_jobs(
             break
         job_id, domain_id, payload = claimed
         action = IndexAction(payload["action"])
+        beat = asyncio.create_task(heartbeat(sessions, worker, job_id, jobs or JobSettings()))
         try:
             status, detail = await _run_job(engine, domain_id, action, payload)
         except Exception as error:  # the job records the failure; the runner goes on
             status, detail = JobStatus.FAILED, f"{type(error).__name__}: {error}"
+        finally:
+            beat.cancel()
+            await asyncio.gather(beat, return_exceptions=True)
         async with engine.begin() as connection:
             await connection.execute(_BYPASS)
             await connection.execute(

@@ -259,6 +259,17 @@ The chart's database roles were installed on a kind cluster with an external Pos
 
 The open items are ranked in the threat model under [residual risks, by priority](threat-model.md#residual-risks-by-priority): webhook signing keys stored usable unless `webhooks.encryption_key` is set; erasure covering vault values only; vault keys in the services' configuration; small value oracles; branches forked before a tag; conservative Operation analysis; erasure from the command line; and the limits of the read audit and of checkpoints. The per-finding limits of the first review are in the security review.
 
+## Operations
+
+### Job release and reclaim in containers
+
+Checked on a throwaway compose stack (own project name, ports and volume; Postgres, migrations and one or two Scribe containers on an image built from the repository, with the defaults `scribe.worker.shutdown_grace_s` 30, `shutdown_cancel_s` 5, `heartbeat_interval_s` 30 and `store.jobs.stale_after_seconds` 90). An `audit_verify` job was held in `running` by an `ACCESS EXCLUSIVE` lock on `audit_log` taken from another session; releasing the lock let it finish.
+
+- `docker stop` (SIGTERM, default grace): the container stopped in 31 s with exit code 0 (30 s grace for the job, then it was cancelled). The log showed `worker stopping` with one running job and `job released on shutdown`; the job was `queued` with `attempts` 0, due at once, and none was left `running`. Starting the container again ran the job to `succeeded` on its first attempt.
+- `docker kill` (SIGKILL) of the Scribe holding the job, with a second Scribe running: the job stayed `running` under the dead worker until its lock was 90 s old, then the second Scribe reclaimed it 91 s after the kill (`attempts` 2, new `locked_by`) and ran it to `succeeded` once the lock was gone. With a single Scribe nothing reclaims the job until it is started again.
+
+Per-Attribute index builds sent no heartbeat when run with `run_index_jobs`, so a build longer than the stale threshold could have been reclaimed; it now sends one like the worker and `python -m lorebase_store.jobs work` do (`test_index_jobs_send_heartbeats_while_building`).
+
 ## Interop and connectors
 
 Documents: [LinkML](linkml.md), [Scribe](scribe.md#sources), [schema inference](inference.md). The work dates from 2026-10-21 and 2026-10-22 (commit dates). The repository does not record timings or pass counts for these suites, so the tables name what each test checks.
