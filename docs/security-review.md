@@ -447,6 +447,40 @@ and applies the grants of `app-role.sh`, `audit_log` revoke included; the migrat
 maintenance DSN or an unsafe managed role unless `database.allowSharedRole: true` (development).
 Test: `tests/tooling/test_helm_db_roles.py`, the CI negative cases of the `helm` job.
 
+## Residual risks closed
+
+The residual risks the threat model listed after the hardening above were fixed rather than
+documented, each with tests; every fix was reviewed again on its own and the findings of those
+reviews were fixed in follow-up commits with regression tests:
+
+- **Vault key rotation** (`packages/store/src/lorebase_store/vault/rotation.py`, `keys.py`):
+  `vault.rotate` job and `lorebase admin vault rotate|status` (`vault.manage`, installation
+  administrators only); `vault.token_key` rotates through `token_key_id` and
+  `previous_token_keys`. Tests: `packages/store/tests/test_vault.py`.
+- **Erasure gaps** (`vault/store.py`, `keeper/routes/vault.py`): matching forms for case
+  variants, lineage of key changes followed under the Domain's vault lock, moved tokens, tombstones
+  with `vault.erased_values` for Source syncs, extraction and imports, `pii.import` for feeding
+  vault Attributes, keyed digest of the key in the audit entry. Tests: `test_vault.py`,
+  `packages/keeper/tests/integration/test_sensitivity_api.py`,
+  `packages/keeper/tests/integration/writes/test_pii_import_postgres.py`.
+- **Value oracles** (`keeper/reading/sensitivity.py`, `kindhealth/`, `core/validate/data_rules.py`,
+  `services/operations.py`, `lorebase_store/digests.py`): keyed parameter digests always, hidden
+  duplicate groups, generic and collapsed issue codes, nested references refused, references
+  resolved consistently (diff stream, Operation edits, Conflicts, markdown from structured data),
+  step errors redacted.
+- **Branches forked before a tag** (`materialize/stale.py`, `services/schema.py`): tag rebase and
+  the `store.sensitivity_refresh` job by the effective tags.
+- **Operation analysis** (`core/expr/sensitivity.py`): field reads resolved by the inferred Kind.
+- **Bundles** (`vault/transfer.py`, `bundle.py`): opt-in plaintext vault export, audited at start
+  and end, restored under the target's keys with lineage and tombstones.
+- **Webhook keys and the read audit**: sealed signing keys by default; `on_overflow: reject` for a
+  read stream that serves as proof.
+
+What stays is inherent and listed in the [threat model](threat-model.md#residual-risks-by-priority):
+values outside the vault stay in content-addressed history; the services hold the vault keys and
+fingerprints are deterministic; the fallback digest secret lives in the database; checkpoints
+cover the chains up to the latest one published.
+
 ## Other observations
 
 - **Prompt injection.** The extraction model gets no tools, its output is validated against a
