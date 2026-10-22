@@ -20,10 +20,12 @@ Filters (`kinds`, `where`) apply before ranking and fusion. Snippets come from `
 over the title and the searchable Attributes.
 
 Lexical search without `where` goes through the store primitive `search_records` (design
-8.7): at most `store.reads.search_candidates` matches are ranked, through the security
-definer function `lb_search_corrected`, so its index plans hold under row-level security;
-snippets are computed for the returned page only. Filtered, semantic and hybrid searches are
-compiled here.
+8.7), through the security definer function `lb_search_bounded`, so its index plans hold
+under row-level security; snippets are computed for the returned page only. The word lexicon
+bounds the matches of q (`lorebase_store.reads.CommonTerms`): within
+`search.common_term_docs` every match is ranked; when every term is more common, only the
+first `search.common_term_candidates` matches in index order are, and the response says
+`truncated_candidates`. Filtered, semantic and hybrid searches are compiled here.
 """
 
 from __future__ import annotations
@@ -79,6 +81,7 @@ from lorebase_keeper.tracing.explain import explain
 from lorebase_store.embeddings import fingerprint_of, template_fingerprints
 from lorebase_store.models import metadata
 from lorebase_store.reads import (
+    CommonTerms,
     Correction,
     PartialMatching,
     PartialQuery,
@@ -337,6 +340,15 @@ def partial_matching(runtime: ReadRuntime) -> PartialMatching | None:
     )
 
 
+def common_terms(runtime: ReadRuntime) -> CommonTerms | None:
+    """How many matches lexical search ranks, from `search.common_term_*`; `None` (the store's
+    `store.reads.search_candidates`) when `common_term_docs` is 0."""
+    settings = runtime.search
+    if settings.common_term_docs < 1:
+        return None
+    return CommonTerms(docs=settings.common_term_docs, candidates=settings.common_term_candidates)
+
+
 def _match(full: bool | None) -> Literal["all", "partial"] | None:
     if full is None:
         return None
@@ -393,6 +405,7 @@ async def _lexical_page(
         corrections=corrections,
         correction_weight=settings.trigram_weight,
         partial=partial,
+        common=common_terms(runtime),
         runtime=runtime.store,
     )
     snippets: dict[tuple[str, str], str | None] = {}
@@ -430,7 +443,11 @@ async def _lexical_page(
         for h in hits
     ]
     return SearchResponse(
-        **served(point), mode="lexical", items=items, corrections=_applied(corrections)
+        **served(point),
+        mode="lexical",
+        items=items,
+        corrections=_applied(corrections),
+        truncated_candidates=hits.truncated,
     )
 
 

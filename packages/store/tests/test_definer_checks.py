@@ -54,6 +54,8 @@ _COUNTS = {
 }
 _TEMPLATES["lb_search_corrected"] = _TEMPLATES["lb_search"]
 _COUNTS["lb_search_corrected"] = _COUNTS["lb_search"]
+_TEMPLATES["lb_search_bounded"] = _TEMPLATES["lb_search"]
+_COUNTS["lb_search_bounded"] = _COUNTS["lb_search"]
 CALLS = {
     **{name: sql.format(name=name, branch="'main'") for name, sql in _TEMPLATES.items()},
     **{
@@ -256,9 +258,15 @@ def test_upgrade_and_downgrade_keep_the_grants(
     checked = [(name, True, False, True) for name in names]
     assert _privileges(database_url, application_role) == checked
     plain = ["lb_links_in", "lb_neighborhood", "lb_query_by_attribute", "lb_search"]
+    migrations.downgrade("0034", database=database, store=store, url=database_url)
+    assert _privileges(database_url, application_role) == [
+        (name, True, False, True) for name in names if "_bounded" not in name
+    ]
     migrations.downgrade("0017", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [
-        (name, True, False, True) for name in names if "_correct" not in name
+        (name, True, False, True)
+        for name in names
+        if "_correct" not in name and "_bounded" not in name
     ]
     migrations.downgrade("0009", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [

@@ -19,9 +19,11 @@ from lorebase_store.indexes import plan_indexes, run_index_jobs
 from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.reads import (
+    CommonTerms,
     Comparison,
     Correction,
     Direction,
+    MatchBound,
     PartialMatching,
     PartialQuery,
     TypoTolerance,
@@ -33,6 +35,7 @@ from lorebase_store.reads import (
     links_of_record,
     links_to_record,
     list_records,
+    match_bound,
     partial_query,
     partial_terms,
     query_by_attribute,
@@ -128,9 +131,11 @@ async def test_head_and_schema_cache(sessions: Sessions, runtime: StoreRuntime) 
     assert third.schema.kinds[SUPPLIER].attributes[VAT].description == "Tax id."
 
 
-LEGACY_FUNCTIONS = frozenset({"lb_search", "lb_search_overlay"})
-"""Search functions of revision 0005 and 0010, kept for older processes; search calls
-`lb_search_corrected` since revision 0018."""
+LEGACY_FUNCTIONS = frozenset(
+    {"lb_search", "lb_search_overlay", "lb_search_corrected", "lb_search_corrected_overlay"}
+)
+"""Search functions of revisions 0005, 0010 and 0018, kept for older processes; search calls
+`lb_search_bounded` since revision 0035."""
 
 
 def reads_runtime(*, definer: bool) -> StoreRuntime:
@@ -381,6 +386,46 @@ async def test_records_links_queries_and_search(sessions: Sessions, definer: boo
             runtime=runtime,
         )
         assert {h.key for h in stopped} == {"P-1", "P-2"}
+        # Common terms: within `docs` (the lexicon bounds "bearing" to 2 Records) every match
+        # is ranked; above it only `candidates` are, and the hits say so.
+        ranked = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "bearing",
+            limit=5,
+            common=CommonTerms(docs=2, candidates=1),
+            runtime=runtime,
+        )
+        assert {h.key for h in ranked} == {"P-1", "P-3"}
+        assert not ranked.truncated
+        sampled = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "bearing",
+            limit=5,
+            kind_ids=[PART, SUPPLIER],
+            common=CommonTerms(docs=1, candidates=1),
+            runtime=runtime,
+        )
+        assert len(sampled) == 2  # one more than wanted is read, to tell a full read
+        assert sampled.truncated
+        # A rarer term keeps the ranking exact, corrections and partial matches included.
+        rarer = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "rollr bearing seal",
+            limit=10,
+            corrections=[Correction("rollr", ("roller",))],
+            partial=partial,
+            common=CommonTerms(docs=50, candidates=1),
+            runtime=runtime,
+        )
+        assert [(h.key, h.partial) for h in rarer] == [(h.key, h.partial) for h in corrected]
+        assert not rarer.truncated
+        assert not (await search_records(session, DOMAIN, "main", "bearing", limit=5)).truncated
 
         supplied = schema.relations[SUPPLIED_BY]
         first = await links_to_record(
@@ -839,6 +884,24 @@ async def test_read_functions_read_only_the_domain_they_are_given(
         titles += [n.record.title for n in hood.records]
         assert titles
         assert not any((title or "").startswith("Rival") for title in titles)
+
+
+def test_match_bound_follows_the_operators_of_the_query() -> None:
+    counts = {"bear": 100, "seal": 30, "oil": 5, "roller": 7}
+
+    def bound(tsquery: str) -> MatchBound:
+        return match_bound(tsquery, lambda word: counts.get(word, 0) if word != "m8" else None)
+
+    assert bound("'bear' & 'seal'") == MatchBound(30, 130)
+    assert bound("'bear' | 'seal'") == MatchBound(130, 130)
+    assert bound("'bear' & !'oil'") == MatchBound(100, 100)
+    assert bound("!'oil'") == MatchBound(None, 0)
+    assert bound("'roller' <-> 'bear' | 'oil' & 'seal'") == MatchBound(12, 142)
+    assert bound("( 'bear' | 'oil' ) & 'seal'") == MatchBound(30, 135)
+    assert bound("'bear' & 'm8'") == MatchBound(100, None)
+    assert bound("'bear' | 'm8'") == MatchBound(None, None)
+    assert bound("'it''s'") == MatchBound(0, 0)
+    assert bound("") == MatchBound(0, 0)
 
 
 def test_partial_query_keeps_phrases_and_negations() -> None:

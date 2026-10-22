@@ -318,6 +318,7 @@ async def test_neighborhood_renders_nodes_edges_and_truncation(
         "depth": 1,
         "max_nodes": 50,
         "relations": ["supplies"],
+        "values": False,
     }
     assert 'Supplier/S-1 "Acme"' in out
     assert "tier=1" not in out

@@ -32,8 +32,10 @@ from lorebase_keeper.reading.sensitivity import condition_fields, require_compar
 from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import (
     Edge,
+    EdgeRef,
     NeighborhoodResponse,
     RecordOut,
+    RecordRef,
     TraverseHopOut,
     TraverseResponse,
     link_values,
@@ -132,7 +134,8 @@ async def neighborhood(
     The store primitive `lorebase_store.traverse.neighborhood`; caps are the smaller of
     `read.traverse` and `store.traverse`. Nodes come nearest first; each Link is reported
     once, by its forward name, from its `from` Record to its `to` Record. Path Derivations are
-    followed when named in `relations`.
+    followed when named in `relations`. With `values: false` nodes are Record headers and
+    edges Link endpoints: the walk is the same, the response carries no values.
     """
     caps, store = runtime.read.traverse, runtime.store_settings.traverse
     max_seeds = min(caps.max_seeds, store.max_seeds)
@@ -172,24 +175,32 @@ async def neighborhood(
         runtime=runtime.store,
     )
     titles = {(n.record.kind_id, n.record.key): n.record.title for n in walked.records}
-    nodes = [
-        record_out(point.schema, _row(n.record), masking=point.masking) for n in walked.records
+    nodes: list[RecordOut | RecordRef] = [
+        record_out(point.schema, _row(n.record), masking=point.masking)
+        if request.values
+        else record_ref(point.schema, n.record.kind_id, n.record.key, n.record.title, point.masking)
+        for n in walked.records
     ]
-    edges = []
+    edges: list[Edge | EdgeRef] = []
     for link in walked.links:
         relation = point.schema.link_relation(link.relation_id)
         assert relation is not None  # the walk follows only Relations of the schema
+        source = record_ref(point.schema, relation.from_kind, link.from_key)
+        to = record_ref(
+            point.schema,
+            relation.to_kind,
+            link.to_key,
+            titles.get((relation.to_kind, link.to_key)),
+            point.masking,
+        )
+        if not request.values:
+            edges.append(EdgeRef(relation=relation.api_name, source=source, to=to))
+            continue
         edges.append(
             Edge(
                 relation=relation.api_name,
-                source=record_ref(point.schema, relation.from_kind, link.from_key),
-                to=record_ref(
-                    point.schema,
-                    relation.to_kind,
-                    link.to_key,
-                    titles.get((relation.to_kind, link.to_key)),
-                    point.masking,
-                ),
+                source=source,
+                to=to,
                 values=link_values(point.schema, relation, link.values, point.masking),
             )
         )

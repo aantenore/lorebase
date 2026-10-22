@@ -11,16 +11,17 @@ reports, run the reads of one request in a `REPEATABLE READ` transaction.
 - `links_of_record`: Links in either direction, stored or foreign-key backed.
 - `links_to_record`: one page of the Links pointing at a Record along one Relation.
 - `query_by_attribute`: comparisons served by the per-Attribute partial indexes.
-- `search_records`: full-text search over the GIN index, ranking a bounded candidate set;
-  with `PartialMatching`, a query whose words do not all occur together falls back to Records
-  that hold some of them (`partial_terms`).
+- `search_records`: full-text search over the GIN index, ranking a bounded candidate set
+  (sized per query from the word lexicon with `CommonTerms`, and reported `truncated` when
+  the cap cut the ranking); with `PartialMatching`, a query whose words do not all occur
+  together falls back to Records that hold some of them (`partial_terms`).
 - `search_corrections`: typo corrections of query words from the branch's word lexicon.
 
 Incoming foreign-key Links, attribute queries and search compare with functions Postgres does
 not mark leakproof, so under row-level security plain SQL cannot use their indexes. With
 `store.reads.use_definer_functions` (the default) they run through the security definer
-functions of revisions 0005 and 0018 (`lb_links_in`, `lb_query_by_attribute`,
-`lb_search_corrected`, `lb_search_corrections`), which take the Domain as an argument: only
+functions of revisions 0005, 0018 and 0035 (`lb_links_in`, `lb_query_by_attribute`,
+`lb_search_bounded`, `lb_search_corrections`), which take the Domain as an argument: only
 these primitives call them, with the Domain their caller has already authorized (store schema
 notes). Otherwise the same statements run as plain SQL.
 
@@ -34,7 +35,7 @@ on a full branch they are unchanged.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -795,7 +796,8 @@ def search_sql(*, by_kind: bool, corrections: int = 0, records: str = "mat_recor
     `:replacements_<n>` (text array) for each and `:weight`: up to `:candidates` more rows
     that match only the corrected query come after the exact matches, ranked at `:weight`
     times their rank. `records` is the FROM item of the rows, aliased `m`
-    (`BranchLayout.records_from("m")`).
+    (`BranchLayout.records_from("m")`). Every row's `truncated` says whether the candidates
+    of either kind filled `:candidates` (revision 0035, `lb_search_bounded`).
     """
     kinds = "AND m.kind_id = ANY(CAST(:kinds AS text[])) " if by_kind else ""
 
@@ -808,7 +810,8 @@ def search_sql(*, by_kind: bool, corrections: int = 0, records: str = "mat_recor
     if not corrections:
         return (
             f"SELECT c.kind_id, c.key, c.title, "
-            f"CAST(ts_rank_cd(c.search, {_QUERY}) AS real) AS score, c.exact "
+            f"CAST(ts_rank_cd(c.search, {_QUERY}) AS real) AS score, c.exact, "
+            "count(*) OVER () >= :candidates AS truncated "
             f"FROM ({rows(True, f'm.search @@ {_QUERY}')}) AS c "
             f"ORDER BY score DESC, c.kind_id, c.key LIMIT :limit"
         )
@@ -818,7 +821,9 @@ def search_sql(*, by_kind: bool, corrections: int = 0, records: str = "mat_recor
         f"ELSE CAST(:weight AS real) * ts_rank_cd(c.search, {fixed}) END"
     )
     return (
-        f"SELECT c.kind_id, c.key, c.title, CAST({score} AS real) AS score, c.exact "
+        f"SELECT c.kind_id, c.key, c.title, CAST({score} AS real) AS score, c.exact, "
+        "(count(*) FILTER (WHERE c.exact) OVER () >= :candidates "
+        "OR count(*) FILTER (WHERE NOT c.exact) OVER () >= :candidates) AS truncated "
         f"FROM (({rows(True, f'm.search @@ {_QUERY}')}) UNION ALL "
         f"({rows(False, f'm.search @@ {fixed} AND NOT m.search @@ {_QUERY}')})) AS c "
         f"ORDER BY c.exact DESC, score DESC, c.kind_id, c.key LIMIT :limit"
@@ -837,8 +842,178 @@ _SEARCH_DEFINER = {
         "CAST(:limit AS integer), CAST(:words AS text[]), CAST(:replacements AS text[]), "
         "CAST(:weight AS real))"
     )
-    for function in ("lb_search_corrected", "lb_search_corrected_overlay")
+    for function in ("lb_search_bounded", "lb_search_bounded_overlay")
 }
+
+
+class SearchHits(list[SearchHit]):
+    """Hits of `search_records`, best first. `truncated`: a candidate cap cut the ranking, so
+    the hits are the best of the first matches in index order, not of every match."""
+
+    def __init__(self, hits: Iterable[SearchHit] = (), *, truncated: bool = False) -> None:
+        super().__init__(hits)
+        self.truncated = truncated
+
+
+@dataclass(frozen=True, slots=True)
+class CommonTerms:
+    """How many matches search ranks, chosen per query from the word lexicon (`mat_lexicon`
+    counts, the base's added on an overlay).
+
+    The lexicon gives an upper bound of the matches of a query: a lexeme matches at most the
+    Records counted for it, `a & b` at most the fewer of the two, `a | b` at most their sum
+    (a negation or a word the lexicon does not hold, one with a digit, leaves the bound
+    open). Within `docs`, every match is ranked (`docs` candidates: an exact ranking).
+    Otherwise, when every term is very common, only the first `candidates` matches in index
+    order are ranked and the result says it is truncated, so that callers narrow the query.
+    """
+
+    docs: int
+    candidates: int
+
+
+_TERM_COUNTS_SQL = """
+SELECT q.query, w.word, (
+    SELECT sum(l.records) FROM mat_lexicon l
+    WHERE l.domain_id = :domain AND l.branch = ANY(CAST(:branches AS text[]))
+      {kinds}AND l.word = w.word AND l.records > 0) AS records
+FROM (SELECT CAST(websearch_to_tsquery(CAST(:config AS regconfig), :query) AS text) AS query) q
+LEFT JOIN LATERAL (
+    SELECT DISTINCT x.word FROM ({words} UNION ALL
+                                 SELECT unnest(CAST(:extra AS text[]))) AS x) AS w ON true
+"""
+_TERM_COUNTS = {
+    by_kind: text(
+        _TERM_COUNTS_SQL.format(
+            kinds="AND l.kind_id = ANY(CAST(:kinds AS text[])) " if by_kind else "",
+            words=_WORDS.replace("CAST(" + _QUERY + " AS text)", "q.query"),
+        )
+    )
+    for by_kind in (False, True)
+}
+"""The query as full-text search reads it (tsquery text), and the Records of the branch that
+hold each of its lexemes but the negated ones, and each word of `:extra` (one row each)."""
+
+_TSQUERY_TOKENS = re.compile(r"'((?:[^']|'')*)'(?::[*A-D]+)?|<\d+>|<->|[&|!()]")
+
+
+def _lexicon_word(word: str) -> bool:
+    """Whether the lexicon holds `word` when the branch does (`lb_lexicon_word`)."""
+    return not any(c.isdigit() for c in word) and len(word) <= 64
+
+
+@dataclass(frozen=True, slots=True)
+class MatchBound:
+    """Upper bounds of the Records a query matches (`None`: the lexicon cannot say)."""
+
+    query: int | None
+    """Of the query itself."""
+    any_term: int | None
+    """Of any of its positive lexemes, the alternatives of partial matching."""
+
+
+def match_bound(tsquery: str, records: Callable[[str], int | None]) -> MatchBound:
+    """The bounds of `tsquery` (its text form) from `records(lexeme)`, the Records holding a
+    lexeme (`None` when unknown). Operators bind as tsquery prints them: `!`, then `<->` and
+    `<N>`, then `&`, then `|`."""
+    tokens: list[str | re.Match[str]] = [
+        m if m.group(1) is not None else m.group(0) for m in _TSQUERY_TOKENS.finditer(tsquery)
+    ]
+    if not tokens:
+        return MatchBound(0, 0)
+    position = 0
+    positive: list[int | None] = []
+
+    def peek() -> str | re.Match[str] | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def take() -> str | re.Match[str]:
+        nonlocal position
+        position += 1
+        return tokens[position - 1]
+
+    def operand(negated: bool) -> int | None:
+        token = take()
+        if token == "!":
+            operand(not negated)
+            return None  # NOT x: open
+        if token == "(":
+            found = alternatives(negated)
+            take()  # ")"
+            return found
+        assert isinstance(token, re.Match)
+        count = records(token.group(1).replace("''", "'"))
+        if not negated:
+            positive.append(count)
+        return count
+
+    def conjunction(negated: bool, operator: str) -> int | None:
+        inner = (lambda n: conjunction(n, "<")) if operator == "&" else operand
+        bound = inner(negated)
+        while isinstance(token := peek(), str) and token.startswith(operator):
+            take()
+            other = inner(negated)
+            # x AND y: the smaller bound; an open side leaves the other.
+            bound = other if bound is None else bound if other is None else min(bound, other)
+        return bound
+
+    def alternatives(negated: bool) -> int | None:
+        bound = conjunction(negated, "&")
+        while peek() == "|":
+            take()
+            other = conjunction(negated, "&")
+            bound = None if bound is None or other is None else bound + other
+        return bound
+
+    bound = alternatives(False)
+    any_term = None if None in positive else sum(c for c in positive if c is not None)
+    return MatchBound(bound, any_term)
+
+
+async def _match_bound(
+    session: AsyncSession,
+    layout: BranchLayout,
+    query: str,
+    fixes: Sequence[Correction],
+    kind_ids: Sequence[str] | None,
+    config: str,
+) -> MatchBound:
+    """`match_bound` of `query` with the lexicon's counts, each corrected word counting the
+    Records of its replacements too (one round trip)."""
+    extra = sorted({r for c in fixes for r in c.replacements})
+    params: dict[str, Any] = {
+        "domain": layout.domain_id,
+        "branches": [layout.branch, *([layout.base] if layout.base else [])],
+        "config": config,
+        "query": query,
+        "extra": extra,
+    }
+    if kind_ids is not None:
+        params["kinds"] = list(kind_ids)
+    rows = (await session.execute(_TERM_COUNTS[kind_ids is not None], params)).all()
+    if not rows:
+        return MatchBound(0, 0)
+    tsquery = rows[0][0] or ""
+    counts = {word: int(found or 0) for _, word, found in rows if word is not None}
+    widened = {c.word: c.replacements for c in fixes}
+
+    def records(word: str) -> int | None:
+        if not _lexicon_word(word):
+            return None
+        return counts.get(word, 0) + sum(counts.get(r, 0) for r in widened.get(word, ()))
+
+    return match_bound(tsquery, records)
+
+
+def _candidates(wanted: int, ceiling: int) -> int:
+    """The candidates argument for `wanted` matches: one more, so that the statement fills it
+    (`truncated`) only when more matches exist than were wanted."""
+    return max(1, min(wanted + 1, ceiling))
+
+
+def _wanted(bound: int | None, common: CommonTerms) -> int:
+    """Matches to rank: all of them when the bound is within `common.docs`, else a sample."""
+    return common.docs if bound is not None and bound <= common.docs else common.candidates
 
 
 @dataclass(frozen=True, slots=True)
@@ -965,8 +1140,9 @@ async def search_records(
     corrections: Sequence[Correction] = (),
     correction_weight: float = 1.0,
     partial: PartialMatching | None = None,
+    common: CommonTerms | None = None,
     runtime: StoreRuntime | None = None,
-) -> list[SearchHit]:
+) -> SearchHits:
     """Best `limit` lexical matches of `query` (web search syntax) on the branch head.
 
     `kind_ids` restricts the Kinds searched (`None`: every Kind). `corrections`
@@ -974,16 +1150,27 @@ async def search_records(
     that way have `exact` false and come after the others, ranked at `correction_weight`
     times their rank. With `partial`, fewer than `partial.min_results` hits are followed by
     Records that hold only some of the terms (`partial` true; `PartialMatching`).
+
+    At most `store.reads.search_candidates` matches are ranked, or with `common` as many as
+    the word lexicon says the query needs (`CommonTerms`, one more round trip); the result
+    is `truncated` when a statement filled its candidates.
     """
     settings = _runtime(runtime).settings
     layout = await resolve_layout(session, domain_id, branch)
     fixes = [c for c in corrections if c.replacements]
     cap = _cap(limit, settings.reads.max_search_rows)
+    config = settings.materialize.text_search_config
+    ceiling = settings.reads.definer_ceilings.candidates
+    bound = None
+    wanted = settings.reads.search_candidates
+    if common is not None:
+        bound = await _match_bound(session, layout, query, fixes, kind_ids, config)
+        wanted = _wanted(bound.query, common)
     params: dict[str, Any] = {
         "domain": domain_id,
         "branch": layout.branch,
-        "config": settings.materialize.text_search_config,
-        "candidates": settings.reads.search_candidates,
+        "config": config,
+        "candidates": _candidates(wanted, ceiling),
         "weight": correction_weight,
     }
     kinds = None if kind_ids is None else list(kind_ids)
@@ -994,7 +1181,7 @@ async def search_records(
             words=[c.word for c in fixes for _ in c.replacements],
             replacements=[r for c in fixes for r in c.replacements],
         )
-        statement = _SEARCH_DEFINER[_function("lb_search_corrected", layout)]
+        statement = _SEARCH_DEFINER[_function("lb_search_bounded", layout)]
     else:
         for n, correction in enumerate(fixes):
             params[f"word_{n}"] = correction.word
@@ -1003,36 +1190,41 @@ async def search_records(
             params["kinds"] = kinds
         statement = _search(layout.records_from("m", probe=False), kinds is not None, len(fixes))
     rows = (await session.execute(statement, {**params, "query": query, "limit": cap})).all()
-    hits = [
-        SearchHit(kind_id, key, title, float(score), bool(exact))
-        for kind_id, key, title, score, exact in rows
-    ]
+    hits = SearchHits(
+        (
+            SearchHit(kind_id, key, title, float(score), bool(exact))
+            for kind_id, key, title, score, exact, _ in rows
+        ),
+        truncated=bool(rows and rows[0][5]),
+    )
     if partial is None or len(hits) >= min(partial.min_results, cap):
         return hits
     alternatives = await partial_terms(session, query, partial.stop_words)
     if alternatives is None:
         return hits
     if definer:
-        _function("lb_search_corrected", layout)
+        _function("lb_search_bounded", layout)
     found = {(h.kind_id, h.key) for h in hits}
-    others = {
+    others: dict[str, Any] = {
         "query": alternatives.text,
         "limit": _cap(partial.candidates, settings.reads.max_search_rows),
     }
-    candidates = [
+    if common is not None and bound is not None:
+        others["candidates"] = _candidates(_wanted(bound.any_term, common), ceiling)
+    found_rows = (await session.execute(statement, {**params, **others})).all()
+    truncated = hits.truncated or bool(found_rows and found_rows[0][5])
+    matches = [
         (kind_id, key, title, float(score), bool(exact))
-        for kind_id, key, title, score, exact in (
-            await session.execute(statement, {**params, **others})
-        ).all()
+        for kind_id, key, title, score, exact, _ in found_rows
         if (kind_id, key) not in found
     ]
-    if not candidates:
-        return hits
+    if not matches:
+        return SearchHits(hits, truncated=truncated)
     matched = await _matched_terms(
         session,
         domain_id,
         layout,
-        [(c[0], c[1]) for c in candidates],
+        [(c[0], c[1]) for c in matches],
         alternatives,
         fixes,
         params["config"],
@@ -1046,10 +1238,10 @@ async def search_records(
             exact,
             partial=True,
         )
-        for kind_id, key, title, rank, exact in candidates
+        for kind_id, key, title, rank, exact in matches
     ]
     scored.sort(key=lambda h: (-h.score, h.kind_id, h.key))
-    return hits + scored[: cap - len(hits)]
+    return SearchHits([*hits, *scored[: cap - len(hits)]], truncated=truncated)
 
 
 async def _matched_terms(

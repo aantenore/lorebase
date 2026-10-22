@@ -111,6 +111,16 @@ class Edge(BaseModel):
     model_config = {"populate_by_name": True, "serialize_by_alias": True}
 
 
+class EdgeRef(BaseModel):
+    """A Link by its endpoints only (`values: false`)."""
+
+    relation: str
+    source: RecordRef = Field(alias="from")
+    to: RecordRef
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
 class TraverseHopOut(BaseModel):
     relation: str
     records: list[RecordOut]
@@ -124,8 +134,14 @@ class TraverseResponse(Served):
 
 
 class NeighborhoodResponse(Served):
-    nodes: list[RecordOut]
-    edges: list[Edge]
+    nodes: list[RecordOut | RecordRef] = Field(
+        description="Records reached, nearest first: headers only (`RecordRef`) when the "
+        "request has `values: false`."
+    )
+    edges: list[Edge | EdgeRef] = Field(
+        description="Links between the nodes: endpoints only (`EdgeRef`) when the request has "
+        "`values: false`."
+    )
     truncated: bool = False
 
 
@@ -160,6 +176,12 @@ class SearchResponse(Served):
         default_factory=list,
         description="Typo corrections applied to q; hits found only through them come after "
         "the others.",
+    )
+    truncated_candidates: bool = Field(
+        default=False,
+        description="Only a sample of the matches of q (the first ones in index order) was "
+        "ranked, as happens when every term of q is very common: better matches may exist. "
+        "Add a rarer term, a Kind or a filter to narrow q.",
     )
 
 

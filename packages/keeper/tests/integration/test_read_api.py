@@ -648,6 +648,19 @@ async def test_traverse_and_neighborhood(http: httpx.AsyncClient) -> None:
         ("Part", r["from_key"]) for r in rows("supplied_by.csv") if r["to_key"] == "S-1005"
     } <= keys
     assert not hood["truncated"]
+    headers = await post_ok(
+        http,
+        "/neighborhood",
+        {"seeds": [{"kind": "Supplier", "key": "S-1005"}], "depth": 1, "values": False},
+    )
+    assert [(n["kind"], n["key"], n["title"]) for n in headers["nodes"]] == [
+        (n["kind"], n["key"], n["title"]) for n in hood["nodes"]
+    ]
+    assert all(set(n) == {"kind", "key", "title"} for n in headers["nodes"])
+    assert [{k: e[k] for k in ("relation", "from", "to")} for e in hood["edges"]] == headers[
+        "edges"
+    ]
+    assert headers["truncated"] == hood["truncated"]
     capped = await post_ok(
         http,
         "/neighborhood",
@@ -702,7 +715,9 @@ async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> No
     assert scores == sorted(scores, reverse=True)
 
     assert lexical["corrections"] == []
-    typo = await post_ok(http, "/search", {"q": "Kavsen Aloys", "kinds": ["Supplier"]})
+    # The lexicon bounds "bearing" well within search.common_term_docs: every match ranked.
+    assert lexical["truncated_candidates"] is False
+    typo =await post_ok(http, "/search", {"q": "Kavsen Aloys", "kinds": ["Supplier"]})
     assert "S-1001" in [hit["key"] for hit in typo["items"]]
     assert [c["word"] for c in typo["corrections"]] == ["aloys"]
     assert "alloys" in typo["corrections"][0]["replacements"]
