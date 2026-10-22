@@ -156,7 +156,7 @@ class ReadSettings(SectionModel):
         default_factory=HistorySettings, description="Per-Record history and lineage."
     )
     statement_timeout_ms: int = Field(
-        default=1000, ge=0, description="statement_timeout of read transactions; 0 disables."
+        default=2000, ge=0, description="statement_timeout of read transactions; 0 disables."
     )
     schema_cache_entries: int = Field(
         default=64, ge=1, description="Compiled schemas kept in memory, by schema hash."
