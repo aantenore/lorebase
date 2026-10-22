@@ -90,6 +90,13 @@ Scan nodes of the statements of one call of each read, statements run inside the
   measured, at p95 for that role, 28.06 ms for Links of a Record (inbound foreign-key Links
   filter every purchase order), 136.73 ms for the neighborhood and 68.14 ms for search (a scan
   of the Domain's partition).
+- Record history and lineage (`GET .../records/{key}/history`, `/lineage`) are not in the
+  harness yet. They read `mat_history` by its primary key prefix `(domain_id, branch,
+  partition, element_key)` joined to `revisions` by id: one index range per Record whose size
+  is the number of changes of that Record, never a walk of the branch's Revisions. History
+  pages are keyset pages on `(generation, revision)`; lineage reads at most
+  `read.history.lineage_max_changes` changes. The conditions compare text and `bytea` columns,
+  so the plans hold under row-level security without definer functions.
 - Key, page and stored-Link reads compare text columns only; text equality and ordering are
   leakproof, so they keep their index plans as plain SQL under row-level security.
 - The functions build each statement with the Domain, branch and Kind as literals, so every
