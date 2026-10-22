@@ -109,6 +109,7 @@ nav:
       - Agents: agents.md
       - MCP server: mcp.md
       - Schema inference: inference.md
+      - LinkML: linkml.md
       - Inference providers: inference-providers.md
       - Document extraction: extraction.md
       - Scribe: scribe.md

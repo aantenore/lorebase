@@ -1,9 +1,10 @@
-"""`schema get|validate|apply|diff`: the schema of a Domain as a YAML document."""
+"""`schema get|validate|apply|diff|export|import`: the schema of a Domain as a YAML document."""
 
 from __future__ import annotations
 
 import json
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +12,15 @@ import typer
 
 from lorebase_cli.context import AppContext, app_of
 from lorebase_cli.failures import EXIT_INVALID, CliError
+from lorebase_cli.linkml import (
+    Conversion,
+    LinkmlError,
+    LinkmlOptions,
+    dump_yaml,
+    from_linkml,
+    load_yaml,
+    to_linkml,
+)
 from lorebase_cli.options import AtOpt, BranchOpt, DomainOpt, JsonOpt
 from lorebase_cli.output import Column
 from lorebase_client import models as m
@@ -206,3 +216,138 @@ def _report_apply(app: AppContext, result: m.SchemaChangeResult) -> None:
     )
     if result.changes:
         app.out.table([c.model_dump() for c in result.changes], CHANGE_COLUMNS)
+
+
+class InterchangeFormat(StrEnum):
+    """Schema languages `schema export` and `schema import` translate to and from."""
+
+    LINKML = "linkml"
+
+
+OutputOpt = Annotated[
+    Path | None, typer.Option("--output", "-o", help="Write the document to this file.")
+]
+
+
+def _write(app: AppContext, text: str, output: Path | None) -> None:
+    if output:
+        output.write_text(text, encoding="utf-8")
+        app.out.info(f"wrote {output}")
+    else:
+        app.out.text(text)
+
+
+@schema_app.command("export")
+def schema_export(
+    ctx: typer.Context,
+    format_: Annotated[
+        InterchangeFormat, typer.Option("--format", help="Schema language to write.")
+    ],
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    at: AtOpt = None,
+    file: Annotated[
+        str | None,
+        typer.Option(
+            "--file",
+            help="Convert this Lorebase schema document (`-` reads standard input) instead of "
+            "the schema of the Domain.",
+        ),
+    ] = None,
+    uri: Annotated[
+        str | None,
+        typer.Option("--uri", help="Id of the LinkML schema; `{domain}` is the Domain id."),
+    ] = None,
+    output: OutputOpt = None,
+) -> None:
+    """Translate a schema into LinkML YAML.
+
+    What LinkML cannot express (element ids, sensitivity, search settings, Operations,
+    Derivations, Sources) travels as `lorebase.*` annotations.
+    """
+    app = app_of(ctx, False)
+    if file is not None:
+        text = read_document(file)
+    else:
+        name = app.domain(domain)
+        text = app.client().schema.get_yaml(name, branch=app.branch(branch), at=at)
+    options = LinkmlOptions(schema_uri=uri) if uri else LinkmlOptions()
+    try:
+        schema = to_linkml(load_yaml(text), options)
+    except LinkmlError as error:
+        raise CliError(str(error), exit_code=EXIT_INVALID) from error
+    _write(app, dump_yaml(schema), output)
+
+
+@schema_app.command("import")
+def schema_import(
+    ctx: typer.Context,
+    file: Annotated[
+        str, typer.Argument(help="LinkML schema; `-` reads standard input.", metavar="FILE")
+    ],
+    source: Annotated[InterchangeFormat, typer.Option("--from", help="Schema language of FILE.")],
+    output: OutputOpt = None,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Apply the result to a branch instead of printing it."),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Plan applying the result; write nothing.")
+    ] = False,
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    message: Annotated[
+        str | None, typer.Option("--message", "-m", help="Revision message.")
+    ] = None,
+    cascade: Annotated[
+        bool,
+        typer.Option("--cascade", help="Allow removing Kinds or Relations that hold data."),
+    ] = False,
+    expected_head: Annotated[
+        str | None,
+        typer.Option("--expected-head", help="Fail unless the branch is at this Revision."),
+    ] = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Translate a LinkML schema into a Lorebase schema document.
+
+    Prints the document (or writes it with --output); warnings about what it leaves out go to
+    standard error. --apply sends it to a branch like `schema apply`, --dry-run plans that. The
+    document replaces the whole schema: elements it leaves out, Operations, Derivations and
+    Sources included, are removed.
+    """
+    app = app_of(ctx, json_out)
+    try:
+        conversion = from_linkml(load_yaml(read_document(file)))
+    except LinkmlError as error:
+        raise CliError(str(error), exit_code=EXIT_INVALID) from error
+    for warning in conversion.warnings:
+        app.out.info(f"warning: {warning}")
+    if not (apply or dry_run):
+        _print_conversion(app, conversion, output)
+        return
+    name = app.domain(domain)
+    conversion.document["domain"]["id"] = name
+    target = _default_branch(app, name, branch)
+    result = app.client().schema.apply(
+        name,
+        target,
+        yaml=dump_yaml(conversion.document),
+        message=message,
+        expected_head=expected_head,
+        dry_run=dry_run,
+        cascade=cascade,
+    )
+    app.out.emit(result, lambda: _report_apply(app, result))
+
+
+def _print_conversion(app: AppContext, conversion: Conversion, output: Path | None) -> None:
+    if app.json_mode and not output:
+        app.out.data(
+            {
+                "document": conversion.document,
+                "warnings": [vars(warning) for warning in conversion.warnings],
+            }
+        )
+        return
+    _write(app, dump_yaml(conversion.document), output)

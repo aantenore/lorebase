@@ -1,0 +1,200 @@
+# A person and organization schema in the style of the LinkML personinfo example, written for
+# the import tests. It uses features the import maps (classes, slots, slot_usage, mixins, enums,
+# identifiers, inverses) and features it reports (is_a, abstract and tree_root classes, inlined
+# objects, rules, custom types, enum meanings, mappings, any_of).
+id: https://example.org/personinfo
+name: personinfo
+title: Person information
+description: People, the organizations they work for and where they live.
+license: https://creativecommons.org/publicdomain/zero/1.0/
+version: 0.1.0
+prefixes:
+  linkml: https://w3id.org/linkml/
+  personinfo: https://example.org/personinfo/
+  schema: http://schema.org/
+default_prefix: personinfo
+default_range: string
+imports:
+  - linkml:types
+
+types:
+  PhoneNumberType:
+    typeof: string
+    pattern: '^[\d\(\)\-]+$'
+
+enums:
+  GenderType:
+    permissible_values:
+      nonbinary_man:
+        meaning: GSSO:009254
+      nonbinary_woman:
+        meaning: GSSO:009253
+      cisgender_man:
+      cisgender_woman:
+  FamilialRelationshipType:
+    description: How two people are related.
+    permissible_values:
+      SIBLING_OF:
+        description: Shares a parent with the other person.
+      PARENT_OF:
+      CHILD_OF:
+
+slots:
+  id:
+    identifier: true
+    range: uriorcurie
+    slot_uri: schema:identifier
+  name:
+    required: true
+    slot_uri: schema:name
+  description:
+  primary_email:
+    pattern: '^\S+@[\S+\.]+\S+'
+  birth_date:
+    range: date
+  age_in_years:
+    range: integer
+    minimum_value: 0
+    maximum_value: 999
+  gender:
+    range: GenderType
+  phone:
+    range: PhoneNumberType
+  aliases:
+    multivalued: true
+  current_address:
+    range: Address
+    inlined: true
+  employed_at:
+    range: Organization
+    inverse: employees
+  employees:
+    range: Person
+    multivalued: true
+    inverse: employed_at
+  has_employment_history:
+    range: EmploymentEvent
+    multivalued: true
+    inlined_as_list: true
+  related_to:
+    range: Person
+  type:
+    range: FamilialRelationshipType
+  mission_statement:
+  founding_date:
+    range: date
+  salary:
+    range: decimal
+  street:
+  city:
+  postal_code:
+  started_at_time:
+    range: date
+  ended_at_time:
+    range: date
+  wake_up_time:
+    range: time
+  favorite_color:
+    any_of:
+      - range: string
+      - range: integer
+
+classes:
+  NamedThing:
+    abstract: true
+    description: A generic grouping for any identifiable entity.
+    slots:
+      - id
+      - name
+      - description
+    class_uri: schema:Thing
+
+  HasAliases:
+    mixin: true
+    description: A mixin applied to any class that can have aliases.
+    slots:
+      - aliases
+
+  Person:
+    is_a: NamedThing
+    mixins:
+      - HasAliases
+    description: A person, living or dead.
+    class_uri: schema:Person
+    exact_mappings:
+      - schema:Person
+    slots:
+      - primary_email
+      - birth_date
+      - age_in_years
+      - gender
+      - phone
+      - wake_up_time
+      - favorite_color
+      - current_address
+      - employed_at
+      - has_employment_history
+    slot_usage:
+      primary_email:
+        required: true
+    rules:
+      - preconditions:
+          slot_conditions:
+            age_in_years:
+              minimum_value: 18
+        postconditions:
+          slot_conditions:
+            employed_at:
+              required: true
+
+  Organization:
+    is_a: NamedThing
+    description: An organization such as a company or university.
+    slots:
+      - mission_statement
+      - founding_date
+      - employees
+    attributes:
+      revenue:
+        range: decimal
+        minimum_value: 0
+
+  Address:
+    slots:
+      - street
+      - city
+      - postal_code
+
+  EmploymentEvent:
+    description: A period of employment.
+    slots:
+      - started_at_time
+      - ended_at_time
+      - salary
+      - employed_at
+    slot_usage:
+      employed_at:
+        inverse:
+
+  FamilialRelationship:
+    slots:
+      - started_at_time
+      - type
+      - related_to
+    slot_usage:
+      type:
+        required: true
+      related_to:
+        required: true
+
+  Container:
+    tree_root: true
+    attributes:
+      persons:
+        range: Person
+        multivalued: true
+        inlined_as_list: true
+      organizations:
+        range: Organization
+        multivalued: true
+        inlined_as_list: true

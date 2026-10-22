@@ -103,7 +103,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
 - [x] Backup and restore guide, audit chain verification, signed images (Domain bundles and `pg_dump` in [operations](operations.md#backup-and-restore-of-a-domain); `python -m lorebase_keeper audit verify`, `GET .../audit/verify`, `lorebase audit verify` and a daily Scribe job with an alert, [operations](operations.md#audit-chain-verification); images signed with cosign by the release workflow, [release](release.md))
 - [x] HTTP JSON Source with cursor, page, offset and Link header pagination ([scribe](scribe.md#sources)); landed early
-- [ ] LinkML schema import and export
+- [x] LinkML schema import and export (`lorebase schema export --format linkml`, `lorebase schema import FILE --from linkml`; round trips through `lorebase.*` annotations, [LinkML](linkml.md))
 - [x] Documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built with `mkdocs build --strict` (`make docs`) and published by the Docs workflow
 - [ ] API stability guarantees for `/api/v1` (the policy is written, [API stability](api-stability.md): what is stable, compatible and breaking changes, deprecation, client compatibility, MCP tools and the schema format; it binds from 1.0, and Keeper does not emit `Deprecation` or `Sunset` headers yet since nothing is deprecated)
 - [x] Threat model published and the security review checklist completed ([threat model](threat-model.md): STRIDE per trust boundary with mitigations and residual risks; [security review](security-review.md): 23 findings, all fixed, none open)
