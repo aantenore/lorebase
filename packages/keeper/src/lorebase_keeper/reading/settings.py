@@ -294,7 +294,7 @@ class SearchSettings(SectionModel):
         default=4, ge=1, description="Shortest query word (in characters) that is corrected."
     )
     common_term_docs: int = Field(
-        default=20000,
+        default=2000,
         ge=0,
         description="Lexical search without filters ranks every match when the word lexicon "
         "bounds the matches of q within this many Records; when every term of q is more "
@@ -303,7 +303,7 @@ class SearchSettings(SectionModel):
         "store.reads.search_candidates matches are ranked, whatever the terms.",
     )
     common_term_candidates: int = Field(
-        default=5000,
+        default=1000,
         ge=1,
         description="Matches ranked when every term of q is above search.common_term_docs.",
     )
