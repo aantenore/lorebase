@@ -95,6 +95,34 @@ _REBUILD_HISTORY = text(
 )
 
 
+_CHAIN_TO = text(
+    """
+    WITH RECURSIVE chain(id, depth) AS (
+        SELECT CAST(:head AS bytea), 0
+        UNION ALL
+        SELECT p.parent_id, chain.depth + 1
+        FROM chain
+        JOIN revision_parents p
+          ON p.domain_id = :domain AND p.revision_id = chain.id AND p.position = 0
+        WHERE chain.id <> :stop AND chain.depth < :limit
+    )
+    SELECT id FROM chain
+    """
+)
+
+_INSERT_CHAIN_HISTORY = text(
+    """
+    INSERT INTO mat_history
+        (domain_id, branch, partition, element_key, revision_id, at, old_hash, new_hash,
+         provenance)
+    SELECT :domain, :branch, c.partition, c.element_key, c.revision_id, r.created_at,
+           c.old_hash, c.new_hash, c.provenance
+    FROM revisions r
+    JOIN changesets c ON c.domain_id = :domain AND c.revision_id = r.id
+    WHERE r.domain_id = :domain AND r.id = ANY(CAST(:ids AS bytea[]))
+    """
+)
+
 _KEYS_WITH_ORIGIN = """
     SELECT r.key FROM {records}
     WHERE r.domain_id = :domain AND r.branch = :branch AND r.kind_id = :kind
@@ -768,6 +796,28 @@ class MaterializedRepository:
             ],
             writes=self._writes,
             on_conflict=OnConflict.ERROR,
+        )
+
+    async def first_parent_range(
+        self, head: bytes, stop: bytes, *, limit: int
+    ) -> list[bytes] | None:
+        """The Revisions from `head` down the first-parent chain to `stop` (excluded), when
+        `stop` is reached within `limit` of them; None otherwise."""
+        if limit <= 0 or head == stop:
+            return None
+        found = await self._session.execute(
+            _CHAIN_TO, {"head": head, "stop": stop, "domain": self._domain, "limit": limit}
+        )
+        ids = [bytes(row[0]) for row in found]
+        if ids[-1] != stop:
+            return None
+        return ids[:-1]
+
+    async def insert_chain_history(self, revisions: Sequence[bytes]) -> None:
+        """History rows of the changesets of `revisions`, as `rebuild_history` writes them."""
+        await self._session.execute(
+            _INSERT_CHAIN_HISTORY,
+            {"domain": self._domain, "branch": self._branch, "ids": list(revisions)},
         )
 
     async def history(self, partition: str, element_key: str) -> list[HistoryRow]:

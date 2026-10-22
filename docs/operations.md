@@ -34,7 +34,8 @@ stored before the default branch tagged an Attribute) and `store.lineage_backfil
 lineage revisions of rows materialized before migration `0032`; a starting worker queues the
 sweep once, and `python -m lorebase_store.jobs lineage-backfill [--domain D --branch B]
 [--recompute]` queues it by hand, `--recompute` also correcting rows of merges made before
-merges attributed only the values they change) jobs by default (`--types` narrows it; see [Large
+merges attributed only the values they change, and the history and rows of earlier
+fast-forwards) jobs by default (`--types` narrows it; see [Large
 branches](#large-branches)). Index jobs
 build and drop per-Attribute indexes; they run as `database.maintenance_dsn` when it is set,
 because their DDL needs a role that owns `mat_records` ([store schema

@@ -304,9 +304,72 @@ async def test_a_fast_forward_names_the_revisions_a_rebuild_folds(
     assert s1[COUNTRY] == moved.hex()
     assert s1[LEGAL_NAME] == renamed.hex()
     assert s1[SUPPLIER_CODE] == created.hex()
+    # One history row per change of each fast-forwarded Revision, as a rebuild writes them.
+    history = await main_history(sessions)
+    assert {row[2] for row in history if row[1] == "S-1"} == {created, moved, renamed}
     async with sessions() as session, session.begin():
         await rebuild(session, DOMAIN, "main", runtime=runtime)
     assert await main_rows(sessions) == incremental
+    assert await main_history(sessions) == history
+
+
+MAIN_HISTORY = text(
+    "SELECT partition, element_key, revision_id, at, old_hash, new_hash, provenance "
+    "FROM mat_history WHERE domain_id = :domain AND branch = 'main' "
+    "ORDER BY partition, element_key, revision_id"
+)
+SINGLE_ROW = StoreRuntime.from_settings(
+    StoreSettings(materialize=MaterializeSettings(fast_forward_history_max_revisions=0))
+)
+
+
+async def main_history(sessions: Sessions) -> list[tuple[Any, ...]]:
+    async with sessions() as session:
+        return [tuple(row) for row in await session.execute(MAIN_HISTORY, {"domain": DOMAIN})]
+
+
+async def test_recompute_rewrites_what_older_fast_forwards_wrote(
+    sessions: Sessions, engine: AsyncEngine, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await fork_side(sessions, runtime, clock)
+    await run(sessions, runtime, clock, [supplier("S-1", "Acme", country="FR")], branch="side")
+    await run(sessions, runtime, clock, [supplier("S-1", "Acme Ltd", country="FR")], branch="side")
+    # Beyond the bound (here 0): one history row per element at the source head, as every
+    # fast-forward wrote before; and the rows those wrote, naming the source head.
+    head = await merge(sessions, SINGLE_ROW, clock, "side")
+    single = await main_history(sessions)
+    assert {row[2] for row in single if row[1] == "S-1"} >= {head}
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "UPDATE mat_records SET updated_revision = :head, lineage_revisions = "
+                "jsonb_build_object(CAST(:country AS text), CAST(:hex AS text), "
+                "CAST(:name AS text), "
+                "CAST(:hex AS text), '$created', lineage_revisions ->> '$created') "
+                "WHERE domain_id = :d AND branch = 'main' AND key = 'S-1'"
+            ),
+            {"head": head, "hex": head.hex(), "country": COUNTRY, "name": LEGAL_NAME, "d": DOMAIN},
+        )
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO jobs (type, domain_id, payload) "
+                "VALUES (:type, :domain, CAST(:payload AS jsonb))"
+            ),
+            {
+                "type": LINEAGE_BACKFILL_JOB,
+                "domain": DOMAIN,
+                "payload": json.dumps(backfill_payload("main", recompute=True)),
+            },
+        )
+    assert await drain(sessions, engine, runtime) == 1
+    repaired_rows, repaired_history = await main_rows(sessions), await main_history(sessions)
+    assert repaired_history != single
+    async with sessions() as session, session.begin():
+        await rebuild(session, DOMAIN, "main", runtime=runtime)
+    assert await main_history(sessions) == repaired_history
+    assert await main_rows(sessions) == repaired_rows
 
 
 async def test_recompute_names_only_the_values_an_older_merge_changed(

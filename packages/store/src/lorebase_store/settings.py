@@ -215,6 +215,14 @@ class MaterializeSettings(SectionModel):
         "the Links of materialized path Derivations in the materialized head on every commit, "
         "merge and rebuild.",
     )
+    fast_forward_history_max_revisions: int = Field(
+        default=1000,
+        ge=0,
+        description="Revisions of a fast-forwarded range written to the target branch's "
+        "history one by one, as a rebuild would; a longer range, or one whose start is not on "
+        "the source head's first-parent chain, is recorded as one change at the source head. "
+        "0 always records one change.",
+    )
     derivation_max_incremental_records: int = Field(
         default=10000,
         ge=1,

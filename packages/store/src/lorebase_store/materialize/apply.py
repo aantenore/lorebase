@@ -70,6 +70,7 @@ async def apply_changeset(
     expression_limits: ExprLimits | None = None,
     runtime: StoreRuntime | None = None,
     lineage_source: str | None = None,
+    fast_forward_from: bytes | None = None,
 ) -> None:
     """Apply a Revision's changeset to the materialized head of `branch`.
 
@@ -78,6 +79,10 @@ async def apply_changeset(
     the same object takes the source row's lineage, lineage revisions and update Revision, as
     a rebuild folding that chain would (one primary-key read per batch of changed keys; a
     source row without lineage revisions is folded from the changeset instead).
+    `fast_forward_from` is the branch's head before that fast-forward: when it lies on the
+    first-parent chain of `revision_id` within `materialize.fast_forward_history_max_revisions`
+    Revisions, the branch history gets one row per change of each of them, as a rebuild
+    writes it; otherwise one row per change at `revision_id`.
 
     `schema` is the schema at the Revision; `schema_hash` is its schema partition hash when
     the schema changed. `refresh_kinds` lists Kinds whose title or search settings changed:
@@ -123,20 +128,32 @@ async def apply_changeset(
         if not deferred:
             await promote(session, domain_id, branch, runtime=runtime, locked=True)
         repository.forget_layout()
-    await repository.insert_history(
-        [
-            HistoryRow(
-                partition=change.entry.partition,
-                element_key=change.entry.key,
-                revision_id=revision_id,
-                at=at,
-                old_hash=change.entry.old_hash,
-                new_hash=change.entry.new_hash,
-                provenance=dict(change.entry.provenance) or None,
-            )
-            for change in changes
-        ]
+    fast_forwarded = (
+        None
+        if fast_forward_from is None
+        else await repository.first_parent_range(
+            revision_id,
+            fast_forward_from,
+            limit=settings.materialize.fast_forward_history_max_revisions,
+        )
     )
+    if fast_forwarded is not None:
+        await repository.insert_chain_history(fast_forwarded)
+    else:
+        await repository.insert_history(
+            [
+                HistoryRow(
+                    partition=change.entry.partition,
+                    element_key=change.entry.key,
+                    revision_id=revision_id,
+                    at=at,
+                    old_hash=change.entry.old_hash,
+                    new_hash=change.entry.new_hash,
+                    provenance=dict(change.entry.provenance) or None,
+                )
+                for change in changes
+            ]
+        )
     if schema_hash is not None:
         await repository.set_schema(SchemaRow(schema_hash, schema.content()))
     by_partition: dict[str, list[MaterializedChange]] = defaultdict(list)
