@@ -790,7 +790,8 @@ Outbox events, shared by every consumer (design 10.5)
 |---------|---------|-------------|
 | `store.outbox.retention_s` | `604800.0` | events every consumer handed off are kept this long (7 days) |
 | `store.outbox.max_age_s` | `2592000.0` | events are deleted after this even when still pending (30 days) |
-| `store.outbox.prune_batch` | `10000` | events deleted per reason by one pruning pass |
+| `store.outbox.prune_batch` | `10000` | events deleted per reason by one batch (own transaction) |
+| `store.outbox.prune_budget_s` | `5.0` | seconds one pruning pass keeps deleting batches |
 
 ### `store.bundle`
 

@@ -172,6 +172,18 @@ groups:
           description: "{{ $value | humanize }} webhook deliveries became dead in the last hour (attempts used up or target refused). Check the dead deliveries in the database."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasewebhookdeliveryfailing"
 
+      # Outbox events eligible for pruning left after the pass (the count is capped at 100000).
+      - alert: LorebaseOutboxPruneBacklog
+        expr: min_over_time(lorebase_outbox_prune_backlog[30m]) > 50000
+        for: 30m
+        labels:
+          severity: warning
+          component: scribe
+        annotations:
+          summary: "Outbox pruning cannot keep up"
+          description: "{{ $value | humanize }} outbox events were still eligible for pruning after every pass of the last 30 minutes."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebaseoutboxprunebacklog"
+
       # N is 3 days: the default schedule collects every day at 03:00 UTC (scribe.scheduler.gc_schedule).
       # Only real collections count, and only a schedule that queues real ones (gc_dry_run false)
       # can raise it: a dry-run schedule or a null one does not page.

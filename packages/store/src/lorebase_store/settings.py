@@ -360,8 +360,17 @@ class OutboxSettings(SectionModel):
     prune_batch: int = Field(
         default=10000,
         ge=1,
-        description="Events deleted per reason by one pruning pass (run by each webhook "
-        "delivery pass), so a large backlog goes over several passes.",
+        description="Events deleted per reason by one batch (its own short transaction). A "
+        "pruning pass, run by each webhook delivery pass, repeats batches until nothing is "
+        "left to prune or outbox.prune_budget_s is spent.",
+    )
+    prune_budget_s: float = Field(
+        default=5.0,
+        gt=0,
+        description="Time one pruning pass may spend deleting batches of outbox.prune_batch "
+        "events; no new batch starts once it is spent (a batch always runs), and the rest "
+        "waits for the next pass. Events still prunable are reported by "
+        "lorebase.outbox.prune.backlog.",
     )
 
     @model_validator(mode="after")

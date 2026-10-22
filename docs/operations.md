@@ -413,6 +413,14 @@ claim (database down), or every job hangs. The Scribe dashboard shows the queue 
 and logs, `SELECT type, status, count(*) FROM jobs GROUP BY 1, 2`, and rows locked for longer than `store.jobs.stale_after_seconds` (the scheduler requeues those).
 `python -m lorebase_store.jobs work` drains the queue from a shell.
 
+#### LorebaseOutboxPruneBacklog
+
+Outbox events eligible for pruning stayed above 50000 for 30 minutes (`lorebase_outbox_prune_backlog`, capped at
+100000 by the count): pruning cannot keep up with the event rate, or Scribe stopped passing. Check that the
+webhook delivery job runs (job queue and Scribe dashboards), then raise `store.outbox.prune_budget_s` or
+`store.outbox.prune_batch`, or shorten `store.outbox.retention_s`. Each batch is a short transaction; a pass
+spends at most the budget on it.
+
 #### LorebaseWebhookDeliveryFailing
 
 Deliveries became dead in the last hour (`lorebase_webhooks_deliveries_total{outcome="dead"}`); the Scribe
@@ -425,7 +433,10 @@ The outbox keeps a backlog per consumer (`outbox_pending`): `SELECT consumer, co
 outbox_pending GROUP BY 1`. Events leave the outbox once every consumer handed them off and they
 are older than `store.outbox.retention_s` (7 days), or after `store.outbox.max_age_s` (30 days)
 in any case; the latter are counted in `lorebase_outbox_pruned_total{reason="expired"}` and
-logged. To stop keeping events for a consumer that no longer runs, delete its row from
+logged. A pruning pass (one per webhook delivery pass) deletes batches of `store.outbox.prune_batch`,
+each in its own transaction, until nothing is left or `store.outbox.prune_budget_s` (5 s) is spent;
+`lorebase_outbox_prune_backlog` is what stayed prunable after the latest pass, counted up to 100000.
+To stop keeping events for a consumer that no longer runs, delete its row from
 `outbox_consumers` (its pending rows go with it).
 
 A receiver that stopped answering does not hold Scribe: each attempt is cut off after `webhooks.timeout_s`

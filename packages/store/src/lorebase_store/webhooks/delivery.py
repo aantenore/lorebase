@@ -25,7 +25,9 @@ A pass, safe to run concurrently in several workers (rows are claimed with `SKIP
    again), so receivers drop repeats by it. Deliveries are not ordered: retries interleave
    with newer events; payloads carry `sequence` (the outbox id) for receivers that need one;
 4. prune finished deliveries older than `retention_s`, and outbox events by `store.outbox`
-   (`OutboxRepository.prune`).
+   (`OutboxRepository.prune`): batches of `prune_batch`, each in its own transaction, until
+   nothing is left or `prune_budget_s` is spent; the events still prunable are reported by
+   `lorebase.outbox.prune.backlog` (counted up to `PRUNE_BACKLOG_CAP`).
 
 Before these steps, with `encryption_key` set, up to `batch` signing keys stored usable (or
 under a previous encryption key) are sealed under it (`webhooks.keys`). A delivery whose key
@@ -43,6 +45,7 @@ import ipaddress
 import json
 import logging
 import socket
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -63,6 +66,7 @@ from lorebase_store.repositories.events import OutboxRepository, OutboxRow
 from lorebase_store.settings import OutboxSettings, WriteSettings
 from lorebase_store.telemetry import (
     OUTBOX_HANDOFFS,
+    OUTBOX_PRUNE_BACKLOG,
     OUTBOX_PRUNED,
     WEBHOOK_OUTCOMES,
     WEBHOOK_TIMEOUTS,
@@ -515,11 +519,15 @@ async def _release(
         )
 
 
+PRUNE_BACKLOG_CAP = 100_000  # prunable events counted for lorebase.outbox.prune.backlog
+
+
 async def _prune(
     sessions: async_sessionmaker[AsyncSession],
     settings: WebhookSettings,
     outbox: OutboxSettings,
     now: datetime,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> int:
     before = now - timedelta(seconds=settings.retention_s)
     d = WEBHOOK_DELIVERIES
@@ -530,15 +538,34 @@ async def _prune(
             .returning(d.c.id)
         )
         pruned = len(result.all())
-        handed, expired = await OutboxRepository(session).prune(
-            before=now - timedelta(seconds=outbox.retention_s),
-            expire_before=now - timedelta(seconds=outbox.max_age_s),
-            limit=outbox.prune_batch,
-        )
-    if handed:
-        OUTBOX_PRUNED.add(handed, {"reason": "retention"})
+    cutoffs = {
+        "before": now - timedelta(seconds=outbox.retention_s),
+        "expire_before": now - timedelta(seconds=outbox.max_age_s),
+    }
+    deadline = monotonic() + outbox.prune_budget_s
+    handed = expired = 0
+    drained = False
+    while True:  # batches, each in its own transaction, until drained or out of budget
+        async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+            batch_handed, batch_expired = await OutboxRepository(session).prune(
+                **cutoffs, limit=outbox.prune_batch
+            )
+        # Counted per committed batch, so a later failing batch keeps these counts.
+        if batch_handed:
+            OUTBOX_PRUNED.add(batch_handed, {"reason": "retention"})
+        if batch_expired:
+            OUTBOX_PRUNED.add(batch_expired, {"reason": "expired"})
+        handed += batch_handed
+        expired += batch_expired
+        drained = max(batch_handed, batch_expired) < outbox.prune_batch
+        if drained or monotonic() >= deadline:
+            break
+    backlog = 0
+    if not drained:  # out of budget: count what is left (a drained pass left nothing)
+        async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+            backlog = await OutboxRepository(session).prunable(**cutoffs, cap=PRUNE_BACKLOG_CAP)
+    OUTBOX_PRUNE_BACKLOG.set(backlog)
     if expired:
-        OUTBOX_PRUNED.add(expired, {"reason": "expired"})
         logger.warning(
             "outbox events expired before every consumer handed them off",
             extra={"expired": expired, "max_age_s": outbox.max_age_s},
@@ -556,10 +583,12 @@ async def deliver_pending(
     vault: VaultKeys | None = None,
     clock: Clock = utc_now,
     resolve: Resolver = resolve_host,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> DeliveryReport:
     """One delivery pass (see module doc); call it periodically. `outbox` sets the retention
     of outbox events (default: code defaults); `vault` opens the vault values that webhooks
-    cleared for them receive (without it they receive `masked_value`)."""
+    cleared for them receive (without it they receive `masked_value`). `monotonic` times the
+    pruning budget (`outbox.prune_budget_s`)."""
     report = DeliveryReport()
     keys = SigningKeys.from_settings(settings)
     if keys.sealing:
@@ -596,5 +625,5 @@ async def deliver_pending(
                     "error": outcome.error,
                 },
             )
-    report.pruned = await _prune(sessions, settings, outbox or OutboxSettings(), clock())
+    report.pruned = await _prune(sessions, settings, outbox or OutboxSettings(), clock(), monotonic)
     return report
