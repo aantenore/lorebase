@@ -6,7 +6,8 @@ commands read the database and `store.*` settings from the Lorebase configuratio
 
 ## Garbage collection
 
-Objects, tree nodes and Revisions are immutable, so deleting a branch only removes its ref.
+Objects, tree nodes and Revisions are immutable, so deleting a branch only removes its ref (and
+its materialized rows, in the background for a large branch: see [Large branches](#large-branches)).
 Collection reclaims what no ref reaches any more (design 6.13). Per Domain, it marks every
 Revision reachable from a branch or tag, from an open Proposal's merge attempts, or created less
 than `store.gc.grace_seconds` ago (default one hour), then the tree nodes and objects those
@@ -26,9 +27,10 @@ python -m lorebase_store.jobs work                        # run queued jobs (SKI
 python -m lorebase_store.indexes plan --domain supply     # pending per-Attribute index DDL
 ```
 
-`jobs work` runs `gc`, `store.index` and `store.materialize` (promotion of an overlay branch
-whose base moved too far, [store schema notes](store-schema-notes.md#overlay-branches)) jobs
-by default (`--types` narrows it). Index jobs
+`jobs work` runs `gc`, `store.index`, `store.materialize` (the background copy of a large copy
+branch, or of an overlay branch whose base moved too far) and `store.branch_delete` (the rows of
+a large deleted branch) jobs by default (`--types` narrows it; see [Large
+branches](#large-branches)). Index jobs
 build and drop per-Attribute indexes; they run as `database.maintenance_dsn` when it is set,
 because their DDL needs a role that owns `mat_records` ([store schema
 notes](store-schema-notes.md#physical-layout)). `indexes plan` prints that DDL for an
@@ -59,6 +61,50 @@ Safety:
   Rows written ahead of their Revision by other means are not protected.
 - Run a dry run first on production data and compare it with the expected branch deletions.
   Take a bundle (below) before the first collection of a long-lived Domain.
+
+## Large branches
+
+Copying or deleting a branch takes time in proportion to its rows (about 90 s for a copy at 1M
+Records, [performance](performance.md#1m-records)), more than `database.statement_timeout_ms`.
+Above `store.materialize.async_copy_min_rows` rows in the source, a copy branch is therefore
+created as an overlay at once, readable and writable, and a `store.materialize` job copies its
+rows; above `async_delete_min_rows` rows, a deleted branch disappears at once and a
+`store.branch_delete` job deletes its rows. Both run in batches of `job_batch_rows` rows, one
+short transaction each, resume after a failure or a restart from where they stopped, and at
+most `job_concurrency` of them run at once across all workers ([store schema
+notes](store-schema-notes.md#large-branches)). Scribe runs them like any other job; without
+Scribe, `python -m lorebase_store.jobs work` does.
+
+- **Progress.** `GET /api/v1/domains/{domain}/branches/{branch}` has `materialization_status`
+  (`pending`, `running`, `done`, `failed`) and `materialization_progress` (`phase`, `rows_done`
+  of `rows_total`, the last `error`). `lorebase branch create NAME --mode copy --wait` waits
+  for the copy, printing progress on standard error, and fails when the copy fails. In SQL:
+  `SELECT branch, status, phase, rows_done, rows_total, error FROM branch_materializations`.
+- **Batch size.** Each batch must finish within `database.statement_timeout_ms`, and holds the
+  branch lock while it runs: a commit on the branch, or on its source when it has to copy rows
+  into the branch, waits for at most one batch. Raise `job_batch_rows` to copy faster, lower it
+  when batches come close to the timeout or commits wait too long
+  (`lorebase.store.branch_jobs.batch.duration`, [metrics](metrics.md#store)).
+- **Concurrency.** `job_concurrency` bounds the write load of copies and deletions on the
+  database; a job that finds no free slot is queued again after `job_retry_seconds` and counted
+  as `deferred` in `lorebase.store.branch_jobs.runs`.
+- **While a copy runs.** The branch answers with `materialization: overlay`. Schema changes on
+  it are refused with 409 `branch-materializing` and `Retry-After` until the copy is done; data
+  commits, merges and reads work, with overlay performance. It counts against
+  `keeper.branches.max_materialized_per_domain`.
+- **A failed copy** (`failed` after `store.jobs.max_attempts`, with the error) leaves a correct
+  overlay. Fix the cause (usually the statement timeout: lower `job_batch_rows`), then queue the
+  copy again; it resumes from its cursor:
+
+  ```sql
+  INSERT INTO jobs (type, domain_id, payload) VALUES ('store.materialize', 'supply', '{"branch": "feature"}');
+  ```
+
+- **While a deletion runs.** The name stays taken: creating a branch with it answers 409
+  `already-exists` with `Retry-After`. A deleted branch that other overlays are based on waits
+  for their background copies first (a copy that keeps failing keeps it waiting) (`waiting` in `lorebase.store.branch_jobs.runs`). Hidden
+  branches still being deleted: `SELECT name, deleted_at FROM refs WHERE deleted_at IS NOT
+  NULL`. Their heads stay garbage collection roots until the job ends.
 
 ## Backup and restore of a Domain
 

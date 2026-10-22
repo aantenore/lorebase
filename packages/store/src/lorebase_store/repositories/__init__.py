@@ -22,6 +22,13 @@ from lorebase_store.repositories.index_view import (
     RecordState,
 )
 from lorebase_store.repositories.invocations import InvocationRepository, InvocationRow
+from lorebase_store.repositories.materializations import (
+    BranchMaterializationRepository,
+    MaterializationPhase,
+    MaterializationState,
+    MaterializationStatus,
+    copy_fence,
+)
 from lorebase_store.repositories.materialized import (
     HistoryRow,
     HistoryStep,
@@ -72,6 +79,7 @@ from lorebase_store.repositories.source_runs import SourceRunRepository, SourceR
 
 __all__ = [
     "EVERY_PARTITION",
+    "BranchMaterializationRepository",
     "ChangesetRepository",
     "ChunkRepository",
     "ChunkRow",
@@ -94,6 +102,9 @@ __all__ = [
     "LinkRow",
     "LinkState",
     "LockTimeoutError",
+    "MaterializationPhase",
+    "MaterializationState",
+    "MaterializationStatus",
     "MaterializedIndexView",
     "MaterializedRepository",
     "MergeAttemptRepository",
@@ -124,5 +135,6 @@ __all__ = [
     "SourceRunRepository",
     "SourceRunRow",
     "advisory_lock_key",
+    "copy_fence",
     "scope_to_domain",
 ]

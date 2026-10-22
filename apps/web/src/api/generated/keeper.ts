@@ -1300,8 +1300,11 @@ export interface paths {
          * @description Create a materialized branch (a copy, or an overlay on its source) from a branch, tag
          *     or Revision.
          *
-         *     With an `Idempotency-Key`, retrying a create that succeeded returns the branch with status
-         *     200 and `Idempotent-Replayed: true`.
+         *     A copy of a large source (above `store.materialize.async_copy_min_rows` rows) is created
+         *     as an overlay at once and copied by a background job: `materialization_status` is then
+         *     `pending`, and the branch becomes `full` when it is `done`. With an `Idempotency-Key`,
+         *     retrying a create that succeeded returns the branch with status 200 and
+         *     `Idempotent-Replayed: true`.
          */
         post: operations["create_branch_api_v1_domains__domain_id__branches_post"];
         delete?: never;
@@ -1351,6 +1354,9 @@ export interface paths {
         /**
          * Delete a branch
          * @description Delete a branch and its materialized rows; the default and protected branches stay.
+         *
+         *     A large branch (above `store.materialize.async_delete_min_rows` rows) disappears at once
+         *     and a background job deletes its rows; its name can be used again when that is done.
          */
         delete: operations["delete_branch_api_v1_domains__domain_id__branches__branch__delete"];
         options?: never;
@@ -1827,6 +1833,10 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** @description Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches. `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a correct overlay). Null for a branch that was never copied in the background. */
+            materialization_status?: components["schemas"]["MaterializationStatus"] | null;
+            /** @description Progress of the background copy; null without one. */
+            materialization_progress?: components["schemas"]["MaterializationProgress"] | null;
             /**
              * Ahead
              * @description Revisions on this branch that the default branch lacks.
@@ -1867,6 +1877,10 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** @description Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches. `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a correct overlay). Null for a branch that was never copied in the background. */
+            materialization_status?: components["schemas"]["MaterializationStatus"] | null;
+            /** @description Progress of the background copy; null without one. */
+            materialization_progress?: components["schemas"]["MaterializationProgress"] | null;
         };
         /**
          * BranchUpdate
@@ -3370,6 +3384,48 @@ export interface components {
          * @enum {string}
          */
         Materialization: "full" | "overlay" | "none";
+        /**
+         * MaterializationPhase
+         * @description What the next batch copies; `switch` makes the branch a full copy.
+         * @enum {string}
+         */
+        MaterializationPhase: "records" | "links" | "history" | "switch" | "done";
+        /**
+         * MaterializationProgress
+         * @description How far the background copy of a branch got.
+         */
+        MaterializationProgress: {
+            /** @description What the next batch copies: `records`, `links`, `history`, then `switch` (the branch becomes a full copy); `done` at the end. */
+            phase: components["schemas"]["MaterializationPhase"];
+            /**
+             * Rows Done
+             * @description Rows of the source branch read so far.
+             */
+            rows_done: number;
+            /**
+             * Rows Total
+             * @description Rows of the source branch to read (Records, Links and history entries at the start of the copy); null until the job has started.
+             */
+            rows_total: number | null;
+            /**
+             * Error
+             * @description Last failure of the copy job, kept while it is retried and when it failed.
+             */
+            error: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /**
+         * MaterializationStatus
+         * @description Where a background copy stands.
+         * @enum {string}
+         */
+        MaterializationStatus: "pending" | "running" | "done" | "failed";
         /** MaterializedOut */
         MaterializedOut: {
             /** Revision */

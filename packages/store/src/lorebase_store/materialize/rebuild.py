@@ -38,6 +38,7 @@ from lorebase_store.materialize.rows import (
 from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
+from lorebase_store.repositories.materializations import copy_fence
 from lorebase_store.repositories.materialized import (
     LinkRow,
     MaterializedRepository,
@@ -84,6 +85,7 @@ async def rebuild(
     head = await RevisionRepository(session, domain_id).require(ref.head)
     await promote_overlays_of(session, domain_id, branch, runtime=runtime)
     if ref.materialization is Materialization.OVERLAY:
+        await copy_fence(session, domain_id, branch)
         await refs.set_materialization(branch, Materialization.FULL)
     repository = MaterializedRepository(session, domain_id, branch, writes=runtime.settings.writes)
     await repository.clear()

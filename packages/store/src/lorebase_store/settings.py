@@ -250,6 +250,38 @@ class MaterializeSettings(SectionModel):
         description="Open overlays on one base branch (each base commit copies the rows it "
         "changes into each of them); further branches are created as copies.",
     )
+    async_copy_min_rows: int = Field(
+        default=10000,
+        ge=0,
+        description="A copy branch whose source holds more rows (Records and Links) is "
+        "created as an overlay at once and turned into a full copy by a store.materialize "
+        "job, in batches; smaller copies are made in the creating transaction.",
+    )
+    async_delete_min_rows: int = Field(
+        default=10000,
+        ge=0,
+        description="Deleting a branch that holds more rows (Records and Links) hides it at "
+        "once and leaves its rows to a store.branch_delete job, in batches; smaller branches "
+        "are deleted in the deleting transaction.",
+    )
+    job_batch_rows: int = Field(
+        default=5000,
+        ge=1,
+        description="Rows a store.materialize or store.branch_delete job copies or deletes "
+        "per transaction; each batch must finish within database.statement_timeout_ms.",
+    )
+    job_concurrency: int = Field(
+        default=2,
+        ge=1,
+        description="store.materialize and store.branch_delete jobs running at once across "
+        "all workers; a job that finds every slot taken runs again after job_retry_seconds.",
+    )
+    job_retry_seconds: float = Field(
+        default=10,
+        ge=0,
+        description="Delay before a branch job that found no free slot, a busy branch or a "
+        "deletion waiting for its overlays runs again.",
+    )
 
 
 class GcSettings(SectionModel):

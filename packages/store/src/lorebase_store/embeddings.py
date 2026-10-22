@@ -124,6 +124,7 @@ async def materialized_branches(
             REFS.c.domain_id == domain_id,
             REFS.c.kind == RefKind.BRANCH,
             REFS.c.materialization != Materialization.NONE,
+            REFS.c.deleted_at.is_(None),
         )
         .order_by(REFS.c.name)
     )

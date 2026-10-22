@@ -21,7 +21,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
@@ -42,7 +42,14 @@ from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.definer import grant_read_functions
 from lorebase_store.indexes import BranchIndexes, run_index_jobs
 from lorebase_store.layout import BranchLayout, load_layout
-from lorebase_store.materialize import BranchMode, MaterializationMode, create_branch
+from lorebase_store.materialize import (
+    BranchDeletion,
+    BranchMode,
+    MaterializationMode,
+    background,
+    create_branch,
+    delete_branch,
+)
 from lorebase_store.reads import (
     Comparison,
     TitleSimilarity,
@@ -619,25 +626,116 @@ def _summary(measurement: Measurement, role: str | None) -> str:
     return f"{m.name} [{role or 'owner'}]: p50 {m.p50:.2f} p95 {m.p95:.2f} p99 {m.p99:.2f} ms"
 
 
+@dataclass(frozen=True, slots=True)
+class BranchJobs:
+    """A copy of `main` and its deletion: the request transactions, and the background job
+    that copies or deletes the rows (total time and each batch transaction)."""
+
+    create: Measurement
+    copy: Measurement
+    copy_batches: Measurement
+    delete: Measurement
+    delete_job: Measurement
+    delete_batches: Measurement
+
+    def all(self) -> list[Measurement]:
+        return [
+            self.create,
+            self.copy,
+            self.copy_batches,
+            self.delete,
+            self.delete_job,
+            self.delete_batches,
+        ]
+
+
+async def finish_copy(
+    engine: AsyncEngine, runtime: StoreRuntime, name: str, batches: Measurement | None = None
+) -> float:
+    """Run the background copy of `name` to the end, batch by batch as its job does; returns
+    the total milliseconds."""
+    return await _run_steps(engine, runtime, name, "materialize", batches)
+
+
+async def _run_steps(
+    engine: AsyncEngine,
+    runtime: StoreRuntime,
+    name: str,
+    job: str,
+    batches: Measurement | None,
+) -> float:
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    run = background._Run(job, name)
+    settings = runtime.settings.materialize
+    total = time.perf_counter()
+    while True:
+        started = time.perf_counter()
+        async with sessions() as session, session.begin():
+            if job == "materialize":
+                step = await background._materialize_step(
+                    session, DOMAIN, name, run, runtime, lambda: datetime.now(UTC)
+                )
+            else:
+                step = await background._delete_step(
+                    session, DOMAIN, name, run, settings, lambda: datetime.now(UTC)
+                )
+        if batches is not None:
+            batches.samples_ms.append((time.perf_counter() - started) * 1000)
+        if step.finished is not None:
+            assert step.finished["status"] == "done", step.finished
+            return (time.perf_counter() - total) * 1000
+
+
 async def measure_branch_copy(
     engine: AsyncEngine, runtime: StoreRuntime, *, iterations: int
-) -> Measurement:
-    """Create a fully materialized branch from `main` (copy), then delete it."""
+) -> BranchJobs:
+    """Create a copy of `main`, run its background copy, then delete it and run the
+    background deletion. `engine` keeps the default `database.statement_timeout_ms`: every
+    transaction must finish within it. Both always go to the background here, whatever
+    `async_copy_min_rows` and `async_delete_min_rows` say."""
+    materialize = runtime.settings.materialize.model_copy(
+        update={"async_copy_min_rows": 0, "async_delete_min_rows": 0}
+    )
+    runtime = StoreRuntime.from_settings(
+        runtime.settings.model_copy(update={"materialize": materialize})
+    )
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    measurement = Measurement("branch creation (copy)")
+    jobs = BranchJobs(
+        Measurement("branch creation (copy), request"),
+        Measurement("branch copy, background job"),
+        Measurement("branch copy, one batch"),
+        Measurement("branch deletion, request"),
+        Measurement("branch deletion, background job"),
+        Measurement("branch deletion, one batch"),
+    )
     for index in range(iterations):
         name = f"perf-{index}"
         started = time.perf_counter()
         async with sessions() as session:
-            await create_branch(session, DOMAIN, name, created_by="usr_perf", runtime=runtime)
-        measurement.samples_ms.append((time.perf_counter() - started) * 1000)
-        _progress(f"{measurement.name}: {measurement.samples_ms[-1]:.0f} ms")
+            created = await create_branch(
+                session, DOMAIN, name, created_by="usr_perf", mode=BranchMode.COPY, runtime=runtime
+            )
+        jobs.create.samples_ms.append((time.perf_counter() - started) * 1000)
+        assert created.pending, "the source is above store.materialize.async_copy_min_rows"
+        jobs.copy.samples_ms.append(
+            await finish_copy(engine, runtime, name, batches=jobs.copy_batches)
+        )
+        started = time.perf_counter()
         async with sessions() as session, session.begin():
             await scope_to_domain(session, DOMAIN)
-            await RefRepository(session, DOMAIN).delete(name)
+            deletion = await delete_branch(session, DOMAIN, name, runtime=runtime)
+        jobs.delete.samples_ms.append((time.perf_counter() - started) * 1000)
+        assert deletion is BranchDeletion.SCHEDULED
+        jobs.delete_job.samples_ms.append(
+            await _run_steps(engine, runtime, name, "delete", jobs.delete_batches)
+        )
+        for m in jobs.all():
+            _progress(f"{m.name}: p50 {m.p50:.0f} ms, max {max(m.samples_ms):.0f} ms")
+        async with sessions() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
             await BranchIndexes(session, DOMAIN, name, settings=runtime.settings.indexes).drop_all()
         await build_indexes(engine, runtime)
-    return measurement
+    return jobs
 
 
 OVERLAY_BRANCH = "agent/perf"
@@ -688,9 +786,11 @@ async def overlay_pair(
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     for name, mode in ((OVERLAY_BRANCH, BranchMode.OVERLAY), (COPY_BRANCH, BranchMode.COPY)):
         async with sessions() as session:
-            await create_branch(
+            created = await create_branch(
                 session, DOMAIN, name, created_by="usr_perf", mode=mode, runtime=runtime
             )
+        if created.pending:
+            await finish_copy(engine, runtime, name)
     part = work.schema.kinds[work.part_kind]
     cost = next(a for a in part.attributes.values() if a.api_name == "unit_cost")
     rng = random.Random(17)

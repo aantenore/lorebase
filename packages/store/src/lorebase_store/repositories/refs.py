@@ -3,6 +3,10 @@
 Design 6.5: writers to one branch are serialized by a transaction-scoped advisory lock on a
 stable 64-bit hash of `(domain_id, branch)`; the head moves by compare-and-swap on
 `(head, version)`.
+
+A branch being deleted in the background (`deleted_at` set, `mark_deleted`) is invisible to
+every method here except `get_deleting`, `delete` and `dependents`: reads, listings, counts
+and overlay lookups skip it, and its name stays taken until `delete` removes the row.
 """
 
 from __future__ import annotations
@@ -15,13 +19,16 @@ from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_store.jobs import INDEX_JOB, cancel_queued_jobs
+from lorebase_store.jobs import INDEX_JOB, MATERIALIZE_JOB, cancel_queued_jobs
 from lorebase_store.layout import BranchLayout, layout_from
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
 
 REFS: Table = metadata.tables["refs"]
 REF_LOG: Table = metadata.tables["ref_log"]
+
+_LIVE = REFS.c.deleted_at.is_(None)
+"""Refs whose deletion is not in progress."""
 
 LOCK_NOT_AVAILABLE = "55P03"
 """SQLSTATE raised when `lock_timeout` expires."""
@@ -84,6 +91,7 @@ class RefRow:
     base_branch: str | None = None
     base_revision: bytes | None = None
     base_generation: int | None = None
+    deleted_at: datetime | None = None
 
     @property
     def layout(self) -> BranchLayout:
@@ -117,9 +125,19 @@ class RefRepository:
 
     async def get(self, name: str) -> RefRow | None:
         result = await self._session.execute(
-            select(REFS).where(REFS.c.domain_id == self._domain, REFS.c.name == name)
+            select(REFS).where(REFS.c.domain_id == self._domain, REFS.c.name == name, _LIVE)
         )
         found = result.mappings().one_or_none()
+        return None if found is None else RefRow(**found)
+
+    async def get_deleting(self, name: str, *, key_share: bool = False) -> RefRow | None:
+        """The ref named `name` whether or not its deletion is in progress. With `key_share`,
+        the row is locked `FOR KEY SHARE`, so it cannot be deleted before the caller's
+        transaction ends (commits still move it)."""
+        query = select(REFS).where(REFS.c.domain_id == self._domain, REFS.c.name == name)
+        if key_share:
+            query = query.with_for_update(key_share=True)
+        found = (await self._session.execute(query)).mappings().one_or_none()
         return None if found is None else RefRow(**found)
 
     async def require(self, name: str) -> RefRow:
@@ -129,7 +147,7 @@ class RefRepository:
         return found
 
     async def all(self, kind: RefKind | None = None) -> list[RefRow]:
-        query = select(REFS).where(REFS.c.domain_id == self._domain).order_by(REFS.c.name)
+        query = select(REFS).where(REFS.c.domain_id == self._domain, _LIVE).order_by(REFS.c.name)
         if kind is not None:
             query = query.where(REFS.c.kind == kind)
         result = await self._session.execute(query)
@@ -139,7 +157,7 @@ class RefRepository:
         """Refs of one kind ordered by name, starting after `after`."""
         query = (
             select(REFS)
-            .where(REFS.c.domain_id == self._domain, REFS.c.kind == kind)
+            .where(REFS.c.domain_id == self._domain, REFS.c.kind == kind, _LIVE)
             .order_by(REFS.c.name)
             .limit(limit)
         )
@@ -153,7 +171,7 @@ class RefRepository:
         query = (
             select(func.count())
             .select_from(REFS)
-            .where(REFS.c.domain_id == self._domain, REFS.c.kind == kind)
+            .where(REFS.c.domain_id == self._domain, REFS.c.kind == kind, _LIVE)
         )
         if materialization is not None:
             query = query.where(REFS.c.materialization == materialization)
@@ -169,10 +187,12 @@ class RefRepository:
         return await self.get(name)
 
     async def delete(self, name: str) -> bool:
-        """Remove a ref. Materialized rows of a branch go with it; the ref log is kept.
+        """Remove a ref (also one whose deletion is in progress). Materialized rows of a branch
+        go with it; the ref log is kept.
 
-        In the same transaction, the queued index builds of the branch are cancelled: there
-        is nothing left to index. Queued drops stay, they clean up the branch's indexes.
+        In the same transaction, the queued index builds and materializations of the branch
+        are cancelled: there is nothing left to build. Queued drops stay, they clean up the
+        branch's indexes.
         """
         result = await self._session.execute(
             delete(REFS)
@@ -181,6 +201,33 @@ class RefRepository:
         )
         if result.scalar_one_or_none() is None:
             return False
+        await self._cancel_jobs(name)
+        return True
+
+    async def mark_deleted(self, name: str, *, at: datetime) -> bool:
+        """Hide a branch whose rows a background job deletes (see the module doc); cancels
+        its queued index builds and materializations like `delete`."""
+        result = await self._session.execute(
+            update(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.name == name, _LIVE)
+            .values(deleted_at=at)
+            .returning(REFS.c.name)
+        )
+        if result.scalar_one_or_none() is None:
+            return False
+        await self._cancel_jobs(name)
+        return True
+
+    async def dependents(self, base: str) -> list[RefRow]:
+        """Every ref naming `base` as its base branch, deletions in progress included."""
+        result = await self._session.execute(
+            select(REFS)
+            .where(REFS.c.domain_id == self._domain, REFS.c.base_branch == base)
+            .order_by(REFS.c.name)
+        )
+        return [RefRow(**row) for row in result.mappings()]
+
+    async def _cancel_jobs(self, name: str) -> None:
         await cancel_queued_jobs(
             self._session,
             INDEX_JOB,
@@ -188,7 +235,13 @@ class RefRepository:
             match={"branch": name, "action": "create"},
             reason="branch deleted",
         )
-        return True
+        await cancel_queued_jobs(
+            self._session,
+            MATERIALIZE_JOB,
+            domain_id=self._domain,
+            match={"branch": name},
+            reason="branch deleted",
+        )
 
     async def create(
         self,
@@ -247,6 +300,7 @@ class RefRepository:
                 REFS.c.domain_id == self._domain,
                 REFS.c.base_branch == base,
                 REFS.c.materialization == Materialization.OVERLAY,
+                _LIVE,
             )
             .order_by(REFS.c.name)
         )

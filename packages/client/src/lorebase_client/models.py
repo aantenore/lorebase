@@ -20,6 +20,8 @@ DOMAIN_ID_PATTERN = r"^[a-z][a-z0-9_-]*$"
 SchemaSection = Literal["kinds", "relations", "traits", "operations", "derivations", "sources"]
 SearchMode = Literal["lexical", "semantic", "hybrid"]
 BranchMode = Literal["copy", "overlay"]
+MaterializationStatus = Literal["pending", "running", "done", "failed"]
+MaterializationPhase = Literal["records", "links", "history", "switch", "done"]
 ServedFrom = Literal["materialized", "tree"]
 ChangeKind = Literal["created", "updated", "deleted"]
 LinkDirection = Literal["forward", "inverse"]
@@ -154,6 +156,17 @@ class BranchUpdate(RequestModel):
     protected: bool
 
 
+class MaterializationProgress(Model):
+    """How far the background copy of a branch got."""
+
+    phase: MaterializationPhase
+    rows_done: int
+    rows_total: int | None
+    error: str | None
+    updated_at: datetime
+    finished_at: datetime | None
+
+
 class Branch(Model):
     """A branch."""
 
@@ -165,6 +178,8 @@ class Branch(Model):
     version: int
     created_at: datetime
     created_by: str
+    materialization_status: MaterializationStatus | None = None
+    materialization_progress: MaterializationProgress | None = None
 
 
 class BranchDetail(Branch):

@@ -42,8 +42,11 @@ EXTRACTION_JOB = "extraction"
 INDEX_JOB = "store.index"
 """Job type of a per-Attribute index build or drop (see `lorebase_store.indexes`)."""
 MATERIALIZE_JOB = "store.materialize"
-"""Job type of an overlay promotion to a full copy; payload `{"branch": name}`
-(see `lorebase_store.materialize.overlay`)."""
+"""Job type of an overlay turned into a full copy in batches; payload `{"branch": name}`
+(see `lorebase_store.materialize.background`)."""
+BRANCH_DELETE_JOB = "store.branch_delete"
+"""Job type of the batched deletion of a hidden branch's rows; payload `{"branch": name}`
+(see `lorebase_store.materialize.background`)."""
 EMBEDDINGS_JOB = "embeddings"
 """Job type of an embedding pass over a Domain's branches run by Scribe; payload from
 `embeddings_payload`."""
@@ -386,8 +389,9 @@ def _parser() -> argparse.ArgumentParser:
     work.add_argument(
         "--types",
         nargs="+",
-        default=[GC_JOB, INDEX_JOB, MATERIALIZE_JOB],
-        help=f"Job types to run (default: {GC_JOB} {INDEX_JOB} {MATERIALIZE_JOB}).",
+        default=[GC_JOB, INDEX_JOB, MATERIALIZE_JOB, BRANCH_DELETE_JOB],
+        help=f"Job types to run (default: {GC_JOB} {INDEX_JOB} {MATERIALIZE_JOB} "
+        f"{BRANCH_DELETE_JOB}).",
     )
     return parser
 
@@ -397,7 +401,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_store.db import create_engine
     from lorebase_store.gc import run_gc_job
     from lorebase_store.indexes import run_index_job
-    from lorebase_store.materialize.overlay import run_materialize_job
+    from lorebase_store.materialize.background import run_branch_delete_job, run_materialize_job
     from lorebase_store.runtime import StoreRuntime
     from lorebase_store.settings import database_settings
 
@@ -419,6 +423,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
         GC_JOB: lambda job: run_gc_job(engine, job, runtime=runtime),
         INDEX_JOB: lambda job: run_index_job(ddl, job),
         MATERIALIZE_JOB: lambda job: run_materialize_job(engine, job, runtime=runtime),
+        BRANCH_DELETE_JOB: lambda job: run_branch_delete_job(engine, job, runtime=runtime),
     }
     unknown = [t for t in types if t not in known]
     if unknown:

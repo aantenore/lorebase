@@ -8,8 +8,9 @@ per-Attribute indexes (`lorebase_store.indexes`). Its commits write only the row
 An overlay is promoted to a full copy ("materialized"):
 - when a commit leaves it with more than `store.materialize.overlay_max_rows` rows of its own,
   or when its base has moved more than `overlay_max_base_lag_revisions` generations past its
-  fork point (checked by its own commits; a base commit that pushes an overlay past the lag
-  queues a `store.materialize` job for it);
+  fork point (checked by its own commits, unless a background copy of it is queued or running;
+  a base commit that pushes an overlay past the lag queues a `store.materialize` job for it,
+  which copies it in batches, `materialize.background`);
 - before a commit or merge that changes its schema (whole-Kind rewrites and index changes
   belong to full branches);
 - before its base is deleted or rebuilt (`promote_overlays_of`);
@@ -22,17 +23,20 @@ which costs as much as creating it.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
 
 from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.indexes import BranchIndexes
-from lorebase_store.jobs import MATERIALIZE_JOB, JobRow, enqueue_job
+from lorebase_store.jobs import MATERIALIZE_JOB, enqueue_job
 from lorebase_store.layout import MAT_HISTORY, MAT_LINKS, MAT_RECORDS
 from lorebase_store.models.enums import Materialization
+from lorebase_store.repositories.materializations import (
+    BranchMaterializationRepository,
+    copy_fence,
+)
 from lorebase_store.repositories.materialized import MaterializedRepository
 from lorebase_store.repositories.refs import RefMovedError, RefRepository, RefRow
 from lorebase_store.repositories.revisions import RevisionRepository
@@ -67,7 +71,8 @@ async def promote(
     """Turn the overlay `branch` into a full copy; `False` when it is not an overlay.
 
     Takes the branch lock unless the caller holds it (`locked`). The head and ref version do
-    not change, so a commit of the caller's transaction still moves the ref afterwards.
+    not change, so a commit of the caller's transaction still moves the ref afterwards. A
+    background copy of the branch (`materialize.background`) is marked done.
     """
     runtime = runtime or default_runtime()
     refs = RefRepository(session, domain_id)
@@ -76,11 +81,15 @@ async def promote(
     ref = await refs.get(branch)
     if ref is None or ref.materialization is not Materialization.OVERLAY:
         return False
+    await copy_fence(session, domain_id, branch)
     repository = MaterializedRepository(
         session, domain_id, branch, writes=runtime.settings.writes, layout=ref.layout
     )
     await repository.complete_overlay()
     await refs.set_materialization(branch, Materialization.FULL)
+    states = BranchMaterializationRepository(session, domain_id)
+    if await states.get(branch) is not None:
+        await states.finish(branch, at=datetime.now(UTC))
     schema = await repository.schema()
     if schema is not None:
         # Imported here: the commit package imports the materializer.
@@ -121,6 +130,9 @@ async def check_overlay(
     session = repository.session
     if layout.overlay:
         assert layout.base is not None
+        if await BranchMaterializationRepository(session, layout.domain_id).active(layout.branch):
+            # Its background copy makes it a full copy without a long transaction.
+            return False
         refs = RefRepository(session, layout.domain_id)
         base = await refs.get(layout.base)
         base_generation = None
@@ -180,6 +192,7 @@ async def refork(
         raise OverlayError(f"branch {branch!r} has no base; name one")
     await refs.lock(base_name, timeout_ms=timeout)
     await refs.lock(branch, timeout_ms=timeout)
+    await copy_fence(session, domain_id, branch)
     ref = await refs.require(branch)
     base_ref = await refs.require(base_name)
     if base_ref.materialization is not Materialization.FULL:
@@ -234,17 +247,3 @@ async def refork(
             maintenance=runtime.index_maintenance,
         ).sync(load_compiled(schema.compiled))
     return await refs.require(branch)
-
-
-async def run_materialize_job(
-    engine: AsyncEngine, job: JobRow, *, runtime: StoreRuntime | None = None
-) -> Mapping[str, Any]:
-    """Job handler of `store.materialize`: promote the overlay named by the payload."""
-    if job.domain_id is None:
-        raise ValueError("a store.materialize job needs a Domain")
-    branch = str(job.payload["branch"])
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    async with sessions() as session, session.begin():
-        await scope_to_domain(session, job.domain_id)
-        promoted = await promote(session, job.domain_id, branch, runtime=runtime)
-    return {"branch": branch, "promoted": promoted}

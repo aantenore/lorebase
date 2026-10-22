@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from typing import Annotated, Any, cast, get_args
 
 import typer
@@ -11,7 +12,7 @@ from lorebase_cli.context import AppContext, app_of
 from lorebase_cli.failures import CliError
 from lorebase_cli.options import AllOpt, DomainOpt, JsonOpt, LimitOpt, complete_domain
 from lorebase_cli.output import Column, short_id
-from lorebase_client.models import BranchMode, Domain
+from lorebase_client.models import Branch, BranchMode, Domain
 
 domain_app = typer.Typer(help="Create, inspect and delete Domains.", no_args_is_help=True)
 branch_app = typer.Typer(help="List, create, protect and delete branches.", no_args_is_help=True)
@@ -150,7 +151,22 @@ BRANCH_COLUMNS = [
     Column("protected", "protected"),
     Column("default", "default"),
     Column("materialization", "materialization"),
+    Column("copy", "materialization_status"),
 ]
+
+_sleep = time.sleep
+_clock = time.monotonic
+
+
+def _copy_note(branch: Branch) -> str | None:
+    """The background copy of a branch: status, phase and rows read."""
+    if branch.materialization_status is None:
+        return None
+    progress = branch.materialization_progress
+    if progress is None:
+        return branch.materialization_status
+    total = "?" if progress.rows_total is None else progress.rows_total
+    return f"{branch.materialization_status}: {progress.phase} {progress.rows_done}/{total}"
 
 
 @branch_app.command("list")
@@ -190,6 +206,7 @@ def branch_get(
                 ("ahead", found.ahead),
                 ("behind", found.behind),
                 ("materialization", found.materialization),
+                ("copy", _copy_note(found)),
                 ("created", found.created_at),
             ]
         ),
@@ -212,17 +229,44 @@ def branch_create(
         str | None,
         typer.Option("--mode", help="copy (own rows) or overlay (only its changes)."),
     ] = None,
+    wait: Annotated[
+        bool, typer.Option("--wait", help="Wait until the background copy of the branch ends.")
+    ] = False,
+    wait_timeout: Annotated[
+        float, typer.Option("--wait-timeout", min=0, help="Seconds --wait gives up after.")
+    ] = 3600.0,
+    poll_interval: Annotated[
+        float, typer.Option("--poll-interval", min=0, help="Seconds between --wait checks.")
+    ] = 2.0,
     domain: DomainOpt = None,
     json_out: JsonOpt = False,
 ) -> None:
-    """Create a branch from a branch, a tag or a Revision."""
+    """Create a branch from a branch, a tag or a Revision. A large copy starts as an overlay
+    that a background job copies; --wait blocks until it is a full copy."""
     app = app_of(ctx, json_out)
     allowed = get_args(BranchMode)
     if mode is not None and mode not in allowed:
         raise CliError(f"--mode: unknown {mode!r}, use {', '.join(allowed)}")
-    created = app.client().branches.create(
-        app.domain(domain), name, source=source, revision=revision, mode=cast(BranchMode, mode)
+    domain_id = app.domain(domain)
+    created: Branch = app.client().branches.create(
+        domain_id, name, source=source, revision=revision, mode=cast(BranchMode, mode)
     )
+    if wait:
+        deadline = _clock() + wait_timeout
+        last: str | None = None
+        while created.materialization_status in ("pending", "running"):
+            note = _copy_note(created)
+            if note != last:
+                app.out.info(f"copying: {note}")
+                last = note
+            if _clock() >= deadline:
+                raise CliError(f"branch {name!r} is still being copied after {wait_timeout:g}s")
+            _sleep(poll_interval)
+            created = app.client().branches.get(domain_id, name)
+        if created.materialization_status == "failed":
+            progress = created.materialization_progress
+            error = progress.error if progress is not None else None
+            raise CliError(f"copy of branch {name!r} failed: {error or 'unknown error'}")
     app.out.emit(created, lambda: app.out.table([created.model_dump()], BRANCH_COLUMNS))
 
 

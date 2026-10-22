@@ -88,7 +88,9 @@ class BranchLayout:
         return self._resolved("mat_links", LINK_COLUMNS, ("relation_id", "from_key", "to_key"))
 
     def history_sql(self) -> str:
-        """The branch history: the overlay's own entries and the base's up to the fork."""
+        """The branch history: the overlay's own entries and the base's up to the fork that
+        it does not hold itself (a background copy, `materialize.background`, copies them in
+        batches before the overlay becomes a full copy)."""
         own = ", ".join(f"h.{_quoted(c)}" for c in HISTORY_COLUMNS)
         base = ", ".join(
             f"CAST({_literal(self.branch)} AS text)" if c == "branch" else f"b.{_quoted(c)}"
@@ -101,7 +103,10 @@ class BranchLayout:
             f"WHERE b.domain_id = {domain} AND b.branch = {_literal(self._base())} "
             f"AND EXISTS (SELECT 1 FROM revisions r WHERE r.domain_id = {domain} "
             f"AND r.id = b.revision_id AND r.generation <= {self._generation()} OFFSET 0) "
-            f"AND {self._guard()}"
+            f"AND {self._guard()} AND NOT EXISTS (SELECT 1 FROM mat_history x "
+            f"WHERE x.domain_id = {domain} AND x.branch = {_literal(self.branch)} "
+            f"AND x.partition = b.partition AND x.element_key = b.element_key "
+            f"AND x.revision_id = b.revision_id OFFSET 0)"
         )
 
     def records_from(self, alias: str | None = None, *, probe: bool = True) -> str:

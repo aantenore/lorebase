@@ -8459,7 +8459,7 @@
           "branches"
         ],
         "summary": "Create a branch",
-        "description": "Create a materialized branch (a copy, or an overlay on its source) from a branch, tag\nor Revision.\n\nWith an `Idempotency-Key`, retrying a create that succeeded returns the branch with status\n200 and `Idempotent-Replayed: true`.",
+        "description": "Create a materialized branch (a copy, or an overlay on its source) from a branch, tag\nor Revision.\n\nA copy of a large source (above `store.materialize.async_copy_min_rows` rows) is created\nas an overlay at once and copied by a background job: `materialization_status` is then\n`pending`, and the branch becomes `full` when it is `done`. With an `Idempotency-Key`,\nretrying a create that succeeded returns the branch with status 200 and\n`Idempotent-Replayed: true`.",
         "operationId": "create_branch_api_v1_domains__domain_id__branches_post",
         "security": [
           {
@@ -9061,7 +9061,7 @@
           "branches"
         ],
         "summary": "Delete a branch",
-        "description": "Delete a branch and its materialized rows; the default and protected branches stay.",
+        "description": "Delete a branch and its materialized rows; the default and protected branches stay.\n\nA large branch (above `store.materialize.async_delete_min_rows` rows) disappears at once\nand a background job deletes its rows; its name can be used again when that is done.",
         "operationId": "delete_branch_api_v1_domains__domain_id__branches__branch__delete",
         "security": [
           {
@@ -10308,6 +10308,28 @@
             "type": "string",
             "title": "Created By"
           },
+          "materialization_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterializationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches. `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a correct overlay). Null for a branch that was never copied in the background."
+          },
+          "materialization_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterializationProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Progress of the background copy; null without one."
+          },
           "ahead": {
             "type": "integer",
             "title": "Ahead",
@@ -10377,6 +10399,28 @@
           "created_by": {
             "type": "string",
             "title": "Created By"
+          },
+          "materialization_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterializationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches. `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a correct overlay). Null for a branch that was never copied in the background."
+          },
+          "materialization_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterializationProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Progress of the background copy; null without one."
           }
         },
         "type": "object",
@@ -14085,6 +14129,94 @@
         ],
         "title": "Materialization",
         "description": "Branch materialization mode (design 6.11)."
+      },
+      "MaterializationPhase": {
+        "type": "string",
+        "enum": [
+          "records",
+          "links",
+          "history",
+          "switch",
+          "done"
+        ],
+        "title": "MaterializationPhase",
+        "description": "What the next batch copies; `switch` makes the branch a full copy."
+      },
+      "MaterializationProgress": {
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/MaterializationPhase",
+            "description": "What the next batch copies: `records`, `links`, `history`, then `switch` (the branch becomes a full copy); `done` at the end."
+          },
+          "rows_done": {
+            "type": "integer",
+            "title": "Rows Done",
+            "description": "Rows of the source branch read so far."
+          },
+          "rows_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rows Total",
+            "description": "Rows of the source branch to read (Records, Links and history entries at the start of the copy); null until the job has started."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Last failure of the copy job, kept while it is retried and when it failed."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "phase",
+          "rows_done",
+          "rows_total",
+          "error",
+          "updated_at",
+          "finished_at"
+        ],
+        "title": "MaterializationProgress",
+        "description": "How far the background copy of a branch got."
+      },
+      "MaterializationStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed"
+        ],
+        "title": "MaterializationStatus",
+        "description": "Where a background copy stands."
       },
       "MaterializedOut": {
         "properties": {

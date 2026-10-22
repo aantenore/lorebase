@@ -68,8 +68,12 @@ ANALYSIS = """\
   trigram matches on titles to the candidates.
 - Times come from a laptop shared with other work; repeated runs differ by a few milliseconds
   at p95, up to ten for typo-tolerant search.
-- Branch creation copies the Records, Links and history rows of `main` (about twice the Records
-  and Links) and builds the new branch's per-Attribute indexes in the same transaction.
+- A copy branch of `main` is created as an overlay (the request) and copied by its background
+  job: the Records, Links and history rows of `main` (about twice the Records and Links) in
+  batches of `store.materialize.job_batch_rows`, each its own transaction, then the switch to a
+  full copy, which queues the per-Attribute indexes. Its deletion hides it (the request) and
+  its job deletes the rows in batches. Every transaction runs under the default
+  `database.statement_timeout_ms`.
 - An overlay branch (AC-16, store schema notes) is created by inserting its ref, copying the
   compiled schema row and queuing the builds of its per-Attribute indexes (`store.index`
   jobs, one per index): its cost does not depend on the size of the Domain. The job worker
@@ -116,7 +120,7 @@ class Report:
     seeded: harness.SeedReport
     owner: dict[str, harness.Measurement]
     reader: dict[str, harness.Measurement]
-    branch: harness.Measurement
+    branch: harness.BranchJobs
     overlay_branch: harness.Measurement
     commits: harness.Measurement
     pair: harness.OverlayPair
@@ -193,9 +197,14 @@ def _scans(plan: dict[str, Any]) -> list[str]:
 
 
 def _engine(url: str) -> AsyncEngine:
-    """Without a statement timeout: at 1M Records, copying a branch (one INSERT ... SELECT per
-    table) and deleting it take longer than the default `database.statement_timeout_ms`."""
+    """Without a statement timeout: loading the dataset commits 10,000 changes at a time."""
     return create_engine(DatabaseSettings(), url=url, statement_timeout_ms=0)
+
+
+def _timed_engine(url: str) -> AsyncEngine:
+    """With the default `database.statement_timeout_ms`, as Keeper and Scribe run: branch
+    copies and deletions must fit in it."""
+    return create_engine(DatabaseSettings(), url=url)
 
 
 async def seed_only(options: Options, url: str) -> harness.SeedReport:
@@ -227,9 +236,13 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
             "owner": await plans_of(engine, operations, None),
             "rls": await plans_of(engine, operations, harness.READER_ROLE),
         }
-        branch = await harness.measure_branch_copy(
-            engine, runtime, iterations=options.branch_iterations
-        )
+        timed = _timed_engine(url)
+        try:
+            branch = await harness.measure_branch_copy(
+                timed, runtime, iterations=options.branch_iterations
+            )
+        finally:
+            await timed.dispose()
         commits = await harness.measure_commits(
             engine,
             runtime,
@@ -338,12 +351,19 @@ def render(report: Report) -> str:
         "",
         "## Writes (milliseconds)",
         "",
-        "| Operation | Runs | p50 | p95 | p99 |",
-        "|-----------|-----:|----:|----:|----:|",
+        "| Operation | Runs | p50 | p95 | p99 | max |",
+        "|-----------|-----:|----:|----:|----:|----:|",
         *(
-            f"| {m.name} | {len(m.samples_ms)} | {_ms(m.p50)} | {_ms(m.p95)} | {_ms(m.p99)} |"
-            for m in (report.branch, report.overlay_branch, report.commits)
+            f"| {m.name} | {len(m.samples_ms)} | {_ms(m.p50)} | {_ms(m.p95)} | {_ms(m.p99)} "
+            f"| {_ms(max(m.samples_ms))} |"
+            for m in (*report.branch.all(), report.overlay_branch, report.commits)
         ),
+        "",
+        "A copy branch of `main` answers at once as an overlay; its background job copies "
+        "the rows in batches of `store.materialize.job_batch_rows` "
+        "(each its own transaction, under the default `database.statement_timeout_ms`), then "
+        "switches it to a full copy. Deleting it hides it at once; its job deletes the rows in "
+        "batches. Runs is the number of copies, or of batch transactions.",
         "",
         *_overlay_section(report),
         "## Plans",

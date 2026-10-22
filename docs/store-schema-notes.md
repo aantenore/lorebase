@@ -354,9 +354,12 @@ changed; every other row is read from its base branch as it was at the fork poin
   indexes. It happens when a commit leaves the overlay with more than
   `overlay_max_rows` rows of its own; when the base is more than
   `overlay_max_base_lag_revisions` generations past the fork (checked by the overlay's commits;
-  a base commit that crosses the limit queues a `store.materialize` job); before a commit or
-  merge that changes the overlay's schema; before its base is rebuilt or deleted
-  (`promote_overlays_of`, called by Keeper's branch delete).
+  a base commit that crosses the limit queues a `store.materialize` job, which copies in
+  batches, see [Large branches](#large-branches)); before a commit or merge that changes the
+  overlay's schema; before its base is rebuilt or deleted (`promote_overlays_of`, called by a
+  branch deletion small enough to run in its transaction). An overlay whose background copy is
+  queued or running is not promoted by its commits' limits, and a schema change on it fails
+  with `BranchMaterializingError` until the copy is done.
 - **Re-fork.** After an overlay was merged into its base (its head is an ancestor of the base
   head), `materialize.refork` fast-forwards it to the base head (ref log reason
   `branch.refork`), drops its rows and records the new fork point: as cheap as creating it.
@@ -364,15 +367,20 @@ changed; every other row is read from its base branch as it was at the fork poin
   `store.materialize.branch_mode` (default `copy`) decides, except names starting with one of
   `overlay_branch_prefixes` (default `agent/`, `extract/`, `source/`), which default to
   overlays. An overlay needs to start at the head of a full source branch; otherwise the branch
-  is a copy (or rebuilt from the tree). Keeper's `POST /branches` takes `mode`; overlays do not
-  count against `keeper.branches.max_materialized_per_domain`.
+  is a copy (or rebuilt from the tree). A copy of a source holding more than
+  `async_copy_min_rows` rows starts as an overlay and is copied in the background
+  ([Large branches](#large-branches)). Keeper's `POST /branches` takes `mode`; overlays do not
+  count against `keeper.branches.max_materialized_per_domain`, copies in progress do.
 - **Index jobs of short-lived branches.** Proposal branches are overlays that are merged and
   deleted soon after creation, often before the worker has built their indexes.
   - Deleting a branch (`RefRepository.delete`, the one path of Keeper's branch delete and of
     the task-branch release after a merge or close) cancels, in the same transaction, the
-    branch's `queued` `store.index` builds (`status = 'cancelled'`, result detail `branch
-    deleted`). Queued drops stay: they clean up indexes the branch left. A job a worker
-    already claimed (`running`) is not touched; its handler decides.
+    branch's `queued` `store.index` builds and `store.materialize` copies (`status =
+    'cancelled'`, result detail `branch deleted`). Queued drops stay: they clean up indexes
+    the branch left. A job a worker already claimed (`running`) is not touched; its handler
+    decides. Hiding a large branch for a background deletion (`RefRepository.mark_deleted`)
+    cancels the same jobs, and a build that runs afterwards finds no branch (the ref of a
+    branch being deleted does not count).
   - A build whose branch is gone when it runs (claimed before the delete, or queued by hand)
     completes as a no-op: no DDL, result `{"status": "cancelled", "detail": "the branch no
     longer exists"}`, a `debug` log, and the job ends `succeeded` on the first attempt, so it
@@ -391,9 +399,96 @@ changed; every other row is read from its base branch as it was at the fork poin
     existence check is not atomic with the insert, so two concurrent syncs can queue the same
     build twice; the second finds the index built (`already built`) and does nothing.
 - **Garbage collection.** Fork points (`refs.base_revision`) are marking roots; materialized
-  rows are never swept, so the copies an overlay holds go with its ref.
+  rows are never swept, so the copies an overlay holds go with its ref. A branch being deleted
+  in the background keeps its head and fork point as roots until its ref is gone.
 - **Bundles.** Export records `overlay`; import restores every branch as a full copy (heads
   are rebuilt from trees).
+
+## Large branches
+
+Revision `0017`. Copying a branch is one `INSERT ... SELECT` per table and deleting one is a
+cascade from its ref: both grow with the Domain (85 to 95 s at 1M Records, see
+[performance](performance.md#1m-records)) and would not fit in `database.statement_timeout_ms`.
+Above a size, both run as jobs in batches, each batch its own short transaction
+(`lorebase_store.materialize.background`).
+
+- **Copy.** `create_branch(mode="copy")` at the head of a full source that holds more than
+  `store.materialize.async_copy_min_rows` Records and Links (and has room under
+  `overlay_max_per_branch`) creates the branch as an overlay of the source, as cheap as any
+  overlay: it is readable and writable at once with overlay semantics. A row in
+  `branch_materializations` (status `pending`, the fork point) and a `store.materialize` job
+  are added in the same transaction (`BranchCreation.pending`). Below the threshold, or when no
+  overlay is possible (another start point, an overlay source, the overlay cap reached), the
+  copy is made in the creating transaction as before.
+- **Batches.** The job copies the base rows the overlay reads, table by table (`records`,
+  `links`, then `history`), in primary key order from a cursor: each batch finds the key
+  `job_batch_rows` rows ahead and runs `INSERT ... SELECT ... ON CONFLICT DO NOTHING` for the
+  base rows of that key range with `revision_generation` at or before the fork (history: of
+  Revisions up to its generation), and saves the cursor and `rows_done` in the same
+  transaction. A worker that dies, a retry or a second runner resumes from the saved cursor;
+  a batch run twice copies nothing. The `switch` phase then takes the branch lock, deletes the
+  overlay's tombstones, sets `materialization = 'full'` (head and version unchanged) and queues
+  the per-Attribute indexes of a full branch (`BranchIndexes(defer=True)`: none is built in
+  that transaction). A re-fork while the copy runs changes the fork point: the copy restarts
+  from the first row.
+- **Commits during the copy.** Each batch holds the branch lock for its transaction (about
+  0.1 to 1 s with the default batch size), so a commit on the branch, or a base commit copying
+  on write into it, waits for at most one batch; without it their inserts of the same keys in
+  another order could deadlock with the batch and fail the commit. Between batches commits run
+  as on any overlay. A copied row is the row the overlay already reads, so reads do not change
+  while it fills up: the overlay half returns it, the base half no longer does (anti-join on
+  the identity; for history an anti-join on `(partition, element_key, revision_id)`, which
+  `BranchLayout.history_sql` has for this).
+  - A commit on the branch copies a base row up before it changes it and leaves a tombstone
+    when it deletes one: a later batch that meets such a row finds it held and keeps it (`DO
+    NOTHING`); a commit that meets a row a batch copied changes that copy.
+  - A commit on the base copies the rows it changes or removes into the overlay first (copy
+    on write, as for every overlay) and stamps its own rows with a later generation, which
+    the batches skip; the base rows written at or before the fork never change while the
+    overlay depends on them, so one pass over the base copies everything.
+  - Promotion, re-fork and rebuild delete rows of the branch outside a commit; a batch run
+    meanwhile could insert a deleted row again. They take the copy fence (`copy_fence`, an
+    advisory lock per branch) exclusively and batches take it shared, so they never overlap;
+    the next batch sees the result (a full branch ends the copy, a new fork point restarts it).
+  - The switch runs in the transaction of the last step, under the branch lock. When a batch
+    waits for the branch lock longer than `commit.lock_timeout_ms` three times, the job queues
+    itself again.
+  - The overlay's own limits (`overlay_max_rows`, base lag) do not promote it while its copy
+    is queued or running, since `promote` copies in one transaction. A schema change on it
+    fails with `BranchMaterializingError` (Keeper: 409 `branch-materializing` with
+    `Retry-After`) until the copy is done.
+- **Status.** `branch_materializations` keeps per branch `status` (`pending`: queued or
+  waiting for a retry; `running`; `done`; `failed`: the job used `store.jobs.max_attempts`),
+  `phase`, `cursor`, `rows_done` and `rows_total` (Records, Links and history entries of the
+  base when the copy started), the last `error`, and the times. Keeper's branch responses carry
+  it as `materialization_status` and `materialization_progress`; `lorebase branch create
+  --mode copy --wait` waits for it. A failed copy leaves a correct overlay: queuing a
+  `store.materialize` job for the branch again resumes from the cursor. A lag promotion queued
+  by a base commit uses the same job and the same row. A branch made full by another path
+  (`promote`) has its row marked `done`.
+- **Delete.** `materialize.delete_branch` (Keeper's branch delete and a merge with
+  `delete_source`) deletes a branch holding at most `async_delete_min_rows` rows in the
+  caller's transaction, promoting its overlays first, as before. A larger branch gets
+  `refs.deleted_at`: every `RefRepository` read, listing and count, the replica head lookup,
+  the embedding pass, bundle export and index builds skip it, so it is gone for clients at
+  once (404, absent from listings, commits fail with branch not found), and its queued index
+  builds and copies are cancelled. A `store.branch_delete` job then deletes its
+  `mat_records`, `mat_links` and `mat_history` rows in batches of `job_batch_rows` (primary
+  keys of the next batch, then `DELETE ... WHERE key IN`), and finally the ref, whose foreign
+  keys cascade the rest (`mat_schema`, `embedding_cursors`, `branch_materializations`).
+  Overlays based on the branch keep reading its rows: their copies are queued when it is
+  hidden, and the job waits (queues itself again) until no ref names it as base. The name
+  stays taken while the deletion runs: creating a branch with it answers 409
+  `already-exists` with `Retry-After`. A materialization job that meets a branch being
+  deleted stops; its batches lock the ref row `FOR KEY SHARE`, so the final ref delete waits
+  for a batch in flight and no row outlives the ref.
+- **Concurrency.** At most `job_concurrency` copy and delete jobs run at once across workers:
+  each job holds, on a connection of its own, a session advisory lock on its branch (a second
+  job on the same branch returns `skipped`) and one of `job_concurrency` slot locks (none
+  free: `deferred`, queued again after `job_retry_seconds`). Both go with the connection if a
+  worker dies.
+- **Metrics.** `lorebase.store.branch_jobs.rows`, `.runs` and `.batch.duration`
+  ([metrics](metrics.md#store)).
 
 ## Concurrency contracts
 

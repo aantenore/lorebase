@@ -144,6 +144,42 @@ Regenerate with:
 uv run python tests/perf/bench.py --scale 540 --extra-links 4 --out docs/performance.md
 ```
 
+## Background branch copies and deletions
+
+Since migration `0017`, a copy of a large branch is created as an overlay and copied by a
+`store.materialize` job in batches, and a large branch is deleted by a `store.branch_delete`
+job in batches ([store schema notes](store-schema-notes.md#large-branches)). Measured on
+2026-10-22 on the 100k-Record dataset above (99,900 Records, 302,940 Links, 45 commits), same
+machine, with `tests/perf/bench.py --scale 540 --extra-links 4 --branch-iterations 2` (reads at
+100 iterations). Every transaction ran under the default `database.statement_timeout_ms`
+(30 s); default `store.materialize.job_batch_rows` (5,000).
+
+| Operation | Runs | p50 | p95 | p99 | max |
+|-----------|-----:|----:|----:|----:|----:|
+| branch creation (copy), request | 2 | 76.65 | 101.57 | 101.57 | 101.57 |
+| branch copy, background job | 2 | 9,682 | 9,763 | 9,763 | 9,763 |
+| branch copy, one batch | 326 | 47.63 | 132.96 | 208.49 | 531.93 |
+| branch deletion, request | 2 | 7.81 | 8.49 | 8.49 | 8.49 |
+| branch deletion, background job | 2 | 8,631 | 12,273 | 12,273 | 12,273 |
+| branch deletion, one batch | 326 | 39.40 | 86.04 | 113.25 | 157.85 |
+
+- The request that creates a copy now takes as long as an overlay (77 ms here against 7.3 s
+  for the copy in one transaction before); the branch is readable and writable at once.
+- The background copy reads about 815,000 base rows (Records, Links and history entries) in
+  163 batches and takes 9.7 s, against 8.0 s for the single `INSERT ... SELECT` in the same
+  run: the price of `ON CONFLICT DO NOTHING`, one statement per batch and the cursor. Batches
+  read the base along its primary key (`ORDER BY ... LIMIT`), so their cost does not grow with
+  the size of the branch; a history batch probes `revisions` by primary key per row
+  (`OFFSET 0`), where a semi-join scanned every Revision of the Domain per row and made the
+  history phase four times slower at this size.
+- Records batches are the slowest (up to 0.5 s: the GIN indexes on search vectors, values and
+  titles). A batch holds the branch lock, so a commit on the copy waits for at most that long.
+- Deleting is a 8 ms request; the job removes the rows in 8.6 to 12.3 s, batches under 0.2 s.
+- At 1M Records (not measured in this run: the `--seed-database` fixture of [1M Records](#1m-records)
+  was not available, and loading it takes about 33 minutes), the batches stay the same size and
+  the copy and deletion jobs scale with the rows, about ten times longer in total; no
+  transaction depends on the size of the Domain any more.
+
 ## 1M Records
 
 The M1 fixture: the same harness at ten times the size, run on 2026-10-22.
@@ -176,7 +212,8 @@ uv run python tests/perf/bench.py --scale 5406 --extra-links 4 --iterations 1000
   alternate between the two branches with the same keys. The partition then holds `main`, the
   copy (4,032,876 rows) and the overlay (2,000 rows).
 - The harness connects without a statement timeout: copying the branch takes longer than the
-  default `database.statement_timeout_ms` (see Open issues).
+  default `database.statement_timeout_ms` (see Open issues). Copies and deletions now run in
+  batches in the background; see [Background branch copies and deletions](#background-branch-copies-and-deletions).
 
 ### Environment
 
@@ -283,12 +320,13 @@ was at 29.45 to 33.02 at p95 and typo-tolerant search at 149 to 168.
   (`<%`, `word_similarity`) instead of whole-title similarity; run trigram matching only when
   full-text search finds fewer than `limit` matches; or keep a short name per Kind (the title
   of name-like Kinds only) for trigram matching. Until then the budget is not met at 1M.
-- **Copy branches at 1M Records.** Creating a copy (`INSERT ... SELECT` of the Records, Links
-  and history of `main`) takes 85 to 95 s, and deleting it also takes longer than 30 s: both exceed the
-  default `database.statement_timeout_ms` (30 s), so `POST .../branches` with `mode: copy` and
-  branch deletion fail at this size with default settings. Overlay branches (the default for
-  `agent/`, `extract/` and `source/`) are not affected. Moving copies and deletions to a job
-  is a larger change and is not part of this run.
+- **Copy branches at 1M Records** (fixed since this run). Creating a copy (`INSERT ...
+  SELECT` of the Records, Links and history of `main`) took 85 to 95 s, and deleting it also
+  took longer than 30 s: both exceeded the default `database.statement_timeout_ms`, so `POST
+  .../branches` with `mode: copy` and branch deletion failed at this size. Copies and
+  deletions of large branches now run as jobs in batches, each well within the timeout
+  ([Background branch copies and deletions](#background-branch-copies-and-deletions)); the
+  1M-Record run has not been repeated since.
 - Lineage has no budget in design 8.7; with the one proposed here it is at the limit on
   branches. Its statements are index lookups; fewer round trips (the head Revision and the
   Record in one statement) would give the margin.

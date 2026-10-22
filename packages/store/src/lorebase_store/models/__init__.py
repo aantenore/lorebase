@@ -24,6 +24,7 @@ from lorebase_store.models.ingestion import (
     VaultEntry,
 )
 from lorebase_store.models.materialized import (
+    BranchMaterialization,
     Embedding,
     EmbeddingCursor,
     MatHistory,
@@ -60,6 +61,7 @@ __all__ = [
     "ApiKeyUsage",
     "AuditEntry",
     "Base",
+    "BranchMaterialization",
     "ChangesetEntry",
     "Conflict",
     "ConflictResolution",
