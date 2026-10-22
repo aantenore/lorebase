@@ -36,6 +36,7 @@ from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, require
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
+from lorebase_keeper.auth.rbac import AccessContext
 from lorebase_keeper.auth.runtime import AuthRuntime
 from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import KeeperSettingsDep
@@ -542,6 +543,7 @@ async def rebase_tags(
     store: StoreDep,
     keeper: KeeperSettingsDep,
     access: Annotated[Access, Depends(require(Permission.SCHEMA_WRITE, branch_param="branch"))],
+    auth: AuthDep,
 ) -> RebaseTagsOut:
     """Give a branch forked before the default branch tagged an Attribute the tags it lacks.
 
@@ -551,7 +553,8 @@ async def rebase_tags(
     so verification no longer reports them as `sensitivity_stale`. A branch that already has
     the tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:
     then only a `store.sensitivity_refresh` job is queued, which rewrites those rows in
-    batches and leaves the schema as it is.
+    batches and leaves the schema as it is. `tags` lists the tags added only to callers
+    who may read the default branch's schema (empty otherwise).
     """
     limits = keeper.schema_changes
     if body.rows_only:
@@ -598,6 +601,14 @@ async def rebase_tags(
         ) from None
     outcome = rebase.outcome
     revision = None if outcome.revision is None else hex(outcome.revision)
+    shown = rebase.tags
+    if shown and not await auth.authorizer.allows(
+        access.principal,
+        Permission.SCHEMA_READ,
+        domain_id,
+        AccessContext(branch=rebase.default_branch),
+    ):
+        shown = []  # the names of the tagged Attributes come from the default branch
     annotate(
         request,
         action="schema.rebase_tags",
@@ -618,7 +629,7 @@ async def rebase_tags(
                 attribute=t.attribute,
                 tags=t.tags,
             )
-            for t in rebase.tags
+            for t in shown
         ],
         changes=_changes(outcome.changes, limits.max_listed_changes),
         change_count=len(outcome.changes),

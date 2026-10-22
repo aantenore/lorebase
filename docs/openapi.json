@@ -2797,7 +2797,7 @@
           "schema"
         ],
         "summary": "Take the default branch's sensitivity tags",
-        "description": "Give a branch forked before the default branch tagged an Attribute the tags it lacks.\n\nOne schema change adds, to every Attribute the branch shares with the default branch, the\ntags the default branch gives it, and to derived Attributes the tags of what they read;\nno tag is removed. It recomputes the titles and search vectors of the Kinds it changes,\nso verification no longer reports them as `sensitivity_stale`. A branch that already has\nthe tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:\nthen only a `store.sensitivity_refresh` job is queued, which rewrites those rows in\nbatches and leaves the schema as it is.",
+        "description": "Give a branch forked before the default branch tagged an Attribute the tags it lacks.\n\nOne schema change adds, to every Attribute the branch shares with the default branch, the\ntags the default branch gives it, and to derived Attributes the tags of what they read;\nno tag is removed. It recomputes the titles and search vectors of the Kinds it changes,\nso verification no longer reports them as `sensitivity_stale`. A branch that already has\nthe tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:\nthen only a `store.sensitivity_refresh` job is queued, which rewrites those rows in\nbatches and leaves the schema as it is. `tags` lists the tags added only to callers\nwho may read the default branch's schema (empty otherwise).",
         "operationId": "rebase_tags_api_v1_domains__domain_id__branches__branch__rebase_tags_post",
         "security": [
           {

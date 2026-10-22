@@ -36,6 +36,7 @@ from lorebase_store.indexes import BranchIndexes
 from lorebase_store.materialize.background import queue_build, queue_materialization
 from lorebase_store.materialize.overlay import wants_overlay
 from lorebase_store.materialize.rebuild import materialize_revision
+from lorebase_store.materialize.stale import queue_if_stale
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.repositories.domains import DomainRepository
@@ -181,6 +182,11 @@ async def _create(
             settings=runtime.settings.indexes,
             maintenance=runtime.index_maintenance,
         ).sync(load_compiled(source_schema.compiled))
+        # The overlay reads the source's rows: stale ones are the source's to rewrite (its
+        # job then queues the overlays based on it).
+        await queue_if_stale(
+            session, domain_id, source_name, load_compiled(source_schema.compiled), runtime=runtime
+        )
         if background:
             await queue_materialization(session, domain_id, ref, at=now())
             return BranchCreation(ref, MaterializationMode.COPY, pending=True)
@@ -213,13 +219,16 @@ async def _create(
     if at_head:
         assert source_schema is not None
         await repository.copy_from(source_name)
+        copied = load_compiled(source_schema.compiled)
         await BranchIndexes(
             session,
             domain_id,
             name,
             settings=runtime.settings.indexes,
             maintenance=runtime.index_maintenance,
-        ).sync(load_compiled(source_schema.compiled))
+        ).sync(copied)
+        # Stale rows of the source are copied as they are.
+        await queue_if_stale(session, domain_id, name, copied, runtime=runtime)
         return BranchCreation(ref, MaterializationMode.COPY)
     await materialize_revision(session, domain_id, name, head, runtime=runtime)
     return BranchCreation(ref, MaterializationMode.REBUILD)

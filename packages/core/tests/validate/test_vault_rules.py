@@ -274,6 +274,15 @@ def test_rebased_tags_give_a_forked_branch_the_reference_tags() -> None:
     branch = _max_risk(supply_schema())  # forked before the tag, with a derived max
     assert raised_tags(supply_schema(), reference) == frozenset(PII)
     assert raised_tags(reference, supply_schema()) == frozenset()
+    # An Attribute new to the schema, tagged: a branch may hold it untagged.
+    kind = reference.kinds[SUPPLIER]
+    without = {k: a for k, a in kind.attributes.items() if k != RISK_SCORE}
+    before = reference.model_copy(
+        update={
+            "kinds": {**reference.kinds, SUPPLIER: kind.model_copy(update={"attributes": without})}
+        }
+    )
+    assert raised_tags(before, reference) == frozenset(PII)
     rebased = rebased_tags(branch, {RISK_SCORE: frozenset(PII)})
     assert rebased.kinds[SUPPLIER].attributes[RISK_SCORE].sensitivity == PII
     # The derived copy takes the tag of what it reads, so the schema validates.

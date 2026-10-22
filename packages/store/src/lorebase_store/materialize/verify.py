@@ -18,7 +18,6 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, link_key, relation_partition
 from lorebase_store.commit.schema import load_compiled
@@ -30,7 +29,7 @@ from lorebase_store.materialize.rows import (
     parse_partition,
     record_title,
 )
-from lorebase_store.materialize.sensitivity import reference_tags
+from lorebase_store.materialize.sensitivity import branch_tagged_schema
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
 from lorebase_store.repositories.materialized import MaterializedRepository
@@ -117,7 +116,7 @@ async def verify(
     tree = await nodes.load_tree(head.root)
 
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
-    tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
+    tagged = await branch_tagged_schema(session, domain_id, branch, schema, runtime=runtime)
     stored_schema = await repository.schema()
     if stored_schema is None:
         report.add(Divergence(DivergenceReason.SCHEMA_MISSING, PARTITION_SCHEMA))

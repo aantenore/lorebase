@@ -190,6 +190,11 @@ async def seed(
         admin = await _principal(store, "admin", {"role": "admin"})
         editor = await _principal(store, "editor", {"role": "editor"})
         modeler = await _principal(store, "modeler", {"role": "modeler"})
+        stale_modeler = await _principal(
+            store,
+            "stale modeler",
+            {"role": "branch-modeler", "scope_type": GrantScope.BRANCH, "scope_ref": STALE},
+        )
     finally:
         await engine.dispose()
     seeded = Seeded(owner_url=owner_url, app_url=app_url, schema=schema)
@@ -201,6 +206,7 @@ async def seed(
         "admin": admin,
         "editor": editor,
         "modeler": modeler,
+        "stale_modeler": stale_modeler,
         "token": token,
         "forged": forged,
     }
@@ -217,7 +223,12 @@ def _section() -> dict[str, Any]:
         "auth": {
             "mode": "api_key",
             "api_keys": {"pepper": PEPPER},
-            "authz": {"custom_roles": {"pii-reader": ["schema.read", "data.read", "pii.read"]}},
+            "authz": {
+                "custom_roles": {
+                    "pii-reader": ["schema.read", "data.read", "pii.read"],
+                    "branch-modeler": ["schema.write"],
+                }
+            },
         }
     }
 
@@ -596,6 +607,10 @@ async def test_a_branch_forked_before_a_tag_takes_the_default_branch_tags(
         assert body["tags"] == [
             {"section": "kinds", "owner": "Supplier", "attribute": "phone", "tags": ["pii"]}
         ]
+        # A writer of the branch alone is not told what the default branch tags.
+        modeled = await _post(http, facts["stale_modeler"], path, {"dry_run": True})
+        assert modeled.status_code == 200, modeled.text
+        assert (modeled.json()["change_count"], modeled.json()["tags"]) == (1, [])
         queued = await _post(http, admin, path, {"rows_only": True})
         assert queued.status_code == 200, queued.text
         assert queued.json()["status"] == "queued"

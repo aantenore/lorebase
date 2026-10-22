@@ -12,14 +12,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.expr.sensitivity import rebased_tags, schema_tags
-from lorebase_core.model import Schema, Sensitivity
+from lorebase_core.model import Derivation, ExpressionDerivation, Record, Schema, Sensitivity
+from lorebase_core.validate import RecordUpsert
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.commit.schema import load_compiled
-from lorebase_store.jobs import SENSITIVITY_REFRESH_JOB, JobRow
+from lorebase_store.jobs import MATERIALIZE_JOB, SENSITIVITY_REFRESH_JOB, JobRow
 from lorebase_store.materialize import (
     BranchMode,
     DivergenceReason,
     create_branch,
+    queue_stale_refresh,
+    run_materialize_job,
     run_sensitivity_refresh_job,
     stale_kinds,
     verify,
@@ -33,10 +36,16 @@ from .support import (
     COUNTRY,
     DOMAIN,
     LEGAL_NAME,
+    NOTES,
     ORIGIN,
+    RATING,
     SUPPLIER,
+    SUPPLIER_CODE,
     Clock,
+    T,
+    attribute,
     domain,
+    ident,
     part,
     schema_changes,
     supplier,
@@ -57,13 +66,15 @@ def runtime_with(**materialize: Any) -> StoreRuntime:
 
 
 ONE_A_BATCH = runtime_with(job_batch_rows=1)
+COPY = ident("att", 107)
+DERIVATION = ident("drv", 1)
 
 
-def job(branch: str, **payload: Any) -> JobRow:
+def job(branch: str, type: str = SENSITIVITY_REFRESH_JOB, **payload: Any) -> JobRow:
     now = datetime.now(UTC)
     return JobRow(
         id=0,
-        type=SENSITIVITY_REFRESH_JOB,
+        type=type,
         domain_id=DOMAIN,
         payload={"branch": branch, **payload},
         priority=0,
@@ -175,7 +186,8 @@ async def schema_of(sessions: Sessions, branch: str) -> Schema:
 async def test_a_tag_on_the_default_branch_queues_the_rewrite_of_every_other_branch(
     sessions: Sessions,
 ) -> None:
-    assert await queued(sessions) == [{"branch": STALE}, {"branch": OVERLAY}]
+    # The overlay is left to the job of its base, which queues it when done.
+    assert await queued(sessions) == [{"branch": STALE}]
 
 
 async def test_no_rewrite_is_queued_when_the_setting_is_off(
@@ -218,7 +230,9 @@ async def test_the_job_rewrites_stale_titles_and_vectors_in_batches(
 
     again = await run_sensitivity_refresh_job(engine, job(STALE), runtime=ONE_A_BATCH)
     assert (again["titles"], again["vectors"]) == (0, 0)
-    assert "overlays" not in again
+    # Done, even with nothing rewritten this time (an earlier deferred run may have): the
+    # overlays are queued.
+    assert again["overlays"]
 
 
 async def test_a_busy_branch_defers_the_job_with_where_it_stopped(
@@ -291,3 +305,98 @@ async def test_vectors_of_a_tagged_searchable_attribute_are_rewritten(
     assert await indexed(factory, "acme") == ["S-1"]  # the title is not sensitive
     again = await run_sensitivity_refresh_job(engine, job(STALE), runtime=ONE_A_BATCH)
     assert (again["titles"], again["vectors"]) == (0, 0)
+
+
+async def fresh(engine: AsyncEngine, runtime: StoreRuntime) -> tuple[Sessions, Clock]:
+    """A Domain with the supply schema and the three Suppliers, and `stale` forked from it."""
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    clock = Clock()
+    async with factory() as session:
+        await create_domain(session, domain(), author=AUTHOR, runtime=runtime, clock=clock)
+    rows = [supplier(code, name, rating="excellent") for code, name in SUPPLIERS.items()]
+    await run(factory, runtime, clock, rows, schema_changes=schema_changes())
+    async with factory() as session:
+        await create_branch(session, DOMAIN, STALE, created_by="usr_test", runtime=runtime)
+    return factory, clock
+
+
+async def test_a_running_job_does_not_swallow_a_new_one(sessions: Sessions) -> None:
+    async with sessions() as session, session.begin():
+        first = await queue_stale_refresh(session, DOMAIN, STALE)
+        assert await queue_stale_refresh(session, DOMAIN, STALE) == first
+        await session.execute(
+            text("UPDATE jobs SET status = 'running' WHERE id = :id"), {"id": first}
+        )
+        # The running job may be past the Kinds a new tag makes stale.
+        assert await queue_stale_refresh(session, DOMAIN, STALE) != first
+
+
+async def test_a_tag_on_an_attribute_new_to_the_default_branch_is_followed(
+    engine: AsyncEngine, runtime: StoreRuntime
+) -> None:
+    factory, clock = await fresh(engine, runtime)
+    # `stale` adds a searchable note; the default branch gets the same Attribute, tagged.
+    notes = attribute(NOTES, "notes", T("string"), searchable=True)
+    kind = supplier_kind()
+    on_branch = kind.model_copy(update={"attributes": {**kind.attributes, NOTES: notes}})
+    noted = RecordUpsert(
+        record=Record(
+            kind=SUPPLIER, key="S-1", values={SUPPLIER_CODE: "S-1", LEGAL_NAME: "Acme", NOTES: "x"}
+        )
+    )
+    await run(
+        factory, runtime, clock, [noted], branch=STALE, schema_changes=[SchemaUpsert(on_branch)]
+    )
+    tagged = notes.model_copy(update={"sensitivity": PII})
+    on_main = kind.model_copy(update={"attributes": {**kind.attributes, NOTES: tagged}})
+    await run(factory, runtime, clock, [], schema_changes=[SchemaUpsert(on_main)])
+    assert await queued(factory) == [{"branch": STALE}]
+
+
+async def test_derived_searchable_attributes_follow_what_they_read(
+    engine: AsyncEngine, runtime: StoreRuntime
+) -> None:
+    factory, clock = await fresh(engine, runtime)
+    # Only `stale` derives a searchable copy of the rating.
+    copy = attribute(COPY, "rating_copy", T("string"), searchable=True, derivation_id=DERIVATION)
+    derivation = Derivation(
+        id=DERIVATION,
+        api_name="rating_copy",
+        definition=ExpressionDerivation(kind=SUPPLIER, attribute=COPY, expression="rating"),
+    )
+    kind = supplier_kind()
+    on_branch = kind.model_copy(update={"attributes": {**kind.attributes, COPY: copy}})
+    changes = [SchemaUpsert(on_branch), SchemaUpsert(derivation)]
+    await run(factory, runtime, clock, [], branch=STALE, schema_changes=changes)
+    assert await indexed(factory, "excellent") == sorted(SUPPLIERS)
+    rating = kind.attributes[RATING].model_copy(update={"sensitivity": PII})
+    on_main = kind.model_copy(update={"attributes": {**kind.attributes, RATING: rating}})
+    await run(factory, runtime, clock, [], schema_changes=[SchemaUpsert(on_main)])
+    assert await queued(factory) == [{"branch": STALE}]
+
+    result = await run_sensitivity_refresh_job(engine, job(STALE), runtime=ONE_A_BATCH)
+    assert (result["kinds"], result["vectors"]) == ([SUPPLIER], len(SUPPLIERS))
+    assert await indexed(factory, "excellent") == []
+
+
+async def test_copies_of_a_stale_branch_are_queued(sessions: Sessions, engine: AsyncEngine) -> None:
+    background = runtime_with(async_copy_min_rows=0, job_batch_rows=100)
+    async with sessions() as session:
+        await create_branch(
+            session, DOMAIN, "copy", created_by="usr_test", source=STALE, mode=BranchMode.COPY
+        )
+    async with sessions() as session:
+        created = await create_branch(
+            session,
+            DOMAIN,
+            "large",
+            created_by="usr_test",
+            source=STALE,
+            mode=BranchMode.COPY,
+            runtime=background,
+        )
+    assert created.pending
+    assert await queued(sessions) == [{"branch": STALE}, {"branch": "copy"}]
+    done = await run_materialize_job(engine, job("large", type=MATERIALIZE_JOB), runtime=background)
+    assert done["promoted"]
+    assert {"branch": "large"} in await queued(sessions)

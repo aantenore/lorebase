@@ -96,10 +96,10 @@ _PENDING = text(
     """
     SELECT id FROM jobs
     WHERE type = :type AND domain_id IS NOT DISTINCT FROM CAST(:domain AS text)
-      AND status IN ('queued', 'running') AND payload = CAST(:payload AS jsonb)
+      AND status::text = ANY(CAST(:statuses AS text[])) AND payload = CAST(:payload AS jsonb)
     ORDER BY id LIMIT 1
     """
-)
+).bindparams(bindparam("statuses", type_=ARRAY(Text())))
 
 _COMPLETE = text(
     "UPDATE jobs SET status = 'succeeded', result = CAST(:result AS jsonb), "
@@ -219,15 +219,20 @@ async def enqueue_job(
     priority: int = 0,
     run_after: datetime | None = None,
     unique: bool = False,
+    unique_queued: bool = False,
 ) -> int:
     """Queue a job and return its id. With `unique`, an identical queued or running job of the
-    same type, Domain (or no Domain) and payload is returned instead of adding a duplicate."""
+    same type, Domain (or no Domain) and payload is returned instead of adding a duplicate;
+    with `unique_queued`, only an identical job that has not started yet (a running one may
+    already be past what the new one is queued for)."""
     body = json.dumps(dict(payload or {}), sort_keys=True)
     async with rls_scope(session, bypass=True):
-        if unique:
+        if unique or unique_queued:
+            statuses = ["queued"] if unique_queued else ["queued", "running"]
             found = (
                 await session.execute(
-                    _PENDING, {"type": job_type, "domain": domain_id, "payload": body}
+                    _PENDING,
+                    {"type": job_type, "domain": domain_id, "payload": body, "statuses": statuses},
                 )
             ).scalar_one_or_none()
             if found is not None:

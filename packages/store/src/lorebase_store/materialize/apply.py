@@ -19,7 +19,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.expr import ExprLimits
-from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import Schema
 from lorebase_core.revision import ChangesetEntry
 from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
@@ -34,7 +33,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
-from lorebase_store.materialize.sensitivity import reference_tags
+from lorebase_store.materialize.sensitivity import branch_tagged_schema
 from lorebase_store.repositories.materializations import BranchMaterializationRepository
 from lorebase_store.repositories.materialized import (
     HistoryRow,
@@ -88,7 +87,7 @@ async def apply_changeset(
     """
     runtime = runtime or StoreRuntime.from_settings(settings)
     # Titles and search vectors use the default branch's tags too (`materialize.sensitivity`).
-    tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
+    tagged = await branch_tagged_schema(session, domain_id, branch, schema, runtime=runtime)
     generation = (await RevisionRepository(session, domain_id).generations([revision_id]))[
         revision_id
     ]

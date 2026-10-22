@@ -83,6 +83,7 @@ from lorebase_store.jobs import BRANCH_DELETE_JOB, MATERIALIZE_JOB, JobRow, enqu
 from lorebase_store.layout import MAT_HISTORY, MAT_LINKS, MAT_RECORDS
 from lorebase_store.materialize import build
 from lorebase_store.materialize.overlay import promote_overlays_of
+from lorebase_store.materialize.stale import queue_if_stale
 from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.repositories.materializations import (
@@ -1101,6 +1102,7 @@ async def _sync_indexes(
         # Imported here: the commit package imports the materializer.
         from lorebase_store.commit.schema import load_compiled
 
+        compiled = load_compiled(schema.compiled)
         await BranchIndexes(
             session,
             domain_id,
@@ -1108,7 +1110,9 @@ async def _sync_indexes(
             settings=runtime.settings.indexes,
             maintenance=runtime.index_maintenance,
             defer=True,
-        ).sync(load_compiled(schema.compiled))
+        ).sync(compiled)
+        # Rows copied before the source rewrote them are stale.
+        await queue_if_stale(session, domain_id, branch, compiled, runtime=runtime)
 
 
 async def run_branch_delete_job(

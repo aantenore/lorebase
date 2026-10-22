@@ -16,15 +16,23 @@ based on the branch read are copied into them first, stamped with the generation
 branch head). Only titles that differ are written, so a batch run twice writes nothing new.
 Nothing is committed: titles and search vectors are not part of the tree.
 
+Tags are the effective ones (`materialize.sensitivity.tagged_schema`): a derived title or
+searchable Attribute reading a tagged Attribute is stale too.
+
 **Job.** `store.sensitivity_refresh` (payload `{"branch"}`) runs the rewrite for one branch.
 A batch that waits longer than `commit.lock_timeout_ms` for the branch lock, three times, queues
 the job again after `materialize.job_retry_seconds`, with `resume` set to the last key
-written. When it rewrote anything, the job queues itself for the overlays based on the branch:
-the copies it made into them hold the old rows.
+written. When it is done, the job queues itself for the overlays based on the branch: the
+copies it made into them hold the old rows, and their own rows are theirs to rewrite. A job
+is queued unless an identical one is still queued; a running one does not count, since it
+may already be past the Kinds a new tag makes stale.
 
 **Automatic.** With `materialize.refresh_branches_on_tag`, a commit or merge on the default
-branch that adds a tag to an existing Attribute queues the job for every other branch
-(`queue_after_tagging`), in its transaction. The branches' schemas are not changed:
+branch that adds a tag (to any Attribute, new ones included) queues the job, in one statement
+of its transaction, for every other branch that has stale Kinds by its schema, except
+overlays whose base is queued (the base's job queues them). Creating a copy of a branch with
+stale Kinds queues the copy (an overlay's source is queued instead), and so does the end of a
+background copy (`queue_if_stale`). The branches' schemas are not changed:
 `POST .../branches/{b}/rebase-tags` (Keeper) commits the tags to a branch's schema, and that
 schema change recomputes the titles and search vectors of the Kinds it changes in its own
 transaction, as every schema change does.
@@ -33,6 +41,7 @@ transaction, as every schema change does.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -40,16 +49,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_core.expr.sensitivity import raised_tags, with_tags
+from lorebase_core.expr.sensitivity import raised_tags, schema_tags
 from lorebase_core.model import Kind, Schema
+from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import SENSITIVITY_REFRESH_JOB, JobRow, enqueue_job
 from lorebase_store.materialize.rows import record_title, search_weights
-from lorebase_store.materialize.sensitivity import reference_tags
-from lorebase_store.models.enums import RefKind
+from lorebase_store.materialize.sensitivity import branch_tagged_schema, tagged_schema
+from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories.domains import DomainRepository
 from lorebase_store.repositories.materialized import MaterializedRepository
 from lorebase_store.repositories.refs import LockTimeoutError, RefRepository, sqlstate
@@ -142,15 +153,58 @@ async def queue_stale_refresh(
     resume: Cursor | None = None,
     run_after: datetime | None = None,
 ) -> int:
-    """Queue the rewrite of a branch's stale rows (an identical queued job is reused)."""
+    """Queue the rewrite of a branch's stale rows (an identical job that has not started yet
+    is reused)."""
     return await enqueue_job(
         session,
         SENSITIVITY_REFRESH_JOB,
         domain_id=domain_id,
         payload=refresh_payload(branch, resume),
         run_after=run_after,
-        unique=True,
+        unique_queued=True,
     )
+
+
+async def queue_if_stale(
+    session: AsyncSession, domain_id: str, branch: str, schema: Schema, *, runtime: StoreRuntime
+) -> int | None:
+    """With `materialize.refresh_branches_on_tag`, queue the rewrite of `branch` (whose
+    schema is `schema`) when the default branch's tags make some of its Kinds stale."""
+    if not runtime.settings.materialize.refresh_branches_on_tag:
+        return None
+    tagged = await branch_tagged_schema(session, domain_id, branch, schema, runtime=runtime)
+    if not stale_kinds(schema, tagged):
+        return None
+    return await queue_stale_refresh(session, domain_id, branch)
+
+
+_BRANCH_SCHEMAS = text(
+    """
+    SELECT r.name, r.materialization::text, r.base_branch, s.schema_hash
+    FROM refs r JOIN mat_schema s ON s.domain_id = r.domain_id AND s.branch = r.name
+    WHERE r.domain_id = :domain AND r.kind = 'branch' AND r.deleted_at IS NULL
+      AND r.name <> :default
+    """
+)
+_COMPILED = text(
+    """
+    SELECT DISTINCT ON (schema_hash) schema_hash, compiled FROM mat_schema
+    WHERE domain_id = :domain AND schema_hash = ANY(CAST(:hashes AS bytea[]))
+    """
+)
+_ENQUEUE_MISSING = text(
+    """
+    INSERT INTO jobs (type, domain_id, payload, priority, run_after)
+    SELECT CAST(:type AS text), CAST(:domain AS text), e.payload, 0, CAST(:now AS timestamptz)
+    FROM jsonb_array_elements(CAST(:payloads AS jsonb)) AS e(payload)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM jobs j
+        WHERE j.type = CAST(:type AS text) AND j.domain_id = CAST(:domain AS text)
+          AND j.status::text = 'queued' AND j.payload = e.payload
+    )
+    RETURNING id
+    """
+)
 
 
 async def queue_after_tagging(
@@ -163,20 +217,50 @@ async def queue_after_tagging(
     runtime: StoreRuntime,
 ) -> list[int]:
     """In the transaction of a commit or merge that changed the schema of `branch` from `old`
-    to `new`: when `branch` is the default branch, `new` adds tags to Attributes of `old` and
-    `materialize.refresh_branches_on_tag` is on, queue the rewrite for every other branch.
-    Returns the job ids."""
+    to `new`: when `branch` is the default branch, `new` adds tags and
+    `materialize.refresh_branches_on_tag` is on, queue the rewrite, in one statement, for
+    every other branch that has stale Kinds by its schema and `new`'s tags, except overlays
+    whose base is queued too. Returns the job ids."""
     if not runtime.settings.materialize.refresh_branches_on_tag or not raised_tags(old, new):
         return []
     domain = await DomainRepository(session).get(domain_id)
     if domain is None or branch != domain.default_branch:
         return []
-    refs = await RefRepository(session, domain_id).all(RefKind.BRANCH)
-    return [
-        await queue_stale_refresh(session, domain_id, ref.name)
-        for ref in refs
-        if ref.name != branch and ref.deleted_at is None
-    ]
+    found = (await session.execute(_BRANCH_SCHEMAS, {"domain": domain_id, "default": branch})).all()
+    hashes = sorted({bytes(row[3]) for row in found})
+    compiled = {
+        bytes(digest): load_compiled(body)
+        for digest, body in (
+            await session.execute(_COMPILED, {"domain": domain_id, "hashes": hashes})
+        ).all()
+    }
+    reference = schema_tags(new)
+    limits = runtime.schema.expression_limits
+    stale_by_hash = {
+        digest: bool(stale_kinds(schema, tagged_schema(schema, reference, limits)))
+        for digest, schema in compiled.items()
+    }
+    stale = {name for name, _, _, digest in found if stale_by_hash.get(bytes(digest))}
+    queued = sorted(
+        name
+        for name, materialization, base, _ in found
+        if name in stale
+        and not (materialization == Materialization.OVERLAY.value and base in stale)
+    )
+    if not queued:
+        return []
+    payloads = json.dumps([refresh_payload(name) for name in queued])
+    async with rls_scope(session, bypass=True):
+        result = await session.execute(
+            _ENQUEUE_MISSING,
+            {
+                "type": SENSITIVITY_REFRESH_JOB,
+                "domain": domain_id,
+                "payloads": payloads,
+                "now": _now(),
+            },
+        )
+    return [int(job_id) for (job_id,) in result.all()]
 
 
 async def refresh_stale_rows(
@@ -252,7 +336,7 @@ async def _refresh_batch(
         report.status = "cancelled"
         return None
     own = load_compiled(stored.compiled)
-    tagged = with_tags(own, await reference_tags(session, domain_id, branch, runtime=runtime))
+    tagged = await branch_tagged_schema(session, domain_id, branch, own, runtime=runtime)
     report.kinds = stale_kinds(own, tagged)
     for kind_id in report.kinds:
         if cursor is not None and kind_id < cursor[0]:
@@ -324,7 +408,7 @@ async def run_sensitivity_refresh_job(
             result["again"] = await queue_stale_refresh(
                 session, job.domain_id, branch, resume=report.resume, run_after=now() + delay
             )
-    elif report.rewrote:
+    elif report.status == "done":
         async with sessions() as session, session.begin():
             await scope_to_domain(session, job.domain_id)
             overlays = await RefRepository(session, job.domain_id).overlays_of(branch)
@@ -351,6 +435,7 @@ __all__ = [
     "JOB_NAME",
     "StaleRefresh",
     "queue_after_tagging",
+    "queue_if_stale",
     "queue_stale_refresh",
     "refresh_payload",
     "refresh_stale_rows",

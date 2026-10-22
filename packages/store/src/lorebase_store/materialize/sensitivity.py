@@ -2,16 +2,20 @@
 
 Titles and full-text vectors leave sensitive Attributes out. A branch forked before the
 default branch tagged an Attribute still has it untagged in its own schema, so the
-materializer, the rebuild and the verification add the default branch's tags
-(`lorebase_core.expr.sensitivity.with_tags`) when they compute titles and search vectors.
+materializer, the rebuild and the verification compute titles and search vectors with the
+effective tags (`tagged_schema`): the default branch's tags added, and carried through the
+branch's Derivations, as reads see them.
 The default branch's schema comes from the store's schema cache, keyed by its head Revision.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.expr.sensitivity import Tags, schema_tags
+from lorebase_core.expr.limits import ExprLimits
+from lorebase_core.expr.sensitivity import Tags, rebased_tags, schema_tags, with_tags
 from lorebase_core.model import Schema
 from lorebase_store.reads import head_schema
 from lorebase_store.repositories.domains import DomainRepository
@@ -40,3 +44,23 @@ async def reference_tags(
         return {}
     found = await head_schema(session, domain_id, domain.default_branch, runtime=runtime)
     return {} if found is None else schema_tags(found.schema)
+
+
+def tagged_schema(
+    schema: Schema, reference: Mapping[str, Tags], limits: ExprLimits | None = None
+) -> Schema:
+    """`schema` with the effective tags of its Attributes (`rebased_tags`): the tags of
+    `reference` (the default branch's) added, and carried to the derived Attributes reading
+    them. A schema that already has every tag of `reference` is returned as it is: its
+    validation made its derived Attributes carry what they read."""
+    if not reference or with_tags(schema, reference) == schema:
+        return schema
+    return rebased_tags(schema, reference, limits)
+
+
+async def branch_tagged_schema(
+    session: AsyncSession, domain_id: str, branch: str, schema: Schema, *, runtime: StoreRuntime
+) -> Schema:
+    """`tagged_schema` of the schema of `branch` with the default branch's tags."""
+    reference = await reference_tags(session, domain_id, branch, runtime=runtime)
+    return tagged_schema(schema, reference, runtime.schema.expression_limits)
