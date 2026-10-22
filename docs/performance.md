@@ -37,9 +37,10 @@ The sections from Dataset to Reading the results are the 100k-Record run of 2026
 | full-text search | 50.00 | 2.18 | 3.15 | 3.87 | 2.32 | 2.80 | 3.40 |
 | typo-tolerant full-text search | 50.00 | 3.09 | 4.12 | 4.45 | 3.35 | 4.80 | 5.89 |
 | record history page | 10.00\* | 2.69 | 3.16 | 3.87 | 2.91 | 3.19 | 3.65 |
-| record lineage | 10.00\* | 3.54 | 3.86 | 4.40 | 3.78 | 4.56 | 6.41 |
+| record lineage | 10.00\* | 4.42\*\* | 8.18\*\* | 11.28\*\* | 4.27\*\* | 8.43\*\* | 11.67\*\* |
 
 \* No budget in design 8.7; held to the budget of Links of a Record, the other per-Record index range read.
+\*\* One-statement lineage, measured on a loaded machine where get by key took 1.9 ms at p50; see [Record lineage in one statement](#record-lineage-in-one-statement-100k-records).
 
 ## Writes (milliseconds)
 
@@ -88,7 +89,7 @@ Scan nodes of the statements of one call of each read, statements run inside the
 | full-text search | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx |
 | typo-tolerant full-text search | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Index Scan pk_mat_lexicon<br>Seq Scan mat_lexicon<br>Seq Scan refs | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Index Scan pk_mat_lexicon<br>Seq Scan mat_lexicon<br>Seq Scan refs |
 | record history page | Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs | Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs |
-| record lineage | Index Scan ix_proposals_domain_id_target_ref_status<br>Index Scan mat_records_p3_pkey<br>Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs | Index Scan ix_proposals_domain_id_target_ref_status<br>Index Scan mat_records_p3_pkey<br>Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs |
+| record lineage | Bitmap Heap Scan provenance<br>Bitmap Index Scan pk_provenance<br>Index Only Scan pk_mat_history<br>Index Scan ix_proposals_domain_id_target_ref_status<br>Index Scan mat_records_p3_pkey<br>Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs | Bitmap Heap Scan provenance<br>Bitmap Index Scan pk_provenance<br>Index Only Scan pk_mat_history<br>Index Scan ix_proposals_domain_id_target_ref_status<br>Index Scan mat_records_p3_pkey<br>Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs |
 
 ## Reading the results
 
@@ -353,9 +354,12 @@ was at 29.45 to 33.02 at p95 and typo-tolerant search at 149 to 168.
   under 16 ms for all of them. They grew by 2 to 10 ms at p95 from the 100k baseline, mostly
   in pages read from outside shared buffers.
 - History and lineage read one primary-key range of `mat_history` per Record and are flat in
-  the size of the Domain. Lineage makes about eight statements (Domain, ref and head Revision,
-  then the Record, its history range, provenance and Proposals) and sits at its proposed
-  budget: 9.3 ms at p95 on `main` with 2GB of buffers, 9.8 to 11.0 on branches and with 128MB.
+  the size of the Domain. Lineage made about eight statements in this run (Domain, ref and head
+  Revision, then the Record, its history range, provenance and Proposals) and sat at its
+  proposed budget: 9.3 ms at p95 on `main` with 2GB of buffers, 9.8 to 11.0 on branches and
+  with 128MB. It now reads the Record and its lineage in one statement, about 25% faster at
+  100k ([Record lineage in one statement](#record-lineage-in-one-statement-100k-records)); not
+  re-measured at 1M.
 - The 2-hop neighborhood is within budget on `main` (9.5 to 24.4 ms at p95) and over it on the
   copy and the overlay (29 to 34 ms). The plans are the baseline's (index scans only, about
   900 buffers per call for about 130 nodes and 130 Links); the time goes to the pages missing
@@ -434,9 +438,40 @@ statements are otherwise the same.
   deletions of large branches now run as jobs in batches, each well within the timeout
   ([Background branch copies and deletions](#background-branch-copies-and-deletions)); the
   1M-Record run has not been repeated since.
-- Lineage has no budget in design 8.7; with the one proposed here it is at the limit on
-  branches. Its statements are index lookups; fewer round trips (the head Revision and the
-  Record in one statement) would give the margin.
+
+## Record lineage in one statement (100k Records)
+
+Lineage at a branch head is one statement since migration `0024`: the materialized Record keeps
+the Revision behind each value (`mat_records.lineage_revisions`), and the Record, those
+Revisions, the provenance entries, the Proposals, the creating change and the count of changes
+come back in one row. Before, Keeper read the Record, then the newest
+`read.history.lineage_max_changes` (10,000) changes of the Record, then provenance and
+Proposals, and a value set before that window named no Revision.
+
+Measured on 2026-10-22 on the 100k-Record dataset above (scale 540, 4 extra Links per Part),
+same machine, while other workloads kept it busy (load average about 28): get by key took
+1.9 ms at p50 against 1.1 in the baseline, so read the absolute figures as inflated. The three
+reads ran in turn call by call with the same random keys (1,000 timed calls after 100 warm-up
+calls per role), so they saw the same load; "before" is the previous implementation on the
+same database. Times include resolving the branch head (Domain, ref, head Revision).
+
+| Operation | Role | p50 | p95 | p99 |
+|-----------|------|----:|----:|----:|
+| get by key | owner | 1.95 | 3.60 | 5.17 |
+| record lineage, before | owner | 6.20 | 11.36 | 15.25 |
+| record lineage | owner | 4.42 | 8.18 | 11.28 |
+| get by key | rls | 1.92 | 4.04 | 7.00 |
+| record lineage, before | rls | 5.47 | 11.23 | 16.47 |
+| record lineage | rls | 4.27 | 8.43 | 11.67 |
+
+- Lineage is 22 to 29% faster at p50 and 25 to 28% at p95; relative to get by key it went
+  from about 3x to about 2.2x. The full harness in the same conditions gave the same order
+  (lineage now below the history page, which was above it before).
+- Its cost no longer depends on the number of changes of the Record: the history range is read
+  only to count the changes (an index-only scan) and, for rows written before migration `0024`
+  (null `lineage_revisions`), to find the Revisions they lack.
+- Lineage at another Revision (`at`) reads the Record from the tree and folds its changes up to
+  that Revision; it was not measured here.
 
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
