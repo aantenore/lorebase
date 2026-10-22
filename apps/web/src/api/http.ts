@@ -521,6 +521,19 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
       explain: (scope, kind, key) => explain(scope, kind, key),
     },
 
+    trace: {
+      sessions: async (params) => {
+        const page = await get<S['TraceSessionPage']>('/trace/sessions', {
+          actor: params?.actor,
+          domain_id: params?.domain_id,
+          ...pageParams(params),
+        });
+        return { ...page, next_cursor: page.next_cursor ?? null };
+      },
+      timeline: (sessionId, params) =>
+        get<S['TraceTimeline']>(`/trace/sessions/${enc(sessionId)}`, { actor: params?.actor }),
+    },
+
     webhooks: {
       list: async (domain) => (await get<S['WebhookList']>(`${d(domain)}/webhooks`)).items,
       create: (domain, input) => post(`${d(domain)}/webhooks`, input),

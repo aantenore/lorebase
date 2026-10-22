@@ -1211,6 +1211,95 @@ def test_audit_verify_refused_for_a_non_admin(http: respx.MockRouter) -> None:
     assert "audit.read" in result.stderr
 
 
+TRACE_SESSION = {
+    "session_id": "s-1",
+    "actor": "usr_1",
+    "started_at": NOW,
+    "last_at": NOW,
+    "calls": 2,
+    "notes": 1,
+    "domains": ["supply"],
+    "tools": ["search", "get_record"],
+    "proposals": ["prp_1"],
+}
+TRACE_STEPS = [
+    {
+        "step": 1,
+        "seq": 1,
+        "type": "call",
+        "at": NOW,
+        "actor": "usr_1",
+        "tool": "search",
+        "method": "POST",
+        "route": "/domains/{domain_id}/search",
+        "status": 200,
+        "latency_ms": 12.4,
+        "cache": "miss",
+        "result": {"counts": {"items": 3}},
+        "refs": {
+            "records": [{"kind": "Part", "key": "P-1"}],
+            "links": [],
+            "truncated": False,
+        },
+    },
+    {
+        "step": 2,
+        "seq": 2,
+        "type": "note",
+        "at": NOW,
+        "actor": "usr_1",
+        "note": "looked \x1b[31mred\x1b[0m",
+    },
+]
+
+
+def test_trace_list_filters_and_prints_sessions(http: respx.MockRouter) -> None:
+    route = http.get("/trace/sessions").respond(
+        200, json={"enabled": True, "items": [TRACE_SESSION], "next_cursor": None}
+    )
+    result = run("trace", "list", "--actor", "usr_1", "-d", "supply", "--limit", "5")
+    assert result.exit_code == 0, result.output
+    assert "s-1" in result.stdout
+    assert "search, get_record" in result.stdout
+    params = route.calls.last.request.url.params
+    assert (params["actor"], params["domain_id"], params["limit"]) == ("usr_1", "supply", "5")
+    as_json = run("trace", "list", "--json")
+    assert json.loads(as_json.stdout)["items"][0]["session_id"] == "s-1"
+
+
+def test_trace_show_prints_the_timeline_and_notes_as_plain_text(http: respx.MockRouter) -> None:
+    route = http.get("/trace/sessions/s-1").respond(
+        200, json={"session_id": "s-1", "truncated": False, "steps": TRACE_STEPS}
+    )
+    result = run("trace", "show", "s-1", "--actor", "usr_1")
+    assert result.exit_code == 0, result.output
+    assert route.calls.last.request.url.params["actor"] == "usr_1"
+    assert "POST /domains/{domain_id}/search" in result.stdout
+    assert "items=3" in result.stdout
+    assert "1r 0l" in result.stdout
+    assert "\x1b" not in result.stdout
+    assert "looked ?[31mred?[0m" in result.stdout
+    as_json = run("trace", "show", "s-1", "--json")
+    assert json.loads(as_json.stdout)["steps"][1]["type"] == "note"
+
+
+def test_trace_show_unknown_session_is_not_found(http: respx.MockRouter) -> None:
+    http.get("/trace/sessions/nope").mock(return_value=problem(404, "not_found", "no session"))
+    result = run("trace", "show", "nope")
+    assert result.exit_code == 1
+
+
+def test_trace_note_posts_the_text(http: respx.MockRouter) -> None:
+    route = http.post("/trace/sessions/s-1/notes").respond(202, json={"recorded": True})
+    result = run("trace", "note", "s-1", "why", "-d", "supply", "--step", "3")
+    assert result.exit_code == 0, result.output
+    assert json.loads(route.calls.last.request.content) == {
+        "text": "why",
+        "domain_id": "supply",
+        "step": 3,
+    }
+
+
 def test_apikey_create_and_list_show_allowed_networks(http: respx.MockRouter) -> None:
     key = {
         "id": "key_2",

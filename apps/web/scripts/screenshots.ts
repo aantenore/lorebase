@@ -115,6 +115,18 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
     needsWebGL: true,
   },
   {
+    name: 'agent-activity',
+    path: `/${domain}/agent-activity?session=sess_20261020_brevik&step=4`,
+    ready: '[role=img][aria-label^="Records touched"]',
+    needsWebGL: true,
+  },
+  {
+    name: 'retrieval-lab',
+    path: `/${domain}/retrieval-lab?q=brevik%20beerings&budget=1200`,
+    ready: '[role=img][aria-label^="Involved Records"]',
+    needsWebGL: true,
+  },
+  {
     name: 'modeler-list',
     path: `/${domain}/modeler`,
     ready: 'text=Supplier',

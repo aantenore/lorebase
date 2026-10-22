@@ -7,6 +7,7 @@
 | `token` | `LOREBASE_TOKEN` | none |
 | `timeout` | `LOREBASE_TIMEOUT` (seconds) | `DEFAULT_TIMEOUT_S` |
 | `api_prefix` | `LOREBASE_API_PREFIX` | `DEFAULT_API_PREFIX` |
+| `session_id`, `tool`, `trace` | none | none (agent trace headers) |
 
 An API key (`lbk_...`) and an OIDC access token both travel as `Authorization: Bearer`; when
 both are set the API key wins. `token` may be a callable returning the current token, called
@@ -16,8 +17,10 @@ for every request, so that a refreshing token source plugs in.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lorebase_client.errors import LorebaseConfigError
 
@@ -35,7 +38,22 @@ DEFAULT_BACKOFF_MAX_S = 30.0
 DEFAULT_CACHE_ENTRIES = 256
 RETRY_STATUSES = frozenset({429, 503})
 
+SESSION_HEADER = "X-Lorebase-Session"
+TOOL_HEADER = "X-Lorebase-Tool"
+TRACE_HEADER = "X-Lorebase-Trace"
+"""Default names of the agent trace headers (Keeper can be configured with others; pass those
+through `headers=`)."""
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
 TokenSource = str | Callable[[], str]
+TraceMode = Literal["on", "debug"]
+
+
+def check_session_id(session_id: str) -> str:
+    """The session id, or `LorebaseConfigError` when it is not 1-128 of `A-Za-z0-9._:-`."""
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise LorebaseConfigError("session_id must be 1-128 characters of A-Za-z0-9._:-")
+    return session_id
 
 
 @dataclass(frozen=True)
@@ -68,6 +86,12 @@ class ClientConfig:
     cache_entries: int | None = None
     """Entries of the ETag cache; `None` leaves caching off."""
     headers: Mapping[str, str] = field(default_factory=dict)
+    session_id: str | None = None
+    """Agent trace session sent as `X-Lorebase-Session` with every request."""
+    tool: str | None = None
+    """Tool name sent as `X-Lorebase-Tool`."""
+    trace: TraceMode | None = None
+    """`X-Lorebase-Trace` value: `on` opts requests in, `debug` adds query plans."""
 
     @property
     def root(self) -> str:
@@ -94,6 +118,9 @@ def resolve_config(
     auto_idempotency_keys: bool = False,
     cache: bool | int = False,
     headers: Mapping[str, str] | None = None,
+    session_id: str | None = None,
+    tool: str | None = None,
+    trace: TraceMode | None = None,
     env: Mapping[str, str] | None = None,
 ) -> ClientConfig:
     """Merge arguments with the environment (`env`, default `os.environ`).
@@ -127,4 +154,7 @@ def resolve_config(
         auto_idempotency_keys=auto_idempotency_keys,
         cache_entries=entries,
         headers=dict(headers or {}),
+        session_id=check_session_id(session_id) if session_id else None,
+        tool=tool or None,
+        trace=trace,
     )

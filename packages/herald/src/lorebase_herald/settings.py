@@ -152,6 +152,40 @@ class ChangesSettings(SectionModel):
     max_pages: int = Field(default=10, ge=1, description="Pages read looking for `since`.")
 
 
+class TraceSettings(SectionModel):
+    """Agent trace headers on every Keeper call (Keeper's `keeper.trace` records them)."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Send the session, tool and traceparent headers; false sends none of them.",
+    )
+    session_header: str = Field(
+        default="X-Lorebase-Session",
+        min_length=1,
+        description="Header carrying the session id, to Keeper and, when a caller sends it, "
+        "to Herald (the name configured on Keeper).",
+    )
+    tool_header: str = Field(
+        default="X-Lorebase-Tool", min_length=1, description="Header carrying the tool name."
+    )
+    trace_header: str = Field(
+        default="X-Lorebase-Trace",
+        min_length=1,
+        description="Header opting a request in to tracing (`on`, or `debug` for query plans).",
+    )
+    opt_in: bool = Field(
+        default=False,
+        description="Send `<trace_header>: on` on every call (true), or only when "
+        "the caller's request carries it.",
+    )
+    session_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9._:-]{1,128}$",
+        description="Session id used when the caller's request names none, in place of the MCP "
+        "session id. Without any, no session header is sent and Keeper infers sessions.",
+    )
+
+
 class HeraldSettings(SectionModel):
     """The MCP server (design 11.2)."""
 
@@ -175,6 +209,7 @@ class HeraldSettings(SectionModel):
     context: ContextSettings = Field(default_factory=ContextSettings)
     neighborhood: NeighborhoodSettings = Field(default_factory=NeighborhoodSettings)
     changes: ChangesSettings = Field(default_factory=ChangesSettings)
+    trace: TraceSettings = Field(default_factory=TraceSettings)
 
 
 register_section(SECTION, HeraldSettings, env_aliases=ENV_ALIASES)

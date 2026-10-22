@@ -202,13 +202,80 @@ function snippetFor(rec: StoredRecord, terms: string[]): string {
   return '';
 }
 
-export function runSearch(
+/** Edit distance, capped: enough to tell a typo from another word. */
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      row.push(
+        Math.min((previous[j] ?? 0) + 1, (row[j - 1] ?? 0) + 1, (previous[j - 1] ?? 0) + cost),
+      );
+    }
+    previous = row;
+  }
+  return previous[b.length] ?? 0;
+}
+
+/** Words of the Records, for typo corrections. */
+function vocabulary(data: BranchData): Set<string> {
+  const words = new Set<string>();
+  for (const rec of data.records) {
+    const parts = [titleOf(data, rec), ...Object.values(rec.values).map((v) => text(v))];
+    for (const part of parts) {
+      for (const word of part.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+        if (word.length > 3) words.add(word);
+      }
+    }
+  }
+  return words;
+}
+
+/** A pseudo similarity in [0, 1) that depends on the vector and the Record, for the mock. */
+function similarity(vector: number[], ref: string): number {
+  let hash = vector.reduce((sum, v, i) => sum + v * (i + 1), 0);
+  for (let i = 0; i < ref.length; i += 1) hash = (hash * 31 + ref.charCodeAt(i)) % 9973;
+  return Math.abs(hash % 1000) / 1000;
+}
+
+export interface MockSearch {
+  results: SearchResult[];
+  mode: string;
+  corrections: { word: string; replacements: string[] }[];
+}
+
+/**
+ * Lexical search with typo corrections; a query vector makes semantic and hybrid modes add a
+ * stand-in similarity. `tuning` is honored loosely: the weights scale the two scores and
+ * `candidates` caps the hits.
+ */
+export function runSearchFull(
   data: BranchData,
   request: SearchRequest,
   fallbackLimit: number,
-): SearchResult[] {
-  const terms = request.q.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return [];
+): MockSearch {
+  const vector = request.query_vector;
+  const asked = request.mode ?? (vector === undefined ? 'lexical' : 'hybrid');
+  const mode = vector === undefined ? 'lexical' : asked;
+  const tuning = request.tuning ?? {};
+  const lexicalWeight = tuning.lexical_weight ?? 1;
+  const semanticWeight = tuning.semantic_weight ?? 1;
+
+  const asTyped = request.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const known = vocabulary(data);
+  const corrections: MockSearch['corrections'] = [];
+  const terms = asTyped.map((term) => {
+    if (term.length <= 3 || known.has(term) || [...known].some((w) => w.includes(term))) {
+      return term;
+    }
+    const close = [...known].filter((w) => editDistance(w, term) <= 2).slice(0, 2);
+    if (close.length === 0) return term;
+    corrections.push({ word: term, replacements: close });
+    return close[0] ?? term;
+  });
+  if (terms.length === 0) return { results: [], mode, corrections };
+
   const results: SearchResult[] = [];
   for (const rec of data.records) {
     if (
@@ -220,22 +287,37 @@ export function runSearch(
     if (!matchesWhere(data, rec, request.where)) continue;
     const title = titleOf(data, rec).toLowerCase();
     const body = Object.values(rec.values).map((v) => text(v).toLowerCase());
-    let score = 0;
+    let lexical = 0;
     for (const term of terms) {
-      if (title.includes(term)) score += 3;
-      else if (body.some((b) => b.includes(term))) score += 1;
+      if (title.includes(term)) lexical += 3;
+      else if (body.some((b) => b.includes(term))) lexical += 1;
     }
-    if (score === 0) continue;
+    const ref = refOf(rec.kind, rec.key);
+    const semantic = vector === undefined || mode === 'lexical' ? 0 : similarity(vector, ref);
+    const score =
+      mode === 'semantic'
+        ? semantic * semanticWeight
+        : lexical * lexicalWeight + semantic * semanticWeight;
+    if (mode === 'semantic' ? semantic < 0.5 : lexical === 0) continue;
     results.push({
-      ref: refOf(rec.kind, rec.key),
+      ref,
       kind: rec.kind,
       title: titleOf(data, rec),
       snippet: snippetFor(rec, terms),
-      score,
+      score: Math.round(score * 1000) / 1000,
     });
   }
   results.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
-  return results.slice(0, request.limit ?? fallbackLimit);
+  const cap = Math.min(request.limit ?? fallbackLimit, tuning.candidates ?? Infinity);
+  return { results: results.slice(0, cap), mode, corrections };
+}
+
+export function runSearch(
+  data: BranchData,
+  request: SearchRequest,
+  fallbackLimit: number,
+): SearchResult[] {
+  return runSearchFull(data, request, fallbackLimit).results;
 }
 
 // ------------------------------------------------------------ neighborhood

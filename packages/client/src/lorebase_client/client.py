@@ -16,9 +16,11 @@ raise subclasses of `LorebaseError`. The request layer is shared with `AsyncLore
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from types import TracebackType
 from typing import Any, Self
 
@@ -27,7 +29,14 @@ from pydantic import JsonValue
 
 from lorebase_client import endpoints as ep
 from lorebase_client import models as m
-from lorebase_client.config import ClientConfig, RetryPolicy, TokenSource, resolve_config
+from lorebase_client.config import (
+    ClientConfig,
+    RetryPolicy,
+    TokenSource,
+    TraceMode,
+    check_session_id,
+    resolve_config,
+)
 from lorebase_client.core import (
     Call,
     Done,
@@ -64,6 +73,9 @@ class LorebaseClient:
         auto_idempotency_keys: bool = False,
         cache: bool | int = False,
         headers: Mapping[str, str] | None = None,
+        session_id: str | None = None,
+        tool: str | None = None,
+        trace: TraceMode | None = None,
         transport: httpx.BaseTransport | None = None,
         trust_env: bool = True,
         env: Mapping[str, str] | None = None,
@@ -79,6 +91,9 @@ class LorebaseClient:
             auto_idempotency_keys=auto_idempotency_keys,
             cache=cache,
             headers=headers,
+            session_id=session_id,
+            tool=tool,
+            trace=trace,
             env=env,
         )
         self._core = RequestCore(self.config)
@@ -86,6 +101,9 @@ class LorebaseClient:
         self._http = httpx.Client(
             timeout=self.config.timeout_s, transport=transport, trust_env=trust_env
         )
+        self._mount()
+
+    def _mount(self) -> None:
         self.domains = Domains(self)
         self.branches = Branches(self)
         self.tags = Tags(self)
@@ -98,11 +116,32 @@ class LorebaseClient:
         self.grants = Grants(self)
         self.principals = Principals(self)
         self.audit = Audit(self)
+        self.trace = Trace(self)
         self.proposals = Proposals(self)
         self.agents = Agents(self)
         self.webhooks = Webhooks(self)
         self.sources = Sources(self)
         self.documents = Documents(self)
+
+    def with_session(
+        self, session_id: str, *, tool: str | None = None, trace: TraceMode | None = None
+    ) -> Self:
+        """A client for another agent trace session over the same connection and cache.
+
+        It sends `session_id` (and `tool`, `trace` when given; otherwise this client's) with
+        every request. Closing either client closes the shared connection.
+        """
+        derived = copy.copy(self)
+        derived.config = replace(
+            self.config,
+            session_id=check_session_id(session_id),
+            tool=tool or self.config.tool,
+            trace=trace or self.config.trace,
+        )
+        derived._core = RequestCore(derived.config)
+        derived._core.cache = self._core.cache
+        derived._mount()
+        return derived
 
     def close(self) -> None:
         self._http.close()
@@ -983,6 +1022,49 @@ class Audit(_Resource):
     def verify(self, domain: str, *, after_seq: int | None = None) -> m.AuditVerification:
         """Recompute the Domain's audit hash chain; `intact` and `first_broken` tell the result."""
         return self._c.send(ep.verify_audit(domain, after_seq=after_seq))
+
+
+class Trace(_Resource):
+    """Agent trace: sessions the caller may see, their timelines and notes."""
+
+    def sessions(
+        self,
+        *,
+        actor: str | None = None,
+        domain_id: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.TraceSessionPage:
+        """One page of sessions, most recent first; `enabled` tells whether Keeper traces."""
+        call = ep.list_trace_sessions(actor=actor, domain_id=domain_id, limit=limit, cursor=cursor)
+        return self._c.send(call)
+
+    def iterate(
+        self,
+        *,
+        actor: str | None = None,
+        domain_id: str | None = None,
+        page_size: int | None = None,
+    ) -> Iterator[m.TraceSession]:
+        return self._c.iterate(
+            ep.list_trace_sessions(actor=actor, domain_id=domain_id, limit=page_size)
+        )
+
+    def session(self, session_id: str, *, actor: str | None = None) -> m.TraceTimeline:
+        """The calls and notes of a session in order."""
+        return self._c.send(ep.get_trace_session(session_id, actor=actor))
+
+    def add_note(
+        self,
+        session_id: str,
+        text: str,
+        *,
+        domain_id: str | None = None,
+        step: int | None = None,
+    ) -> m.NoteAccepted:
+        """Attach a note to the caller's session; it is written off the request path."""
+        body = m.NoteRequest(text=text, domain_id=domain_id, step=step)
+        return self._c.send(ep.add_trace_note(session_id, body))
 
 
 class Proposals(_Resource):

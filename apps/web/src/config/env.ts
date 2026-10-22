@@ -24,7 +24,13 @@ export interface AppConfig {
   apiMode: ApiMode;
   /** Keeper origin without the API path. `null` in mock mode. */
   keeperBaseUrl: string | null;
-  /** Guide origin (`VITE_GUIDE_URL`), without a trailing slash. `null` when the assistant is not configured. */
+  /**
+   * Guide origin (`VITE_GUIDE_URL`, `guideUrl` in `/config.js`), without a trailing slash. `null`
+   * when the assistant is not configured. The Retrieval lab then asks `POST {guideUrl}/embed`
+   * for the query vector (request `{"text": string}`, answer `{"vector": number[], "model"?:
+   * string, "dims"?: number}`); without it the lab searches by words only, or takes a vector
+   * pasted by hand.
+   */
   guideUrl: string | null;
   /** From `VITE_AUTH_MODE`. Always `token` in mock mode. */
   authMode: AuthMode;

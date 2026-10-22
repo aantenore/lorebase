@@ -30,7 +30,7 @@ const MIN_NODE_SIZE = 8;
 const NODE_SIZE_PER_EDGE = 2;
 const MAX_NODE_SIZE = 22;
 
-function colorOf(kinds: Kind[], name: string): string {
+export function colorOf(kinds: Kind[], name: string): string {
   const index = kinds.findIndex((k) => k.api_name === name);
   const kind = kinds[index];
   return kind?.color ?? FALLBACK_COLORS[Math.max(index, 0) % FALLBACK_COLORS.length] ?? '#888888';

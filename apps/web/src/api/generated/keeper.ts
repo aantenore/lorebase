@@ -1429,6 +1429,67 @@ export interface paths {
         patch: operations["update_branch_api_v1_domains__domain_id__branches__branch__patch"];
         trace?: never;
     };
+    "/api/v1/trace/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List agent trace sessions
+         * @description Sessions with a step the caller may see, most recent activity first.
+         */
+        get: operations["list_sessions_api_v1_trace_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trace/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Timeline of an agent trace session
+         * @description Calls and notes of one principal's session in order, as far as the caller may see
+         *     them.
+         */
+        get: operations["get_session_api_v1_trace_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trace/sessions/{session_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach a note to an agent trace session
+         * @description Queue a note of the caller's session (written off the request path, like calls).
+         */
+        post: operations["add_note_api_v1_trace_sessions__session_id__notes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3674,6 +3735,32 @@ export interface components {
             /** Not */
             not: components["schemas"]["AllOf"] | components["schemas"]["AnyOf"] | components["schemas"]["NotCondition"] | components["schemas"]["ViaCondition"] | components["schemas"]["CountCondition"] | components["schemas"]["MatchCondition"] | components["schemas"]["DerivedCondition"] | components["schemas"]["AttributeCondition"];
         };
+        /** NoteAccepted */
+        NoteAccepted: {
+            /**
+             * Recorded
+             * @description False when tracing is disabled or the note was dropped.
+             */
+            recorded: boolean;
+        };
+        /** NoteIn */
+        NoteIn: {
+            /**
+             * Text
+             * @description Free text; bounded by keeper.trace.max_note_chars.
+             */
+            text: string;
+            /**
+             * Domain Id
+             * @description Domain the note is about; principals holding trace.read there see it. Needs data.read in that Domain.
+             */
+            domain_id?: string | null;
+            /**
+             * Step
+             * @description The agent's own step counter, shown with the note.
+             */
+            step?: number | null;
+        };
         /**
          * Operator
          * @description Comparison operators; which ones apply depends on the Attribute type.
@@ -4841,6 +4928,8 @@ export interface components {
             query_vector?: number[] | null;
             /** Limit */
             limit?: number | null;
+            /** @description Ranking knobs in place of the `search` settings. */
+            tuning?: components["schemas"]["SearchTuning"] | null;
         };
         /** SearchResponse */
         SearchResponse: {
@@ -4859,6 +4948,28 @@ export interface components {
              * @description Typo corrections applied to q; hits found only through them come after the others.
              */
             corrections?: components["schemas"]["SearchCorrection"][];
+        };
+        /**
+         * SearchTuning
+         * @description Ranking knobs of one search in place of the `search` settings (to compare parameter
+         *     sets). Unset knobs keep their configured value; `candidates` and `typo_candidates` may only
+         *     be lowered and `trigram_threshold` only raised.
+         */
+        SearchTuning: {
+            /** Lexical Weight */
+            lexical_weight?: number | null;
+            /** Semantic Weight */
+            semantic_weight?: number | null;
+            /** Rrf K */
+            rrf_k?: number | null;
+            /** Trigram Threshold */
+            trigram_threshold?: number | null;
+            /** Trigram Weight */
+            trigram_weight?: number | null;
+            /** Typo Candidates */
+            typo_candidates?: number | null;
+            /** Candidates */
+            candidates?: number | null;
         };
         /**
          * ServedFrom
@@ -5093,6 +5204,190 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+        };
+        /** TraceLinkRef */
+        TraceLinkRef: {
+            /** Relation */
+            relation: string;
+            from: components["schemas"]["TraceRecordRef"];
+            to: components["schemas"]["TraceRecordRef"];
+        };
+        /** TraceRecordRef */
+        TraceRecordRef: {
+            /** Kind */
+            kind: string;
+            /** Key */
+            key: string;
+        };
+        /** TraceRefs */
+        TraceRefs: {
+            /** Records */
+            records: components["schemas"]["TraceRecordRef"][];
+            /** Links */
+            links: components["schemas"]["TraceLinkRef"][];
+            /**
+             * Truncated
+             * @description More refs were touched than kept or than visible.
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /** TraceSessionOut */
+        TraceSessionOut: {
+            /** Session Id */
+            session_id: string;
+            /**
+             * Actor
+             * @description Principal that made the calls.
+             */
+            actor: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Last At
+             * Format: date-time
+             */
+            last_at: string;
+            /** Calls */
+            calls: number;
+            /** Notes */
+            notes: number;
+            /** Domains */
+            domains: string[];
+            /** Tools */
+            tools: string[];
+            /**
+             * Proposals
+             * @description Proposals the session opened or acted on.
+             */
+            proposals: string[];
+            /**
+             * Inferred
+             * @description Grouped heuristically: the calls carried no session id and were grouped by principal and client while they kept coming (keeper.trace.inferred_session_idle_s).
+             * @default false
+             */
+            inferred: boolean;
+        };
+        /** TraceSessionPage */
+        TraceSessionPage: {
+            /**
+             * Enabled
+             * @description Whether new requests are traced (keeper.trace.enabled).
+             */
+            enabled: boolean;
+            /** Items */
+            items: components["schemas"]["TraceSessionOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** TraceStepOut */
+        TraceStepOut: {
+            /**
+             * Step
+             * @description Position in the timeline, from 1.
+             */
+            step: number;
+            /** Seq */
+            seq: number;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "call" | "note";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Actor */
+            actor: string;
+            /** Principal Type */
+            principal_type?: string | null;
+            /** Domain Id */
+            domain_id?: string | null;
+            /** Tool */
+            tool?: string | null;
+            /** Method */
+            method?: string | null;
+            /**
+             * Route
+             * @description Route template, values unexpanded.
+             */
+            route?: string | null;
+            /** Status */
+            status?: number | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /**
+             * Cache
+             * @description Response cache: hit, miss or bypass.
+             */
+            cache?: string | null;
+            /** Branch */
+            branch?: string | null;
+            /**
+             * Query
+             * @description The query as sent, filter values redacted by default.
+             */
+            query?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Result
+             * @description Counts, search mode and corrections, budget; no values.
+             */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+            refs?: components["schemas"]["TraceRefs"] | null;
+            /**
+             * Explain
+             * @description Query plan summaries (`X-Lorebase-Trace: debug`).
+             */
+            explain?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Note
+             * @description Text of a note; opaque, not markup.
+             */
+            note?: string | null;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Request Id */
+            request_id?: string | null;
+            /**
+             * Trace Id
+             * @description W3C trace id of the request.
+             */
+            trace_id?: string | null;
+            /**
+             * Inferred
+             * @description The step had no session id; its session was inferred.
+             * @default false
+             */
+            inferred: boolean;
+            /**
+             * Withheld
+             * @description Another principal's step whose query, corrections and note text the reader may not see (it lacks Domain-wide data.read or a sensitivity clearance).
+             * @default false
+             */
+            withheld: boolean;
+        };
+        /** TraceTimeline */
+        TraceTimeline: {
+            /** Session Id */
+            session_id: string;
+            /** Steps */
+            steps: components["schemas"]["TraceStepOut"][];
+            /**
+             * Truncated
+             * @description The session has more visible steps than returned.
+             */
+            truncated: boolean;
         };
         /** TraverseHopOut */
         TraverseHopOut: {
@@ -11087,6 +11382,178 @@ export interface operations {
                 };
             };
             /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_sessions_api_v1_trace_sessions_get: {
+        parameters: {
+            query?: {
+                /** @description Only this principal. */
+                actor?: string | null;
+                /** @description Only steps in this Domain. */
+                domain_id?: string | null;
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceSessionPage"];
+                };
+            };
+            /** @description No visible step of that session. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No database is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_session_api_v1_trace_sessions__session_id__get: {
+        parameters: {
+            query?: {
+                /** @description Principal whose steps are read; default: the caller. A session id names one session per principal. */
+                actor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Session id as sent in the session header. */
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceTimeline"];
+                };
+            };
+            /** @description No visible step of that session. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No database is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    add_note_api_v1_trace_sessions__session_id__notes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session id as sent in the session header. */
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoteAccepted"];
+                };
+            };
+            /** @description No visible step of that session. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Empty or too long note, or bad session id. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No database is configured. */
             503: {
                 headers: {
                     [name: string]: unknown;

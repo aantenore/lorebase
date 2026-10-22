@@ -21,16 +21,18 @@ import {
   findRecord,
   neighborhood,
   runQuery,
-  runSearch,
+  runSearchFull,
   toRow,
 } from './engine';
 import { createAdminMock } from './admin';
+import { buildContext } from './context';
 import { createDocumentsMock } from './documents';
 import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
 import { createSourcesMock } from './sources';
 import { createSuggestionsMock } from './suggestions';
+import { createTraceMock } from './trace';
 import { evaluateSchemaChanges } from './schema-changes';
 import { buildHrDomain } from './sample/hr';
 import { generatePerfGraph } from './perf-graph';
@@ -531,10 +533,8 @@ export function createMockApi(options: MockOptions): KeeperApi {
     search: {
       run: (scope, request) => {
         const { data, revision } = scoped(scope);
-        return Promise.resolve({
-          revision,
-          results: runSearch(data, request, options.searchLimit),
-        });
+        const { results, mode, corrections } = runSearchFull(data, request, options.searchLimit);
+        return Promise.resolve({ revision, results, mode, corrections });
       },
     },
 
@@ -738,7 +738,11 @@ export function createMockApi(options: MockOptions): KeeperApi {
     },
 
     agents: {
-      context: () => Promise.reject(notSupported('Context packs')),
+      context: (scope, request) => {
+        const { domain, data, revision } = scoped(scope);
+        const branch = scope.branch ?? domain.domain.default_branch;
+        return Promise.resolve(buildContext(scope.domain, branch, revision, data, request));
+      },
       explain: () => Promise.reject(notSupported('Record explanations')),
     },
 
@@ -748,6 +752,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
       delete: () => Promise.reject(notSupported('Webhooks')),
     },
 
+    trace: createTraceMock(),
     documents: documents.api,
     inference: inference.api,
     sources: sources.api,

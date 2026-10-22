@@ -1148,3 +1148,41 @@ def get_document_text(domain: str, document_id: str) -> Call[m.DocumentText]:
         parse_model(m.DocumentText),
         safe=True,
     )
+
+
+# Agent trace ------------------------------------------------------------------------------
+
+
+def list_trace_sessions(
+    *,
+    actor: str | None = None,
+    domain_id: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.TraceSessionPage]:
+    return Call(
+        "GET",
+        "/trace/sessions",
+        parse_model(m.TraceSessionPage),
+        params={"actor": actor, "domain_id": domain_id, "limit": limit, "cursor": cursor},
+        safe=True,
+    )
+
+
+def get_trace_session(session_id: str, *, actor: str | None = None) -> Call[m.TraceTimeline]:
+    return Call(
+        "GET",
+        f"/trace/sessions/{_seg(session_id)}",
+        parse_model(m.TraceTimeline),
+        params={"actor": actor},
+        safe=True,
+    )
+
+
+def add_trace_note(session_id: str, body: m.NoteRequest) -> Call[m.NoteAccepted]:
+    return Call(
+        "POST",
+        f"/trace/sessions/{_seg(session_id)}/notes",
+        parse_model(m.NoteAccepted),
+        body=body.payload(),
+    )

@@ -13,6 +13,7 @@ import type { SourceRunListParams } from './sources-types';
 import type { DecideSuggestionsInput, SuggestionFilter } from './suggestion-types';
 import type {
   BranchName,
+  ContextRequest,
   DomainId,
   NeighborhoodRequest,
   PageParams,
@@ -22,6 +23,7 @@ import type {
   RecordListParams,
   RevisionId,
   SearchRequest,
+  TraceSessionParams,
 } from './types';
 
 /**
@@ -68,6 +70,12 @@ export const keys = {
   search: (scope: QueryScope, request: SearchRequest) => [...at(scope), 'search', request] as const,
   neighborhood: (scope: QueryScope, request: NeighborhoodRequest) =>
     [...at(scope), 'neighborhood', request] as const,
+  context: (scope: QueryScope, request: ContextRequest) =>
+    [...at(scope), 'context', request] as const,
+  traceSessions: (params: Omit<TraceSessionParams, 'cursor'> | undefined) =>
+    ['keeper', 'trace-sessions', params ?? null] as const,
+  traceTimeline: (sessionId: string, actor: string | undefined) =>
+    ['keeper', 'trace-timeline', sessionId, actor ?? null] as const,
   proposals: (domain: DomainId, params: ProposalListParams | undefined) =>
     ['keeper', 'proposals', domain, params ?? null] as const,
   proposal: (domain: DomainId, id: string) => ['keeper', 'proposal', domain, id] as const,
@@ -238,6 +246,40 @@ export function useNeighborhood(scope: QueryScope, request: NeighborhoodRequest,
     queryKey: keys.neighborhood(scope, request),
     queryFn: () => api.query.neighborhood(toReadScope(scope), request),
     enabled,
+  });
+}
+
+/** The context pack an agent would receive for `request` (`POST .../context`). */
+export function useContextPack(scope: QueryScope, request: ContextRequest, enabled = true) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.context(scope, request),
+    queryFn: () => api.agents.context(toReadScope(scope), request),
+    enabled,
+  });
+}
+
+// ------------------------------------------------------------ Agent activity
+
+/** Agent sessions, newest activity first, one page more per `fetchNextPage`; not tied to a Branch. */
+export function useTraceSessions(params?: Omit<TraceSessionParams, 'cursor'>) {
+  const api = useKeeperApi();
+  const { pageSize } = useConfig();
+  return useInfiniteQuery({
+    queryKey: keys.traceSessions(params),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.trace.sessions({ limit: pageSize, ...params, cursor: pageParam }),
+    getNextPageParam: (last) => last.next_cursor ?? null,
+  });
+}
+
+export function useTraceTimeline(sessionId: string | undefined, actor?: string) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.traceTimeline(sessionId ?? '', actor),
+    queryFn: () => api.trace.timeline(sessionId ?? '', actor === undefined ? undefined : { actor }),
+    enabled: sessionId !== undefined,
   });
 }
 

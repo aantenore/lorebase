@@ -25,6 +25,7 @@ from lorebase_keeper.services.config import (
     SchemaInferenceSettings,
     SchemaSuggestionSettings,
 )
+from lorebase_keeper.tracing.config import TraceSettings
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 SECTION = "keeper"
@@ -254,6 +255,7 @@ class KeeperSettings(SectionModel):
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
     agent_writes: AgentWriteSettings = Field(default_factory=AgentWriteSettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
+    trace: TraceSettings = Field(default_factory=TraceSettings)
 
     @field_validator("trusted_proxies")
     @classmethod

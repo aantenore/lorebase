@@ -120,4 +120,72 @@ describe('mock adapter', () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(404);
   });
+
+  it('corrects a typo and honors the search tuning loosely', async () => {
+    const api = setup();
+    const typo = await api.search.run(supply, { q: 'brevik beerings' });
+    expect(typo.corrections?.[0]).toMatchObject({ word: 'beerings' });
+    expect(typo.results[0]?.ref).toBe('Supplier/S-1001');
+
+    const capped = await api.search.run(supply, { q: 'bearing', tuning: { candidates: 1 } });
+    expect(capped.results).toHaveLength(1);
+
+    const plain = await api.search.run(supply, { q: 'bearing' });
+    const vector = await api.search.run(supply, {
+      q: 'bearing',
+      mode: 'hybrid',
+      query_vector: [0.3, 0.9],
+    });
+    expect(plain.mode).toBe('lexical');
+    expect(vector.mode).toBe('hybrid');
+  });
+
+  it('builds a context pack for a search within a budget', async () => {
+    const api = setup();
+    const pack = await api.agents.context(supply, { search: 'brevik', depth: 2 });
+    expect(pack.seeds[0]?.ref).toBe('Supplier/S-1001');
+    expect(pack.neighbors.some((n) => n.ref === 'Plant/TRN' && n.depth === 1)).toBe(true);
+    expect(Object.keys(pack.links)).toContain('feeds');
+    expect(pack.budget.used_tokens).toBeLessThanOrEqual(pack.budget.limit_tokens);
+
+    const tight = await api.agents.context(supply, {
+      search: 'brevik',
+      depth: 2,
+      budget_tokens: 150,
+    });
+    expect(tight.budget.used_tokens).toBeLessThan(pack.budget.used_tokens);
+    expect(tight.budget.trimmed.length).toBeGreaterThan(0);
+    expect(tight.neighbors.length).toBeLessThan(pack.neighbors.length);
+  });
+
+  it('serves trace sessions and their timeline', async () => {
+    const api = setup();
+    const all = await api.trace.sessions();
+    expect(all.enabled).toBe(true);
+    expect(all.items.map((s) => s.session_id)).toEqual([
+      'inferred-3f9a1c07d2b84e65',
+      'sess_20261020_brevik',
+    ]);
+    const hr = await api.trace.sessions({ domain_id: 'hr' });
+    expect(hr.items.map((s) => s.session_id)).toEqual(['inferred-3f9a1c07d2b84e65']);
+    const first = await api.trace.sessions({ limit: 1 });
+    expect(first.next_cursor).not.toBeNull();
+
+    const brevik = all.items[1];
+    expect(brevik).toMatchObject({ calls: 5, notes: 2, proposals: ['41'] });
+    const timeline = await api.trace.timeline('sess_20261020_brevik');
+    expect(timeline.steps.map((s) => s.type)).toEqual([
+      'call',
+      'note',
+      'call',
+      'call',
+      'call',
+      'note',
+      'call',
+    ]);
+    await expect(api.trace.timeline('nope')).rejects.toBeInstanceOf(ApiError);
+    await expect(
+      api.trace.timeline('sess_20261020_brevik', { actor: 'someone_else' }),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
 });

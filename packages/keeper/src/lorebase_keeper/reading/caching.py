@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from lorebase_keeper.auth.read_audit import note_all, noted_sensitive
 from lorebase_keeper.settings import ReadCacheSettings
+from lorebase_keeper.tracing.notes import note_cache
 
 JSON = "application/json"
 
@@ -170,6 +171,7 @@ def not_modified(
     if not _matches(request, tag):
         return None
     common = {"ETag": tag, "Cache-Control": CACHE_CONTROL, **(headers or {})}
+    note_cache("not_modified")
     return Response(status_code=304, headers=common)
 
 
@@ -223,10 +225,12 @@ async def respond_with(
     tag = entity_tag(key)
     common = {"ETag": tag, "Cache-Control": CACHE_CONTROL, **(headers or {})}
     if _matches(request, tag):
+        note_cache("not_modified")
         return Response(status_code=304, headers=common)
     cached = None if cache is None else await cache.get(key)
     result = "bypass" if cache is None else "miss" if cached is None else "hit"
     _LOOKUPS.add(1, {"result": result})
+    note_cache(result)
     if cached is not None:
         note_all(cached.sensitive)
         return Response(

@@ -149,6 +149,27 @@ class Authorizer:
             and permission in self._roles.get(grant.role, frozenset())
         )
 
+    async def domains_granting(
+        self, principal: Principal, permission: Permission
+    ) -> frozenset[str] | None:
+        """Domains where a Domain-wide grant of the principal has a role containing
+        `permission`; None means every Domain (authentication off, or an installation
+        administrator whose key is not limited to Domains)."""
+        if principal.method == "none":
+            return None
+        if principal.installation_admin and not principal.key_scopes:
+            return None
+        grants = await self._grants(principal, None)
+        found = {
+            grant.domain_id
+            for grant in grants
+            if grant.scope_type is GrantScope.DOMAIN
+            and permission in self._roles.get(grant.role, frozenset())
+        }
+        if principal.key_scopes:
+            found = {d for d in found if domain_scope(d) in principal.key_scopes}
+        return frozenset(found)
+
     async def allows_installation(self, principal: Principal, permission: Permission) -> bool:
         """Whether `principal` holds an installation-level permission.
 

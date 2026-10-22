@@ -21,7 +21,9 @@ Role semantics where the design table leaves room:
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
   delete the Domain (`domain.delete`), read values of sensitive Attributes (`pii.read`,
   `confidential.read`, `restricted.read`; other callers see them masked) and erase vault
-  values (`pii.erase`); custom roles grant the clearances to others. `domain.create` is
+  values (`pii.erase`); custom roles grant the clearances to others. `admin` also reads the
+  agent traces of other principals in its Domain (`trace.read`) and the query plans of traced
+  requests (`trace.explain`); every principal reads its own traces. `domain.create` is
   installation-level: installation administrators hold it, and so do admins of any Domain.
 """
 
@@ -63,6 +65,8 @@ class Permission(StrEnum):
     CONFIDENTIAL_READ = "confidential.read"
     RESTRICTED_READ = "restricted.read"
     PII_ERASE = "pii.erase"
+    TRACE_READ = "trace.read"
+    TRACE_EXPLAIN = "trace.explain"
 
 
 INSTALLATION_PERMISSIONS = frozenset({Permission.PRINCIPAL_READ, Permission.DOMAIN_CREATE})

@@ -27,6 +27,21 @@ describe('router smoke', () => {
     }
   });
 
+  it('opens Agent activity and the Retrieval lab from the left navigation', async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp('/supply/explorer');
+    await heading('Explorer');
+
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    await user.click(within(nav).getByRole('link', { name: 'Agent activity' }));
+    expect(await heading('Agent activity')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/supply/agent-activity');
+
+    await user.click(within(nav).getByRole('link', { name: 'Retrieval lab' }));
+    expect(await heading('Retrieval lab')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/supply/retrieval-lab');
+  });
+
   it('keeps the Branch in the URL while navigating', async () => {
     const user = userEvent.setup();
     const { router } = renderApp('/supply/explorer?branch=model%2Frisk');

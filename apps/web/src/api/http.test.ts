@@ -947,4 +947,43 @@ describe('live adapter: documents and extraction items', () => {
       }),
     ).rejects.toMatchObject({ status: 422, issues: [{ code: 'link.required' }] });
   });
+
+  it('sends search tuning and a query vector, and maps the mode and corrections', async () => {
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/search': {
+        revision: 'r1',
+        served_from: 'materialized',
+        mode: 'hybrid',
+        items: [{ kind: 'Part', key: 'P-1', title: 'Bolt', snippet: null, score: 0.5 }],
+        corrections: [{ word: 'bolts', replacements: ['bolt'] }],
+      },
+    });
+    const found = await api.search.run(
+      { domain: 'supply' },
+      { q: 'bolts', mode: 'hybrid', query_vector: [0.1], tuning: { rrf_k: 10, candidates: 5 } },
+    );
+    expect(calls[0]?.body).toEqual({
+      q: 'bolts',
+      mode: 'hybrid',
+      query_vector: [0.1],
+      tuning: { rrf_k: 10, candidates: 5 },
+    });
+    expect(found.mode).toBe('hybrid');
+    expect(found.corrections).toEqual([{ word: 'bolts', replacements: ['bolt'] }]);
+  });
+
+  it('reads the trace sessions and the timeline of one', async () => {
+    const { api, calls } = fakeKeeper({
+      'GET /trace/sessions': { enabled: false, items: [], next_cursor: null },
+      'GET /trace/sessions/sess 1': { session_id: 'sess 1', steps: [], truncated: false },
+    });
+    const page = await api.trace.sessions({ actor: 'svc_herald', domain_id: 'supply', limit: 10 });
+    expect(page).toEqual({ enabled: false, items: [], next_cursor: null });
+    expect(calls[0]?.url.searchParams.get('actor')).toBe('svc_herald');
+    expect(calls[0]?.url.searchParams.get('domain_id')).toBe('supply');
+    expect(calls[0]?.url.searchParams.get('limit')).toBe('10');
+    const timeline = await api.trace.timeline('sess 1', { actor: 'svc_herald' });
+    expect(timeline.steps).toEqual([]);
+    expect(calls[1]?.url.searchParams.get('actor')).toBe('svc_herald');
+  });
 });

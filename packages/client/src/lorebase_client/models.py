@@ -587,6 +587,21 @@ class NeighborhoodRequest(RequestModel):
     max_edges: int | None = Field(default=None, ge=1)
 
 
+class SearchTuning(RequestModel):
+    """Ranking knobs of one search in place of the configured ones; unset knobs keep theirs.
+
+    `candidates` and `typo_candidates` may only be lowered.
+    """
+
+    lexical_weight: float | None = Field(default=None, ge=0, le=100)
+    semantic_weight: float | None = Field(default=None, ge=0, le=100)
+    rrf_k: int | None = Field(default=None, ge=1, le=10000)
+    trigram_threshold: float | None = Field(default=None, ge=0.1, le=1)
+    trigram_weight: float | None = Field(default=None, ge=0, le=100)
+    typo_candidates: int | None = Field(default=None, ge=0)
+    candidates: int | None = Field(default=None, ge=1)
+
+
 class SearchRequest(RequestModel):
     """Lexical, semantic (caller-supplied vector) or hybrid search."""
 
@@ -597,6 +612,7 @@ class SearchRequest(RequestModel):
     mode: SearchMode | None = None
     query_vector: list[float] | None = None
     limit: int | None = Field(default=None, ge=1)
+    tuning: SearchTuning | None = None
 
 
 # Revisions, log and diff ------------------------------------------------------------------
@@ -1454,3 +1470,102 @@ class SuggestionsDecided(Model):
 
 
 RecordItem.model_rebuild()
+
+
+# Agent trace ------------------------------------------------------------------------------
+
+
+class TraceRecordRef(Model):
+    kind: str
+    key: str
+
+
+class TraceLinkRef(Model):
+    relation: str
+    source: TraceRecordRef = Field(alias="from")
+    to: TraceRecordRef
+
+
+class TraceRefs(Model):
+    """Records and Links a call touched; `truncated` when more were touched than kept."""
+
+    records: list[TraceRecordRef]
+    links: list[TraceLinkRef]
+    truncated: bool = False
+
+
+class TraceSession(Model):
+    """Summary of one agent session."""
+
+    session_id: str
+    actor: str
+    started_at: datetime
+    last_at: datetime
+    calls: int
+    notes: int
+    domains: list[str]
+    tools: list[str]
+    proposals: list[str]
+    inferred: bool = False
+    """Grouped heuristically: the calls carried no session id."""
+
+
+class TraceSessionPage(Model):
+    """One page of sessions; `enabled` tells whether Keeper traces new requests."""
+
+    enabled: bool
+    items: list[TraceSession]
+    next_cursor: str | None = None
+
+
+class TraceStep(Model):
+    """One call or note of a session. `note` is opaque user text, not markup."""
+
+    step: int
+    seq: int
+    type: Literal["call", "note"]
+    at: datetime
+    actor: str
+    principal_type: str | None = None
+    domain_id: str | None = None
+    tool: str | None = None
+    method: str | None = None
+    route: str | None = None
+    status: int | None = None
+    latency_ms: float | None = None
+    cache: str | None = None
+    branch: str | None = None
+    query: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    refs: TraceRefs | None = None
+    explain: dict[str, Any] | None = None
+    note: str | None = None
+    proposal_id: str | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
+    inferred: bool = False
+    withheld: bool = False
+    """Another principal's step whose query, corrections and note text are not shown."""
+
+
+class TraceTimeline(Model):
+    """Steps of a session in order; `truncated` when it has more visible steps."""
+
+    session_id: str
+    steps: list[TraceStep]
+    truncated: bool
+
+
+class NoteRequest(RequestModel):
+    """A note attached to a session."""
+
+    text: str = Field(min_length=1)
+    domain_id: str | None = Field(default=None, max_length=256)
+    step: int | None = Field(default=None, ge=0)
+    """The agent's own step counter."""
+
+
+class NoteAccepted(Model):
+    """`recorded` is false when tracing is off or the note was dropped."""
+
+    recorded: bool

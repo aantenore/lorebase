@@ -113,19 +113,23 @@ asks for a final answer from what it read), 2 when the chat API failed.
   injection through Record values; it does not remove it. Use a key with the narrowest grants.
 - **Cited Records are checked** against the tool results; unread ones are reported as a warning.
 - **Secrets stay out of the output.** Keys are read from files or variables, held in memory
-  and scrubbed from error messages. The trace notes carry reasoning and tool names, not tool
-  results.
+  and scrubbed from error messages. The trace notes carry reasoning and tool names with their
+  argument names, not argument values or tool results.
 - **Bounded.** `--max-steps` (12), `--max-total-tokens` (60000), `--max-completion-tokens`
   (2000), `--timeout` (300 s) and `--max-result-chars` (8000, cut and marked).
 
 ## Agent trace
 
-When Keeper has the agent-trace notes endpoint, the agent sends a session id in the header
-`--trace-session-header` (default `Lorebase-Agent-Session`) and posts its thoughts, tool calls and
-final answer as notes to `--trace-url` (default
-`{keeper-url}/api/v1/domains/{domain}/agent-trace/notes`). Any failure, such as a `404` from a
-Keeper without it, turns tracing off for the run. `--no-trace` disables it. Adjust the URL and
-header to the [agent trace](../../docs/agents.md) documentation of your Keeper version.
+With a Lorebase key, the agent traces its run as one [agent trace](../../docs/agent-trace.md)
+session (`--trace-session`, default `agent-<random>`). It sends the session id in
+`--trace-session-header` (default `X-Lorebase-Session`) with `X-Lorebase-Trace: on` to Herald,
+which forwards both to Keeper on every tool call (stdio: through `herald.trace.session_id` and
+`herald.trace.opt_in`), and posts its thoughts, tool calls and final answer as notes to
+`--trace-url` (default `{keeper-url}/api/v1/trace/sessions/{session}/notes`, with the Domain
+as `domain_id`). Keeper records them when `keeper.trace.enabled` is on; the summary prints the
+timeline URL (`/api/v1/trace/sessions/{session}`, web app
+`/{domain}/agent-activity?session={session}`). Any failure of a note, such as a `404` from a
+Keeper without tracing, turns the notes off for the run. `--no-trace` disables both.
 
 ## Test
 

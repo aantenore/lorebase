@@ -27,6 +27,7 @@ compiled here.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Literal
 
 from pgvector.sqlalchemy import VECTOR
@@ -62,7 +63,7 @@ from lorebase_keeper.reading.compiler import Compiler, json_text
 from lorebase_keeper.reading.points import ReadPoint
 from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupported
 from lorebase_keeper.reading.records import compiler_for
-from lorebase_keeper.reading.requests import SearchMode, SearchRequest
+from lorebase_keeper.reading.requests import SearchMode, SearchRequest, SearchTuning
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import Masking, condition_fields, require_comparable
 from lorebase_keeper.reading.views import (
@@ -72,6 +73,7 @@ from lorebase_keeper.reading.views import (
     kind_name,
     served,
 )
+from lorebase_keeper.tracing.explain import explain
 from lorebase_store.models import metadata
 from lorebase_store.reads import (
     Correction,
@@ -132,6 +134,7 @@ async def search(
 ) -> SearchResponse:
     if not point.materialized:
         raise tree_unsupported("Search")
+    runtime = tuned(runtime, request.tuning)
     settings = runtime.search
     mode = search_mode(request)
     limit = request.limit or settings.results.default_limit
@@ -255,6 +258,7 @@ async def search(
         .order_by(*exact_first, ranked.c.score.desc(), ranked.c.kind_id, ranked.c.key)
         .limit(limit)
     )
+    await explain(session, query, point.domain.id, f"search:{mode}")
     rows = (await session.execute(query)).mappings()
     items = [
         SearchHit(
@@ -270,6 +274,35 @@ async def search(
     return SearchResponse(
         **served(point), mode=mode, items=items, corrections=_applied(corrections)
     )
+
+
+def tuned(runtime: ReadRuntime, tuning: SearchTuning | None) -> ReadRuntime:
+    """`runtime` with the ranking knobs of `tuning` in place of the `search` settings. Knobs
+    that bound the work may only make it smaller: `candidates` and `typo_candidates` lower,
+    `trigram_threshold` higher; 422 otherwise."""
+    if tuning is None:
+        return runtime
+    settings = runtime.search
+    for name in ("candidates", "typo_candidates"):
+        value, bound = getattr(tuning, name), getattr(settings, name)
+        if value is not None and value > bound:
+            raise invalid(f"/body/tuning/{name}", f"must not exceed {bound}", "limit_exceeded")
+    threshold = tuning.trigram_threshold
+    if threshold is not None and threshold < settings.trigram_threshold:
+        raise invalid(
+            "/body/tuning/trigram_threshold",
+            f"must not be below {settings.trigram_threshold}",
+            "limit_exceeded",
+        )
+    given: dict[str, Any] = tuning.model_dump(exclude_none=True)
+    hybrid: dict[str, Any] = {
+        k: given.pop(k) for k in ("lexical_weight", "semantic_weight", "rrf_k") if k in given
+    }
+    effective = copy.copy(runtime)
+    effective.search = settings.model_copy(
+        update={**given, "hybrid": settings.hybrid.model_copy(update=hybrid)}
+    )
+    return effective
 
 
 def typo_tolerance(runtime: ReadRuntime) -> TypoTolerance:

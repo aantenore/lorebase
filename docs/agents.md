@@ -31,6 +31,12 @@ Three properties hold on every read an agent makes:
 5. **Follow changes** with the event stream (`GET /branches/{b}/events`), the polling fallback
    (`GET /branches/{b}/changes?since=`) or a webhook, and refresh only what changed.
 
+To see how an agent moved through the graph, send a session id with its calls and turn on the
+[agent trace](agent-trace.md): every call becomes a step (query, counts, touched Records and
+Links, latency), the agent can attach notes, and the web app replays the session on the
+Canvas. To tune what an agent finds, compare search parameters and context packs in the
+[retrieval lab](retrieval-lab.md).
+
 ## 1. Context packs
 
 `POST /context` takes exactly one seed selector: `refs` (`Kind/key` references), `query` (the
