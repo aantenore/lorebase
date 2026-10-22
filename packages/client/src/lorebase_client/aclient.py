@@ -400,6 +400,14 @@ class SchemaApi(_Resource):
             ep.preview_files(domain, files, rows=rows, records_path=records_path)
         )
 
+    async def preview_derivation(self, domain: str, body: JsonObject) -> dict[str, Any]:
+        """Evaluate a candidate Derivation on sample Records without saving it."""
+        return await self._c.send(ep.preview_derivation(domain, body))
+
+    async def preview_source(self, domain: str, body: JsonObject) -> dict[str, Any]:
+        """Evaluate the expression mappings of a candidate Source on sample rows."""
+        return await self._c.send(ep.preview_source(domain, body))
+
     async def suggestions(
         self,
         domain: str,

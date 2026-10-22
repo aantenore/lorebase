@@ -350,6 +350,8 @@ def sample_calls() -> list[Any]:
         ep.decide_proposal_items(d, "prp_1", m.DecideItems()),
         ep.list_schema_suggestions(d, status=["pending"], all=True),
         ep.merge_schema_suggestions(d),
+        ep.preview_derivation(d, {"patch": {}, "derivation": "x"}),
+        ep.preview_source(d, {"patch": {}, "source": "s", "rows": []}),
         ep.decide_schema_suggestions(
             d, m.DecideSuggestions(decisions=[{"suggestion": "ssg_1", "decision": "rejected"}])
         ),

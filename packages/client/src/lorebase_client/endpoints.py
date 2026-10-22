@@ -300,6 +300,23 @@ def preview_files(
     )
 
 
+def preview_derivation(domain: str, body: Mapping[str, Any]) -> Call[dict[str, Any]]:
+    """Evaluate a candidate Derivation on sample Records without saving it: `body` holds the
+    change set (`yaml`, or `patch`/`remove`), `derivation` and optionally `branch`, `limit`,
+    `keys`. Record-read permissions and masking apply; nothing is written."""
+    return Call(
+        "POST", f"{_domain(domain)}/derivations:preview", parse_json, body=dict(body), safe=True
+    )
+
+
+def preview_source(domain: str, body: Mapping[str, Any]) -> Call[dict[str, Any]]:
+    """Evaluate the expression mappings of a candidate Source on the given `rows`: `body` holds
+    the change set, `source` and `rows`. Nothing is read from the Source or written."""
+    return Call(
+        "POST", f"{_domain(domain)}/sources:preview", parse_json, body=dict(body), safe=True
+    )
+
+
 def list_schema_suggestions(
     domain: str,
     *,

@@ -411,6 +411,14 @@ class SchemaApi(_Resource):
         """The first rows of each data file as Keeper reads them; nothing is stored."""
         return self._c.send(ep.preview_files(domain, files, rows=rows, records_path=records_path))
 
+    def preview_derivation(self, domain: str, body: JsonObject) -> dict[str, Any]:
+        """Evaluate a candidate Derivation on sample Records without saving it."""
+        return self._c.send(ep.preview_derivation(domain, body))
+
+    def preview_source(self, domain: str, body: JsonObject) -> dict[str, Any]:
+        """Evaluate the expression mappings of a candidate Source on sample rows."""
+        return self._c.send(ep.preview_source(domain, body))
+
     def suggestions(
         self,
         domain: str,
