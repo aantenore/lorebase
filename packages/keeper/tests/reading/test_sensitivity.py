@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from lorebase_core.expr import ExprError, ExprErrorCode, ExprLimits
 from lorebase_core.model import (
@@ -19,6 +21,7 @@ from lorebase_core.model import (
     Schema,
     Sensitivity,
     UpdateRecordStep,
+    load_schema,
 )
 from lorebase_core.query import Query, QueryLimits, resolve_query
 from lorebase_core.tree import kind_partition
@@ -114,6 +117,53 @@ def test_values_computed_from_other_kinds_need_the_clearance_there() -> None:
     assert not Masking(Clearance.full()).hidden_with_origins(phone, (KIND,), origins)
     name = PERSON.attributes[NAME]
     assert not Masking(Clearance()).hidden_with_origins(name, (KIND,), {})
+
+
+SUPPLY_SCHEMA = Path(__file__).resolve().parents[4] / "examples" / "supply" / "schema.yaml"
+
+
+def _counting_risky_suppliers() -> Schema:
+    """The supply schema where Part `supplier_count` counts Suppliers by their pii risk
+    score: a value of Part whose tag comes from Supplier."""
+    document = yaml.safe_load(SUPPLY_SCHEMA.read_text(encoding="utf-8"))
+    document["kinds"]["Supplier"]["attributes"]["risk_score"]["sensitivity"] = ["pii"]
+    document["derivations"]["supplier_count"]["definition"]["filter"] = "risk_score >= 50"
+    return load_schema(yaml.safe_dump(document))
+
+
+def test_derived_values_from_other_kinds_are_masked_on_every_read() -> None:
+    schema = _counting_risky_suppliers()
+    part, supplier = schema.kind_by_api_name("Part"), schema.kind_by_api_name("Supplier")
+    assert part is not None
+    assert supplier is not None
+    count = part.attribute_by_api_name("supplier_count")
+    assert count is not None
+    values = {count.id: 3}
+    query = Query.model_validate(
+        {"kind": "Part", "where": {"attr": "supplier_count", "op": "gte", "value": 1}}
+    )
+    plan = resolve_query(query, schema, QueryLimits())
+    for clearance, masked in (
+        (Clearance(kinds={Sensitivity.PII: frozenset({part.id})}), True),
+        (Clearance(kinds={Sensitivity.PII: frozenset({supplier.id})}), True),
+        (Clearance(kinds={Sensitivity.PII: frozenset({part.id, supplier.id})}), False),
+        (Clearance(everywhere=frozenset({Sensitivity.PII})), False),
+    ):
+        masking = Masking(clearance).over(schema)
+        assert masking.hidden(count, (part.id,)) is masked
+        shown = masking.kind_values(part, values, derived=values)["supplier_count"]
+        assert (shown == "***") is masked
+        assert (masking.value(count, (part.id,), 3) == "***") is masked
+        if masked:  # filtering or ordering by it would tell the value
+            with pytest.raises(ProblemError):
+                require_comparable_plan(schema, masking, plan, "/body")
+        else:
+            require_comparable_plan(schema, masking, plan, "/body")
+    # A Kind-narrowed clearance still reads the Kind's own stored values.
+    risk = supplier.attribute_by_api_name("risk_score")
+    assert risk is not None
+    narrowed = Masking(Clearance(kinds={Sensitivity.PII: frozenset({supplier.id})})).over(schema)
+    assert not narrowed.hidden(risk, (supplier.id,))
 
 
 def test_masking_replaces_or_omits_values() -> None:

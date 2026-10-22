@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import yaml
 
-from lorebase_core.expr.sensitivity import tag_origins
+from lorebase_core.expr.sensitivity import effective_origins, tag_origins
 from lorebase_core.model import Schema, Sensitivity, load_schema
 
 from .support import SUPPLY_SCHEMA
@@ -46,3 +46,14 @@ def test_values_read_from_nothing_sensitive_have_no_origins() -> None:
     _, count = _ids(schema, "Part", "supplier_count")
     assert tag_origins(schema, count) == {}
     assert tag_origins(schema, "att_unknown") == {}
+
+
+def test_origins_of_every_attribute_at_once() -> None:
+    schema = _schema('vat_number != ""')
+    supplier, vat = _ids(schema, "Supplier", "vat_number")
+    _, count = _ids(schema, "Part", "supplier_count")
+    _, single = _ids(schema, "Part", "single_sourced")
+    every = effective_origins(schema)
+    assert every[vat] == {Sensitivity.CONFIDENTIAL: frozenset({supplier})}
+    assert every[count] == every[single] == tag_origins(schema, count)
+    assert all(tag_origins(schema, attribute) == found for attribute, found in every.items())
