@@ -251,6 +251,7 @@ The documentation is published at [aantenore.github.io/lorebase](https://aanteno
 - [Agents](docs/agents.md): how an agent reads, writes and follows a Domain: context packs, explanations, Operations, change feed and webhooks
 - [MCP server](docs/mcp.md): Herald, its tools and its configuration for MCP hosts
 - [Comparison](docs/comparison.md): Lorebase next to similar products
+- [Validation record](docs/validation.md): every validation run in one place, with the commands to repeat them
 - [Security review](docs/security-review.md): the trust boundaries examined before the first release and the 23 findings fixed
 - [Roadmap](docs/roadmap.md)
 - [Glossary](docs/glossary.md), [examples](examples/README.md), [M1 plan](docs/plan/m1.md)
