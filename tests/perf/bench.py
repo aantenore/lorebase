@@ -118,6 +118,7 @@ class Options:
     in_place: bool = False
     trace_iterations: int = 200
     trace_warmup: int = 20
+    replicas: int = 1
 
 
 @dataclass
@@ -169,6 +170,13 @@ def parse(argv: Sequence[str] | None = None) -> Options:
     )
     parser.add_argument("--trace-warmup", type=int, default=20)
     parser.add_argument(
+        "--replicas",
+        type=int,
+        default=1,
+        help="load scale/replicas through the commit pipeline, then copy its materialized "
+        "rows replicas-1 times with renumbered keys (harness.replicate)",
+    )
+    parser.add_argument(
         "--in-place",
         action="store_true",
         help="with --seed-database: measure the seed database itself instead of a copy "
@@ -194,6 +202,7 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         in_place=args.in_place,
         trace_iterations=args.trace_iterations,
         trace_warmup=args.trace_warmup,
+        replicas=args.replicas,
     )
 
 
@@ -242,9 +251,8 @@ async def seed_only(options: Options, url: str, *, resume: bool = False) -> harn
     runtime = StoreRuntime.from_settings(StoreSettings())
     engine = _engine(url)
     try:
-        return await harness.seed(
-            engine, runtime, harness.Scale(options.scale, options.extra_links), resume=resume
-        )
+        scale = harness.Scale(options.scale, options.extra_links, replicas=options.replicas)
+        return await harness.seed(engine, runtime, scale, resume=resume)
     finally:
         await engine.dispose()
 
@@ -254,7 +262,7 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
     engine = _engine(url)
     try:
         if seeded is None:
-            scale = harness.Scale(options.scale, options.extra_links)
+            scale = harness.Scale(options.scale, options.extra_links, replicas=options.replicas)
             seeded = await harness.seed(engine, runtime, scale)
         if options.in_place:
             await harness.remove_perf_branches(engine, runtime)
@@ -524,7 +532,9 @@ def _seeded_database(options: Options, server: str, name: str) -> harness.SeedRe
             n=name,
         )
     )
-    wanted = {"scale": options.scale, "extra_links": options.extra_links}
+    wanted: dict[str, int] = {"scale": options.scale, "extra_links": options.extra_links}
+    if options.replicas > 1:
+        wanted["replicas"] = options.replicas
     if found is not None:
         kept = json.loads(found)
         if kept["scale"] != wanted:

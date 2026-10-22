@@ -11,6 +11,7 @@ the Domain and runs the store primitive. Timings are client side over a local so
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import platform
@@ -20,13 +21,14 @@ import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Link, Record, Schema, load_schema
@@ -140,6 +142,10 @@ class Scale:
     #: in shards of at most this scale with their own seeds and key ranges, so that memory
     #: stays bounded; a shard links only its own Records.
     shard_factor: int = 6000
+    #: Copies of the loaded dataset on `main`: with more than one, `factor / replicas` goes
+    #: through the commit pipeline and `replicate` copies its materialized rows with
+    #: renumbered keys.
+    replicas: int = 1
 
     def shards(self) -> list[int]:
         """Generator scale of each shard."""
@@ -371,8 +377,11 @@ async def seed(
         await _create_schema(sessions, schema, runtime)
         done = 0
     await _drop_deferred_indexes(engine)
+    if scale.factor % scale.replicas:
+        raise ValueError(f"scale {scale.factor} is not a multiple of {scale.replicas} replicas")
+    loaded = replace(scale, factor=scale.factor // scale.replicas, replicas=1)
     batches = 0
-    for batch in build_changes(schema, scale):
+    for batch in build_changes(schema, loaded):
         batches += 1
         if batches <= done:
             continue
@@ -389,6 +398,8 @@ async def seed(
                 origin=ORIGIN,
                 runtime=runtime,
             )
+    if scale.replicas > 1:
+        await replicate(engine, schema, loaded.factor, scale.replicas)
     _progress(f"seed: {batches} commits, building indexes")
     await _create_deferred_indexes(engine)
     await build_indexes(engine, runtime)
@@ -422,6 +433,172 @@ DEFERRED_INDEXES = {
     "ix_mat_records_values": "CREATE INDEX ix_mat_records_values "
     'ON public.mat_records USING gin ("values" jsonb_path_ops)',
 }
+
+
+#: Renumbers a key of the generator in replica `s`: numbered keys move by `s` times the
+#: count of their prefix (`n`, a JSON object), ULID keys (Risk flags, which start with 0 in
+#: the generator's time range) get a first character of their own; other text is kept.
+#: `lb_rv` applies it to the text values of a Record and gives unique Attributes (`uniq`)
+#: the replica number.
+_RENUMBER = r"""
+CREATE FUNCTION pg_temp.lb_rk(k text, s int, n jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE
+    WHEN k ~ '^(S|P|PL|PO|C)-[0-9]+$' THEN
+      split_part(k, '-', 1) || '-'
+      || (split_part(k, '-', 2)::bigint + s * (n ->> split_part(k, '-', 1))::bigint)
+    WHEN k ~ '^0[0-9A-HJKMNP-TV-Z]{25}$' THEN
+      substr('123456789ABCDEFGHJKMNPQRSTVWXYZ', s, 1) || substr(k, 2)
+    ELSE k
+  END $$;
+CREATE FUNCTION pg_temp.lb_rv(v jsonb, s int, n jsonb, uniq text[]) RETURNS jsonb
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT coalesce(jsonb_object_agg(e.key, CASE
+    WHEN jsonb_typeof(e.value) <> 'string' THEN e.value
+    WHEN e.key = ANY(uniq) THEN
+      to_jsonb(left(e.value #>> '{}', 2) || lpad(s::text, 2, '0') || substr(e.value #>> '{}', 3))
+    ELSE to_jsonb(pg_temp.lb_rk(e.value #>> '{}', s, n))
+  END), '{}'::jsonb)
+  FROM jsonb_each(v) AS e $$;
+"""
+_REPLICA_RECORDS = """
+INSERT INTO mat_records (domain_id, branch, kind_id, key, "values", derived, title, search,
+    object_hash, lineage, updated_revision, updated_at, revision_generation, deleted,
+    lineage_revisions)
+SELECT domain_id, branch, kind_id, pg_temp.lb_rk(key, :s, CAST(:n AS jsonb)),
+    pg_temp.lb_rv("values", :s, CAST(:n AS jsonb), CAST(:uniq AS text[])), derived,
+    CASE WHEN title = key THEN pg_temp.lb_rk(title, :s, CAST(:n AS jsonb)) ELSE title END,
+    search, object_hash, lineage, updated_revision, updated_at, revision_generation, deleted,
+    lineage_revisions
+FROM mat_records WHERE domain_id = :d AND branch = 'main' AND key = ANY(CAST(:keys AS text[]))
+"""
+_REPLICA_LINKS = """
+INSERT INTO mat_links (domain_id, branch, relation_id, from_key, to_key, "values",
+    object_hash, lineage, revision_generation, deleted)
+SELECT domain_id, branch, relation_id, pg_temp.lb_rk(from_key, :s, CAST(:n AS jsonb)),
+    pg_temp.lb_rk(to_key, :s, CAST(:n AS jsonb)), "values", object_hash, lineage,
+    revision_generation, deleted
+FROM mat_links WHERE domain_id = :d AND branch = 'main' AND from_key = ANY(CAST(:keys AS text[]))
+"""
+_REPLICA_HISTORY = """
+INSERT INTO mat_history (domain_id, branch, partition, element_key, revision_id, at, old_hash,
+    new_hash, provenance)
+SELECT domain_id, branch, partition,
+    CASE WHEN partition LIKE 'k:%' THEN pg_temp.lb_rk(element_key, :s, CAST(:n AS jsonb))
+    ELSE pg_temp.lb_rk(split_part(element_key, chr(31), 1), :s, CAST(:n AS jsonb)) || chr(31)
+        || pg_temp.lb_rk(split_part(element_key, chr(31), 2), :s, CAST(:n AS jsonb)) END,
+    revision_id, at, old_hash, new_hash, provenance
+FROM mat_history
+WHERE domain_id = :d AND branch = 'main' AND (partition LIKE 'k:%' OR partition LIKE 'r:%')
+  AND split_part(element_key, chr(31), 1) = ANY(CAST(:keys AS text[]))
+"""
+#: Generator key kinds and their `BASE_COUNTS` entries.
+REPLICA_KINDS = {
+    "supplier": "suppliers",
+    "part": "parts",
+    "plant": "plants",
+    "order": "orders",
+    "contract": "contracts",
+}
+#: Keys per replication statement, and replicas written at once.
+REPLICA_BATCH_KEYS = 20000
+REPLICA_PARALLEL = 4
+
+
+async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: int) -> None:
+    """Grow `main` to `replicas` copies of the Records, Links and history loaded at generator
+    scale `factor`, with renumbered keys, by set-based SQL: at 10M Records the commit
+    pipeline needs about ten hours on a laptop, mostly random index reads and writes of
+    content-addressed objects and tree nodes.
+
+    Only the materialized head is copied, which every read reads: Revisions, trees and
+    objects stay those of the loaded copy, and the copies' rows point to its Revisions and
+    objects. Search vectors are copied (titles equal to the key are renumbered); the word
+    lexicon counts the new rows through its triggers; per-Attribute indexes are dropped and
+    built again afterwards. A replica already present (its first Supplier exists) is
+    skipped, so an interrupted run resumes."""
+    unique = sorted(a.id for k in schema.kinds.values() for a in k.attributes.values() if a.unique)
+    module = generator()
+    prefixes = {kind: module.KEY_PREFIX[kind].rstrip("-") for kind in REPLICA_KINDS}
+    counts = {
+        prefixes[kind]: module.BASE_COUNTS[stem] * factor for kind, stem in REPLICA_KINDS.items()
+    }
+    ends = {prefixes[kind]: module.KEY_START[kind] + counts[prefixes[kind]] for kind in prefixes}
+    async with engine.connect() as connection:
+        # The loaded copy: numbered keys before their first replica, ULIDs as generated.
+        keys = list(
+            (
+                await connection.execute(
+                    text(
+                        "SELECT key FROM mat_records WHERE domain_id = :d AND branch = 'main' "
+                        "AND (key LIKE '0%' OR (key ~ '^[A-Z]+-[0-9]+$' AND "
+                        "split_part(key, '-', 2)::bigint < "
+                        "(CAST(:ends AS jsonb) ->> split_part(key, '-', 1))::bigint)) "
+                        "ORDER BY key"
+                    ),
+                    {"d": DOMAIN, "ends": json.dumps(ends)},
+                )
+            ).scalars()
+        )
+    numbers = json.dumps(counts)
+    attribute_indexes = await _drop_attribute_indexes(engine)
+    gate = asyncio.Semaphore(REPLICA_PARALLEL)
+
+    async def one(replica: int) -> None:
+        async with gate, engine.begin() as connection:
+            supplier = prefixes["supplier"]
+            number = module.KEY_START["supplier"] + replica * counts[supplier]
+            moved = f"{supplier}-{number}"
+            present = await connection.execute(
+                text(
+                    "SELECT 1 FROM mat_records WHERE domain_id = :d AND branch = 'main' "
+                    "AND key = :k"
+                ),
+                {"d": DOMAIN, "k": moved},
+            )
+            if present.first() is not None:
+                _progress(f"replica {replica}: present")
+                return
+            for statement in filter(str.strip, _RENUMBER.split(";\n")):
+                await connection.exec_driver_sql(statement)
+            for start in range(0, len(keys), REPLICA_BATCH_KEYS):
+                chunk = keys[start : start + REPLICA_BATCH_KEYS]
+                params = {"d": DOMAIN, "s": replica, "n": numbers, "keys": chunk}
+                await connection.execute(text(_REPLICA_RECORDS), {**params, "uniq": unique})
+                await connection.execute(text(_REPLICA_LINKS), params)
+                await connection.execute(text(_REPLICA_HISTORY), params)
+            _progress(f"replica {replica}: written")
+
+    _progress(f"replicating {len(keys):,} Records {replicas - 1} times")
+    await asyncio.gather(*(one(replica) for replica in range(1, replicas)))
+    await _create_attribute_indexes(engine, attribute_indexes)
+
+
+async def _drop_attribute_indexes(engine: AsyncEngine) -> list[str]:
+    """Drop the per-Attribute indexes of `main`; returns the statements that build them."""
+    async with engine.begin() as connection:
+        found = (
+            await connection.execute(
+                text(
+                    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' "
+                    "AND indexname LIKE 'mat_records_attr_%' AND indexdef LIKE :branch"
+                ),
+                {"branch": "%branch = 'main'::text%"},
+            )
+        ).all()
+        for name, _ in found:
+            await connection.exec_driver_sql(f"DROP INDEX {name}")
+    return [definition for _, definition in found]
+
+
+async def _create_attribute_indexes(engine: AsyncEngine, statements: Sequence[str]) -> None:
+    gate = asyncio.Semaphore(REPLICA_PARALLEL)
+
+    async def one(statement: str) -> None:
+        async with gate, engine.begin() as connection:
+            await connection.exec_driver_sql("SET LOCAL maintenance_work_mem = '512MB'")
+            await connection.exec_driver_sql(statement)
+
+    await asyncio.gather(*(one(statement) for statement in statements))
 
 
 async def _create_schema(
@@ -528,7 +705,12 @@ async def drop_reader(engine: AsyncEngine) -> None:
     async with engine.connect() as connection:
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
         await auto.exec_driver_sql(f"DROP OWNED BY {READER_ROLE}")
-        await auto.exec_driver_sql(f"DROP ROLE IF EXISTS {READER_ROLE}")
+        try:
+            await auto.exec_driver_sql(f"DROP ROLE IF EXISTS {READER_ROLE}")
+        except DBAPIError:
+            # Roles belong to the server: another database of it (a kept seed database)
+            # still grants to this one.
+            _progress(f"kept role {READER_ROLE}, still used by another database")
 
 
 # Measurements -----------------------------------------------------------------------------------
