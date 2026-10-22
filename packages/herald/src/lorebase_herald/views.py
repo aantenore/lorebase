@@ -471,6 +471,150 @@ def explain_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
+# Record history and lineage -------------------------------------------------------------------
+
+
+def _present(**members: Any) -> View:
+    """The members that carry a value."""
+    return {k: v for k, v in members.items() if v is not None}
+
+
+def _change_entry(change: m.RecordChange, *, values: bool) -> View:
+    attributes = []
+    for attribute in change.attributes:
+        entry = _present(name=attribute.name)
+        if values:
+            entry.update(before=attribute.before, after=attribute.after)
+        if attribute.provenance:
+            entry["origin_type"] = attribute.provenance.origin_type
+        attributes.append(entry)
+    return _present(
+        revision=change.revision,
+        at=timestamp(change.at),
+        author=change.author,
+        on_behalf_of=change.on_behalf_of,
+        origin=change.origin.get("type"),
+        change=change.change,
+        message=change.message,
+        attributes=attributes,
+    )
+
+
+def history_view(body: m.RecordHistory, output: OutputSettings, *, values: bool) -> View:
+    """The changes of a Record, newest first (`.../history`), capped."""
+    entries = [_change_entry(c, values=values) for c in body.items]
+    shown, omitted = capped(entries, output.max_items)
+    view: View = {
+        "revision": body.revision,
+        "branch": body.branch,
+        "ref": ref(body.kind, body.key),
+        "items": shown,
+    }
+    if omitted:
+        view["omitted"] = omitted
+    if body.next_cursor:
+        view["next_cursor"] = body.next_cursor
+    return view
+
+
+def history_text(view: Mapping[str, Any], output: OutputSettings) -> str:
+    lines = [
+        f"{view['ref']} rev {view['revision']} on {view['branch']}: {len(view['items'])} changes"
+    ]
+    for item in view["items"]:
+        origin = f" [{item['origin']}]" if item.get("origin") else ""
+        lines.append(
+            f"{item['revision']} {item['at']} {item['author']}{origin} {item['change']}: "
+            f"{value_text(item['message'], output.max_value_chars)}"
+        )
+        for attribute in item["attributes"]:
+            if "after" in attribute or "before" in attribute:
+                before = value_text(attribute.get("before"), output.max_value_chars)
+                after = value_text(attribute.get("after"), output.max_value_chars)
+                lines.append(f"  {attribute['name']}: {before} -> {after}")
+            else:
+                lines.append(f"  {attribute['name']}")
+    lines.extend(more_line(view.get("omitted", 0), "lower `limit`"))
+    if view.get("next_cursor"):
+        lines.append(f"next_cursor: {view['next_cursor']}")
+    return "\n".join(lines)
+
+
+def lineage_view(body: m.RecordLineage, output: OutputSettings) -> View:
+    """Where the current values of a Record came from (`.../lineage`), capped."""
+    rows: list[View] = []
+    for item in body.attributes:
+        provenance = item.provenance
+        rows.append(
+            _present(
+                name=item.name,
+                value=item.value,
+                origin_type=provenance.origin_type if provenance else None,
+                actor=provenance.actor if provenance else None,
+                at=timestamp(provenance.at) if provenance else None,
+                revision=item.revision,
+                author=item.author,
+                message=item.message,
+                source=item.source,
+                operation=item.operation,
+                extraction=item.extraction.model_dump(mode="json") if item.extraction else None,
+                proposal=item.proposal.model_dump(mode="json") if item.proposal else None,
+            )
+        )
+    shown, omitted = capped(rows, output.max_items)
+    view: View = {
+        "revision": body.revision,
+        "branch": body.branch,
+        "ref": ref(body.kind, body.key),
+        "changes": body.changes,
+        "created": _change_entry(body.created, values=False) if body.created else None,
+        "attributes": shown,
+        "sources": body.sources,
+        "proposals": [p.model_dump(mode="json") for p in body.proposals],
+    }
+    if omitted:
+        view["omitted"] = omitted
+    return view
+
+
+def lineage_text(view: Mapping[str, Any], output: OutputSettings) -> str:
+    lines = [
+        f"{view['ref']} rev {view['revision']} on {view['branch']} ({view['changes']} changes)"
+    ]
+    if created := view.get("created"):
+        lines.append(f"created <- {created['author']} at {created['at']} in {created['revision']}")
+    for entry in view["attributes"]:
+        value = value_text(entry.get("value"), output.max_value_chars)
+        origin = entry.get("origin_type") or "no recorded origin"
+        detail = [
+            f"{label} {entry[key]}"
+            for label, key in (
+                ("by", "actor"),
+                ("at", "at"),
+                ("in", "revision"),
+                ("source", "source"),
+                ("operation", "operation"),
+            )
+            if entry.get(key)
+        ]
+        lines.append(f"{entry['name']} = {value} <- {origin} {' '.join(detail)}".rstrip())
+        if evidence := entry.get("extraction"):
+            lines.append(
+                f"  extracted from document {evidence['document_id']} "
+                f"[{evidence['span_start']}:{evidence['span_end']}] by {evidence['model_id']}"
+            )
+    lines.extend(more_line(view.get("omitted", 0)))
+    if view["sources"]:
+        lines.append("SOURCES: " + ", ".join(view["sources"]))
+    for proposal in view["proposals"]:
+        merged = proposal.get("merged_revision")
+        lines.append(
+            f'PROPOSAL {proposal["id"]} "{proposal["title"]}" {proposal["status"]}'
+            + (f" in {merged}" if merged else "")
+        )
+    return "\n".join(lines)
+
+
 # History, diff, branches ---------------------------------------------------------------------
 
 

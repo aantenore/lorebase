@@ -16,6 +16,8 @@ from .fake_keeper import (
     CONTEXT_PACK,
     EXECUTION,
     EXPLAINED,
+    HISTORY,
+    LINEAGE,
     MARKDOWN_PACK,
     OLDER,
     PARENT,
@@ -39,6 +41,8 @@ TOOLS = {
     "lorebase_neighborhood",
     "lorebase_context",
     "lorebase_explain",
+    "lorebase_history",
+    "lorebase_lineage",
     "lorebase_changes",
     "lorebase_diff",
     "lorebase_execute",
@@ -397,6 +401,29 @@ async def test_explain_uses_keepers_explain_endpoint(connect: Connect, fake: Fak
     assert f'prp_1 "Raise risk" merged in {REVISION}' in lines
     assert [a["name"] for a in only["attributes"]] == ["tier"]
     assert "links" not in only
+
+
+async def test_history_and_lineage_use_keepers_record_endpoints(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    base = f"{API}/kinds/Supplier/records/S-1001"
+    fake.on("GET", f"{base}/history", HISTORY)
+    fake.on("GET", f"{base}/lineage", LINEAGE)
+    async with connect() as client:
+        history = text(
+            await client.call_tool(
+                "lorebase_history",
+                {"ref": "Supplier/S-1001", "values": True, "limit": 5, "cursor": "h1"},
+            )
+        )
+        lineage = text(await client.call_tool("lorebase_lineage", {"ref": "Supplier/S-1001"}))
+    params = next(r for r in fake.requests if r.url.path.endswith("/history")).url.params
+    assert (params["values"], params["limit"], params["cursor"]) == ("true", "5", "h1")
+    assert "  tier: null -> 2" in history.splitlines()
+    assert history.splitlines()[-1] == "next_cursor: h2"
+    assert "tier = 1 <- extraction by usr_loader" in lineage
+    assert "extracted from document doc_1 [10:24] by m-1" in lineage
+    assert "SOURCES: erp" in lineage
 
 
 async def test_changes_walks_the_log_back_to_since(connect: Connect, fake: FakeKeeper) -> None:

@@ -5,7 +5,8 @@ schemas and descriptions. Read tools only read Keeper's REST API through the typ
 client: no tool calls a model.
 
 `lorebase_context` and `lorebase_explain` use Keeper's agent endpoints (`POST .../context`,
-`GET .../records/{key}/explain`).
+`GET .../records/{key}/explain`); `lorebase_history` and `lorebase_lineage` read
+`GET .../records/{key}/history` and `.../lineage`.
 """
 
 from __future__ import annotations
@@ -317,6 +318,51 @@ class LorebaseTools:
         view = views.explain_view(explained, attributes, self.output)
         text = views.explain_text(view, self.output)
         return render(view, text, self.fmt(fmt), self.output)
+
+    async def history(
+        self,
+        credential: str | None,
+        *,
+        record: str,
+        values: bool,
+        limit: int | None,
+        cursor: str | None,
+        domain: str | None,
+        branch: str | None,
+        fmt: str | None,
+    ) -> str:
+        target = RecordRef.parse(record)
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.records.history(
+                name,
+                target.kind,
+                target.key,
+                branch=self.branch(branch),
+                values=values,
+                limit=limit,
+                cursor=cursor,
+            )
+        view = views.history_view(found, self.output, values=values)
+        return render(view, views.history_text(view, self.output), self.fmt(fmt), self.output)
+
+    async def lineage(
+        self,
+        credential: str | None,
+        *,
+        record: str,
+        domain: str | None,
+        branch: str | None,
+        fmt: str | None,
+    ) -> str:
+        target = RecordRef.parse(record)
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.records.lineage(
+                name, target.kind, target.key, branch=self.branch(branch)
+            )
+        view = views.lineage_view(found, self.output)
+        return render(view, views.lineage_text(view, self.output), self.fmt(fmt), self.output)
 
     async def changes(
         self,
