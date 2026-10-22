@@ -319,6 +319,10 @@ export interface Derivation {
 export const SOURCE_TYPES = [
   'postgres_table',
   'postgres_query',
+  'mysql_table',
+  'mysql_query',
+  'mssql_table',
+  'mssql_query',
   'csv',
   'json',
   'jsonl',
@@ -347,9 +351,9 @@ export interface Source {
   type: SourceType;
   /** Secret reference such as `secret://env/ERP_DSN`; never a literal. */
   connection: string;
-  /** `postgres_table`: the table, optionally schema-qualified. */
+  /** `postgres_table`, `mysql_table`, `mssql_table`: the table, optionally schema-qualified. */
   table?: string;
-  /** `postgres_query`: the read-only `SELECT`. */
+  /** `postgres_query`, `mysql_query`, `mssql_query`: the read-only `SELECT`. */
   query?: string;
   /** `json` and `http_json`: dotted path of the array of records in the document. */
   records_path?: string;

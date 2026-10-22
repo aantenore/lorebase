@@ -73,6 +73,19 @@ describe('schema rules', () => {
     );
   });
 
+  it('ask the MySQL and SQL Server query types for a query', async () => {
+    const schema = await sampleSchema('main');
+    const source = schema.sources[0];
+    if (source === undefined) throw new Error('No Source');
+    source.type = 'mssql_query';
+    expect(validateSchema(schema).map((i) => i.code)).toContain('missing_query');
+    source.query = 'SELECT 1 AS a';
+    expect(validateSchema(schema).map((i) => i.code)).not.toContain('missing_query');
+    source.type = 'mysql_query';
+    source.query = ' ';
+    expect(validateSchema(schema).map((i) => i.code)).toContain('missing_query');
+  });
+
   it('check Sources the way Keeper does: type fields, sync, key, credential headers', async () => {
     const schema = await sampleSchema('main');
     const source = schema.sources[0];

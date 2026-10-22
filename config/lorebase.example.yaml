@@ -895,6 +895,14 @@ scribe:
       statement_timeout_ms: 60000  # statement_timeout of the read-only transaction
       connect_timeout_s: 10.0
       fetch_rows: 5000           # rows fetched per round trip
+    mysql:                       # MySQL and MariaDB Sources; needs lorebase-scribe[mysql]
+      statement_timeout_ms: 60000  # max_execution_time (MariaDB: max_statement_time, seconds)
+      connect_timeout_s: 10.0
+      fetch_rows: 5000           # rows fetched per round trip
+    mssql:                       # SQL Server Sources; needs lorebase-scribe[mssql]
+      statement_timeout_ms: 60000  # query timeout and LOCK_TIMEOUT
+      connect_timeout_s: 10.0    # login timeout
+      fetch_rows: 5000           # rows fetched per round trip
   extraction:                    # documents into reviewable Proposals (docs/extraction.md)
     tiers: [0, 1]                # 0 rules, 1 local span and relation models, 2 the chat model
                                  # of inference.llm; add 2 once a model is configured

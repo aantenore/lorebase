@@ -129,6 +129,34 @@ sources:
     target_branch_policy: {merge_policy: auto_with_authority}
 ```
 
+MySQL, MariaDB and SQL Server Sources take the same fields as Postgres ones (`table`, `query`,
+`scope_filter`, `watermark_column`, `tombstone_column`):
+
+```yaml
+sources:
+  erp.shipments:
+    id: src_01KEZF7C00SHIPMENTSMYSQL01
+    type: mysql_table                     # mysql_query with `query:`; MariaDB works too
+    connection: secret://env/ERP_MYSQL_DSN     # mysql://reader:...@db:3306/erp
+    table: shipments
+    target_kind: Shipment
+    key_mapping: [shipment_no]
+    sync_mode: incremental
+    watermark_column: updated_at
+    target_branch_policy: {merge_policy: auto_when_clean}
+
+  finance.invoices:
+    id: src_01KEZF7C00INVOICESMSSQL001
+    type: mssql_query                     # mssql_table reads `table: dbo.invoices`
+    connection: secret://env/FINANCE_MSSQL_DSN # mssql://reader:...@db:1433/finance
+    query: SELECT invoice_no, supplier_code, total, modified_at FROM dbo.invoices
+    target_kind: Invoice
+    key_mapping: [invoice_no]
+    sync_mode: incremental
+    watermark_column: modified_at
+    target_branch_policy: {merge_policy: proposal}
+```
+
 JSON documents, JSON Lines and Parquet files are local files, like local CSV files:
 
 ```yaml
@@ -201,7 +229,9 @@ sources:
 
 **Connections** are secret references, never literals. Scribe resolves them in its own
 environment: for CSV the value is a local path or an `http(s)` URL, for JSON, JSON Lines and
-Parquet a local path, for `http_json` the URL of the first page, for Postgres a DSN. Only
+Parquet a local path, for `http_json` the URL of the first page, for Postgres a DSN, for MySQL
+and SQL Server a URL (`mysql://user:password@host:3306/database`,
+`mssql://user:password@host:1433/database`). Only
 the references listed in `scribe.sources.allowed_connections` are resolved (empty by default),
 and so are secret header values of `http_json` Sources: Sources are written by schema authors,
 and without the list any of them could name a reference meant for something else, such as the
@@ -254,6 +284,17 @@ DSN of the Lorebase database. Errors name the reference, never the value behind 
   name is checked as an identifier and quoted; `scope_filter` and `query` are SQL written by
   the schema's modelers and reviewed with the schema, so give the DSN a role that can only
   read what the Source needs.
+- MySQL, MariaDB and SQL Server Sources (`mysql_table`, `mysql_query`, `mssql_table`,
+  `mssql_query`) are read the same way, fetched `fetch_rows` rows at a time, with their own
+  settings (`scribe.sources.mysql`, `scribe.sources.mssql`: `statement_timeout_ms`,
+  `connect_timeout_s`, `fetch_rows`). Their drivers are optional extras and the run fails with a
+  message naming the extra when it is missing: `lorebase-scribe[mysql]` (asyncmy, async, wheels
+  for the usual platforms) and `lorebase-scribe[mssql]` (pymssql, run in worker threads; FreeTDS
+  is bundled, so no ODBC driver is needed). MySQL and MariaDB sessions are `READ ONLY` and
+  bounded by `max_execution_time` (MariaDB: `max_statement_time`). SQL Server has no read-only
+  transaction: the login must be able to read only. `query` is wrapped as
+  `SELECT * FROM (<query>) AS lorebase_source`, so SQL Server refuses an `ORDER BY` in it;
+  `datetime2` watermarks keep their microseconds. Locators are `<table>:<row>` or `query:<row>`.
 
 **Mapping.** Each mapped Attribute reads one column through a list of transforms: `trim`,
 `lower`, `upper`, `null_if` (`value` or `values`), `constant` (`value`), `concat` (`columns`,
@@ -276,8 +317,8 @@ existing Record are kept, and Links of other Relations are left alone.
 1. Scribe resolves the Source (by id or api name) in the schema of the Domain's default branch,
    the target branch, and records the run in `source_runs`.
 2. It reads the rows (incremental Sources only those whose watermark column is greater than the
-   highest watermark of the last successful run) and maps them. Postgres compares watermarks in
-   SQL with the column's type and CSV as text (use ISO timestamps or zero-padded numbers); JSON,
+   highest watermark of the last successful run) and maps them. Postgres, MySQL and SQL Server
+   compare watermarks in SQL with the column's type and CSV as text (use ISO timestamps or zero-padded numbers); JSON,
    JSON Lines, Parquet and `http_json` Sources compare natively (numbers, Parquet timestamps)
    or as text when the types differ, so string watermarks should be ISO timestamps too.
 3. It prepares the Source branch, `source/<api name>` by default: created from the target

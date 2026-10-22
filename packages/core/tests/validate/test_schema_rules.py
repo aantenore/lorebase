@@ -708,6 +708,24 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
         None,
     ),
     (
+        "source-mysql-query-without-query",
+        lambda s: set_source(s, type=SourceType.MYSQL_QUERY),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-mssql-query-without-query",
+        lambda s: set_source(s, type=SourceType.MSSQL_QUERY, query=" "),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-records-path-on-mssql",
+        lambda s: set_source(s, type=SourceType.MSSQL_TABLE, records_path="data.items"),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
         "source-records-path-on-postgres",
         lambda s: set_source(s, records_path="data.items"),
         {C.SCHEMA_SOURCE_INVALID},

@@ -250,10 +250,10 @@ export function removeDerivation(draft: SchemaDocument, name: string) {
 
 // --------------------------------------------------------------------- Sources
 
-/** Source fields shown for some types only; `table` and `query` belong to Postgres. */
+/** Source fields shown for some types only; `table` and `query` belong to the SQL types. */
 const TYPE_ONLY_FIELDS: Record<string, readonly string[]> = {
-  table: ['postgres_table'],
-  query: ['postgres_query'],
+  table: ['postgres_table', 'mysql_table', 'mssql_table'],
+  query: ['postgres_query', 'mysql_query', 'mssql_query'],
   ...SOURCE_TYPE_FIELDS,
 };
 

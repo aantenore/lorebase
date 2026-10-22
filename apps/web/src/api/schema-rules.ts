@@ -53,6 +53,8 @@ export const SOURCE_TYPE_FIELDS: Record<string, readonly string[]> = {
   flatten_separator: ['json', 'jsonl', 'parquet', 'http_json'],
   http: ['http_json'],
 };
+/** Source types that read a `query` instead of a table. */
+const QUERY_SOURCE_TYPES: readonly string[] = ['postgres_query', 'mysql_query', 'mssql_query'];
 /** Request headers an `http_json` Source may not set. */
 export const RESERVED_HEADERS = [
   'host',
@@ -540,8 +542,8 @@ function checkSource(out: Collector, schema: SchemaBody, source: Source) {
       'A connection is a secret:// reference, never a literal.',
     );
   }
-  if (source.type === 'postgres_query' && blank(source.query)) {
-    out.add(`${path}/query`, 'missing_query', 'A postgres_query Source needs a query.');
+  if (QUERY_SOURCE_TYPES.includes(source.type) && blank(source.query)) {
+    out.add(`${path}/query`, 'missing_query', `A ${source.type} Source needs a query.`);
   }
   for (const [field, types] of Object.entries(SOURCE_TYPE_FIELDS)) {
     const value = (source as unknown as Record<string, unknown>)[field];

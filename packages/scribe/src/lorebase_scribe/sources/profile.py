@@ -1,9 +1,9 @@
 """Profiles of Sources for schema inference (`lorebase_core.infer`), through their connectors.
 
-Any Source a connector reads (CSV, JSON, JSON Lines, Parquet, HTTP JSON, Postgres) becomes a
-`TableProfile` named after the last segment of its api name: every row is read and counted,
-`store.profiling.records` decides which rows are kept, and the columns are the connector's
-header followed by every other key seen. The connection rules and limits are those of a
+Any Source a connector reads (CSV, JSON, JSON Lines, Parquet, HTTP JSON, Postgres, MySQL, SQL
+Server) becomes a `TableProfile` named after the last segment of its api name: every row
+is read and counted, `store.profiling.records` decides which rows are kept, and the columns are the
+connector's header followed by every other key seen. The connection rules and limits are those of a
 synchronization; no watermark applies.
 """
 

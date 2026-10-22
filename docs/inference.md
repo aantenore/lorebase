@@ -74,12 +74,15 @@ proposal = infer_schema(tables, "supply")
 print(dump_schema(proposal.schema))
 ```
 
-Any Source Scribe can synchronize (CSV, JSON, JSON Lines, Parquet, `http_json`, Postgres) can be
+Any Source Scribe can synchronize (CSV, JSON, JSON Lines, Parquet, `http_json`, Postgres, MySQL,
+MariaDB, SQL Server) can be
 profiled through its connector, with the same connection rules and limits as a
 synchronization ([scribe.md](scribe.md#sources)). Every row is read and counted,
 `store.profiling.records` decides which are kept, and the columns are the connector's header
 followed by every other key seen; values keep their native types (numbers, dates and nested
-objects from JSON or Parquet):
+objects from JSON or Parquet). The MySQL and SQL Server drivers are optional extras
+(`lorebase-scribe[mysql]`, `lorebase-scribe[mssql]`); the Keeper endpoint above names Postgres
+tables only, so those databases are profiled through their Source, not by DSN:
 
 ```python
 from lorebase_scribe.settings import scribe_settings

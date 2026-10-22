@@ -28,6 +28,17 @@ documents = ["pypdf>=4.2", "python-docx>=1.1"]
 # parquet: pyarrow (Apache-2.0) reads parquet Sources batch by batch. Without it those Sources
 # fail with a message naming this extra.
 parquet = ["pyarrow>=15"]
+# mysql: asyncmy (Apache-2.0, async, prebuilt wheels) reads MySQL and MariaDB Sources through
+# SQLAlchemy. Without it those Sources fail with a message naming this extra.
+mysql = ["asyncmy>=0.2.10"]
+# mssql: pymssql (LGPL-2.1, FreeTDS bundled in the wheels, no ODBC driver to install) reads SQL
+# Server Sources through SQLAlchemy in worker threads. Without it those Sources fail with a
+# message naming this extra.
+mssql = ["pymssql>=2.3"]
+
+[dependency-groups]
+# Disposable MySQL and SQL Server servers for the integration tests of those Sources.
+dev = ["testcontainers[mysql,mssql]>=4.8"]
 
 [project.scripts]
 lorebase-scribe = "lorebase_scribe.__main__:main"

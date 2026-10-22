@@ -123,6 +123,36 @@ describe('Source editor', () => {
     expect(after['x_contact']).toBe('procurement');
   });
 
+  it('offers the MySQL and SQL Server types and keeps their definition on a round trip', async () => {
+    const user = userEvent.setup();
+    const doc = document();
+    Object.assign(source(doc), {
+      type: 'mysql_table',
+      connection: 'secret://env/ERP_MYSQL',
+      table: 'erp.orders',
+    });
+    const { current } = renderForm(SourcesForm, doc);
+    const type = screen.getByRole('combobox', { name: 'Source type' });
+    expect(type).toHaveValue('mysql_table');
+    expect(screen.getByRole('textbox', { name: 'Table' })).toHaveValue('erp.orders');
+    expect(screen.queryByRole('textbox', { name: 'Query' })).toBeNull();
+    expect(source(current())).toEqual(source(doc));
+
+    await user.selectOptions(type, 'mssql_query');
+    expect(source(current())['table']).toBeUndefined();
+    await user.type(screen.getByRole('textbox', { name: 'Query' }), 'SELECT 1 AS a');
+    expect(source(current())).toMatchObject({
+      type: 'mssql_query',
+      connection: 'secret://env/ERP_MYSQL',
+      query: 'SELECT 1 AS a',
+      x_contact: 'procurement',
+    });
+
+    await user.selectOptions(type, 'mssql_table');
+    expect(source(current())['query']).toBeUndefined();
+    expect(screen.getByRole('textbox', { name: 'Table' })).toBeInTheDocument();
+  });
+
   it('sets sync mode, watermark, relation columns and merge policy', async () => {
     const user = userEvent.setup();
     const { current } = renderForm(SourcesForm, document());
