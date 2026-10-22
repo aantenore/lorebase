@@ -863,6 +863,12 @@ scribe:
     prompt_version: extract-v1   # recorded in Lineage and the cache key; bump with prompts
     cache: true                  # reuse tier 2 answers for unchanged chunk, schema and model
     max_tokens_per_job: 2000000  # tier 2 stops after this many tokens; 0: no limit
+    parser:                      # PDF and DOCX parsed in a child process without network
+      isolated: true             # false: in a worker thread, bounded by max_input_bytes only
+      timeout_s: 60.0            # wall-clock time per document
+      cpu_s: 60                  # CPU seconds (RLIMIT_CPU)
+      memory_mb: 1024            # address space in MiB (RLIMIT_AS, where enforced)
+      max_input_bytes: 52428800  # larger documents are not parsed
     chunking:
       max_chars: 2000            # largest chunk of parsed text
       overlap_chars: 200         # repeated from the previous chunk (< max_chars / 2)

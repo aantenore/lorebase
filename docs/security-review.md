@@ -318,6 +318,19 @@ private address 422. `keeper.documents.url_allow_private_targets` (false) turns 
 Test: `packages/keeper/tests/test_document_urls.py` (loopback, RFC 1918, link-local, shared
 address space, IPv6 unique local and IPv4-mapped loopback refused before any request; the
 request goes to the checked address with the original `Host` and SNI).
+**PDF and DOCX parsed in a limited child process**
+(`packages/scribe/src/lorebase_scribe/extraction/sandbox.py`, settings
+`scribe.extraction.parser`). The extraction job hands the bytes to
+`python -I -B -m lorebase_scribe.extraction.sandbox` over standard input, with an empty
+environment. Before reading them the child sets `RLIMIT_CPU` (`cpu_s`, 60), `RLIMIT_AS`
+(`memory_mb`, 1024, where the system enforces it) and no core files, and replaces the socket
+constructors and name resolution with functions that refuse. The parent kills it after
+`timeout_s` (60 s), reads a bounded answer, refuses documents over `max_input_bytes` (50 MiB)
+without starting it, and turns a limit, a signal, a parser exception or a garbled answer into a
+`ParseError`, a permanent job error. Markdown and text are still decoded in the worker. Test:
+`packages/scribe/tests/test_parser_sandbox.py` with stand-in parsers
+(`packages/scribe/tests/sandbox_targets.py`) that sleep, spin, allocate, return a huge text,
+open sockets and kill themselves; real PDF and DOCX parse as before.
 
 ## Other observations
 

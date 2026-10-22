@@ -119,7 +119,7 @@ what Scribe connects to. Code: `packages/scribe/src/lorebase_scribe/sources/conn
 | I | Secret values in errors and run records | Errors name the setting or reference, never the value (F2); HTTP JSON credential headers must come from `secret://` references in `allowed_connections`, literal values for headers named like credentials are refused (`packages/core/src/lorebase_core/model/source.py`) | HTTP JSON errors name the host (`sources/http_json.py`), which a Source run record shows to Domain readers |
 | D | A slow or huge remote | `timeout_s` per request (30 s), `max_bytes` per response (50 MiB), `max_pages` per run (1000, a Source can only lower it), bounded retries honoring `Retry-After` | A Source within its limits can still keep one worker slot busy for the whole run |
 | I | SSRF through document URL intake in Keeper | Off unless `keeper.documents.url_hosts` lists hosts (exact match); https only; the host resolved once and refused unless every address is global unicast (`check_target`), the connection pinned to the checked addresses with the host name kept for TLS; no redirects, no proxies, streamed size cap (`packages/keeper/src/lorebase_keeper/services/document_urls.py`) | `keeper.documents.url_allow_private_targets: true` turns the address check and the pinning off |
-| D | Malicious document files | Size cap `keeper.documents.max_bytes` (20 MiB), one file per upload, suffix allowlist (`.md`, `.txt`, `.pdf`, `.docx`) | Type is checked by suffix only; PDF and DOCX are parsed in the Scribe process by pypdf and python-docx (`packages/scribe/src/lorebase_scribe/extraction/parsing.py`) without a sandbox or parse timeout, so a crafted file can cost CPU and memory in a worker |
+| D | Malicious document files | Size cap `keeper.documents.max_bytes` (20 MiB), one file per upload, suffix allowlist (`.md`, `.txt`, `.pdf`, `.docx`) checked against the content (PDF and ZIP signatures, UTF-8 text); in Scribe, PDF and DOCX are parsed by pypdf and python-docx in a child process with an empty environment and the socket functions disabled, under `scribe.extraction.parser` limits: wall-clock `timeout_s` (60 s), `RLIMIT_CPU` `cpu_s` (60), `RLIMIT_AS` `memory_mb` (1024), `max_input_bytes` (50 MiB) and a bounded answer; any failure is a permanent job error (`packages/scribe/src/lorebase_scribe/extraction/sandbox.py`) | `RLIMIT_AS` is not enforced on macOS and `resource` limits do not exist on Windows, where only the wall-clock limit holds; the network is denied inside Python, not by the kernel; a crafted file can still use the limits' worth of one worker slot |
 
 ## TB5: Herald and MCP agents
 
@@ -198,8 +198,10 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
    the tail of a chain; ship a recent `entry_hash` outside the database (TB6).
 2. **No dependency audit in CI and no automated updates.** Add `make security` (or a dependency
    review action) to CI and enable Dependabot or Renovate (TB9).
-3. **Document parsing in the worker.** Parse PDF and DOCX in a subprocess with CPU, memory and
-   time limits, and check content types beyond the suffix (TB4).
+3. **Document parsing in the worker.** Fixed: PDF and DOCX are parsed in a child process with
+   time, CPU, memory and size limits and no network
+   (`packages/scribe/src/lorebase_scribe/extraction/sandbox.py`); Keeper checks content
+   signatures besides the suffix (TB4).
 4. **Document URL intake trusts the allowed host's DNS.** Fixed: addresses checked with
    `check_target` and connections pinned to them
    (`packages/keeper/src/lorebase_keeper/services/document_urls.py`) (TB4).

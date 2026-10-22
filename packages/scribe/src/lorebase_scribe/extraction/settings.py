@@ -96,6 +96,38 @@ class ConfidenceSettings(SectionModel):
     )
 
 
+class ParserSettings(SectionModel):
+    """Limits of the process that turns PDF and DOCX bytes into text (design 9.2 step 2).
+
+    A crafted file can make a parser loop or allocate without bound, so PDF and DOCX are parsed
+    in a child process with no network access, limited in wall-clock time, CPU time and address
+    space; a document over `max_input_bytes` is not parsed at all. A document that breaks a
+    limit fails its extraction job with a message naming the setting. Markdown and plain text
+    are decoded in the worker under the same size limit.
+    """
+
+    isolated: bool = Field(
+        default=True,
+        description="Parse PDF and DOCX in a child process with the limits below. Off: in a "
+        "worker thread, bounded only by max_input_bytes.",
+    )
+    timeout_s: float = Field(
+        default=60.0, gt=0, description="Wall-clock time a document may take to parse."
+    )
+    cpu_s: int = Field(
+        default=60, ge=1, description="CPU seconds of the parser process (RLIMIT_CPU, POSIX)."
+    )
+    memory_mb: int = Field(
+        default=1024,
+        ge=128,
+        description="Address space of the parser process in MiB (RLIMIT_AS; Linux and other "
+        "POSIX systems that enforce it).",
+    )
+    max_input_bytes: int = Field(
+        default=50 * 1024 * 1024, ge=1, description="Largest document parsed, in bytes."
+    )
+
+
 class ExtractionSettings(SectionModel):
     """Document extraction into reviewable Proposals (design 9.2)."""
 
@@ -148,6 +180,7 @@ class ExtractionSettings(SectionModel):
         description="Tier 2 stops calling the model once a job used this many tokens; 0 means "
         "no limit.",
     )
+    parser: ParserSettings = Field(default_factory=ParserSettings)
     chunking: ChunkSettings = Field(default_factory=ChunkSettings)
     matching: MatchSettings = Field(default_factory=MatchSettings)
     confidence: ConfidenceSettings = Field(default_factory=ConfidenceSettings)

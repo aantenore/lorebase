@@ -1212,6 +1212,18 @@ Documents into reviewable Proposals (docs/extraction.md)
 | `scribe.extraction.cache` | `true` | reuse tier 2 answers for unchanged chunk, schema and model |
 | `scribe.extraction.max_tokens_per_job` | `2000000` | tier 2 stops after this many tokens; 0: no limit |
 
+#### `scribe.extraction.parser`
+
+PDF and DOCX parsed in a child process without network
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.extraction.parser.isolated` | `true` | false: in a worker thread, bounded by max_input_bytes only |
+| `scribe.extraction.parser.timeout_s` | `60.0` | wall-clock time per document |
+| `scribe.extraction.parser.cpu_s` | `60` | CPU seconds (RLIMIT_CPU) |
+| `scribe.extraction.parser.memory_mb` | `1024` | address space in MiB (RLIMIT_AS, where enforced) |
+| `scribe.extraction.parser.max_input_bytes` | `52428800` | larger documents are not parsed |
+
 #### `scribe.extraction.chunking`
 
 | Setting | Default | Description |
