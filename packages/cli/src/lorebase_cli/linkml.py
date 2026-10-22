@@ -22,7 +22,8 @@ Mapping, both ways:
 | Relation | a slot with a class range on each side, linked by `inverse` |
 | `cardinality` | `multivalued` of the two slots |
 | `id`, sensitivity and every other field | annotations `lorebase.<field>` |
-| Operations, Derivations, Sources | schema annotations on export; skipped on import |
+| path Derivation | a slot on the first Kind, annotated with the steps; read back on import |
+| Operations, other Derivations, Sources | schema annotations on export; skipped on import |
 
 Annotation values are scalars; structured values are written as JSON text and read back as
 JSON when the text is a JSON object or array.
@@ -47,6 +48,10 @@ LINKML_TYPES_IMPORT = "linkml:types"
 
 #: Sections of a Lorebase document kept only as annotations in LinkML.
 EXPORT_ONLY_SECTIONS = ("operations", "derivations", "sources")
+#: Annotation tag value that marks a slot as a path Derivation, not an Attribute or Relation.
+_PATH_MARK = "path"
+#: Path Derivation fields that travel as annotations of its slot, besides the id.
+_PATH_FIELDS = ("steps", "inverse_api_name", "materialized")
 #: Attribute fields that name elements of those sections, dropped on import.
 _SECTION_REFERENCES = {"derivation": "derivations", "authority": "sources"}
 _LOREBASE_ROOT_KEYS = frozenset(
@@ -338,9 +343,6 @@ class _Exporter:
         schema["default_range"] = "string"
         schema["imports"] = [LINKML_TYPES_IMPORT]
         annotations = {ANNOTATION_PREFIX + "format": LOREBASE_FORMAT, **_annotations(domain)}
-        for section in EXPORT_ONLY_SECTIONS:
-            if self.document.get(section):
-                annotations[ANNOTATION_PREFIX + section] = _encode(self.document[section])
         schema["annotations"] = annotations
 
         classes: dict[str, dict[str, Any]] = {}
@@ -352,9 +354,74 @@ class _Exporter:
         for relation_name, relation in self.relations.items():
             path = f"relations/{relation_name}"
             self.relation_slots(relation_name, _mapping(relation, path), classes, path)
+        derivations = self.path_slots(classes, self.document.get("derivations"))
+        for section in EXPORT_ONLY_SECTIONS:
+            value = derivations if section == "derivations" else self.document.get(section)
+            if value:
+                annotations[ANNOTATION_PREFIX + section] = _encode(value)
         _put(schema, "classes", classes)
         _put(schema, "enums", self.enums)
         return schema
+
+    def path_slots(self, classes: dict[str, dict[str, Any]], derivations: Any) -> dict[str, Any]:
+        """Puts each path Derivation on the class where it starts, as a slot that ends at the
+        class where it ends; returns the other Derivations, which stay in the schema annotation."""
+        kept: dict[str, Any] = {}
+        for name, value in _mapping(derivations, "derivations").items():
+            path = f"derivations/{name}"
+            derivation = _mapping(value, path)
+            ends = self.path_ends(derivation)
+            if ends is None or name in classes[ends[0]].get("attributes", {}):
+                kept[name] = value
+                continue
+            start, end, many = ends
+            fields = dict(derivation)
+            definition = _mapping(fields.pop("definition", None), f"{path}/definition")
+            slot: dict[str, Any] = {}
+            annotations: dict[str, Any] = {ANNOTATION_PREFIX + "derivation_variant": _PATH_MARK}
+            _put(annotations, ANNOTATION_PREFIX + "id", fields.pop("id", None))
+            _put(slot, "description", fields.pop("description", None))
+            _put(slot, "title", fields.pop("display_name", None))
+            slot["range"] = end
+            if many:
+                slot["multivalued"] = True
+            annotations.update(_annotations({key: definition.get(key) for key in _PATH_FIELDS}))
+            annotations.update(_annotations(fields))
+            slot["annotations"] = annotations
+            self.add_slot(classes, start, name, slot, path)
+        return kept
+
+    def path_ends(self, derivation: Mapping[str, Any]) -> tuple[str, str, bool] | None:
+        """Kind where a path Derivation starts, Kind where it ends and whether it can reach
+        several Records; None when it is not a path or its steps do not chain through Kinds."""
+        definition = derivation.get("definition")
+        if not isinstance(definition, Mapping) or definition.get("variant") != _PATH_MARK:
+            return None
+        start: str | None = None
+        end: str | None = None
+        many = False
+        for step in definition.get("steps") or []:
+            relation = (
+                self.relations.get(str(step.get("relation"))) if isinstance(step, Mapping) else None
+            )
+            if not isinstance(relation, Mapping):
+                return None
+            from_kind, to_kind = str(relation.get("from_kind")), str(relation.get("to_kind"))
+            many_from, _, many_to = str(relation.get("cardinality", "many_to_many")).partition(
+                "_to_"
+            )
+            if step.get("direction") == "inverse":
+                origin, target, fans_out = to_kind, from_kind, many_from == "many"
+            else:
+                origin, target, fans_out = from_kind, to_kind, many_to == "many"
+            if origin not in self.kinds or (end is not None and origin != end):
+                return None
+            start = start or origin
+            end = target
+            many = many or fans_out
+        if start is None or end not in self.kinds:
+            return None
+        return start, end, many
 
     def kind_class(self, name: str, kind: dict[str, Any]) -> dict[str, Any]:
         path = f"kinds/{name}"
@@ -646,6 +713,7 @@ class _Importer:
         self.types = _mapping(schema.get("types"), "types")
         self.default_range = str(schema.get("default_range") or options.default_range)
         self.class_names: dict[str, str] = {}
+        self.derivations: dict[str, Any] = {}
         self.trait_attributes: dict[str, list[str]] = {}
         self._enum_values: dict[str, tuple[str, ...] | None] = {}
         self._type_names: dict[str, str] = {}
@@ -711,6 +779,7 @@ class _Importer:
         _put(document, "kinds", kinds)
         _put(document, "relations", relations)
         _put(document, "traits", traits)
+        _put(document, "derivations", self.derivations)
         return Conversion(document, self.warnings)
 
     def domain(self) -> dict[str, Any]:
@@ -855,6 +924,8 @@ class _Importer:
         attributes: dict[str, Any] = {}
         for slot_name, slot in self.effective_slots(name).items():
             slot_path = f"{path}/attributes/{slot_name}"
+            if self.path_derivation(slot_name, slot, slot_path):
+                continue
             target = self.relation_target(slot)
             if target is not None:
                 if target in self.class_names and not self.classes[target].get("mixin"):
@@ -897,6 +968,29 @@ class _Importer:
         _put(kind, "traits", traits)
         self.draft_when_incomplete(kind, path)
         return kind
+
+    def path_derivation(self, name: str, slot: Mapping[str, Any], path: str) -> bool:
+        """Reads a slot marked as a path Derivation into `derivations`; False for other slots."""
+        lorebase = self.annotations(slot.get("annotations"), path)
+        if lorebase.pop("derivation_variant", None) != _PATH_MARK:
+            return False
+        if name in self.derivations:  # inherited by a subclass: already read
+            return True
+        steps = lorebase.pop("steps", None)
+        if not isinstance(steps, list) or not steps:
+            self.warn(path, "path Derivation without steps, skipped")
+            return True
+        definition: dict[str, Any] = {"variant": _PATH_MARK, "steps": steps}
+        for key in _PATH_FIELDS[1:]:
+            _put(definition, key, lorebase.pop(key, None))
+        derivation: dict[str, Any] = {}
+        _put(derivation, "id", lorebase.pop("id", None))
+        _put(derivation, "display_name", slot.get("title"))
+        _put(derivation, "description", slot.get("description"))
+        derivation.update(lorebase)
+        derivation["definition"] = definition
+        self.derivations[name] = derivation
+        return True
 
     def draft_when_incomplete(self, kind: dict[str, Any], path: str) -> None:
         """Active Kinds need a title attribute and described Attributes, which LinkML schemas
@@ -1224,17 +1318,18 @@ _OWNED_RELATION = frozenset(
         "attributes",
     }
 )
+_OWNED_DERIVATION = frozenset({"id", "display_name", "description", "definition"})
 _OWNED_CONSTRAINTS = frozenset(key for pair in (*_CONSTRAINT_SLOTS, *_LENGTH_SLOTS) for key in pair)
 
 
 def merge_into_current(current: Any, imported: Conversion, *, prune: bool = False) -> Conversion:
     """The imported document laid over the current schema of a Domain.
 
-    The import owns Kinds, Attributes, Relations, Traits and enums. Everything else is kept:
-    Operations, Derivations and Sources, and the fields an element has that the import does not
-    carry (`derivation`, `authority`, `indexed`, `icon`, ...). Elements match by `id`, else by
-    name, and keep the current id. Kinds, Traits, Relations and Attributes the import leaves out
-    are kept with a warning, or removed with `prune`.
+    The import owns Kinds, Attributes, Relations, Traits, enums and path Derivations. Everything
+    else is kept: Operations, other Derivations and Sources, and the fields an element has that
+    the import does not carry (`derivation`, `authority`, `indexed`, `icon`, ...). Elements match
+    by `id`, else by name, and keep the current id. Kinds, Traits, Relations and Attributes the
+    import leaves out are kept with a warning, or removed with `prune`.
     """
     if not isinstance(current, Mapping):
         raise LinkmlError("the current schema is not a mapping")
@@ -1247,14 +1342,18 @@ def merge_into_current(current: Any, imported: Conversion, *, prune: bool = Fals
     for section in EXPORT_ONLY_SECTIONS:
         if old.get(section):
             document[section] = copy.deepcopy(old[section])
+            merger.drop_stale_warnings(section)
+    imported_paths = _mapping(imported.document.get("derivations"), "derivations")
     pruned: set[str] = set()
     for section, owned in (("traits", _OWNED_TRAIT), ("kinds", _OWNED_KIND)):
         merged, gone = merger.section(section, old, document, owned, set())
         _put(document, section, merged)
         if section == "kinds":
             pruned = gone
-    merged, _ = merger.section("relations", old, document, _OWNED_RELATION, pruned)
+    merged, gone = merger.section("relations", old, document, _OWNED_RELATION, pruned)
     _put(document, "relations", merged)
+    document.pop("derivations", None)
+    _put(document, "derivations", merger.derivations(old, imported_paths, gone))
     merger.restore_status(document, old)
     return Conversion(document, merger.warnings)
 
@@ -1266,6 +1365,36 @@ class _Merger:
 
     def note(self, path: str, message: str) -> None:
         self.warnings.append(ConversionWarning(path, message))
+
+    def drop_stale_warnings(self, section: str) -> None:
+        """The import warns that `section` is not imported; the merge keeps the current one."""
+        stale = f"{section} are not imported"
+        self.warnings = [
+            w
+            for w in self.warnings
+            if w.path != f"annotations/{ANNOTATION_PREFIX}{section}" and stale not in w.message
+        ]
+
+    def derivations(
+        self, old: Mapping[str, Any], imported: Mapping[str, Any], gone_relations: set[str]
+    ) -> dict[str, Any]:
+        """The current Derivations, with the path ones of the import laid over them (they
+        match by id, else by name); a path through a removed Relation is removed too."""
+        before = _mapping(old.get("derivations"), "derivations")
+        matched = _match(before, imported)
+        merged = {name: copy.deepcopy(item) for name, item in before.items()}
+        for name, item in imported.items():
+            previous = before.get(matched.get(name, ""))
+            if previous is not None:
+                del merged[matched[name]]
+                item = _inherit(previous, item, _OWNED_DERIVATION)
+            merged[name] = item
+        for name, item in list(merged.items()):
+            steps = _mapping(item.get("definition"), name).get("steps") or []
+            if any(step.get("relation") in gone_relations for step in steps):
+                del merged[name]
+                self.note(f"derivations/{name}", "removed: it refers to a pruned Relation")
+        return merged
 
     def section(
         self,

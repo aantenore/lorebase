@@ -632,3 +632,117 @@ def test_schema_import_print_ignores_the_current_schema(http: respx.MockRouter) 
     result = runner.invoke(app, ["schema", "import", str(PERSONINFO), "--from", "linkml"])
     assert result.exit_code == 0, result.output
     assert not http.calls
+
+
+# Path Derivations and merge warnings ----------------------------------------------------------
+
+PATH_DERIVATION: dict[str, Any] = {
+    "id": "drv_01KEZF7C00PATH00000000000A",
+    "description": "Orders issued to the suppliers of a part.",
+    "definition": {
+        "variant": "path",
+        "steps": [
+            {"relation": "supplied_by"},
+            {"relation": "issued_to", "direction": "inverse"},
+        ],
+        "inverse_api_name": "parts_ordered",
+        "materialized": True,
+    },
+}
+
+
+def with_path() -> dict[str, Any]:
+    document = supply()
+    document["derivations"]["orders_for_part"] = copy.deepcopy(PATH_DERIVATION)
+    return document
+
+
+def test_export_writes_a_path_derivation_as_an_annotated_slot() -> None:
+    schema = to_linkml(with_path())
+
+    slot = schema["classes"]["Part"]["attributes"]["orders_for_part"]
+    assert slot["range"] == "PurchaseOrder"
+    assert slot["multivalued"] is True
+    assert slot["description"] == PATH_DERIVATION["description"]
+    notes = slot["annotations"]
+    assert notes["lorebase.derivation_variant"] == "path"
+    assert notes["lorebase.id"] == PATH_DERIVATION["id"]
+    assert json.loads(notes["lorebase.steps"]) == PATH_DERIVATION["definition"]["steps"]
+    assert notes["lorebase.inverse_api_name"] == "parts_ordered"
+    assert notes["lorebase.materialized"] is True
+    kept = json.loads(schema["annotations"]["lorebase.derivations"])
+    assert set(kept) == {"supplier_count", "single_sourced"}
+
+
+def test_path_derivation_round_trips_and_is_not_a_relation() -> None:
+    back, warnings = round_trip(with_path())
+
+    assert back["derivations"] == {"orders_for_part": PATH_DERIVATION}
+    assert "orders_for_part" not in back["relations"]
+    assert "orders_for_part" not in back["kinds"]["Part"]["attributes"]
+    assert not [w for w in warnings if "orders_for_part" in w]
+
+
+def test_path_derivation_alone_leaves_no_derivations_annotation() -> None:
+    document = supply()
+    document["derivations"] = {"orders_for_part": copy.deepcopy(PATH_DERIVATION)}
+    schema = to_linkml(document)
+
+    assert "lorebase.derivations" not in schema["annotations"]
+    back, warnings = round_trip(document)
+    assert back["derivations"] == {"orders_for_part": PATH_DERIVATION}
+    assert not [w for w in warnings if w.startswith("annotations/lorebase.derivations")]
+
+
+def test_export_keeps_a_path_that_cannot_be_placed_in_the_annotation() -> None:
+    document = supply()
+    broken = copy.deepcopy(PATH_DERIVATION)
+    broken["definition"]["steps"][0]["relation"] = "missing"
+    document["derivations"]["orders_for_part"] = broken
+
+    schema = to_linkml(document)
+    assert "orders_for_part" not in schema["classes"]["Part"]["attributes"]
+    assert "orders_for_part" in json.loads(schema["annotations"]["lorebase.derivations"])
+
+
+def test_merge_applies_a_path_derivation_and_keeps_the_other_derivations() -> None:
+    changed = copy.deepcopy(PATH_DERIVATION)
+    changed["definition"]["materialized"] = False
+    target = with_path()
+    target["derivations"]["orders_for_part"] = changed
+    result = merge_into_current(with_path(), from_linkml(to_linkml(target)))
+
+    derivations = result.document["derivations"]
+    assert set(derivations) == {"supplier_count", "single_sourced", "orders_for_part"}
+    assert derivations["orders_for_part"]["definition"]["materialized"] is False
+    assert derivations["orders_for_part"]["id"] == PATH_DERIVATION["id"]
+
+
+def test_merge_removes_a_path_through_a_pruned_relation() -> None:
+    schema = hand_written(with_path(), drop_kind="Supplier")
+    result = merge_into_current(with_path(), from_linkml(schema), prune=True)
+
+    assert "orders_for_part" not in result.document["derivations"]
+    assert "derivations/orders_for_part: removed: it refers to a pruned Relation" in [
+        str(w) for w in result.warnings
+    ]
+
+
+def test_merge_does_not_say_preserved_sections_are_not_imported() -> None:
+    imported = from_linkml(to_linkml(supply()))
+    assert any("not imported" in str(w) for w in imported.warnings)
+
+    kept = merge_into_current(supply(), imported)
+    assert not [w for w in kept.warnings if "not imported" in str(w)]
+
+    bare = {k: v for k, v in supply().items() if k not in ("operations", "derivations", "sources")}
+    lost = merge_into_current(bare, imported)
+    assert any("not imported" in str(w) for w in lost.warnings)
+
+
+def test_schema_import_prune_needs_apply_or_dry_run(http: respx.MockRouter) -> None:
+    result = runner.invoke(app, [*IMPORT, "--prune"])
+
+    assert result.exit_code == 1
+    assert "--prune needs --apply or --dry-run" in result.output
+    assert not http.calls
