@@ -41,7 +41,7 @@ from lorebase_store.jobs import INDEX_JOB, JobRow, claim_jobs, enqueue_job, run_
 from lorebase_store.materialize import create_branch, promote, refork, verify
 from lorebase_store.repositories import RefRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import DatabaseSettings, IndexSettings, StoreSettings
+from lorebase_store.settings import DatabaseSettings, IndexSettings, JobSettings, StoreSettings
 
 from .support import (
     AUTHOR,
@@ -323,6 +323,54 @@ async def test_large_kinds_are_queued_and_built_concurrently(
     assert [(o.action, o.status) for o in outcomes] == [("create", "succeeded")]
     assert [valid for _, valid in (await indexes_of(sessions)).values()] == [True]
     assert await run_index_jobs(engine, runtime.settings.indexes) == []
+
+
+@pytestmark_integration
+async def test_index_jobs_send_heartbeats_while_building(
+    engine: AsyncEngine, sessions: Sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = StoreRuntime.from_settings(
+        StoreSettings(indexes=IndexSettings(inline_max_rows=1, job_batch=5))
+    )
+    async with sessions() as session:
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            [supplier("S-1", "Alpha", vat="IT1"), supplier("S-2", "Beta", vat="IT2")],
+            schema_changes=schema_changes(),
+            author=AUTHOR,
+            message="schema",
+            origin=ORIGIN,
+            runtime=runtime,
+        )
+    original = indexes_module._run_job
+    seen: list[tuple[object, object]] = []
+
+    async def slow(*args: Any, **kwargs: Any) -> Any:
+        async def lock() -> tuple[object, object]:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text("SELECT set_config('lorebase.bypass_rls', 'on', true)")
+                )
+                row = await connection.execute(
+                    text("SELECT locked_at, status FROM jobs WHERE type = 'store.index'")
+                )
+                return row.one()
+
+        first = await lock()
+        await asyncio.sleep(1.0)  # several heartbeats at stale_after_seconds = 0.3
+        seen.extend([first, await lock()])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(indexes_module, "_run_job", slow)
+    outcomes = await run_index_jobs(
+        engine, runtime.settings.indexes, jobs=JobSettings(stale_after_seconds=0.3)
+    )
+    assert [o.status for o in outcomes] == ["succeeded"]
+    (before, _), (after, status) = seen
+    assert status == "running"
+    assert after > before, "the heartbeat refreshed the lock while the job ran"
 
 
 @pytestmark_integration
