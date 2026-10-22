@@ -118,8 +118,10 @@ nav:
       - Kubernetes: kubernetes.md
       - Performance: performance.md
       - Security review: security-review.md
+      - Threat model: threat-model.md
   - Reference:
       - REST API: reference/api.md
+      - API stability: api-stability.md
       - Command line: reference/cli.md
       - Configuration: reference/configuration.md
       - Store schema notes: store-schema-notes.md
