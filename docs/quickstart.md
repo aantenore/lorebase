@@ -175,6 +175,27 @@ settings are in [`.env.example`](https://github.com/aantenore/lorebase/blob/main
 lists the variables of the app itself, and a mock mode with built-in sample data and no Keeper is
 in [section 12](#12-web-app).
 
+**Browser sign-in** (`WEB_AUTH_MODE=session`) can be tried on this stack with a mock OpenID
+Connect provider, the overlay `deploy/compose/oidc-mock.yaml` (it signs in anyone: local use
+only). Add a session key to `.env`, then start Keeper, the web app and the provider with it:
+
+```bash
+echo "LOREBASE_SESSION_KEY=$(openssl rand -base64 48)" >> .env
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  -f deploy/compose/oidc-mock.yaml up -d --wait keeper web oidc-mock
+```
+
+Keeper switches to `auth.mode: oidc` with `auth.sessions` (client `lorebase-web`, PKCE, callback
+`http://127.0.0.1:8090/api/v1/auth/callback`) and the app to session mode. Open
+`http://127.0.0.1:8090` and sign in: the provider's page asks for any user name (and optional
+claims such as `{"name": "Alice"}`), then returns to the app with a session cookie. The provider
+runs in Keeper's network namespace and is published on `127.0.0.1:8096` (`OIDC_MOCK_PORT`), so
+the browser and Keeper use the same issuer URL, `http://localhost:8096/lorebase`. The user is
+created at its first sign-in (`keeper.auth.oidc.auto_provision`) and, like any principal, reads
+what its grants allow. To go back to authentication off, remove the provider (the same command
+with `rm -sf oidc-mock` instead of `up ...`) and run `make up`. Settings and cookies:
+[deployment](deployment.md#web-sign-in).
+
 **Contributors** who change the app run the dev server instead (Node.js 24 and pnpm), with hot
 reload, on the Keeper of the stack:
 

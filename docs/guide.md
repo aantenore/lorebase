@@ -102,7 +102,9 @@ browser sends the cookie to that origin only.
 
 Browser requests must come from an origin listed in `guide.http.allowed_origins`, which is also the
 CORS allow-list; a request whose `Origin` is not listed, or marked `Sec-Fetch-Site: cross-site`
-without an `Origin`, is refused with 403.
+without an `Origin`, is refused with 403. While `allowed_origins` is empty, `guide.http.default_origins`
+applies instead; the compose file sets it to the origins of its `web` service, so `GUIDE_ALLOWED_ORIGINS=[]`
+in `.env` behaves as unset and Guide logs a warning at start.
 
 ## Agent trace
 
