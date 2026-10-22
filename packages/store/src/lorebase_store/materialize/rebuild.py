@@ -17,7 +17,6 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, Tree
 from lorebase_store.bulk import chunks
@@ -39,7 +38,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
-from lorebase_store.materialize.sensitivity import reference_tags
+from lorebase_store.materialize.sensitivity import branch_tagged_schema
 from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
@@ -140,7 +139,7 @@ async def materialize_revision(
     objects = PgObjectStore(session, domain_id, writes=settings.writes, batch=batch)
     tree = await nodes.load_tree(head.root)
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
-    tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
+    tagged = await branch_tagged_schema(session, domain_id, branch, schema, runtime=runtime)
     branch_indexes = BranchIndexes(
         session, domain_id, branch, settings=settings.indexes, maintenance=runtime.index_maintenance
     )

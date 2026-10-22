@@ -69,13 +69,12 @@ def lowered_tags(old: Schema, new: Schema) -> Tags:
 
 
 def raised_tags(old: Schema, new: Schema) -> Tags:
-    """Tags `new` adds to Attributes `old` already has (new Attributes left out)."""
+    """Tags `new` gives an Attribute that `old` does not give it, Attributes new to `new`
+    included: another schema (a branch) may hold the same Attribute untagged."""
     before = schema_tags(old)
-    known = {a.id for a in all_attributes(old)}
     raised: set[Sensitivity] = set()
     for attribute_id, tags in schema_tags(new).items():
-        if attribute_id in known:
-            raised |= tags - before.get(attribute_id, NO_TAGS)
+        raised |= tags - before.get(attribute_id, NO_TAGS)
     return frozenset(raised)
 
 

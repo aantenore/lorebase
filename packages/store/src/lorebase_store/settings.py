@@ -321,9 +321,11 @@ class MaterializeSettings(SectionModel):
     refresh_branches_on_tag: bool = Field(
         default=True,
         description="When a commit or merge on a Domain's default branch adds a sensitivity "
-        "tag to an existing Attribute, queue a store.sensitivity_refresh job for every other "
-        "branch: it rewrites, in batches of job_batch_rows, the titles and search vectors the "
-        "branch materialized before the tag (verification reports them as sensitivity_stale). "
+        "tag, queue a store.sensitivity_refresh job for every other branch whose titles or "
+        "search vectors the tag makes stale (overlays through the job of their base), and for "
+        "copies of such a branch when they are made: it rewrites, in batches of "
+        "job_batch_rows, the titles and search vectors the branch materialized before the tag "
+        "(verification reports them as sensitivity_stale). "
         "The branch's schema is left as it is: POST .../branches/{b}/rebase-tags copies the "
         "tags into it. Off: stale rows stay until rewritten that way, by a rebuild or by the "
         "next schema change of their Kind on the branch.",

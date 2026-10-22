@@ -150,6 +150,8 @@ class TagRebase:
 
     outcome: ChangeSetOutcome
     tags: list[TagChange]
+    default_branch: str
+    """Where the tags come from: who may not read its schema is not told them."""
 
 
 class RemovalBlockedError(Exception):
@@ -399,7 +401,7 @@ async def rebase_tags(
     async with store.sessions() as session:
         await session.begin()
         try:
-            await require_domain(session, domain_id)
+            domain = await require_domain(session, domain_id)
             ref = await require_branch(session, domain_id, branch)
             head_revision = await require_revision(session, domain_id, ref.head)
             current = await schema_at(session, domain_id, head_revision, store.runtime)
@@ -411,7 +413,9 @@ async def rebase_tags(
             added = _added_tags(current, target)
             if not changes:
                 return TagRebase(
-                    ChangeSetOutcome(ChangeStatus.NO_OP, ref.head, ref.head, []), added
+                    ChangeSetOutcome(ChangeStatus.NO_OP, ref.head, ref.head, []),
+                    added,
+                    domain.default_branch,
                 )
             if ref.protected and not dry_run:
                 raise ProtectedBranchError(branch)
@@ -426,10 +430,11 @@ async def rebase_tags(
                 changes,
                 described,
                 message=message or REBASE_TAGS_MESSAGE,
-                expected_head=expected_head,
+                # The target was computed from this head: a commit on top of another refuses.
+                expected_head=expected_head or ref.head,
                 dry_run=dry_run,
             )
-            return TagRebase(outcome, added)
+            return TagRebase(outcome, added, domain.default_branch)
         finally:
             if session.in_transaction():
                 await session.rollback()
