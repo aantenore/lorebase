@@ -558,6 +558,8 @@ $ lorebase schema [OPTIONS] COMMAND [ARGS]...
 * `validate`: Check a schema document against the schema...
 * `diff`: Show which elements applying a schema...
 * `apply`: Apply a schema document to a branch as one...
+* `export`: Translate a schema into LinkML YAML.
+* `import`: Translate a LinkML schema into a Lorebase...
 
 #### `lorebase schema get`
 
@@ -647,6 +649,63 @@ $ lorebase schema apply [OPTIONS] {FILE}
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
 * `-m, --message <str>`: Revision message.
 * `--dry-run`: Plan only; write nothing.
+* `--cascade`: Allow removing Kinds or Relations that hold data.
+* `--expected-head <str>`: Fail unless the branch is at this Revision.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase schema export`
+
+Translate a schema into LinkML YAML.
+
+What LinkML cannot express (element ids, sensitivity, search settings, Operations,
+Derivations, Sources) travels as `lorebase.*` annotations.
+
+**Usage**:
+
+```console
+$ lorebase schema export [OPTIONS]
+```
+
+**Options**:
+
+* `--format <linkml>`: Schema language to write.  [required]
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
+* `--file <str>`: Convert this Lorebase schema document (`-` reads standard input) instead of the schema of the Domain.
+* `--uri <str>`: Id of the LinkML schema; `{domain}` is the Domain id.
+* `-o, --output <path>`: Write the document to this file.
+* `--help`: Show this message and exit.
+
+#### `lorebase schema import`
+
+Translate a LinkML schema into a Lorebase schema document.
+
+Prints the document (or writes it with --output); warnings about what it leaves out go to
+standard error. --apply sends it to a branch like `schema apply`, --dry-run plans that. The
+document replaces the whole schema: elements it leaves out, Operations, Derivations and
+Sources included, are removed.
+
+**Usage**:
+
+```console
+$ lorebase schema import [OPTIONS] {FILE}
+```
+
+**Arguments**:
+
+* `FILE`: LinkML schema; `-` reads standard input.  [required]
+
+**Options**:
+
+* `--from <linkml>`: Schema language of FILE.  [required]
+* `-o, --output <path>`: Write the document to this file.
+* `--apply`: Apply the result to a branch instead of printing it.
+* `--dry-run`: Plan applying the result; write nothing.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `-m, --message <str>`: Revision message.
 * `--cascade`: Allow removing Kinds or Relations that hold data.
 * `--expected-head <str>`: Fail unless the branch is at this Revision.
 * `--json`: Print JSON instead of a table.

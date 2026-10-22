@@ -12,6 +12,8 @@ dependencies = [
 [project.optional-dependencies]
 # Parquet imports (`lorebase import records data.parquet`).
 parquet = ["pyarrow>=15"]
+# LinkML schema interchange (`lorebase schema export --format linkml`, `schema import --from linkml`).
+linkml = ["pyyaml>=6.0"]
 
 [project.scripts]
 lorebase = "lorebase_cli.main:main"

@@ -1830,6 +1830,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+linkml = [
+    { name = "pyyaml" },
+]
 parquet = [
     { name = "pyarrow" },
 ]
@@ -1838,9 +1841,10 @@ parquet = [
 requires-dist = [
     { name = "lorebase-client", editable = "packages/client" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15" },
+    { name = "pyyaml", marker = "extra == 'linkml'", specifier = ">=6.0" },
     { name = "typer", specifier = ">=0.27" },
 ]
-provides-extras = ["parquet"]
+provides-extras = ["parquet", "linkml"]
 
 [[package]]
 name = "lorebase-client"
