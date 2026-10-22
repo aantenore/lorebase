@@ -85,6 +85,16 @@ Writes, same run: branch creation by copy 8,162.80 ms at p50 (3 runs), by overla
 
 **Overlay against copy.** An overlay branch and a copy branch got the same commit of 1,000 Part updates, then `main` committed 1,000 others; the overlay stores 2,000 rows, the copy 402,840. Reads alternated between the two. At 100k Records the overlay costs between -4% and +32% at p50, with the largest overhead on typo-tolerant search (+32%) and Links of a Record (+18 to +28%), and every read far within budget. Before revisions `0011` and `0012` and the overlay's own indexes, search cost +93 to +101% at p50 and the neighborhood +50%.
 
+**2-hop neighborhood, before and after the covering reverse Link index** (migration `0026`, 2026-10-22, the 100k dataset loaded once and copied so both sides read the same rows; shared blocks per call from `auto_explain` with buffers, mean of 100 calls; reads are the blocks not found in shared buffers):
+
+| | blocks before | blocks after | reads before | reads after | p50 / p95 before (owner) | p50 / p95 after (owner) |
+|---|---:|---:|---:|---:|---|---|
+| `main` | 765 | 675 | 122 | 118 | 8.93 / 14.54 | 10.25 / 16.46 |
+| copy | 757 | 667 | 159 | 107 | 9.21 / 16.93 | 9.81 / 16.52 |
+| overlay | 1,303 | 1,239 | 160 | 102 | 8.91 / 16.07 | 10.26 / 18.07 |
+
+The inbound Link hop is an index-only scan with no heap fetch (205 to 112 blocks on `main` and the copy, 288 to 222 on the overlay), and the blocks read from outside shared buffers fall by a third on the copy and the overlay. Latency at this size does not move beyond noise (the laptop ran other work, load average above 20): the working set is in memory. The index is 117 MB against 19 MB for the one it replaces at this size.
+
 **Typo-tolerant search, before and after the word lexicon** (migration `0018`, same machine, 100k Records), p50 and p95 in milliseconds:
 
 | | before | after |
@@ -119,7 +129,7 @@ p95 in milliseconds, first run (before the lexicon):
 
 Writes: branch creation by copy 84,529 ms at p50 (94,825 ms with 128MB), by overlay 23.68 ms; a commit of 1,000 changes 2,367 ms at p50 and 4,276 ms at p95 (1,357 ms at p50 with 128MB), against 0.4 s at 100k.
 
-**Overlay against copy at 1M.** Key, page, Links, attribute, full-text, history and lineage reads stay within budget on all three branches, with the overlay close to the copy (for example 3.67 against 4.19 ms at p50 for a page, rls). Over budget on branches: the 2-hop neighborhood (29 to 34 ms at p95 on the copy and the overlay, against 30), and typo-tolerant search (70 to 123 ms at p95).
+**Overlay against copy at 1M.** Key, page, Links, attribute, full-text, history and lineage reads stay within budget on all three branches, with the overlay close to the copy (for example 3.67 against 4.19 ms at p50 for a page, rls). The 2-hop neighborhood measured 29 to 34 ms at p95 on the copy and the overlay, against 30, with the time in pages read from outside shared buffers; its inbound Link hop reads the covering index of migration `0026` alone since, which cut those reads by a third on both branches at 100k (above). Typo-tolerant search measured 70 to 123 ms at p95 before the word lexicon.
 
 **With the word lexicon** (same fixture, 2GB buffers, reloaded in 1,831 s against 1,961 s), p95 in milliseconds:
 
@@ -140,11 +150,12 @@ Typo-tolerant search went from 116 to 123 ms to 7.6 to 14 ms at p95, 15 times le
 | A copy branch at 1M Records took 85 to 95 s and its deletion more than 30 s, so both failed through the API at the default statement timeout | Copies and deletions of large branches run as jobs in batches (migration `0017`); measured at 100k. The 1M run has not been repeated since |
 | A semi-join in the history phase of the background copy scanned every Revision of the Domain per row and made that phase four times slower | The batch probes `revisions` by primary key per row |
 | Search on an overlay cost +93 to +101% at p50; the neighborhood +50% | Revisions `0011` (GIN index on domain, branch and search vector) and `0012`, plus the overlay's own per-Attribute indexes; `test_overlay_reads_keep_index_plans` checks the plans |
+| At 1M Records the 2-hop neighborhood on the copy and the overlay ran at 29 to 42 ms at p95 against 30, the time in pages missing from shared buffers; its inbound Link hop fetched every Link from the heap, about one page per Link | Covering reverse Link index (migration `0026`): the hop is an index-only scan on full branches and both halves of an overlay; at 100k the blocks per call fall from 757 to 667 on the copy and the blocks read from outside shared buffers by a third on the copy and the overlay. `test_overlay_reads_keep_index_plans` checks the plan. The 1M run has not been repeated since |
 | Plain SQL under row-level security lost its index plans | Reads go through the security definer functions by default (revision `0005`) |
 
 ### Open at 1M Records
 
-The 2-hop neighborhood on branches other than `main` (29 to 42 ms at p95 across runs, against 30) and lineage at its proposed budget (9.3 ms on `main`, 9.8 to 11.0 on branches and with 128MB). The plans are index scans only; the time goes to pages missing from shared buffers and from the VM's page cache, and the budget assumes the 32 GB reference hardware of design 6.14. The 1M run has not been repeated since the background copy jobs. A commit measured right after two 4-million-row copies took 5.5 s at p50 because the page cache was full of them; measured again warm it took 0.65 to 0.75 s.
+Lineage at its proposed budget (9.3 ms on `main`, 9.8 to 11.0 on branches and with 128MB); its statements are index lookups and the budget assumes the 32 GB reference hardware of design 6.14. The 1M run has not been repeated since the background copy jobs and the covering reverse Link index; for the neighborhood on branches the expected effect there is the reduction measured at 100k, about a third fewer blocks read from outside shared buffers, which is where its p95 went. A commit measured right after two 4-million-row copies took 5.5 s at p50 because the page cache was full of them; measured again warm it took 0.65 to 0.75 s.
 
 ### Canvas, 5,000 nodes and 10,000 edges
 

@@ -86,7 +86,21 @@ class MatLink(Base):
     __tablename__ = "mat_links"
     __table_args__ = (
         _branch_fk(),
-        Index("ix_mat_links_reverse", "domain_id", "branch", "relation_id", "to_key"),
+        # Covering, so inbound Link hops are index-only scans (revision 0026).
+        Index(
+            "ix_mat_links_reverse_covering",
+            "domain_id",
+            "branch",
+            "relation_id",
+            "to_key",
+            postgresql_include=[
+                "from_key",
+                "values",
+                "object_hash",
+                "revision_generation",
+                "deleted",
+            ],
+        ),
         HASH_PARTITIONED,
     )
 
