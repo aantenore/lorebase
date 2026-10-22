@@ -61,35 +61,47 @@ The routes, viewport, theme and the browser flags live in the `MOCK_SHOTS`, `LIV
 
 Everything comes from Vite environment variables, read at build time, overlaid when the page loads by the runtime configuration (see [Runtime configuration](#runtime-configuration)). No URL, endpoint or limit is written in the code; the only default for the Keeper URL lives in `.env.example`.
 
-| Variable                           | Required                             | Meaning                                                                                                              |
-| ---------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `VITE_API_MODE`                    | yes                                  | `mock` (in-memory sample Domains) or `live` (Keeper over REST)                                                       |
-| `VITE_KEEPER_BASE_URL`             | in `live` mode                       | Keeper origin without `/api/v1`, for example `http://localhost:8080`, or `/` for the app's own origin behind a proxy |
-| `VITE_API_TOKEN`                   | no                                   | API key or access token sent as `Authorization: Bearer`; development only (see [Authentication](#authentication))    |
-| `VITE_PAGE_SIZE`                   | no (50)                              | Rows per page in Record lists                                                                                        |
-| `VITE_SEARCH_LIMIT`                | no (20)                              | Results per search                                                                                                   |
-| `VITE_CANVAS_DEPTH`                | no (2)                               | Neighborhood depth for the Canvas graph explorer                                                                     |
-| `VITE_CANVAS_MAX_NODES`            | no (200)                             | Node cap for one Canvas neighborhood                                                                                 |
-| `VITE_CANVAS_LAYOUT_ITERATIONS`    | no (100)                             | ForceAtlas2 iterations when laying out a graph                                                                       |
-| `VITE_QUERY_STALE_MS`              | no (30000)                           | How long cached reads count as fresh                                                                                 |
-| `VITE_TOAST_MS`                    | no (5000)                            | How long a toast stays on screen                                                                                     |
-| `VITE_MOCK_LATENCY_MS`             | no (0)                               | Artificial delay of every mock call                                                                                  |
-| `VITE_SCHEMA_BRANCH_PREFIX`        | no (`schema/`)                       | Prefix of the Branch that carries schema changes of a protected one                                                  |
-| `VITE_INFER_MAX_FILES`             | no (50)                              | Files accepted by "Start from data"; keep equal to Keeper's `max_files`                                              |
-| `VITE_INFER_MAX_FILE_BYTES`        | no (1048576)                         | Bytes per uploaded file; Keeper's `max_file_bytes`                                                                   |
-| `VITE_INFER_MAX_TOTAL_BYTES`       | no (1048576)                         | Bytes for all uploaded files together; Keeper's `max_total_bytes`                                                    |
-| `VITE_INFER_FILE_SUFFIXES`         | no (`.csv,.tsv,.txt`)                | File suffixes the upload accepts                                                                                     |
-| `VITE_INFER_ACCEPT_THRESHOLD`      | no (0.9)                             | Confidence from which "Accept all at or above" accepts an element                                                    |
-| `VITE_INFER_POSTGRES_SOURCES`      | no (empty)                           | Comma separated secret references offered for Postgres inference                                                     |
-| `VITE_DOCUMENTS_MAX_FILES`         | no (20)                              | Documents per drop on the Documents screen                                                                           |
-| `VITE_DOCUMENTS_MAX_FILE_BYTES`    | no (20971520)                        | Bytes per document; Keeper's `keeper.documents.max_bytes`                                                            |
-| `VITE_DOCUMENTS_FILE_SUFFIXES`     | no (`.md,.markdown,.txt,.pdf,.docx`) | File suffixes the upload accepts; Keeper's `keeper.documents.media_types`                                            |
-| `VITE_DOCUMENTS_TIERS`             | no (`0,1`)                           | Extraction tiers preselected on upload (0 rules, 1 local models, 2 chat model)                                       |
-| `VITE_DOCUMENTS_EXTRACT_ON_UPLOAD` | no (`true`)                          | Whether "Extract after storing" is on at first                                                                       |
-| `VITE_DOCUMENTS_URL_INTAKE`        | no (`true`)                          | Offer intake by URL (Keeper allows only the hosts of `keeper.documents.url_hosts`)                                   |
-| `VITE_DOCUMENTS_JOB_POLL_MS`       | no (3000)                            | How often the library asks again while an extraction job is queued or running; 0 turns it off                        |
-| `VITE_EXTRACTION_ACCEPT_THRESHOLD` | no (0.9)                             | Threshold the bulk bar of the extraction items starts with                                                           |
-| `VITE_EXTRACTION_ITEMS_PAGE_SIZE`  | no (200)                             | Items per request when an extraction Proposal's items are loaded                                                     |
+| Variable                                      | Required                             | Meaning                                                                                                              |
+| --------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `VITE_API_MODE`                               | yes                                  | `mock` (in-memory sample Domains) or `live` (Keeper over REST)                                                       |
+| `VITE_KEEPER_BASE_URL`                        | in `live` mode                       | Keeper origin without `/api/v1`, for example `http://localhost:8080`, or `/` for the app's own origin behind a proxy |
+| `VITE_API_TOKEN`                              | no                                   | API key or access token sent as `Authorization: Bearer`; development only (see [Authentication](#authentication))    |
+| `VITE_PAGE_SIZE`                              | no (50)                              | Rows per page in Record lists                                                                                        |
+| `VITE_SEARCH_LIMIT`                           | no (20)                              | Results per search                                                                                                   |
+| `VITE_CANVAS_DEPTH`                           | no (2)                               | Neighborhood depth for the Canvas graph explorer                                                                     |
+| `VITE_CANVAS_MAX_NODES`                       | no (200)                             | Node cap for one Canvas neighborhood                                                                                 |
+| `VITE_CANVAS_LAYOUT_ITERATIONS`               | no (100)                             | ForceAtlas2 iterations when laying out a graph                                                                       |
+| `VITE_CANVAS_PRELAYOUT_MAX_NODES`             | no (500)                             | Largest graph laid out on the main thread before the first draw; bigger ones are laid out in a worker                |
+| `VITE_CANVAS_LAYOUT_TIME_BUDGET_MS`           | no (20000)                           | Hard stop of one worker layout run                                                                                   |
+| `VITE_CANVAS_LAYOUT_SAMPLE_MS`                | no (500)                             | Interval between two convergence samples                                                                             |
+| `VITE_CANVAS_LAYOUT_CONVERGENCE`              | no (0.01)                            | Mean node move per sample, as a fraction of the graph extent, under which the layout counts as calm                  |
+| `VITE_CANVAS_LAYOUT_STABLE_SAMPLES`           | no (3)                               | Consecutive calm samples after which the layout stops                                                                |
+| `VITE_CANVAS_BARNES_HUT_MIN_NODES`            | no (1000)                            | Node count from which ForceAtlas2 uses the Barnes-Hut approximation                                                  |
+| `VITE_CANVAS_LABELS_MAX_NODES`                | no (300)                             | Above this many nodes only larger nodes keep a label                                                                 |
+| `VITE_CANVAS_DENSE_LABEL_MIN_SIZE`            | no (14)                              | Node size (pixels) that earns a label in a dense graph                                                               |
+| `VITE_CANVAS_EDGE_LABELS_MAX_EDGES`           | no (300)                             | Above this many edges, edge labels are not drawn                                                                     |
+| `VITE_CANVAS_HIDE_EDGES_ON_MOVE_MIN_EDGES`    | no (2000)                            | From this many edges, edges are hidden while the view moves                                                          |
+| `VITE_CANVAS_LIST_MAX_EDGES`                  | no (500)                             | Edges shown in the Canvas list view                                                                                  |
+| `VITE_MOCK_PERF_NODES / VITE_MOCK_PERF_EDGES` | no (unset)                           | Mock API only: every neighborhood is a generated graph of this size (see `pnpm perf:canvas`)                         |
+| `VITE_QUERY_STALE_MS`                         | no (30000)                           | How long cached reads count as fresh                                                                                 |
+| `VITE_TOAST_MS`                               | no (5000)                            | How long a toast stays on screen                                                                                     |
+| `VITE_MOCK_LATENCY_MS`                        | no (0)                               | Artificial delay of every mock call                                                                                  |
+| `VITE_SCHEMA_BRANCH_PREFIX`                   | no (`schema/`)                       | Prefix of the Branch that carries schema changes of a protected one                                                  |
+| `VITE_INFER_MAX_FILES`                        | no (50)                              | Files accepted by "Start from data"; keep equal to Keeper's `max_files`                                              |
+| `VITE_INFER_MAX_FILE_BYTES`                   | no (1048576)                         | Bytes per uploaded file; Keeper's `max_file_bytes`                                                                   |
+| `VITE_INFER_MAX_TOTAL_BYTES`                  | no (1048576)                         | Bytes for all uploaded files together; Keeper's `max_total_bytes`                                                    |
+| `VITE_INFER_FILE_SUFFIXES`                    | no (`.csv,.tsv,.txt`)                | File suffixes the upload accepts                                                                                     |
+| `VITE_INFER_ACCEPT_THRESHOLD`                 | no (0.9)                             | Confidence from which "Accept all at or above" accepts an element                                                    |
+| `VITE_INFER_POSTGRES_SOURCES`                 | no (empty)                           | Comma separated secret references offered for Postgres inference                                                     |
+| `VITE_DOCUMENTS_MAX_FILES`                    | no (20)                              | Documents per drop on the Documents screen                                                                           |
+| `VITE_DOCUMENTS_MAX_FILE_BYTES`               | no (20971520)                        | Bytes per document; Keeper's `keeper.documents.max_bytes`                                                            |
+| `VITE_DOCUMENTS_FILE_SUFFIXES`                | no (`.md,.markdown,.txt,.pdf,.docx`) | File suffixes the upload accepts; Keeper's `keeper.documents.media_types`                                            |
+| `VITE_DOCUMENTS_TIERS`                        | no (`0,1`)                           | Extraction tiers preselected on upload (0 rules, 1 local models, 2 chat model)                                       |
+| `VITE_DOCUMENTS_EXTRACT_ON_UPLOAD`            | no (`true`)                          | Whether "Extract after storing" is on at first                                                                       |
+| `VITE_DOCUMENTS_URL_INTAKE`                   | no (`true`)                          | Offer intake by URL (Keeper allows only the hosts of `keeper.documents.url_hosts`)                                   |
+| `VITE_DOCUMENTS_JOB_POLL_MS`                  | no (3000)                            | How often the library asks again while an extraction job is queued or running; 0 turns it off                        |
+| `VITE_EXTRACTION_ACCEPT_THRESHOLD`            | no (0.9)                             | Threshold the bulk bar of the extraction items starts with                                                           |
+| `VITE_EXTRACTION_ITEMS_PAGE_SIZE`             | no (200)                             | Items per request when an extraction Proposal's items are loaded                                                     |
 
 `LOREBASE_KEEPER_PROXY` is not a `VITE_` variable and never reaches the bundle: it is read by `vite.config.ts` for `pnpm dev` and `pnpm preview` and makes them proxy `/api` to that Keeper (see [Live mode](#live-mode)). The optional values are non-functional tunables with defaults in `src/config/env.ts`. A missing or invalid required value stops the app at start with a message on screen. `src/config/env.ts` is the only place that reads the environment; components get the validated config from `useConfig()`.
 
@@ -182,7 +194,7 @@ scripts/                screenshots (mock or live)
 - **Scope.** `ScopeProvider` resolves the Domain and Branch named by the URL and exposes `{domain, branch, head, at}` through `useScope()`. Screens render only when both exist.
 - **Revision-aware caching.** Every scoped query key includes the Branch head Revision (or `at`), so a Branch that moves never serves old reads as current.
 - **Theme.** Colors are CSS variables in `src/styles.css`, mapped to Tailwind utilities (`bg-surface`, `text-muted`, `border-line`, ...). Light and dark follow the system by default and can be forced from the top bar or Settings; the choice is kept in local storage.
-- **Canvas.** Sigma 4 needs WebGL 2. It is loaded on demand; when WebGL is not available (tests, some remote desktops) the canvas shows a message and the list view below still describes the graph. Layout is ForceAtlas2 run synchronously on the main thread (a web worker is planned for large graphs).
+- **Canvas.** Sigma 4 needs WebGL 2. It is loaded on demand; when WebGL is not available (tests, some remote desktops) the canvas shows a message and the list view below still describes the graph. Layout is ForceAtlas2: graphs up to `VITE_CANVAS_PRELAYOUT_MAX_NODES` nodes are laid out before the first draw; larger ones are drawn at once and laid out in a web worker (the supervisor of `graphology-layout-forceatlas2/worker`, loaded with the Canvas), with Barnes-Hut from `VITE_CANVAS_BARNES_HUT_MIN_NODES` nodes. The run stops when the nodes settle or at the time budget, and can be paused and resumed; it is not restarted by re-renders. Large graphs also lose edge labels, most node labels and (while moving) edges. The worker is a blob, so a Content-Security-Policy needs `worker-src blob:`; without workers the graph keeps its pre-layout. `pnpm perf:canvas` measures a generated 5,000 node, 10,000 edge graph.
 
 ## Screens
 

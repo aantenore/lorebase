@@ -12,18 +12,25 @@ import { isCanvasView, type CanvasView } from './search';
 import { fromNeighborhood, fromSchema, type GraphData } from './graph-model';
 
 function GraphLists({ data }: { data: GraphData }) {
+  const { listMaxEdges } = useConfig().canvas.detail;
+  const shown = data.edges.slice(0, listMaxEdges);
   return (
     <details className="mt-3 rounded-md border border-line bg-surface p-3">
       <summary className="cursor-pointer text-sm font-medium">
         List view: {data.nodes.length} nodes, {data.edges.length} edges
       </summary>
       <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
-        {data.edges.map((edge) => (
+        {shown.map((edge) => (
           <li key={edge.id}>
             {edge.source} <span className="text-muted">{edge.label}</span> {edge.target}
           </li>
         ))}
       </ul>
+      {shown.length < data.edges.length && (
+        <p className="mt-2 text-xs text-muted">
+          Showing the first {shown.length} of {data.edges.length} edges.
+        </p>
+      )}
     </details>
   );
 }

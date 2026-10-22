@@ -69,7 +69,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 - [x] Web app Modeler "Start from data" wizard over schema inference, a Sources screen (list, runs, YAML editor) and Admin basics (API keys, principals and grants, audit log) on the mock API; Source runs and Sync now use Keeper's Source routes in live mode
 - [x] Web app verified against a live Keeper (Playwright flows against Keeper in CI)
 - [x] Review: Proposal list and detail, reviews, data diff and merge against live Proposals
-- [ ] Canvas rendering 5k nodes and 10k edges smoothly, with a worker layout
+- [x] Canvas rendering 5k nodes and 10k edges, with a worker layout (first render of the generated graph in about 0.6 s instead of 1.7 s, see [performance](performance.md#web-app-canvas-5000-nodes-10000-edges)); frame times were measured on a software WebGL only
 
 ## M3: Governance and agents
 

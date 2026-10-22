@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "types": "openapi-typescript ../../docs/openapi.json -o src/api/generated/keeper.ts",
     "e2e": "playwright test",
-    "screenshots": "node scripts/screenshots.ts"
+    "screenshots": "node scripts/screenshots.ts",
+    "perf:canvas": "node scripts/perf-canvas.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

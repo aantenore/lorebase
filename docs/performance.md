@@ -134,3 +134,18 @@ Regenerate with:
 ```sh
 uv run python tests/perf/bench.py --scale 540 --extra-links 4 --out docs/performance.md
 ```
+
+## Web app: Canvas (5,000 nodes, 10,000 edges)
+
+Measured by `pnpm perf:canvas` in `apps/web` on the generated graph of the mock API (`VITE_MOCK_PERF_NODES=5000`, `VITE_MOCK_PERF_EDGES=10000`, `VITE_CANVAS_MAX_NODES=5000`): a production build served by `vite preview`, opened in headless Chromium with a software WebGL (SwiftShader), 1440x900, median of 3 runs, 2026-10-22, same machine as above. Time to first render is navigation start to the second animation frame after the canvas exists. The pan is 80 mouse moves with the button down; frame time is the gap between animation frames while it runs. Software WebGL makes every frame slower than on a GPU, so read the numbers as a comparison between the two rows, not as what a laptop shows.
+
+| | before (layout on the main thread) | after (worker layout) |
+|---|---|---|
+| time to first render | 1,675 ms | 612 ms |
+| main thread blocked before it (long tasks past 50 ms) | 1,497 ms (longest task 1,361 ms) | 463 ms (longest task 513 ms) |
+| pan right after first render, mean frame | 218 ms | 151 ms |
+| pan right after first render, p95 frame | 617 ms | 500 ms |
+| pan on the settled graph, mean frame | not applicable (layout done before) | 122 ms |
+| layout | 100 iterations, then fixed | runs in a worker until it settles or 20 s |
+
+Before, the 100 ForceAtlas2 iterations ran on the main thread before the first draw and the layout never improved after that. Now the graph is drawn from its seed positions at once, the worker refines it while it is on screen, and Barnes-Hut, edge hiding while moving, no edge labels and fewer node labels apply at this size. The frame times during a pan are dominated by the software rasterizer in both rows; the win measured here is the time to first render and a free main thread during the layout.

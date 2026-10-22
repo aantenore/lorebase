@@ -1,5 +1,5 @@
 import Graph from 'graphology';
-import forceAtlas2 from 'graphology-layout-forceatlas2';
+import forceAtlas2, { type ForceAtlas2Settings } from 'graphology-layout-forceatlas2';
 import type { Kind, NeighborhoodResponse, Schema } from '@/api/types';
 
 export interface CanvasNode {
@@ -80,19 +80,38 @@ export function fromSchema(schema: Schema): GraphData {
   };
 }
 
-/** Build a positioned graphology graph: circular seed layout refined by ForceAtlas2. */
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+/**
+ * ForceAtlas2 settings for a graph: tuned by size, with the Barnes-Hut approximation from
+ * `barnesHutMinNodes` nodes on (it trades a little accuracy for far fewer node pairs).
+ */
+export function layoutSettings(graph: Graph, barnesHutMinNodes: number): ForceAtlas2Settings {
+  return {
+    ...forceAtlas2.inferSettings(graph),
+    barnesHutOptimize: graph.order >= barnesHutMinNodes,
+  };
+}
+
+/**
+ * Build a positioned graphology graph: nodes seeded evenly over a disc, then refined by
+ * `layoutIterations` ForceAtlas2 iterations on the calling thread (0 leaves the seed as it is,
+ * for a layout that runs elsewhere).
+ */
 export function buildGraph(data: GraphData, layoutIterations: number): Graph {
   const graph = new Graph({ type: 'directed', multi: true });
   const count = Math.max(data.nodes.length, 1);
   data.nodes.forEach((node, index) => {
-    const angle = (2 * Math.PI * index) / count;
+    // Sunflower seed: even density and no symmetry for the layout to get stuck in.
+    const angle = index * GOLDEN_ANGLE;
+    const radius = Math.sqrt((index + 0.5) / count);
     graph.addNode(node.id, {
       label: node.label,
       color: node.color,
       group: node.group,
       size: MIN_NODE_SIZE,
-      x: Math.cos(angle),
-      y: Math.sin(angle),
+      x: radius * Math.cos(angle),
+      y: radius * Math.sin(angle),
     });
   });
   for (const edge of data.edges) {
@@ -104,7 +123,7 @@ export function buildGraph(data: GraphData, layoutIterations: number): Graph {
     const size = Math.min(MAX_NODE_SIZE, MIN_NODE_SIZE + graph.degree(node) * NODE_SIZE_PER_EDGE);
     graph.setNodeAttribute(node, 'size', size);
   });
-  if (graph.order > 1) {
+  if (graph.order > 1 && layoutIterations > 0) {
     forceAtlas2.assign(graph, {
       iterations: layoutIterations,
       settings: forceAtlas2.inferSettings(graph),
