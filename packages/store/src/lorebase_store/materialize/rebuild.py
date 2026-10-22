@@ -32,6 +32,7 @@ from lorebase_store.materialize.paths import PathLinks
 from lorebase_store.materialize.rows import (
     CREATED_KEY,
     PartitionType,
+    changed_provenance,
     next_lineage,
     parse_partition,
     record_title,
@@ -41,7 +42,7 @@ from lorebase_store.materialize.rows import (
 from lorebase_store.materialize.sensitivity import branch_tagged_schema
 from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
-from lorebase_store.objectstore import PgObjectStore
+from lorebase_store.objectstore import PgObjectStore, StoredBody
 from lorebase_store.repositories.materializations import copy_fence
 from lorebase_store.repositories.materialized import (
     LinkRow,
@@ -155,7 +156,7 @@ async def materialize_revision(
         entries: dict[str, bytes] = {}
         async for scanned in nodes.scan(ref.root):
             entries.update(scanned)
-        folded = await fold_history(repository, partition, batch=batch)
+        folded = await fold_history(repository, partition, batch=batch, objects=objects)
         for chunk in chunks(sorted(entries), batch):
             bodies = await objects.get_many(entries[key] for key in chunk)
             values = {key: dict(bodies[entries[key]].body.get("values", {})) for key in chunk}
@@ -227,27 +228,43 @@ async def fold_history(
     partition: str,
     *,
     batch: int,
+    objects: PgObjectStore,
     keys: Sequence[str] | None = None,
 ) -> dict[str, Folded]:
     """Per element still present (of those in `keys`, when given), the union of its
     provenance maps since it was last created, and the Revision of each entry. A step that
     creates the element (no old hash) records its Revision under `CREATED_KEY`; history
-    that starts after the creation names none."""
+    that starts after the creation names none. A merge Revision's step attributes only the
+    values it changes against the branch's previous value (`rows.changed_provenance`): merges
+    made before their changesets were restricted carry the source's whole Lineage."""
     folded: dict[str, Folded] = {}
     async for steps in repository.stream_history_steps(partition, batch=batch, keys=keys):
+        merges = [s for s in steps if s.merge and s.new_hash is not None and s.provenance]
+        bodies = await objects.get_many(
+            h for s in merges for h in (s.old_hash, s.new_hash) if h is not None
+        )
+
         for step in steps:
             if step.new_hash is None:
                 folded.pop(step.element_key, None)
                 continue
+            taken = dict(step.provenance or {})
+            if step.merge and taken and (new := _values(bodies, step.new_hash)) is not None:
+                taken = changed_provenance(taken, _values(bodies, step.old_hash), new)
             previous = folded.get(step.element_key)
             provenance = {} if previous is None else previous.provenance
-            provenance.update(step.provenance or {})
+            provenance.update(taken)
             revisions = {} if previous is None else previous.revisions
             if step.old_hash is None:
                 revisions = {CREATED_KEY: step.revision_id.hex()}
-            revisions.update(dict.fromkeys(step.provenance or {}, step.revision_id.hex()))
+            revisions.update(dict.fromkeys(taken, step.revision_id.hex()))
             folded[step.element_key] = Folded(provenance, revisions, step.revision_id, step.at)
     return folded
+
+
+def _values(bodies: Mapping[bytes, StoredBody], digest: bytes | None) -> Mapping[str, Any] | None:
+    found = None if digest is None else bodies.get(digest)
+    return None if found is None else found.body.get("values") or {}
 
 
 def record_row(

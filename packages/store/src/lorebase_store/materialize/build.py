@@ -239,7 +239,11 @@ async def rows_batch(
     parsed = parse_partition(partition)
     hashes = dict(entries)
     keys = sorted(hashes)
-    folded = await fold_history(rows, partition, batch=read_batch, keys=keys) if keys else {}
+    folded = (
+        await fold_history(rows, partition, batch=read_batch, objects=objects, keys=keys)
+        if keys
+        else {}
+    )
     for chunk in chunks(keys, read_batch):
         bodies = await objects.get_many(hashes[key] for key in chunk)
         values = {key: dict(bodies[hashes[key]].body.get("values", {})) for key in chunk}

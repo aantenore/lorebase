@@ -78,6 +78,16 @@ def changed_attributes(old: Mapping[str, Any] | None, new: Mapping[str, Any]) ->
     )
 
 
+def changed_provenance(
+    provenance: Mapping[str, str], old: Mapping[str, Any] | None, new: Mapping[str, Any]
+) -> dict[str, str]:
+    """`provenance` restricted to the Attributes whose value differs between `old` and `new`
+    (and the element key): what a change actually attributes. Merges bring the whole Lineage
+    of an element taken from the source; only the values they change are theirs."""
+    kept = {*changed_attributes(old, new), ELEMENT_PROVENANCE_KEY}
+    return {attribute: entry for attribute, entry in provenance.items() if attribute in kept}
+
+
 def next_lineage(
     previous: Mapping[str, str] | None,
     provenance: Mapping[str, str] | None,
