@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from lorebase_core.expr import ExprError, ExprErrorCode
+from lorebase_core.expr import ExprError, ExprErrorCode, ExprLimits
 from lorebase_core.model import (
     Attribute,
     Derivation,
@@ -18,6 +18,7 @@ from lorebase_core.model import (
     Record,
     Schema,
     Sensitivity,
+    UpdateRecordStep,
 )
 from lorebase_core.query import Query, QueryLimits, resolve_query
 from lorebase_core.tree import kind_partition
@@ -489,3 +490,46 @@ def test_the_redactor_resolves_comprehension_variables_by_their_kind() -> None:
         ExprErrorCode.EVALUATION, "bad '555'", source="[record(p)].map(x, int(x.phone))[0]"
     )
     assert "555" not in _expression_finding(phone, redact).message
+
+
+def _copying(expression: str, target: str = NAME) -> Operation:
+    """`_touch` with a step writing `expression` into `target` of the Person `p`."""
+    step = UpdateRecordStep(kind=KIND, target="p", values={target: expression})
+    return _touch().model_copy(update={"steps": (step,)})
+
+
+def test_step_errors_are_redacted_when_the_step_reads_or_writes_hidden_values() -> None:
+    uncleared = Masking(Clearance())
+    # A value that does not fit its Attribute, reported without the expression.
+    unfit = ExprError(
+        ExprErrorCode.VALUE_INVALID, "name: '555' is too long", path=("steps", 0, "values", NAME)
+    )
+    reading = _redactor(SCHEMA, uncleared, _copying("record(p).phone"))
+    assert _expression_finding(unfit, reading).message == REDACTED_ERROR
+    plain = _redactor(SCHEMA, uncleared, _copying("record(p).code"))
+    assert _expression_finding(unfit, plain).message.startswith("name: '555'")
+    # A value written into a hidden Attribute, whatever the step reads.
+    into_phone = ExprError(
+        ExprErrorCode.VALUE_INVALID, "phone: 'P-1' is too long", path=("steps", 0, "values", PHONE)
+    )
+    writing = _redactor(SCHEMA, uncleared, _copying("record(p).code", PHONE))
+    assert _expression_finding(into_phone, writing).message == REDACTED_ERROR
+    # An error of the step as a whole (the key of a Record) weighs every expression of it.
+    exists = ExprError(
+        ExprErrorCode.RECORD_EXISTS, "Record Person/555 exists already", path=("steps", 0)
+    )
+    assert _expression_finding(exists, reading).message == REDACTED_ERROR
+    assert _expression_finding(exists, plain).message.startswith("Record Person/555")
+
+
+def test_the_redactor_fails_closed_on_expressions_it_cannot_parse() -> None:
+    uncleared = Masking(Clearance())
+    broken = ExprError(ExprErrorCode.EVALUATION, "bad '555'", source="record(p).phone +")
+    redact = _redactor(SCHEMA, uncleared, _touch())
+    assert _expression_finding(broken, redact).message == REDACTED_ERROR
+    assert _expression_finding(broken, _redactor(SCHEMA, uncleared)).message == REDACTED_ERROR
+    # Parsed with the configured limits, not the defaults.
+    name = ExprError(ExprErrorCode.EVALUATION, "bad 'Ada'", source="int(record(p).name)")
+    tight = _redactor(SCHEMA, uncleared, _touch(), ExprLimits(max_source_length=8))
+    assert _expression_finding(name, tight).message == REDACTED_ERROR
+    assert _expression_finding(name, redact).message == "bad 'Ada'"

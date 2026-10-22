@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -51,6 +51,7 @@ from lorebase_core.expr import (
     EvaluationContext,
     ExprError,
     ExprErrorCode,
+    ExprLimits,
     LinkedRecord,
     LinksRequest,
     MemoryResolver,
@@ -62,6 +63,8 @@ from lorebase_core.expr import (
     plan_steps,
 )
 from lorebase_core.expr import Principal as ExpressionPrincipal
+from lorebase_core.expr.ast import parse
+from lorebase_core.expr.errors import PathPart
 from lorebase_core.expr.sensitivity import (
     attributes_named,
     expression_fields,
@@ -70,16 +73,20 @@ from lorebase_core.expr.sensitivity import (
 )
 from lorebase_core.model import (
     Attribute,
+    CreateLinkStep,
+    CreateRecordStep,
     IdPrefix,
     ImportOrigin,
     Kind,
     LinkDirection,
     Operation,
     OperationOrigin,
+    OperationStep,
     ProvenanceEntry,
     Relation,
     ReviewMode,
     Schema,
+    UpdateRecordStep,
     new_id,
     new_ulid,
 )
@@ -571,7 +578,7 @@ async def _execute(
         settings,
         principal,
         store.clock(),
-        redact=_redactor(schema, masking, resolved.custom),
+        redact=_redactor(schema, masking, resolved.custom, settings.expression_limits),
     )
     changes, findings = planned.changes, planned.findings
     if planned.review and not needs_review and not request.reviewed_by_proposal:
@@ -890,24 +897,78 @@ Redact = Callable[[ExprError], bool]
 REDACTED_ERROR = "Evaluating the expression failed on a value the caller may not read."
 
 
-def _redactor(schema: Schema, masking: Masking, operation: Operation | None = None) -> Redact:
+def _redactor(
+    schema: Schema,
+    masking: Masking,
+    operation: Operation | None = None,
+    limits: ExprLimits | None = None,
+) -> Redact:
     """Errors of expressions that read values the caller is not cleared for are redacted: their
     messages may quote the values (a cast, a missing Record's key). The caller must be cleared
     for each Attribute the expression may read on the Kinds that hold it (both Kinds of a
-    Relation for a Link Attribute), as when the values are read."""
+    Relation for a Link Attribute), as when the values are read.
+
+    An error of a step may quote a value the step computed (one that does not fit its
+    Attribute, the key of a Record it creates): it is redacted when any expression of the
+    step reads such an Attribute, or when the Attribute written is one. An expression that
+    cannot be parsed is redacted, since what it reads cannot be told."""
     holders = _attribute_kinds(schema)
+    limits = limits or ExprLimits()
+
+    def hidden(attributes: Iterable[Attribute]) -> bool:
+        return any(masking.hidden(a, holders.get(a.id, ())) for a in attributes)
+
+    def reads(source: str, step: int | None) -> list[Attribute] | None:
+        """What `source` may read; `None` when it cannot be parsed."""
+        try:
+            parse(source, limits)
+        except ExprError:
+            return None
+        if operation is None:
+            return attributes_named(schema, expression_fields(source, limits))
+        return operation_reads(schema, operation, source, limits, step=step)
 
     def redact(error: ExprError) -> bool:
-        if error.source is None:
-            return False
-        read = (
-            attributes_named(schema, expression_fields(error.source))
-            if operation is None
-            else operation_reads(schema, operation, error.source, step=_step_of(error))
-        )
-        return any(masking.hidden(a, holders.get(a.id, ())) for a in read)
+        step = _step_of(error)
+        sources = [] if error.source is None else [error.source]
+        written: list[Attribute] = []
+        if operation is not None and step is not None and step < len(operation.steps):
+            sources += _step_sources(operation.steps[step])
+            written = _step_writes(schema, operation.steps[step], tuple(error.path))
+        for source in sources:
+            read = reads(source, step)
+            if read is None or hidden(read):
+                return True
+        return hidden(written)
 
     return redact
+
+
+def _step_sources(step: OperationStep) -> list[str]:
+    """Every expression of an Operation step."""
+    sources = [getattr(step, name, None) for name in ("target", "from_", "to")]
+    found = [s for s in sources if isinstance(s, str)]
+    found += list(getattr(step, "values", {}).values())
+    return found
+
+
+def _step_writes(
+    schema: Schema, step: OperationStep, path: tuple[PathPart, ...]
+) -> list[Attribute]:
+    """The Attributes an error of `step` at `path` may quote a written value of: the one at
+    `("steps", n, "values", attribute)`, otherwise every Attribute the step writes."""
+    if isinstance(step, CreateRecordStep | UpdateRecordStep):
+        kind = schema.kinds.get(step.kind)
+        attributes = {} if kind is None else kind.attributes
+    elif isinstance(step, CreateLinkStep):
+        relation = schema.relations.get(step.relation)
+        attributes = {} if relation is None else relation.attributes
+    else:
+        return []
+    if len(path) >= 4 and path[2] == "values":
+        attribute = attributes.get(str(path[3]))
+        return [] if attribute is None else [attribute]
+    return [attributes[a] for a in step.values if a in attributes]
 
 
 def _attribute_kinds(schema: Schema) -> dict[str, tuple[str, ...]]:

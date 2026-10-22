@@ -187,6 +187,8 @@ def test_values_that_do_not_fit_are_refused() -> None:
     assert raised.value.code is ExprErrorCode.VALUE_INVALID
     assert raised.value.message.startswith("severity: 'user:ana' is not one of")
     assert raised.value.path == ("steps", 0, "values", severity.id)
+    # Located with the value's expression, so what it reads can be told (redaction).
+    assert raised.value.source == "principal.id"
 
 
 def test_later_steps_read_records_of_earlier_steps() -> None:
