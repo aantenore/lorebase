@@ -440,3 +440,39 @@ async def test_sensitive_reads_are_audited_whatever_the_sampling(seeded: Seeded)
     assert [row.details["sensitive"] for row in rows] == expected
     assert {row.domain_id for row in rows} == {DOMAIN}
     assert not any(secret in str(rows) for secret in SECRETS)
+
+
+async def test_a_branch_forked_before_a_tag_takes_the_default_branch_tags(
+    seeded: Seeded,
+) -> None:
+    facts = seeded.facts
+    path = f"/branches/{STALE}/rebase-tags"
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        refused = await _post(http, facts["viewer"], path, {})
+        assert refused.status_code == 403, refused.text
+        admin = facts["admin"]
+        planned = await _post(http, admin, path, {"dry_run": True})
+        assert planned.status_code == 200, planned.text
+        body = planned.json()
+        assert (body["status"], body["revision"]) == ("dry_run", None)
+        assert body["tags"] == [
+            {"section": "kinds", "owner": "Supplier", "attribute": "phone", "tags": ["pii"]}
+        ]
+        queued = await _post(http, admin, path, {"rows_only": True})
+        assert queued.status_code == 200, queued.text
+        assert queued.json()["status"] == "queued"
+        assert isinstance(queued.json()["job"], int)
+        done = await _post(http, admin, path, {"message": "Take the tags"})
+        assert done.status_code == 200, done.text
+        assert done.json()["status"] == "committed"
+        schema = await _get(http, admin, "/schema/kinds/Supplier", branch=STALE)
+        phone = next(a for a in schema.json()["attributes"].values() if a["api_name"] == "phone")
+        assert phone["sensitivity"] == ["pii"]
+        assert (await _post(http, admin, path, {})).json()["status"] == "no_op"
+        # The protected default branch has nothing to take.
+        on_main = await _post(http, admin, "/branches/main/rebase-tags", {})
+        assert on_main.json()["status"] == "no_op"
+        # The stale branch's index no longer holds the phone's words.
+        on_stale = await _post(http, facts["viewer"], "/search", {"q": "0100", "branch": STALE})
+        _hidden(on_stale)
+        assert on_stale.json()["items"] == []

@@ -292,6 +292,39 @@ class SchemaChangeResult(Model):
     issue_count: int
 
 
+class RebaseTagsRequest(RequestModel):
+    """A tag rebase of one branch: take the default branch's sensitivity tags."""
+
+    message: str | None = Field(default=None, max_length=2000)
+    expected_head: str | None = None
+    dry_run: bool = False
+    rows_only: bool = False
+
+
+class TagChange(Model):
+    """Sensitivity tags a tag rebase adds to one Attribute."""
+
+    section: Literal["kinds", "relations"]
+    owner: str
+    attribute: str
+    tags: list[str]
+
+
+class RebaseTagsResult(Model):
+    """Outcome of a tag rebase; `job` is the queued row rewrite of a `rows_only` rebase."""
+
+    status: Literal["committed", "dry_run", "no_op", "queued"]
+    branch: str
+    head: str
+    revision: str | None = None
+    tags: list[TagChange] = Field(default_factory=list)
+    changes: list[ElementChange] = Field(default_factory=list)
+    change_count: int = 0
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    issue_count: int = 0
+    job: int | None = None
+
+
 class SchemaValidation(Model):
     """Static validation of a change set."""
 

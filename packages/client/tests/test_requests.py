@@ -188,6 +188,21 @@ def test_hierarchical_branch_names_stay_in_the_path(http: respx.MockRouter, slee
     assert route.called
 
 
+async def test_rebase_tags_of_a_hierarchical_branch(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.post("/domains/supply/branches/agent/bot-1/rebase-tags").respond(
+        200,
+        json={"status": "queued", "branch": "agent/bot-1", "head": "aa", "job": 7},
+    )
+    with make(sleeps) as client:
+        queued = client.branches.rebase_tags("supply", "agent/bot-1", rows_only=True)
+    assert (queued.status, queued.job, queued.tags) == ("queued", 7, [])
+    assert json.loads(route.calls.last.request.content) == {"dry_run": False, "rows_only": True}
+    async with amake(sleeps) as aclient:
+        planned = await aclient.branches.rebase_tags("supply", "agent/bot-1", dry_run=True)
+    assert planned.status == "queued"
+    assert json.loads(route.calls.last.request.content) == {"dry_run": True, "rows_only": False}
+
+
 def test_booleans_and_repeated_parameters(http: respx.MockRouter, sleeps: Sleeps) -> None:
     route = http.get("/domains/supply/diff").respond(
         200,

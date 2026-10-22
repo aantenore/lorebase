@@ -9,7 +9,8 @@ never fewer).
 
 `effective_tags` gives, per Attribute id, the tags of a schema united with tags from elsewhere
 (the default branch's schema) and carried through Derivations: what a reader must be cleared
-for, whatever the schema read says.
+for, whatever the schema read says. `rebased_tags` stores them: it gives a branch forked before
+the default branch tagged an Attribute the tags the default branch has.
 """
 
 from __future__ import annotations
@@ -64,6 +65,27 @@ def lowered_tags(old: Schema, new: Schema) -> Tags:
     for attribute_id, tags in schema_tags(old).items():
         lowered |= tags - after.get(attribute_id, NO_TAGS)
     return frozenset(lowered)
+
+
+def raised_tags(old: Schema, new: Schema) -> Tags:
+    """Tags `new` adds to Attributes `old` already has (new Attributes left out)."""
+    before = schema_tags(old)
+    known = {a.id for a in all_attributes(old)}
+    raised: set[Sensitivity] = set()
+    for attribute_id, tags in schema_tags(new).items():
+        if attribute_id in known:
+            raised |= tags - before.get(attribute_id, NO_TAGS)
+    return frozenset(raised)
+
+
+def rebased_tags(
+    schema: Schema, extra: Mapping[str, Tags], limits: ExprLimits | None = None
+) -> Schema:
+    """`schema` with the tags of `extra` (the default branch's, by Attribute id) on the
+    Attributes it has, and on its derived Attributes the tags of what their Derivations may
+    read (`effective_tags`). Tags are only ever added: a schema to store on a branch forked
+    before the default branch tagged an Attribute."""
+    return with_tags(schema, effective_tags(schema, extra, limits))
 
 
 def with_tags(schema: Schema, extra: Mapping[str, Tags]) -> Schema:

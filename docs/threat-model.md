@@ -211,18 +211,10 @@ Remaining:
    rotate them (`lorebase admin vault rotate`). Tombstones cannot be made again under a new
    token key (they hold no value), so they stay matchable only while the old key stays in
    `previous_token_keys`.
-4. **Installation digest secret in the database.** The installation digest secret of revision `0027` (used when neither `vault.digest_key` nor
-   vault keys are set) is readable by whoever reads the database (TB6).
-5. **Branches forked before a tag.** Once the default branch tags an Attribute that a
-   branch's schema searches, titles with or derives from, schema changes on that branch fail
-   validation until its schema is fixed (availability, not disclosure). Extraction on such a
-   branch decides what to extract from the branch's own tags; its output is masked on read and
-   validated on write. Titles and search vectors that branch materialized before the tag stay
-   stored until its Records are rewritten: Keeper keeps them out of responses, snippets and
-   lexical search for callers without the clearance, and verification reports them as
-   `sensitivity_stale` (TB3).
+4. **Installation digest secret in the database.** The installation digest secret of
+   revision `0027` (used when neither `vault.digest_key` nor vault keys are set) is readable by whoever reads the database (TB6).
 
-6. **Limits of the read audit and of checkpoints.** Read records are sampled when
+5. **Limits of the read audit and of checkpoints.** Read records are sampled when
    `sample_rate` is below 1 and dropped when the queue is full or a batch fails (counted in
    `lorebase.audit.reads.dropped`), so the read stream is evidence of what it holds, not proof
    that nothing else was read; reads that showed or masked a sensitive value are never sampled
@@ -258,6 +250,19 @@ see the [security review](security-review.md#hardening-from-the-threat-model)):
   `test_sensitivity_api.py::test_violations_on_unreadable_values_do_not_tell_what_is_wrong`,
   `test_sensitivity_api.py::test_streamed_diffs_and_operation_edits_show_values_not_references`,
   `test_vault_rules.py::test_references_nested_inside_other_values_are_refused` (TB3).
+- **Branches forked before a tag.** `POST /domains/{d}/branches/{b}/rebase-tags`
+  (`lorebase branch rebase-tags`) commits the default branch's tags to the branch (never
+  removing one) and recomputes its titles and search vectors in the same transaction; when the
+  default branch tags an Attribute, the `store.sensitivity_refresh` job rewrites the stale rows
+  of every other branch in resumable batches (`store.materialize.refresh_branches_on_tag`, on by
+  default), so verification no longer reports `sensitivity_stale`. Extraction decides by the
+  effective tags (`packages/store/src/lorebase_store/materialize/stale.py`,
+  `packages/keeper/src/lorebase_keeper/services/schema.py`,
+  `packages/scribe/src/lorebase_scribe/extraction/ontology.py`; tests
+  `packages/store/tests/test_sensitivity_refresh.py`,
+  `test_sensitivity_api.py::test_a_branch_forked_before_a_tag_takes_the_default_branch_tags`,
+  `test_extraction_link_values.py::test_the_default_branch_tags_keep_attributes_out_of_extraction`)
+  (TB3).
 - **Conservative Operation analysis.** Fields an Operation expression reads are resolved
   against the Kind the type checker infers, inside comprehensions, conditionals, traversals and
   `record($step[n])` too; only fields of untyped (`dyn`) values are still matched by name.

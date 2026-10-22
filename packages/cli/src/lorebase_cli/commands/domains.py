@@ -298,6 +298,69 @@ def branch_protect(
     app.out.emit(updated, lambda: app.out.table([updated.model_dump()], BRANCH_COLUMNS))
 
 
+TAG_CHANGE_COLUMNS = [
+    Column("section", "section"),
+    Column("owner", "owner"),
+    Column("attribute", "attribute"),
+    Column("tags", "tags", lambda tags: ", ".join(tags)),
+]
+
+
+@branch_app.command("rebase-tags")
+def branch_rebase_tags(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Branch name.", metavar="BRANCH")],
+    message: Annotated[
+        str | None, typer.Option("--message", "-m", help="Revision message.")
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Plan only; write nothing.")] = False,
+    rows_only: Annotated[
+        bool,
+        typer.Option(
+            "--rows-only",
+            help="Leave the schema alone: queue the rewrite of the stale titles and search "
+            "vectors only.",
+        ),
+    ] = False,
+    expected_head: Annotated[
+        str | None,
+        typer.Option("--expected-head", help="Fail unless the branch is at this Revision."),
+    ] = None,
+    domain: DomainOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Give a branch forked before the default branch tagged an Attribute the tags it lacks.
+
+    One schema change adds the default branch's sensitivity tags (never removes one) and
+    recomputes the titles and search vectors the branch stored before them. Protected
+    branches refuse it; --rows-only only queues the rewrite of those rows.
+    """
+    app = app_of(ctx, json_out)
+    result = app.client().branches.rebase_tags(
+        app.domain(domain),
+        name,
+        message=message,
+        expected_head=expected_head,
+        dry_run=dry_run,
+        rows_only=rows_only,
+    )
+
+    def report() -> None:
+        app.out.pairs(
+            [
+                ("status", result.status),
+                ("branch", result.branch),
+                ("revision", result.revision),
+                ("element changes", result.change_count),
+                ("job", result.job),
+            ]
+        )
+        if result.tags:
+            app.out.table([t.model_dump() for t in result.tags], TAG_CHANGE_COLUMNS)
+
+    app.out.emit(result, report)
+
+
 # Tags -------------------------------------------------------------------------------------
 
 TAG_COLUMNS = [

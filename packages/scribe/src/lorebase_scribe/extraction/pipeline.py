@@ -4,7 +4,8 @@
 2. For each document: read the bytes from the blob store, parse, chunk, store the chunks and
    the text hash.
 3. Find mentions: keys and titles (tier 0), spans of the local model (tier 1); resolve them
-   against the default branch.
+   against the default branch. Attributes sensitive by their effective tags (the schema's,
+   the default branch's and those carried through Derivations) are never extracted.
 4. Find values (tier 0 rules), Links (co-occurrence and headings, tier 0; the local relation
    model, tier 1) and ask the chat model chunk by chunk (tier 2), within the token budget.
 5. Assemble the items. With at least one item: create branch `extract/<job id>` from the
@@ -27,7 +28,7 @@ import hashlib
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -35,6 +36,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import lorebase_inference
+from lorebase_core.expr.sensitivity import Tags
 from lorebase_core.model import Schema, new_ulid
 from lorebase_inference import (
     InferenceSettings,
@@ -96,6 +98,7 @@ from lorebase_store.extraction import (
     refresh_proposal,
 )
 from lorebase_store.materialize import create_branch
+from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.models.enums import ItemDecision, ProposalOrigin, ProposalStatus, RunStatus
 from lorebase_store.reads import similar_titles
 from lorebase_store.repositories import (
@@ -399,6 +402,11 @@ class ExtractionRun:
             ).schema()
             if compiled is None:
                 raise ExtractionError(f"branch {domain.default_branch!r} is not materialized")
+            # What may be extracted follows the effective tags, as reads do: the default
+            # branch's tags are added to those of the schema extracted against.
+            reference = await reference_tags(
+                session, domain_id, domain.default_branch, runtime=self._runtime
+            )
             documents: list[DocumentRow] = []
             repository = DocumentRepository(session, domain_id)
             for document_id in dict.fromkeys(document_ids):
@@ -432,7 +440,9 @@ class ExtractionRun:
             )
         schema = load_compiled(compiled.compiled)
         try:
-            await self._run(domain, schema, compiled.schema_hash, documents, models, report)
+            await self._run(
+                domain, schema, compiled.schema_hash, documents, models, report, reference
+            )
         except Exception as error:
             report.duration_ms = int((time.monotonic() - started) * 1000)
             await self._finish(
@@ -498,8 +508,9 @@ class ExtractionRun:
         documents: Sequence[DocumentRow],
         models: ExtractionModels,
         report: ExtractionReport,
+        reference: Mapping[str, Tags] | None = None,
     ) -> None:
-        ontology = build_ontology(schema, self._settings.new_record_kinds)
+        ontology = build_ontology(schema, self._settings.new_record_kinds, reference)
         dictionary = await self._dictionary(domain.id, report.target, ontology)
         resolver = Resolver(
             ontology,

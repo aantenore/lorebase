@@ -102,7 +102,8 @@ BRANCH_JOB_ROWS = meter.create_counter(
     "lorebase.store.branch_jobs.rows",
     unit="{row}",
     description="Rows read by background branch jobs, by job (materialize: base rows copied "
-    "to a branch, delete: rows of a deleted branch removed).",
+    "to a branch, delete: rows of a deleted branch removed, sensitivity_refresh: Records whose "
+    "title and search vector were checked).",
 )
 BRANCH_JOB_RUNS = meter.create_counter(
     "lorebase.store.branch_jobs.runs",

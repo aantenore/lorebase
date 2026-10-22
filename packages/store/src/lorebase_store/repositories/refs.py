@@ -19,7 +19,12 @@ from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_store.jobs import INDEX_JOB, MATERIALIZE_JOB, cancel_queued_jobs
+from lorebase_store.jobs import (
+    INDEX_JOB,
+    MATERIALIZE_JOB,
+    SENSITIVITY_REFRESH_JOB,
+    cancel_queued_jobs,
+)
 from lorebase_store.layout import BranchLayout, layout_from
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
@@ -191,9 +196,10 @@ class RefRepository:
         """Remove a ref (also one whose deletion is in progress). Materialized rows of a branch
         go with it; the ref log is kept.
 
-        In the same transaction, the queued index builds and materializations of the branch
-        are cancelled: there is nothing left to build. Queued drops stay, they clean up the
-        branch's indexes. Operation events still deferred on the branch (not merged) go too.
+        In the same transaction, the queued index builds, materializations and sensitivity
+        refreshes of the branch are cancelled: there is nothing left to build. Queued drops
+        stay, they clean up the branch's indexes. Operation events still deferred on the branch
+        (not merged) go too.
         """
         result = await self._session.execute(
             delete(REFS)
@@ -240,6 +246,13 @@ class RefRepository:
         await cancel_queued_jobs(
             self._session,
             MATERIALIZE_JOB,
+            domain_id=self._domain,
+            match={"branch": name},
+            reason="branch deleted",
+        )
+        await cancel_queued_jobs(
+            self._session,
+            SENSITIVITY_REFRESH_JOB,
             domain_id=self._domain,
             match={"branch": name},
             reason="branch deleted",

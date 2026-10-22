@@ -2791,6 +2791,123 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/branches/{branch}/rebase-tags": {
+      "post": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Take the default branch's sensitivity tags",
+        "description": "Give a branch forked before the default branch tagged an Attribute the tags it lacks.\n\nOne schema change adds, to every Attribute the branch shares with the default branch, the\ntags the default branch gives it, and to derived Attributes the tags of what they read;\nno tag is removed. It recomputes the titles and search vectors of the Kinds it changes,\nso verification no longer reports them as `sensitivity_stale`. A branch that already has\nthe tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:\nthen only a `store.sensitivity_refresh` job is queued, which rewrites those rows in\nbatches and leaves the schema as it is.",
+        "operationId": "rebase_tags_api_v1_domains__domain_id__branches__branch__rebase_tags_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Branch"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebaseTagsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebaseTagsOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission named in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch, Revision or element not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Protected branch or moved head.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The change set is invalid; `issues` locate why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/schema:infer": {
       "post": {
         "tags": [
@@ -18132,6 +18249,141 @@
         "title": "Readiness",
         "description": "Whether the service can take traffic, with the outcome of each check."
       },
+      "RebaseTagsOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "dry_run",
+              "no_op",
+              "queued"
+            ],
+            "title": "Status"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "head": {
+            "type": "string",
+            "title": "Head",
+            "description": "Branch head the rebase was planned against."
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "New Revision; null for dry runs and rows_only."
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/TagChangeOut"
+            },
+            "type": "array",
+            "title": "Tags",
+            "description": "Tags the schema change adds."
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ElementChangeOut"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "change_count": {
+            "type": "integer",
+            "title": "Change Count"
+          },
+          "issues": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "issue_count": {
+            "type": "integer",
+            "title": "Issue Count"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job",
+            "description": "The queued store.sensitivity_refresh job (rows_only)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "branch",
+          "head",
+          "revision",
+          "tags",
+          "changes",
+          "change_count",
+          "issues",
+          "issue_count"
+        ],
+        "title": "RebaseTagsOut",
+        "description": "Outcome of a tag rebase."
+      },
+      "RebaseTagsRequest": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "expected_head": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Head",
+            "description": "Fail with 409 unless the branch head is this Revision."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "description": "Plan without committing or queueing.",
+            "default": false
+          },
+          "rows_only": {
+            "type": "boolean",
+            "title": "Rows Only",
+            "description": "Leave the branch's schema as it is: queue the batched rewrite of the titles and search vectors it materialized before the default branch's tags.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "RebaseTagsRequest",
+        "description": "A tag rebase of one branch."
+      },
       "RecordAddress": {
         "properties": {
           "kind": {
@@ -19948,6 +20200,15 @@
         "title": "SearchTuning",
         "description": "Ranking knobs of one search in place of the `search` settings (to compare parameter\nsets). Unset knobs keep their configured value; `candidates` and `typo_candidates` may only\nbe lowered and `trigram_threshold` only raised."
       },
+      "Sensitivity": {
+        "type": "string",
+        "enum": [
+          "pii",
+          "confidential",
+          "restricted"
+        ],
+        "title": "Sensitivity"
+      },
       "ServedFrom": {
         "type": "string",
         "enum": [
@@ -20568,6 +20829,44 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SyncRequest"
+      },
+      "TagChangeOut": {
+        "properties": {
+          "section": {
+            "type": "string",
+            "enum": [
+              "kinds",
+              "relations"
+            ],
+            "title": "Section"
+          },
+          "owner": {
+            "type": "string",
+            "title": "Owner",
+            "description": "Api name of the Kind or Relation."
+          },
+          "attribute": {
+            "type": "string",
+            "title": "Attribute",
+            "description": "Api name of the Attribute."
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/Sensitivity"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "section",
+          "owner",
+          "attribute",
+          "tags"
+        ],
+        "title": "TagChangeOut",
+        "description": "Sensitivity tags added to one Attribute."
       },
       "TagCreate": {
         "properties": {

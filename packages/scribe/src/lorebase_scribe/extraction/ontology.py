@@ -3,7 +3,10 @@ schema of an ontology fragment.
 
 Only active Kinds and Relations take part. Attributes that are derived, sensitive (`pii`,
 `confidential`, `restricted`) or of a type extraction does not handle (`json`, `geo_point`,
-`array`, `duration`) are never proposed.
+`array`, `duration`) are never proposed. Sensitive means by the effective tags, as reads see
+them: the schema's own, those the default branch gives the same Attribute, and those carried
+through Derivations (`lorebase_core.expr.sensitivity.effective_tags`), so a schema forked
+before the default branch tagged an Attribute does not make it extractable.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from lorebase_core.expr.sensitivity import Tags, effective_tags
 from lorebase_core.model import Attribute, ElementStatus, Kind, Relation, Schema
 from lorebase_core.types import AttributeType
 
@@ -117,12 +121,11 @@ def key_regex(pattern: str) -> re.Pattern[str] | None:
         return None
 
 
-def extractable(attribute: Attribute) -> bool:
-    return (
-        not attribute.is_derived
-        and not attribute.sensitivity
-        and attribute.type.name in EXTRACTABLE_TYPES
-    )
+def extractable(attribute: Attribute, tags: Mapping[str, Tags] | None = None) -> bool:
+    """Whether extraction may propose values of `attribute`; `tags` are the effective tags
+    by Attribute id (the Attribute's own when not given)."""
+    sensitive = attribute.sensitivity if tags is None else tags.get(attribute.id)
+    return not attribute.is_derived and not sensitive and attribute.type.name in EXTRACTABLE_TYPES
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,8 @@ class Ontology:
     kinds: Mapping[str, KindView]
     relations: Mapping[str, Relation]
     new_record_kinds: frozenset[str]
+    tags: Mapping[str, Tags]
+    """Effective sensitivity tags by Attribute id (module doc)."""
 
     def kind_by_label(self, label: str) -> KindView | None:
         folded = label.casefold()
@@ -181,8 +186,15 @@ class Ontology:
         ]
 
 
-def build_ontology(schema: Schema, new_record_kinds: Sequence[str] | None) -> Ontology:
-    """The extraction view of `schema`; `new_record_kinds` as in `scribe.extraction`."""
+def build_ontology(
+    schema: Schema,
+    new_record_kinds: Sequence[str] | None,
+    reference: Mapping[str, Tags] | None = None,
+) -> Ontology:
+    """The extraction view of `schema`; `new_record_kinds` as in `scribe.extraction`;
+    `reference` the tags of the default branch's schema by Attribute id, added to the
+    schema's own (module doc)."""
+    tags = effective_tags(schema, reference)
     kinds: dict[str, KindView] = {}
     for kind in schema.kinds.values():
         if kind.status is not ElementStatus.ACTIVE:
@@ -194,7 +206,7 @@ def build_ontology(schema: Schema, new_record_kinds: Sequence[str] | None) -> On
             if key_attribute is not None and key_attribute.constraints.pattern:
                 pattern = key_regex(key_attribute.constraints.pattern)
         title = kind.attributes.get(kind.title_attribute or "")
-        attributes = tuple(a for a in kind.attributes.values() if extractable(a))
+        attributes = tuple(a for a in kind.attributes.values() if extractable(a, tags))
         kinds[kind.id] = KindView(
             kind=kind,
             label=kind.display_name or humanize(kind.api_name),
@@ -214,7 +226,7 @@ def build_ontology(schema: Schema, new_record_kinds: Sequence[str] | None) -> On
     else:
         names = set(new_record_kinds)
         allowed = {k for k, view in kinds.items() if view.api_name in names}
-    return Ontology(schema, kinds, relations, frozenset(allowed))
+    return Ontology(schema, kinds, relations, frozenset(allowed), tags)
 
 
 # Tier 2 JSON schema -------------------------------------------------------------------------
@@ -306,13 +318,16 @@ UNLISTED_SCHEMA: dict[str, Any] = {
 """Tier 2 `unlisted` answers: what the model saw outside the schema (schema discovery)."""
 
 
-def link_attributes(relation: Relation) -> list[Attribute]:
-    """Link Attributes of `relation` that extraction can propose."""
-    return [a for a in relation.attributes.values() if extractable(a)]
+def link_attributes(relation: Relation, tags: Mapping[str, Tags] | None = None) -> list[Attribute]:
+    """Link Attributes of `relation` that extraction can propose (`tags` as in
+    `extractable`)."""
+    return [a for a in relation.attributes.values() if extractable(a, tags)]
 
 
 def _link_schema(
-    relations: Sequence[Relation], with_values: Relation | None = None
+    relations: Sequence[Relation],
+    tags: Mapping[str, Tags],
+    with_values: Relation | None = None,
 ) -> dict[str, Any]:
     properties: dict[str, Any] = {
         "relation": {"const": with_values.api_name}
@@ -324,7 +339,7 @@ def _link_schema(
     }
     required = ["relation", "from", "to", "evidence"]
     if with_values is not None:
-        attributes = link_attributes(with_values)
+        attributes = link_attributes(with_values, tags)
         properties["values"] = {
             "type": "object",
             "additionalProperties": False,
@@ -355,15 +370,15 @@ def _link_schema(
     }
 
 
-def _links_schema(relations: Sequence[Relation]) -> dict[str, Any]:
+def _links_schema(relations: Sequence[Relation], tags: Mapping[str, Tags]) -> dict[str, Any]:
     """Schema of one link answer: Relations with link Attributes get a branch of their own
     whose `values` lists those Attributes."""
-    plain = [r for r in relations if not link_attributes(r)]
-    typed = [r for r in relations if link_attributes(r)]
+    plain = [r for r in relations if not link_attributes(r, tags)]
+    typed = [r for r in relations if link_attributes(r, tags)]
     if not typed:
-        return _link_schema(plain)
-    branches = [_link_schema(plain)] if plain else []
-    branches.extend(_link_schema(relations, r) for r in typed)
+        return _link_schema(plain, tags)
+    branches = [_link_schema(plain, tags)] if plain else []
+    branches.extend(_link_schema(relations, tags, r) for r in typed)
     return {"anyOf": branches}
 
 
@@ -379,7 +394,7 @@ def fragment_schema(
     required = ["records"]
     relations = ontology.relations_between(kind_ids)
     if relations:
-        properties["links"] = {"type": "array", "items": _links_schema(relations)}
+        properties["links"] = {"type": "array", "items": _links_schema(relations, ontology.tags)}
         required.append("links")
     if unlisted:
         properties["unlisted"] = UNLISTED_SCHEMA
@@ -409,7 +424,7 @@ def fragment_description(ontology: Ontology, kind_ids: Sequence[str]) -> str:
         lines.append(
             f"Relation {relation.api_name}: {source} -> {target}. {relation.description}".rstrip()
         )
-        for attribute in link_attributes(relation):
+        for attribute in link_attributes(relation, ontology.tags):
             need = " (required: give it with evidence)" if attribute.required else ""
             lines.append(
                 f"  - link attribute {attribute.api_name}{need}: {attribute.description}".rstrip()

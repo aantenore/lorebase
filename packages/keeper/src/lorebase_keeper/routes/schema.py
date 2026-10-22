@@ -5,6 +5,7 @@
 | `GET /domains/{d}/schema`, `GET /domains/{d}/schema/{section}/{name}` | `schema.read` |
 | `POST /domains/{d}/schema:validate` | `schema.read` |
 | `POST /domains/{d}/branches/{b}/schema/changes` | `schema.write` on the branch |
+| `POST /domains/{d}/branches/{b}/rebase-tags` | `schema.write` on the branch |
 
 `schema.read` is checked against the Revision that `branch`/`at` resolve to, not the name given
 (`services/reads.py`).
@@ -15,6 +16,11 @@ A change set is sent as JSON (`yaml`: a full document, or `patch` and `remove`) 
 YAML document (`Content-Type: text/yaml` or `application/yaml`, options as query
 parameters). Protected branches refuse direct changes: the change goes to another branch and
 then through a Proposal.
+
+`rebase-tags` brings a branch forked before the default branch tagged an Attribute level with
+it: one schema change adds the default branch's sensitivity tags (never removes one) and
+recomputes the titles and search vectors of the Kinds it changes. With `rows_only`, the schema
+is left alone and a `store.sensitivity_refresh` job rewrites those rows in batches.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, Field, JsonValue, ValidationError, model_validator
 
 from lorebase_core.canonical import hex
-from lorebase_core.model import Schema, dump_schema
+from lorebase_core.model import Schema, Sensitivity, dump_schema
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, require
 from lorebase_keeper.auth.permissions import Permission
@@ -181,6 +187,47 @@ class SchemaChangeOut(BaseModel):
     data_changes: int = Field(description="Record and Link changes made by data migrations.")
     issues: list[dict[str, Any]]
     issue_count: int
+
+
+class RebaseTagsRequest(BaseModel):
+    """A tag rebase of one branch."""
+
+    message: str | None = Field(default=None, max_length=2000)
+    expected_head: str | None = Field(
+        default=None, description="Fail with 409 unless the branch head is this Revision."
+    )
+    dry_run: bool = Field(default=False, description="Plan without committing or queueing.")
+    rows_only: bool = Field(
+        default=False,
+        description="Leave the branch's schema as it is: queue the batched rewrite of the "
+        "titles and search vectors it materialized before the default branch's tags.",
+    )
+
+
+class TagChangeOut(BaseModel):
+    """Sensitivity tags added to one Attribute."""
+
+    section: Literal["kinds", "relations"]
+    owner: str = Field(description="Api name of the Kind or Relation.")
+    attribute: str = Field(description="Api name of the Attribute.")
+    tags: list[Sensitivity]
+
+
+class RebaseTagsOut(BaseModel):
+    """Outcome of a tag rebase."""
+
+    status: Literal["committed", "dry_run", "no_op", "queued"]
+    branch: str
+    head: str = Field(description="Branch head the rebase was planned against.")
+    revision: str | None = Field(description="New Revision; null for dry runs and rows_only.")
+    tags: list[TagChangeOut] = Field(description="Tags the schema change adds.")
+    changes: list[ElementChangeOut]
+    change_count: int
+    issues: list[dict[str, Any]]
+    issue_count: int
+    job: int | None = Field(
+        default=None, description="The queued store.sensitivity_refresh job (rows_only)."
+    )
 
 
 class SchemaValidationOut(BaseModel):
@@ -472,6 +519,104 @@ async def apply_schema_changes(
         changes=_changes(outcome.changes, limits.max_listed_changes),
         change_count=len(outcome.changes),
         data_changes=outcome.data_changes,
+        issues=finding_documents(outcome.issues, limits.max_issues),
+        issue_count=len(outcome.issues),
+    )
+
+
+@router.post(
+    "/domains/{domain_id}/branches/{branch:path}/rebase-tags",
+    summary="Take the default branch's sensitivity tags",
+    responses=_ERRORS,
+)
+async def rebase_tags(
+    domain_id: str,
+    branch: str,
+    body: RebaseTagsRequest,
+    request: Request,
+    store: StoreDep,
+    keeper: KeeperSettingsDep,
+    access: Annotated[Access, Depends(require(Permission.SCHEMA_WRITE, branch_param="branch"))],
+) -> RebaseTagsOut:
+    """Give a branch forked before the default branch tagged an Attribute the tags it lacks.
+
+    One schema change adds, to every Attribute the branch shares with the default branch, the
+    tags the default branch gives it, and to derived Attributes the tags of what they read;
+    no tag is removed. It recomputes the titles and search vectors of the Kinds it changes,
+    so verification no longer reports them as `sensitivity_stale`. A branch that already has
+    the tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:
+    then only a `store.sensitivity_refresh` job is queued, which rewrites those rows in
+    batches and leaves the schema as it is.
+    """
+    limits = keeper.schema_changes
+    if body.rows_only:
+        head, job = await service.queue_tag_refresh(store, domain_id, branch, dry_run=body.dry_run)
+        annotate(request, action="schema.rebase_tags", target=branch, job=job)
+        return RebaseTagsOut(
+            status="dry_run" if body.dry_run else "queued",
+            branch=branch,
+            head=hex(head),
+            revision=None,
+            tags=[],
+            changes=[],
+            change_count=0,
+            issues=[],
+            issue_count=0,
+            job=job,
+        )
+    expected = (
+        None
+        if body.expected_head is None
+        else parse_revision_id(body.expected_head, "/body/expected_head")
+    )
+    try:
+        rebase = await service.rebase_tags(
+            store,
+            domain_id,
+            branch,
+            access.principal,
+            message=body.message,
+            expected_head=expected,
+            dry_run=body.dry_run,
+        )
+    except service.ChangeSetInvalidError as invalid:
+        raise violations_problem(invalid.issues, limit=limits.max_issues) from None
+    except ProtectedBranchError:
+        raise protected_branch_problem(
+            domain_id, branch, f"{keeper.api_prefix}/domains/{domain_id}/proposals"
+        ) from None
+    except CommitError as error:
+        raise commit_problem(
+            error,
+            max_issues=limits.max_issues,
+            retry_after_s=keeper.branches.lock_retry_after_s,
+        ) from None
+    outcome = rebase.outcome
+    revision = None if outcome.revision is None else hex(outcome.revision)
+    annotate(
+        request,
+        action="schema.rebase_tags",
+        target=branch,
+        status=outcome.status.value,
+        revision=revision,
+        changes=len(outcome.changes),
+    )
+    return RebaseTagsOut(
+        status=outcome.status.value,
+        branch=branch,
+        head=hex(outcome.head),
+        revision=revision,
+        tags=[
+            TagChangeOut(
+                section="kinds" if t.section == "kinds" else "relations",
+                owner=t.owner,
+                attribute=t.attribute,
+                tags=t.tags,
+            )
+            for t in rebase.tags
+        ],
+        changes=_changes(outcome.changes, limits.max_listed_changes),
+        change_count=len(outcome.changes),
         issues=finding_documents(outcome.issues, limits.max_issues),
         issue_count=len(outcome.issues),
     )

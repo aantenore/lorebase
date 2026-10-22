@@ -63,6 +63,7 @@ from lorebase_store.commit.pipeline import (
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.apply import MaterializedChange, apply_changeset
 from lorebase_store.materialize.background import delete_branch
+from lorebase_store.materialize.stale import queue_after_tagging
 from lorebase_store.merging.attempts import (
     AttemptComputation,
     ConflictState,
@@ -408,6 +409,7 @@ class MergeService:
         compiled = await MaterializedRepository(
             session, domain_id, target.name, writes=settings.writes
         ).schema()
+        target_schema: Schema | None = None
         if compiled is not None:
             target_schema = load_compiled(compiled.compiled)
             lowered = lowered_tags(target_schema, prepared.schema)
@@ -467,6 +469,15 @@ class MergeService:
             expression_limits=self._runtime.schema.expression_limits,
             runtime=self._runtime,
         )
+        if target_schema is not None and prepared.schema_hash is not None:
+            await queue_after_tagging(
+                session,
+                domain_id,
+                target.name,
+                target_schema,
+                prepared.schema,
+                runtime=self._runtime,
+            )
         refs = RefRepository(session, domain_id)
         try:
             await refs.compare_and_swap(
