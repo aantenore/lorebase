@@ -102,7 +102,7 @@ Code: `packages/keeper/src/lorebase_keeper/auth/rbac.py`, `auth/permissions.py`,
 | T | Self-approval | `keeper.proposals.allow_self_approval` is false by default; the author's approvals are refused and not counted | None known |
 | E | Installation administration from a Domain role | Installation permissions (`principal.read`, `domain.create`) are held by installation administrators and by Domain-wide grants of roles holding them; API keys limited to Domains never hold them; Domain admins cannot mint keys for installation administrators or for principals without a grant in their Domain (`routes/admin.py`, `_check_key_holder`) | Domain admins see installation-wide principal lists (`principal.read` is in `admin`) |
 | I | Raw documents to readers | `document.read` is held by `editor`, `reviewer`, `maintainer` and `admin` only; `viewer`, `explorer` and `agent-reader` never read documents (`auth/permissions.py`) | Documents are unmasked input: whoever reads them reads the sensitive values they hold |
-| I | Sensitive values to readers without clearance | Values of `pii`, `confidential` and `restricted` Attributes are masked unless the caller holds `pii.read`, `confidential.read` or `restricted.read` for the read; responses are cached per clearance; filters, ordering and grouping on them need the clearance; sensitive Attributes are out of full-text vectors, the lexicon, snippets and titles; vault references are replaced after the cache and only for cleared callers (`reading/sensitivity.py`) | Validation messages quote values back to their writers; Kind health lists the keys of Records sharing a sensitive unique value (never the value); see residual risks 5 to 8 |
+| I | Sensitive values to readers without clearance | Values of `pii`, `confidential` and `restricted` Attributes are masked unless the caller holds `pii.read`, `confidential.read` or `restricted.read` for the read (a Kind-narrowed clearance must cover every Kind a derived value's tags come from); responses are cached per clearance; filters, ordering and grouping on them need the clearance; sensitive Attributes are out of full-text vectors, the lexicon, snippets and titles; vault references are replaced after the cache and only for cleared callers (`reading/sensitivity.py`) | Validation messages quote values back to their writers; Kind health lists the keys of Records sharing a sensitive unique value (never the value); see residual risks 5 to 8 |
 | I | Personal data kept in history | `vault: true` Attributes store a reference in Record objects and the value encrypted in `vault`; erasure (`pii.erase`) clears it for every Revision and is audited in the same transaction (`lorebase_store/vault`, `routes/vault.py`) | Inline sensitive values (no vault) and Record keys stay in history; clients and caches outside Keeper keep what they read |
 | D | Expensive queries | DSL depth and fan-out caps, traverse and neighborhood limits, health scan caps, per-class rate limits | Statement timeout is the last line for queries that stay under the caps |
 
@@ -283,6 +283,13 @@ see the [security review](security-review.md#hardening-from-the-threat-model)):
   read (`packages/core/src/lorebase_core/expr/sensitivity.py`,
   `packages/keeper/src/lorebase_keeper/services/operations.py`; tests
   `packages/core/tests/validate/test_vault_rules.py`,
+  `packages/keeper/tests/reading/test_sensitivity.py`) (TB3).
+- **Derived values from other Kinds.** A value computed from sensitive Attributes of another
+  Kind is masked for a caller whose clearance is narrowed to the Kind holding it unless the
+  clearance also covers every Kind the tags come from, on every read path and in filters,
+  ordering and grouping (`Masking.hidden` with `effective_origins`). Webhook clearances are
+  Domain-wide tags only, and change feed events carry no values, so neither needs the origin
+  Kinds (`packages/keeper/tests/integration/test_derived_sensitivity_api.py`,
   `packages/keeper/tests/reading/test_sensitivity.py`) (TB3).
 - **Bundles lost vault values.** `python -m lorebase_store.bundle export
   --include-vault-values` (an operator tool that already runs with the database owner's

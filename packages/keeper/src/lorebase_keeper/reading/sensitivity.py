@@ -7,7 +7,8 @@ value. Grants narrowed to a branch do not count: whoever may create branches cou
 match. Kind-narrowed grants name Kinds by api name; they are resolved to Kind ids in the
 schema of the Domain's default branch (the reference schema), so renaming a Kind on another
 branch does not move a clearance. An Attribute with several tags needs every clearance; Link
-Attributes need it on both Kinds of the Relation. Callers without it get
+Attributes need it on both Kinds of the Relation; a derived value needs each tag cleared also on
+every Kind the tag comes from (`Masking.origins`). Callers without it get
 `keeper.reads.sensitivity.masked_value` (or nothing, with `omit`).
 
 **Tags.** An Attribute's tags are those of the schema read plus those the same Attribute (by
@@ -61,7 +62,13 @@ from typing import Any
 from pydantic import BaseModel, JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.expr.sensitivity import effective_tags, lowered_tags, schema_tags
+from lorebase_core.expr.sensitivity import (
+    Origins,
+    effective_origins,
+    effective_tags,
+    lowered_tags,
+    schema_tags,
+)
 from lorebase_core.model import (
     VAULT_KEY,
     Attribute,
@@ -223,15 +230,25 @@ class Masking:
     """Tags of the default branch's Attributes by id (`reference_tags`)."""
     effective: Mapping[str, frozenset[Sensitivity]] = field(default_factory=dict)
     """Tags of the schemas read, with the reference's, carried through Derivations (`over`)."""
+    origins: Mapping[str, Origins] = field(default_factory=dict)
+    """Per Attribute id, the Kinds each of its tags comes from in the schemas read (`over`)."""
 
     def over(self, *schemas: Schema) -> Masking:
         """This masking for reads of `schemas`: a derived Attribute carries the tags of what it
         reads, as the default branch and the schemas read tag them (`effective_tags`)."""
         effective: dict[str, frozenset[Sensitivity]] = {}
+        origins: dict[str, Origins] = {}
         for schema in schemas:
-            for key, tags in _effective(schema, self.reference).items():
+            tags_of, origins_of = _effective(schema, self.reference)
+            for key, tags in tags_of.items():
                 effective[key] = effective.get(key, frozenset()) | tags
-        return replace(self, effective=MappingProxyType(effective))
+            for key, found in origins_of.items():
+                united = origins.setdefault(key, {})
+                for tag, kinds in found.items():
+                    united[tag] = united.get(tag, frozenset()) | kinds
+        return replace(
+            self, effective=MappingProxyType(effective), origins=MappingProxyType(origins)
+        )
 
     @property
     def variant(self) -> str:
@@ -271,9 +288,9 @@ class Masking:
 
     def hidden(self, attribute: Attribute, kinds: Sequence[str]) -> bool:
         """Whether values of `attribute` (held by Records or Links of the Kinds `kinds`, by
-        id) are masked."""
-        tags = self.tags(attribute)
-        return bool(tags) and not self.clearance.covers(tags, kinds)
+        id) are masked: each tag needs clearance on `kinds` and on every Kind it comes from
+        in the schemas read (`origins`)."""
+        return self.hidden_with_origins(attribute, kinds, {})
 
     def hidden_with_origins(
         self,
@@ -281,13 +298,22 @@ class Masking:
         kinds: Sequence[str],
         origins: Mapping[Sensitivity, Iterable[str]],
     ) -> bool:
-        """`hidden`, with each tag also needing clearance on the Kinds it comes from
-        (`origins`, from `lorebase_core.expr.sensitivity.tag_origins`): for a value computed
-        from sensitive Attributes of other Kinds."""
-        return any(
-            not self.clearance.covers((tag,), sorted({*kinds, *origins.get(tag, ())}))
-            for tag in self.tags(attribute)
-        )
+        """`hidden`, with each tag also needing clearance on the Kinds it comes from: those of
+        `origins` (from `lorebase_core.expr.sensitivity.tag_origins`) and of the schemas read.
+        A value computed from sensitive Attributes of other Kinds tells about their Records, so
+        a clearance narrowed to the Kind holding the value is not enough. Domain-wide
+        clearances cover every Kind."""
+        tags = self.tags(attribute)
+        if not tags:
+            return False
+        if not self.clearance.covers(tags, kinds):
+            return True
+        known = self.origins.get(attribute.id, {})
+        for tag in tags:
+            sources = {*known.get(tag, ()), *origins.get(tag, ())}
+            if sources and not self.clearance.covers((tag,), sorted(sources)):
+                return True
+        return False
 
     @property
     def masked(self) -> str:
@@ -374,30 +400,31 @@ class Masking:
 
 
 _EffectiveKey = tuple[int, frozenset[tuple[str, frozenset[Sensitivity]]]]
-_EFFECTIVE: OrderedDict[_EffectiveKey, tuple[Schema, dict[str, frozenset[Sensitivity]]]] = (
-    OrderedDict()
-)
+_EFFECTIVE: OrderedDict[
+    _EffectiveKey, tuple[Schema, dict[str, frozenset[Sensitivity]], dict[str, Origins]]
+] = OrderedDict()
 _EFFECTIVE_ENTRIES = 256
 _EFFECTIVE_LOCK = Lock()
 
 
 def _effective(
     schema: Schema, reference: Mapping[str, frozenset[Sensitivity]]
-) -> dict[str, frozenset[Sensitivity]]:
-    """`effective_tags`, remembered per schema object and reference tags (compiled schemas
-    are cached, so the same object comes back for the same schema)."""
+) -> tuple[dict[str, frozenset[Sensitivity]], dict[str, Origins]]:
+    """`effective_tags` and `effective_origins`, remembered per schema object and reference
+    tags (compiled schemas are cached, so the same object comes back for the same schema)."""
     key = (id(schema), frozenset(reference.items()))
     with _EFFECTIVE_LOCK:
         found = _EFFECTIVE.get(key)
         if found is not None and found[0] is schema:
             _EFFECTIVE.move_to_end(key)
-            return found[1]
+            return found[1], found[2]
     computed = effective_tags(schema, reference)
+    origins = effective_origins(schema, reference)
     with _EFFECTIVE_LOCK:
-        _EFFECTIVE[key] = (schema, computed)
+        _EFFECTIVE[key] = (schema, computed, origins)
         while len(_EFFECTIVE) > _EFFECTIVE_ENTRIES:
             _EFFECTIVE.popitem(last=False)
-    return computed
+    return computed, origins
 
 
 def relation_kinds(_schema: Schema, relation: Relation) -> tuple[str, ...]:
@@ -756,8 +783,8 @@ def _issue_hidden(issue: Issue, schemas: Sequence[Schema], masking: Masking) -> 
         attribute = attributes.get(attribute_id)
         if attribute is None:
             continue
-        tags = masking.tags(attribute) | ({Sensitivity.PII} if attribute.in_vault else set())
-        hidden = bool(tags) and not masking.clearance.covers(tags, kinds)
+        vault = attribute.in_vault and not masking.clearance.covers((Sensitivity.PII,), kinds)
+        hidden = vault or masking.hidden(attribute, kinds)
         return attribute.api_name if hidden else None
     kinds = tuple(k for k in (issue.kind,) if k is not None)
     return None if masking.clearance.covers(Sensitivity, kinds) else attribute_id

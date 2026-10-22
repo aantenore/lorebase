@@ -9,9 +9,9 @@ never fewer).
 
 `effective_tags` gives, per Attribute id, the tags of a schema united with tags from elsewhere
 (the default branch's schema) and carried through Derivations: what a reader must be cleared
-for, whatever the schema read says. `tag_origins` tells which Kinds each tag comes from.
-`rebased_tags` stores them: it gives a branch forked before the default branch tagged an
-Attribute the tags the default branch has.
+for, whatever the schema read says. `tag_origins` tells which Kinds each tag comes from
+(`effective_origins`, for every Attribute at once). `rebased_tags` stores the tags: it gives a
+branch forked before the default branch tagged an Attribute the tags the default branch has.
 """
 
 from __future__ import annotations
@@ -139,37 +139,54 @@ def effective_tags(
     return {k: frozenset(v) for k, v in tags.items() if v}
 
 
+Origins = dict[Sensitivity, frozenset[str]]
+"""Tag -> ids of the Kinds holding the Attributes the tag comes from."""
+
+
+def effective_origins(
+    schema: Schema, extra: Mapping[str, Tags] | None = None, limits: ExprLimits | None = None
+) -> dict[str, Origins]:
+    """Attribute id -> `tag_origins`, for every Attribute of a Kind that has a tag (by the
+    schema, `extra` or what its Derivation may read), in one pass over the Derivations."""
+    origins: dict[str, dict[Sensitivity, set[str]]] = {
+        a.id: {tag: {kind.id} for tag in {*a.sensitivity, *(extra or {}).get(a.id, NO_TAGS)}}
+        for kind in schema.kinds.values()
+        for a in kind.attributes.values()
+    }
+    reads = {
+        derivation.target[1]: [a for _, a in derivation_reads(schema, derivation, limits)]
+        for derivation in schema.derivations.values()
+        if derivation.target is not None
+    }
+    changed = True
+    while changed:
+        changed = False
+        for target, inputs in reads.items():
+            held = origins.setdefault(target, {})
+            for source in inputs:
+                for tag, kinds in origins.get(source, {}).items():
+                    current = held.setdefault(tag, set())
+                    if not kinds <= current:
+                        current |= kinds
+                        changed = True
+    return {
+        attribute_id: {tag: frozenset(kinds) for tag, kinds in found.items()}
+        for attribute_id, found in origins.items()
+        if found
+    }
+
+
 def tag_origins(
     schema: Schema,
     attribute_id: str,
     extra: Mapping[str, Tags] | None = None,
     limits: ExprLimits | None = None,
-) -> dict[Sensitivity, frozenset[str]]:
+) -> Origins:
     """Tag -> ids of the Kinds holding the Attributes the tag comes from: the Attribute's own
     tags (the schema's and `extra`'s) and, transitively, those of everything its Derivation may
     read. A value computed from a sensitive Attribute of another Kind tells about Records of
     that Kind, so a reader must be cleared on it too."""
-    found = {a.id: (kind.id, a) for kind in schema.kinds.values() for a in kind.attributes.values()}
-    reads = {
-        derivation.target[1]: derivation_reads(schema, derivation, limits)
-        for derivation in schema.derivations.values()
-        if derivation.target is not None
-    }
-    origins: dict[Sensitivity, set[str]] = {}
-    pending = [attribute_id]
-    seen: set[str] = set()
-    while pending:
-        current = pending.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        held = found.get(current)
-        if held is not None:
-            kind_id, attribute = held
-            for tag in {*attribute.sensitivity, *(extra or {}).get(current, NO_TAGS)}:
-                origins.setdefault(tag, set()).add(kind_id)
-        pending.extend(a for _, a in reads.get(current, ()))
-    return {tag: frozenset(kinds) for tag, kinds in origins.items()}
+    return effective_origins(schema, extra, limits).get(attribute_id, {})
 
 
 def expression_fields(source: str, limits: ExprLimits | None = None) -> frozenset[str]:
