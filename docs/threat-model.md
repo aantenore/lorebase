@@ -197,13 +197,11 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 
 Remaining:
 
-1. **Webhook signing keys stored usable by default.** `webhooks.encryption_key` is unset by
-   default; set it (TB6, TB7).
-2. **Erasure covers vault values only.** Sensitive values stored inline, values quoted in
+1. **Erasure covers vault values only.** Sensitive values stored inline, values quoted in
    Revision messages, documents and the extraction evidence quoted from them stay in history;
    store personal data in `vault: true` Attributes (TB3). Inherent: history is content addressed,
    so only values kept outside the objects can be erased without rewriting every later Revision.
-3. **Vault keys in the services' configuration.** Whoever holds `vault.encryption_key` and a
+2. **Vault keys in the services' configuration.** Whoever holds `vault.encryption_key` and a
    database copy reads every vaulted value; value fingerprints let whoever reads the database
    link Records of a Kind holding the same vaulted value, and tombstones keep the fingerprints of
    erased values (TB6). Inherent: the services must open values to serve them, and erasure by
@@ -213,19 +211,30 @@ Remaining:
    `previous_token_keys`. A Source sync, extraction or import whose data the operator controls
    can still learn whether a value was erased (it is stored erased or refused); writes of other
    origins are not checked against tombstones for that reason (`vault.tombstone_origins`).
-4. **Installation digest secret in the database.** The installation digest secret of
-   revision `0027` (used when neither `vault.digest_key` nor vault keys are set) is readable by whoever reads the database (TB6).
-
-5. **Limits of the read audit and of checkpoints.** Read records are sampled when
-   `sample_rate` is below 1 and dropped when the queue is full or a batch fails (counted in
-   `lorebase.audit.reads.dropped`), so the read stream is evidence of what it holds, not proof
-   that nothing else was read; reads that showed or masked a sensitive value are never sampled
-   out. Checkpoints cover the chains up to the latest one published (`interval_s`, one hour by
-   default) (TB2, TB3, TB6).
+3. **Installation digest secret in the database.** The installation digest secret of
+   revision `0027` (used when neither `vault.digest_key` nor vault keys are set) is readable by
+   whoever reads the database (TB6); set `vault.digest_key` where that matters.
+4. **Limits of the read audit and of checkpoints.** With `keeper.auth.audit.reads.on_overflow:
+   drop` (the default) read records are sampled when `sample_rate` is below 1 and dropped when
+   the queue is full (counted in `lorebase.audit.reads.dropped`), so the read stream is evidence
+   of what it holds, not proof that nothing else was read; `reject` refuses such reads (503) and
+   retries failed batches, and with `sample_rate: 1` the stream is complete except for records
+   still queued at shutdown (counted). Reads that showed or masked a sensitive value are never
+   sampled out. Inherent: checkpoints cover the chains up to the latest one published
+   (`interval_s`, one hour by default) (TB2, TB3, TB6).
 
 Fixed since this page was first published, in the order of the original list (each with tests,
 see the [security review](security-review.md#hardening-from-the-threat-model)):
 
+- **Webhook signing keys stored usable by default.** Keeper refuses to create a webhook without
+  `webhooks.encryption_key` unless `webhooks.allow_unsealed_keys` (development); compose and the
+  Helm chart supply the key (`packages/keeper/tests/integration/writes/test_webhook_sealing_postgres.py`,
+  `tests/tooling/test_helm_webhook_key.py`) (TB6, TB7).
+- **Read records dropped under pressure.** `keeper.auth.audit.reads.on_overflow: reject` holds a
+  place in the queue before a read's body is sent and answers 503 otherwise; failed batches are
+  kept and retried, and readiness fails meanwhile
+  (`packages/keeper/src/lorebase_keeper/auth/read_audit.py`, test
+  `packages/keeper/tests/auth/test_read_audit.py`) (TB2, TB6).
 - **Vault keys could not rotate; erasure missed variants, earlier keys and later writes.**
   `vault.token_key` rotates with `token_key_id` and `previous_token_keys`, and the `vault.rotate`
   job (`lorebase admin vault rotate`) seals and fingerprints every row again under the current
