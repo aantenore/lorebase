@@ -1,0 +1,1403 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Values of the Lorebase chart",
+  "description": "Every key is documented in values.yaml. `config` (the application settings) and `postgresql` (the CloudNativePG subchart) stay open; everything else is closed.",
+  "type": "object",
+  "definitions": {
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "k8sObject": {
+      "type": "object",
+      "description": "A Kubernetes object, passed through unchanged."
+    },
+    "k8sList": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "A list of Kubernetes objects, passed through unchanged."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "pullPolicy": {
+      "type": "string",
+      "enum": [
+        "Always",
+        "IfNotPresent",
+        "Never"
+      ]
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "pullPolicy": {
+          "$ref": "#/definitions/pullPolicy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "percentOrNull": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "intOrStringOrNull": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "strategy": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "RollingUpdate",
+            "Recreate"
+          ]
+        },
+        "rollingUpdate": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "probe": {
+      "type": "object",
+      "description": "A Kubernetes probe; empty disables it."
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        }
+      },
+      "additionalProperties": false
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minReplicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxReplicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "targetCPUUtilizationPercentage": {
+          "$ref": "#/definitions/percentOrNull"
+        },
+        "targetMemoryUtilizationPercentage": {
+          "$ref": "#/definitions/percentOrNull"
+        },
+        "customMetrics": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "behavior": {
+          "$ref": "#/definitions/k8sObject"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pdb": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minAvailable": {
+          "$ref": "#/definitions/intOrStringOrNull"
+        },
+        "maxUnavailable": {
+          "$ref": "#/definitions/intOrStringOrNull"
+        }
+      },
+      "additionalProperties": false
+    },
+    "networkPeers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "NetworkPolicyPeer list."
+    },
+    "networkPorts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "TCP",
+              "UDP",
+              "SCTP"
+            ]
+          },
+          "port": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "endPort": {
+            "$ref": "#/definitions/port"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "egressTarget": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "$ref": "#/definitions/networkPeers"
+        },
+        "ports": {
+          "$ref": "#/definitions/networkPorts"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Helm global values, shared with the subchart."
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "commonLabels": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "commonAnnotations": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "image": {
+      "$ref": "#/definitions/image"
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "automount": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "podSecurityContext": {
+      "$ref": "#/definitions/k8sObject"
+    },
+    "containerSecurityContext": {
+      "$ref": "#/definitions/k8sObject"
+    },
+    "config": {
+      "type": "object",
+      "description": "lorebase.yaml of the application (config/lorebase.example.yaml); open, checked by the application.",
+      "properties": {
+        "keeper": {
+          "type": "object",
+          "properties": {
+            "auth": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "api_key",
+                    "oidc",
+                    "api_key+oidc"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "logLevel": {
+      "type": "string",
+      "enum": [
+        "CRITICAL",
+        "ERROR",
+        "WARNING",
+        "INFO",
+        "DEBUG"
+      ]
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "otlpEndpoint": {
+          "type": "string"
+        },
+        "sampleRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "existingSecret": {
+          "type": "string"
+        },
+        "keys": {
+          "type": "object",
+          "properties": {
+            "dbDsn": {
+              "type": "string"
+            },
+            "dbMaintenanceDsn": {
+              "type": "string"
+            },
+            "dbReadDsn": {
+              "type": "string"
+            },
+            "apiKeyPepper": {
+              "type": "string"
+            },
+            "llmApiKey": {
+              "type": "string"
+            },
+            "oidcClientSecret": {
+              "type": "string"
+            },
+            "sessionEncryptionKey": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "values": {
+          "type": "object",
+          "properties": {
+            "dbDsn": {
+              "type": "string"
+            },
+            "dbMaintenanceDsn": {
+              "type": "string"
+            },
+            "dbAppPassword": {
+              "type": "string"
+            },
+            "dbReadDsn": {
+              "type": [
+                "string",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "apiKeyPepper": {
+              "type": "string"
+            },
+            "llmApiKey": {
+              "type": "string"
+            },
+            "oidcClientSecret": {
+              "type": "string"
+            },
+            "sessionEncryptionKey": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "extra": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "extraNames": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "appRole": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+            },
+            "create": {
+              "type": "boolean"
+            },
+            "passwordSecret": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "setup": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "waitSeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "clusterRoles": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "maintenanceDsnInKeeper": {
+          "type": "boolean"
+        },
+        "allowSharedRole": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "postgresql": {
+      "type": "object",
+      "description": "CloudNativePG `cluster` subchart values (validated by the subchart); `enabled` switches it on.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "fullnameOverride": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "migrate": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "hookEvents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "pre-install",
+              "post-install",
+              "pre-upgrade",
+              "post-upgrade",
+              "pre-delete",
+              "post-delete",
+              "pre-rollback",
+              "post-rollback"
+            ]
+          }
+        },
+        "hookEventsInCluster": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "pre-install",
+              "post-install",
+              "pre-upgrade",
+              "post-upgrade",
+              "pre-delete",
+              "post-delete",
+              "pre-rollback",
+              "post-rollback"
+            ]
+          }
+        },
+        "hookWeight": {
+          "type": "integer"
+        },
+        "command": {
+          "$ref": "#/definitions/command"
+        },
+        "workingDir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "waitForDatabase": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "intervalSeconds": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "serviceAccountName": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "keeper": {
+      "type": "object",
+      "properties": {
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "autoscaling": {
+          "$ref": "#/definitions/autoscaling"
+        },
+        "command": {
+          "$ref": "#/definitions/command"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumeMounts": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumes": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "livenessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "pdb": {
+          "$ref": "#/definitions/pdb"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "preStopSleepSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "preferReplica": {
+          "type": "boolean"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "rateLimitBackend": {
+          "type": "string",
+          "enum": [
+            "",
+            "local",
+            "postgres"
+          ]
+        },
+        "readinessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "service": {
+          "$ref": "#/definitions/service"
+        },
+        "startupProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "strategy": {
+          "$ref": "#/definitions/strategy"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "topologySpreadConstraints": {
+          "$ref": "#/definitions/k8sList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "scribe": {
+      "type": "object",
+      "properties": {
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "autoscaling": {
+          "$ref": "#/definitions/autoscaling"
+        },
+        "command": {
+          "$ref": "#/definitions/command"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumeMounts": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumes": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "livenessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "pdb": {
+          "$ref": "#/definitions/pdb"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "readinessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "startupProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "strategy": {
+          "$ref": "#/definitions/strategy"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "topologySpreadConstraints": {
+          "$ref": "#/definitions/k8sList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "herald": {
+      "type": "object",
+      "properties": {
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "autoscaling": {
+          "$ref": "#/definitions/autoscaling"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "command": {
+          "$ref": "#/definitions/command"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumeMounts": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumes": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "keeperUrl": {
+          "type": "string"
+        },
+        "livenessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "pdb": {
+          "$ref": "#/definitions/pdb"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "readinessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "service": {
+          "$ref": "#/definitions/service"
+        },
+        "startupProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "strategy": {
+          "$ref": "#/definitions/strategy"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "topologySpreadConstraints": {
+          "$ref": "#/definitions/k8sList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "guide": {
+      "type": "object",
+      "properties": {
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "allowedOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "autoscaling": {
+          "$ref": "#/definitions/autoscaling"
+        },
+        "command": {
+          "$ref": "#/definitions/command"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumeMounts": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumes": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "keeperUrl": {
+          "type": "string"
+        },
+        "livenessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "pdb": {
+          "$ref": "#/definitions/pdb"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "readinessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "service": {
+          "$ref": "#/definitions/service"
+        },
+        "startupProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "strategy": {
+          "$ref": "#/definitions/strategy"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "topologySpreadConstraints": {
+          "$ref": "#/definitions/k8sList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "web": {
+      "type": "object",
+      "properties": {
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "assetsCacheControl": {
+          "type": "string"
+        },
+        "autoscaling": {
+          "$ref": "#/definitions/autoscaling"
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "apiMode": {
+              "type": "string",
+              "enum": [
+                "live",
+                "mock"
+              ]
+            },
+            "authMode": {
+              "type": "string",
+              "enum": [
+                "token",
+                "session"
+              ]
+            },
+            "keeperBaseUrl": {
+              "type": "string"
+            },
+            "guideUrl": {
+              "type": "string"
+            },
+            "extra": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumeMounts": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "extraVolumes": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "livenessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "pdb": {
+          "$ref": "#/definitions/pdb"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podSecurityContext": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "readinessProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "csp": {
+              "type": "string"
+            },
+            "connectSrc": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "hsts": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "service": {
+          "$ref": "#/definitions/service"
+        },
+        "startupProbe": {
+          "$ref": "#/definitions/probe"
+        },
+        "strategy": {
+          "$ref": "#/definitions/strategy"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "topologySpreadConstraints": {
+          "$ref": "#/definitions/k8sList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ollama": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "wireScribe": {
+          "type": "boolean"
+        },
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "existingClaim": {
+              "type": "string"
+            },
+            "size": {
+              "type": "string",
+              "minLength": 1
+            },
+            "storageClass": {
+              "type": "string"
+            },
+            "accessModes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "ReadWriteOnce",
+                  "ReadOnlyMany",
+                  "ReadWriteMany",
+                  "ReadWriteOncePod"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "resources": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "podSecurityContext": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "tolerations": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "affinity": {
+          "$ref": "#/definitions/k8sObject"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/k8sList"
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "pattern": "^/"
+                    },
+                    "pathType": {
+                      "type": "string",
+                      "enum": [
+                        "Prefix",
+                        "Exact",
+                        "ImplementationSpecific"
+                      ]
+                    },
+                    "component": {
+                      "type": "string",
+                      "enum": [
+                        "keeper",
+                        "herald",
+                        "guide",
+                        "web"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "component"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "host",
+              "paths"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "secretName": {
+                "type": "string"
+              },
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ingressFrom": {
+          "$ref": "#/definitions/networkPeers"
+        },
+        "egress": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "dnsNamespaceSelector": {
+              "$ref": "#/definitions/k8sObject"
+            },
+            "dnsPodSelector": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "dnsPorts": {
+              "$ref": "#/definitions/networkPorts"
+            },
+            "database": {
+              "$ref": "#/definitions/egressTarget"
+            },
+            "telemetry": {
+              "$ref": "#/definitions/egressTarget"
+            },
+            "model": {
+              "$ref": "#/definitions/egressTarget"
+            },
+            "webhooks": {
+              "$ref": "#/definitions/egressTarget"
+            },
+            "kubernetesApi": {
+              "$ref": "#/definitions/egressTarget"
+            },
+            "extra": {
+              "type": "object",
+              "properties": {
+                "keeper": {
+                  "$ref": "#/definitions/k8sList"
+                },
+                "scribe": {
+                  "$ref": "#/definitions/k8sList"
+                },
+                "herald": {
+                  "$ref": "#/definitions/k8sList"
+                },
+                "guide": {
+                  "$ref": "#/definitions/k8sList"
+                },
+                "web": {
+                  "$ref": "#/definitions/k8sList"
+                },
+                "ollama": {
+                  "$ref": "#/definitions/k8sList"
+                },
+                "migrate": {
+                  "$ref": "#/definitions/k8sList"
+                }
+              },
+              "additionalProperties": false
+            },
+            "rules": {
+              "$ref": "#/definitions/k8sList"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "labels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "selector": {
+          "type": "object",
+          "properties": {
+            "matchLabels": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "additionalProperties": false
+        },
+        "namespaceSelector": {
+          "type": "object",
+          "properties": {
+            "matchNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "port": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m|h)$"
+        },
+        "scrapeTimeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m|h)$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "dashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "labels": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "additionalProperties": false
+        },
+        "alertRules": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "labels": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "additionalProperties": false
+        },
+        "collector": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespace": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

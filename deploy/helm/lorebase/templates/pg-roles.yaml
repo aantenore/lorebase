@@ -1,0 +1,167 @@
+{{- /*
+In-cluster database, upgrades: the operator creates the roles of `postgresql.cluster.roles` only once
+Helm applies the Cluster, after the pre-upgrade hooks. This hook Job (files/pg-roles.py) declares them
+on the Cluster and waits for the operator before the migration Job runs (weights: support objects
+-20, this Job -10, the migration's objects -5 and its Job `migrate.hookWeight`). Its RBAC, ConfigMap
+and NetworkPolicy are hooks too, so they exist on the first upgrade that introduces them and are
+removed once the hooks succeed.
+*/}}
+{{- if include "lorebase.clusterRolesHook" . }}
+{{- include "lorebase.validate" . }}
+{{- $name := include "lorebase.componentName" (dict "ctx" . "component" "pg-roles") }}
+{{- $scope := dict "ctx" . "component" "pg-roles" }}
+{{- $cluster := include "lorebase.pgClusterName" . }}
+{{- $hook := dict "helm.sh/hook" "pre-upgrade" "helm.sh/hook-weight" "-20" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+rules:
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    resourceNames: [{{ $cluster | quote }}]
+    verbs: ["get", "patch"]
+  # Whether the password Secret of a role exists yet; its content is never read.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.database.appRole.passwordSecret | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+data:
+  pg-roles.py: |
+    {{- .Files.Get "files/pg-roles.py" | nindent 4 }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.egress.enabled }}
+{{- $api := .Values.networkPolicy.egress.kubernetesApi }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-egress
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "lorebase.selectorLabels" $scope | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- required "networkPolicy.egress.kubernetesApi.to is empty: set the address ranges of the Kubernetes API server, or database.setup.clusterRoles.enabled=false" $api.to | toYaml | nindent 8 }}
+      ports:
+        {{- toYaml $api.ports | nindent 8 }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lorebase.labels" $scope | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ add .Values.database.setup.waitSeconds 120 }}
+  template:
+    metadata:
+      labels:
+        {{- include "lorebase.labels" $scope | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: pg-roles
+          image: {{ include "lorebase.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "/etc/lorebase/pg-roles.py"]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: CLUSTER
+              value: {{ $cluster | quote }}
+            - name: APP_ROLE
+              value: {{ .Values.database.appRole.name | quote }}
+            - name: ROLES
+              value: {{ .Values.postgresql.cluster.roles | toJson | quote }}
+            - name: ROLE_WAIT_S
+              value: {{ .Values.database.setup.waitSeconds | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: script
+              mountPath: /etc/lorebase
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: {{ $name }}
+      {{- with .Values.migrate.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.migrate.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.migrate.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

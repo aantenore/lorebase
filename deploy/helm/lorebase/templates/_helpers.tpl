@@ -130,6 +130,12 @@ annotations:
 {{- if and .Values.postgresql.enabled (not .Values.secrets.existingSecret) (get .Values.secrets.values "dbAppPassword") -}}true{{- end -}}
 {{- end -}}
 
+{{/* "true" when the `pg-roles` hook declares the in-cluster roles before the migration of an upgrade. */}}
+{{- define "lorebase.clusterRolesHook" -}}
+{{- $setup := .Values.database.setup -}}
+{{- if and .Values.postgresql.enabled (include "lorebase.splitRoles" .) .Values.migrate.enabled $setup.enabled $setup.clusterRoles.enabled (has "pre-upgrade" .Values.migrate.hookEventsInCluster) -}}true{{- end -}}
+{{- end -}}
+
 {{/*
 "true" when Keeper and Scribe connect as the application role and the migration as the maintenance
 role (the default). Empty with `database.allowSharedRole`, where every component uses one DSN.
@@ -182,6 +188,10 @@ role). External: `secrets.keys.dbDsn`.
     secretKeyRef:
       name: {{ required "database.appRole.passwordSecret must not be empty" $ctx.Values.database.appRole.passwordSecret }}
       key: password
+      {{- if .hook }}
+      {{- /* An upgrade creates the Secret after its hooks; the role setup needs only the user name. */}}
+      optional: true
+      {{- end }}
 - name: {{ .name }}
   value: {{ printf "postgresql+asyncpg://%s:$(LOREBASE_DB_APP_PASSWORD)@%s-rw:5432/%s" $ctx.Values.database.appRole.name (include "lorebase.pgClusterName" $ctx) $pg.cluster.initdb.database | quote }}
 {{- else -}}
