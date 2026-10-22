@@ -30,6 +30,11 @@ PERF_FLAGS_10m := --copy-batches 200 --no-pair-copy
 PERF_ITERATIONS ?= 1000
 PERF_WARMUP ?= 100
 PERF_OUT ?= build/perf
+# Text of the generated Records: zipf (realistic term frequencies) or demo (the 695 words of the
+# example, seeded as perf_seed_1m and perf_seed_10m before the option existed).
+PERF_VOCABULARY ?= zipf
+PERF_SEED_SUFFIX_zipf := _zipf
+PERF_SEED_SUFFIX_demo :=
 export PERF_PG_PORT PERF_PG_PASSWORD
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
@@ -85,7 +90,8 @@ perf-run-%:
 	@mkdir -p $(PERF_OUT)
 	LOREBASE_TEST_DATABASE_URL=$(PERF_URL) $(UV) run python tests/perf/bench.py \
 		--scale $(PERF_SCALE_$*) --replicas $(PERF_REPLICAS_$*) --extra-links 4 --iterations $(PERF_ITERATIONS) --warmup $(PERF_WARMUP) \
-		--branch-iterations 1 $(PERF_FLAGS_$*) --seed-database perf_seed_$* --in-place \
+		--branch-iterations 1 $(PERF_FLAGS_$*) --vocabulary $(PERF_VOCABULARY) \
+		--seed-database perf_seed_$*$(PERF_SEED_SUFFIX_$(PERF_VOCABULARY)) --in-place \
 		--out $(PERF_OUT)/perf-$*.md
 
 perf-down: ## Stop the perf Postgres and delete its seeded datasets

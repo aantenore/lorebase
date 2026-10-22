@@ -38,7 +38,7 @@ from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
 from lorebase_keeper.reading.points import KindScope, ReadPoint, ServedFrom
 from lorebase_keeper.reading.record_history import record_history, record_lineage
 from lorebase_keeper.reading.runtime import ReadRuntime
-from lorebase_keeper.reading.search import partial_matching, typo_tolerance
+from lorebase_keeper.reading.search import common_terms, partial_matching, typo_tolerance
 from lorebase_keeper.reading.settings import ReadSettings, SearchSettings
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
@@ -107,6 +107,10 @@ TYPO_SEARCH = "typo-tolerant full-text search"
 #: Record, so the full match finds too few and the ranked partial matches follow
 #: (`search.partial`), corrections included.
 PARTIAL_SEARCH = "partial-match full-text search"
+#: Keeper's lexical search on one of the most common words of the branch (above
+#: `search.common_term_docs` when the dataset has such words): a sample of its matches is
+#: ranked (`search.common_term_candidates`) and the response says `truncated_candidates`.
+COMMON_SEARCH = "common-term full-text search"
 
 TARGETS_MS = {
     "get by key": 5.0,
@@ -117,6 +121,7 @@ TARGETS_MS = {
     "full-text search": 50.0,
     TYPO_SEARCH: 50.0,
     PARTIAL_SEARCH: 50.0,
+    COMMON_SEARCH: 50.0,
     "record history page": 10.0,
     "record lineage": 10.0,
 }
@@ -146,6 +151,9 @@ class Scale:
     #: through the commit pipeline and `replicate` copies its materialized rows with
     #: renumbered keys.
     replicas: int = 1
+    #: Text of the generator (`--vocabulary`): `zipf`, realistic term frequencies, or `demo`,
+    #: the 695 words of the committed example (the runs before 2026-10-23).
+    vocabulary: str = "zipf"
 
     def shards(self) -> list[int]:
         """Generator scale of each shard."""
@@ -228,7 +236,9 @@ def build_changes(schema: Schema, scale: Scale) -> Iterator[list[DataChange]]:
     for shard, factor in enumerate(scale.shards()):
         seed = scale.seed + shard
         tables = module.build_dataset(
-            module.Settings(factor, seed, date.fromisoformat(module.DEFAULT_AS_OF))
+            module.Settings(
+                factor, seed, date.fromisoformat(module.DEFAULT_AS_OF), scale.vocabulary
+            )
         )
         _densify(tables, scale, random.Random(seed))
         if shard:
@@ -748,6 +758,21 @@ class Workload:
     words: list[str]
     supplier_kind: str
     part_kind: str
+    #: The most common words of `main` (`COMMON_SEARCH`).
+    common: list[str] = field(default_factory=list)
+
+
+#: Common words sampled by `COMMON_SEARCH`.
+COMMON_WORDS = 30
+_COMMON = text(
+    "SELECT word FROM mat_lexicon WHERE domain_id = :d AND branch = 'main' "
+    "AND word ~ '^[a-z]{4,}$' GROUP BY word ORDER BY sum(records) DESC, word LIMIT :n"
+)
+_ABOVE = text(
+    "SELECT word FROM mat_lexicon WHERE domain_id = :d AND branch = 'main' "
+    "AND word ~ '^[a-z]{4,}$' GROUP BY word HAVING sum(records) > :docs "
+    "ORDER BY sum(records) DESC, word LIMIT :n"
+)
 
 
 async def workload(engine: AsyncEngine, runtime: StoreRuntime) -> Workload:
@@ -778,7 +803,14 @@ async def workload(engine: AsyncEngine, runtime: StoreRuntime) -> Workload:
                 if word.isalpha() and len(word) > 3
             }
         )
-    return Workload(schema, parts, suppliers, words, supplier.id, part.id)
+        # Above search.common_term_docs when the dataset has such words, else the most common.
+        docs = SearchSettings().common_term_docs
+        above = {"d": DOMAIN, "docs": docs, "n": COMMON_WORDS}
+        common = list((await session.execute(_ABOVE, above)).scalars())
+        if not common:
+            found_common = await session.execute(_COMMON, {"d": DOMAIN, "n": COMMON_WORDS})
+            common = list(found_common.scalars())
+    return Workload(schema, parts, suppliers, words, supplier.id, part.id, common)
 
 
 def read_operations(
@@ -840,17 +872,40 @@ def read_operations(
             runtime=runtime,
         )
 
-    async def search(session: AsyncSession, rng: random.Random) -> Any:
-        return await search_records(
-            session, DOMAIN, branch, rng.choice(work.words), limit=20, runtime=runtime
-        )
-
     reading = ReadRuntime(
         sessions=async_sessionmaker(),
         read=ReadSettings(),
         search=SearchSettings(),
         store=runtime,
     )
+    # As Keeper searches: every Kind named, the ranking sized by the word lexicon.
+    kinds = sorted(schema.kinds)
+    common = common_terms(reading)
+
+    async def search(session: AsyncSession, rng: random.Random) -> Any:
+        return await search_records(
+            session,
+            DOMAIN,
+            branch,
+            rng.choice(work.words),
+            limit=20,
+            kind_ids=kinds,
+            common=common,
+            runtime=runtime,
+        )
+
+    async def search_common(session: AsyncSession, rng: random.Random) -> Any:
+        return await search_records(
+            session,
+            DOMAIN,
+            branch,
+            rng.choice(work.common or work.words),
+            limit=20,
+            kind_ids=kinds,
+            common=common,
+            runtime=runtime,
+        )
+
     part = schema.kinds[work.part_kind]
     name = branch.branch if isinstance(branch, BranchLayout) else branch
 
@@ -895,15 +950,19 @@ def read_operations(
     async def search_typos(session: AsyncSession, rng: random.Random) -> Any:
         # Keeper's lexical search: the corrections, then the search with them.
         query = misspelled(rng.choice(work.words))
-        fixes = await search_corrections(session, DOMAIN, branch, query, typos, runtime=runtime)
+        fixes = await search_corrections(
+            session, DOMAIN, branch, query, typos, kind_ids=kinds, runtime=runtime
+        )
         return await search_records(
             session,
             DOMAIN,
             branch,
             query,
             limit=20,
+            kind_ids=kinds,
             corrections=fixes,
             correction_weight=typos.weight,
+            common=common,
             runtime=runtime,
         )
 
@@ -911,16 +970,20 @@ def read_operations(
 
     async def search_partial(session: AsyncSession, rng: random.Random) -> Any:
         query = " ".join(rng.sample(work.words, 3))
-        fixes = await search_corrections(session, DOMAIN, branch, query, typos, runtime=runtime)
+        fixes = await search_corrections(
+            session, DOMAIN, branch, query, typos, kind_ids=kinds, runtime=runtime
+        )
         return await search_records(
             session,
             DOMAIN,
             branch,
             query,
             limit=20,
+            kind_ids=kinds,
             corrections=fixes,
             correction_weight=typos.weight,
             partial=partial,
+            common=common,
             runtime=runtime,
         )
 
@@ -933,6 +996,7 @@ def read_operations(
         "full-text search": search,
         TYPO_SEARCH: search_typos,
         PARTIAL_SEARCH: search_partial,
+        COMMON_SEARCH: search_common,
         "record history page": history,
         "record lineage": lineage,
     }

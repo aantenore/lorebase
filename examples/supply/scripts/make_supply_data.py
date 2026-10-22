@@ -10,8 +10,15 @@ file of its own.
 The default output (``--scale 1``) is the committed ``data/`` directory. Larger scales multiply
 every row count and give a bigger dataset with the same shape, for load and performance runs.
 
+``--vocabulary zipf`` writes the names, titles, summaries and reasons with a vocabulary of
+tens of thousands of terms whose frequencies follow Zipf's law, plus product codes, so that
+full-text search sees the spread of a real catalogue (a few very common terms, a long tail of
+rare ones) instead of the few hundred words of the demo text. Keys, numbers, Links and every
+other column are those of ``--vocabulary demo`` (the default): the two differ only in text.
+
     python examples/supply/scripts/make_supply_data.py                    # rewrite data/
     python examples/supply/scripts/make_supply_data.py --scale 200 --out /tmp/supply-big
+    python examples/supply/scripts/make_supply_data.py --scale 200 --vocabulary zipf --out /tmp/z
 
 All names are invented; any resemblance to real companies is a coincidence.
 """
@@ -232,6 +239,152 @@ FLAG_REASONS = {
 }
 
 
+# Realistic text (--vocabulary zipf) ------------------------------------------------------------
+
+VOCABULARIES = ("demo", "zipf")
+#: Distinct terms of the realistic vocabulary, and the exponent of their Zipf distribution
+#: (the term of rank n is used about 1 / n**ZIPF_EXPONENT as often as the first).
+ZIPF_TERMS = 40000
+ZIPF_EXPONENT = 1.05
+
+
+def _words(text: str) -> list[str]:
+    return text.split()
+
+
+#: The most common terms, in rank order: words of industrial catalogues. Invented terms
+#: follow them.
+COMMON_TERMS = _words(
+    "steel stainless industrial standard heavy duty series type high pressure grade zinc "
+    "plated coated sealed precision compact flange threaded metric housing assembly kit "
+    "replacement nominal rated certified bore shaft carbon alloy brass aluminium nickel "
+    "chrome galvanized hardened forged machined welded cast black white blue red green "
+    "yellow inner outer upper lower front rear left right single double triple axial radial "
+    "angular rotary linear static dynamic thermal electric hydraulic pneumatic mechanical "
+    "manual automatic adjustable fixed flexible rigid modular universal reinforced "
+    "lightweight insulated waterproof corrosion resistant food approved marine automotive "
+    "agricultural mining offshore aerospace rail export domestic premium economy spare "
+    "service maintenance inspection quality batch lot pallet carton crate drum spool coil "
+    "roll sheet plate bar rod tube pipe wire cable strip ring disc block bracket clamp clip "
+    "pin stud spring sleeve bushing collar spacer shim plug cap cover guard shield panel "
+    "frame base mount support holder adapter coupling connector fitting nozzle orifice port "
+    "manifold chamber cylinder piston plunger diaphragm membrane cartridge element screen "
+    "mesh gauge meter switch relay sensor probe transmitter actuator controller module unit"
+)
+#: Syllables of the invented terms and supplier names.
+ONSETS = _words(
+    "b br c ch cr d dr f fl fr g gl gr h j k kl kr l m n p pl pr qu r s sc sh sk sl sp st "
+    "str t th tr v w z"
+)
+NUCLEI = _words("a e i o u y ae ai au ea ee ei ia io oa oo ou")
+CODAS = [
+    "",
+    "",
+    "",
+    *_words("b ck d f g k l ld lt m n nd ng nk nt p r rd rk rn rt s sk st t th x z"),
+]
+AGREEMENTS = (
+    "Framework supply agreement",
+    "Spot purchase agreement",
+    "Consignment stock agreement",
+    "Service level agreement",
+    "Tooling loan agreement",
+    "Quality assurance agreement",
+    "Vendor managed inventory agreement",
+    "Long term pricing agreement",
+)
+CODE_LETTERS = "ABCDEFGHJKLMNPRSTUVWXZ"
+
+
+def syllables(rng: random.Random, count: int) -> str:
+    return "".join(
+        rng.choice(ONSETS) + rng.choice(NUCLEI) + rng.choice(CODAS) for _ in range(count)
+    )
+
+
+@dataclass(frozen=True)
+class Vocabulary:
+    """`ZIPF_TERMS` terms, `COMMON_TERMS` first, and the cumulative weights of their Zipf
+    distribution; the same for the same seed."""
+
+    terms: tuple[str, ...]
+    cumulative: tuple[float, ...]
+
+    @classmethod
+    def build(cls, seed: int, size: int = ZIPF_TERMS) -> Vocabulary:
+        rng = random.Random(f"{seed}:vocabulary")
+        terms = list(dict.fromkeys(COMMON_TERMS))
+        seen = set(terms)
+        while len(terms) < size:
+            word = syllables(rng, rng.choice((2, 2, 3, 3, 4)))
+            if 4 <= len(word) <= 14 and word not in seen:
+                seen.add(word)
+                terms.append(word)
+        total, cumulative = 0.0, []
+        for rank in range(1, size + 1):
+            total += 1.0 / rank**ZIPF_EXPONENT
+            cumulative.append(total)
+        return cls(tuple(terms), tuple(cumulative))
+
+    def words(self, rng: random.Random, count: int) -> list[str]:
+        return rng.choices(self.terms, cum_weights=self.cumulative, k=count)
+
+    def phrase(self, rng: random.Random, low: int, high: int) -> str:
+        return " ".join(self.words(rng, rng.randint(low, high)))
+
+
+def product_code(rng: random.Random) -> str:
+    """A catalogue code such as ``KX-4471B``, ``RT204-2Z``, ``M8471`` or ``PL-77``."""
+    head = "".join(rng.choice(CODE_LETTERS) for _ in range(rng.choice((1, 2, 2, 3))))
+    number = rng.randrange(10, 99999)
+    shape = rng.randrange(4)
+    if shape == 0:
+        return f"{head}-{number}{rng.choice(CODE_LETTERS)}"
+    if shape == 1:
+        return f"{head}{number}-{rng.randrange(1, 9)}{rng.choice('ZRSN')}"
+    if shape == 2:
+        return f"{head}{number}"
+    return f"{head}-{number}"
+
+
+def realistic_text(tables: dict[str, list[Row]], settings: Settings) -> None:
+    """Rewrite the text columns of `tables` from the Zipf vocabulary, with a random stream of
+    their own: every other column stays as generated."""
+    vocabulary = Vocabulary.build(settings.seed)
+    rng = random.Random(f"{settings.seed}:text")
+
+    def capital(word: str) -> str:
+        return word[:1].upper() + word[1:]
+
+    names: dict[str, str] = {}
+    for row in tables["supplier"]:
+        stem = capital(syllables(rng, rng.choice((2, 2, 3))))
+        middle = capital(vocabulary.words(rng, 1)[0]) if rng.random() < 0.5 else ""
+        form = rng.choice(COUNTRIES[row["country"]][2])
+        name = " ".join(p for p in (stem, middle, rng.choice(PRODUCT_WORDS), form) if p)
+        row["legal_name"] = name
+        names[row["supplier_code"]] = name
+    for row in tables["part"]:
+        bases, variants, _, _ = PART_CATALOG[row["category"]]
+        base, variant = rng.choice(bases), rng.choice(variants)
+        descriptor = f" {vocabulary.phrase(rng, 1, 2)}" if rng.random() < 0.6 else ""
+        row["name"] = f"{base} {variant} {product_code(rng)}{descriptor}"
+        row["summary"] = (
+            f"{capital(vocabulary.phrase(rng, 3, 7))} for {rng.choice(APPLICATIONS)}; "
+            f"{base.lower()} {variant}, {vocabulary.phrase(rng, 4, 12)}."
+        )
+    for row in tables["plant"]:
+        word = capital(vocabulary.words(rng, 1)[0])
+        row["name"] = f"{row['city']} {PLANT_TYPES[row['plant_type']]} {word}"
+    supplier_of = {link["from_key"]: link["to_key"] for link in tables["with_supplier"]}
+    for row in tables["contract"]:
+        topic = vocabulary.phrase(rng, 1, 3)
+        supplier = names[supplier_of[row["contract_number"]]]
+        row["title"] = f"{rng.choice(AGREEMENTS)} {row['start_date'][:4]} {topic} - {supplier}"
+    for row in tables["risk_flag"]:
+        row["reason"] = f"{row['reason']} Affects {vocabulary.phrase(rng, 2, 6)}."
+
+
 # Output tables -------------------------------------------------------------------------------
 
 COLUMNS: dict[str, tuple[str, ...]] = {
@@ -298,6 +451,8 @@ class Settings:
     scale: int
     seed: int
     as_of: date
+    #: Text of names and descriptions: `demo` (the committed data) or `zipf` (`realistic_text`).
+    vocabulary: str = "demo"
 
 
 def key(kind: str, index: int) -> str:
@@ -582,7 +737,7 @@ def build_dataset(settings: Settings) -> dict[str, list[Row]]:
     )
     contracts, with_supplier = build_contracts(settings, suppliers, rng)
     flag_rows, flag_links = build_flags(settings, suppliers, rng)
-    return {
+    tables = {
         "supplier": suppliers,
         "part": parts,
         "plant": plants,
@@ -596,6 +751,9 @@ def build_dataset(settings: Settings) -> dict[str, list[Row]]:
         "with_supplier": with_supplier,
         "flags": flag_links,
     }
+    if settings.vocabulary == "zipf":
+        realistic_text(tables, settings)
+    return tables
 
 
 def write_dataset(tables: dict[str, list[Row]], out: Path) -> None:
@@ -613,10 +771,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="random seed")
     parser.add_argument("--as-of", default=DEFAULT_AS_OF, help="reference date, YYYY-MM-DD")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output directory")
+    parser.add_argument(
+        "--vocabulary",
+        choices=VOCABULARIES,
+        default="demo",
+        help="text of names and descriptions: demo (the committed data) or zipf (realistic "
+        "term frequencies, for search performance runs)",
+    )
     args = parser.parse_args(argv)
     if args.scale < 1:
         parser.error("--scale must be at least 1")
-    tables = build_dataset(Settings(args.scale, args.seed, date.fromisoformat(args.as_of)))
+    settings = Settings(args.scale, args.seed, date.fromisoformat(args.as_of), args.vocabulary)
+    tables = build_dataset(settings)
     write_dataset(tables, args.out)
     for name, rows in tables.items():
         print(f"{name}.csv: {len(rows)} rows")
