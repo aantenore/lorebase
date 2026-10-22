@@ -750,13 +750,17 @@ webhooks:
   signature_header: Lorebase-Signature   # t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">
   event_header: Lorebase-Event
   delivery_header: Lorebase-Delivery
-  timeout_s: 10.0                # time budget of one request
+  timeout_s: 10.0                # time budget of one attempt as a whole (lookup, connects, status)
+  connect_timeout_s: 5.0         # connecting to one address; then the next checked one (<= timeout_s)
   max_attempts: 8                # then the delivery is marked dead
   backoff_base_s: 30.0           # delay after the first failure ...
   backoff_factor: 2.0            # ... multiplied by this after each next one ...
   backoff_max_s: 3600.0          # ... up to this
-  lease_s: 120.0                 # a claimed delivery is retried by another worker after this
+  lease_s: 120.0                 # a claimed delivery is retried by another worker after this;
+                                 # a pass running longer is abandoned (> pass_timeout_s + timeout_s)
   batch: 100                     # events and deliveries per worker pass
+  concurrency: 8                 # attempts of one pass in flight at the same time
+  pass_timeout_s: 60.0           # no attempt starts after this; the rest go to the next pass
   changed_keys_max: 100          # changed Record keys listed per event payload
   retention_s: 604800.0          # finished deliveries and handed-off events kept (7 days)
 

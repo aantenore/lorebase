@@ -1032,13 +1032,16 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 | `webhooks.signature_header` | `Lorebase-Signature` | t=&lt;unix&gt;,v1=&lt;hex HMAC-SHA256 of "&lt;t&gt;.&lt;body&gt;"&gt; |
 | `webhooks.event_header` | `Lorebase-Event` |  |
 | `webhooks.delivery_header` | `Lorebase-Delivery` |  |
-| `webhooks.timeout_s` | `10.0` | time budget of one request |
+| `webhooks.timeout_s` | `10.0` | time budget of one attempt as a whole (lookup, connects, status) |
+| `webhooks.connect_timeout_s` | `5.0` | connecting to one address; then the next checked one (&lt;= timeout_s) |
 | `webhooks.max_attempts` | `8` | then the delivery is marked dead |
 | `webhooks.backoff_base_s` | `30.0` | delay after the first failure ... |
 | `webhooks.backoff_factor` | `2.0` | ... multiplied by this after each next one ... |
 | `webhooks.backoff_max_s` | `3600.0` | ... up to this |
-| `webhooks.lease_s` | `120.0` | a claimed delivery is retried by another worker after this |
+| `webhooks.lease_s` | `120.0` | a claimed delivery is retried by another worker after this; a pass running longer is abandoned (&gt; pass_timeout_s + timeout_s) |
 | `webhooks.batch` | `100` | events and deliveries per worker pass |
+| `webhooks.concurrency` | `8` | attempts of one pass in flight at the same time |
+| `webhooks.pass_timeout_s` | `60.0` | no attempt starts after this; the rest go to the next pass |
 | `webhooks.changed_keys_max` | `100` | changed Record keys listed per event payload |
 | `webhooks.retention_s` | `604800.0` | finished deliveries and handed-off events kept (7 days) |
 

@@ -356,6 +356,13 @@ dashboard shows `delivered`, `retrying` and `dead` side by side. Dead letters ar
 refused (scheme, private address) is dead at once; others after `webhooks.max_attempts`. Fix or disable the
 webhook; the pass retries what is still pending.
 
+A receiver that stopped answering does not hold Scribe: each attempt is cut off after `webhooks.timeout_s`
+(`last_error` reads `timed out after 10s`, counted in `lorebase_webhooks_timeouts_total`), a pass starts no attempt
+after `webhooks.pass_timeout_s` and releases the rest to the next pass (`released` in the job result), and a pass
+still running after `webhooks.lease_s` is abandoned as a failed job attempt, since its deliveries may then be sent
+by another pass. Many timeouts with a steady `released` count mean slow receivers: raise
+`webhooks.concurrency` or fix the receiver.
+
 #### LorebaseGcNotRun
 
 No garbage collection completed in 3 days (`lorebase_gc_runs_total`, dry runs excluded) although Scribe is

@@ -435,6 +435,12 @@ def verified(secret: str, header: str, body: bytes, tolerance_s: int = 300) -> b
 
 Answer 2xx to acknowledge. Other answers and timeouts are retried with exponential backoff
 (`webhooks.backoff_*`) up to `webhooks.max_attempts`, then the delivery is marked dead.
+Each attempt, host lookup included, is cut off after `webhooks.timeout_s` (10 s), and a
+connection to one address after `webhooks.connect_timeout_s` (5 s), so a receiver that is gone
+(connection refused), accepts and never answers, drops packets, or closes midway only fails
+that attempt. A pass sends `webhooks.concurrency` deliveries at a time and starts none after
+`webhooks.pass_timeout_s`; the deliveries it did not reach go to the next pass without counting
+an attempt. Answer quickly and do the work afterwards: the response body is never read.
 Deliveries are made by `lorebase_store.webhooks.deliver_pending`, which Scribe runs
 periodically (`webhook_delivery` jobs, see [scribe.md](scribe.md)) with its HTTP sender
 (`lorebase_scribe.webhooks.HttpxSender`); targets

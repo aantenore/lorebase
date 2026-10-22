@@ -25,6 +25,7 @@ What changed in each release, newest first. The notes are written for the person
 
 ### Fixed
 
+- A webhook receiver that disappears no longer holds a Scribe worker. Each delivery attempt, host lookup and every checked address included, is now cut off after `webhooks.timeout_s`; before, the budget applied to each address in turn, the lookup had none, and one pass sent up to `webhooks.batch` deliveries one after the other, so a receiver that accepted connections and never answered, or dropped packets, kept a `webhook_delivery` job running for many minutes while its heartbeat kept it from being requeued. Connections give up after the new `webhooks.connect_timeout_s` (5 s) and try the next checked address; a pass sends `webhooks.concurrency` (8) deliveries at a time, starts none after `webhooks.pass_timeout_s` (60 s) and releases the rest to the next pass without counting an attempt; a pass still running after `webhooks.lease_s` fails its job attempt. `webhooks.lease_s` must now exceed `pass_timeout_s + timeout_s` (the defaults do). Timed-out attempts are retried with backoff and marked dead after `max_attempts` as before, and counted in the new metric `lorebase.webhooks.timeouts` ([operations](docs/operations.md#lorebasewebhookdeliveryfailing)).
 - The compose `db-roles` step grants the application role EXECUTE on all eight security definer read functions of a database migrated before the role existed (it granted only the four of revision 0005), reading them from the catalog like the Helm chart's role setup does.
 
 ### Changed

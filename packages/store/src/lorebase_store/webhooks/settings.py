@@ -42,7 +42,19 @@ class WebhookSettings(SectionModel):
     signature_header: str = Field(default="Lorebase-Signature", min_length=1)
     event_header: str = Field(default="Lorebase-Event", min_length=1)
     delivery_header: str = Field(default="Lorebase-Delivery", min_length=1)
-    timeout_s: float = Field(default=10.0, gt=0, description="Time budget of one request.")
+    timeout_s: float = Field(
+        default=10.0,
+        gt=0,
+        description="Time budget of one attempt as a whole: host lookup, connection to each "
+        "checked address, sending and the answer's status. Past it the attempt fails and is "
+        "retried like any other failure.",
+    )
+    connect_timeout_s: float = Field(
+        default=5.0,
+        gt=0,
+        description="Time to open a connection to one address; the next checked address is "
+        "tried after it, within timeout_s.",
+    )
     max_attempts: int = Field(
         default=8, ge=1, description="Attempts before a delivery is marked dead."
     )
@@ -53,9 +65,21 @@ class WebhookSettings(SectionModel):
         default=120.0,
         gt=0,
         description="A claimed delivery is retried by another worker after this long if its "
-        "result was never recorded.",
+        "result was never recorded; a pass running longer than this is abandoned.",
     )
     batch: int = Field(default=100, ge=1, description="Events and deliveries per worker pass.")
+    concurrency: int = Field(
+        default=8,
+        ge=1,
+        description="Attempts of one pass in flight at the same time, so a target that does "
+        "not answer holds one of them, not the whole pass.",
+    )
+    pass_timeout_s: float = Field(
+        default=60.0,
+        gt=0,
+        description="A pass starts no attempt after this long; the deliveries it claimed and did "
+        "not attempt are released to the next pass without counting an attempt.",
+    )
     changed_keys_max: int = Field(
         default=100, ge=0, description="Changed Record keys listed per event payload."
     )
@@ -70,8 +94,10 @@ class WebhookSettings(SectionModel):
     def _consistent(self) -> Self:
         if self.backoff_base_s > self.backoff_max_s:
             raise ValueError("backoff_base_s cannot exceed backoff_max_s")
-        if self.lease_s <= self.timeout_s:
-            raise ValueError("lease_s must exceed timeout_s")
+        if self.connect_timeout_s > self.timeout_s:
+            raise ValueError("connect_timeout_s cannot exceed timeout_s")
+        if self.lease_s <= self.pass_timeout_s + self.timeout_s:
+            raise ValueError("lease_s must exceed pass_timeout_s + timeout_s")
         keys = [self.encryption_key, *self.previous_encryption_keys]
         if any(
             key is not None and len(key.get_secret_value()) < MIN_ENCRYPTION_KEY_LENGTH

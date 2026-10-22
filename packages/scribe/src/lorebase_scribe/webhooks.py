@@ -9,8 +9,11 @@ the environment sits between the checks and the target) and:
   certificate verification) keep the host name, so a DNS answer that changed after the check
   cannot reach an internal service;
 - never follows redirects (a redirect could lead to a target the checks did not see);
-- never reads the response body, and bounds each attempt by the timeout as a whole, so a
-  target that streams or trickles cannot hold the worker.
+- never reads the response body, and bounds each exchange by the timeout as a whole, so a
+  target that streams or trickles cannot hold the worker;
+- gives up a connection after `connect_timeout_s` (at most the timeout) and tries the next
+  checked address, so one address that drops packets does not use up the whole budget.
+  `deliver_pending` bounds the attempt over all addresses by the same timeout.
 """
 
 from __future__ import annotations
@@ -36,8 +39,11 @@ def pin(url: httpx.URL, address: str) -> tuple[httpx.URL, dict[str, str], dict[s
 class HttpxSender:
     """`Sender` over an `httpx.AsyncClient`."""
 
-    def __init__(self, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self, client: httpx.AsyncClient, *, connect_timeout_s: float | None = None
+    ) -> None:
         self._client = client
+        self._connect_timeout_s = connect_timeout_s
 
     async def __call__(
         self,
@@ -60,6 +66,14 @@ class HttpxSender:
         assert failure is not None
         raise failure
 
+    def _timeout(self, timeout_s: float) -> httpx.Timeout:
+        """Every phase bounded: connect by `connect_timeout_s` (capped by `timeout_s`), each
+        write and read and the wait for a pooled connection by `timeout_s`."""
+        connect = timeout_s
+        if self._connect_timeout_s is not None:
+            connect = min(self._connect_timeout_s, timeout_s)
+        return httpx.Timeout(timeout_s, connect=connect)
+
     async def _post(
         self,
         url: httpx.URL,
@@ -77,7 +91,7 @@ class HttpxSender:
                 url,
                 content=body,
                 headers=headers,
-                timeout=timeout_s,
+                timeout=self._timeout(timeout_s),
                 follow_redirects=False,
                 extensions=extensions,
             ) as response,

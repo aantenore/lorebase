@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -20,8 +22,10 @@ from lorebase_store.webhooks import (
 from lorebase_store.webhooks.delivery import (
     DEAD,
     DELIVERED,
+    PENDING,
     Target,
     _attempt,
+    _attempt_all,
     _Claimed,
     backoff,
     check_target,
@@ -204,6 +208,9 @@ def test_example_file_matches_code_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     [
         ({"backoff_base_s": 10, "backoff_max_s": 5}, "webhooks"),
         ({"lease_s": 5, "timeout_s": 10}, "webhooks"),
+        ({"lease_s": 70, "pass_timeout_s": 60, "timeout_s": 10}, "pass_timeout_s"),
+        ({"connect_timeout_s": 20, "timeout_s": 10}, "connect_timeout_s"),
+        ({"concurrency": 0}, "webhooks.concurrency"),
         ({"allowed_schemes": []}, "webhooks.allowed_schemes"),
     ],
 )
@@ -211,3 +218,91 @@ def test_invalid_values_name_the_key(values: dict[str, object], needle: str) -> 
     with pytest.raises(ConfigError) as caught:
         webhook_settings(Settings(webhooks=values))
     assert needle in str(caught.value)
+
+
+# A receiver that is gone or silent: every attempt ends within `timeout_s`, and a pass within
+# `pass_timeout_s` plus one attempt, whatever the lookup or the sender do.
+
+FAST = WebhookSettings(timeout_s=0.2, connect_timeout_s=0.1, pass_timeout_s=0.5, lease_s=5)
+
+
+def fixed_clock() -> datetime:
+    return datetime(2026, 10, 21, tzinfo=UTC)
+
+
+async def public(host: str) -> list[str]:
+    return ["93.184.215.14"]
+
+
+async def hanging_lookup(host: str) -> list[str]:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+class _Hanging:
+    """Never answers for `silent` hosts; answers 204 to the others."""
+
+    def __init__(self, silent: frozenset[str] = frozenset({"gone.example.com"})) -> None:
+        self.silent = silent
+        self.sent: list[str] = []
+
+    async def __call__(
+        self,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        timeout_s: float,
+        addresses: Sequence[str],
+    ) -> int:
+        if urlsplit(url).hostname in self.silent:
+            await asyncio.Event().wait()
+        self.sent.append(url)
+        return 204
+
+
+def claimed(n: int, host: str = "gone.example.com", attempts: int = 0) -> _Claimed:
+    return _Claimed("acme", n, f"https://{host}/hook", b"k" * 32, "e", {}, attempts)
+
+
+async def test_a_silent_receiver_fails_the_attempt_at_the_timeout() -> None:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    outcome = await _attempt(claimed(1), FAST, _Hanging(), fixed_clock, public)
+    assert loop.time() - started < 1
+    assert (outcome.status, outcome.timed_out) == (PENDING, True)
+    assert outcome.error == "timed out after 0.2s"
+
+    last = await _attempt(
+        claimed(1, attempts=FAST.max_attempts - 1), FAST, _Hanging(), fixed_clock, public
+    )
+    assert (last.status, last.timed_out) == (DEAD, True)  # attempts used up: dead letter
+
+
+async def test_a_hanging_lookup_counts_in_the_attempt_timeout() -> None:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    outcome = await _attempt(claimed(1), FAST, _Hanging(), fixed_clock, hanging_lookup)
+    assert loop.time() - started < 1
+    assert (outcome.status, outcome.timed_out) == (PENDING, True)
+
+
+async def test_a_silent_receiver_does_not_hold_the_others_of_a_pass() -> None:
+    send = _Hanging()
+    deliveries = [claimed(1), claimed(2, "ok.example.com"), claimed(3, "ok.example.com")]
+    settings = FAST.model_copy(update={"concurrency": 2})
+    outcomes, left = await _attempt_all(deliveries, settings, send, fixed_clock, public)
+    assert left == []
+    assert {o.claimed.id: o.status for o in outcomes} == {1: PENDING, 2: DELIVERED, 3: DELIVERED}
+    assert len(send.sent) == 2
+
+
+async def test_a_pass_starts_no_attempt_after_its_deadline() -> None:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deliveries = [claimed(n) for n in range(1, 11)]
+    settings = FAST.model_copy(update={"concurrency": 1})
+    outcomes, left = await _attempt_all(deliveries, settings, _Hanging(), fixed_clock, public)
+    # 0.5 s of pass with 0.2 s attempts: three start, the rest go back to the queue untried
+    assert [o.claimed.id for o in outcomes] == [1, 2, 3]
+    assert [c.id for c in left] == list(range(4, 11))
+    assert loop.time() - started < settings.pass_timeout_s + settings.timeout_s + 0.5
