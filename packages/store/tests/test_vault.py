@@ -1,9 +1,11 @@
 """The personal data vault against Postgres (design 13.5): tokens in objects, values in the
-vault, erasure across history, references bound to their Record, row-level security, and no
-sensitive word in the search vectors, the lexicon or search corrections."""
+vault, erasure across history, references bound to their Record, row-level security, no
+sensitive word in the search vectors, the lexicon or search corrections, erasure of case
+variants, key changes and later writes, the erasure lock, and key rotation."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Record, Sensitivity, vault_reference, vault_token
 from lorebase_core.types import TypeSpec
-from lorebase_core.validate import IssueCode, RecordUpsert
+from lorebase_core.validate import IssueCode, RecordDelete, RecordUpsert
 from lorebase_store.commit import (
     CommitResult,
     SchemaUpsert,
@@ -24,17 +26,20 @@ from lorebase_store.commit import (
     create_domain,
 )
 from lorebase_store.materialize import verify
-from lorebase_store.models import MatLexicon, MatRecord, StoredObject
+from lorebase_store.models import MatLexicon, MatRecord, StoredObject, VaultEntry
 from lorebase_store.reads import TypoTolerance, search_corrections
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 from lorebase_store.vault import (
+    ErasedValues,
     VaultKeys,
     VaultSettings,
     VaultState,
     erase_matching,
     erase_record,
     open_values,
+    rotate,
+    usage,
 )
 
 from .support import (
@@ -118,7 +123,9 @@ async def sessions(engine: AsyncEngine, runtime: StoreRuntime) -> AsyncIterator[
     assert report.ok, report.divergences
 
 
-async def write(sessions: Sessions, runtime: StoreRuntime, *changes: RecordUpsert) -> CommitResult:
+async def write(
+    sessions: Sessions, runtime: StoreRuntime, *changes: RecordUpsert | RecordDelete
+) -> CommitResult:
     async with sessions() as session:
         return await commit(
             session,
@@ -199,8 +206,12 @@ async def test_erasure_reaches_every_revision_and_is_idempotent(
         old: (VaultState.ERASED, None),
         new: (VaultState.ERASED, None),
     }
-    # The erased value written again is stored under a new token; history stays erased.
-    await write(sessions, runtime, person("S-1", "old@example.com"))
+    # Written again (a Source sync, say), the erased value stays erased: same token.
+    await write(sessions, runtime, person("S-1", "new@example.com"))
+    assert vault_token(await stored_email(sessions, "S-1")) == new
+    # Allowed again, it is stored under a new token; history stays erased.
+    allowing = with_vault(runtime, erased_values=ErasedValues.ALLOW)
+    await write(sessions, allowing, person("S-1", "old@example.com"))
     again = vault_token(await stored_email(sessions, "S-1"))
     assert again not in (None, old, new)
     assert (await opened(sessions, runtime, again))[again][0] is VaultState.VALUE  # type: ignore[index]
@@ -217,14 +228,7 @@ async def test_erasure_by_value_reaches_every_record(
         person("S-2", "shared@example.com"),
         person("S-3", "other@example.com"),
     )
-    keys = runtime.vault
-    assert keys is not None
-    fingerprint = keys.fingerprint(DOMAIN, SUPPLIER, EMAIL, "shared@example.com")
-    async with sessions() as session, session.begin():
-        await session.execute(
-            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
-        )
-        assert await erase_matching(session, DOMAIN, SUPPLIER, EMAIL, fingerprint) == 2
+    assert await erase_value(sessions, runtime, "shared@example.com") == 2
     tokens = [vault_token(await stored_email(sessions, c)) for c in ("S-1", "S-2", "S-3")]
     states = await opened(sessions, runtime, *[t for t in tokens if t])
     assert [states[t][0] for t in tokens if t] == [
@@ -360,3 +364,182 @@ async def test_removing_a_tag_needs_to_be_allowed(
     with pytest.raises(SensitivityLoweredError):  # cleared for another tag only
         await untag(frozenset({Sensitivity.CONFIDENTIAL}))
     await untag(frozenset(PII))  # the caller is cleared for pii
+
+
+def with_vault(runtime: StoreRuntime, **changes: Any) -> StoreRuntime:
+    """A runtime sharing the settings of `runtime` with other vault settings."""
+    settings = VAULT.model_copy(update=changes)
+    return StoreRuntime.from_settings(
+        runtime.settings,
+        vault=VaultSettings.model_validate(
+            settings.model_dump(mode="python")
+            | {
+                "token_key": _secret(settings.token_key),
+                "encryption_key": _secret(settings.encryption_key),
+                "digest_key": _secret(settings.digest_key),
+                "previous_keys": {k: _secret(v) for k, v in settings.previous_keys.items()},
+                "previous_token_keys": {
+                    k: _secret(v) for k, v in settings.previous_token_keys.items()
+                },
+            }
+        ),
+    )
+
+
+def _secret(value: Any) -> Any:
+    return value.get_secret_value() if hasattr(value, "get_secret_value") else value
+
+
+async def erase_value(sessions: Sessions, runtime: StoreRuntime, value: Any) -> int:
+    keys = runtime.vault
+    assert keys is not None
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        return await erase_matching(session, DOMAIN, SUPPLIER, EMAIL, value, keys)
+
+
+async def erase_key(sessions: Sessions, key: str) -> int:
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        return await erase_record(session, DOMAIN, SUPPLIER, key)
+
+
+async def state_of(sessions: Sessions, runtime: StoreRuntime, code: str) -> VaultState:
+    token = vault_token(await stored_email(sessions, code))
+    assert token
+    return (await opened(sessions, runtime, token))[token][0]  # type: ignore[no-any-return]
+
+
+async def test_erasure_by_value_reaches_case_variants(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(
+        sessions,
+        runtime,
+        person("S-1", "Ada.Lovelace@Example.com"),
+        person("S-2", "  ada.lovelace@example.COM "),
+        person("S-3", "ada.lovelace@example.org"),
+    )
+    assert await erase_value(sessions, runtime, "ada.lovelace@example.com") == 2
+    assert [await state_of(sessions, runtime, c) for c in ("S-1", "S-2", "S-3")] == [
+        VaultState.ERASED,
+        VaultState.ERASED,
+        VaultState.VALUE,
+    ]
+    # A later write of a variant of the erased value, to any Record of the Kind, stays erased.
+    await write(sessions, runtime, person("S-4", "ADA.LOVELACE@EXAMPLE.COM"))
+    assert await state_of(sessions, runtime, "S-4") is VaultState.ERASED
+    refusing = with_vault(runtime, erased_values=ErasedValues.REFUSE)
+    with pytest.raises(ValidationFailedError) as raised:
+        await write(sessions, refusing, person("S-5", "ada.lovelace@example.com"))
+    assert [i.code for i in raised.value.issues] == [IssueCode.VALUE_VAULT_ERASED]
+
+
+async def test_erasure_follows_key_changes(sessions: Sessions, runtime: StoreRuntime) -> None:
+    await write(sessions, runtime, person("S-1", "old@example.com"))
+    await write(sessions, runtime, person("S-1", "kept@example.com"))
+    held = await stored_email(sessions, "S-1")
+    # Another Record cannot take the reference; a key change (same change set deletes S-1) can.
+    with pytest.raises(ValidationFailedError):
+        await write(sessions, runtime, person("S-9", held))
+    await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-1"), person("S-9", held))
+    moved = vault_token(await stored_email(sessions, "S-9"))
+    assert moved not in (None, vault_token(held))
+    assert (await opened(sessions, runtime, moved))[moved] == (  # type: ignore[index]
+        VaultState.VALUE,
+        "kept@example.com",
+    )
+    # Erasing the new key erases what the Record held under its earlier key too.
+    assert await erase_key(sessions, "S-9") == 3
+    token = vault_token(held)
+    assert token
+    assert (await opened(sessions, runtime, token))[token][0] is VaultState.ERASED
+
+
+async def test_an_erasure_waits_for_commits_and_commits_wait_for_it(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-1", "ada@example.com"))
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        assert await erase_record(session, DOMAIN, SUPPLIER, "S-1") == 1
+        # The erasure holds the vault lock: a commit writing the value again waits for it.
+        racing = asyncio.create_task(write(sessions, runtime, person("S-1", "ada@example.com")))
+        await asyncio.sleep(0.5)
+        assert not racing.done()
+    await racing
+    # It then reads the tombstone: the value is stored erased, never readable again.
+    assert await state_of(sessions, runtime, "S-1") is VaultState.ERASED
+
+
+async def test_token_key_rotation_keeps_tokens_and_finds_old_fingerprints(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-1", "ada@example.com"), person("S-2", "Bob@x.io"))
+    first = await stored_email(sessions, "S-1")
+    rotated = with_vault(
+        runtime,
+        token_key="n" * 32,
+        token_key_id="2",
+        previous_token_keys={"1": "t" * 32},
+    )
+    # The same value written again under the new token key finds its old token: no change.
+    assert (await write(sessions, rotated, person("S-1", "ada@example.com"))).no_op
+    await write(sessions, rotated, person("S-3", "carol@example.com"))
+    async with sessions() as session, session.begin():
+        found = await usage(session)
+    assert found.fingerprint_keys == {"1/2": 2, "2/2": 1}
+    keys = rotated.vault
+    assert keys is not None
+    report = await rotate(sessions, keys, batch=1, max_rows=100)
+    assert (report.fingerprinted, report.unopenable, report.after) == (2, 0, None)
+    async with sessions() as session, session.begin():
+        assert (await usage(session)).fingerprint_keys == {"2/2": 3}
+    # Without the old token key, erasure by value still finds the rotated fingerprints.
+    only_new = with_vault(runtime, token_key="n" * 32, token_key_id="2")
+    assert await erase_value(sessions, only_new, "bob@x.io") == 1
+    assert await stored_email(sessions, "S-1") == first
+
+
+async def test_encryption_key_rotation_reseals_every_row(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-1", "ada@example.com"), person("S-2", "bob@x.io"))
+    rotated = with_vault(
+        runtime, encryption_key="f" * 32, key_id="k2", previous_keys={"k1": "e" * 32}
+    )
+    keys = rotated.vault
+    assert keys is not None
+    first = await rotate(sessions, keys, batch=1, max_rows=1)
+    assert (first.rows, first.resealed) == (1, 1)
+    assert first.after is not None  # stopped after max_rows: a continuation resumes here
+    rest = await rotate(sessions, keys, batch=10, max_rows=10, after=first.after)
+    assert (rest.resealed, rest.after) == (1, None)
+    async with sessions() as session, session.begin():
+        assert (await usage(session)).encryption_keys == {"k2": 2}
+    only_new = with_vault(runtime, encryption_key="f" * 32, key_id="k2")
+    assert await state_of(sessions, only_new, "S-1") is VaultState.VALUE
+
+
+async def test_rows_without_a_current_fingerprint_are_made_again_before_erasure(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-1", "Ada@Example.com"))
+    keys = runtime.vault
+    assert keys is not None
+    async with sessions() as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        # As stored before matching forms: the fingerprint of the canonical value, no key id.
+        await session.execute(
+            VaultEntry.__table__.update().values(  # type: ignore[attr-defined]
+                fingerprint=keys.fingerprints(DOMAIN, SUPPLIER, EMAIL, "Ada@Example.com")[1],
+                fingerprint_key=None,
+            )
+        )
+    assert await erase_value(sessions, runtime, "ada@example.com") == 1

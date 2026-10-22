@@ -19,7 +19,12 @@ from dataclasses import dataclass
 
 from lorebase_keeper.auth.cache import TtlCache
 from lorebase_keeper.auth.config import AuthzSettings
-from lorebase_keeper.auth.permissions import INSTALLATION_PERMISSIONS, Permission, role_catalog
+from lorebase_keeper.auth.permissions import (
+    INSTALLATION_ADMIN_PERMISSIONS,
+    INSTALLATION_PERMISSIONS,
+    Permission,
+    role_catalog,
+)
 from lorebase_keeper.auth.ports import AuthStore
 from lorebase_keeper.auth.principals import Principal
 from lorebase_store.auth import GrantRecord
@@ -186,6 +191,8 @@ class Authorizer:
             return False
         if principal.installation_admin:
             return True
+        if permission in INSTALLATION_ADMIN_PERMISSIONS:
+            return False
         grants = await self._grants(principal, None)
         return any(
             grant.scope_type is GrantScope.DOMAIN

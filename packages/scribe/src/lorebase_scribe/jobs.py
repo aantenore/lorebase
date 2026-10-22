@@ -12,6 +12,7 @@
 | `embeddings` | `{"branches", "reindex", "resume"}` optional, Domain set | `EmbeddingPass.run` |
 | `audit_verify` | none | `lorebase_store.auth.AuditRepository.verify` over every chain |
 | `audit_checkpoint` | none | `checkpoints.publish_checkpoints` |
+| `vault.rotate` | `{"after": [domain id, token]}` optional | `lorebase_store.vault.rotate` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -31,6 +32,11 @@ under `reads`, those of the read stream.
 An `audit_checkpoint` job signs the head of every chain of `scribe.audit_checkpoints.streams`
 and stores one checkpoint per stream in the configured sink; `lorebase.audit.checkpoints`
 counts them by outcome. A failure fails the attempt (it is retried like any job).
+
+A `vault.rotate` job makes the vault rows of every Domain sealed or fingerprinted under
+earlier keys again under the current ones (`vault.rekey_batch` rows per transaction); after
+`vault.rekey_rows_per_job` rows it queues its continuation from where it stopped and succeeds.
+Without vault keys it fails at once.
 
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
@@ -73,12 +79,14 @@ from lorebase_store.jobs import (
     INDEX_JOB,
     MATERIALIZE_JOB,
     SOURCE_SYNC_JOB,
+    VAULT_ROTATE_JOB,
     JobRow,
     embeddings_payload,
     enqueue_job,
 )
 from lorebase_store.materialize import run_branch_delete_job, run_materialize_job
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.vault import rotate
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
 WEBHOOK_DELIVERY_JOB = "webhook_delivery"
@@ -98,6 +106,7 @@ JOB_TYPES = (
     EMBEDDINGS_JOB,
     AUDIT_VERIFY_JOB,
     AUDIT_CHECKPOINT_JOB,
+    VAULT_ROTATE_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -321,6 +330,36 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         AUDIT_CHECKPOINTS.add(len(published), {"outcome": "published"})
         return {"published": [item.as_dict() for item in published]}
 
+    async def vault_rotate(job: JobRow) -> Mapping[str, Any]:
+        keys = context.runtime.vault
+        if keys is None:
+            raise PermanentJobError("vault.rotate needs vault.token_key and vault.encryption_key")
+        after = job.payload.get("after")
+        if after is not None and (
+            not isinstance(after, list)
+            or len(after) != 2
+            or not all(isinstance(part, str) for part in after)
+        ):
+            raise PermanentJobError("`after` must be [domain id, token]")
+        settings = context.runtime.vault_settings
+        report = await rotate(
+            context.sessions,
+            keys,
+            batch=settings.rekey_batch,
+            max_rows=settings.rekey_rows_per_job,
+            after=None if after is None else (after[0], after[1]),
+        )
+        result = report.as_dict()
+        if report.after is not None:
+            async with context.sessions() as session, session.begin():
+                result["continuation"] = await enqueue_job(
+                    session,
+                    VAULT_ROTATE_JOB,
+                    payload={"after": list(report.after)},
+                    unique=True,
+                )
+        return result
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -332,6 +371,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         EMBEDDINGS_JOB: embeddings,
         AUDIT_VERIFY_JOB: audit_verify,
         AUDIT_CHECKPOINT_JOB: audit_checkpoint,
+        VAULT_ROTATE_JOB: vault_rotate,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())

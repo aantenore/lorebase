@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -194,6 +195,8 @@ class VaultEntry(Base):
 
     The Kind, Record key and Attribute bind a token to the value it stands for; `fingerprint`
     (a keyed hash of the value without the Record key) finds the rows erasure by value erases.
+    `key_id` names the encryption key and `fingerprint_key` the token key and scheme of the
+    fingerprint (`<token_key_id>/<scheme>`, null for rows written before key rotation).
     """
 
     __tablename__ = "vault"
@@ -211,5 +214,55 @@ class VaultEntry(Base):
     fingerprint: Mapped[bytes | None]
     value_ciphertext: Mapped[bytes | None]
     key_id: Mapped[str | None]
+    fingerprint_key: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
     erased_at: Mapped[datetime | None]
+
+
+class VaultTombstone(Base):
+    """A value erased from the vault: the fingerprint of every value an erasure erased, of one
+    Record (`record_key`) or of every Record of the Kind (null), so a later write of it is
+    stored erased or refused (`vault.erased_values`). Holds no value."""
+
+    __tablename__ = "vault_tombstones"
+    __table_args__ = (
+        domain_fk(),
+        Index(None, "domain_id", "fingerprint"),
+    )
+
+    domain_id: Mapped[DomainKey]
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    kind_id: Mapped[str]
+    attribute_id: Mapped[str]
+    record_key: Mapped[str | None]
+    fingerprint: Mapped[bytes]
+    fingerprint_key: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class VaultLineage(Base):
+    """A Record whose vaulted values were taken over from a Record of the same Kind under
+    another key (a key change): erasing either erases the values of both."""
+
+    __tablename__ = "vault_lineage"
+    __table_args__ = (
+        domain_fk(),
+        Index(None, "domain_id", "kind_id", "previous_key"),
+    )
+
+    domain_id: Mapped[DomainKey]
+    kind_id: Mapped[str] = mapped_column(primary_key=True)
+    record_key: Mapped[str] = mapped_column(primary_key=True)
+    previous_key: Mapped[str] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class InstallationSecret(Base):
+    """Random secrets of the installation made by the migrations, such as the key of the keyed
+    digests when no `vault.digest_key` is configured (`lorebase_store.digests`)."""
+
+    __tablename__ = "installation_secrets"
+
+    name: Mapped[str] = mapped_column(primary_key=True)
+    secret: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))

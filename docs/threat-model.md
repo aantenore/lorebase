@@ -201,23 +201,23 @@ Remaining:
    default; set it (TB6, TB7).
 2. **Erasure covers vault values only.** Sensitive values stored inline, values quoted in
    Revision messages, documents and the extraction evidence quoted from them stay in history;
-   store personal data in `vault: true` Attributes (TB3). Erasure by key misses the tokens a
-   Record held under an earlier key; erasure by value matches the canonical value exactly (a case
-   variant answers `erased: 0`); a later write of an erased value (a Source sync, say) stores it
-   again under a new token. An erasure racing a commit of the same value can leave the new write
-   reading `erased` (fails closed). The erasure audit entry keeps the Record key.
+   store personal data in `vault: true` Attributes (TB3). Inherent: history is content addressed,
+   so only values kept outside the objects can be erased without rewriting every later Revision.
 3. **Vault keys in the services' configuration.** Whoever holds `vault.encryption_key` and a
-   database copy reads every vaulted value; `vault.token_key` cannot be rotated; value
-   fingerprints let whoever reads the database link Records of a Kind holding the same vaulted
-   value (TB6).
-4. **Small value oracles.** Without the vault keys, the parameter digest of Operation
-   invocations is a plain SHA-256, which confirms guessed parameter values; configure the vault.
-   Kind health lists which Records share a sensitive unique or title
+   database copy reads every vaulted value; value fingerprints let whoever reads the database
+   link Records of a Kind holding the same vaulted value, and tombstones keep the fingerprints of
+   erased values (TB6). Inherent: the services must open values to serve them, and erasure by
+   value and tombstones need a deterministic fingerprint; keep the keys in a secret store and
+   rotate them (`lorebase admin vault rotate`). Tombstones cannot be made again under a new
+   token key (they hold no value), so they stay matchable only while the old key stays in
+   `previous_token_keys`.
+4. **Small value oracles.** Kind health lists which Records share a sensitive unique or title
    value (never the value); validation issue codes on sensitive values tell their format; a
    reference nested inside a `json` value of another Attribute is stored (it discloses nothing
    the caller is not cleared for). Some answers show raw references instead of values to cleared
-   callers (the NDJSON diff stream, Operation edits): no value leaks, but none is shown. Key
-   changing Operations that copy vault references are refused (TB3).
+   callers (the NDJSON diff stream, Operation edits): no value leaks, but none is shown (TB3).
+   The installation digest secret of revision `0027` (used when neither `vault.digest_key` nor
+   vault keys are set) is readable by whoever reads the database (TB6).
 5. **Branches forked before a tag.** Once the default branch tags an Attribute that a
    branch's schema searches, titles with or derives from, schema changes on that branch fail
    validation until its schema is fixed (availability, not disclosure). Extraction on such a
@@ -230,9 +230,7 @@ Remaining:
    whose Kind cannot be told (inside a comprehension, say) are matched by name against every
    Kind, so a same-named sensitive Attribute elsewhere can refuse a harmless Operation;
    evaluation errors are shown in full only to callers cleared Domain-wide (TB3).
-7. **Erasure from the command line.** `lorebase admin erase --value V` puts the value in the
-   shell history and the process list; use `--value -` to read it from standard input (TB2).
-8. **Limits of the read audit and of checkpoints.** Read records are sampled when
+7. **Limits of the read audit and of checkpoints.** Read records are sampled when
    `sample_rate` is below 1 and dropped when the queue is full or a batch fails (counted in
    `lorebase.audit.reads.dropped`), so the read stream is evidence of what it holds, not proof
    that nothing else was read; reads that showed or masked a sensitive value are never sampled
@@ -241,6 +239,25 @@ Remaining:
 
 Fixed since this page was first published, in the order of the original list (each with tests,
 see the [security review](security-review.md#hardening-from-the-threat-model)):
+
+- **Vault keys could not rotate; erasure missed variants, earlier keys and later writes.**
+  `vault.token_key` rotates with `token_key_id` and `previous_token_keys`, and the `vault.rotate`
+  job (`lorebase admin vault rotate`) seals and fingerprints every row again under the current
+  keys in resumable batches (`packages/store/src/lorebase_store/vault/rotation.py`). Erasure by
+  value compares matching forms (`packages/core/src/lorebase_core/types/matching.py`); erasure by
+  key follows the lineage of key changes, which now store values again under the new key
+  instead of being refused; tombstones make a later write of an erased value stored erased or
+  refused (`vault.erased_values`); a Domain vault lock orders erasures and commits; the erasure
+  audit entry holds a keyed digest of the key (`packages/store/src/lorebase_store/vault/store.py`,
+  `packages/keeper/src/lorebase_keeper/routes/vault.py`, revision `0027`). Tests:
+  `packages/store/tests/test_vault.py`, `packages/keeper/tests/integration/test_sensitivity_api.py`
+  (TB3, TB6).
+- **Plain parameter digest without vault keys.** Always keyed: `vault.digest_key`, the token
+  key, or the installation secret of revision `0027` (`packages/store/src/lorebase_store/digests.py`,
+  test `packages/keeper/tests/test_operations.py`) (TB3).
+- **Erasure value on the command line.** `lorebase admin erase --value` accepts only `-`
+  (standard input, no echo on a terminal) or `@FILE` (`packages/cli/src/lorebase_cli/commands/admin.py`,
+  test `packages/cli/tests/test_commands.py`) (TB2).
 
 - **No off-database anchor of the audit chain.** Scribe's `audit_checkpoint` job signs the
   head of every chain (Ed25519) and writes it to a file, an HTTP endpoint or an S3-compatible

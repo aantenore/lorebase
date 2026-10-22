@@ -12,13 +12,18 @@ from fastapi import APIRouter, Depends, FastAPI
 
 from lorebase_keeper.auth.config import AuthzSettings
 from lorebase_keeper.auth.deps import Access, require, require_installation
-from lorebase_keeper.auth.permissions import BUILTIN_ROLES, Permission, role_catalog
+from lorebase_keeper.auth.permissions import (
+    BUILTIN_ROLES,
+    INSTALLATION_ADMIN_PERMISSIONS,
+    Permission,
+    role_catalog,
+)
 from lorebase_keeper.auth.principals import Principal, anonymous_principal
 from lorebase_keeper.auth.rbac import AccessContext, Authorizer
 from lorebase_store.models.enums import GrantScope, PrincipalType
 
 P = Permission
-ALL = frozenset(Permission)
+ALL = frozenset(Permission) - {Permission.VAULT_MANAGE}
 READ = {P.SCHEMA_READ, P.DATA_READ}
 DOCUMENTS = {P.DOCUMENT_READ, P.DOCUMENT_WRITE}
 
@@ -388,7 +393,21 @@ async def test_custom_roles_work_through_the_settings(
 
 def test_every_permission_is_held_by_some_role() -> None:
     held = set().union(*BUILTIN_ROLES.values())
-    assert held == set(Permission)
+    assert held == set(Permission) - INSTALLATION_ADMIN_PERMISSIONS
+
+
+def test_no_role_holds_installation_administrator_permissions() -> None:
+    with pytest.raises(ValueError, match="installation administrators only"):
+        role_catalog({"keys": ["data.read", "vault.manage"]})
+
+
+async def test_vault_manage_is_for_installation_administrators_only(store: Any) -> None:
+    store.add_grant("acme", "usr_admin", "admin")
+    subject = authorizer(store)
+    assert not await subject.allows_installation(user("usr_admin"), P.VAULT_MANAGE)
+    assert await subject.allows_installation(user("usr_admin"), P.DOMAIN_CREATE)
+    ops = user("usr_nobody", installation_admin=True)
+    assert await subject.allows_installation(ops, P.VAULT_MANAGE)
 
 
 async def test_key_scoped_to_another_domain_is_forbidden_here(

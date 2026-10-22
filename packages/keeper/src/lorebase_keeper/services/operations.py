@@ -31,7 +31,6 @@ the audit entry.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -134,6 +133,7 @@ from lorebase_store.commit import (
     commit,
 )
 from lorebase_store.commit.schema import load_compiled
+from lorebase_store.digests import DigestKeys
 from lorebase_store.models.enums import InvocationStatus
 from lorebase_store.reads import Direction, head_schema, links_of_record
 from lorebase_store.repositories import (
@@ -142,7 +142,6 @@ from lorebase_store.repositories import (
     MaterializedRepository,
     RefRepository,
 )
-from lorebase_store.vault import VaultKeys
 
 REVIEW_PROTECTED = "protected-branch"
 REVIEW_POLICY = "review-policy"
@@ -259,21 +258,19 @@ def parameters_hash(
     branch: str,
     parameters: Mapping[str, JsonValue],
     *,
-    domain_id: str = "",
-    keys: VaultKeys | None = None,
+    domain_id: str,
+    digests: DigestKeys,
 ) -> str:
-    """Stable digest of an invocation's inputs (idempotency, provenance, audit). With the
-    vault keys it is keyed (HMAC under `vault.token_key`), so a stored digest does not let
-    anyone confirm guessed parameter values; without them it is a plain SHA-256."""
+    """Stable digest of an invocation's inputs (idempotency, provenance, audit), keyed with the
+    installation's digest key (`lorebase_store.digests`, ready), so a stored digest does not let
+    anyone confirm guessed parameter values."""
     payload = json.dumps(
         {"operation": operation, "branch": branch, "parameters": parameters},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    if keys is not None:
-        return keys.digest(domain_id, "parameters", payload)
-    return hashlib.sha256(payload).hexdigest()
+    return digests.digest(domain_id, "parameters", payload)
 
 
 def resolve(schema: Schema, name: str) -> _Resolved:
@@ -482,7 +479,11 @@ async def _execute(
         _check_operation_permissions(resolved.custom, principal)
         warnings = expressions_gate(resolved.custom, settings)
     digest = parameters_hash(
-        resolved.name, branch, request.parameters, domain_id=domain_id, keys=store.runtime.vault
+        resolved.name,
+        branch,
+        request.parameters,
+        domain_id=domain_id,
+        digests=await store.runtime.digests.ready(session),
     )
     invocations = InvocationRepository(session, domain_id)
     if request.idempotency_key is not None and not request.dry_run:

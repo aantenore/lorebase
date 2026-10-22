@@ -1,15 +1,19 @@
-"""The personal data vault (design 13.5): settings, keys, storage and erasure."""
+"""The personal data vault (design 13.5): settings, keys, storage, erasure and key rotation."""
 
 from lorebase_store.vault.keys import VaultKeys
-from lorebase_store.vault.settings import VaultSettings, vault_settings
+from lorebase_store.vault.rotation import KeyUsage, RotationReport, rotate, usage
+from lorebase_store.vault.settings import ErasedValues, VaultSettings, vault_settings
 from lorebase_store.vault.store import (
+    Lineage,
     Tokenized,
     VaultRow,
     VaultState,
     VaultValue,
     erase_matching,
     erase_record,
+    insert_lineage,
     insert_rows,
+    linked_keys,
     matching_keys,
     open_values,
     tokenize,
@@ -17,6 +21,10 @@ from lorebase_store.vault.store import (
 )
 
 __all__ = [
+    "ErasedValues",
+    "KeyUsage",
+    "Lineage",
+    "RotationReport",
     "Tokenized",
     "VaultKeys",
     "VaultRow",
@@ -25,10 +33,14 @@ __all__ = [
     "VaultValue",
     "erase_matching",
     "erase_record",
+    "insert_lineage",
     "insert_rows",
+    "linked_keys",
     "matching_keys",
     "open_values",
+    "rotate",
     "tokenize",
+    "usage",
     "vault_attributes",
     "vault_settings",
 ]

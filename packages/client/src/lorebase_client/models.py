@@ -719,6 +719,27 @@ class EraseResult(Model):
     erased: int
 
 
+class VaultKeys(Model):
+    """Which keys the vault rows use (`vault.manage`)."""
+
+    key_id: str
+    token_key_id: str
+    fingerprint_key: str
+    encryption_keys: dict[str, int]
+    fingerprint_keys: dict[str, int]
+    tombstone_keys: dict[str, int]
+    outdated: int
+    removable_keys: list[str]
+    removable_token_keys: list[str]
+    digests: str
+
+
+class VaultRotation(Model):
+    """A queued vault key rotation."""
+
+    job_id: int
+
+
 class CreateApiKey(RequestModel):
     """Request to create an API key for a Domain."""
 

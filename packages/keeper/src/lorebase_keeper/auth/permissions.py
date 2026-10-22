@@ -24,7 +24,9 @@ Role semantics where the design table leaves room:
   values (`pii.erase`); custom roles grant the clearances to others. `admin` also reads the
   agent traces of other principals in its Domain (`trace.read`) and the query plans of traced
   requests (`trace.explain`); every principal reads its own traces. `domain.create` is
-  installation-level: installation administrators hold it, and so do admins of any Domain.
+  installation-level: installation administrators hold it, and so do admins of any Domain;
+- `vault.manage` (vault key rotation and its status) is held by installation administrators
+  only: no role, built in or custom, contains it.
 """
 
 from __future__ import annotations
@@ -67,11 +69,20 @@ class Permission(StrEnum):
     PII_ERASE = "pii.erase"
     TRACE_READ = "trace.read"
     TRACE_EXPLAIN = "trace.explain"
+    VAULT_MANAGE = "vault.manage"
 
 
-INSTALLATION_PERMISSIONS = frozenset({Permission.PRINCIPAL_READ, Permission.DOMAIN_CREATE})
+INSTALLATION_ADMIN_PERMISSIONS = frozenset({Permission.VAULT_MANAGE})
+"""Installation-level permissions only installation administrators hold: no role contains
+them."""
+
+INSTALLATION_PERMISSIONS = (
+    frozenset({Permission.PRINCIPAL_READ, Permission.DOMAIN_CREATE})
+    | INSTALLATION_ADMIN_PERMISSIONS
+)
 """Permissions that are not about one Domain: installation administrators hold them, and so do
-principals who hold them through a role in at least one Domain."""
+principals who hold them through a role in at least one Domain (except
+`INSTALLATION_ADMIN_PERMISSIONS`)."""
 
 _VIEWER = frozenset({Permission.SCHEMA_READ, Permission.DATA_READ})
 _EDITOR = _VIEWER | {
@@ -100,7 +111,7 @@ BUILTIN_ROLES: Mapping[str, frozenset[Permission]] = MappingProxyType(
         "maintainer": _EDITOR
         | _REVIEWER
         | {Permission.PROPOSAL_MERGE, Permission.SOURCE_MANAGE, Permission.JOB_MANAGE},
-        "admin": frozenset(Permission),
+        "admin": frozenset(Permission) - INSTALLATION_ADMIN_PERMISSIONS,
         "agent-reader": _VIEWER,
     }
 )
@@ -119,5 +130,10 @@ def role_catalog(
     for name, permissions in (custom or {}).items():
         if name in BUILTIN_ROLES:
             raise ValueError(f"role {name!r} is built in and cannot be redefined")
-        catalog[name] = frozenset(Permission(p) for p in permissions)
+        granted = frozenset(Permission(p) for p in permissions)
+        reserved = granted & INSTALLATION_ADMIN_PERMISSIONS
+        if reserved:
+            names = ", ".join(sorted(p.value for p in reserved))
+            raise ValueError(f"role {name!r}: {names} is held by installation administrators only")
+        catalog[name] = granted
     return catalog

@@ -5720,6 +5720,120 @@
         }
       }
     },
+    "/api/v1/vault/keys": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Show which keys the vault rows use",
+        "description": "Rows by encryption key and fingerprint key, and the earlier keys that can be removed.",
+        "operationId": "vault_keys_api_v1_vault_keys_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultKeysOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not an installation administrator.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The vault is not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/vault/rotate": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Queue a vault key rotation",
+        "description": "Queue the job that makes the rows stored under earlier keys again under the current\nones.",
+        "operationId": "rotate_vault_api_v1_vault_rotate_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotationQueued"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not an installation administrator.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The vault is not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/domains/{domain_id}/documents": {
       "post": {
         "tags": [
@@ -18285,6 +18399,20 @@
         ],
         "title": "RevisionOut"
       },
+      "RotationQueued": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id",
+            "description": "Id of the queued (or already pending) rotation job."
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id"
+        ],
+        "title": "RotationQueued"
+      },
       "SchemaAttributeOut": {
         "properties": {
           "name": {
@@ -20605,6 +20733,90 @@
         ],
         "title": "ValueLineageOut",
         "description": "Where the current value of one Attribute came from."
+      },
+      "VaultKeysOut": {
+        "properties": {
+          "key_id": {
+            "type": "string",
+            "title": "Key Id",
+            "description": "Encryption key new values are sealed under."
+          },
+          "token_key_id": {
+            "type": "string",
+            "title": "Token Key Id",
+            "description": "Token key new tokens and fingerprints use."
+          },
+          "fingerprint_key": {
+            "type": "string",
+            "title": "Fingerprint Key",
+            "description": "Current fingerprint key: token key id/scheme."
+          },
+          "encryption_keys": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Encryption Keys",
+            "description": "Live rows by encryption key id."
+          },
+          "fingerprint_keys": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Fingerprint Keys",
+            "description": "Live rows by fingerprint key (`legacy`: written before rotation)."
+          },
+          "tombstone_keys": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Tombstone Keys",
+            "description": "Fingerprints of erased values by fingerprint key."
+          },
+          "outdated": {
+            "type": "integer",
+            "title": "Outdated",
+            "description": "Live rows the rotation job still has to make again."
+          },
+          "removable_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Removable Keys",
+            "description": "Ids in vault.previous_keys that no row uses: they can be removed."
+          },
+          "removable_token_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Removable Token Keys",
+            "description": "Ids in vault.previous_token_keys that no row or tombstone uses."
+          },
+          "digests": {
+            "type": "string",
+            "title": "Digests",
+            "description": "Key of the keyed digests: vault.digest_key, vault.token_key or installation (the database's own secret)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "key_id",
+          "token_key_id",
+          "fingerprint_key",
+          "encryption_keys",
+          "fingerprint_keys",
+          "tombstone_keys",
+          "outdated",
+          "removable_keys",
+          "removable_token_keys",
+          "digests"
+        ],
+        "title": "VaultKeysOut",
+        "description": "Which keys the vault rows use."
       },
       "ViaCondition": {
         "properties": {

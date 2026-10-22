@@ -665,6 +665,14 @@ def erase_vault(domain: str, body: m.EraseRequest) -> Call[m.EraseResult]:
     )
 
 
+def vault_keys() -> Call[m.VaultKeys]:
+    return Call("GET", "/vault/keys", parse_model(m.VaultKeys), safe=True)
+
+
+def rotate_vault() -> Call[m.VaultRotation]:
+    return Call("POST", "/vault/rotate", parse_model(m.VaultRotation))
+
+
 def create_api_key(domain: str, body: m.CreateApiKey) -> Call[m.ApiKeyCreated]:
     return Call(
         "POST", f"{_domain(domain)}/api-keys", parse_model(m.ApiKeyCreated), body=body.payload()

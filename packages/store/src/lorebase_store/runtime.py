@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from lorebase_platform.settings import Settings, load_settings
+from lorebase_store.digests import DigestKeys
 from lorebase_store.nodestore import NodeCache
 from lorebase_store.schema_cache import SchemaCache
 from lorebase_store.settings import (
@@ -25,9 +26,11 @@ class StoreRuntime:
     """Settings and caches shared by the commits and reads of one process.
 
     `vault` holds the keys of the personal data vault (`vault` settings), None when it is not
-    configured. `index_maintenance` is true when `database.maintenance_dsn` is set: commits by a
-    role that does not own `mat_records` then queue their per-Attribute index changes for the
-    job worker, which runs them as the maintenance role (`lorebase_store.indexes`).
+    configured; `vault_settings` the whole section; `digests` the keys of the keyed digests
+    (`lorebase_store.digests`). `index_maintenance` is true when `database.maintenance_dsn` is
+    set: commits by a role that does not own `mat_records` then queue their per-Attribute index
+    changes for the job worker, which runs them as the maintenance role
+    (`lorebase_store.indexes`).
     """
 
     settings: StoreSettings
@@ -36,6 +39,8 @@ class StoreRuntime:
     schema: SchemaSettings = field(default_factory=SchemaSettings)
     index_maintenance: bool = False
     vault: VaultKeys | None = None
+    vault_settings: VaultSettings = field(default_factory=VaultSettings)
+    digests: DigestKeys = field(default_factory=DigestKeys)
 
     @classmethod
     def from_settings(
@@ -46,13 +51,17 @@ class StoreRuntime:
         database: DatabaseSettings | None = None,
         vault: VaultSettings | None = None,
     ) -> StoreRuntime:
+        keys = None if vault is None else VaultKeys.from_settings(vault)
+        vault = vault or VaultSettings()
         return cls(
             settings=settings,
             node_cache=NodeCache.from_settings(settings.nodes),
             schema_cache=SchemaCache(settings.reads.schema_cache_entries),
             schema=schema or SchemaSettings(),
             index_maintenance=database is not None and database.maintenance_dsn is not None,
-            vault=None if vault is None else VaultKeys.from_settings(vault),
+            vault=keys,
+            vault_settings=vault,
+            digests=DigestKeys.from_settings(vault, keys),
         )
 
     @classmethod

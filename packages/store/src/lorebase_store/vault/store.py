@@ -1,16 +1,28 @@
 """The `vault` table: storing values behind tokens, opening them, erasing them (design 13.5).
 
-- `tokenize` runs in the commit pipeline (and wherever Records are written outside it): the
-  plain values of vault Attributes in Record upserts become references, and the rows to insert
-  are returned. A reference already in an upsert is accepted when it is the value the Record
-  holds at the branch head, or when a vault row binds it to the same Kind, Record key and
-  Attribute; any other reference is refused, so a writer cannot copy another Record's value.
+- `tokenize` runs in the commit pipeline: the plain values of vault Attributes in Record
+  upserts become references, and the rows to insert are returned. A reference already in an
+  upsert is accepted when it is the value the Record holds at the branch head, or when a vault
+  row binds it to the same Kind, Record key and Attribute. A reference another Record of the
+  Kind holds in the same Attribute is taken over when the same change set deletes that Record
+  (a key change): its value is stored again under a token of the new key, and `vault_lineage`
+  records that both keys hold the same data subject's values. Any other reference is refused,
+  so a writer cannot copy another Record's value.
+- A plain value whose fingerprint an erasure recorded (`vault_tombstones`) is stored erased,
+  refused, or stored again, as `vault.erased_values` says.
 - `open_values` reads rows by token: the value, `erased`, or `unavailable` (the key that
   sealed it is not configured).
 - `erase_record` and `erase_matching` erase rows: the ciphertext, key id and fingerprint are
-  cleared and `erased_at` is set. The row stays, so the token keeps answering `erased` and a
-  later write of the same value gets a new token (`lorebase_store.vault.keys`). Erasing an
-  erased row changes nothing.
+  cleared and `erased_at` is set. The row stays, so the token keeps answering `erased`; the
+  fingerprints of the erased values go to `vault_tombstones`. Erasing an erased row changes
+  nothing. Erasure by record follows `vault_lineage` to every key the Record had; erasure by
+  value compares matching forms (`lorebase_core.types.matching`), so case variants of the value
+  are erased too.
+
+Commits that store vault values hold the Domain's vault lock shared from the first vault read to
+the end of their transaction, erasures hold it exclusively: an erasure waits for the commits in
+flight, and a commit that starts during an erasure reads the vault after it. A value is thus
+either written before the erasure (and erased by it) or after it (and finds its tombstone).
 
 Every statement filters on `domain_id` and runs under the Domain's row-level security scope.
 """
@@ -20,26 +32,40 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import JsonValue
-from sqlalchemy import Table, func, select, update
+from sqlalchemy import Table, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from lorebase_core.model import Record, Schema, looks_like_reference, vault_reference, vault_token
-from lorebase_core.validate import DataChange, Issue, IssueCode, RecordUpsert, check_values
+from lorebase_core.validate import (
+    DataChange,
+    Issue,
+    IssueCode,
+    RecordDelete,
+    RecordUpsert,
+    check_values,
+)
 from lorebase_store.models import metadata
 from lorebase_store.vault.keys import VaultKeys
+from lorebase_store.vault.settings import ErasedValues
 
 VAULT: Table = metadata.tables["vault"]
+TOMBSTONES: Table = metadata.tables["vault_tombstones"]
+LINEAGE: Table = metadata.tables["vault_lineage"]
 
 MAX_GENERATIONS = 64
 """Erased generations of one value of one Record tried before a write is refused."""
+
+_CHUNK = 1000
+
+_LOCK = "SELECT {function}(hashtextextended('lorebase.vault/' || :domain, 0))"
 
 
 class RecordValues(Protocol):
@@ -50,15 +76,27 @@ class RecordValues(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class VaultRow:
-    """A row to insert."""
+    """A row to insert. An erased row (a write of an erased value, `vault.erased_values:
+    erase`) holds no ciphertext, key id or fingerprint."""
 
     token: str
     kind_id: str
     attribute_id: str
     record_key: str
-    fingerprint: bytes
-    ciphertext: bytes
-    key_id: str
+    fingerprint: bytes | None
+    ciphertext: bytes | None
+    key_id: str | None
+    fingerprint_key: str | None = None
+    erased: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Lineage:
+    """Record `record_key` took over vaulted values of `previous_key` (same Kind)."""
+
+    kind_id: str
+    record_key: str
+    previous_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +104,7 @@ class Tokenized:
     changes: list[DataChange]
     rows: list[VaultRow]
     issues: list[Issue]
+    lineage: list[Lineage] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +124,15 @@ class _Plain:
     value: JsonValue
 
 
+@dataclass(frozen=True, slots=True)
+class _Claim:
+    index: int
+    kind_id: str
+    key: str
+    attribute_id: str
+    token: str
+
+
 def vault_attributes(schema: Schema) -> dict[str, list[str]]:
     """Kind id -> ids of its vault Attributes."""
     found: dict[str, list[str]] = {}
@@ -95,6 +143,18 @@ def vault_attributes(schema: Schema) -> dict[str, list[str]]:
     return found
 
 
+def lock_vault(sync: Session, domain_id: str) -> None:
+    """Hold the Domain's vault lock shared until the transaction ends (module doc)."""
+    sync.execute(text(_LOCK.format(function="pg_advisory_xact_lock_shared")), {"domain": domain_id})
+
+
+async def lock_vault_exclusive(session: AsyncSession, domain_id: str) -> None:
+    """Hold the Domain's vault lock exclusively until the transaction ends (module doc)."""
+    await session.execute(
+        text(_LOCK.format(function="pg_advisory_xact_lock")), {"domain": domain_id}
+    )
+
+
 def tokenize(
     sync: Session,
     domain_id: str,
@@ -102,6 +162,8 @@ def tokenize(
     changes: Sequence[DataChange],
     keys: VaultKeys | None,
     current: RecordValues,
+    *,
+    erased_values: ErasedValues = ErasedValues.ERASE,
 ) -> Tokenized:
     """Replace the plain values of vault Attributes in `changes` by references (module doc).
 
@@ -111,8 +173,9 @@ def tokenize(
     vaulted = vault_attributes(schema)
     if not vaulted:
         return Tokenized(list(changes), [], [])
+    deleted = {(change.kind, change.key) for change in changes if isinstance(change, RecordDelete)}
     plain: list[_Plain] = []
-    claimed: list[tuple[int, str, str, str, str]] = []
+    claimed: list[_Claim] = []
     issues: list[Issue] = []
     for index, upsert in enumerate(changes):
         if not isinstance(upsert, RecordUpsert) or upsert.record.kind not in vaulted:
@@ -132,7 +195,7 @@ def tokenize(
                     state = current.record_state(record.kind, record.key)
                     held = {} if state is None else state.values
                 if held.get(attribute_id) != value:
-                    claimed.append((index, record.kind, record.key, attribute_id, token))
+                    claimed.append(_Claim(index, record.kind, record.key, attribute_id, token))
                 continue
             attribute = kind.attributes[attribute_id]
             found = check_values(
@@ -146,31 +209,43 @@ def tokenize(
                 issues.extend(found)
             else:
                 plain.append(_Plain(index, record.kind, record.key, attribute_id, value))
-    issues.extend(_check_claims(sync, domain_id, claimed))
+    if not plain and not claimed:
+        return Tokenized(list(changes), [], issues)
+    lock_vault(sync, domain_id)
+    taken, lineage, claim_issues = _check_claims(sync, domain_id, claimed, deleted, current, keys)
+    issues.extend(claim_issues)
+    plain.extend(taken)
     if plain and keys is None:
         issues.extend(
-            Issue(
-                code=IssueCode.VALUE_VAULT_UNAVAILABLE,
-                path=("changes", item.index, "record", "values", item.attribute_id),
-                message="the vault is not configured (vault.token_key, vault.encryption_key)",
-                kind=item.kind_id,
-                key=item.key,
-                attribute=item.attribute_id,
+            _issue(
+                IssueCode.VALUE_VAULT_UNAVAILABLE,
+                item,
+                "the vault is not configured (vault.token_key, vault.encryption_key)",
             )
             for item in plain
         )
     if issues:
         return Tokenized(list(changes), [], issues)
+    erased: set[_Plain] = set()
+    if keys is not None and plain and erased_values is not ErasedValues.ALLOW:
+        erased = _tombstoned(sync, domain_id, plain, keys)
+        if erased and erased_values is ErasedValues.REFUSE:
+            return Tokenized(
+                list(changes),
+                [],
+                [
+                    _issue(IssueCode.VALUE_VAULT_ERASED, item, "this value was erased")
+                    for item in plain
+                    if item in erased
+                ],
+            )
     assert keys is not None or not plain
-    tokens, rows, exhausted = _mint(sync, domain_id, plain, keys) if keys else ({}, [], [])
+    tokens, rows, exhausted = _mint(sync, domain_id, plain, keys, erased) if keys else ({}, [], [])
     issues.extend(
-        Issue(
-            code=IssueCode.VALUE_VAULT_UNAVAILABLE,
-            path=("changes", item.index, "record", "values", item.attribute_id),
-            message=f"this value was erased {MAX_GENERATIONS} times and cannot be stored again",
-            kind=item.kind_id,
-            key=item.key,
-            attribute=item.attribute_id,
+        _issue(
+            IssueCode.VALUE_VAULT_UNAVAILABLE,
+            item,
+            f"this value was erased {MAX_GENERATIONS} times and cannot be stored again",
         )
         for item in exhausted
     )
@@ -187,47 +262,160 @@ def tokenize(
             update={"values": {**upsert.record.values, **values}}
         )
         out[index] = RecordUpsert(record=updated)
-    return Tokenized(out, rows, [])
+    return Tokenized(out, rows, [], lineage)
+
+
+def _issue(code: IssueCode, item: _Plain | _Claim, message: str) -> Issue:
+    return Issue(
+        code=code,
+        path=("changes", item.index, "record", "values", item.attribute_id),
+        message=message,
+        kind=item.kind_id,
+        key=item.key,
+        attribute=item.attribute_id,
+    )
 
 
 def _check_claims(
-    sync: Session, domain_id: str, claimed: Sequence[tuple[int, str, str, str, str]]
-) -> list[Issue]:
-    """Issues for references that no vault row binds to the Record and Attribute claiming
-    them."""
+    sync: Session,
+    domain_id: str,
+    claimed: Sequence[_Claim],
+    deleted: Collection[tuple[str, str]],
+    current: RecordValues,
+    keys: VaultKeys | None,
+) -> tuple[list[_Plain], list[Lineage], list[Issue]]:
+    """References no vault row binds to the Record and Attribute claiming them: the values of
+    key changes to store again under the new key, the lineage they make, and issues for the
+    others."""
     if not claimed:
-        return []
-    bindings = _bindings(sync, domain_id, {token for *_, token in claimed})
+        return [], [], []
+    bindings = _bindings(sync, domain_id, {claim.token for claim in claimed})
+    taken: list[tuple[_Claim, str]] = []
+    lineage: dict[tuple[str, str, str], Lineage] = {}
     issues: list[Issue] = []
-    for index, kind_id, key, attribute_id, token in claimed:
-        found = bindings.get(token)
-        if found is not None and (found.kind_id, found.record_key, found.attribute_id) == (
-            kind_id,
-            key,
-            attribute_id,
+    for claim in claimed:
+        found = bindings.get(claim.token)
+        if found is not None and (found.kind_id, found.attribute_id) == (
+            claim.kind_id,
+            claim.attribute_id,
         ):
-            continue
+            if found.record_key == claim.key:
+                continue
+            if _moved(claim, found, deleted, current):
+                lineage[(claim.kind_id, claim.key, found.record_key)] = Lineage(
+                    claim.kind_id, claim.key, found.record_key
+                )
+                if not found.erased:
+                    taken.append((claim, found.record_key))
+                continue  # an erased value moves as the erased reference it is
         issues.append(
-            Issue(
-                code=IssueCode.VALUE_VAULT_REFERENCE,
-                path=("changes", index, "record", "values", attribute_id),
-                message="the vault reference does not belong to this Record and Attribute",
-                kind=kind_id,
-                key=key,
-                attribute=attribute_id,
+            _issue(
+                IssueCode.VALUE_VAULT_REFERENCE,
+                claim,
+                "the vault reference does not belong to this Record and Attribute",
             )
         )
-    return issues
+    if issues or not taken:
+        return [], list(lineage.values()), issues
+    opened = _open_sync(sync, domain_id, [claim.token for claim, _ in taken], keys)
+    plain: list[_Plain] = []
+    for claim, _ in taken:
+        value = opened.get(claim.token)
+        if value is None:
+            issues.append(
+                _issue(
+                    IssueCode.VALUE_VAULT_UNAVAILABLE,
+                    claim,
+                    "the value of the vault reference cannot be opened with the configured keys",
+                )
+            )
+        else:
+            plain.append(_Plain(claim.index, claim.kind_id, claim.key, claim.attribute_id, value))
+    return plain, list(lineage.values()), issues
+
+
+def _moved(
+    claim: _Claim,
+    found: _Binding,
+    deleted: Collection[tuple[str, str]],
+    current: RecordValues,
+) -> bool:
+    """Whether the claim takes over the reference from a Record the same change set deletes,
+    which holds it in that Attribute at the branch head."""
+    if (claim.kind_id, found.record_key) not in deleted:
+        return False
+    state = current.record_state(claim.kind_id, found.record_key)
+    held = None if state is None else state.values.get(claim.attribute_id)
+    return vault_token(held) == claim.token
+
+
+def _open_sync(
+    sync: Session, domain_id: str, tokens: Sequence[str], keys: VaultKeys | None
+) -> dict[str, JsonValue]:
+    """The values of live rows that open with `keys`."""
+    if keys is None:
+        return {}
+    v = VAULT
+    out: dict[str, JsonValue] = {}
+    ordered = sorted(set(tokens))
+    for start in range(0, len(ordered), _CHUNK):
+        rows = sync.execute(
+            select(v.c.id, v.c.value_ciphertext, v.c.key_id).where(
+                v.c.domain_id == domain_id,
+                v.c.id.in_(ordered[start : start + _CHUNK]),
+                v.c.value_ciphertext.is_not(None),
+            )
+        )
+        for row in rows:
+            opened = keys.open(domain_id, row.id, row.key_id, bytes(row.value_ciphertext))
+            if opened is not None:
+                out[row.id] = json.loads(opened)
+    return out
+
+
+def _tombstoned(
+    sync: Session, domain_id: str, plain: Sequence[_Plain], keys: VaultKeys
+) -> set[_Plain]:
+    """The plain values an erasure recorded, for their Record or for every Record of the
+    Kind."""
+    fingerprints = {
+        item: keys.fingerprints(domain_id, item.kind_id, item.attribute_id, item.value)
+        for item in plain
+    }
+    wanted = sorted({f for found in fingerprints.values() for f in found})
+    t = TOMBSTONES
+    erased: dict[bytes, list[tuple[str, str, str | None]]] = defaultdict(list)
+    for start in range(0, len(wanted), _CHUNK):
+        rows = sync.execute(
+            select(t.c.fingerprint, t.c.kind_id, t.c.attribute_id, t.c.record_key).where(
+                t.c.domain_id == domain_id, t.c.fingerprint.in_(wanted[start : start + _CHUNK])
+            )
+        )
+        for row in rows:
+            erased[bytes(row.fingerprint)].append((row.kind_id, row.attribute_id, row.record_key))
+    if not erased:
+        return set()
+    return {
+        item
+        for item, found in fingerprints.items()
+        if any(
+            kind_id == item.kind_id
+            and attribute_id == item.attribute_id
+            and record_key in (None, item.key)
+            for fingerprint in found
+            for kind_id, attribute_id, record_key in erased.get(fingerprint, ())
+        )
+    }
 
 
 def _bindings(sync: Session, domain_id: str, tokens: Collection[str]) -> dict[str, _Binding]:
     v = VAULT
     found: dict[str, _Binding] = {}
     ordered = sorted(tokens)
-    for start in range(0, len(ordered), 1000):
+    for start in range(0, len(ordered), _CHUNK):
         rows = sync.execute(
             select(v.c.id, v.c.kind_id, v.c.attribute_id, v.c.record_key, v.c.erased_at).where(
-                v.c.domain_id == domain_id, v.c.id.in_(ordered[start : start + 1000])
+                v.c.domain_id == domain_id, v.c.id.in_(ordered[start : start + _CHUNK])
             )
         )
         for row in rows:
@@ -237,46 +425,108 @@ def _bindings(sync: Session, domain_id: str, tokens: Collection[str]) -> dict[st
     return found
 
 
+@dataclass(slots=True)
+class _Search:
+    """Where the generation search of one value stands."""
+
+    generation: int = 0
+    free: int | None = None
+    """Lowest generation whose token under the current key has no row."""
+    erased: str | None = None
+    """An erased token of the value (any key), reused by a write of an erased value."""
+
+
 def _mint(
-    sync: Session, domain_id: str, plain: Sequence[_Plain], keys: VaultKeys
+    sync: Session,
+    domain_id: str,
+    plain: Sequence[_Plain],
+    keys: VaultKeys,
+    erase: Collection[_Plain],
 ) -> tuple[dict[_Plain, str], list[VaultRow], list[_Plain]]:
     """Token of every plain value, the rows to insert and the values whose generations ran
-    out. A token whose row exists and is not erased is reused as it is."""
+    out.
+
+    Generation by generation, the value's token under each configured token key is looked up:
+    a live row (under any key) is reused as it is. Rows of a key exist for consecutive
+    generations from 0, so a generation without a row under any key ends the search; the value
+    then gets the token of the lowest free generation under the current key. A value an erasure
+    recorded (`erase`) never reuses a live row: it reuses an erased token of its own, or gets a
+    new erased row.
+    """
     tokens: dict[_Plain, str] = {}
     rows: dict[str, VaultRow] = {}
     exhausted: list[_Plain] = []
-    pending = dict.fromkeys(plain, 0)
+    pending = {item: _Search() for item in plain}
+
+    def mint(item: _Plain, search: _Search) -> None:
+        if item in erase and search.erased is not None:
+            tokens[item] = search.erased
+            return
+        if search.free is None:
+            exhausted.append(item)
+            return
+        token = keys.token(
+            domain_id, item.kind_id, item.key, item.attribute_id, item.value, search.free
+        )
+        tokens[item] = token
+        if token in rows:
+            return
+        if item in erase:
+            rows[token] = VaultRow(
+                token, item.kind_id, item.attribute_id, item.key, None, None, None, erased=True
+            )
+            return
+        rows[token] = VaultRow(
+            token=token,
+            kind_id=item.kind_id,
+            attribute_id=item.attribute_id,
+            record_key=item.key,
+            fingerprint=keys.fingerprint(domain_id, item.kind_id, item.attribute_id, item.value),
+            ciphertext=keys.seal(domain_id, token, item.value),
+            key_id=keys.key_id,
+            fingerprint_key=keys.fingerprint_key,
+        )
+
     while pending:
         candidates = {
-            item: keys.token(
-                domain_id, item.kind_id, item.key, item.attribute_id, item.value, generation
-            )
-            for item, generation in pending.items()
+            item: [
+                keys.token(
+                    domain_id,
+                    item.kind_id,
+                    item.key,
+                    item.attribute_id,
+                    item.value,
+                    search.generation,
+                ),
+                *keys.earlier_tokens(
+                    domain_id,
+                    item.kind_id,
+                    item.key,
+                    item.attribute_id,
+                    item.value,
+                    search.generation,
+                ),
+            ]
+            for item, search in pending.items()
         }
-        existing = _bindings(sync, domain_id, set(candidates.values()))
-        retry: dict[_Plain, int] = {}
-        for item, token in candidates.items():
-            found = existing.get(token)
-            if found is not None and found.erased:
-                generation = pending[item] + 1
-                if generation >= MAX_GENERATIONS:
-                    exhausted.append(item)
-                else:
-                    retry[item] = generation
+        existing = _bindings(sync, domain_id, {t for found in candidates.values() for t in found})
+        retry: dict[_Plain, _Search] = {}
+        for item, found in candidates.items():
+            search = pending[item]
+            stored = [(token, existing[token]) for token in found if token in existing]
+            live = next((token for token, binding in stored if not binding.erased), None)
+            if live is not None and item not in erase:
+                tokens[item] = live
                 continue
-            tokens[item] = token
-            if found is None and token not in rows:
-                rows[token] = VaultRow(
-                    token=token,
-                    kind_id=item.kind_id,
-                    attribute_id=item.attribute_id,
-                    record_key=item.key,
-                    fingerprint=keys.fingerprint(
-                        domain_id, item.kind_id, item.attribute_id, item.value
-                    ),
-                    ciphertext=keys.seal(domain_id, token, item.value),
-                    key_id=keys.key_id,
-                )
+            if search.erased is None:
+                search.erased = next((token for token, b in stored if b.erased), None)
+            if search.free is None and found[0] not in existing:
+                search.free = search.generation
+            if not stored or search.generation + 1 >= MAX_GENERATIONS:
+                mint(item, search)
+                continue
+            search.generation += 1
+            retry[item] = search
         pending = retry
     return tokens, list(rows.values()), exhausted
 
@@ -300,15 +550,41 @@ async def insert_rows(
                         "attribute_id": row.attribute_id,
                         "record_key": row.record_key,
                         "fingerprint": row.fingerprint,
+                        "fingerprint_key": row.fingerprint_key,
                         "value_ciphertext": row.ciphertext,
                         "key_id": row.key_id,
                         "created_at": at,
+                        "erased_at": at if row.erased else None,
                     }
                     for row in chunk
                 ]
             )
             .on_conflict_do_nothing(index_elements=["domain_id", "id"])
         )
+
+
+async def insert_lineage(
+    session: AsyncSession, domain_id: str, lineage: Sequence[Lineage], *, at: datetime
+) -> None:
+    """Record key changes found by `tokenize`."""
+    if not lineage:
+        return
+    await session.execute(
+        insert(LINEAGE)
+        .values(
+            [
+                {
+                    "domain_id": domain_id,
+                    "kind_id": item.kind_id,
+                    "record_key": item.record_key,
+                    "previous_key": item.previous_key,
+                    "created_at": at,
+                }
+                for item in lineage
+            ]
+        )
+        .on_conflict_do_nothing()
+    )
 
 
 class VaultState(StrEnum):
@@ -335,10 +611,10 @@ async def open_values(
     wanted = sorted(set(tokens))
     out: dict[str, VaultValue] = {t: VaultValue(VaultState.ERASED) for t in wanted}
     v = VAULT
-    for start in range(0, len(wanted), 1000):
+    for start in range(0, len(wanted), _CHUNK):
         rows = await session.execute(
             select(v.c.id, v.c.kind_id, v.c.attribute_id, v.c.value_ciphertext, v.c.key_id).where(
-                v.c.domain_id == domain_id, v.c.id.in_(wanted[start : start + 1000])
+                v.c.domain_id == domain_id, v.c.id.in_(wanted[start : start + _CHUNK])
             )
         )
         for row in rows:
@@ -359,6 +635,26 @@ async def open_values(
     return out
 
 
+async def linked_keys(session: AsyncSession, domain_id: str, kind_id: str, key: str) -> list[str]:
+    """`key` and every key of the Kind linked to it by `vault_lineage`, in both directions."""
+    seen = {key}
+    frontier = {key}
+    lin = LINEAGE
+    while frontier:
+        batch = sorted(frontier)
+        rows = await session.execute(
+            select(lin.c.record_key, lin.c.previous_key).where(
+                lin.c.domain_id == domain_id,
+                lin.c.kind_id == kind_id,
+                (lin.c.record_key.in_(batch)) | (lin.c.previous_key.in_(batch)),
+            )
+        )
+        found = {k for row in rows for k in (row.record_key, row.previous_key)}
+        frontier = found - seen
+        seen |= found
+    return sorted(seen)
+
+
 async def erase_record(
     session: AsyncSession,
     domain_id: str,
@@ -369,12 +665,18 @@ async def erase_record(
     at: datetime | None = None,
 ) -> int:
     """Erase every vaulted value a Record ever held (of `attribute_ids` only, when given), on
-    every branch and Revision; the number of rows erased now."""
+    every branch and Revision and under every key it had (`vault_lineage`); the number of rows
+    erased now."""
+    await lock_vault_exclusive(session, domain_id)
     v = VAULT
-    condition = [v.c.domain_id == domain_id, v.c.kind_id == kind_id, v.c.record_key == key]
+    condition = [
+        v.c.domain_id == domain_id,
+        v.c.kind_id == kind_id,
+        v.c.record_key.in_(await linked_keys(session, domain_id, kind_id, key)),
+    ]
     if attribute_ids is not None:
         condition.append(v.c.attribute_id.in_(sorted(attribute_ids)))
-    return await _erase(session, condition, at)
+    return await _erase(session, domain_id, condition, at)
 
 
 async def erase_matching(
@@ -382,25 +684,57 @@ async def erase_matching(
     domain_id: str,
     kind_id: str,
     attribute_id: str,
-    fingerprint: bytes,
+    value: JsonValue,
+    keys: VaultKeys,
     *,
     at: datetime | None = None,
 ) -> int:
-    """Erase the value with this fingerprint in every Record of the Kind; the rows erased."""
+    """Erase the canonical `value` and its case variants (same matching form) in every Record
+    of the Kind; the rows erased. Rows whose fingerprints were made under an earlier key or
+    scheme are made again first, so none is missed."""
+    from lorebase_store.vault.rotation import refresh_rows
+
+    await lock_vault_exclusive(session, domain_id)
     v = VAULT
+    await refresh_rows(
+        session,
+        keys,
+        [
+            v.c.domain_id == domain_id,
+            v.c.kind_id == kind_id,
+            v.c.attribute_id == attribute_id,
+        ],
+    )
+    fingerprints = keys.fingerprints(domain_id, kind_id, attribute_id, value)
+    await session.execute(
+        insert(TOMBSTONES).values(
+            domain_id=domain_id,
+            kind_id=kind_id,
+            attribute_id=attribute_id,
+            record_key=None,
+            fingerprint=keys.fingerprint(domain_id, kind_id, attribute_id, value),
+            fingerprint_key=keys.fingerprint_key,
+            created_at=at or func.now(),
+        )
+    )
     condition = [
         v.c.domain_id == domain_id,
         v.c.kind_id == kind_id,
         v.c.attribute_id == attribute_id,
-        v.c.fingerprint == fingerprint,
+        v.c.fingerprint.in_(fingerprints),
     ]
-    return await _erase(session, condition, at)
+    return await _erase(session, domain_id, condition, at)
 
 
 async def matching_keys(
-    session: AsyncSession, domain_id: str, kind_id: str, attribute_id: str, fingerprint: bytes
+    session: AsyncSession,
+    domain_id: str,
+    kind_id: str,
+    attribute_id: str,
+    value: JsonValue,
+    keys: VaultKeys,
 ) -> list[str]:
-    """Keys of the Records whose live vault rows hold the value with this fingerprint."""
+    """Keys of the Records whose live vault rows hold the value or a case variant of it."""
     v = VAULT
     rows = await session.execute(
         select(v.c.record_key)
@@ -408,7 +742,7 @@ async def matching_keys(
             v.c.domain_id == domain_id,
             v.c.kind_id == kind_id,
             v.c.attribute_id == attribute_id,
-            v.c.fingerprint == fingerprint,
+            v.c.fingerprint.in_(keys.fingerprints(domain_id, kind_id, attribute_id, value)),
         )
         .distinct()
         .order_by(v.c.record_key)
@@ -416,8 +750,45 @@ async def matching_keys(
     return list(rows.scalars())
 
 
-async def _erase(session: AsyncSession, condition: list[Any], at: datetime | None) -> int:
+async def _erase(
+    session: AsyncSession, domain_id: str, condition: list[Any], at: datetime | None
+) -> int:
+    """Erase the live rows matching `condition` and record their fingerprints."""
     v = VAULT
+    erased = (
+        await session.execute(
+            select(
+                v.c.kind_id, v.c.attribute_id, v.c.record_key, v.c.fingerprint, v.c.fingerprint_key
+            )
+            .where(*condition, v.c.erased_at.is_(None))
+            .order_by(v.c.id)
+            .with_for_update()
+        )
+    ).all()
+    tombstones = {
+        (row.kind_id, row.attribute_id, row.record_key, bytes(row.fingerprint)): row.fingerprint_key
+        for row in erased
+        if row.fingerprint is not None
+    }
+    if tombstones:
+        await session.execute(
+            insert(TOMBSTONES).values(
+                [
+                    {
+                        "domain_id": domain_id,
+                        "kind_id": kind_id,
+                        "attribute_id": attribute_id,
+                        "record_key": record_key,
+                        "fingerprint": fingerprint,
+                        "fingerprint_key": fingerprint_key,
+                        "created_at": at or func.now(),
+                    }
+                    for (kind_id, attribute_id, record_key, fingerprint), fingerprint_key in sorted(
+                        tombstones.items(), key=lambda item: item[0]
+                    )
+                ]
+            )
+        )
     result = await session.execute(
         update(v)
         .where(*condition, v.c.erased_at.is_(None))
@@ -425,6 +796,7 @@ async def _erase(session: AsyncSession, condition: list[Any], at: datetime | Non
             value_ciphertext=None,
             key_id=None,
             fingerprint=None,
+            fingerprint_key=None,
             erased_at=at or func.now(),
         )
         .returning(v.c.id)
