@@ -96,6 +96,23 @@ def test_clearance_covers_tags_everywhere_or_on_kinds() -> None:
     assert nothing.variant == ""
 
 
+def test_values_computed_from_other_kinds_need_the_clearance_there() -> None:
+    phone = PERSON.attributes[PHONE]
+    far = "knd_far"
+    origins = {Sensitivity.PII: frozenset({far})}
+
+    def hidden(kinds: frozenset[str]) -> bool:
+        masking = Masking(Clearance(kinds={Sensitivity.PII: kinds}))
+        return masking.hidden_with_origins(phone, (KIND,), origins)
+
+    assert hidden(frozenset({KIND}))  # own Kind only: the far Kind's values would leak
+    assert hidden(frozenset({far}))  # far Kind only: the value is held by the own Kind
+    assert not hidden(frozenset({KIND, far}))
+    assert not Masking(Clearance.full()).hidden_with_origins(phone, (KIND,), origins)
+    name = PERSON.attributes[NAME]
+    assert not Masking(Clearance()).hidden_with_origins(name, (KIND,), {})
+
+
 def test_masking_replaces_or_omits_values() -> None:
     masked = Masking(Clearance()).kind_values(PERSON, VALUES)
     assert masked == {"code": "P-1", "name": "Ada", "phone": "***", "secret": "***"}

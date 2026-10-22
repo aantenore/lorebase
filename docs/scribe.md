@@ -312,7 +312,9 @@ Record; empty columns mean no Link. A row whose values do not fit is skipped and
 than `max_row_errors` such rows fail the run without committing anything. An Attribute mapped
 by `expression` instead of `column` starts from a CEL expression over the row: each column
 whose name is an identifier is a variable of unknown type (`dyn`, so CSV text needs
-`int(price)`), and `row["Legal name"]` reads any column. The expression is bounded by
+`int(price)`), and `row["Legal name"]` reads any column. Variables are the columns of the
+Source (the header, or every key of the JSON records read, whose rows are then mapped once all
+are read): a column a row lacks is null. The expression is bounded by
 `schema.expression_limits`; its result then goes through the transforms and the coercion like a
 column's, and the Modeler previews it (`POST /domains/{d}/sources:preview`).
 

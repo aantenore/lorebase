@@ -27,7 +27,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -59,7 +59,13 @@ from lorebase_scribe.sources.delta import (
     batches,
     compute_delta,
 )
-from lorebase_scribe.sources.mapping import MappedRow, RowError, RowMapper, SourceDefinitionError
+from lorebase_scribe.sources.mapping import (
+    MappedRow,
+    Row,
+    RowError,
+    RowMapper,
+    SourceDefinitionError,
+)
 from lorebase_scribe.telemetry import SOURCE_CHANGES, SOURCE_ROWS, tracer
 from lorebase_store.commit import Change, ValidationFailedError, commit
 from lorebase_store.commit.schema import load_compiled
@@ -460,39 +466,60 @@ class SourceSync:
     ) -> _Read:
         connector = self._connectors(source, self._settings)
         read = _Read()
-        limit = self._settings.max_row_errors
         watermark_column = source.watermark_column
         checked = False
         # Keys seen in the rows of a Source without fixed columns (JSON records): the mapped
-        # columns are checked against all of them once the rows are read.
+        # columns are checked against all of them once the rows are read. Expressions are
+        # compiled over all of them too, so such rows are mapped once every row was read.
         seen: dict[str, None] = {}
+        held: list[tuple[str, Row]] = []
         async for locator, row in connector.rows(since):
             if not connector.columns:
                 seen.update(dict.fromkeys(row))
             elif not checked:
                 mapper.check_columns(connector.columns)
+                mapper.use_columns(connector.columns)
                 checked = True
             report.rows_read += 1
             if watermark_column is not None and row.get(watermark_column) not in (None, ""):
                 read.watermark = _later(read.watermark, row[watermark_column])
-            try:
-                read.rows.append(mapper.map(row, locator))
-            except RowError as error:
-                report.rows_failed += 1
-                if len(report.errors) < self._settings.error_samples:
-                    report.errors.append(error.as_dict())
-                if report.rows_failed > limit:
-                    if seen:  # a mapped column no row had explains the failures better
-                        mapper.check_columns(tuple(seen))
-                    raise SourceSyncError(
-                        f"more than {limit} rows failed mapping; nothing was committed",
-                        {"rows_failed": report.rows_failed},
-                    ) from None
+            if not connector.columns and mapper.has_expressions:
+                held.append((locator, row))
+                continue
+            self._map_row(mapper, row, locator, read, report, seen)
+        if seen:
+            mapper.use_columns(tuple(seen))
+        for locator, row in held:
+            self._map_row(mapper, row, locator, read, report, seen)
         if seen:
             mapper.check_columns(tuple(seen))
         report.rows_mapped = len(read.rows)
         SOURCE_ROWS.add(report.rows_read, {"lorebase.source": source.api_name})
         return read
+
+    def _map_row(
+        self,
+        mapper: RowMapper,
+        row: Row,
+        locator: str,
+        read: _Read,
+        report: SyncReport,
+        seen: Mapping[str, None],
+    ) -> None:
+        try:
+            read.rows.append(mapper.map(row, locator))
+        except RowError as error:
+            report.rows_failed += 1
+            if len(report.errors) < self._settings.error_samples:
+                report.errors.append(error.as_dict())
+            if report.rows_failed > self._settings.max_row_errors:
+                if seen:  # a mapped column no row had explains the failures better
+                    mapper.check_columns(tuple(seen))
+                raise SourceSyncError(
+                    f"more than {self._settings.max_row_errors} rows failed mapping; nothing "
+                    "was committed",
+                    {"rows_failed": report.rows_failed},
+                ) from None
 
     # Branch and state ---------------------------------------------------------------------------
 

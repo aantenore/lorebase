@@ -66,7 +66,7 @@ describe('Derivation preview', () => {
               code: 'expression.evaluation',
               message: 'division by zero',
             }),
-            item('P-3', null, true, { code: 'expression.evaluation', message: null }),
+            item('P-3', null, true, { code: null, message: null }),
           ],
         }),
       () =>
@@ -101,7 +101,7 @@ describe('Derivation preview', () => {
     expect(within(rows[1] as HTMLElement).getByText('***')).toBeInTheDocument();
     expect(within(rows[1] as HTMLElement).getByText('masked')).toBeInTheDocument();
     expect(within(rows[2] as HTMLElement).getByText('division by zero')).toBeInTheDocument();
-    expect(within(rows[3] as HTMLElement).getByText(/expression.evaluation/)).toBeInTheDocument();
+    expect(within(rows[3] as HTMLElement).getByText('Cannot be computed.')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Preview the edited Derivation' }));
     expect(

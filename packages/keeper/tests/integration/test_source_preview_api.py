@@ -14,7 +14,7 @@ from lorebase_keeper.auth.api_keys import ApiKeyCodec
 from lorebase_keeper.auth.config import ApiKeySettings
 from lorebase_store.auth import SqlAuthStore
 from lorebase_store.db import create_engine
-from lorebase_store.models.enums import PrincipalType
+from lorebase_store.models.enums import GrantScope, PrincipalType
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings
 
@@ -29,11 +29,14 @@ CODEC = ApiKeyCodec(ApiKeySettings(pepper=PEPPER))
 SOURCE = "approved.suppliers"
 
 
-async def _key(store: SqlAuthStore, name: str, role: str) -> str:
+async def _key(store: SqlAuthStore, name: str, role: str, kind: str | None = None) -> str:
+    narrowed: dict[str, Any] = (
+        {} if kind is None else {"scope_type": GrantScope.KIND, "scope_ref": kind}
+    )
     async with store.unit() as unit:
         principal = await unit.principals.add(PrincipalType.SERVICE, name)
         await unit.grants.add(
-            domain_id=DOMAIN, subject=principal.id, created_by="usr_seed", role=role
+            domain_id=DOMAIN, subject=principal.id, created_by="usr_seed", role=role, **narrowed
         )
         generated = CODEC.generate()
         await unit.api_keys.add(
@@ -55,6 +58,8 @@ async def seed(
         keys = {
             "viewer": await _key(store, "viewer", "viewer"),
             "data_only": await _key(store, "data only", "data-only"),
+            "suppliers_schema": await _key(store, "suppliers", "schema-only", "Supplier"),
+            "parts_schema": await _key(store, "parts", "schema-only", "Part"),
         }
     finally:
         await engine.dispose()
@@ -73,7 +78,7 @@ def _section() -> dict[str, Any]:
         "auth": {
             "mode": "api_key",
             "api_keys": {"pepper": PEPPER},
-            "authz": {"custom_roles": {"data-only": ["data.read"]}},
+            "authz": {"custom_roles": {"data-only": ["data.read"], "schema-only": ["schema.read"]}},
         }
     }
 
@@ -112,7 +117,11 @@ async def test_expression_mappings_are_evaluated_on_the_rows_sent(seeded: Seeded
         first, second = body["rows"]
         assert first["legal_name"] == {"value": "Kavsen (PL)", "error": None}
         assert first["risk_score"]["value"] == 42
-        assert second["risk_score"]["error"]["code"] == "expression.type"
+        # A column only another row has is null here, as in Scribe.
+        assert second["risk_score"]["error"]["code"] == "expression.evaluation"
+        nullable = _edited(city={"expression": 'town == null ? "none" : town'})
+        mixed = await _preview(http, key, nullable, [{"name": "a"}, {"town": "Gdansk"}])
+        assert [row["city"]["value"] for row in mixed.json()["rows"]] == ["none", "Gdansk"]
         none = await _preview(http, key, {}, rows)
         assert none.json()["rows"] == [{}, {}]
 
@@ -146,3 +155,44 @@ async def test_the_caller_needs_to_read_the_schema(seeded: Seeded) -> None:
         assert denied.json()["permission"] == "schema.read"
         anonymous = await http.post(PREVIEW, json={"source": SOURCE, "patch": {}, "rows": [{}]})
         assert anonymous.status_code == 401
+
+
+async def test_columns_and_cells_are_bounded(seeded: Seeded) -> None:
+    key = seeded.facts["viewer"]
+    two = _edited(city={"expression": "a"}, legal_name={"expression": "a"})
+    async with keeper(
+        seeded.app_url,
+        _section(),
+        read={"source_preview_max_columns": 2, "source_preview_max_cells": 4},
+    ) as http:
+        wide = await _preview(http, key, two, [{"a": "1"}, {"a": "1", "b": "2", "c": "3"}])
+        assert wide.status_code == 422
+        assert wide.json()["errors"][0]["pointer"] == "/rows/1"
+        assert (await _preview(http, key, two, [{"a": "1"}] * 2)).status_code == 200
+        cells = await _preview(http, key, two, [{"a": "1"}] * 3)
+        assert cells.status_code == 422, cells.text
+        assert cells.json()["errors"][0]["pointer"] == "/rows"
+        # Without expression mappings there is nothing to evaluate.
+        assert (await _preview(http, key, {}, [{"a": "1"}] * 3)).status_code == 200
+
+
+async def test_a_kind_narrowed_grant_covers_its_target_kind_only(seeded: Seeded) -> None:
+    facts = seeded.facts
+    patch = _edited(city={"expression": "a"})
+    invalid = {"sources": {SOURCE: {"type": "nope"}}}
+    async with keeper(seeded.app_url, _section()) as http:
+        allowed = await _preview(http, facts["suppliers_schema"], patch, [{"a": "x"}])
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["rows"] == [{"city": {"value": "x", "error": None}}]
+        denied = await _preview(http, facts["parts_schema"], patch, [{"a": "x"}])
+        assert denied.status_code == 403, denied.text
+        assert (denied.json()["permission"], denied.json()["kind"]) == ("schema.read", "Supplier")
+        missing = await http.post(
+            PREVIEW,
+            json={"source": "nothing", "patch": {}, "rows": [{"a": "x"}]},
+            headers={"Authorization": f"Bearer {facts['suppliers_schema']}"},
+        )
+        assert missing.status_code == 403
+        # A change set that cannot be read is reported to any reader of the schema.
+        unreadable = await _preview(http, facts["parts_schema"], invalid, [{"a": "x"}])
+        assert unreadable.status_code == 422

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -16,7 +19,7 @@ from lorebase_core.model import (
     load_schema,
 )
 from lorebase_core.types import TypeSpec
-from lorebase_store.materialize.derived import aggregate, plan_derivations
+from lorebase_store.materialize.derived import DerivedValues, aggregate, plan_derivations
 
 SUPPLY = Path(__file__).resolve().parents[3] / "examples" / "supply" / "schema.yaml"
 
@@ -24,6 +27,42 @@ SUPPLY = Path(__file__).resolve().parents[3] / "examples" / "supply" / "schema.y
 @pytest.fixture(scope="module")
 def schema() -> Schema:
     return load_schema(SUPPLY.read_text())
+
+
+class _Repository:
+    """Records of a Kind by key; the first ones are read as one page, never as a stream."""
+
+    def __init__(self) -> None:
+        self.pages: list[tuple[str, str | None, int]] = []
+
+    async def record_page(self, kind_id: str, *, after: str | None, limit: int) -> list[Any]:
+        self.pages.append((kind_id, after, limit))
+        return [SimpleNamespace(key=f"P-{n}") for n in range(limit)]
+
+    def stream_records(self, kind_id: str, *, batch: int) -> Any:
+        raise AssertionError("a preview reads one page")
+
+    async def records(self, kind_id: str, keys: Any) -> dict[str, Any]:
+        return {}
+
+
+async def test_a_preview_reads_the_first_records_as_one_page(schema: Schema) -> None:
+    repository = _Repository()
+    values = DerivedValues(
+        cast(Any, repository),
+        schema,
+        limits=ExprLimits(),
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        batch=100,
+        max_incremental=100,
+        fanout=100,
+    )
+    single = schema.kind_by_api_name("Part")
+    assert single is not None
+    attribute = single.attribute_by_api_name("single_sourced")
+    assert attribute is not None
+    assert await values.preview(attribute.id, keys=None, limit=3) == []
+    assert repository.pages == [(single.id, None, 3)]
 
 
 def test_derivations_run_in_dependency_order(schema: Schema) -> None:

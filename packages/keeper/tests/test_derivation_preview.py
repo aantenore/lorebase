@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from lorebase_core.expr import ExprLimits
 from lorebase_core.model import Schema, load_schema
 from lorebase_keeper.reading.settings import ReadSettings
+from lorebase_keeper.services import derivation_preview as preview_service
 from lorebase_keeper.services.derivation_preview import (
     DERIVATION_NOT_FOUND,
     DERIVATION_UNSUPPORTED,
@@ -130,6 +133,24 @@ def test_touched_kinds_follow_relations_and_links(supply: Schema) -> None:
     )
     through_links = candidate_of(supply, linked, "single_sourced", RULES)
     assert kind_names(through_links.schema, through_links.touched) == ["Part", "Supplier"]
+
+
+def test_touched_kinds_read_with_the_schema_limits(
+    supply: Schema, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[ExprLimits | None] = []
+    original = preview_service.derivation_reads
+
+    def recording(schema: Schema, derivation: Any, limits: ExprLimits | None = None) -> Any:
+        seen.append(limits)
+        return original(schema, derivation, limits)
+
+    monkeypatch.setattr(preview_service, "derivation_reads", recording)
+    tight = SchemaSettings(expression_limits={"max_depth": 20}).rules()
+    candidate = candidate_of(supply, ChangeSetInput(patch={}), "single_sourced", tight)
+    assert candidate.limits == tight.expression_limits
+    assert kind_names(candidate.schema, candidate.touched) == ["Part"]
+    assert seen == [tight.expression_limits]
 
 
 def test_sample_size_is_a_setting() -> None:

@@ -106,7 +106,7 @@ class ReadSettings(SectionModel):
         default_factory=HistorySettings, description="Per-Record history and lineage."
     )
     statement_timeout_ms: int = Field(
-        default=2000, ge=0, description="statement_timeout of read transactions; 0 disables."
+        default=1000, ge=0, description="statement_timeout of read transactions; 0 disables."
     )
     schema_cache_entries: int = Field(
         default=64, ge=1, description="Compiled schemas kept in memory, by schema hash."
@@ -116,11 +116,27 @@ class ReadSettings(SectionModel):
         description="Records `POST /derivations:preview` evaluates a candidate Derivation on: "
         "the default and the most one request may ask for.",
     )
+    derivation_preview_max_key_length: int = Field(
+        default=1024,
+        ge=1,
+        description="Characters of each Record key `POST /derivations:preview` accepts in `keys`.",
+    )
     source_preview_max_rows: int = Field(
         default=100,
         ge=1,
         description="Sample rows `POST /sources:preview` evaluates the expression mappings of a "
         "candidate Source on.",
+    )
+    source_preview_max_columns: int = Field(
+        default=200,
+        ge=1,
+        description="Columns of one sample row `POST /sources:preview` accepts.",
+    )
+    source_preview_max_cells: int = Field(
+        default=1000,
+        ge=1,
+        description="Expressions evaluated by one `POST /sources:preview`: sample rows times "
+        "Attributes mapped by an expression.",
     )
     query: QuerySettings = Field(default_factory=QuerySettings)
     traverse: TraverseSettings = Field(default_factory=TraverseSettings)

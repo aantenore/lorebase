@@ -17,7 +17,9 @@ a definition problem). `map` turns one source row into a `MappedRow`:
 
 An Attribute mapped by `expression` instead of `column` takes the value of a CEL expression over
 the row (`lorebase_core.expr.rows`: columns are variables, `row` holds them all); the transforms
-and the coercion then apply to that value like to a column's.
+and the coercion then apply to that value like to a column's. Expressions are compiled once over
+the Source's columns (`use_columns`: the header, or every key of the rows read); a column a row
+lacks is null.
 """
 
 from __future__ import annotations
@@ -31,13 +33,7 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from lorebase_core.expr import (
-    ExprError,
-    ExprLimits,
-    compile_row_expression,
-    evaluate_row_expression,
-)
-from lorebase_core.expr.compiler import CompiledExpression
+from lorebase_core.expr import ExprError, ExprLimits, RowExpressions
 from lorebase_core.model import (
     Attribute,
     Kind,
@@ -252,9 +248,7 @@ class RowMapper:
     """Maps rows of one Source onto its target Kind."""
 
     def __init__(self, schema: Schema, source: Source, *, limits: ExprLimits | None = None) -> None:
-        self._schema = schema
-        self._limits = limits
-        self._programs: dict[tuple[str, frozenset[str]], CompiledExpression] = {}
+        self._expressions = RowExpressions(schema, limits=limits)
         kind = schema.kinds.get(source.target_kind)
         if kind is None:
             raise SourceDefinitionError(f"unknown target Kind {source.target_kind}")
@@ -346,6 +340,16 @@ class RowMapper:
             names.update(link.columns)
         return frozenset(names)
 
+    @property
+    def has_expressions(self) -> bool:
+        """Whether an Attribute is mapped by an expression."""
+        return any(rule.expression is not None for rule in self._rules)
+
+    def use_columns(self, columns: Sequence[str]) -> None:
+        """Declare the Source's columns, which expressions are compiled over. Columns of a row
+        not declared yet are added when it is mapped."""
+        self._expressions.declare(columns)
+
     def check_columns(self, available: Sequence[str]) -> None:
         """Refuse a source whose header lacks columns the mapping reads."""
         missing = sorted(self.columns - set(available))
@@ -373,12 +377,7 @@ class RowMapper:
         """The value a rule starts from: its column, or the expression over the row."""
         if rule.expression is None:
             return row.get(str(rule.column))
-        key = (rule.expression, frozenset(row))
-        program = self._programs.get(key)
-        if program is None:
-            program = compile_row_expression(self._schema, rule.expression, row, self._limits)
-            self._programs[key] = program
-        return evaluate_row_expression(program, row, now=datetime.now(UTC))
+        return self._expressions.evaluate(rule.expression, row, now=datetime.now(UTC))
 
     def map(self, row: Row, locator: str) -> MappedRow:
         """Map one row; raises `RowError` when a value does not fit."""

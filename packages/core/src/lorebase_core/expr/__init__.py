@@ -9,7 +9,8 @@ the Schema and evaluated in a bounded, deterministic sandbox without I/O.
   ``plan_steps`` evaluate Operations; ``evaluate_derivation`` and ``matches_filter``
   evaluate Derivations. Records come from a caller-supplied ``RecordResolver``.
 - ``compile_row_expression`` and ``evaluate_row_expression`` handle the ``expression`` of a
-  Source's Attribute mapping, over one row of the Source.
+  Source's Attribute mapping, over one row of the Source; ``RowExpressions`` compiles them
+  once over the Source's columns.
 - ``ExprLimits`` bounds compiling and evaluation; ``ExprError`` reports problems with a
   stable code, the position in the expression and the path in the schema element.
 """
@@ -56,6 +57,7 @@ from lorebase_core.expr.resolver import (
     RecordResolver,
 )
 from lorebase_core.expr.rows import (
+    RowExpressions,
     compile_row_expression,
     evaluate_row_expression,
     row_environment,
@@ -86,6 +88,7 @@ __all__ = [
     "RecordNotLoaded",
     "RecordRequest",
     "RecordResolver",
+    "RowExpressions",
     "StepPlan",
     "TypeKind",
     "activation",

@@ -122,15 +122,17 @@ function SavedPreview({ kind, attribute }: { kind: string; attribute: string }) 
   );
 }
 
+function cannotCompute(code: string | null): string {
+  return code === null ? 'Cannot be computed.' : `Cannot be computed (${code}).`;
+}
+
 function rowsOf(preview: Preview) {
   return preview.items.map((item) => ({
     key: item.key,
     title: item.title ?? '',
     value: item.value,
     masked: item.masked,
-    ...(item.error === null
-      ? {}
-      : { error: item.error.message ?? `Cannot be computed (${item.error.code}).` }),
+    ...(item.error === null ? {} : { error: item.error.message ?? cannotCompute(item.error.code) }),
   }));
 }
 

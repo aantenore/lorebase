@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from lorebase_core.model import Schema, Source
 from lorebase_core.model.source import AttributeMapping, RelationMapping, Transform
 from lorebase_core.types import AttributeType, TypeSpec
+from lorebase_scribe.settings import SourceSettings
 from lorebase_scribe.sources.mapping import (
     RowError,
     RowMapper,
@@ -18,6 +20,7 @@ from lorebase_scribe.sources.mapping import (
     apply_transform,
     coerce,
 )
+from lorebase_scribe.sources.sync import SourceSync, SyncReport
 
 SUPPLIER_ROW = {
     "supplier_code": " S-1001 ",
@@ -150,6 +153,53 @@ def test_expression_mappings_start_from_the_row(supply_schema: Schema) -> None:
     failing = RowMapper(supply_schema, suppliers.model_copy(update={"attribute_mapping": broken}))
     with pytest.raises(RowError, match="city"):
         failing.map(SUPPLIER_ROW, "suppliers.csv:2")
+
+
+def _expression_mapper(schema: Schema, expression: str) -> tuple[RowMapper, str]:
+    suppliers = source(schema, "approved.suppliers")
+    city = attribute_id(schema, "Supplier", "city")
+    mapping = {**suppliers.attribute_mapping, city: AttributeMapping(expression=expression)}
+    return RowMapper(schema, suppliers.model_copy(update={"attribute_mapping": mapping})), city
+
+
+def test_expressions_compile_over_the_columns_and_missing_ones_are_null(
+    supply_schema: Schema,
+) -> None:
+    mapper, city = _expression_mapper(supply_schema, 'town == null ? "none" : town')
+    mapper.use_columns([*SUPPLIER_ROW, "town"])
+    assert mapper.map({**SUPPLIER_ROW, "town": "Gdansk"}, "1").values[city] == "Gdansk"
+    assert mapper.map(SUPPLIER_ROW, "2").values[city] == "none"
+
+
+class _JsonRecords:
+    """A Source without fixed columns: keys differ from row to row."""
+
+    columns: tuple[str, ...] = ()
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        self._records = records
+
+    async def rows(self, since: Any) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        for index, record in enumerate(self._records):
+            yield f"records[{index}]", record
+
+
+async def test_rows_without_fixed_columns_see_every_key_of_the_run(supply_schema: Schema) -> None:
+    """Scribe gives what the Keeper preview gives for the same rows: an expression reading a key
+    only a later row has sees null in the earlier rows, not an undeclared column."""
+    mapper, city = _expression_mapper(supply_schema, 'town == null ? "none" : town')
+    records = [dict(SUPPLIER_ROW), {**SUPPLIER_ROW, "supplier_code": "S-2", "town": "Gdansk"}]
+    sync = SourceSync(
+        cast(Any, None),
+        cast(Any, None),
+        SourceSettings(),
+        principal="svc",
+        connectors=lambda _source, _settings: _JsonRecords(records),
+    )
+    report = SyncReport("run", "dom", "src", "approved.suppliers", "b", "main", True)
+    read = await sync._read(mapper, mapper.source, None, report)
+    assert report.rows_failed == 0, report.errors
+    assert [row.values[city] for row in read.rows] == ["none", "Gdansk"]
 
 
 def test_definition_errors(supply_schema: Schema) -> None:
