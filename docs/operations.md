@@ -260,6 +260,15 @@ included. Query strings, bodies and values are never recorded.
   (`queue_full`, `write_failed`, `shutdown`) and `sensitive`; written ones count in
   `lorebase.audit.reads.recorded`. The last tenth of the queue takes only sensitive reads, and a
   batch holding one is tried twice; alert on drops with `sensitive="true"`.
+- With the default `on_overflow: drop` the read stream is evidence, not proof. Where it must be
+  proof, set `on_overflow: reject`: a read is answered only once its record holds a place in
+  the queue, taken before the status line and any of the body leave (streamed bodies too);
+  without one the read gets 503 `read-audit-unavailable` with `Retry-After` (`retry_after_s`),
+  counted in `lorebase.audit.reads.refused`. A batch that fails is kept and retried every
+  `flush_interval_s`, never dropped (`lorebase.audit.reads.write_failures`); after
+  `unready_after_failures` failures in a row `/readyz` reports `read_audit` failed until a
+  batch is written. Records still queued at shutdown are lost and counted (`shutdown`).
+  `sample_rate` and the filters still apply; with `1.0` every read is recorded.
 - The read stream has hash chains of its own, so it never slows down or breaks those of
   actions. Verify it with `audit verify --reads`; the daily `audit_verify` job checks both
   streams (`lorebase_audit_verifications_total{stream}`), and checkpoints cover both.

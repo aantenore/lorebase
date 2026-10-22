@@ -15,7 +15,12 @@ from lorebase_keeper import __version__
 from lorebase_keeper.auth.audit import AuditMiddleware
 from lorebase_keeper.auth.config import AuditSettings
 from lorebase_keeper.auth.ports import AuthStore
-from lorebase_keeper.auth.read_audit import ReadAuditor, ReadSink, database_sink
+from lorebase_keeper.auth.read_audit import (
+    ReadAuditCheck,
+    ReadAuditor,
+    ReadSink,
+    database_sink,
+)
 from lorebase_keeper.auth.runtime import build_runtime
 from lorebase_keeper.client_address import ClientAddresses
 from lorebase_keeper.client_address import install as install_client_addresses
@@ -151,6 +156,8 @@ def create_app(
     reads = _read_auditor(
         keeper.auth.audit, auth.audit_writer is not None, database, read_audit_sink, telemetry
     )
+    if reads is not None and reads.rejects:
+        checks.append(ReadAuditCheck(reads))
     traces = _trace_recorder(keeper.trace, database, trace_sink, telemetry)
 
     @asynccontextmanager
@@ -252,6 +259,7 @@ def create_app(
             writer=auth.audit_writer,
             settings=keeper.auth.audit,
             api_prefix=keeper.api_prefix,
+            renderer=renderer,
             reads=reads,
             is_read=keeper.limits.rate.routes.only_reads,
         )

@@ -512,8 +512,27 @@ class ReadAuditSettings(SectionModel):
     write_timeout_s: float = Field(
         default=5.0,
         gt=0,
-        description="Time budget of one batch; a batch that fails is dropped and counted "
-        "(reason `write_failed`).",
+        description="Time budget of one batch; with `on_overflow: drop` a batch that fails is "
+        "dropped and counted (reason `write_failed`).",
+    )
+    on_overflow: Literal["drop", "reject"] = Field(
+        default="drop",
+        description="What happens when a record cannot be kept. `drop`: the read is served and "
+        "the record dropped and counted. `reject`: a read is answered only once its record "
+        "holds a place in the queue (else 503 with `Retry-After`), and a batch that fails is "
+        "kept and retried, never dropped; for deployments where the read stream is proof.",
+    )
+    retry_after_s: int = Field(
+        default=1,
+        ge=1,
+        description="Retry-After of a read refused because the queue is full "
+        "(`on_overflow: reject`).",
+    )
+    unready_after_failures: int = Field(
+        default=3,
+        ge=1,
+        description="Failed attempts in a row of one batch after which readiness reports the "
+        "read audit as failed until a batch is written again (`on_overflow: reject`).",
     )
 
 
