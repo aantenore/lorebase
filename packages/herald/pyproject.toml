@@ -8,12 +8,14 @@ requires-python = ">=3.12"
 # lorebase-client: the typed client of Keeper's REST API (requests, models, errors, retries).
 # httpx: transport options of that client (TLS verification, test transports).
 # pydantic: tool input schemas and the `herald` settings section.
+# opentelemetry-api: trace context of Herald's own spans, propagated to Keeper as `traceparent`.
 # lorebase-platform: layered settings, secret references and structured logging.
 dependencies = [
   "lorebase-platform>=0.1,<0.2",
   "lorebase-client>=0.1,<0.2",
   "mcp>=2.3,<3",
   "httpx>=0.27",
+  "opentelemetry-api>=1.25",
   "pydantic>=2.7",
 ]
 

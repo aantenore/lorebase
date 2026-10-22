@@ -15,7 +15,7 @@ import httpx
 
 from lorebase_client import AsyncLorebaseClient, RetryPolicy
 from lorebase_herald.settings import KeeperConnection
-from lorebase_herald.tracing import call_headers
+from lorebase_herald.tracing import call_headers, stamp_request
 
 
 def bearer_token(credential: str | None) -> str | None:
@@ -44,7 +44,8 @@ class KeeperClients:
     async def open(self, credential: str | None) -> AsyncIterator[AsyncLorebaseClient]:
         """A client for one request, closed afterwards. With no credential, requests go out
         anonymous: the client reads no key from the environment. It carries the trace headers of
-        the tool call being served (see `lorebase_herald.tracing`)."""
+        the tool call being served; each of its requests gets a span of its own (see
+        `lorebase_herald.tracing`)."""
         connection = self._connection
         async with AsyncLorebaseClient(
             connection.base_url,
@@ -56,6 +57,7 @@ class KeeperClients:
             ),
             headers={"User-Agent": connection.user_agent, **(call_headers.get() or {})},
             transport=self._transport_for_request(),
+            event_hooks={"request": [stamp_request]},
             trust_env=connection.trust_env,
             env={},
         ) as client:

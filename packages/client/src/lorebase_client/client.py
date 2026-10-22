@@ -58,7 +58,9 @@ class LorebaseClient:
     create and Operation execution a key, which also makes them safe to retry after a lost
     answer. `transport` replaces the network (tests, in-process servers); `sleep` replaces the
     wait between retries. `trust_env=False` makes `httpx` ignore proxy variables
-    (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) and other environment settings.
+    (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) and other environment settings. `event_hooks` maps
+    `request` / `response` to callables `httpx` runs on every HTTP request sent (each retry
+    included), e.g. to set a header per request.
     """
 
     def __init__(
@@ -78,6 +80,7 @@ class LorebaseClient:
         trace: TraceMode | None = None,
         transport: httpx.BaseTransport | None = None,
         trust_env: bool = True,
+        event_hooks: Mapping[str, Sequence[Callable[..., Any]]] | None = None,
         env: Mapping[str, str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -99,7 +102,10 @@ class LorebaseClient:
         self._core = RequestCore(self.config)
         self._sleep = sleep
         self._http = httpx.Client(
-            timeout=self.config.timeout_s, transport=transport, trust_env=trust_env
+            timeout=self.config.timeout_s,
+            transport=transport,
+            trust_env=trust_env,
+            event_hooks={k: list(v) for k, v in (event_hooks or {}).items()},
         )
         self._mount()
 
