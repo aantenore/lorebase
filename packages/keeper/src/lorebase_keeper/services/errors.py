@@ -46,7 +46,7 @@ from lorebase_store.commit import (
 STALE_HEAD = ProblemType("stale-head", 409, "Branch head moved")
 BRANCH_BUSY = ProblemType("branch-busy", 503, "Branch is busy")
 BRANCH_NOT_MATERIALIZED = ProblemType("branch-not-materialized", 409, "Branch not materialized")
-BRANCH_MATERIALIZING = ProblemType("branch-materializing", 409, "Branch still being copied")
+BRANCH_MATERIALIZING = ProblemType("branch-materializing", 409, "Branch still being built")
 SCHEMA_CHANGE_INVALID = ProblemType("schema-change-invalid", 422, "Schema change not applicable")
 PROTECTED_BRANCH = ProblemType("protected-branch", 409, "Branch is protected")
 REVIEW_REQUIRED = ProblemType("review-required", 409, "Review required")

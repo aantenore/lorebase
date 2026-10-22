@@ -2116,7 +2116,7 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
-            /** @description Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches. `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a correct overlay). Null for a branch that was never copied in the background. */
+            /** @description Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches; a large copy that cannot start as an overlay (of an overlay, from an older Revision) is `building` until a job writes its rows from its tree (its head reads like a past Revision, commits answer 409). `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (a build that failed for good). Null for a branch that was never copied in the background. */
             materialization_status?: components["schemas"]["MaterializationStatus"] | null;
             /** @description Progress of the background copy; null without one. */
             materialization_progress?: components["schemas"]["MaterializationProgress"] | null;
@@ -2160,7 +2160,7 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
-            /** @description Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches. `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a correct overlay). Null for a branch that was never copied in the background. */
+            /** @description Background copy of the branch: a large copy branch is created as an overlay of its source (`materialization` is `overlay`, reads and writes work at once) and a job copies its rows in batches; a large copy that cannot start as an overlay (of an overlay, from an older Revision) is `building` until a job writes its rows from its tree (its head reads like a past Revision, commits answer 409). `pending` (queued, or waiting for a retry), `running`, `done` (`materialization` is then `full`) or `failed` (a build that failed for good). Null for a branch that was never copied in the background. */
             materialization_status?: components["schemas"]["MaterializationStatus"] | null;
             /** @description Progress of the background copy; null without one. */
             materialization_progress?: components["schemas"]["MaterializationProgress"] | null;
@@ -3893,13 +3893,18 @@ export interface components {
          * @description Branch materialization mode (design 6.11).
          * @enum {string}
          */
-        Materialization: "full" | "overlay" | "none";
+        Materialization: "full" | "overlay" | "none" | "building";
         /**
          * MaterializationPhase
-         * @description What the next batch copies; `switch` makes the branch a full copy.
+         * @description What the next batch does; `switch` makes the branch a full copy.
+         *
+         *     `base`: `records`, `links`, `history`, `switch`. `tree`: `clear` (rows left by an
+         *     earlier state), `tree_history`, `tree_rows`, `derived`, `paths`, `switch`. After the
+         *     switch, a copy that got schema changes reconciles: `prune`, `derived`, `paths`,
+         *     `search`.
          * @enum {string}
          */
-        MaterializationPhase: "records" | "links" | "history" | "switch" | "done";
+        MaterializationPhase: "records" | "links" | "history" | "clear" | "tree_history" | "tree_rows" | "switch" | "prune" | "derived" | "paths" | "search" | "done";
         /**
          * MaterializationProgress
          * @description How far the background copy of a branch got.

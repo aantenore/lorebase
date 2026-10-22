@@ -10,7 +10,7 @@ Derivations, with the evaluation the incremental path uses (`materialize.derived
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -66,7 +66,7 @@ class RebuildReport:
 
 
 @dataclass(frozen=True, slots=True)
-class _Folded:
+class Folded:
     """Lineage inputs of one element folded from its history."""
 
     provenance: dict[str, str]
@@ -154,14 +154,14 @@ async def materialize_revision(
         entries: dict[str, bytes] = {}
         async for scanned in nodes.scan(ref.root):
             entries.update(scanned)
-        folded = await _fold_history(repository, partition, batch=batch)
+        folded = await fold_history(repository, partition, batch=batch)
         for chunk in chunks(sorted(entries), batch):
             bodies = await objects.get_many(entries[key] for key in chunk)
             values = {key: dict(bodies[entries[key]].body.get("values", {})) for key in chunk}
             if parsed.type is PartitionType.KIND:
                 await repository.upsert_records(
                     [
-                        _record_row(
+                        record_row(
                             parsed.element_id,
                             key,
                             values[key],
@@ -176,9 +176,7 @@ async def materialize_revision(
             else:
                 await repository.upsert_links(
                     [
-                        _link_row(
-                            parsed.element_id, key, values[key], entries[key], folded.get(key)
-                        )
+                        link_row(parsed.element_id, key, values[key], entries[key], folded.get(key))
                         for key in chunk
                     ]
                 )
@@ -223,12 +221,17 @@ async def materialize_revision(
     return RebuildReport(branch=branch, head=head.id, records=records, links=links)
 
 
-async def _fold_history(
-    repository: MaterializedRepository, partition: str, *, batch: int
-) -> dict[str, _Folded]:
-    """Per element still present, the union of its provenance maps since it was last created."""
-    folded: dict[str, _Folded] = {}
-    async for steps in repository.stream_history_steps(partition, batch=batch):
+async def fold_history(
+    repository: MaterializedRepository,
+    partition: str,
+    *,
+    batch: int,
+    keys: Sequence[str] | None = None,
+) -> dict[str, Folded]:
+    """Per element still present (of those in `keys`, when given), the union of its
+    provenance maps since it was last created."""
+    folded: dict[str, Folded] = {}
+    async for steps in repository.stream_history_steps(partition, batch=batch, keys=keys):
         for step in steps:
             if step.new_hash is None:
                 folded.pop(step.element_key, None)
@@ -236,17 +239,17 @@ async def _fold_history(
             previous = folded.get(step.element_key)
             provenance = {} if previous is None else previous.provenance
             provenance.update(step.provenance or {})
-            folded[step.element_key] = _Folded(provenance, step.revision_id, step.at)
+            folded[step.element_key] = Folded(provenance, step.revision_id, step.at)
     return folded
 
 
-def _record_row(
+def record_row(
     kind_id: str,
     key: str,
     values: Mapping[str, Any],
     digest: bytes,
     schema: Schema,
-    folded: _Folded | None,
+    folded: Folded | None,
     head: RevisionRow,
 ) -> RecordRow:
     return RecordRow(
@@ -261,12 +264,12 @@ def _record_row(
     )
 
 
-def _link_row(
+def link_row(
     relation_id: str,
     key: str,
     values: Mapping[str, Any],
     digest: bytes,
-    folded: _Folded | None,
+    folded: Folded | None,
 ) -> LinkRow:
     from_key, to_key = split_link_key(key)
     return LinkRow(

@@ -1,8 +1,10 @@
-"""Progress of background branch copies (`branch_materializations`, revision 0017).
+"""Progress of background branch copies (`branch_materializations`, revisions 0017, 0031).
 
-A row exists for each branch a `store.materialize` job turns from an overlay into a full copy
-(`lorebase_store.materialize.background`): its status, the phase and cursor where the next
-batch starts, and the rows done out of the rows to read.
+A row exists for each branch a `store.materialize` job turns into a full copy
+(`lorebase_store.materialize.background`): from the base rows of an overlay (`base`) or from
+the tree of its head (`tree`). It holds the status, the phase and cursor where the next
+batch starts, the rows done out of the rows to read, the failed jobs and the schema changes
+to reconcile.
 """
 
 from __future__ import annotations
@@ -52,13 +54,35 @@ class MaterializationStatus(StrEnum):
 ACTIVE = (MaterializationStatus.PENDING, MaterializationStatus.RUNNING)
 
 
+class MaterializationStrategy(StrEnum):
+    """Where a background copy reads the rows it writes."""
+
+    BASE = "base"
+    """The base rows an overlay reads, as of its fork point."""
+    TREE = "tree"
+    """The tree of the branch head (a `building` branch)."""
+
+
 class MaterializationPhase(StrEnum):
-    """What the next batch copies; `switch` makes the branch a full copy."""
+    """What the next batch does; `switch` makes the branch a full copy.
+
+    `base`: `records`, `links`, `history`, `switch`. `tree`: `clear` (rows left by an
+    earlier state), `tree_history`, `tree_rows`, `derived`, `paths`, `switch`. After the
+    switch, a copy that got schema changes reconciles: `prune`, `derived`, `paths`,
+    `search`.
+    """
 
     RECORDS = "records"
     LINKS = "links"
     HISTORY = "history"
+    CLEAR = "clear"
+    TREE_HISTORY = "tree_history"
+    TREE_ROWS = "tree_rows"
     SWITCH = "switch"
+    PRUNE = "prune"
+    DERIVED = "derived"
+    PATHS = "paths"
+    SEARCH = "search"
     DONE = "done"
 
 
@@ -76,6 +100,9 @@ class MaterializationState:
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None
+    strategy: MaterializationStrategy = MaterializationStrategy.BASE
+    failures: int = 0
+    reconcile: dict[str, Any] | None = None
 
     @property
     def active(self) -> bool:
@@ -97,6 +124,9 @@ def _state(row: Any) -> MaterializationState:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         finished_at=row["finished_at"],
+        strategy=MaterializationStrategy(row["strategy"]),
+        failures=int(row["failures"]),
+        reconcile=row["reconcile"],
     )
 
 
@@ -161,17 +191,29 @@ class BranchMaterializationRepository:
         base_generation: int,
         status: MaterializationStatus,
         at: datetime,
+        strategy: MaterializationStrategy = MaterializationStrategy.BASE,
+        failures: int = 0,
+        reconcile: dict[str, Any] | None = None,
     ) -> MaterializationState:
-        """Start (or restart from the first row) the copy of `branch` from its fork point."""
+        """Start (or restart from the first row) the copy of `branch`: from its fork point
+        (`base`) or from the tree of its head (`tree`)."""
+        first = (
+            MaterializationPhase.RECORDS
+            if strategy is MaterializationStrategy.BASE
+            else MaterializationPhase.CLEAR
+        )
         values: dict[str, Any] = {
             "status": status.value,
-            "phase": MaterializationPhase.RECORDS.value,
+            "phase": first.value,
+            "strategy": strategy.value,
             "base_branch": base_branch,
             "base_generation": base_generation,
             "cursor": None,
             "rows_done": 0,
             "rows_total": None,
             "error": None,
+            "failures": failures,
+            "reconcile": reconcile,
             "updated_at": at,
             "finished_at": None,
         }
@@ -194,6 +236,8 @@ class BranchMaterializationRepository:
             values["status"] = MaterializationStatus(values["status"]).value
         if "phase" in values:
             values["phase"] = MaterializationPhase(values["phase"]).value
+        if "strategy" in values:
+            values["strategy"] = MaterializationStrategy(values["strategy"]).value
         if "cursor" in values and values["cursor"] is not None:
             values["cursor"] = {"key": list(values["cursor"])}
         await self._session.execute(
@@ -214,5 +258,19 @@ class BranchMaterializationRepository:
             phase=MaterializationPhase.DONE,
             cursor=None,
             error=None,
+            failures=0,
+            reconcile=None,
             finished_at=at,
         )
+
+    async def add_reconcile(
+        self, branch: str, *, refresh_kinds: Collection[str], at: datetime
+    ) -> None:
+        """Record a schema change made while the copy of `branch` runs: after its switch, the
+        job recomputes what a schema change recomputes on a full branch (`refresh_kinds`:
+        Kinds whose titles and search vectors change)."""
+        state = await self.get(branch, for_update=True)
+        if state is None:
+            return
+        kinds = set((state.reconcile or {}).get("refresh_kinds", ())) | set(refresh_kinds)
+        await self.update(branch, at=at, reconcile={"refresh_kinds": sorted(kinds)})

@@ -22,6 +22,9 @@ class Materialization(StrEnum):
     FULL = "full"
     OVERLAY = "overlay"
     NONE = "none"
+    BUILDING = "building"
+    """A full branch whose rows a background job is still writing from its tree; reads of
+    its head and commits wait for it (`materialize.background`)."""
 
 
 class ProposalOrigin(StrEnum):

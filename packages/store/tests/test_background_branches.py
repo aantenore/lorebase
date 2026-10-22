@@ -28,6 +28,7 @@ from lorebase_store.materialize import (
     create_branch,
     delete_branch,
     promote,
+    rebuild,
     run_branch_delete_job,
     run_materialize_job,
     verify,
@@ -39,6 +40,7 @@ from lorebase_store.repositories import (
     MaterializationPhase,
     MaterializationState,
     MaterializationStatus,
+    MaterializationStrategy,
     MaterializedRepository,
     RefRepository,
     scope_to_domain,
@@ -125,7 +127,7 @@ async def materialization(sessions: Sessions, branch: str) -> Materialization:
 
 async def step(sessions: Sessions, branch: str, runtime: StoreRuntime = BACKGROUND) -> bool:
     """One batch of the background copy of `branch`; whether it finished."""
-    run = background._Run("materialize", branch)
+    run = background._Run("materialize", branch, background._Pace.of(runtime.settings.materialize))
     async with sessions() as session, session.begin():
         outcome = await background._materialize_step(
             session, DOMAIN, branch, run, runtime, lambda: datetime.now(UTC)
@@ -294,18 +296,28 @@ async def test_commits_during_the_copy_stay_correct(sessions: Sessions) -> None:
         [part_with("P-3", "Ball bearing, sealed"), supplied("P-3", "S-2")],
     )
     await assert_reads_like(sessions, BIG, REFERENCE)
-    # A schema change needs the full copy: refused until the copy is done.
+    # A schema change during the copy is applied to the overlay; the job reconciles the rows
+    # it did not write after its switch.
     kind = counted_supplier()
     attributes = dict(kind.attributes)
     attributes[VAT] = attributes[VAT].model_copy(update={"description": "Tax number."})
     changed = SchemaUpsert(kind.model_copy(update={"attributes": attributes}))
-    with pytest.raises(BranchMaterializingError):
-        await put(sessions, tight, [BIG], [], schema_changes=[changed])
-    while not await step(sessions, BIG):
-        pass
-    assert await materialization(sessions, BIG) is Materialization.FULL
-    await assert_reads_like(sessions, BIG, REFERENCE)
     await put(sessions, tight, [BIG, REFERENCE], [], schema_changes=[changed])
+    assert await materialization(sessions, BIG) is Materialization.OVERLAY
+    state = await state_of(sessions, BIG)
+    assert state is not None
+    assert state.reconcile is not None
+    phases = []
+    while not await step(sessions, BIG):
+        state = await state_of(sessions, BIG)
+        assert state is not None
+        phases.append(state.phase)
+    assert {MaterializationPhase.PRUNE, MaterializationPhase.SEARCH} <= set(phases)
+    assert await materialization(sessions, BIG) is Materialization.FULL
+    state = await state_of(sessions, BIG)
+    assert state is not None
+    assert (state.status, state.reconcile) == (MaterializationStatus.DONE, None)
+    await assert_reads_like(sessions, BIG, REFERENCE)
     await put(sessions, tight, ["main"], [supplier("S-3", "Gamma Main", vat="IT3")])
     await assert_reads_like(sessions, BIG, REFERENCE)
 
@@ -364,9 +376,11 @@ async def test_a_failed_copy_keeps_its_progress_and_resumes(
         await run_materialize_job(engine, last, runtime=BACKGROUND)
     state = await state_of(sessions, BIG)
     assert state is not None
-    assert state.status is MaterializationStatus.FAILED
+    assert (state.status, state.failures) == (MaterializationStatus.PENDING, 1)
     assert state.cursor == kept
     assert await materialization(sessions, BIG) is Materialization.OVERLAY
+    retry = await queued_after(sessions, MATERIALIZE_JOB)
+    assert retry is not None, "queued again with backoff"
     await assert_reads_like(sessions, BIG, REFERENCE)
 
     # Run again (queued by hand): it resumes from the cursor, and batches it repeats copy
@@ -381,9 +395,152 @@ async def test_a_failed_copy_keeps_its_progress_and_resumes(
     assert (result["status"], result["promoted"]) == ("done", True)
     state = await state_of(sessions, BIG)
     assert state is not None
-    assert (state.status, state.error) == (MaterializationStatus.DONE, None)
+    assert (state.status, state.error, state.failures) == (MaterializationStatus.DONE, None, 0)
     assert await rows_of(sessions, BIG) == await rows_of(sessions, REFERENCE)
     await assert_reads_like(sessions, BIG, REFERENCE)
+
+
+async def queued_after(sessions: Sessions, job_type: str) -> datetime | None:
+    """`run_after` of the latest queued job of a type, when it is in the future."""
+    async with sessions() as session, session.begin():
+        found = await session.execute(
+            text(
+                "SELECT run_after FROM jobs WHERE type = :t AND status = 'queued' "
+                "AND run_after > now() ORDER BY id DESC LIMIT 1"
+            ),
+            {"t": job_type},
+        )
+        return found.scalar_one_or_none()
+
+
+async def finish(sessions: Sessions, branch: str, runtime: StoreRuntime = BACKGROUND) -> list[Any]:
+    """Run the batches of the background job of `branch` to the end; the phases seen."""
+    phases = []
+    while not await step(sessions, branch, runtime):
+        state = await state_of(sessions, branch)
+        assert state is not None
+        phases.append(state.phase)
+    return phases
+
+
+async def head_of(sessions: Sessions, branch: str) -> bytes:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        return (await RefRepository(session, DOMAIN).require(branch)).head
+
+
+async def test_a_copy_whose_copies_keep_failing_is_rebuilt_from_its_tree(
+    sessions: Sessions, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After copy_max_failures failed jobs the overlay is detached from its base and built
+    from its tree; the deletion of its base no longer waits for it."""
+    once = runtime_with(
+        async_copy_min_rows=1, async_delete_min_rows=1, job_batch_rows=3, copy_max_failures=1
+    )
+    await create(sessions, BIG, once)
+    await create(sessions, REFERENCE, INLINE)
+
+    async def failing(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(background, "_copy_batch", failing)
+    last = job(MATERIALIZE_JOB, BIG, attempts=once.settings.jobs.max_attempts)
+    with pytest.raises(RuntimeError):
+        await run_materialize_job(engine, last, runtime=once)
+    assert await materialization(sessions, BIG) is Materialization.BUILDING
+    state = await state_of(sessions, BIG)
+    assert state is not None
+    assert (state.strategy, state.status) == (
+        MaterializationStrategy.TREE,
+        MaterializationStatus.PENDING,
+    )
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        assert await RefRepository(session, DOMAIN).overlays_of("main") == []
+    # Commits wait for the build.
+    with pytest.raises(BranchMaterializingError):
+        await put(sessions, once, [BIG], [supplier("S-9", "Late", vat="IT9")])
+    phases = await finish(sessions, BIG, once)
+    assert phases[0] is MaterializationPhase.CLEAR or MaterializationPhase.TREE_HISTORY in phases
+    assert {MaterializationPhase.TREE_ROWS, MaterializationPhase.DERIVED} <= set(phases)
+    assert await materialization(sessions, BIG) is Materialization.FULL
+    await assert_reads_like(sessions, BIG, REFERENCE)
+
+
+async def test_a_large_copy_from_an_older_revision_is_built_in_the_background(
+    sessions: Sessions,
+) -> None:
+    start = await head_of(sessions, "main")
+    await put(sessions, BACKGROUND, ["main"], [supplier("S-1", "Alpha Later", vat="IT1")])
+    created = await create(sessions, BIG, BACKGROUND, start=start)
+    assert (created.mode, created.pending) == (MaterializationMode.REBUILD, True)
+    assert await materialization(sessions, BIG) is Materialization.BUILDING
+    assert await rows_of(sessions, BIG) == {
+        "mat_records": 0,
+        "mat_links": 0,
+        "mat_history": 0,
+        "mat_schema": 0,
+    }
+    reference = await create(sessions, REFERENCE, INLINE, start=start)
+    assert not reference.pending
+    with pytest.raises(BranchMaterializingError):
+        await put(sessions, BACKGROUND, [BIG], [supplier("S-9", "Late", vat="IT9")])
+    phases = await finish(sessions, BIG)
+    assert list(dict.fromkeys(phases)) == [
+        MaterializationPhase.TREE_HISTORY,
+        MaterializationPhase.TREE_ROWS,
+        MaterializationPhase.DERIVED,
+        MaterializationPhase.PATHS,
+        MaterializationPhase.SWITCH,
+    ]
+    assert await materialization(sessions, BIG) is Materialization.FULL
+    assert await rows_of(sessions, BIG) == await rows_of(sessions, REFERENCE)
+    await assert_reads_like(sessions, BIG, REFERENCE)
+    await put(sessions, BACKGROUND, [BIG, REFERENCE], [supplier("S-9", "Late", vat="IT9")])
+    await assert_reads_like(sessions, BIG, REFERENCE)
+
+
+async def test_a_large_copy_of_an_overlay_is_built_in_the_background(
+    sessions: Sessions,
+) -> None:
+    async with sessions() as session:
+        await create_branch(
+            session,
+            DOMAIN,
+            "agent/source",
+            created_by="usr_test",
+            mode=BranchMode.OVERLAY,
+            runtime=INLINE,
+        )
+    await put(sessions, INLINE, ["agent/source"], [supplier("S-2", "Beta Agent", vat="IT2")])
+    created = await create(sessions, BIG, BACKGROUND, source="agent/source")
+    assert (created.mode, created.pending) == (MaterializationMode.COPY, True)
+    assert await materialization(sessions, BIG) is Materialization.BUILDING
+    await create(sessions, REFERENCE, INLINE, source="agent/source")
+    await finish(sessions, BIG)
+    assert await materialization(sessions, BIG) is Materialization.FULL
+    assert await rows_of(sessions, BIG) == await rows_of(sessions, REFERENCE)
+    await assert_reads_like(sessions, BIG, REFERENCE)
+
+
+async def test_rebuilding_a_large_base_detaches_its_overlays(sessions: Sessions) -> None:
+    async with sessions() as session:
+        await create_branch(
+            session,
+            DOMAIN,
+            "agent/reader",
+            created_by="usr_test",
+            mode=BranchMode.OVERLAY,
+            runtime=BACKGROUND,
+        )
+    await put(sessions, BACKGROUND, ["agent/reader"], [supplier("S-2", "Beta", vat="IT2")])
+    await create(sessions, REFERENCE, INLINE, source="agent/reader")
+    async with sessions() as session, session.begin():
+        await rebuild(session, DOMAIN, "main", runtime=BACKGROUND)
+    assert await materialization(sessions, "agent/reader") is Materialization.BUILDING
+    await finish(sessions, "agent/reader")
+    assert await materialization(sessions, "agent/reader") is Materialization.FULL
+    await assert_reads_like(sessions, "agent/reader", REFERENCE)
 
 
 async def test_jobs_wait_for_a_free_slot(sessions: Sessions, engine: AsyncEngine) -> None:
@@ -553,3 +710,35 @@ async def test_background_jobs_run_as_a_role_subject_to_row_level_security(
         )
         assert done["status"] == "done"
     assert sum((await rows_of(sessions, BIG)).values()) == 0
+
+
+async def test_a_reconciliation_that_keeps_failing_is_marked_failed(
+    sessions: Sessions, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full branch has no base to fall back from: its reconciliation fails for good."""
+    once = runtime_with(
+        async_copy_min_rows=1, async_delete_min_rows=1, job_batch_rows=3, copy_max_failures=1
+    )
+    await create(sessions, BIG, once)
+    await finish(sessions, BIG, once)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await BranchMaterializationRepository(session, DOMAIN).update(
+            BIG,
+            at=datetime.now(UTC),
+            status=MaterializationStatus.RUNNING,
+            phase=MaterializationPhase.PRUNE,
+            reconcile={"refresh_kinds": []},
+        )
+
+    async def failing(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(background.build, "prune_batch", failing)
+    last = job(MATERIALIZE_JOB, BIG, attempts=once.settings.jobs.max_attempts)
+    with pytest.raises(RuntimeError):
+        await run_materialize_job(engine, last, runtime=once)
+    state = await state_of(sessions, BIG)
+    assert state is not None
+    assert (state.status, state.failures) == (MaterializationStatus.FAILED, 1)
+    assert await materialization(sessions, BIG) is Materialization.FULL

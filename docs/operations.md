@@ -83,19 +83,33 @@ Scribe, `python -m lorebase_store.jobs work` does.
   `SELECT branch, status, phase, rows_done, rows_total, error FROM branch_materializations`.
 - **Batch size.** Each batch must finish within `database.statement_timeout_ms`, and holds the
   branch lock while it runs: a commit on the branch, or on its source when it has to copy rows
-  into the branch, waits for at most one batch. Raise `job_batch_rows` to copy faster, lower it
-  when batches come close to the timeout or commits wait too long
-  (`lorebase.store.branch_jobs.batch.duration`, [metrics](metrics.md#store)).
+  into the branch, waits for at most one batch. Batches size themselves between
+  `job_batch_min_rows` and `job_batch_rows` to hold the lock about `job_batch_target_ms`, or
+  `job_batch_contended_ms` once a commit waited for it (`lorebase.store.branch_jobs.batch.rows`
+  and `.batch.duration`, [metrics](metrics.md#store)). Lower `job_batch_contended_ms` when
+  commits on branches being copied must wait less; lower `job_batch_rows` when batches come
+  close to the timeout.
 - **Concurrency.** `job_concurrency` bounds the write load of copies and deletions on the
   database; a job that finds no free slot is queued again after `job_retry_seconds` and counted
   as `deferred` in `lorebase.store.branch_jobs.runs`.
-- **While a copy runs.** The branch answers with `materialization: overlay`. Schema changes on
-  it are refused with 409 `branch-materializing` and `Retry-After` until the copy is done; data
-  commits, merges and reads work, with overlay performance. It counts against
-  `keeper.branches.max_materialized_per_domain`.
-- **A failed copy** (`failed` after `store.jobs.max_attempts`, with the error) leaves a correct
-  overlay. Fix the cause (usually the statement timeout: lower `job_batch_rows`), then queue the
-  copy again; it resumes from its cursor:
+- **While a copy runs.** The branch answers with `materialization: overlay`. Data and schema
+  commits, merges and reads work, with overlay performance; a schema change is reconciled by
+  the job after its switch (`phase` `prune` to `search`), and until then Records the branch
+  did not write since the change keep derived values, titles and search vectors of the
+  previous schema. It counts against `keeper.branches.max_materialized_per_domain`.
+- **While a build runs.** A large copy that cannot start as an overlay (of an overlay, from an
+  older Revision) answers with `materialization: building` until its rows are written from its
+  tree. Reads of its head are served like reads at a past Revision (`served_from: tree`, or a
+  snapshot); commits and merges into it answer 409 `branch-materializing` with `Retry-After`.
+- **A failing copy** is queued again with a delay doubling from `job_retry_seconds` (at most
+  `copy_retry_max_seconds`) each time its job uses `store.jobs.max_attempts` (`retried` in
+  `lorebase.store.branch_jobs.runs`). After `copy_max_failures` failed jobs the overlay is
+  detached from its base and built from its tree (`fallback`, alert
+  [LorebaseBranchCopyFallback](#lorebasebranchcopyfallback)), so the deletion of its base never
+  waits on it for good. A build that fails as often stays `failed`
+  ([LorebaseBranchBuildFailed](#lorebasebranchbuildfailed)). Fix the cause (usually the
+  statement timeout: lower `job_batch_rows`), then queue the job again; it resumes from its
+  cursor:
 
   ```sql
   INSERT INTO jobs (type, domain_id, payload) VALUES ('store.materialize', 'supply', '{"branch": "feature"}');
@@ -103,7 +117,8 @@ Scribe, `python -m lorebase_store.jobs work` does.
 
 - **While a deletion runs.** The name stays taken: creating a branch with it answers 409
   `already-exists` with `Retry-After`. A deleted branch that other overlays are based on waits
-  for their background copies first (a copy that keeps failing keeps it waiting) (`waiting` in `lorebase.store.branch_jobs.runs`). Hidden
+  for their background copies first (`waiting` in `lorebase.store.branch_jobs.runs`); a copy
+  that keeps failing is detached and stops holding it up. Hidden
   branches still being deleted: `SELECT name, deleted_at FROM refs WHERE deleted_at IS NOT
   NULL`. Their heads stay garbage collection roots until the job ends.
 
@@ -454,6 +469,25 @@ after `webhooks.pass_timeout_s` and releases the rest to the next pass (`release
 still running after `webhooks.lease_s` is abandoned as a failed job attempt, since its deliveries may then be sent
 by another pass. Many timeouts with a steady `released` count mean slow receivers: raise
 `webhooks.concurrency` or fix the receiver.
+
+#### LorebaseBranchCopyFallback
+
+The background copy of an overlay failed `store.materialize.copy_max_failures` times
+(`lorebase_store_branch_jobs_runs_total{job="materialize",outcome="fallback"}`): the overlay was
+detached from its base and is being rebuilt from its tree (`materialization: building`; commits
+into it wait). Read the errors in `branch_materializations.error` and the worker logs: usually
+`database.statement_timeout_ms` against the batch size, or a constraint the base rows break.
+The branch needs nothing further unless
+[LorebaseBranchBuildFailed](#lorebasebranchbuildfailed) follows.
+
+#### LorebaseBranchBuildFailed
+
+A branch build from its tree failed `copy_max_failures` times
+(`lorebase_store_branch_jobs_runs_total{job="materialize",outcome="given_up"}`): the branch
+stays `building` (`branch_materializations.status = 'failed'`), its head is still readable and
+commits into it are refused. Fix the cause from `branch_materializations.error`, then queue a
+`store.materialize` job for the branch again ([large branches](#large-branches)); it resumes
+from its cursor. A branch that is not needed can be deleted instead.
 
 #### LorebaseGcNotRun
 

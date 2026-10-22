@@ -109,7 +109,15 @@ BRANCH_JOB_RUNS = meter.create_counter(
     "lorebase.store.branch_jobs.runs",
     unit="{run}",
     description="Runs of background branch jobs, by job and outcome (done, deferred, waiting, "
-    "skipped, cancelled, failed).",
+    "skipped, cancelled, failed; for copies also retried: failed for good, queued again "
+    "with backoff; fallback: the overlay was detached and is rebuilt from its tree; "
+    "given_up: no attempt left).",
+)
+BRANCH_JOB_BATCH_ROWS = meter.create_histogram(
+    "lorebase.store.branch_jobs.batch.rows",
+    unit="{row}",
+    description="Rows a batch of a background branch job was sized for, by job: batches "
+    "shrink while commits wait for the branch lock and grow back when none does.",
 )
 BRANCH_JOB_BATCH_DURATION = meter.create_histogram(
     "lorebase.store.branch_jobs.batch.duration",

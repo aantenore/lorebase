@@ -118,6 +118,11 @@ class PathLinks:
         if self.write:
             await self.repository.set_path_fanout(self.fanout)
 
+    async def refresh(self, path: PathRelation, starts: Sequence[str]) -> None:
+        """Recompute the pairs of the start keys `starts` (a piece of `recompute_all` that a
+        background job commits on its own)."""
+        await self._refresh(path, starts)
+
     async def recompute(self, applied: AppliedChanges) -> None:
         for path in self.paths:
             starts = await self.affected(path, applied)

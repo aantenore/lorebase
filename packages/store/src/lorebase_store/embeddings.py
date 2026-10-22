@@ -179,7 +179,8 @@ async def materialized_branches(
         .where(
             REFS.c.domain_id == domain_id,
             REFS.c.kind == RefKind.BRANCH,
-            REFS.c.materialization != Materialization.NONE,
+            # A branch still being built from its tree has no complete rows yet.
+            REFS.c.materialization.not_in([Materialization.NONE, Materialization.BUILDING]),
             REFS.c.deleted_at.is_(None),
         )
         .order_by(REFS.c.name)

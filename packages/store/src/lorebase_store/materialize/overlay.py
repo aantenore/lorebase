@@ -10,10 +10,13 @@ An overlay is promoted to a full copy ("materialized"):
   or when its base has moved more than `overlay_max_base_lag_revisions` generations past its
   fork point (checked by its own commits, unless a background copy of it is queued or running;
   a base commit that pushes an overlay past the lag queues a `store.materialize` job for it,
-  which copies it in batches, `materialize.background`);
+  which copies it in batches, `materialize.background`). Over a base holding more than
+  `async_copy_min_rows` rows, the overlay's own commit queues that job too;
 - before a commit or merge that changes its schema (whole-Kind rewrites and index changes
-  belong to full branches);
-- before its base is deleted or rebuilt (`promote_overlays_of`);
+  belong to full branches): inline over a small base; over a large one the copy job takes
+  the change over (`apply.defer_schema_change`);
+- before its base is deleted or rebuilt (`promote_overlays_of`): inline over a small base;
+  over a large one it is detached and rebuilt from its tree in the background;
 - on request (`promote`).
 
 After an overlay is merged into its base, `refork` moves it to the base head and empties it,
@@ -106,17 +109,44 @@ async def promote(
     return True
 
 
+async def base_is_large(
+    session: AsyncSession, domain_id: str, base: str, *, runtime: StoreRuntime
+) -> bool:
+    """Whether copying the rows of `base` into an overlay is a job for the background: it
+    holds more than `store.materialize.async_copy_min_rows` rows."""
+    limit = runtime.settings.materialize.async_copy_min_rows
+    rows = MaterializedRepository(session, domain_id, base, writes=runtime.settings.writes)
+    return await rows.own_rows(limit=limit) > limit
+
+
 async def promote_overlays_of(
     session: AsyncSession, domain_id: str, base: str, *, runtime: StoreRuntime | None = None
 ) -> list[str]:
-    """Promote every overlay based on `base` (before deleting or rebuilding it). The caller
-    holds the lock of `base`; each overlay's lock is taken after it."""
+    """Make every overlay based on `base` independent of it (before deleting or rebuilding
+    it): promoted to a full copy in this transaction when `base` is small, otherwise
+    detached and rebuilt from its tree by a background job (`background.detach_to_build`).
+    The caller holds the lock of `base`; each overlay's lock is taken after it. Returns the
+    overlays handled."""
+    runtime = runtime or default_runtime()
     refs = RefRepository(session, domain_id)
-    promoted = []
-    for ref in await refs.overlays_of(base):
-        if await promote(session, domain_id, ref.name, runtime=runtime):
-            promoted.append(ref.name)
-    return promoted
+    overlays = await refs.overlays_of(base)
+    if not overlays:
+        return []
+    large = await base_is_large(session, domain_id, base, runtime=runtime)
+    handled = []
+    for ref in overlays:
+        if large:
+            # Imported here: the background jobs import this module.
+            from lorebase_store.materialize.background import detach_to_build
+
+            done = await detach_to_build(
+                session, domain_id, ref.name, runtime=runtime, at=datetime.now(UTC)
+            )
+        else:
+            done = await promote(session, domain_id, ref.name, runtime=runtime)
+        if done:
+            handled.append(ref.name)
+    return handled
 
 
 async def check_overlay(
@@ -147,6 +177,16 @@ async def check_overlay(
         if lagging or await repository.own_rows(limit=settings.overlay_max_rows) > (
             settings.overlay_max_rows
         ):
+            if await base_is_large(session, layout.domain_id, layout.base, runtime=runtime):
+                # Imported here: the background jobs import this module.
+                from lorebase_store.materialize.background import queue_materialization
+
+                ref = await refs.get(layout.branch)
+                if ref is not None:
+                    await queue_materialization(
+                        session, layout.domain_id, ref, at=datetime.now(UTC)
+                    )
+                return False
             promoted = await promote(
                 session, layout.domain_id, layout.branch, runtime=runtime, locked=True
             )

@@ -12,7 +12,10 @@ Creating the ref is O(1). The source branch is locked meanwhile, so no commit mo
   per-Attribute indexes. When an overlay is possible and the source holds more than
   `store.materialize.async_copy_min_rows` rows, the branch is created as an overlay and a
   `store.materialize` job copies its rows in batches (`materialize.background`):
-  `BranchCreation.pending` is then true.
+  `BranchCreation.pending` is then true. A copy of that size that cannot start as an
+  overlay (an overlay source, another start point, the overlay cap reached) is created
+  `building`: the same job writes its rows from the tree of its start Revision in batches
+  (`pending` too); meanwhile reads of its head are served from the tree and commits wait.
 
 Without an explicit mode, `store.materialize.branch_mode` decides, except for names starting
 with one of `overlay_branch_prefixes`, which default to overlays.
@@ -27,16 +30,18 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.tree import PARTITION_SCHEMA
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.indexes import BranchIndexes
-from lorebase_store.materialize.background import queue_materialization
+from lorebase_store.materialize.background import queue_build, queue_materialization
 from lorebase_store.materialize.overlay import wants_overlay
 from lorebase_store.materialize.rebuild import materialize_revision
 from lorebase_store.models.enums import Materialization, RefKind
+from lorebase_store.nodestore import NodeRepository
 from lorebase_store.repositories.domains import DomainRepository
 from lorebase_store.repositories.materialized import MaterializedRepository
 from lorebase_store.repositories.refs import RefRepository, RefRow
-from lorebase_store.repositories.revisions import RevisionRepository
+from lorebase_store.repositories.revisions import RevisionRepository, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 
@@ -134,7 +139,9 @@ async def _create(
     source_rows = MaterializedRepository(
         session, domain_id, source_name, writes=runtime.settings.writes
     )
-    source_schema = await source_rows.schema()
+    # A source still being built has no complete rows to copy: its tree is read instead.
+    building = source_ref.materialization is Materialization.BUILDING
+    source_schema = None if building else await source_rows.schema()
     at_head = source_ref.head == head.id and source_schema is not None
     settings = runtime.settings.materialize
     overlay_possible = (
@@ -178,6 +185,19 @@ async def _create(
             await queue_materialization(session, domain_id, ref, at=now())
             return BranchCreation(ref, MaterializationMode.COPY, pending=True)
         return BranchCreation(ref, MaterializationMode.OVERLAY)
+    if await _large_copy(session, domain_id, source_rows, head, at_head=at_head, runtime=runtime):
+        ref = await refs.create(
+            name,
+            head.id,
+            created_at=now(),
+            created_by=created_by,
+            kind=RefKind.BRANCH,
+            materialization=Materialization.BUILDING,
+            reason=BRANCH_CREATE_REASON,
+        )
+        await queue_build(session, domain_id, name, source=source_name, head=head, at=now())
+        mode = MaterializationMode.COPY if at_head else MaterializationMode.REBUILD
+        return BranchCreation(ref, mode, pending=True)
     ref = await refs.create(
         name,
         head.id,
@@ -203,3 +223,34 @@ async def _create(
         return BranchCreation(ref, MaterializationMode.COPY)
     await materialize_revision(session, domain_id, name, head, runtime=runtime)
     return BranchCreation(ref, MaterializationMode.REBUILD)
+
+
+async def _large_copy(
+    session: AsyncSession,
+    domain_id: str,
+    source_rows: MaterializedRepository,
+    head: RevisionRow,
+    *,
+    at_head: bool,
+    runtime: StoreRuntime,
+) -> bool:
+    """Whether a copy that cannot start as an overlay holds more than
+    `async_copy_min_rows` rows: the rows the source reads at its head (an overlay's own rows
+    and its base's, an upper bound), or the entries of the start Revision's tree."""
+    limit = runtime.settings.materialize.async_copy_min_rows
+    if at_head:
+        layout = await source_rows.layout()
+        total = await source_rows.own_rows(limit=limit)
+        if layout.base is not None and total <= limit:
+            base_rows = MaterializedRepository(
+                session, domain_id, layout.base, writes=runtime.settings.writes
+            )
+            total += await base_rows.own_rows(limit=limit)
+        return total > limit
+    settings = runtime.settings
+    nodes = NodeRepository(
+        session, domain_id, writes=settings.writes, batch=settings.nodes.prefetch_batch
+    )
+    tree = await nodes.load_tree(head.root)
+    total = sum(ref.count for name, ref in tree.partitions.items() if name != PARTITION_SCHEMA)
+    return total > limit

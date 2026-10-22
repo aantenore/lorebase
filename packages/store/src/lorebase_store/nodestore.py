@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict, defaultdict
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import Table, select
@@ -316,6 +316,50 @@ class NodeRepository:
                 if entries:
                     yield entries
             frontier = following
+
+    async def scan_from(
+        self, node: bytes, *, after: Sequence[int] | None, limit: int
+    ) -> tuple[list[tuple[str, bytes]], list[int] | None]:
+        """Entries of a partition subtree, whole leaves at a time, in a fixed depth-first
+        order: those of the leaves after the leaf at path `after` (child bytes from `node`;
+        `None` starts at the first leaf), until at least `limit` entries. Returns them with
+        the path of the last leaf read, or `None` when no leaf is left.
+
+        The order depends on the subtree only, which never changes, so a caller can resume
+        from the returned path in a later transaction. Each branch node's children are read
+        in one query; scanned nodes do not enter the cache.
+        """
+        entries: list[tuple[str, bytes]] = []
+        bodies = await self.get_many([node], use_cache=False)
+        stack: list[tuple[bytes, list[int], list[int] | None]] = [
+            (node, [], None if after is None else list(after))
+        ]
+        while stack:
+            digest, path, bound = stack.pop()
+            body = bodies.pop(digest, None)
+            if body is None:
+                raise MissingNodeError(digest.hex())
+            decoded = decode_node(body)
+            if isinstance(decoded, LeafNode):
+                if bound is not None:
+                    continue  # the leaf at `after` itself: already read
+                entries.extend(decoded.entries)
+                if len(entries) >= limit:
+                    return entries, path
+                continue
+            if not isinstance(decoded, BranchNode):
+                continue
+            wanted: list[tuple[bytes, list[int], list[int] | None]] = []
+            for byte, child in decoded.children:
+                if bound is not None and bound and byte < bound[0]:
+                    continue
+                inner = bound[1:] if bound is not None and bound and byte == bound[0] else None
+                wanted.append((child, [*path, byte], inner))
+            missing = [child for child, _, _ in wanted if child not in bodies]
+            if missing:
+                bodies.update(await self.get_many(missing, use_cache=False))
+            stack.extend(reversed(wanted))
+        return entries, None
 
 
 class _SingleNode:

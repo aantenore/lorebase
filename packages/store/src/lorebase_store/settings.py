@@ -269,8 +269,42 @@ class MaterializeSettings(SectionModel):
     job_batch_rows: int = Field(
         default=5000,
         ge=1,
-        description="Rows a store.materialize or store.branch_delete job copies or deletes "
-        "per transaction; each batch must finish within database.statement_timeout_ms.",
+        description="Most rows a store.materialize or store.branch_delete job copies or "
+        "deletes per transaction; each batch must finish within "
+        "database.statement_timeout_ms. Batches are sized between job_batch_min_rows and this "
+        "by the time they hold the branch lock.",
+    )
+    job_batch_min_rows: int = Field(
+        default=100,
+        ge=1,
+        description="Fewest rows a branch job batch copies or deletes (job_batch_rows when "
+        "that is smaller); batches start at this size.",
+    )
+    job_batch_target_ms: int = Field(
+        default=200,
+        ge=1,
+        description="Time a branch job batch aims to hold the branch lock while no commit "
+        "waits for it; the next batch grows or shrinks toward it.",
+    )
+    job_batch_contended_ms: int = Field(
+        default=50,
+        ge=1,
+        description="Time a branch job batch aims to hold the branch lock after a commit "
+        "waited for it (the batch waited for the lock, or found a commit waiting): a commit "
+        "on a branch being copied waits about this long at most.",
+    )
+    copy_max_failures: int = Field(
+        default=3,
+        ge=1,
+        description="Failed store.materialize jobs (each after store.jobs.max_attempts) a "
+        "background copy of an overlay retries with backoff; then the overlay is detached "
+        "from its base and rebuilt from its tree instead.",
+    )
+    copy_retry_max_seconds: float = Field(
+        default=3600,
+        ge=0,
+        description="Longest delay before a failed background copy is retried; the delay "
+        "doubles from job_retry_seconds with each failure.",
     )
     job_concurrency: int = Field(
         default=2,

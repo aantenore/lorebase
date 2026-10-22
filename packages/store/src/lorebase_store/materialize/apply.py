@@ -77,11 +77,13 @@ async def apply_changeset(
     their title and search vectors are recomputed for every Record. `expression_limits`
     bound the evaluation of Derivations (`schema.expression_limits`).
 
-    The caller holds the branch lock. An overlay branch is promoted to a full copy first when
-    the schema changes, and afterwards when it is over its limits (`materialize.overlay`);
-    overlays based on the branch get the previous state of the rows it changes. A schema
-    change on an overlay whose background copy is queued or running raises
-    `BranchMaterializingError` (`materialize.background`).
+    The caller holds the branch lock. When the schema changes, an overlay over a small base
+    is promoted to a full copy first; an overlay over a large base, or one whose background
+    copy is queued or running, keeps its overlay rows: the change is applied to the rows the
+    changeset writes, and the copy job (queued if needed) recomputes the rest after the
+    switch (`reconcile`, `materialize.background`). An overlay over its limits is promoted
+    afterwards (`materialize.overlay`); overlays based on the branch get the previous state
+    of the rows it changes. A `building` branch raises `BranchMaterializingError`.
     """
     runtime = runtime or StoreRuntime.from_settings(settings)
     # Titles and search vectors use the default branch's tags too (`materialize.sensitivity`).
@@ -97,16 +99,22 @@ async def apply_changeset(
         generation=generation,
         lock_timeout_ms=settings.commit.lock_timeout_ms,
     )
-    if schema_hash is not None and (await repository.layout()).overlay:
-        if await BranchMaterializationRepository(session, domain_id).active(branch):
-            # Imported here: the commit package imports the materializer.
-            from lorebase_store.commit.errors import BranchMaterializingError
+    layout = await repository.layout()
+    if layout.building:
+        # Imported here: the commit package imports the materializer.
+        from lorebase_store.commit.errors import BranchMaterializingError
 
-            raise BranchMaterializingError(
-                f"branch {branch!r} is still being copied in the background; retry the "
-                "schema change when its materialization is done"
-            )
-        await promote(session, domain_id, branch, runtime=runtime, locked=True)
+        raise BranchMaterializingError(
+            f"branch {branch!r} is being built from its tree in the background; retry when "
+            "its materialization is done"
+        )
+    deferred = False
+    if schema_hash is not None and layout.overlay:
+        deferred = await defer_schema_change(
+            session, domain_id, branch, refresh_kinds=refresh_kinds, at=at, runtime=runtime
+        )
+        if not deferred:
+            await promote(session, domain_id, branch, runtime=runtime, locked=True)
         repository.forget_layout()
     await repository.insert_history(
         [
@@ -167,11 +175,14 @@ async def apply_changeset(
         elif parsed.type is PartitionType.RELATION:
             await _apply_links(repository, parsed.element_id, group)
             applied.links[parsed.element_id].update(split_link_key(c.entry.key) for c in group)
+    # A deferred schema change recomputes only what the changeset touched; the copy job
+    # reconciles every other row after its switch.
+    whole = schema_hash is not None and not deferred
     changed: dict[str, set[str]] = {}
     # A change of `store.traverse.path_fanout` recomputes whatever follows it, once.
     stale = schema_hash is None and paths is not None and await paths.fanout_stale(derived)
     if derived is not None:
-        if schema_hash is not None:
+        if whole:
             await derived.prune()
             changed = await derived.recompute_all()
         elif stale and derived.reads_paths:
@@ -179,13 +190,15 @@ async def apply_changeset(
         elif derived.steps:
             changed = await derived.recompute(applied)
     if paths is not None:
-        if schema_hash is not None or stale:
-            if schema_hash is not None:
+        if whole or stale:
+            if whole:
                 await paths.prune()
             await paths.recompute_all()
             await paths.record_fanout()
         elif paths.paths:
             await paths.recompute(applied)
+    if deferred:
+        refresh_kinds = ()
     search_config = settings.materialize.text_search_config
     for kind_id in written_kinds:
         if kind_id not in refresh_kinds:
@@ -206,6 +219,36 @@ async def apply_changeset(
     for kind_id in refresh_kinds:
         await refresh_kind(repository, tagged, kind_id, settings=settings)
     await check_overlay(repository, generation=generation, runtime=runtime)
+
+
+async def defer_schema_change(
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    *,
+    refresh_kinds: Sequence[str],
+    at: datetime,
+    runtime: StoreRuntime,
+) -> bool:
+    """For a schema change on the overlay `branch`: whether its background copy takes it
+    over (`reconcile`) instead of a promotion in the writing transaction. It does when a copy
+    is queued or running, or when the base holds more than `async_copy_min_rows` rows (the
+    copy is then queued here)."""
+    # Imported here: the background jobs import the overlay helpers this module uses.
+    from lorebase_store.materialize.background import queue_materialization
+    from lorebase_store.materialize.overlay import base_is_large
+    from lorebase_store.repositories.refs import RefRepository
+
+    states = BranchMaterializationRepository(session, domain_id)
+    if not await states.active(branch):
+        ref = await RefRepository(session, domain_id).get(branch)
+        if ref is None or ref.base_branch is None:
+            return False
+        if not await base_is_large(session, domain_id, ref.base_branch, runtime=runtime):
+            return False
+        await queue_materialization(session, domain_id, ref, at=at)
+    await states.add_reconcile(branch, refresh_kinds=refresh_kinds, at=at)
+    return True
 
 
 async def refresh_kind(

@@ -85,6 +85,7 @@ from lorebase_store.commit.changes import (
 )
 from lorebase_store.commit.errors import (
     BranchLockTimeoutError,
+    BranchMaterializingError,
     BranchNotFoundError,
     BranchNotMaterializedError,
     SensitivityLoweredError,
@@ -281,6 +282,11 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         raise BranchNotFoundError(f"no branch {branch!r} in Domain {domain_id!r}")
     if request.expected_head is not None and request.expected_head != ref.head:
         raise StaleHeadError(branch, request.expected_head, ref.head)
+    if ref.materialization is Materialization.BUILDING:
+        raise BranchMaterializingError(
+            f"branch {branch!r} is being built from its tree in the background; retry when "
+            "its materialization is done"
+        )
     revisions = RevisionRepository(session, domain_id)
     head = await revisions.require(ref.head)
     materialized = MaterializedRepository(session, domain_id, branch, writes=settings.writes)

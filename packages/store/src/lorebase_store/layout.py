@@ -31,7 +31,7 @@ branches and the overlay's row of an identity wins; revision `0012` renders the 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import FromClause, Table, text
@@ -63,6 +63,9 @@ class BranchLayout:
     branch: str
     base: str | None = None
     base_generation: int | None = None
+    building: bool = field(default=False, compare=False)
+    """A `building` branch: its own rows are still being written from its tree by a
+    background job (`materialize.background`); commits wait for it."""
 
     def __post_init__(self) -> None:
         if (self.base is None) != (self.base_generation is None):
@@ -287,7 +290,7 @@ def layout_from(
     """The layout of a ref row's materialization columns."""
     if materialization == Materialization.OVERLAY and base is not None:
         return BranchLayout(domain_id, branch, base, generation)
-    return BranchLayout(domain_id, branch)
+    return BranchLayout(domain_id, branch, building=materialization == Materialization.BUILDING)
 
 
 async def load_layout(session: AsyncSession, domain_id: str, branch: str) -> BranchLayout:

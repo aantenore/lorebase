@@ -27,6 +27,7 @@ from lorebase_store.repositories.materializations import (
     MaterializationPhase,
     MaterializationState,
     MaterializationStatus,
+    MaterializationStrategy,
     copy_fence,
 )
 from lorebase_store.repositories.materialized import (
@@ -111,6 +112,7 @@ __all__ = [
     "MaterializationPhase",
     "MaterializationState",
     "MaterializationStatus",
+    "MaterializationStrategy",
     "MaterializedIndexView",
     "MaterializedRepository",
     "MergeAttemptRepository",
