@@ -5,7 +5,8 @@ database, authentication mode `none`. Tracing is enabled in its settings and opt
 a request carrying the opt-in and session headers is traced (the "on" case), one without them is
 not (the "off" case). The two are called in turn with the same random keys and timed client
 side, so both see the same machine load. The response cache is disabled
-(`keeper.reads.cache.enabled`), or repeated reads would answer from memory.
+(`keeper.reads.cache.enabled`), or repeated reads would answer from memory, and so are rate
+limits (`keeper.limits.rate.enabled`), which the timed loop exceeds.
 
 The trace is written off the request path; what the "on" case adds is capturing the query and
 the response counts and queueing the step. After measuring, the application is shut down (which
@@ -97,7 +98,11 @@ async def measure_trace_overhead(
     keeper = KeeperSettings()
     trace = keeper.trace.model_copy(update={"enabled": True})
     settings = Settings(
-        keeper={"trace": trace.model_dump(), "reads": {"cache": {"enabled": False}}},
+        keeper={
+            "trace": trace.model_dump(),
+            "reads": {"cache": {"enabled": False}},
+            "limits": {"rate": {"enabled": False}},
+        },
         database={"dsn": url},
     )
     app = create_app(settings)
