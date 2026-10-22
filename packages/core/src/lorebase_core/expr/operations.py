@@ -360,12 +360,13 @@ class _StepPlanner:
 
     def ref(self, program: CompiledExpression | None, kind_id: str, where: str) -> Ref:
         value = self.value(program, where)
+        assert program is not None  # `value` raises without it
         try:
             if isinstance(value, str):
                 return Ref(kind_id, normalize_key(value))
             ref = ref_key(value, where)
         except ExprError as error:
-            raise error.located(path=(*self.path, where)) from None
+            raise error.located(source=program.source, path=(*self.path, where)) from None
         if ref.kind != kind_id:
             raise ExprError(
                 ExprErrorCode.VALUE_INVALID,
@@ -387,7 +388,9 @@ class _StepPlanner:
                 values[attribute_id] = encode_result(attributes[attribute_id].type, value)
             except ExprError as error:
                 error.message = f"{attributes[attribute_id].api_name}: {error.message}"
-                raise error.located(path=(*self.path, "values", attribute_id)) from None
+                raise error.located(
+                    source=program.source, path=(*self.path, "values", attribute_id)
+                ) from None
         return values
 
     def current(self, kind_id: str, key: str) -> Mapping[str, JsonValue] | None:
@@ -441,6 +444,7 @@ class _StepPlanner:
             raise ExprError(
                 ExprErrorCode.RECORD_NOT_FOUND,
                 f"Record {format_ref(kind.api_name, target.key)} does not exist",
+                source=self.step.target.source if self.step.target is not None else None,
                 path=(*self.path, "target"),
             )
         # derived values the resolver may hold are not Record content (AC-07)
