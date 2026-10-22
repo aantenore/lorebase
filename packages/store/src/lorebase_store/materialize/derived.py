@@ -19,7 +19,9 @@ reads a derived Attribute runs after the one computing it):
 Evaluation is bounded by `schema.expression_limits`; `now()` is the time of the Revision. A
 value that cannot be computed (an evaluation error, a result that does not fit the Attribute)
 is absent and counted in `failures`. With `write=False` nothing is written: results are kept in
-memory (`expected`) for verification.
+memory (`expected`) for verification. `preview` evaluates one Derivation on a few Records and
+returns the values and the errors without writing, whatever `write` is (candidate Derivations
+that are not stored yet).
 """
 
 from __future__ import annotations
@@ -178,6 +180,17 @@ class AppliedChanges:
     previous: dict[RecordKey, Mapping[str, Any] | None] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class PreviewedValue:
+    """The value a Derivation computes for one Record: `value` is `None` when there is none,
+    `error` says why the evaluation failed."""
+
+    key: str
+    title: str | None
+    value: JsonValue
+    error: ExprError | None = None
+
+
 @dataclass
 class _Loaded:
     """Inputs of one batch: Records of the Derivation's Kind and, per hop, the Links and far
@@ -253,6 +266,34 @@ class DerivedValues:
             target = None if len(keys) > self.max_incremental else keys
             changed[kind_id] |= await self._run(step, target)
         return changed
+
+    async def preview(
+        self, attribute_id: str, *, keys: Sequence[str] | None, limit: int
+    ) -> list[PreviewedValue]:
+        """The values the Derivation of `attribute_id` computes for `keys` (the first `limit`
+        Records of its Kind by key when `None`), from the stored and derived values of the
+        branch. Nothing is written; Records that do not exist are left out."""
+        step = next((s for s in self.steps if s.attribute.id == attribute_id), None)
+        if step is None:
+            raise ExprError(ExprErrorCode.EVALUATION, "the Derivation cannot be evaluated")
+        if keys is None:
+            batch: list[str] = []
+            async for rows in self.repository.stream_records(step.kind.id, batch=limit):
+                batch = [row.key for row in rows[:limit]]
+                break
+        else:
+            batch = list(dict.fromkeys(keys))[:limit]
+        loaded = await self._load(step, batch)
+        previewed: list[PreviewedValue] = []
+        for key in sorted(loaded.rows):
+            row = loaded.rows[key]
+            try:
+                previewed.append(
+                    PreviewedValue(key, row.title, await self._compute(step, row, loaded))
+                )
+            except ExprError as error:
+                previewed.append(PreviewedValue(key, row.title, None, error))
+        return previewed
 
     # Affected Records ---------------------------------------------------------------------------
 
@@ -358,31 +399,8 @@ class DerivedValues:
             yield [row.key for row in rows]
 
     async def _value(self, step: DerivationStep, row: RecordRow, loaded: _Loaded) -> JsonValue:
-        resolver = MemoryResolver()
-        for hop, linked in loaded.links.items():
-            resolver.links[(hop.relation.id, hop.direction, row.key)] = linked.get(row.key, [])
-        context = EvaluationContext(now=self.now, resolver=resolver, limits=self.limits)
-        record = Record(kind=step.kind.id, key=row.key, values=self._inputs(step.kind.id, row))
-        compiled = step.compiled
-        definition = step.derivation.definition
         try:
-            if isinstance(definition, ExpressionDerivation):
-                return await self._loading(
-                    lambda: evaluate_derivation(compiled, record, context), resolver
-                )
-            assert isinstance(definition, AggregateDerivation)
-            hop = step.hops[0]
-            far = self.schema.kinds[hop.far_kind]
-            members = []
-            for item in loaded.links[hop].get(row.key, []):
-                candidate = Record(kind=far.id, key=item.key, values=dict(item.values))
-
-                def passes(record: Record = candidate) -> bool:
-                    return matches_filter(compiled, record, context)
-
-                if await self._loading(passes, resolver):
-                    members.append(item)
-            return aggregate(step.attribute, definition, far, members)
+            return await self._compute(step, row, loaded)
         except ExprError as error:
             self.failures += 1
             logger.debug(
@@ -390,6 +408,33 @@ class DerivedValues:
                 extra={"derivation": step.derivation.id, "key": row.key, "error": str(error)},
             )
             return None
+
+    async def _compute(self, step: DerivationStep, row: RecordRow, loaded: _Loaded) -> JsonValue:
+        """The value of one Record; raises `ExprError` when it cannot be computed."""
+        resolver = MemoryResolver()
+        for hop, linked in loaded.links.items():
+            resolver.links[(hop.relation.id, hop.direction, row.key)] = linked.get(row.key, [])
+        context = EvaluationContext(now=self.now, resolver=resolver, limits=self.limits)
+        record = Record(kind=step.kind.id, key=row.key, values=self._inputs(step.kind.id, row))
+        compiled = step.compiled
+        definition = step.derivation.definition
+        if isinstance(definition, ExpressionDerivation):
+            return await self._loading(
+                lambda: evaluate_derivation(compiled, record, context), resolver
+            )
+        assert isinstance(definition, AggregateDerivation)
+        hop = step.hops[0]
+        far = self.schema.kinds[hop.far_kind]
+        members = []
+        for item in loaded.links[hop].get(row.key, []):
+            candidate = Record(kind=far.id, key=item.key, values=dict(item.values))
+
+            def passes(record: Record = candidate) -> bool:
+                return matches_filter(compiled, record, context)
+
+            if await self._loading(passes, resolver):
+                members.append(item)
+        return aggregate(step.attribute, definition, far, members)
 
     async def _loading[T](self, compute: Callable[[], T], resolver: MemoryResolver) -> T:
         """Run an evaluation, loading the Link lists it asks for (filters reading Links of
