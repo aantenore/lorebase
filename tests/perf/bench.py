@@ -119,6 +119,8 @@ class Options:
     trace_iterations: int = 200
     trace_warmup: int = 20
     replicas: int = 1
+    copy_batches: int | None = None
+    pair_copy: bool = True
 
 
 @dataclass
@@ -170,6 +172,18 @@ def parse(argv: Sequence[str] | None = None) -> Options:
     )
     parser.add_argument("--trace-warmup", type=int, default=20)
     parser.add_argument(
+        "--copy-batches",
+        type=int,
+        default=None,
+        help="stop the measured background copy after this many batches (its throughput and "
+        "batches are measured; a full copy of 10M Records takes hours)",
+    )
+    parser.add_argument(
+        "--no-pair-copy",
+        action="store_true",
+        help="compare the overlay with main instead of a full copy of main",
+    )
+    parser.add_argument(
         "--replicas",
         type=int,
         default=1,
@@ -203,6 +217,8 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         trace_iterations=args.trace_iterations,
         trace_warmup=args.trace_warmup,
         replicas=args.replicas,
+        copy_batches=args.copy_batches,
+        pair_copy=not args.no_pair_copy,
     )
 
 
@@ -285,7 +301,10 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
         timed = _timed_engine(url)
         try:
             branch = await harness.measure_branch_copy(
-                timed, runtime, iterations=options.branch_iterations
+                timed,
+                runtime,
+                iterations=options.branch_iterations,
+                max_batches=options.copy_batches,
             )
         finally:
             await timed.dispose()
@@ -299,7 +318,9 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
         overlay_branch = await harness.measure_branch_overlay(
             engine, runtime, iterations=options.overlay_iterations
         )
-        pair = await harness.overlay_pair(engine, runtime, work, changes=options.overlay_changes)
+        pair = await harness.overlay_pair(
+            engine, runtime, work, changes=options.overlay_changes, copy=options.pair_copy
+        )
         copy_reads: dict[str, dict[str, harness.Measurement]] = {}
         overlay_reads: dict[str, dict[str, harness.Measurement]] = {}
         copy_ops = harness.read_operations(work, runtime, pair.copy)
@@ -416,6 +437,7 @@ def render(report: Report) -> str:
         "(each its own transaction, under the default `database.statement_timeout_ms`), then "
         "switches it to a full copy. Deleting it hides it at once; its job deletes the rows in "
         "batches. Runs is the number of copies, or of batch transactions.",
+        *_partial_copy(report),
         "",
         *_overlay_section(report),
         "## Plans",
@@ -443,6 +465,21 @@ def render(report: Report) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _partial_copy(report: Report) -> list[str]:
+    jobs = report.branch
+    if not jobs.partial:
+        return []
+    seconds = sum(jobs.copy.samples_ms) / 1000
+    rows = sum(jobs.copied_rows)
+    return [
+        "",
+        f"The copy stopped after {report.options.copy_batches} batches "
+        f"(`--copy-batches`): {rows:,} rows in {seconds:,.0f} s, "
+        f"{rows / seconds:,.0f} rows per second; the background job row is that time, not a "
+        "full copy.",
+    ]
 
 
 def _trace_section(report: Report) -> list[str]:
@@ -479,18 +516,32 @@ def _overhead(copy: float, overlay: float) -> str:
 
 def _overlay_section(report: Report) -> list[str]:
     o, pair = report.options, report.pair
+    if o.pair_copy:
+        other = "copy"
+        intro = (
+            f"`{harness.OVERLAY_BRANCH}` (overlay) and `{harness.COPY_BRANCH}` (copy) forked "
+            f"from `main` and got the same commit of {o.overlay_changes} Part updates; `main` "
+            f"then committed {o.overlay_changes} other Part updates. The overlay stores "
+            f"{pair.overlay_rows:,} rows (its changes, its derived and copied-on-write rows), "
+            f"the copy {pair.copy_rows:,}."
+        )
+    else:
+        other = "main"
+        intro = (
+            f"`{harness.OVERLAY_BRANCH}` (overlay) forked from `main` and got a commit of "
+            f"{o.overlay_changes} Part updates; `main` then committed {o.overlay_changes} other "
+            f"Part updates. The overlay stores {pair.overlay_rows:,} rows (its changes, its "
+            "derived and copied-on-write rows) and is compared with `main` itself "
+            "(`--no-pair-copy`)."
+        )
     lines = [
         "## Overlay branches (milliseconds)",
         "",
-        f"`{harness.OVERLAY_BRANCH}` (overlay) and `{harness.COPY_BRANCH}` (copy) forked from "
-        f"`main` and got the same commit of {o.overlay_changes} Part updates; `main` then "
-        f"committed {o.overlay_changes} other Part updates. The overlay stores "
-        f"{pair.overlay_rows:,} rows (its changes, its derived and copied-on-write rows), the "
-        f"copy {pair.copy_rows:,}. Reads alternate between the two branches call by call, "
-        f"with the same random keys, {o.iterations} timed calls each.",
+        f"{intro} Reads alternate between the two branches call by call, with the same random "
+        f"keys, {o.iterations} timed calls each.",
         "",
-        "| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | copy p99 "
-        "| overlay p99 | overhead p50 | overhead p95 |",
+        f"| Operation | Role | {other} p50 | overlay p50 | {other} p95 | overlay p95 "
+        f"| {other} p99 | overlay p99 | overhead p50 | overhead p95 |",
         "|-----------|------|---------:|------------:|---------:|------------:|---------:"
         "|------------:|-------------:|-------------:|",
     ]
