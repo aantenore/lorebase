@@ -375,8 +375,8 @@ machine; a machine that has never pulled them spends a few more minutes in `make
 | 2.1 | `git clone` | 6 s |
 | 2.1 | `uv sync --all-packages`, empty uv cache | 29 s (1 s with a warm cache) |
 | 2.2 | `make env` | under 1 s |
-| 2.3 | `make up` (backend and web images, Postgres, migrations, Keeper and web healthy) | TBD |
-| 2.4 | `make example-data` | 4 s |
+| 2.3 | `make up` (backend and web images, Postgres, migrations, Keeper and web healthy) | 38 s (the web image adds a `pnpm install` and a build) |
+| 2.4 | `make example-data` | 5 s |
 | 2.5 | first query, CLI and curl | 1 s |
 | 2.6 | open the web app (already running); contributor path: `pnpm install`, empty store; `pnpm dev` until ready | 0 s; 11 s; 2 s |
 | 3 | Herald check script (start, list tools, one search) | 3 s |
