@@ -20,6 +20,7 @@ from lorebase_core.model import (
     vault_reference,
     vault_token,
 )
+from lorebase_core.types import TypeSpec
 from lorebase_core.validate import (
     IssueCode,
     SchemaRules,
@@ -44,12 +45,15 @@ from ..model.supply import (
     SUPPLIER_COUNT_DRV,
     TIER,
     VAT,
+    add_attribute,
+    ident,
     replace_attribute,
     replace_kind,
     supply_schema,
 )
 
 C = IssueCode
+NOTES = ident("att", 199)
 PII = (Sensitivity.PII,)
 TOKEN = "vlt_" + "0" * 32
 
@@ -130,6 +134,32 @@ def test_references_are_accepted_for_vault_attributes_only() -> None:
     assert [i.code for i in validate_record(schema, copied)] == [C.VALUE_VAULT_REFERENCE]
     forged = record.model_copy(update={"values": {**values, SUPPLIER_CITY: {"$vault": "x"}}})
     assert [i.code for i in validate_record(schema, forged)] == [C.VALUE_VAULT_REFERENCE]
+
+
+def test_references_nested_inside_other_values_are_refused() -> None:
+    schema = vault(supply_schema(), SUPPLIER_CITY)
+    notes = Attribute(id=NOTES, api_name="notes", description="Notes.", type=TypeSpec.of("json"))
+    schema = add_attribute(schema, SUPPLIER, notes)
+    values = {
+        SUPPLIER_CODE: "S-1",
+        LEGAL_NAME: "Acme",
+        ident_country(schema): "IT",
+        SUPPLIER_CITY: vault_reference(TOKEN),
+    }
+    record = Record(kind=SUPPLIER, key="S-1", values=values)
+    plain = {"notes": [{"vault": "no"}, {"text": "fine"}]}
+    assert validate_record(schema, with_value(record, plain)) == []
+    for nested in (
+        {"copy": vault_reference(TOKEN)},
+        [1, {"deep": [vault_reference(TOKEN)]}],
+        {"looks": {"$vault": "anything"}},
+    ):
+        found = validate_record(schema, with_value(record, nested))
+        assert [(i.code, i.attribute) for i in found] == [(C.VALUE_VAULT_REFERENCE, NOTES)]
+
+
+def with_value(record: Record, value: Any) -> Record:
+    return record.model_copy(update={"values": {**record.values, NOTES: value}})
 
 
 def test_vault_token_recognizes_well_formed_references_only() -> None:
