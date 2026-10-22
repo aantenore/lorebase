@@ -31,6 +31,7 @@ from lorebase_store.materialize.derived import DerivedValues
 from lorebase_store.materialize.overlay import promote_overlays_of
 from lorebase_store.materialize.paths import PathLinks
 from lorebase_store.materialize.rows import (
+    CREATED_KEY,
     PartitionType,
     next_lineage,
     parse_partition,
@@ -70,6 +71,7 @@ class Folded:
     """Lineage inputs of one element folded from its history."""
 
     provenance: dict[str, str]
+    revisions: dict[str, str]
     revision_id: bytes
     at: datetime
 
@@ -239,7 +241,11 @@ async def fold_history(
             previous = folded.get(step.element_key)
             provenance = {} if previous is None else previous.provenance
             provenance.update(step.provenance or {})
-            folded[step.element_key] = Folded(provenance, step.revision_id, step.at)
+            revisions = (
+                {CREATED_KEY: step.revision_id.hex()} if previous is None else previous.revisions
+            )
+            revisions.update(dict.fromkeys(step.provenance or {}, step.revision_id.hex()))
+            folded[step.element_key] = Folded(provenance, revisions, step.revision_id, step.at)
     return folded
 
 
@@ -261,6 +267,13 @@ def record_row(
         lineage=next_lineage(None, None if folded is None else folded.provenance, values),
         updated_revision=head.id if folded is None else folded.revision_id,
         updated_at=head.created_at if folded is None else folded.at,
+        lineage_revisions=None
+        if folded is None
+        else {
+            attribute: revision
+            for attribute, revision in sorted(folded.revisions.items())
+            if attribute in values or attribute == CREATED_KEY
+        },
     )
 
 

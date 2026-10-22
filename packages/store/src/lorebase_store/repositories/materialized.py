@@ -63,6 +63,7 @@ _RECORD_UPDATE_COLUMNS = (
     "updated_at",
     "revision_generation",
     "deleted",
+    "lineage_revisions",
 )
 _LINK_UPDATE_COLUMNS = ("values", "object_hash", "lineage", "revision_generation", "deleted")
 
@@ -106,7 +107,8 @@ _KEYS_WITH_ORIGIN = """
 @dataclass(frozen=True, slots=True)
 class RecordRow:
     """A materialized Record. `derived` holds derived values by Attribute id (AC-07): they are
-    written by the materializer only, never by `upsert_records`."""
+    written by the materializer only, never by `upsert_records`. `lineage_revisions` is None
+    when unknown (`materialize.rows.next_lineage_revisions`)."""
 
     kind_id: str
     key: str
@@ -117,6 +119,7 @@ class RecordRow:
     updated_revision: bytes
     updated_at: datetime
     derived: dict[str, Any] = field(default_factory=dict)
+    lineage_revisions: dict[str, str] | None = None
 
     @property
     def inputs(self) -> dict[str, Any]:
@@ -983,6 +986,7 @@ class MaterializedRepository:
             "updated_at": row.updated_at,
             "revision_generation": self._generation or 0,
             "deleted": False,
+            "lineage_revisions": row.lineage_revisions,
         }
 
     def _link_values(self, row: LinkRow) -> dict[str, Any]:
@@ -1012,6 +1016,7 @@ def _record_select(rows: FromClause) -> Any:
         c.updated_revision,
         c.updated_at,
         c.derived,
+        c.lineage_revisions,
     )
 
 

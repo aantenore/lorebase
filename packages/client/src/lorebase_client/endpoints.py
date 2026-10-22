@@ -504,13 +504,13 @@ def record_history(
 
 
 def record_lineage(
-    domain: str, kind: str, key: str, *, branch: str | None = None
+    domain: str, kind: str, key: str, *, branch: str | None = None, at: str | None = None
 ) -> Call[m.RecordLineage]:
     return Call(
         "GET",
         f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/lineage",
         parse_model(m.RecordLineage),
-        params={"branch": branch},
+        params={"branch": branch, "at": at},
         safe=True,
         cacheable=True,
     )

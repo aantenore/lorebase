@@ -707,10 +707,16 @@ class Records(_Resource):
         return self._c.iterate(call)
 
     async def lineage(
-        self, domain: str, kind: str, key: str, *, branch: str | None = None
+        self,
+        domain: str,
+        kind: str,
+        key: str,
+        *,
+        branch: str | None = None,
+        at: str | None = None,
     ) -> m.RecordLineage:
-        """Where the current values of a Record came from."""
-        return await self._c.send(ep.record_lineage(domain, kind, key, branch=branch))
+        """Where the values of a Record came from, at the branch head or at `at`."""
+        return await self._c.send(ep.record_lineage(domain, kind, key, branch=branch, at=at))
 
     async def links(
         self,

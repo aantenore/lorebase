@@ -230,12 +230,12 @@ whose Conflict resolution set the value). A value merged from another branch kee
 provenance; a resolved Conflict shows `merge_resolution`.
 
 Both read the branch history table, one index range per Record, so their cost follows the
-number of changes of the Record, not the length of the branch; lineage reads at most
-`read.history.lineage_max_changes` of the newest changes to find the Revision behind each
-value. History also takes `at`: the changes up to that Revision, read from a snapshot of it;
-lineage is served at branch heads only. Both are authorized like a Record read (the
-Kind of the path must be readable; only that Kind's Attributes appear) and cached by Revision
-with an `ETag`. CLI: `lorebase record history|lineage KIND KEY`; MCP: `lorebase_history`,
+number of changes of the Record, not the length of the branch. Lineage is one statement: the
+materialized Record keeps the Revision behind each value, however many changes came after it.
+Both also take `at`: the answer at that Revision, read from a snapshot of it (the changes along
+its first-parent chain up to it). Both are authorized like a Record read (the Kind of the path
+must be readable; only that Kind's Attributes appear) and cached by Revision with an `ETag`.
+CLI: `lorebase record history|lineage KIND KEY [--at REV]`; MCP: `lorebase_history`,
 `lorebase_lineage`.
 
 ## 4. Write through Operations

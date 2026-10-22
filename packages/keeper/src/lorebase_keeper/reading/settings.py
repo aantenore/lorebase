@@ -96,12 +96,6 @@ class DiffSettings(SectionModel):
 class HistorySettings(Bounds):
     """Per-Record history and lineage (`.../records/{key}/history` and `/lineage`)."""
 
-    lineage_max_changes: int = Field(
-        default=10_000,
-        ge=1,
-        description="Newest changes of a Record read to attribute its values to Revisions.",
-    )
-
 
 class ReadSettings(SectionModel):
     """Bounds of the read path."""

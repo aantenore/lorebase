@@ -6,6 +6,8 @@ Lineage of a row maps each Attribute holding a value to the provenance entry of 
 change: the provenance maps of the element's changes are folded oldest first and the result
 is restricted to the Attributes present in the current values. Changes that touch no
 Attribute (deletions, schema elements) are attributed under `ELEMENT_PROVENANCE_KEY`.
+The Revisions of those changes are folded the same way (`next_lineage_revisions`), with the
+Revision that created the element under `CREATED_KEY`.
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ from lorebase_core.types import AttributeType, to_text
 
 ELEMENT_PROVENANCE_KEY = "$element"
 """Provenance map key of changes that touch no Attribute value."""
+
+CREATED_KEY = "$created"
+"""Lineage revisions key of the Revision that last created the element."""
 
 DEFAULT_SEARCH_WEIGHT = SearchWeight.B
 """Weight of searchable Attributes without an explicit `search_weight` (titles use A)."""
@@ -82,6 +87,31 @@ def next_lineage(
     merged = dict(previous or {})
     merged.update(provenance or {})
     return {attribute: entry for attribute, entry in sorted(merged.items()) if attribute in values}
+
+
+def next_lineage_revisions(
+    previous: Mapping[str, str] | None,
+    provenance: Mapping[str, str] | None,
+    revision: bytes,
+    values: Mapping[str, Any],
+    *,
+    created: bool,
+) -> dict[str, str]:
+    """Lineage revisions after a change made by `revision` (hex values, see module doc).
+
+    Attributes the change attributes take `revision`; the others keep their previous entry.
+    `previous` is None when unknown (rows written before the revisions were kept): only the
+    change's own entries are known then, and readers resolve the rest from the history.
+    """
+    merged = {} if created else dict(previous or {})
+    merged.update(dict.fromkeys(provenance or {}, revision.hex()))
+    if created:
+        merged[CREATED_KEY] = revision.hex()
+    return {
+        attribute: entry
+        for attribute, entry in sorted(merged.items())
+        if attribute in values or attribute == CREATED_KEY
+    }
 
 
 def record_title(kind: Kind | None, values: Mapping[str, Any]) -> str | None:
