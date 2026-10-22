@@ -1120,6 +1120,7 @@ One process at a time is leader (Postgres advisory lock)
 | `scribe.scheduler.gc_dry_run` | `false` |  |
 | `scribe.scheduler.source_schedules` | `true` | queue Source synchronizations from each Source's `schedule` |
 | `scribe.scheduler.embeddings_interval_s` | `60.0` | embedding pass of every Domain; 0 disables |
+| `scribe.scheduler.audit_verify_interval_s` | `86400.0` | verification of every audit hash chain; 0 disables |
 | `scribe.scheduler.domain_batch` | `100` | Domains read per query |
 
 ### `scribe.sources`

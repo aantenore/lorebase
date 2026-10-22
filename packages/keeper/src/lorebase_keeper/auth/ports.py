@@ -14,6 +14,7 @@ from typing import Protocol
 from lorebase_store.auth import (
     ApiKeyRecord,
     AuditRecord,
+    ChainVerification,
     GrantRecord,
     NewAuditEntry,
     PrincipalRecord,
@@ -130,6 +131,8 @@ class AuditPort(Protocol):
     async def list(
         self, *, domain_id: str | None, limit: int, before_seq: int | None = None
     ) -> list[AuditRecord]: ...
+
+    async def verify(self, *, after_seq: int = 0, domain_id: str | None) -> ChainVerification: ...
 
 
 class UsagePort(Protocol):

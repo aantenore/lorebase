@@ -18,6 +18,7 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 
 from sqlalchemy import ColumnElement, insert, select, text
@@ -59,13 +60,28 @@ class AuditRecord:
     entry_hash: bytes
 
 
+class Chains(Enum):
+    """Chain selectors of `AuditRepository.verify` besides one Domain id."""
+
+    ALL = "all"
+    """Every chain: each Domain's and the installation-wide one."""
+
+
 @dataclass(frozen=True)
 class ChainVerification:
-    """Result of walking the chain. `bad_seq` is the first entry that does not verify."""
+    """Result of walking the chain. `bad_seq` is the first entry that does not verify.
+
+    `checked` counts the entries that verified before it, `chains` the chains they belong to,
+    `last_seq` is the `seq` of the last entry that verified (a checkpoint for `after_seq`) and
+    `bad_domain_id` the Domain of the broken entry (None for the installation-wide chain).
+    """
 
     checked: int
     bad_seq: int | None = None
     reason: str | None = None
+    chains: int = 0
+    last_seq: int | None = None
+    bad_domain_id: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -211,39 +227,56 @@ class AuditRepository:
             return [_record(row) for row in (await self._session.execute(statement)).scalars()]
 
     async def verify(
-        self, *, after_seq: int = 0, batch_size: int = VERIFY_BATCH
+        self,
+        *,
+        after_seq: int = 0,
+        batch_size: int = VERIFY_BATCH,
+        domain_id: str | Chains | None = Chains.ALL,
     ) -> ChainVerification:
-        """Recompute every chain from `after_seq` (exclusive) and report the first broken entry.
+        """Recompute chains from `after_seq` (exclusive) and report the first broken entry.
 
-        Entries are walked in `seq` order; each must link to the previous entry of its own
-        chain. The first entry of each chain in the range is trusted as the anchor for its own
-        `prev_hash`; verifying from 0 also requires the first entry of every chain to have none.
+        `domain_id` selects one Domain's chain, None the installation-wide chain, and
+        `Chains.ALL` (the default) every chain. Entries are read in `seq` order, `batch_size`
+        at a time, so memory holds one batch and the head hash of each chain seen. Each entry
+        must link to the previous entry of its own chain. The first entry of each chain in the
+        range is trusted as the anchor for its own `prev_hash`; verifying from 0 also requires
+        the first entry of every chain to have none.
         """
         checked = 0
         cursor = after_seq
+        last_seq: int | None = None
         heads: dict[str | None, bytes] = {}
+        statement = select(AuditEntry).order_by(AuditEntry.seq).limit(batch_size)
+        if not isinstance(domain_id, Chains):
+            statement = statement.where(_same_chain(domain_id))
+
+        def broken(record: AuditRecord, reason: str) -> ChainVerification:
+            return ChainVerification(
+                checked,
+                record.seq,
+                reason,
+                chains=len(heads | {record.domain_id: b""}),
+                last_seq=last_seq,
+                bad_domain_id=record.domain_id,
+            )
+
         async with rls_scope(self._session, bypass=True):
             while True:
                 rows = (
-                    await self._session.execute(
-                        select(AuditEntry)
-                        .where(AuditEntry.seq > cursor)
-                        .order_by(AuditEntry.seq)
-                        .limit(batch_size)
-                    )
+                    await self._session.execute(statement.where(AuditEntry.seq > cursor))
                 ).scalars()
                 batch = [_record(row) for row in rows]
                 if not batch:
-                    return ChainVerification(checked=checked)
+                    return ChainVerification(checked, chains=len(heads), last_seq=last_seq)
                 for record in batch:
                     if record.domain_id in heads:
                         expected_prev: bytes | None = heads[record.domain_id]
                     else:
                         expected_prev = record.prev_hash if after_seq > 0 else None
                     if record.prev_hash != expected_prev:
-                        return ChainVerification(checked, record.seq, "chain link broken")
+                        return broken(record, "chain link broken")
                     if _digest_of(record, record.prev_hash) != record.entry_hash:
-                        return ChainVerification(checked, record.seq, "entry content changed")
+                        return broken(record, "entry content changed")
                     heads[record.domain_id] = record.entry_hash
-                    cursor = record.seq
+                    cursor = last_seq = record.seq
                     checked += 1

@@ -15,9 +15,11 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_scribe.jobs import (
+    AUDIT_VERIFY_JOB,
     EXTRACTION_JOB,
     WEBHOOK_DELIVERY_JOB,
     JobContext,
@@ -27,6 +29,7 @@ from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import SchedulerSettings, ScribeSettings, WorkerSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS
 from lorebase_scribe.worker import Worker
+from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.gc import enqueue_gc
 from lorebase_store.jobs import (
     INDEX_JOB,
@@ -295,6 +298,37 @@ async def test_worker_runs_a_store_index_job(
     assert result["name"] == name
 
 
+async def test_audit_verify_job_reports_the_first_broken_entry(
+    context: JobContext, sessions: async_sessionmaker[AsyncSession], engine: AsyncEngine
+) -> None:
+    seqs = []
+    for n in range(3):
+        async with sessions() as session, session.begin():
+            entry = NewAuditEntry(actor="usr_1", action=f"test.{n}", details={"n": n})
+            seqs.append((await AuditRepository(session).append(entry)).seq)
+    worker = worker_for(context, sessions)
+    intact = await enqueue(sessions, AUDIT_VERIFY_JOB, unique=True)
+    assert await worker.run_once() == 1
+    status, _, result = await job_state(sessions, intact)
+    assert status == "succeeded"
+    assert result == {"intact": True, "checked": 3, "chains": 1, "last_seq": seqs[2]}
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE audit_log SET action = 'test.forged' WHERE seq = :seq"), {"seq": seqs[1]}
+        )
+    broken = await enqueue(sessions, AUDIT_VERIFY_JOB, unique=True)
+    assert await worker.run_once() == 1
+    status, _, result = await job_state(sessions, broken)
+    assert status == "succeeded"
+    assert result["intact"] is False
+    assert result["first_broken"] == {
+        "seq": seqs[1],
+        "domain_id": None,
+        "reason": "entry content changed",
+    }
+
+
 class Stepper:
     def __init__(self, start: datetime) -> None:
         self.now = start
@@ -311,7 +345,9 @@ async def test_scheduler_leader_election_and_schedules(
 ) -> None:
     await load_domain(sessions, runtime, clock, example_schema())
     time = Stepper(datetime(2026, 10, 21, 1, 0, tzinfo=UTC))
-    settings = SchedulerSettings(webhook_interval_s=10, embeddings_interval_s=0)
+    settings = SchedulerSettings(
+        webhook_interval_s=10, embeddings_interval_s=0, audit_verify_interval_s=86400
+    )
 
     def scheduler() -> Scheduler:
         return Scheduler(
@@ -332,8 +368,8 @@ async def test_scheduler_leader_election_and_schedules(
         # The leader queued the interval jobs; cron jobs whose firing precedes the
         # leadership wait for their next firing.
         types = await fetch(sessions, "SELECT type FROM jobs ORDER BY id")
-        assert [t for (t,) in types] == [WEBHOOK_DELIVERY_JOB]
-        assert len(queued) == 1
+        assert [t for (t,) in types] == [WEBHOOK_DELIVERY_JOB, AUDIT_VERIFY_JOB]
+        assert len(queued) == 2
 
         time.now += timedelta(hours=2, minutes=30)  # 03:30: after gc (03:00) and erp (02:00)
         await first.tick()

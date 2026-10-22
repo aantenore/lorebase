@@ -282,6 +282,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify the audit chain
+         * @description Recompute the hash chain of the Domain's audit log and report the first broken entry.
+         *
+         *     Entries are read in batches, so a long chain costs time, not memory. The answer is 200
+         *     whether the chain is intact or not; `intact` and `first_broken` tell which.
+         */
+        get: operations["verify_audit_api_v1_domains__domain_id__audit_verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains": {
         parameters: {
             query?: never;
@@ -1693,6 +1716,19 @@ export interface components {
             value?: components["schemas"]["JsonValue"];
         };
         /**
+         * AuditBreakOut
+         * @description The first audit entry of a chain that does not verify.
+         */
+        AuditBreakOut: {
+            /** Seq */
+            seq: number;
+            /**
+             * Reason
+             * @description `chain link broken` (an entry was removed, reordered or inserted) or `entry content changed` (an entry was edited).
+             */
+            reason: string;
+        };
+        /**
          * AuditEntryOut
          * @description An audit log entry.
          */
@@ -1718,6 +1754,35 @@ export interface components {
             };
             /** Entry Hash */
             entry_hash: string;
+        };
+        /**
+         * AuditVerificationOut
+         * @description Result of recomputing a Domain's audit chain.
+         */
+        AuditVerificationOut: {
+            /** Domain Id */
+            domain_id: string;
+            /**
+             * Intact
+             * @description Every entry in the range verified.
+             */
+            intact: boolean;
+            /**
+             * Checked
+             * @description Entries that verified, before the first broken one.
+             */
+            checked: number;
+            /**
+             * After Seq
+             * @description Entries up to this `seq` were not read.
+             */
+            after_seq: number;
+            /**
+             * Last Seq
+             * @description `seq` of the last entry that verified; pass it as `after_seq` later to verify only what was appended since.
+             */
+            last_seq: number | null;
+            first_broken?: components["schemas"]["AuditBreakOut"] | null;
         };
         /**
          * BranchCreate
@@ -5775,6 +5840,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Page_AuditEntryOut_"];
+                };
+            };
+            /** @description The caller lacks the permission named in the body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    verify_audit_api_v1_domains__domain_id__audit_verify_get: {
+        parameters: {
+            query?: {
+                /** @description Start after this entry, trusting it as the anchor (a `last_seq` of an earlier verification); 0 verifies the whole chain. */
+                after_seq?: number;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditVerificationOut"];
                 };
             };
             /** @description The caller lacks the permission named in the body. */

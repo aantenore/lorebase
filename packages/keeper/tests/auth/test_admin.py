@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
@@ -521,6 +522,63 @@ async def test_audit_is_for_admins_only(
 ) -> None:
     who = headers_for(store, codec, "svc_maint", "maintainer")
     response = await http.get(f"{BASE}/audit", headers=who)
+    assert response.status_code == 403
+    assert response.json()["permission"] == "audit.read"
+
+
+async def test_verify_reports_an_intact_chain(
+    http: httpx.AsyncClient, store: Any, admin: dict[str, str]
+) -> None:
+    for name in ("one", "two"):
+        await http.post(f"{BASE}/api-keys", json={"name": name}, headers=admin)
+    store.audit_rows.append(replace(store.audit_rows[0], seq=99, domain_id="globex"))
+    response = await http.get(f"{BASE}/audit/verify", headers=admin)
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "domain_id": "acme",
+        "intact": True,
+        "checked": 2,
+        "after_seq": 0,
+        "last_seq": store.audit_rows[1].seq,
+        "first_broken": None,
+    }
+    later = await http.get(
+        f"{BASE}/audit/verify", params={"after_seq": store.audit_rows[0].seq}, headers=admin
+    )
+    assert later.json()["checked"] == 1
+
+
+async def test_verify_of_an_empty_chain_is_intact(
+    http: httpx.AsyncClient, admin: dict[str, str]
+) -> None:
+    body = (await http.get(f"{BASE}/audit/verify", headers=admin)).json()
+    assert (body["intact"], body["checked"], body["last_seq"]) == (True, 0, None)
+
+
+async def test_verify_reports_the_first_tampered_entry(
+    http: httpx.AsyncClient, store: Any, admin: dict[str, str]
+) -> None:
+    for name in ("one", "two", "three"):
+        await http.post(f"{BASE}/api-keys", json={"name": name}, headers=admin)
+    first, second, _ = store.audit_rows
+    store.audit_rows[1] = replace(second, actor="svc_evil")
+    body = (await http.get(f"{BASE}/audit/verify", headers=admin)).json()
+    assert body["intact"] is False
+    assert body["checked"] == 1
+    assert body["last_seq"] == first.seq
+    assert body["first_broken"] == {"seq": second.seq, "reason": "entry content changed"}
+
+    del store.audit_rows[1]
+    body = (await http.get(f"{BASE}/audit/verify", headers=admin)).json()
+    assert body["first_broken"]["reason"] == "chain link broken"
+
+
+async def test_verify_is_for_admins_only(
+    http: httpx.AsyncClient, store: Any, codec: ApiKeyCodec
+) -> None:
+    who = headers_for(store, codec, "svc_maint", "maintainer")
+    response = await http.get(f"{BASE}/audit/verify", headers=who)
     assert response.status_code == 403
     assert response.json()["permission"] == "audit.read"
 

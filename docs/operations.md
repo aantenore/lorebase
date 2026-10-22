@@ -116,6 +116,34 @@ its anchor. `pg_dump` of the whole database is the only way to keep the chain, v
 embeddings intact; bundles are for moving or archiving Domain content and for restoring it
 into a fresh installation, after which embeddings are recomputed.
 
+## Audit chain verification
+
+The audit log is hash-chained: one chain per Domain plus one for entries without a Domain
+(design 10.4). Each entry stores `sha256(prev_hash || canonical entry)`, so editing, deleting,
+inserting or reordering a row breaks the chain from that row on. Three ways to recompute it,
+all reading entries in batches of 1000 in `seq` order (memory holds one batch and one hash per
+chain, so the length of the log costs time only):
+
+- `python -m lorebase_keeper audit verify DOMAIN`, `--installation` or `--all`, connected like
+  `bootstrap` (`database.maintenance_dsn` when set). It prints the result, or JSON with
+  `--json`, and exits 1 when an entry does not verify. `--after-seq N` starts after entry N
+  and trusts it: pass the `last_seq` of an earlier run to verify only what was appended since.
+- `GET /api/v1/domains/{domain_id}/audit/verify` (permission `audit.read`, the `admin` role) and
+  `lorebase audit verify -d DOMAIN`, which exits 2 on a broken chain. They cover one Domain's
+  chain; the installation-wide chain is verified from the shell or by Scribe.
+- Scribe queues an `audit_verify` job of every chain each `scribe.scheduler.audit_verify_interval_s`
+  (default one day, 0 disables it) and when a process becomes scheduler leader. The job counts in
+  `lorebase_audit_verifications_total` with `outcome` `intact` or `broken`, and the
+  `LorebaseAuditChainBroken` alert fires on a broken one.
+
+The answer names the first entry that does not verify and why: `chain link broken` (its
+`prev_hash` is not the hash of the entry before it: a row was removed, inserted or reordered)
+or `entry content changed` (the stored hash does not match the content: a row was edited).
+Entries before it verified. The chain shows that the log was not changed by someone who cannot
+also rewrite every later hash. It cannot show that the newest entries of a chain were deleted,
+and an owner of the database can recompute a whole chain. Keep a recent `last_seq` and its
+`entry_hash` outside the database (a ticket, a log shipper) when you need evidence against both.
+
 ## Rate limits and quotas
 
 Keeper limits how fast a principal may call the API and, for API keys, how much it may use per
@@ -288,3 +316,14 @@ No garbage collection completed in 3 days (`lorebase_gc_runs_total`, dry runs ex
 scheduling work. Check `scribe.scheduler.gc_schedule` (null disables the schedule; change the window in the rule if
 you collect less often), the `gc` rows of `jobs` and the Scribe logs; a collection that never ends makes the next ones fail with `GcBusyError`. Run one by hand with
 `python -m lorebase_store.gc --all` ([garbage collection](#garbage-collection)).
+
+#### LorebaseAuditChainBroken
+
+A scheduled `audit_verify` job found an audit entry that does not verify
+(`lorebase_audit_verifications_total{outcome="broken"}`). Treat it as a security incident until shown otherwise.
+The job's `result` holds the first broken entry (`SELECT result FROM jobs WHERE type = 'audit_verify' ORDER BY id
+DESC LIMIT 1`), and Scribe logs `audit chain broken` with its `seq`, Domain and reason. Do not repair the rows:
+preserve the database (a `pg_dump` of `audit_log`), compare the entry with a backup to see what changed, and check
+who holds write access to `audit_log` (the maintenance role and the database owner).
+`python -m lorebase_keeper audit verify --all` reruns the check ([audit chain verification](#audit-chain-verification)).
+The alert keeps firing while the chain stays broken, because each daily job reports it again.

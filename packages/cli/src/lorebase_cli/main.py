@@ -14,6 +14,7 @@ from lorebase_cli import __version__
 from lorebase_cli.commands import (
     admin,
     agents,
+    audit,
     data,
     documents,
     domains,
@@ -133,6 +134,7 @@ app.add_typer(data.import_app, name="import")
 app.add_typer(data.record_app, name="record")
 app.add_typer(history.revision_app, name="revision")
 app.add_typer(admin.apikey_app, name="apikey")
+app.add_typer(audit.audit_app, name="audit")
 app.add_typer(proposals.proposal_app, name="proposal")
 app.add_typer(sources.sources_app, name="sources")
 app.add_typer(documents.documents_app, name="documents")

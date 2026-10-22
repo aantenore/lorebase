@@ -52,6 +52,11 @@ EMBEDDING_CALL_DURATION = meter.create_histogram(
     description="Duration of one call of the embedding model by an embedding job.",
     explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_S,
 )
+AUDIT_VERIFICATIONS = meter.create_counter(
+    "lorebase.audit.verifications",
+    unit="{verification}",
+    description="Verifications of the audit hash chains by audit_verify jobs, by outcome.",
+)
 
 
 class QueueDepth:

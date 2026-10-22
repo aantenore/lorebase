@@ -4,6 +4,7 @@ from lorebase_store.auth.api_keys import ApiKeyRecord, ApiKeyRepository, PrefixT
 from lorebase_store.auth.audit import (
     AuditRecord,
     AuditRepository,
+    Chains,
     ChainVerification,
     NewAuditEntry,
     audit_lock_key,
@@ -27,6 +28,7 @@ __all__ = [
     "AuditRepository",
     "AuthUnit",
     "ChainVerification",
+    "Chains",
     "GrantRecord",
     "GrantRepository",
     "GroupRepository",

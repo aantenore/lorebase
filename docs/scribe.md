@@ -45,6 +45,7 @@ Domain-wide `data.read` grant.
 | `gc` | the scheduler, at `gc_schedule` per Domain; `python -m lorebase_store.gc --enqueue` | Garbage collection of a Domain ([operations](operations.md)) |
 | `extraction` | `{"documents": [ids], "tiers": [..] or null, "requested_by"}` | Documents into a Proposal of items ([extraction.md](extraction.md)) |
 | `embeddings` | the scheduler, every `embeddings_interval_s` per Domain; a job that used its row budget (continuation) | One embedding pass over the Domain's materialized branches ([below](#embeddings)). Payload `{"branches"?, "reindex"?, "resume"?}`; the scheduled one is `{}` |
+| `audit_verify` | the scheduler, every `audit_verify_interval_s` | Recomputes every audit hash chain; the result names the first broken entry, and `lorebase.audit.verifications` counts the outcome ([operations](operations.md#audit-chain-verification)) |
 
 ### Worker loop
 
@@ -77,7 +78,10 @@ over at its next tick (`tick_s`). The leader requeues stale jobs and queues:
 - a `source_sync` job for each Source whose `schedule` fired, read from the schema of the
   Domain's default branch;
 - an `embeddings` job per Domain every `embeddings_interval_s` (0 disables; an identical queued
-  job is reused).
+  job is reused);
+- an `audit_verify` job every `audit_verify_interval_s` (one day; 0 disables; an identical queued
+  job is reused). The interval is kept in memory, so a process that becomes leader queues one at
+  its first tick.
 
 Cron jobs are queued with `run_after` set to the firing time; a firing is due when it is later
 than the newest such job or, without one, than the moment the process became leader. Missed

@@ -725,6 +725,24 @@ class AuditEntry(Model):
     entry_hash: str
 
 
+class AuditBreak(Model):
+    """The first audit entry of a chain that does not verify."""
+
+    seq: int
+    reason: str
+
+
+class AuditVerification(Model):
+    """Result of recomputing a Domain's audit hash chain."""
+
+    domain_id: str
+    intact: bool
+    checked: int
+    after_seq: int
+    last_seq: int | None = None
+    first_broken: AuditBreak | None = None
+
+
 # Proposals --------------------------------------------------------------------------------
 
 

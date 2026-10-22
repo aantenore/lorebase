@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
 
 from lorebase_keeper import __main__ as entrypoint
+from lorebase_store.auth import Chains, ChainVerification
 
 
 @pytest.fixture(autouse=True)
@@ -73,3 +77,75 @@ def test_installation_commands_connect_as_the_maintenance_role_when_set(
     monkeypatch.setattr(entrypoint, "create_engine", fake_engine)
     entrypoint._store(entrypoint.load_settings())
     assert used == {"url": expected, "pooled": False}
+
+
+class _Audit:
+    def __init__(self, result: ChainVerification) -> None:
+        self.result = result
+        self.calls: list[dict[str, Any]] = []
+
+    async def verify(self, **kwargs: Any) -> ChainVerification:
+        self.calls.append(kwargs)
+        return self.result
+
+
+def _fake_store(monkeypatch: pytest.MonkeyPatch, result: ChainVerification) -> _Audit:
+    audit = _Audit(result)
+
+    class _Unit:
+        def __init__(self) -> None:
+            self.audit = audit
+
+    class _Store:
+        @asynccontextmanager
+        async def unit(self) -> AsyncIterator[_Unit]:
+            yield _Unit()
+
+    async def dispose() -> None:
+        return None
+
+    monkeypatch.setattr(entrypoint, "_store", lambda settings: (_Store(), dispose))
+    return audit
+
+
+@pytest.mark.parametrize(
+    ("argv", "chain"),
+    [(["acme"], "acme"), (["--installation"], None), (["--all"], Chains.ALL)],
+)
+def test_audit_verify_selects_the_chain_and_reports_an_intact_log(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    chain: str | Chains | None,
+) -> None:
+    audit = _fake_store(monkeypatch, ChainVerification(5, chains=2, last_seq=41))
+    entrypoint.main(["audit", "verify", *argv, "--after-seq", "3"])
+    assert audit.calls == [{"after_seq": 3, "domain_id": chain}]
+    assert capsys.readouterr().out == "audit log intact: 5 entries in 2 chain(s), last seq 41\n"
+
+
+def test_audit_verify_exits_1_on_a_broken_chain(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken = ChainVerification(
+        2, 7, "entry content changed", chains=1, last_seq=4, bad_domain_id="acme"
+    )
+    _fake_store(monkeypatch, broken)
+    with pytest.raises(SystemExit) as caught:
+        entrypoint.main(["audit", "verify", "--all", "--json"])
+    assert caught.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "chain": "all",
+        "intact": False,
+        "checked": 2,
+        "chains": 1,
+        "last_seq": 4,
+        "first_broken": {"seq": 7, "domain_id": "acme", "reason": "entry content changed"},
+    }
+
+
+def test_audit_verify_refuses_a_negative_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_store(monkeypatch, ChainVerification(0))
+    with pytest.raises(SystemExit) as caught:
+        entrypoint.main(["audit", "verify", "acme", "--after-seq", "-1"])
+    assert "--after-seq" in str(caught.value)

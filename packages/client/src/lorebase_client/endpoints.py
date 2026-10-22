@@ -649,6 +649,16 @@ def list_audit(
     )
 
 
+def verify_audit(domain: str, *, after_seq: int | None = None) -> Call[m.AuditVerification]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/audit/verify",
+        parse_model(m.AuditVerification),
+        params={"after_seq": after_seq},
+        safe=True,
+    )
+
+
 # Proposals --------------------------------------------------------------------------------
 
 
