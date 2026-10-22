@@ -230,6 +230,56 @@ def test_evidence_must_be_found_and_hold_the_value(supply_schema: Schema) -> Non
     assert not grounded(currency, "PLN", text)
 
 
+@pytest.mark.parametrize(
+    ("raw", "canonical"),
+    [
+        ("2024-01-23", "2024-01-23T00:00:00.000000Z"),
+        ("2024-01-23T00:00:00", "2024-01-23T00:00:00.000000Z"),
+        ("2024-01-23T10:15", "2024-01-23T10:15:00.000000Z"),
+        ("2024-01-23T23:30:00-05:00", "2024-01-24T04:30:00.000000Z"),
+    ],
+)
+async def test_tier2_timestamps_without_offset_are_read_as_utc_and_grounded_by_day(
+    resolver: Resolver, ontology: Ontology, supply_schema: Schema, raw: str, canonical: str
+) -> None:
+    """Answers recorded from a hosted model: a document states an approval day, the model
+    answers a timestamp without offset."""
+    contract = kind(supply_schema, "Contract")
+    text = "Contract C-3013 was approved on 23 January 2024 by contract-manager-1."
+    chunk = Chunk(0, 0, len(text), text)
+    hints = [await resolver.resolve(mention(contract, "C-3013", source="key"))]
+    messages = build_messages(ontology, [contract], chunk, hints)
+    answer: dict[str, Any] = {
+        "records": [
+            {
+                "kind": "Contract",
+                "ref": "C-3013",
+                "evidence": "Contract C-3013",
+                "values": {
+                    "approved_at": {"value": raw, "evidence": "approved on 23 January 2024"},
+                },
+            }
+        ]
+    }
+    settings = InferenceSettings.model_validate({"llm": {"provider": "fake"}})
+    chat = FakeChatModel(settings.llm, settings.fake, {prompt_hash(messages): answer})
+    result = await run_tier2(
+        chat,
+        ontology,
+        chunk,
+        hints,
+        resolver,
+        document_id="doc_1",
+        schema_hash=b"\x00" * 32,
+        model_key="fake:test",
+        settings=SETTINGS,
+        cache=None,
+    )
+    assert result.discarded == {}, result.discarded
+    assert [v.value for v in result.values] == [canonical]
+    assert result.discarded == {}
+
+
 async def test_tier2_answers_are_verified(
     resolver: Resolver, ontology: Ontology, supply_schema: Schema
 ) -> None:

@@ -27,6 +27,23 @@ EmbeddingProvider = Literal["fastembed", "openai_compatible", "fake"]
 SpanProvider = Literal["gliner", "fake"]
 RelationProvider = Literal["glirel", "cooccurrence", "fake"]
 
+RESERVED_HEADERS = frozenset({"authorization", "content-type", "accept", "content-length", "host"})
+"""Headers the client sets itself; `headers` cannot replace them."""
+RESERVED_BODY_FIELDS = frozenset({"model", "messages", "stream", "response_format"})
+"""Request fields the client sets itself; `extra_body` cannot replace them."""
+
+
+def _check_headers(headers: dict[str, Any] | None) -> None:
+    for name in headers or {}:
+        if not name.strip() or name.strip().lower() in RESERVED_HEADERS:
+            raise ValueError(f"header {name!r} cannot be set in `headers`")
+
+
+def _check_extra_body(extra: dict[str, Any] | None) -> None:
+    for name in extra or {}:
+        if name in RESERVED_BODY_FIELDS:
+            raise ValueError(f"field {name!r} cannot be set in `extra_body`")
+
 
 class RetrySettings(SectionModel):
     """Retries of HTTP calls on 429, 5xx and connection errors, with exponential backoff.
@@ -55,11 +72,20 @@ class LlmTaskOverride(SectionModel):
     model: str | None = None
     api_key: SecretValue | None = None
     structured_output: Literal["json_schema", "json_mode"] | None = None
+    json_schema_strict: bool | None = None
     temperature: float | None = Field(default=None, ge=0)
     max_concurrency: int | None = Field(default=None, ge=1)
     timeout_s: float | None = Field(default=None, gt=0)
     trust_env: bool | None = None
     price_per_million_tokens: Price | None = None
+    headers: dict[str, SecretValue] | None = None
+    extra_body: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _check_request_options(self) -> Self:
+        _check_headers(self.headers)
+        _check_extra_body(self.extra_body)
+        return self
 
 
 class LlmSettings(SectionModel):
@@ -90,10 +116,21 @@ class LlmSettings(SectionModel):
         "json_mode asks for a JSON object with the schema in the prompt. Answers are always "
         "validated against the schema, with up to `repair_attempts` repair retries.",
     )
+    json_schema_strict: bool | None = Field(
+        default=None,
+        description="Value of response_format.json_schema.strict in json_schema mode; null "
+        "leaves it out. Some endpoints require true and then refuse schemas outside their "
+        "strict subset, which steps the client down like any other rejection.",
+    )
     repair_attempts: int = Field(
         default=1, ge=0, le=3, description="Repair retries after an invalid answer."
     )
-    temperature: float = Field(default=0, ge=0)
+    temperature: float | None = Field(
+        default=0,
+        ge=0,
+        description="Sampling temperature; null leaves it out of the request, for models that "
+        "refuse the parameter.",
+    )
     max_tokens: int | None = Field(
         default=None, ge=1, description="Completion token cap; unset leaves it to the server."
     )
@@ -106,16 +143,33 @@ class LlmSettings(SectionModel):
     )
     retry: RetrySettings = Field(default_factory=RetrySettings)
     price_per_million_tokens: Price = Field(default_factory=Price)
+    headers: dict[str, SecretValue] = Field(
+        default_factory=dict,
+        description="Extra HTTP headers sent with every request, for example a workspace or "
+        "organization id a hosted provider requires. Values accept secret references.",
+    )
+    extra_body: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra fields merged into every request body, for server-specific options "
+        'such as {"reasoning_effort": "none"}. model, messages, stream and response_format '
+        "are set by the client and cannot be overridden.",
+    )
     tasks: dict[str, LlmTaskOverride] = Field(
         default_factory=dict,
         description="Optional overrides per task name, e.g. extraction, schema_discovery.",
     )
 
+    @model_validator(mode="after")
+    def _check_request_options(self) -> Self:
+        _check_headers(self.headers)
+        _check_extra_body(self.extra_body)
+        return self
+
     def for_task(self, task: str | None) -> Self:
         """Effective settings for a task: this model with the task's overrides applied.
 
-        A task that names another `base_url` uses only its own `api_key`: the main key is never
-        sent to an endpoint it was not configured for.
+        A task that names another `base_url` uses only its own `api_key` and `headers`: the main
+        key and headers are never sent to an endpoint they were not configured for.
         """
         override = self.tasks.get(task) if task else None
         changes: dict[str, Any] = (
@@ -127,8 +181,11 @@ class LlmSettings(SectionModel):
             if override
             else {}
         )
+        if override and override.temperature is None and "temperature" in override.model_fields_set:
+            changes["temperature"] = None  # an explicit null leaves the parameter out
         if override and override.base_url not in (None, self.base_url):
             changes["api_key"] = override.api_key
+            changes["headers"] = override.headers or {}
         return self.model_copy(update={**changes, "tasks": {}})
 
 

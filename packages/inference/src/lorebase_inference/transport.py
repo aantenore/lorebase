@@ -19,7 +19,7 @@ import math
 import random
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from types import TracebackType
@@ -114,6 +114,7 @@ class EndpointClient:
         retry: RetrySettings,
         max_concurrency: int = 4,
         trust_env: bool = False,
+        headers: Mapping[str, SecretStr] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Sleep | None = None,
         jitter: Callable[[], float] = random.random,
@@ -122,6 +123,7 @@ class EndpointClient:
             raise ValueError(f"base_url must start with http:// or https://, got {base_url!r}")
         self._base_url = base_url.rstrip("/")
         self._key = api_key
+        self._headers = dict(headers or {})
         self._timeout = httpx.Timeout(timeout_s, connect=min(_CONNECT_TIMEOUT_S, timeout_s))
         self._retry = retry
         self._slots = asyncio.Semaphore(max_concurrency)
@@ -134,7 +136,8 @@ class EndpointClient:
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         """POST `payload` as JSON to `path` under the base URL and return the JSON object."""
         client = self._http()
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {name: value.get_secret_value() for name, value in self._headers.items()}
+        headers.update({"Content-Type": "application/json", "Accept": "application/json"})
         if self._key is not None and self._key.get_secret_value():
             headers["Authorization"] = f"Bearer {self._key.get_secret_value()}"
         async with self._slots:
@@ -185,6 +188,7 @@ class EndpointClient:
                 f"{path}: HTTP {status}: credentials refused (server text omitted)", status=status
             )
         secrets = [self._key.get_secret_value()] if self._key is not None else []
+        secrets.extend(value.get_secret_value() for value in self._headers.values())
         detail = error_detail(response, secrets=secrets)
         return EndpointError(f"{path}: HTTP {status}: {detail}", status=status, detail=detail)
 

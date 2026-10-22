@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from lorebase_inference.interfaces import Usage
+
 
 class InferenceError(Exception):
     """Base class of every error raised by this package."""
@@ -28,11 +30,20 @@ class EndpointError(InferenceError):
 class InvalidOutputError(InferenceError):
     """The model answered, but not with JSON that satisfies the requested schema."""
 
-    def __init__(self, message: str, *, problems: Sequence[str] = (), attempts: int = 1) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        problems: Sequence[str] = (),
+        attempts: int = 1,
+        usage: Usage | None = None,
+    ) -> None:
         super().__init__(message)
         self.problems = tuple(problems)
         """Validation problems of the last answer: schema path and violated keyword."""
         self.attempts = attempts
+        self.usage = usage or Usage()
+        """Tokens spent on every attempt, so that callers can still count them."""
 
 
 class DimensionMismatchError(InferenceError):
