@@ -20,10 +20,11 @@ Role semantics where the design table leaves room:
   (`maintainer`), into protected and unprotected branches alike;
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
   delete the Domain (`domain.delete`), read values of sensitive Attributes (`pii.read`,
-  `confidential.read`, `restricted.read`; other callers see them masked) and erase vault
-  values (`pii.erase`); custom roles grant the clearances to others. `admin` also reads the
-  agent traces of other principals in its Domain (`trace.read`) and the query plans of traced
-  requests (`trace.explain`); every principal reads its own traces. `domain.create` is
+  `confidential.read`, `restricted.read`; other callers see them masked), erase vault
+  values (`pii.erase`) and feed values of vault Attributes through the built-in imports and
+  Source synchronizations (`pii.import`, see `services.pii_import`); custom roles grant the
+  clearances to others. `admin` also reads the agent traces of other principals in its Domain
+  (`trace.read`) and the query plans of traced requests (`trace.explain`); every principal reads its own traces. `domain.create` is
   installation-level: installation administrators hold it, and so do admins of any Domain;
 - `vault.manage` (vault key rotation and its status) is held by installation administrators
   only: no role, built in or custom, contains it.
@@ -67,6 +68,7 @@ class Permission(StrEnum):
     CONFIDENTIAL_READ = "confidential.read"
     RESTRICTED_READ = "restricted.read"
     PII_ERASE = "pii.erase"
+    PII_IMPORT = "pii.import"
     TRACE_READ = "trace.read"
     TRACE_EXPLAIN = "trace.explain"
     VAULT_MANAGE = "vault.manage"

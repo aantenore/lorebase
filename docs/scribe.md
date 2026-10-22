@@ -433,8 +433,9 @@ settings: `lorebase-inference embed --query "late deliveries" | lorebase search 
 
 - Trigger a run: `POST /api/v1/domains/{d}/sources/{s}/sync` with an optional
   `{"dry_run": true}` (permission `source.sync`: `editor`, `maintainer`, `admin`; audited as
-  `source.sync`). The answer is 202 with the job id; a second request while the job is pending
-  returns the same job.
+  `source.sync`; a Source that maps vault Attributes also needs `pii.import` Domain-wide, as
+  do schema changes and merges that add or change such a Source, design 13.5). The answer is
+  202 with the job id; a second request while the job is pending returns the same job.
 - Follow runs: `GET /api/v1/domains/{d}/sources/{s}/runs` (Domain-wide `data.read`), newest
   first, with status, counts, rows read and failed, row error samples, Revision, Proposal, merge
   status and duration.

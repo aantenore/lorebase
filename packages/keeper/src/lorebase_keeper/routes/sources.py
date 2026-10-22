@@ -4,7 +4,9 @@
 `source.sync`: `editor`, `maintainer`, `admin`) and answers 202 with the job id; while an
 identical job is queued or running, that job is returned instead of a new one. The Source is
 named by id or api name and looked up in the schema of the Domain's default branch. Every
-trigger is audited (`source.sync`).
+trigger is audited (`source.sync`). Triggering a Source that maps vault Attributes also needs
+`pii.import` on the whole Domain (`services.pii_import`): a caller who could feed or re-run
+such a Source would learn whether a value was erased.
 
 `GET /domains/{d}/sources/{s}/runs` lists the runs recorded by Scribe, newest first, with their
 counts, Revision, Proposal and error. It needs `data.read` through a Domain-wide grant: run
@@ -25,15 +27,16 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Sensitivity, Source
+from lorebase_core.model import Schema, Sensitivity, Source
 from lorebase_keeper.auth.audit import annotate
-from lorebase_keeper.auth.deps import Access, require
+from lorebase_keeper.auth.deps import Access, AuthDep, require
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.context import StoreDep, require_domain
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.points import open_domain, read_guard
 from lorebase_keeper.reading.sensitivity import clearance_of
+from lorebase_keeper.services.pii_import import require_pii_import, source_vault_targets
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import SOURCE_SYNC_JOB, enqueue_job, source_sync_payload
@@ -50,6 +53,14 @@ BASE = "/domains/{domain_id}/sources/{source}"
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks the permission."},
     404: {"model": Problem, "description": "Domain or Source not found."},
+}
+_SYNC_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_ERRORS,
+    403: {
+        "model": Problem,
+        "description": "The caller lacks source.sync, or pii.import for a Source mapping "
+        "vault Attributes.",
+    },
 }
 
 Sync = Annotated[Access, Depends(require(Permission.SOURCE_SYNC))]
@@ -85,8 +96,8 @@ class SourceRunOut(BaseModel):
 
 async def _source(
     session: AsyncSession, domain_id: str, branch: str, reference: str, runtime: StoreRuntime
-) -> Source:
-    """The Source named by id or api name in the schema of `branch`."""
+) -> tuple[Schema, Source]:
+    """The Source named by id or api name in the schema of `branch`, with that schema."""
     compiled = await MaterializedRepository(
         session, domain_id, branch, writes=runtime.settings.writes
     ).schema()
@@ -94,9 +105,9 @@ async def _source(
     found = None
     if schema is not None:
         found = schema.sources.get(reference) or schema.source_by_api_name(reference)
-    if found is None:
+    if schema is None or found is None:
         raise ProblemError(NOT_FOUND, f"Source {reference!r} not found.")
-    return found
+    return schema, found
 
 
 REDACTED_ERROR: dict[str, Any] = {"redacted": True}
@@ -121,12 +132,13 @@ def _run(row: SourceRunRow, *, errors: bool) -> SourceRunOut:
     status_code=202,
     summary="Synchronize a Source",
     response_model=SyncQueued,
-    responses=_ERRORS,
+    responses=_SYNC_ERRORS,
 )
 async def sync_source(
     domain_id: str,
     source: str,
     access: Sync,
+    auth: AuthDep,
     store: StoreDep,
     request: Request,
     response: Response,
@@ -136,7 +148,11 @@ async def sync_source(
     dry_run = body is not None and body.dry_run
     async with store.sessions() as session, session.begin():
         domain = await require_domain(session, domain_id)
-        found = await _source(session, domain_id, domain.default_branch, source, store.runtime)
+        schema, found = await _source(
+            session, domain_id, domain.default_branch, source, store.runtime
+        )
+        if source_vault_targets(schema, found):
+            await require_pii_import(auth.authorizer, access.principal, domain_id)
         job_id = await enqueue_job(
             session,
             SOURCE_SYNC_JOB,
@@ -166,7 +182,7 @@ async def list_source_runs(
     async with store.sessions() as session, session.begin():
         domain = await open_domain(session, access)
         await access.require_wide()
-        found = await _source(session, domain.id, domain.default_branch, source, store.runtime)
+        _, found = await _source(session, domain.id, domain.default_branch, source, store.runtime)
         rows = await SourceRunRepository(session, domain_id).page(
             found.id, limit=params.limit + 1, after=after
         )
