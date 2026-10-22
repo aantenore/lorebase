@@ -360,6 +360,47 @@ export interface paths {
         patch: operations["update_domain_api_v1_domains__domain_id__patch"];
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/schema/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List schema suggestions
+         * @description Kinds, Attributes and Relations extraction found outside the schema, with support,
+         *     examples, samples and, for Attributes, the type their samples suggest.
+         */
+        get: operations["list_suggestions_api_v1_domains__domain_id__schema_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/schema/suggestions:decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept or reject schema suggestions
+         * @description Reject or reset suggestions; accept some as one schema change Proposal.
+         */
+        post: operations["decide_suggestions_api_v1_domains__domain_id__schema_suggestions_decide_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/schema": {
         parameters: {
             query?: never;
@@ -2427,6 +2468,18 @@ export interface components {
             items: components["schemas"]["ItemOut"][];
             materialized: components["schemas"]["MaterializedOut"];
         };
+        /** DecideSuggestionsIn */
+        DecideSuggestionsIn: {
+            /** Decisions */
+            decisions: components["schemas"]["SuggestionDecisionIn"][];
+        };
+        /** DecideSuggestionsOut */
+        DecideSuggestionsOut: {
+            /** Suggestions */
+            suggestions: components["schemas"]["SuggestionOut"][];
+            /** @description The Proposal opened for the accepted suggestions. */
+            proposal?: components["schemas"]["SuggestionProposalOut"] | null;
+        };
         /**
          * DerivedCondition
          * @description Compare a derived Attribute with a value.
@@ -2663,6 +2716,16 @@ export interface components {
             count: number;
             /** Keys */
             keys: string[];
+        };
+        /** DuplicateOut */
+        DuplicateOut: {
+            /**
+             * Section
+             * @enum {string}
+             */
+            section: "kinds" | "attributes" | "relations";
+            /** Api Name */
+            api_name: string;
         };
         /**
          * DuplicateReport
@@ -3796,6 +3859,13 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
         };
+        /** Page[SuggestionOut] */
+        Page_SuggestionOut_: {
+            /** Items */
+            items: components["schemas"]["SuggestionOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
         /** Page[TagOut] */
         Page_TagOut_: {
             /** Items */
@@ -4846,6 +4916,118 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** SuggestionDecisionIn */
+        SuggestionDecisionIn: {
+            /** Suggestion */
+            suggestion: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "pending" | "accepted" | "rejected";
+            /**
+             * Name
+             * @description Api name to use instead (accepted only).
+             */
+            name?: string | null;
+        };
+        /** SuggestionOut */
+        SuggestionOut: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "kind" | "attribute" | "relation";
+            /**
+             * Name
+             * @description Proposed api name.
+             */
+            name: string;
+            /**
+             * Kind
+             * @description Owner Kind of an Attribute, from Kind of a Relation: an api name, or `+Name` for a Kind another suggestion proposes.
+             */
+            kind?: string | null;
+            /**
+             * Target
+             * @description To Kind of a Relation.
+             */
+            target?: string | null;
+            /**
+             * Labels
+             * @description Labels as the documents wrote them.
+             */
+            labels: string[];
+            /**
+             * Support
+             * @description Observations, over every document.
+             */
+            support: number;
+            /**
+             * Documents
+             * @description Documents it was observed in.
+             */
+            documents: number;
+            /**
+             * Confidence
+             * @description Mean confidence of the observations.
+             */
+            confidence: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "accepted" | "rejected";
+            /** @description For Attributes: the type the samples suggest. */
+            type_guess?: components["schemas"]["TypeGuessOut"] | null;
+            /** Samples */
+            samples: string[];
+            /**
+             * Examples
+             * @description Evidence: document, chunk, offsets into the parsed text, quote.
+             */
+            examples: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Sources
+             * @description Techniques that observed it (rules, models).
+             */
+            sources: string[];
+            /** @description The element of the current schema it duplicates. */
+            duplicate_of?: components["schemas"]["DuplicateOut"] | null;
+            /**
+             * Withheld
+             * @description Examples and samples are left out: it matches a sensitive Attribute the caller may not read.
+             * @default false
+             */
+            withheld: boolean;
+            /** Proposal Id */
+            proposal_id: string | null;
+            /** Branch */
+            branch: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /** SuggestionProposalOut */
+        SuggestionProposalOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Branch */
+            branch: string;
+            /** Changes */
+            changes: components["schemas"]["ElementChangeOut"][];
+        };
         /** SyncQueued */
         SyncQueued: {
             /**
@@ -4968,6 +5150,22 @@ export interface components {
             step: string;
             /** Removed */
             removed: number;
+        };
+        /** TypeGuessOut */
+        TypeGuessOut: {
+            /**
+             * Type
+             * @description Attribute type inferred from the samples, e.g. `date`.
+             */
+            type: string;
+            /** Constraints */
+            constraints: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Confidence */
+            confidence: number;
+            /** Reasons */
+            reasons: string[];
         };
         /**
          * ValidationProblem
@@ -6429,6 +6627,171 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_suggestions_api_v1_domains__domain_id__schema_suggestions_get: {
+        parameters: {
+            query?: {
+                status?: ("pending" | "accepted" | "rejected")[] | null;
+                type?: ("kind" | "attribute" | "relation")[] | null;
+                /** @description Also those below `schema.suggestions.min_support`. */
+                all?: boolean;
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_SuggestionOut_"];
+                };
+            };
+            /** @description The caller lacks the permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or suggestion not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A suggestion was accepted already. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, a suggestion the schema has meanwhile, or accepted suggestions that do not form a valid schema. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description A branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    decide_suggestions_api_v1_domains__domain_id__schema_suggestions_decide_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideSuggestionsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecideSuggestionsOut"];
+                };
+            };
+            /** @description The caller lacks the permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or suggestion not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A suggestion was accepted already. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, a suggestion the schema has meanwhile, or accepted suggestions that do not form a valid schema. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description A branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Problem details (RFC 9457), media type application/problem+json. */

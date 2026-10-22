@@ -20,6 +20,7 @@ from lorebase_store.models.ingestion import (
     DocumentChunk,
     ExtractionCacheEntry,
     ExtractionJob,
+    SchemaSuggestion,
     SourceRun,
     VaultEntry,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "RefLogEntry",
     "Revision",
     "RevisionParent",
+    "SchemaSuggestion",
     "SourceRun",
     "StoredObject",
     "TreeNode",

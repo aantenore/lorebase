@@ -88,7 +88,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 Goal: day 3 of the proof scenario, on the sample contracts.
 
 - [x] Document store interface and parsers (Postgres blob backend; Markdown, text, PDF, DOCX)
-- [ ] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions (all but schema suggestions done, [docs/extraction.md](extraction.md))
+- [x] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions aggregated over documents and accepted as schema change Proposals (migration `0021`, [docs/extraction.md](extraction.md#schema-suggestions))
 - [x] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles `local-models` and `litellm` ([inference providers](inference-providers.md))
 - [x] Extraction Proposal items and evidence Review UI (an Items tab in Review accepts, edits or rejects items one by one or by filter; the Documents viewer highlights the evidence)
 - [x] Embedding jobs and hybrid search: Kinds opt in with `search.embedding_template`; scheduled Scribe passes embed the Records that lack a vector of the configured model (content-hash keyed, shared across branches and overlays, batched, rate-limited, resumable), `lorebase-scribe embeddings` backfills and reindexes (migration `0014`, [scribe](scribe.md#embeddings)); query vectors are computed on the caller's side (`lorebase-inference embed`, `lorebase search --vector-file`). The model is advertised in `GET /schema` and `lorebase_schema`; prefixes for E5/BGE style models are settings; garbage collection deletes unreferenced vectors

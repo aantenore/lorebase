@@ -74,6 +74,12 @@ import type {
   UploadDocumentInput,
 } from './extraction-types';
 import type { InferRequest, SchemaProposalDraft } from './inference-types';
+import type {
+  DecideSuggestionsInput,
+  DecideSuggestionsResult,
+  SchemaSuggestion,
+  SuggestionListParams,
+} from './suggestion-types';
 import type { SourceRun, SourceRunListParams, SourceSyncQueued } from './sources-types';
 
 /**
@@ -241,6 +247,21 @@ export interface KeeperApi {
      * proposal as a schema change set.
      */
     infer(domain: DomainId, request: InferRequest): Promise<SchemaProposalDraft>;
+  };
+
+  readonly suggestions: {
+    /**
+     * Kinds, Attributes and Relations that document discovery proposes
+     * (`GET .../schema/suggestions`), by status and type. Pending ones below Keeper's minimum
+     * support are listed only with `all`.
+     */
+    list(domain: DomainId, params?: SuggestionListParams): Promise<Page<SchemaSuggestion>>;
+    /**
+     * Accepts, rejects or resets suggestions (`POST .../schema/suggestions:decide`). The
+     * accepted ones of one request become one schema change set on a new Branch, proposed as a
+     * Proposal. An invalid change set is a 422 `ValidationError` and nothing changes.
+     */
+    decide(domain: DomainId, input: DecideSuggestionsInput): Promise<DecideSuggestionsResult>;
   };
 
   readonly sources: {

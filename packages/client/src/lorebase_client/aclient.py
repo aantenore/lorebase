@@ -335,6 +335,50 @@ class SchemaApi(_Resource):
         """Propose a schema from CSV or TSV files (file name to content)."""
         return await self._c.send(ep.infer_schema_files(domain, files, options=options))
 
+    async def suggestions(
+        self,
+        domain: str,
+        *,
+        status: Sequence[m.ItemDecisionValue] | None = None,
+        type: Sequence[m.SuggestionType] | None = None,
+        all: bool | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.Page[m.SchemaSuggestion]:
+        """One page of schema suggestions from extraction, the most supported first."""
+        return await self._c.send(
+            ep.list_schema_suggestions(
+                domain, status=status, type=type, all=all, limit=limit, cursor=cursor
+            )
+        )
+
+    def iterate_suggestions(
+        self,
+        domain: str,
+        *,
+        status: Sequence[m.ItemDecisionValue] | None = None,
+        type: Sequence[m.SuggestionType] | None = None,
+        all: bool | None = None,
+        page_size: int | None = None,
+    ) -> AsyncIterator[m.SchemaSuggestion]:
+        call = ep.list_schema_suggestions(
+            domain, status=status, type=type, all=all, limit=page_size
+        )
+        return self._c.iterate(call)
+
+    async def decide_suggestions(
+        self, domain: str, decisions: Sequence[m.SuggestionDecision | JsonObject]
+    ) -> m.SuggestionsDecided:
+        """Reject, reset or accept suggestions; the accepted ones become one schema change
+        set on a new branch, proposed into the default branch (`proposal`)."""
+        body = m.DecideSuggestions(
+            decisions=[
+                d if isinstance(d, m.SuggestionDecision) else m.SuggestionDecision(**d)
+                for d in decisions
+            ]
+        )
+        return await self._c.send(ep.decide_schema_suggestions(domain, body))
+
 
 class Operations(_Resource):
     async def execute(

@@ -396,6 +396,15 @@ Thresholds and naming rules; a request may override them
 | `keeper.schema_inference.options.id_seed` | `lorebase.infer` | same input and seed: same ids |
 | `keeper.schema_inference.options.id_timestamp_ms` | `0` |  |
 
+### `keeper.schema_suggestions`
+
+GET /domains/{d}/schema/suggestions and :decide; thresholds in schema.suggestions (docs/extraction.md)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.schema_suggestions.branch_prefix` | `schema-suggestions/` | accepted suggestions are applied on &lt;prefix&gt;&lt;id&gt; |
+| `keeper.schema_suggestions.max_decisions` | `100` | suggestions one request may decide |
+
 ### `keeper.operations`
 
 | Setting | Default | Description |
@@ -840,6 +849,29 @@ Budget of one schema expression: compiled at validation, evaluated by the materi
 | `schema.expression_limits.max_string_length` | `65536` |  |
 | `schema.expression_limits.max_record_lookups` | `100` |  |
 | `schema.expression_limits.decimal_precision` | `34` |  |
+
+### `schema.suggestions`
+
+Schema suggestions from extraction (docs/extraction.md)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `schema.suggestions.min_support` | `2` | observations before a pending suggestion is listed |
+| `schema.suggestions.max_suggestions` | `50` | listed at most, the best supported first |
+| `schema.suggestions.max_examples` | `3` | evidence examples kept per suggestion |
+| `schema.suggestions.max_samples` | `20` | distinct sample values kept per suggestion |
+| `schema.suggestions.max_labels` | `5` | labels (as written) kept per suggestion |
+| `schema.suggestions.max_tracked` | `2000` | suggestions kept per Domain; new ones beyond are dropped |
+| `schema.suggestions.name_similarity` | `0.85` | least similarity of a name to an existing element's |
+| `schema.suggestions.synonyms` | `[[supplier, vendor], [contract, agreement], [part, component, item], [plant, site, facility], [purchase_order, order], [customer, client], [quantity, qty]]` | names meaning the same element (snake_case, singular) |
+
+Example:
+
+```yaml
+# type_inference: options of schema inference (as keeper.schema_inference.options) that
+# type new Attributes from their samples; defaults differ in min_support_values: 5,
+# enum_min_values: 5 and propose_max_length: false
+```
 
 ## `read`
 
@@ -1348,6 +1380,23 @@ Confidence given by each technique
 | `scribe.extraction.confidence.cooccurrence_max` | `0.7` | ceiling of Links from co-occurrence in a sentence |
 | `scribe.extraction.confidence.heading` | `0.6` | Links between a heading's Record and those of its section |
 | `scribe.extraction.confidence.tier2` | `0.8` | facts from the chat model with verified evidence |
+
+#### `scribe.extraction.discovery`
+
+Schema suggestions: what the tiers see outside the schema
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.extraction.discovery.enabled` | `true` |  |
+| `scribe.extraction.discovery.rules` | `true` | tier 0: \*\*Label:\*\* fields, table columns, headings with codes |
+| `scribe.extraction.discovery.span_labels` | `[]` | tier 1: extra span labels suggesting Kinds, e.g. [certificate] |
+| `scribe.extraction.discovery.relation_labels` | `[]` | tier 1: extra relation labels suggesting Relations |
+| `scribe.extraction.discovery.tier2` | `true` | tier 2: the model lists `unlisted` facts (verified evidence) |
+| `scribe.extraction.discovery.min_confidence` | `0.3` | weaker observations are dropped |
+| `scribe.extraction.discovery.field_confidence` | `0.6` | a field line or table column |
+| `scribe.extraction.discovery.heading_confidence` | `0.5` | a Kind named by a heading |
+| `scribe.extraction.discovery.max_value_chars` | `120` | sample values are cut to this length |
+| `scribe.extraction.discovery.max_observations_per_job` | `1000` |  |
 
 ### `scribe.embeddings`
 

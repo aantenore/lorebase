@@ -1,9 +1,16 @@
-import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type { PrincipalListParams } from './admin-types';
 import { useConfig } from '@/config/context';
 import type { DocumentDetail, ExtractionItem } from './extraction-types';
 import { useKeeperApi } from './provider';
 import type { SourceRunListParams } from './sources-types';
+import type { DecideSuggestionsInput, SuggestionFilter } from './suggestion-types';
 import type {
   BranchName,
   DomainId,
@@ -73,6 +80,8 @@ export const keys = {
     ['keeper', 'document-text', domain, id, textSha256] as const,
   proposalItems: (domain: DomainId, id: string) =>
     ['keeper', 'proposal-items', domain, id] as const,
+  suggestions: (domain: DomainId, filter?: SuggestionFilter) =>
+    ['keeper', 'suggestions', domain, filter ?? null] as const,
   sourceRuns: (domain: DomainId, params: SourceRunListParams | undefined) =>
     ['keeper', 'source-runs', domain, params ?? null] as const,
   apiKeys: (domain: DomainId) => ['keeper', 'api-keys', domain] as const,
@@ -394,6 +403,41 @@ export function useProposalItems(domain: DomainId, proposal: string, enabled = t
         cursor = page.next_cursor;
       } while (cursor !== null);
       return items;
+    },
+  });
+}
+
+// ------------------------------------------------------------ Schema suggestions
+
+/** Schema suggestions matching `filter`, one page more each time `fetchNextPage` is called. */
+export function useSchemaSuggestions(domain: DomainId, filter: SuggestionFilter) {
+  const api = useKeeperApi();
+  const { pageSize } = useConfig();
+  return useInfiniteQuery({
+    queryKey: keys.suggestions(domain, filter),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.suggestions.list(domain, { ...filter, limit: pageSize, cursor: pageParam }),
+    getNextPageParam: (last) => last.next_cursor,
+  });
+}
+
+/**
+ * Decides suggestions. The accepted ones open a Proposal on a new Branch, so the suggestion
+ * lists, the Proposal lists and the Branches are read again afterwards.
+ */
+export function useDecideSuggestions(domain: DomainId) {
+  const api = useKeeperApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: DecideSuggestionsInput) => api.suggestions.decide(domain, input),
+    meta: { inlineError: true },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['keeper', 'suggestions', domain] }),
+        queryClient.invalidateQueries({ queryKey: ['keeper', 'proposals', domain] }),
+        queryClient.invalidateQueries({ queryKey: keys.branches(domain) }),
+      ]);
     },
   });
 }

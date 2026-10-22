@@ -10,6 +10,11 @@ Every fact must quote its evidence verbatim from the chunk (whitespace-insensiti
 also appear in its quote (dates and numbers compared by value, text case-insensitively). Facts
 that fail are discarded and counted. Answers are cached by model, prompt version, schema hash
 and chunk hash, so a re-run on unchanged input makes no call.
+
+With schema discovery (`scribe.extraction.discovery.tier2`), the answer also lists `unlisted`
+facts the schema has no place for, and records, values and links the model names outside the
+schema are kept as observations besides being discarded; both need verified evidence
+(`discovery`).
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from lorebase_core.infer.suggestions import Observation, SuggestionType
 from lorebase_core.model import Attribute
 from lorebase_core.types import AttributeType, EncodingError, encode_value
 from lorebase_inference.interfaces import ChatModel, ChatOptions, Message, Usage
@@ -50,6 +56,10 @@ SYSTEM_PROMPT = (
     "Write dates as YYYY-MM-DD and numbers without thousands separators. Return an empty list "
     "when the text states nothing that fits."
 )
+DISCOVERY_PROMPT = (
+    " Facts the schema has no place for (another kind of thing, a field or a relationship it "
+    "lacks) go to `unlisted`, each with its verbatim evidence."
+)
 
 
 class AnswerCache(Protocol):
@@ -66,6 +76,7 @@ class Tier2Result:
     usage: Usage = field(default_factory=Usage)
     cached: bool = False
     discarded: dict[str, int] = field(default_factory=dict)
+    observations: list[Observation] = field(default_factory=list)
 
     def discard(self, reason: str) -> None:
         self.discarded[reason] = self.discarded.get(reason, 0) + 1
@@ -78,7 +89,12 @@ def relevant_kinds(ontology: Ontology, hints: Sequence[Resolved]) -> list[str]:
 
 
 def build_messages(
-    ontology: Ontology, kind_ids: Sequence[str], chunk: Chunk, hints: Sequence[Resolved]
+    ontology: Ontology,
+    kind_ids: Sequence[str],
+    chunk: Chunk,
+    hints: Sequence[Resolved],
+    *,
+    discover: bool = False,
 ) -> list[Message]:
     candidates: list[str] = []
     seen: set[tuple[str, str]] = set()
@@ -103,16 +119,24 @@ def build_messages(
         + chunk.text
         + "\n>>>"
     )
-    return [Message("system", SYSTEM_PROMPT), Message("user", user)]
+    system = SYSTEM_PROMPT + (DISCOVERY_PROMPT if discover else "")
+    return [Message("system", system), Message("user", user)]
 
 
 def cache_key(
-    model: str, prompt_version: str, schema_hash: bytes, chunk: Chunk, kinds: Sequence[str]
+    model: str,
+    prompt_version: str,
+    schema_hash: bytes,
+    chunk: Chunk,
+    kinds: Sequence[str],
+    *,
+    discover: bool = False,
 ) -> bytes:
-    payload = json.dumps(
-        [2, model, prompt_version, schema_hash.hex(), chunk.hash.hex(), sorted(kinds)],
-        separators=(",", ":"),
-    )
+    parts: list[Any] = [2, model, prompt_version, schema_hash.hex(), chunk.hash.hex()]
+    parts.append(sorted(kinds))
+    if discover:
+        parts.append("unlisted")
+    payload = json.dumps(parts, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).digest()
 
 
@@ -163,21 +187,27 @@ async def run_tier2(
     model_key: str,
     settings: ExtractionSettings,
     cache: AnswerCache | None,
+    discover: bool = False,
 ) -> Tier2Result:
-    """Candidates from one chunk; offsets of the result are document offsets."""
+    """Candidates from one chunk; offsets of the result are document offsets. With `discover`,
+    observations of facts outside the schema too."""
     result = Tier2Result()
     kinds = relevant_kinds(ontology, hints)
     if not kinds:
         return result
-    schema = fragment_schema(ontology, kinds)
-    key = cache_key(model_key, settings.prompt_version, schema_hash, chunk, kinds)
+    schema = fragment_schema(ontology, kinds, unlisted=discover)
+    key = cache_key(
+        model_key, settings.prompt_version, schema_hash, chunk, kinds, discover=discover
+    )
     stored = await cache.get(key) if cache is not None else None
     if stored is not None:
         data, usage, model = stored
         result.cached = True
     else:
         answer = await chat.complete_json(
-            build_messages(ontology, kinds, chunk, hints), schema, ChatOptions(task=TASK)
+            build_messages(ontology, kinds, chunk, hints, discover=discover),
+            schema,
+            ChatOptions(task=TASK),
         )
         data, usage, model = answer.data, answer.usage, answer.model
         if cache is not None:
@@ -186,13 +216,114 @@ async def run_tier2(
     if not isinstance(data, dict):
         result.discard("invalid_answer")
         return result
-    await _records(
-        data.get("records") or [], ontology, chunk, resolver, document_id, model, settings, result
-    )
-    await _links(
-        data.get("links") or [], ontology, chunk, resolver, document_id, model, settings, result
-    )
+    seen = _Seen(document_id, model, settings.confidence.tier2, discover)
+    await _records(data.get("records") or [], ontology, chunk, resolver, seen, settings, result)
+    await _links(data.get("links") or [], ontology, chunk, resolver, hints, seen, settings, result)
+    if discover:
+        _unlisted(data.get("unlisted") or [], chunk, hints, seen, result)
     return result
+
+
+@dataclass(frozen=True)
+class _Seen:
+    """Where tier 2 facts come from, and whether facts outside the schema are observed."""
+
+    document_id: str
+    model: str
+    confidence: float
+    discover: bool
+
+    def observe(
+        self,
+        result: Tier2Result,
+        type_: SuggestionType,
+        label: Any,
+        evidence: Evidence,
+        *,
+        kind: str | None = None,
+        target: str | None = None,
+        value: Any = None,
+    ) -> None:
+        if not self.discover or not isinstance(label, str) or not label.strip():
+            return
+        result.observations.append(
+            Observation(
+                type=type_,
+                label=label.strip(),
+                document_id=self.document_id,
+                confidence=self.confidence,
+                source=f"model:{self.model}",
+                kind=kind,
+                target=target,
+                value=None if value is None or value == "" else str(value),
+                evidence=evidence.as_dict(),
+            )
+        )
+
+
+def _hinted(hints: Sequence[Resolved], text: Any) -> Resolved | None:
+    """The chunk mention whose key or text is `text` (case-insensitive)."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    folded = text.strip().casefold()
+    for hint in hints:
+        if hint.usable and folded in (str(hint.key).casefold(), hint.mention.text.casefold()):
+            return hint
+    return None
+
+
+def _quoted(value: Any, evidence: Evidence) -> bool:
+    """Whether a text value is written in its evidence."""
+    text = "" if value is None else str(value).strip()
+    return bool(text) and text.casefold() in evidence.quote.casefold()
+
+
+def _unlisted(
+    entries: Sequence[Any],
+    chunk: Chunk,
+    hints: Sequence[Resolved],
+    seen: _Seen,
+    result: Tier2Result,
+) -> None:
+    for entry in entries:
+        if not isinstance(entry, dict):
+            result.discard("invalid_unlisted")
+            continue
+        evidence = _evidence(chunk, seen.document_id, entry.get("evidence"))
+        if evidence is None:
+            result.discard("unverified_evidence")
+            continue
+        type_ = entry.get("type")
+        name, value = entry.get("name"), entry.get("value")
+        if type_ == "kind":
+            seen.observe(result, SuggestionType.KIND, name, evidence, value=value)
+            continue
+        subject = _hinted(hints, entry.get("subject"))
+        if subject is None:
+            result.discard("unresolved_unlisted")
+            continue
+        if type_ == "attribute":
+            if not _quoted(value, evidence):
+                result.discard("ungrounded_value")
+                continue
+            seen.observe(
+                result, SuggestionType.ATTRIBUTE, name, evidence, kind=subject.kind_id, value=value
+            )
+        elif type_ == "relation":
+            target = _hinted(hints, value)
+            if target is None:
+                result.discard("unresolved_unlisted")
+                continue
+            seen.observe(
+                result,
+                SuggestionType.RELATION,
+                name,
+                evidence,
+                kind=subject.kind_id,
+                target=target.kind_id,
+            )
+        else:
+            result.discard("invalid_unlisted")
 
 
 def _evidence(chunk: Chunk, document_id: str, quote: Any) -> Evidence | None:
@@ -246,21 +377,25 @@ async def _records(
     ontology: Ontology,
     chunk: Chunk,
     resolver: Resolver,
-    document_id: str,
-    model: str,
+    seen: _Seen,
     settings: ExtractionSettings,
     result: Tier2Result,
 ) -> None:
+    document_id, model = seen.document_id, seen.model
     by_name = {view.api_name: view for view in ontology.kinds.values()}
     for entry in entries:
         if not isinstance(entry, dict):
             result.discard("invalid_record")
             continue
         view = by_name.get(str(entry.get("kind")))
+        evidence = _evidence(chunk, document_id, entry.get("evidence"))
         if view is None:
             result.discard("unknown_kind")
+            if evidence is not None:
+                seen.observe(
+                    result, SuggestionType.KIND, entry.get("kind"), evidence, value=entry.get("ref")
+                )
             continue
-        evidence = _evidence(chunk, document_id, entry.get("evidence"))
         if evidence is None:
             result.discard("unverified_evidence")
             continue
@@ -282,6 +417,18 @@ async def _records(
             attribute = attributes.get(name)
             if attribute is None or not isinstance(item, dict):
                 result.discard("unknown_attribute")
+                if isinstance(item, dict):
+                    unknown = _evidence(chunk, document_id, item.get("evidence"))
+                    raw = item.get("value")
+                    if unknown is not None and _quoted(raw, unknown):
+                        seen.observe(
+                            result,
+                            SuggestionType.ATTRIBUTE,
+                            name,
+                            unknown,
+                            kind=subject.kind_id,
+                            value=raw,
+                        )
                 continue
             if view.key_attribute is not None and attribute.id == view.key_attribute.id:
                 continue
@@ -314,21 +461,33 @@ async def _links(
     ontology: Ontology,
     chunk: Chunk,
     resolver: Resolver,
-    document_id: str,
-    model: str,
+    hints: Sequence[Resolved],
+    seen: _Seen,
     settings: ExtractionSettings,
     result: Tier2Result,
 ) -> None:
+    document_id, model = seen.document_id, seen.model
     by_name = {r.api_name: r for r in ontology.relations.values()}
     for entry in entries:
         if not isinstance(entry, dict):
             result.discard("invalid_link")
             continue
         relation = by_name.get(str(entry.get("relation")))
+        evidence = _evidence(chunk, document_id, entry.get("evidence"))
         if relation is None:
             result.discard("unknown_relation")
+            source_hint = _hinted(hints, entry.get("from"))
+            target_hint = _hinted(hints, entry.get("to"))
+            if evidence is not None and source_hint is not None and target_hint is not None:
+                seen.observe(
+                    result,
+                    SuggestionType.RELATION,
+                    entry.get("relation"),
+                    evidence,
+                    kind=source_hint.kind_id,
+                    target=target_hint.kind_id,
+                )
             continue
-        evidence = _evidence(chunk, document_id, entry.get("evidence"))
         if evidence is None:
             result.discard("unverified_evidence")
             continue

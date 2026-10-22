@@ -35,6 +35,12 @@ import {
   mapDocumentDetail,
   mapItem,
 } from './live/extraction';
+import {
+  mapSuggestion,
+  mapSuggestionsDecided,
+  suggestionDecideBody,
+  suggestionQuery,
+} from './live/suggestions';
 import { splitRecordRef } from './refs';
 import type { DocumentText, UploadDocumentInput } from './extraction-types';
 import type { SourceRun, SourceRunStatus } from './sources-types';
@@ -529,6 +535,23 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
               postgres: req.postgres,
               ...(req.options === undefined ? {} : { options: req.options }),
             }),
+    },
+
+    suggestions: {
+      list: async (domain, params) => {
+        const page = await get<S['Page_SuggestionOut_']>(`${d(domain)}/schema/suggestions`, {
+          ...suggestionQuery(params),
+          ...pageParams(params),
+        });
+        return { items: page.items.map(mapSuggestion), next_cursor: page.next_cursor ?? null };
+      },
+      decide: async (domain, input) =>
+        mapSuggestionsDecided(
+          await post<S['DecideSuggestionsOut']>(
+            `${d(domain)}/schema/suggestions:decide`,
+            suggestionDecideBody(input),
+          ),
+        ),
     },
 
     sources: {

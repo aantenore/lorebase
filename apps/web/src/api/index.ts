@@ -27,6 +27,7 @@ export * from './admin-types';
 export * from './extraction-types';
 export * from './inference-types';
 export * from './sources-types';
+export * from './suggestion-types';
 
 /**
  * Pick the adapter from configuration: `live` talks to Keeper, `mock` serves sample data.

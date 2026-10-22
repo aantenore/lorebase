@@ -30,6 +30,7 @@ import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
 import { createSourcesMock } from './sources';
+import { createSuggestionsMock } from './suggestions';
 import { evaluateSchemaChanges } from './schema-changes';
 import { buildHrDomain } from './sample/hr';
 import { generatePerfGraph } from './perf-graph';
@@ -77,6 +78,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
   const domains = new Map<DomainId, DomainData>(seed.domains.map((d) => [d.domain.id, d]));
   let proposalCounter = 100;
   let revisionCounter = 0;
+  let suggestionBranches = 0;
 
   const domainOf = (id: DomainId): DomainData => {
     const found = domains.get(id);
@@ -203,13 +205,22 @@ export function createMockApi(options: MockOptions): KeeperApi {
     Object.fromEntries(seed.domains.map((d) => [d.domain.id, d.documents ?? []])),
   );
 
+  // The change set lands on a copy of the default branch, proposed back into it.
+  const suggestions = createSuggestionsMock(async (id, title) => {
+    const target = domainOf(id).domain.default_branch;
+    suggestionBranches += 1;
+    const branch = `schema/suggestions-${suggestionBranches.toString()}`;
+    await mock.branches.create(id, { name: branch, source: target });
+    return mock.proposals.create(id, { title, source_ref: branch, target_ref: target });
+  });
+
   const requireOperation = (data: BranchData, name: string) => {
     const operation = data.schema.operations.find((o) => o.api_name === name);
     if (operation === undefined) throw notFound(`Operation ${name}`);
     return operation;
   };
 
-  return {
+  const mock: KeeperApi = {
     domains: {
       list: () => Promise.resolve(page([...domains.values()].map((d) => d.domain))),
       create: (input) => {
@@ -740,8 +751,10 @@ export function createMockApi(options: MockOptions): KeeperApi {
     documents: documents.api,
     inference: inference.api,
     sources: sources.api,
+    suggestions: suggestions.api,
     admin: admin.api,
   };
+  return mock;
 }
 
 /**

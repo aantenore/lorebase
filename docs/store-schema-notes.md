@@ -43,8 +43,8 @@ difference).
   `proposal_items (domain_id, proposal_id, item_id)`, `merge_attempts (domain_id, id)`,
   `conflicts (domain_id, attempt_id, id)` with `fingerprint` unique per attempt,
   `conflict_resolutions (domain_id, proposal_id, fingerprint)`, `group_members (group_id,
-  principal_id)`, `operation_invocations`, `source_runs`, `documents`, `extraction_jobs`, `vault`
-  on `(domain_id, id)`, `document_chunks (domain_id, document_id, seq)`.
+  principal_id)`, `operation_invocations`, `source_runs`, `documents`, `extraction_jobs`, `vault`,
+  `schema_suggestions` on `(domain_id, id)`, `document_chunks (domain_id, document_id, seq)`.
 - `audit_log.seq`, `outbox.id` and `jobs.id` are `bigint` identities (ordering matters); other ids
   are application-generated prefixed text ids.
 - Timestamps that are hashed or carried by history (`revisions.created_at`, `ref_log.at`,
@@ -594,6 +594,17 @@ stands for, and `fingerprint` is a keyed hash of the value without the Record ke
   reading as erased and a later write of the same value moves to a new token.
 - Row-level security on `domain_id` as for the other Domain tables. The downgrade refuses while
   rows exist.
+
+## Schema suggestions
+
+Revision `0021` (design 9.2 step 10). `schema_suggestions` rows are keyed by `(domain_id, id)`
+and unique by `(domain_id, fingerprint)`, the identity of what is suggested (type, normalized
+singular name, owner and target Kind). `observations` maps a document id to its count and
+summed confidence, so an extraction job replaces the share of the documents it read under
+`SELECT ... FOR UPDATE`; `support` is their sum and is indexed with `status` for the listing.
+`examples`, `samples`, `labels` and `sources` are bounded JSON lists
+(`schema.suggestions`). Inserts race through `ON CONFLICT DO NOTHING` on the fingerprint and
+fold into the winner's row. Row-level security on `domain_id` as for the other Domain tables.
 
 ## Tests
 

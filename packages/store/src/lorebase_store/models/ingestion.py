@@ -1,11 +1,21 @@
-"""Source runs, documents, extraction and the personal data vault (design 7.4, 9, 13.5)."""
+"""Source runs, documents, extraction, schema suggestions and the personal data vault (design
+7.4, 9, 13.5)."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, ForeignKeyConstraint, Index, Integer, LargeBinary, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Float,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    LargeBinary,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -128,6 +138,54 @@ class ExtractionCacheEntry(Base):
     output: Mapped[dict[str, Any]]
     usage: Mapped[dict[str, Any]]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class SchemaSuggestion(Base):
+    """A new Kind, Attribute or Relation that extraction found outside the schema, aggregated
+    over documents by `fingerprint` (`lorebase_core.infer.suggestions`).
+
+    `observations` maps document ids to `{"n": count, "c": summed confidence}`, so extracting a
+    document again replaces its share instead of adding to it; `support` is the sum of the
+    counts. `examples` holds evidence (`document_id`, `chunk`, `start`, `end`, `quote`) and
+    `samples` distinct sample values, both bounded. Accepting a suggestion opens a schema change
+    Proposal (`proposal_id`, `branch`); nothing applies it to a schema by itself.
+    """
+
+    __tablename__ = "schema_suggestions"
+    __table_args__ = (
+        domain_fk(),
+        Index(None, "domain_id", "fingerprint", unique=True),
+        Index(None, "domain_id", "status", "support"),
+        CheckConstraint(
+            "suggestion_type IN ('kind', 'attribute', 'relation')", name="suggestion_type"
+        ),
+        CheckConstraint("status IN ('pending', 'accepted', 'rejected')", name="status"),
+    )
+
+    domain_id: Mapped[DomainKey]
+    id: Mapped[str] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str]
+    suggestion_type: Mapped[str]
+    name: Mapped[str]
+    #: Owner Kind of an Attribute, from Kind of a Relation: a Kind id or `+<KindName>`.
+    kind_ref: Mapped[str | None]
+    #: To Kind of a Relation.
+    target_ref: Mapped[str | None]
+    labels: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    support: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    confidence: Mapped[float] = mapped_column(Float, server_default=text("0"))
+    observations: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    examples: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    samples: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    sources: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    status: Mapped[str] = mapped_column(server_default=text("'pending'"))
+    decided_by: Mapped[str | None]
+    decided_at: Mapped[datetime | None]
+    proposal_id: Mapped[str | None]
+    branch: Mapped[str | None]
+    last_job_id: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
 
 class VaultEntry(Base):

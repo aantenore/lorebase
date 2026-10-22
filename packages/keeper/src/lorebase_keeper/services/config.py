@@ -80,6 +80,21 @@ class SchemaChangeSettings(SectionModel):
     )
 
 
+class SchemaSuggestionSettings(SectionModel):
+    """Review of schema suggestions (design 9.2 step 10). How suggestions are aggregated and
+    listed (support, count, name matching) is set in `schema.suggestions`."""
+
+    branch_prefix: str = Field(
+        default="schema-suggestions/",
+        description="Accepted suggestions are applied as one schema change set on a new "
+        "branch named with this prefix and the first suggestion's id, proposed into the "
+        "default branch.",
+    )
+    max_decisions: int = Field(
+        default=100, ge=1, description="Suggestions one `schema/suggestions:decide` may decide."
+    )
+
+
 class OperationSettings(SectionModel):
     """Operation execution (design 10.1)."""
 

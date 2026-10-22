@@ -76,6 +76,11 @@ from lorebase_store.repositories.revisions import (
 )
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.repositories.source_runs import SourceRunRepository, SourceRunRow
+from lorebase_store.repositories.suggestions import (
+    RecordOutcome,
+    SchemaSuggestionRepository,
+    SuggestionRow,
+)
 
 __all__ = [
     "EVERY_PARTITION",
@@ -118,6 +123,7 @@ __all__ = [
     "ProposalRow",
     "ProvenanceRepository",
     "ProvenanceRow",
+    "RecordOutcome",
     "RecordRow",
     "RecordState",
     "RefLogRow",
@@ -132,8 +138,10 @@ __all__ = [
     "RevisionRepository",
     "RevisionRow",
     "SchemaRow",
+    "SchemaSuggestionRepository",
     "SourceRunRepository",
     "SourceRunRow",
+    "SuggestionRow",
     "advisory_lock_key",
     "copy_fence",
     "scope_to_domain",
