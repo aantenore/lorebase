@@ -18,6 +18,7 @@ from lorebase_core.model.kind import Kind
 from lorebase_core.model.record import Link, Record, record_key
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.model.schema import Schema
+from lorebase_core.model.vault import looks_like_reference, vault_token
 from lorebase_core.types import (
     CastError,
     ConstraintName,
@@ -85,6 +86,16 @@ def check_values(
                 attribute_id,
                 f"{name!r} is derived; derived values are never stored",
             )
+            continue
+        if looks_like_reference(value):
+            # The store mints references and checks they belong to the Record (13.5); the
+            # value behind one was validated when it was written.
+            if not attribute.in_vault or vault_token(value) is None:
+                report(
+                    IssueCode.VALUE_VAULT_REFERENCE,
+                    attribute_id,
+                    f"{name!r} does not take a vault reference",
+                )
             continue
         try:
             canonical = encode_value(attribute.type, value)

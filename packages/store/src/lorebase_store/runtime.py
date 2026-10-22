@@ -16,15 +16,18 @@ from lorebase_store.settings import (
     schema_settings,
     store_settings,
 )
+from lorebase_store.vault.keys import VaultKeys
+from lorebase_store.vault.settings import VaultSettings, vault_settings
 
 
 @dataclass(frozen=True, slots=True)
 class StoreRuntime:
     """Settings and caches shared by the commits and reads of one process.
 
-    `index_maintenance` is true when `database.maintenance_dsn` is set: commits by a role
-    that does not own `mat_records` then queue their per-Attribute index changes for the job
-    worker, which runs them as the maintenance role (`lorebase_store.indexes`).
+    `vault` holds the keys of the personal data vault (`vault` settings), None when it is not
+    configured. `index_maintenance` is true when `database.maintenance_dsn` is set: commits by a
+    role that does not own `mat_records` then queue their per-Attribute index changes for the
+    job worker, which runs them as the maintenance role (`lorebase_store.indexes`).
     """
 
     settings: StoreSettings
@@ -32,6 +35,7 @@ class StoreRuntime:
     schema_cache: SchemaCache
     schema: SchemaSettings = field(default_factory=SchemaSettings)
     index_maintenance: bool = False
+    vault: VaultKeys | None = None
 
     @classmethod
     def from_settings(
@@ -40,6 +44,7 @@ class StoreRuntime:
         schema: SchemaSettings | None = None,
         *,
         database: DatabaseSettings | None = None,
+        vault: VaultSettings | None = None,
     ) -> StoreRuntime:
         return cls(
             settings=settings,
@@ -47,15 +52,18 @@ class StoreRuntime:
             schema_cache=SchemaCache(settings.reads.schema_cache_entries),
             schema=schema or SchemaSettings(),
             index_maintenance=database is not None and database.maintenance_dsn is not None,
+            vault=None if vault is None else VaultKeys.from_settings(vault),
         )
 
     @classmethod
     def from_loaded(cls, settings: Settings) -> StoreRuntime:
-        """Runtime of loaded settings: the `store`, `schema` and `database` sections."""
+        """Runtime of loaded settings: the `store`, `schema`, `database` and `vault`
+        sections."""
         return cls.from_settings(
             store_settings(settings),
             schema_settings(settings),
             database=database_settings(settings),
+            vault=vault_settings(settings),
         )
 
 

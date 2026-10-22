@@ -10,6 +10,8 @@ trigger is audited (`source.sync`).
 counts, Revision, Proposal and error. It needs `data.read` through a Domain-wide grant: run
 stats cover every Kind the Source writes and errors quote row values, so callers whose grants
 are narrowed to a Kind or a branch get 403, as for unknown Domains they may not be told about.
+Errors are shown only to callers cleared Domain-wide for every sensitivity tag (they may
+quote sensitive values of any branch's schema); others get `{"redacted": true}`.
 The trigger needs a Domain-wide `source.sync` grant and answers with the job only, never run
 data.
 """
@@ -23,7 +25,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Source
+from lorebase_core.model import Sensitivity, Source
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, require
 from lorebase_keeper.auth.permissions import Permission
@@ -31,6 +33,7 @@ from lorebase_keeper.context import StoreDep, require_domain
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.points import open_domain, read_guard
+from lorebase_keeper.reading.sensitivity import clearance_of
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import SOURCE_SYNC_JOB, enqueue_job, source_sync_payload
@@ -96,7 +99,10 @@ async def _source(
     return found
 
 
-def _run(row: SourceRunRow) -> SourceRunOut:
+REDACTED_ERROR: dict[str, Any] = {"redacted": True}
+
+
+def _run(row: SourceRunRow, *, errors: bool) -> SourceRunOut:
     return SourceRunOut(
         id=row.id,
         source=row.source_id,
@@ -106,7 +112,7 @@ def _run(row: SourceRunRow) -> SourceRunOut:
         stats=row.stats,
         revision=None if row.revision_id is None else row.revision_id.hex(),
         proposal_id=row.proposal_id,
-        error=row.error,
+        error=row.error if errors or row.error is None else REDACTED_ERROR,
     )
 
 
@@ -164,6 +170,8 @@ async def list_source_runs(
         rows = await SourceRunRepository(session, domain_id).page(
             found.id, limit=params.limit + 1, after=after
         )
+    clearance = await clearance_of(access.authorizer, access.principal, domain_id, None)
+    errors = clearance.covers(Sensitivity, ())
     more = len(rows) > params.limit
     rows = rows[: params.limit]
     last = rows[-1] if rows else None
@@ -172,4 +180,5 @@ async def list_source_runs(
         if more and last is not None and last.started_at is not None
         else None
     )
-    return Page[SourceRunOut](items=[_run(r) for r in rows], next_cursor=next_cursor)
+    items = [_run(r, errors=errors) for r in rows]
+    return Page[SourceRunOut](items=items, next_cursor=next_cursor)

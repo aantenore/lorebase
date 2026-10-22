@@ -41,6 +41,7 @@ from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import tree_unsupported
 from lorebase_keeper.reading.records import fetch_record
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.sensitivity import Masking
 from lorebase_keeper.reading.views import Served
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import metadata
@@ -284,8 +285,10 @@ def _change_out(
     provenance: Mapping[str, ProvenanceOut],
     *,
     values: bool,
+    masking: Masking,
 ) -> RecordChangeOut:
     order = _reading_order(kind)
+    scope = (kind.id,)
     old = bodies.get(change.old_hash, {}) if change.old_hash is not None else {}
     new = bodies.get(change.new_hash, {}) if change.new_hash is not None else {}
     attributes = []
@@ -299,8 +302,8 @@ def _change_out(
         attributes.append(
             AttributeChangeOut(
                 name=attribute.api_name,
-                before=before if values else None,
-                after=after if values else None,
+                before=masking.value(attribute, scope, before) if values else None,
+                after=masking.value(attribute, scope, after) if values else None,
                 provenance=None if provenance_id is None else provenance.get(provenance_id),
             )
         )
@@ -345,7 +348,10 @@ async def _render(
     provenance = await _provenance(
         session, runtime, domain, [p for c in changes for p in c.provenance.values()]
     )
-    return [_change_out(kind, c, bodies, provenance, values=values) for c in changes]
+    return [
+        _change_out(kind, c, bodies, provenance, values=values, masking=point.masking)
+        for c in changes
+    ]
 
 
 # History --------------------------------------------------------------------------------------
@@ -514,7 +520,7 @@ async def record_lineage(
         attributes.append(
             ValueLineageOut(
                 name=attribute.api_name,
-                value=values.get(attribute_id),
+                value=point.masking.value(attribute, (kind.id,), values.get(attribute_id)),
                 provenance=entry,
                 revision=None if setter is None else setter.revision.hex(),
                 revision_at=None if setter is None else setter.at,

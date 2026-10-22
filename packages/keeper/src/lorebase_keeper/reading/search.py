@@ -37,9 +37,11 @@ from sqlalchemy import (
     and_,
     case,
     cast,
+    false,
     func,
     literal,
     not_,
+    null,
     or_,
     over,
     select,
@@ -49,6 +51,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind
+from lorebase_core.model.embedding import TemplateError, kind_template
 from lorebase_core.query import QueryError, Target, condition_kinds, resolve_where
 from lorebase_keeper.reading.compiler import Compiler, json_text
 from lorebase_keeper.reading.points import ReadPoint
@@ -56,6 +59,7 @@ from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupp
 from lorebase_keeper.reading.records import compiler_for
 from lorebase_keeper.reading.requests import SearchMode, SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.sensitivity import Masking, condition_fields, require_comparable
 from lorebase_keeper.reading.views import (
     SearchCorrection,
     SearchHit,
@@ -131,6 +135,8 @@ async def search(
             "dimension_mismatch",
         )
     target = _target(point, request)
+    if mode in ("lexical", "hybrid"):
+        target = _indexed_readable(point, target)
     if not target.kinds:
         return SearchResponse(**served(point), mode=mode, items=[])
     where = None
@@ -144,6 +150,9 @@ async def search(
         except QueryError as error:
             raise query_problem(error, "/body") from None
         point.scope.require(condition_kinds(where))
+        require_comparable(
+            point.schema, point.masking, condition_fields(where, target.kinds), "/body/where"
+        )
 
     compiler = compiler_for(point, runtime)
     corrections: list[Correction] = []
@@ -180,7 +189,9 @@ async def search(
         assert request.query_vector is not None
         lists.append(
             (
-                _semantic(r, base, request.query_vector, runtime),
+                _semantic(
+                    r, [*base, _embedded_readable(r, point, target)], request.query_vector, runtime
+                ),
                 settings.hybrid.semantic_weight,
             )
         )
@@ -191,7 +202,11 @@ async def search(
     if request.q is not None:
         snippet = func.ts_headline(
             compiler.regconfig(),
-            func.concat_ws(" ", final.c.title, *_searchable_text(final, target)),
+            func.concat_ws(
+                " ",
+                _snippet_title(final, target, point.masking),
+                *_searchable_text(final, target, point.masking),
+            ),
             _corrected(compiler, request.q, corrections),
             literal(settings.headline_options),
         )
@@ -219,7 +234,7 @@ async def search(
         SearchHit(
             kind=kind_name(point.schema, row["kind_id"]),
             key=row["key"],
-            title=row["title"],
+            title=point.masking.title(point.schema, row["kind_id"], row["title"]),
             snippet=row["snippet"],
             score=float(row["score"]),
         )
@@ -293,7 +308,11 @@ async def _lexical_page(
         hit = point.layout.records("hit")
         headline = func.ts_headline(
             compiler.regconfig(),
-            func.concat_ws(" ", hit.c.title, *_searchable_text(hit, target)),
+            func.concat_ws(
+                " ",
+                _snippet_title(hit, target, point.masking),
+                *_searchable_text(hit, target, point.masking),
+            ),
             _corrected(compiler, q, corrections),
             literal(settings.headline_options),
         )
@@ -308,7 +327,7 @@ async def _lexical_page(
         SearchHit(
             kind=kind_name(point.schema, h.kind_id),
             key=h.key,
-            title=h.title,
+            title=point.masking.title(point.schema, h.kind_id, h.title),
             snippet=snippets.get((h.kind_id, h.key)),
             score=h.score,
         )
@@ -350,6 +369,44 @@ def _lexical(
         .order_by(not_(flag), score.desc(), r.c.kind_id, r.c.key)
         .limit(settings.candidates)
     )
+
+
+def _indexed_readable(point: ReadPoint, target: Target) -> Target:
+    """The Kinds whose full-text index the caller may search. The index of a branch holds the
+    words of the Attributes its schema leaves untagged; when the default branch tagged one of
+    them after the branch forked (a searchable or title Attribute), its words are still
+    indexed there, so only callers cleared for it search that Kind."""
+    readable = []
+    for kind in target.kinds:
+        stale = [
+            a
+            for a in kind.attributes.values()
+            if (a.searchable or a.id == kind.title_attribute)
+            and not a.is_sensitive
+            and point.masking.hidden(a, (kind.id,))
+        ]
+        if not stale:
+            readable.append(kind)
+    return Target(target.name, tuple(readable), target.trait)
+
+
+def _embedded_readable(r: Any, point: ReadPoint, target: Target) -> ColumnElement[bool]:
+    """Kinds whose vectors embed only values the caller may read: a Kind that embeds a
+    sensitive Attribute (`search.embedding_sensitive`) ranks by it only for cleared callers."""
+    readable = []
+    for kind in target.kinds:
+        try:
+            template = kind_template(kind)
+        except TemplateError:
+            template = None
+        attributes = [] if template is None else template.attributes.values()
+        if not any(
+            point.masking.hidden(kind.attributes[a], (kind.id,))
+            for a in attributes
+            if a in kind.attributes
+        ):
+            readable.append(kind.id)
+    return r.c.kind_id.in_(readable) if readable else false()
 
 
 def _semantic(
@@ -415,8 +472,30 @@ def _fused(lists: list[tuple[Select[Any], float]], runtime: ReadRuntime) -> Any:
     )
 
 
-def _searchable_text(rows: Any, target: Target) -> list[ColumnElement[Any]]:
+def _snippet_title(rows: Any, target: Target, masking: Masking) -> ColumnElement[Any]:
+    """The stored title in snippets, except for Kinds whose title Attribute is sensitive (by
+    the default branch's tags too): a branch forked before the tag may still store it."""
+    hidden = [
+        kind.id
+        for kind in target.kinds
+        if kind.title_attribute in kind.attributes
+        and masking.sensitive(kind.attributes[kind.title_attribute])
+    ]
+    title: ColumnElement[Any] = rows.c.title
+    if not hidden:
+        return title
+    return case((rows.c.kind_id.in_(hidden), null()), else_=title)
+
+
+def _searchable_text(rows: Any, target: Target, masking: Masking) -> list[ColumnElement[Any]]:
+    """Text of the snippets: searchable Attributes that are not sensitive (by the tags of the
+    default branch too)."""
     attributes = sorted(
-        {a.id for kind in target.kinds for a in kind.attributes.values() if a.searchable}
+        {
+            a.id
+            for kind in target.kinds
+            for a in kind.attributes.values()
+            if a.searchable and not masking.sensitive(a)
+        }
     )
     return [json_text(rows.c["values"], attribute) for attribute in attributes]

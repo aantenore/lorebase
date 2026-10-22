@@ -43,6 +43,7 @@ from lorebase_keeper.reading.cursors import invalid_cursor, issue, position_of
 from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import query_problem, tree_unsupported
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.sensitivity import require_comparable_plan
 from lorebase_keeper.reading.tree import TreeReader
 from lorebase_keeper.reading.views import (
     AggregateCount,
@@ -161,7 +162,7 @@ async def get_record(
     if not point.materialized and (links or lineage):
         raise tree_unsupported("The links and lineage summaries")
     fetched = await fetch_record(session, runtime, point, kind, key)
-    record = record_out(point.schema, fetched.row)
+    record = record_out(point.schema, fetched.row, masking=point.masking)
     if links:
         record.links = await link_counts(session, point, kind, fetched.row)
     if lineage:
@@ -279,6 +280,7 @@ def plan_query(query: Query, point: ReadPoint, runtime: ReadRuntime, prefix: str
     except QueryError as error:
         raise query_problem(error, prefix) from None
     point.scope.require(plan_kinds(plan))
+    require_comparable_plan(point.schema, point.masking, plan, prefix)
     return plan
 
 
@@ -326,7 +328,9 @@ async def run_query(
             rows = rows[: plan.limit]
             last = rows[-1]
             next_cursor = issue(shape, [cursor_value(last[f"s{i}"]) for i in range(len(keys))])
-        items = [record_out(point.schema, row, select=plan.select) for row in rows]
+        items = [
+            record_out(point.schema, row, masking=point.masking, select=plan.select) for row in rows
+        ]
         for include in plan.include:
             await _include(session, compiler, point, include, rows, items)
     aggregate = None
@@ -358,7 +362,9 @@ async def _include(
     if near:
         query = compiler.neighbors(hop, near, where=include.where, per_near=include.limit)
         for row in (await session.execute(query)).mappings():
-            found[row["near_key"]].append(record_out(point.schema, row, select=include.select))
+            found[row["near_key"]].append(
+                record_out(point.schema, row, masking=point.masking, select=include.select)
+            )
     for row, item in zip(rows, items, strict=True):
         if row["kind_id"] != hop.near_kind:
             continue
@@ -422,7 +428,10 @@ async def _tree_list(
     bodies = await reader.bodies(e.object_hash for e in page)
     items = [
         record_out(
-            point.schema, tree_record_row(kind, e.key, bodies[e.object_hash]), select=plan.select
+            point.schema,
+            tree_record_row(kind, e.key, bodies[e.object_hash]),
+            masking=point.masking,
+            select=plan.select,
         )
         for e in page
     ]
@@ -452,8 +461,8 @@ def _link_out(
         direction=hop.direction,
         from_key=near if forward else far,
         to_key=far if forward else near,
-        values=link_values(hop.relation, values),
-        target=record_ref(point.schema, hop.far.kind_ids[0], far, title),
+        values=link_values(point.schema, hop.relation, values, point.masking),
+        target=record_ref(point.schema, hop.far.kind_ids[0], far, title, point.masking),
     )
 
 

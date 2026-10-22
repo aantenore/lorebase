@@ -28,6 +28,10 @@ nothing behind.
 
 Revision ids include the Domain id, so a bundle can only be imported under the id it was
 exported with.
+
+Values of vault Attributes travel as the references Record objects hold, never as values: the
+vault is not exported, so after an import they read as unknown (masked), and import refuses a
+Record whose vault Attribute holds anything but a well-formed reference (design 13.5).
 """
 
 from __future__ import annotations
@@ -60,7 +64,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.canonical import ObjectType, from_hex, node_hash
 from lorebase_core.canonical import hex as to_hex
-from lorebase_core.model import dump_schema
+from lorebase_core.model import dump_schema, vault_token
 from lorebase_core.revision import (
     Author,
     Origin,
@@ -966,12 +970,43 @@ async def _prepare_domain(c: _Import) -> None:
     )
 
 
+def _vault_attributes(c: _Import) -> dict[str, set[str]]:
+    """Kind id -> ids of Attributes that are vault Attributes in any schema of the bundle."""
+    found: dict[str, set[str]] = {}
+    for line in c.lines("objects"):
+        if line.get("type") != ObjectType.SCHEMA_KIND.value:
+            continue
+        body = line.get("body") or {}
+        attributes = body.get("attributes") or {}
+        ids = {k for k, a in attributes.items() if isinstance(a, dict) and a.get("vault") is True}
+        if ids:
+            found.setdefault(str(body.get("id")), set()).update(ids)
+    return found
+
+
+def _check_vault_values(line: dict[str, Any], vaulted: dict[str, set[str]]) -> None:
+    """A Record's vault Attributes hold references only: plain values would never be
+    erasable."""
+    body = line.get("body") or {}
+    values = body.get("values") or {}
+    for attribute_id in vaulted.get(str(body.get("kind")), ()):
+        value = values.get(attribute_id)
+        if value is not None and vault_token(value) is None:
+            raise BundleError(
+                f"object {line.get('hash')}: vault attribute {attribute_id} holds a value, "
+                "not a vault reference"
+            )
+
+
 async def _import_objects(c: _Import) -> None:
     store = PgObjectStore(c.session, c.domain_id, writes=c.runtime.settings.writes, batch=c.batch)
+    vaulted = _vault_attributes(c)
     total = 0
     for batch in _batches(c.lines("objects"), c.batch):
         encoded = []
         for line in batch:
+            if vaulted and line.get("type") == ObjectType.RECORD.value:
+                _check_vault_values(line, vaulted)
             try:
                 item = encode_object(ObjectType(line["type"]), line["body"])
             except (ValueError, KeyError, TypeError) as error:

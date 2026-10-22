@@ -85,7 +85,7 @@ async def context_pack(
         point.revision_hex,
         request.url.path,
         (("body", digest),),
-        point.scope.variant,
+        point.variant,
     )
     context = PackContext(point=point, etag=entity_tag(key), since=since, floor=floor)
 
@@ -93,7 +93,12 @@ async def context_pack(
         return await build_pack(session, runtime, context, body, settings.context)
 
     response = await respond_with(
-        request, runtime.cache, key, produce, headers={REVISION_HEADER: point.revision_hex}
+        request,
+        runtime.cache,
+        key,
+        produce,
+        headers={REVISION_HEADER: point.revision_hex},
+        disclose=point.disclosure(session, runtime).send,
     )
     await charge_context_tokens(
         request, access.principal, response, settings.context.chars_per_token
@@ -141,7 +146,8 @@ async def explain(
     return await respond_with(
         request,
         runtime.cache,
-        cache_key(request, point.domain.id, point.revision_hex, point.scope.variant),
+        cache_key(request, point.domain.id, point.revision_hex, point.variant),
         produce,
         headers={REVISION_HEADER: point.revision_hex},
+        disclose=point.disclosure(session, runtime).send,
     )

@@ -117,6 +117,7 @@ function attribute(raw: Raw, names: Names): Attribute {
     searchable: searchable ? (str(raw['search_weight'], 'D') as SearchWeight) : null,
     derivation_id: strOrNull(raw['derivation_id']),
     authority: strOrNull(raw['authority']),
+    ...(raw['vault'] === true ? { vault: true } : {}),
   };
 }
 

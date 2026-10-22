@@ -17,11 +17,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.query import Query as DslQuery
 from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.reading import graph, record_history, records, search
-from lorebase_keeper.reading.caching import CACHE_CONTROL, respond
+from lorebase_keeper.reading.caching import CACHE_CONTROL, JSON, respond
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import (
     REVISION_HEADER,
@@ -82,14 +83,14 @@ _NOT_MODIFIED: dict[int | str, dict[str, Any]] = {
 
 def _mark(response: Response, point: ReadPoint, body: BaseModel) -> None:
     """Headers of a POST read: Revision, and an ETag of the Revision and the request body."""
-    digest = fingerprint(body.model_dump(mode="json"), point.scope.variant)
+    digest = fingerprint(body.model_dump(mode="json"), point.variant)
     response.headers[REVISION_HEADER] = point.revision_hex
     response.headers["ETag"] = f'"{point.revision_hex}.{digest}"'
     response.headers["Cache-Control"] = CACHE_CONTROL
 
 
 async def _answer(
-    request: Request, runtime: ReadRuntime, point: ReadPoint, produce: Any
+    request: Request, runtime: ReadRuntime, point: ReadPoint, produce: Any, session: AsyncSession
 ) -> Response:
     return await respond(
         request,
@@ -99,8 +100,20 @@ async def _answer(
         produce=produce,
         time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
-        variant=point.scope.variant,
+        variant=point.variant,
+        disclose=point.disclosure(session, runtime).send,
     )
+
+
+async def _sent(
+    session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, body: BaseModel, out: BaseModel
+) -> Response:
+    """A POST read's response: `out` with its vault references resolved, and the headers of
+    `_mark`."""
+    content = await point.disclosure(session, runtime).model(out)
+    response = Response(content, media_type=JSON)
+    _mark(response, point, body)
+    return response
 
 
 def _limit(runtime: ReadRuntime, limit: int | None) -> int:
@@ -144,7 +157,9 @@ async def list_records(
     cursor: Cursor = None,
 ) -> Response:
     """Records of a Kind filtered with the DSL, ordered and paginated by keyset."""
-    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+    if at is None and (
+        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    ):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     records.require_kind(point, kind)
@@ -174,7 +189,7 @@ async def list_records(
         )
         return RecordPage(**served(point), items=page.items, next_cursor=page.next_cursor)
 
-    return await _answer(request, runtime, point, produce)
+    return await _answer(request, runtime, point, produce, session)
 
 
 @router.get(
@@ -198,7 +213,9 @@ async def list_record_links(
     cursor: Cursor = None,
 ) -> Response:
     """Links of the Record along `relation`, a forward or inverse api name, by far key."""
-    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+    if at is None and (
+        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    ):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
@@ -218,7 +235,7 @@ async def list_record_links(
         )
         return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
 
-    return await _answer(request, runtime, point, produce)
+    return await _answer(request, runtime, point, produce, session)
 
 
 @router.get(
@@ -241,7 +258,9 @@ async def get_record(
     lineage: Annotated[bool, Query(description="Add the provenance of each value.")] = False,
 ) -> Response:
     """One Record, optionally with its Link counts and the lineage of its values."""
-    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+    if at is None and (
+        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    ):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
@@ -252,7 +271,7 @@ async def get_record(
         )
         return RecordResponse(**served(point), record=record)
 
-    return await _answer(request, runtime, point, produce)
+    return await _answer(request, runtime, point, produce, session)
 
 
 @router.get(
@@ -278,7 +297,7 @@ async def get_record_history(
 ) -> Response:
     """Revisions that changed the Record on the branch, newest first, with the Attributes each
     changed and their provenance. Served at the branch head from the branch history."""
-    if unchanged := await unchanged_head(session, access, request, branch=branch):
+    if unchanged := await unchanged_head(session, runtime, access, request, branch=branch):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=None)
     found = records.require_kind(point, kind)
@@ -300,7 +319,7 @@ async def get_record_history(
             shape=fingerprint("record-history", kind, key, values),
         )
 
-    return await _answer(request, runtime, point, produce)
+    return await _answer(request, runtime, point, produce, session)
 
 
 @router.get(
@@ -321,7 +340,7 @@ async def get_record_lineage(
 ) -> Response:
     """Where each current value of the Record came from: provenance, Revision, Source,
     Operation, extraction evidence and Proposal. Served at the branch head."""
-    if unchanged := await unchanged_head(session, access, request, branch=branch):
+    if unchanged := await unchanged_head(session, runtime, access, request, branch=branch):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=None)
     found = records.require_kind(point, kind)
@@ -336,7 +355,7 @@ async def get_record_lineage(
             max_changes=runtime.read.history.lineage_max_changes,
         )
 
-    return await _answer(request, runtime, point, produce)
+    return await _answer(request, runtime, point, produce, session)
 
 
 @router.get(
@@ -360,7 +379,9 @@ async def list_relation_links(
     cursor: Cursor = None,
 ) -> Response:
     """Links of a Relation (either api name) ordered by `(from_key, to_key)`."""
-    if at is None and (unchanged := await unchanged_head(session, access, request, branch=branch)):
+    if at is None and (
+        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    ):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     effective = _limit(runtime, limit)
@@ -379,21 +400,25 @@ async def list_relation_links(
         )
         return LinkPage(**served(point), items=page.items, next_cursor=page.next_cursor)
 
-    return await _answer(request, runtime, point, produce)
+    return await _answer(request, runtime, point, produce, session)
 
 
 # Query, traversal, search ---------------------------------------------------------------
 
 
-@router.post(f"{BASE}/query", summary="Query Records with the DSL", responses=_ERRORS)
+@router.post(
+    f"{BASE}/query",
+    summary="Query Records with the DSL",
+    responses=_ERRORS,
+    response_model=QueryResponse,
+)
 async def query_records(
     domain_id: str,
     body: QueryRequest,
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
-) -> QueryResponse:
+) -> Response:
     """Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     query = DslQuery.model_validate(body.model_dump(by_alias=True, exclude={"branch", "at"}))
@@ -401,55 +426,61 @@ async def query_records(
     page = await records.run_query(
         session, runtime, point, plan, shape=_shape(query), cursor_pointer="/body/cursor"
     )
-    _mark(response, point, body)
-    return QueryResponse(
+    out = QueryResponse(
         **served(point), items=page.items, next_cursor=page.next_cursor, aggregate=page.aggregate
     )
+    return await _sent(session, runtime, point, body, out)
 
 
-@router.post(f"{BASE}/traverse", summary="Traverse Relations from a Record", responses=_ERRORS)
+@router.post(
+    f"{BASE}/traverse",
+    summary="Traverse Relations from a Record",
+    responses=_ERRORS,
+    response_model=TraverseResponse,
+)
 async def traverse(
     domain_id: str,
     body: TraverseRequest,
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
-) -> TraverseResponse:
+) -> Response:
     """Follow a path of Relations, with a filter and a cap per hop (design 8.3)."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await graph.traverse(session, runtime, point, body)
-    _mark(response, point, body)
-    return result
+    return await _sent(session, runtime, point, body, result)
 
 
-@router.post(f"{BASE}/neighborhood", summary="Neighborhood of seed Records", responses=_ERRORS)
+@router.post(
+    f"{BASE}/neighborhood",
+    summary="Neighborhood of seed Records",
+    responses=_ERRORS,
+    response_model=NeighborhoodResponse,
+)
 async def neighborhood(
     domain_id: str,
     body: NeighborhoodRequest,
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
-) -> NeighborhoodResponse:
+) -> Response:
     """Breadth-first expansion from seed Records within depth, node and edge caps."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await graph.neighborhood(session, runtime, point, body)
-    _mark(response, point, body)
-    return result
+    return await _sent(session, runtime, point, body, result)
 
 
-@router.post(f"{BASE}/search", summary="Search Records", responses=_ERRORS)
+@router.post(
+    f"{BASE}/search", summary="Search Records", responses=_ERRORS, response_model=SearchResponse
+)
 async def search_records(
     domain_id: str,
     body: SearchRequest,
     access: DataRead,
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
-    response: Response,
-) -> SearchResponse:
+) -> Response:
     """Lexical, semantic (caller-supplied vector) or hybrid search (design 8.4)."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
     result = await search.search(session, runtime, point, body)
-    _mark(response, point, body)
-    return result
+    return await _sent(session, runtime, point, body, result)

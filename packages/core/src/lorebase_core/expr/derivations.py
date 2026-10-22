@@ -256,3 +256,51 @@ def derivation_inputs(
     if definition.filter is not None:
         inputs.update(_record_inputs(schema, far_id, definition.filter, limits))
     return frozenset(inputs)
+
+
+def _expression_reads(
+    schema: Schema, kind_id: str, source: str, limits: ExprLimits
+) -> set[tuple[str, str]]:
+    """`(Kind id, Attribute id)` of every Attribute an expression over a Record of `kind_id`
+    may read: its own Attributes named in it and those of Records one hop away (through a
+    ``links.<relation>`` field) whose name appears in it. A superset, never fewer."""
+    try:
+        names = _names(parse(source, limits))
+    except ExprError:
+        return set()  # reported by expression validation
+    words = names.idents | names.fields
+    reads: set[tuple[str, str]] = set()
+    kind = schema.kinds.get(kind_id)
+    if kind is not None:
+        reads.update((kind_id, a.id) for a in kind.attributes.values() if a.api_name in words)
+    available = link_fields(schema, kind_id)
+    for name in names.links:
+        field = available.get(name)
+        far_id = None if field is None else field.relation.far_endpoint(field.direction)
+        far = None if far_id is None else schema.kinds.get(far_id)
+        if far is not None:
+            reads.update((far.id, a.id) for a in far.attributes.values() if a.api_name in words)
+    return reads
+
+
+def derivation_reads(
+    schema: Schema, derivation: Derivation, limits: ExprLimits | None = None
+) -> frozenset[tuple[str, str]]:
+    """`(Kind id, Attribute id)` of every Attribute, stored or derived, a Derivation may read
+    (a superset): what its value can tell, for sensitivity (`schema.sensitivity_inherited`)."""
+    limits = limits or ExprLimits()
+    definition = derivation.definition
+    if isinstance(definition, ExpressionDerivation):
+        return frozenset(_expression_reads(schema, definition.kind, definition.expression, limits))
+    if not isinstance(definition, AggregateDerivation):
+        return frozenset()
+    relation = schema.relations.get(definition.relation)
+    if relation is None:
+        return frozenset()
+    far_id = relation.far_endpoint(definition.direction)
+    reads: set[tuple[str, str]] = set()
+    if definition.source_attribute is not None:
+        reads.add((far_id, definition.source_attribute))
+    if definition.filter is not None:
+        reads.update(_expression_reads(schema, far_id, definition.filter, limits))
+    return frozenset(reads)

@@ -51,7 +51,7 @@ from lorebase_keeper.reading.records import plan_query, require_kind, run_query
 from lorebase_keeper.reading.requests import SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.search import search
-from lorebase_keeper.reading.views import RecordOut, link_values, named_values, record_out
+from lorebase_keeper.reading.views import RecordOut, link_values, record_out
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY, PartitionType, parse_partition
 from lorebase_store.reads import Direction
 from lorebase_store.repositories import ProvenanceRepository
@@ -233,7 +233,9 @@ async def surroundings(
                 relation.api_name,
                 source,
                 target,
-                ordered_values(relation, link_values(relation, link.values)),
+                ordered_values(
+                    relation, link_values(point.schema, relation, link.values, point.masking)
+                ),
             ),
         )
     seed_refs = [ref_of(s.kind, s.key) for s in seeds]
@@ -251,9 +253,9 @@ async def surroundings(
             NeighborItem(
                 ref=ref,
                 kind=kind.api_name,
-                title=record.title,
+                title=point.masking.title(schema, record.kind_id, record.title),
                 depth=depths.get(ref, depth),
-                values=ordered_values(kind, named_values(kind.attributes, record.values)),
+                values=ordered_values(kind, point.masking.kind_values(kind, record.values)),
             )
         )
     neighbors.sort(key=lambda n: (n.depth, n.kind, n.ref))
@@ -440,7 +442,7 @@ async def build_pack(
     bounds = effective(request, settings, runtime)
     addresses = await seed_addresses(session, runtime, point, request, settings)
     rows = await fetch_rows(session, point, addresses)
-    seeds = [record_out(point.schema, row) for row in rows]
+    seeds = [record_out(point.schema, row, masking=point.masking) for row in rows]
     around = await surroundings(session, runtime, point, seeds, request, settings, bounds.depth)
     changes = None
     if request.include_recent_changes:

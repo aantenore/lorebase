@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Schema
 from lorebase_core.tree import kind_partition, relation_partition
@@ -53,6 +54,12 @@ from lorebase_keeper.reading.runtime import (
     ReadRuntimeDep,
     ReadSessionDep,
     begin_read,
+)
+from lorebase_keeper.reading.sensitivity import (
+    Disclosure,
+    Masking,
+    default_schema,
+    masking_for,
 )
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.repositories import ChangesetRepository, RevisionRepository, RevisionRow
@@ -232,6 +239,12 @@ async def revision_changeset(
     """The stored changeset (design 6.3), with provenance per changed Attribute."""
     domain = await open_domain(session, access)
     found = await open_revision(session, access, domain, revision)
+    parent = await _first_parent(session, domain_id, found)
+    new_schema = await schema_at(session, runtime, domain_id, found)
+    old_schema = (
+        new_schema if parent is None else await schema_at(session, runtime, domain_id, parent)
+    )
+    masking = (await _masking(session, access, runtime, domain.id)).over(new_schema, old_schema)
 
     async def produce() -> ChangesPage:
         entries = await ChangesetRepository(
@@ -241,11 +254,6 @@ async def revision_changeset(
             HashChange(e.partition, e.key, e.old_hash, e.new_hash, dict(e.provenance) or None)
             for e in entries
         ]
-        parent = await _first_parent(session, domain_id, found)
-        new_schema = await schema_at(session, runtime, domain_id, found)
-        old_schema = (
-            new_schema if parent is None else await schema_at(session, runtime, domain_id, parent)
-        )
         page = await _page(
             session,
             runtime,
@@ -253,6 +261,7 @@ async def revision_changeset(
             changes,
             old_schema,
             new_schema,
+            masking,
             limit=limit,
             cursor=cursor,
             shape=fingerprint("changeset", found.id.hex()),
@@ -263,7 +272,10 @@ async def revision_changeset(
             **page,
         )
 
-    return await _answer(request, runtime, domain.id, found.id.hex(), produce)
+    disclosure = Disclosure(session, domain.id, (new_schema, old_schema), masking, runtime.vault)
+    return await _answer(
+        request, runtime, domain.id, found.id.hex(), produce, masking=masking, disclosure=disclosure
+    )
 
 
 @router.get(
@@ -298,26 +310,27 @@ async def diff(
     domain = await open_domain(session, access)
     old = await open_revision(session, access, domain, from_)
     new = await open_revision(session, access, domain, to)
+    old_schema = await schema_at(session, runtime, domain_id, old)
+    new_schema = await schema_at(session, runtime, domain_id, new)
+    masking = (await _masking(session, access, runtime, domain.id)).over(new_schema, old_schema)
 
-    async def changes_between() -> tuple[list[HashChange], Schema, Schema, set[str] | None]:
-        old_schema = await schema_at(session, runtime, domain_id, old)
-        new_schema = await schema_at(session, runtime, domain_id, new)
+    async def changes_between() -> tuple[list[HashChange], set[str] | None]:
         partitions = _partitions((new_schema, old_schema), _names(kinds), _names(relations), schema)
         entries = await compute_diff(
             session, runtime, domain_id, old.root, new.root, partitions=partitions
         )
-        return [as_hash_change(e) for e in entries], old_schema, new_schema, partitions
+        return [as_hash_change(e) for e in entries], partitions
 
     if format == "ndjson":
-        changes, old_schema, new_schema, _ = await changes_between()
+        changes, _ = await changes_between()
         return StreamingResponse(
-            _stream(runtime, domain_id, changes, old_schema, new_schema, old, new),
+            _stream(runtime, domain_id, changes, old_schema, new_schema, masking, old, new),
             media_type=NDJSON,
             headers={REVISION_HEADER: new.id.hex()},
         )
 
     async def produce() -> ChangesPage:
-        changes, old_schema, new_schema, partitions = await changes_between()
+        changes, partitions = await changes_between()
         page = await _page(
             session,
             runtime,
@@ -325,6 +338,7 @@ async def diff(
             changes,
             old_schema,
             new_schema,
+            masking,
             limit=limit,
             cursor=cursor,
             shape=fingerprint("diff", old.id.hex(), new.id.hex(), sorted(partitions or [])),
@@ -338,6 +352,19 @@ async def diff(
         f"{old.id.hex()}..{new.id.hex()}",
         produce,
         headers={REVISION_HEADER: new.id.hex()},
+        masking=masking,
+        disclosure=Disclosure(session, domain.id, (new_schema, old_schema), masking, runtime.vault),
+    )
+
+
+async def _masking(
+    session: AsyncSession, access: ReadGuard, runtime: ReadRuntime, domain_id: str
+) -> Masking:
+    """Masking of history reads, which are not tied to one branch: Domain-wide and
+    Kind-narrowed clearances count."""
+    reference = await default_schema(session, domain_id, runtime.store)
+    return await masking_for(
+        access.authorizer, access.principal, domain_id, reference, runtime.sensitivity
     )
 
 
@@ -349,6 +376,8 @@ async def _answer(
     produce: Any,
     *,
     headers: dict[str, str] | None = None,
+    masking: Masking | None = None,
+    disclosure: Disclosure | None = None,
 ) -> Response:
     return await respond(
         request,
@@ -357,6 +386,8 @@ async def _answer(
         revision=revision,
         produce=produce,
         headers=headers or {REVISION_HEADER: revision},
+        variant="" if masking is None else masking.variant,
+        disclose=None if disclosure is None else disclosure.send,
     )
 
 
@@ -413,6 +444,7 @@ async def _page(
     changes: list[HashChange],
     old_schema: Schema,
     new_schema: Schema,
+    masking: Masking,
     *,
     limit: int | None,
     cursor: str | None,
@@ -428,7 +460,13 @@ async def _page(
         start = position[0]
     window = changes[start : start + effective]
     items = await expand(
-        session, runtime, domain_id, window, old_schema=old_schema, new_schema=new_schema
+        session,
+        runtime,
+        domain_id,
+        window,
+        old_schema=old_schema,
+        new_schema=new_schema,
+        masking=masking,
     )
     end = start + len(window)
     return {
@@ -445,6 +483,7 @@ async def _stream(
     changes: list[HashChange],
     old_schema: Schema,
     new_schema: Schema,
+    masking: Masking,
     old: RevisionRow,
     new: RevisionRow,
 ) -> AsyncIterator[bytes]:
@@ -471,6 +510,7 @@ async def _stream(
                 changes[start : start + batch],
                 old_schema=old_schema,
                 new_schema=new_schema,
+                masking=masking,
             )
             lines = (
                 json.dumps({"type": "change", **item.model_dump(mode="json", exclude_none=True)})

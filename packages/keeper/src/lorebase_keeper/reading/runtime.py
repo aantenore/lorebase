@@ -26,10 +26,11 @@ from lorebase_keeper.reading.settings import (
     read_settings,
     search_settings,
 )
-from lorebase_keeper.settings import keeper_settings
+from lorebase_keeper.settings import SensitivitySettings, keeper_settings
 from lorebase_platform.settings import Settings
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
+from lorebase_store.vault import VaultKeys
 
 _STATE_KEY = "read_runtime"
 
@@ -67,6 +68,7 @@ class ReadRuntime:
     search: SearchSettings
     store: StoreRuntime
     cache: ResponseCache | None = None
+    sensitivity: SensitivitySettings = field(default_factory=SensitivitySettings)
     schemas: SchemaCache = field(init=False)
 
     def __post_init__(self) -> None:
@@ -76,14 +78,21 @@ class ReadRuntime:
     def store_settings(self) -> StoreSettings:
         return self.store.settings
 
+    @property
+    def vault(self) -> VaultKeys | None:
+        """Keys of the personal data vault; None when it is not configured."""
+        return self.store.vault
+
     @classmethod
     def build(cls, settings: Settings, sessions: async_sessionmaker[AsyncSession]) -> ReadRuntime:
+        reads = keeper_settings(settings).reads
         return cls(
             sessions=sessions,
             read=read_settings(settings),
             search=search_settings(settings),
             store=StoreRuntime.from_loaded(settings),
-            cache=build_cache(keeper_settings(settings).reads.cache),
+            cache=build_cache(reads.cache),
+            sensitivity=reads.sensitivity,
         )
 
 

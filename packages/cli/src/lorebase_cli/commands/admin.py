@@ -1,16 +1,21 @@
-"""`apikey create|list|revoke`: API keys of a Domain."""
+"""`apikey create|list|revoke`: API keys of a Domain; `admin erase`: erasure of personal data."""
 
 from __future__ import annotations
 
+import json
+import sys
 from typing import Annotated
 
 import typer
+from pydantic import JsonValue
 
 from lorebase_cli.context import app_of
+from lorebase_cli.failures import CliError
 from lorebase_cli.options import AllOpt, DomainOpt, JsonOpt, LimitOpt
 from lorebase_cli.output import Column
 
 apikey_app = typer.Typer(help="Manage the API keys of a Domain.", no_args_is_help=True)
+admin_app = typer.Typer(help="Administer the personal data of a Domain.", no_args_is_help=True)
 
 KEY_COLUMNS = [
     Column("id", "id"),
@@ -109,3 +114,78 @@ def apikey_revoke(
     app = app_of(ctx, json_out)
     app.client().api_keys.revoke(app.domain(domain), key_id)
     app.out.emit({"revoked": key_id}, lambda: app.out.info(f"revoked key {key_id}"))
+
+
+@admin_app.command("erase")
+def admin_erase(
+    ctx: typer.Context,
+    kind: Annotated[str, typer.Argument(help="Kind api name.", metavar="KIND")],
+    key: Annotated[
+        str | None, typer.Option("--key", help="Erase the values of the Record with this key.")
+    ] = None,
+    attribute: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--attribute",
+            help="Vault Attribute (api name). With --key: limit to it (repeatable); with "
+            "--value: the Attribute whose value is erased in every Record.",
+        ),
+    ] = None,
+    value: Annotated[
+        str | None,
+        typer.Option(
+            "--value",
+            help="Value to erase (JSON, or plain text when it is not valid JSON); - reads it "
+            "from standard input, which keeps it out of the shell history.",
+        ),
+    ] = None,
+    branch: Annotated[
+        str | None, typer.Option("--branch", help="Branch whose schema names the Kind.")
+    ] = None,
+    domain: DomainOpt = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    json_out: JsonOpt = False,
+) -> None:
+    """Erase personal data from the vault, on every branch and Revision. This cannot be undone.
+
+    `--key K` erases what the Record ever held in its vault Attributes; `--attribute A --value
+    V` erases V of A in every Record of the Kind. History keeps its shape: reads show the
+    values as erased.
+    """
+    app = app_of(ctx, json_out)
+    if (key is None) == (value is None):
+        raise CliError("give --key, or --attribute and --value")
+    attributes = attribute or []
+    if value is not None and len(attributes) != 1:
+        raise CliError("erasure by --value takes exactly one --attribute")
+    target = f"{kind}/{key}" if key is not None else f"a value of {kind}.{attributes[0]}"
+    if not yes:
+        if not sys.stdin.isatty():
+            raise CliError("erasure is irreversible: pass --yes to confirm")
+        typer.confirm(f"Erase {target} from the vault for good?", abort=True)
+    vault = app.client().vault
+    if key is not None:
+        result = vault.erase_record(
+            app.domain(domain), kind, key, attributes=attributes or None, branch=branch
+        )
+    else:
+        result = vault.erase_value(
+            app.domain(domain),
+            kind,
+            attributes[0],
+            _parsed(_value_text(value or "")),
+            branch=branch,
+        )
+    app.out.emit(result, lambda: app.out.info(f"erased {result.erased} vault value(s)"))
+
+
+def _value_text(value: str) -> str:
+    return sys.stdin.read().rstrip("\n") if value == "-" else value
+
+
+def _parsed(text: str) -> JsonValue:
+    try:
+        parsed: JsonValue = json.loads(text)
+    except ValueError:
+        return text
+    return parsed

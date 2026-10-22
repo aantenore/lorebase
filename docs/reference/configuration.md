@@ -171,6 +171,16 @@ In-process cache of GET read responses, keyed by Revision:
 | `keeper.reads.cache.max_body_bytes` | `1048576` | larger responses are not cached |
 | `keeper.reads.cache.time_travel_max_entries` | `128` | entries for reads at another Revision; 0 never caches them |
 
+#### `keeper.reads.sensitivity`
+
+Values of pii / confidential / restricted Attributes, shown only with pii.read / confidential.read / restricted.read
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.reads.sensitivity.omit` | `false` | true: leave masked values out of Records |
+| `keeper.reads.sensitivity.masked_value` | `"***"` | what masked values read as |
+| `keeper.reads.sensitivity.erased_value` | `"[erased]"` | what erased vault values read as (cleared callers) |
+
 ### `keeper.reads` (continued)
 
 | Setting | Default | Description |
@@ -1044,6 +1054,17 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 | `webhooks.pass_timeout_s` | `60.0` | no attempt starts after this; the rest go to the next pass |
 | `webhooks.changed_keys_max` | `100` | changed Record keys listed per event payload |
 | `webhooks.retention_s` | `604800.0` | finished deliveries and handed-off events kept (7 days) |
+
+## `vault`
+
+Personal data vault (design 13.5; docs/security.md): values of `pii` Attributes with `vault: true` are stored encrypted here, Records hold tokens, and `lorebase admin erase` erases them on every Revision. Keeper, Scribe and every committing process need the same keys.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `vault.token_key` | `null` | secret://... (32+ characters) keying tokens and value fingerprints; never change it once values are stored |
+| `vault.encryption_key` | `null` | secret://... (32+ characters) encrypting new values |
+| `vault.key_id` | `"1"` | id stored with values sealed under encryption_key |
+| `vault.previous_keys` | `{}` | earlier encryption keys by id, still opened |
 
 ## `herald`
 

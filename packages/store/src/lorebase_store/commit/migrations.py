@@ -107,8 +107,10 @@ def plan_migrations(
     skip: Iterable[RecordIdentity | LinkIdentity] = (),
     actor: str,
     at: datetime,
+    sensitive: Callable[[Attribute], bool] = lambda a: a.is_sensitive,
 ) -> MigrationPlan:
-    """Data changes that carry existing values from `old` to `new`."""
+    """Data changes that carry existing values from `old` to `new`. Issues never quote
+    values of `sensitive` Attributes (by default, those with tags in the schemas)."""
     plan = MigrationPlan()
     attribution = _Attribution(actor, at)
     skipped = set(skip)
@@ -126,6 +128,7 @@ def plan_migrations(
         if old_kind == new_kind:
             continue
         plan.refresh_kinds.append(kind_id)
+        plan.issues.extend(_vault_changes(kind_id, old_kind.attributes, new_kind.attributes))
         unique = [
             a
             for a in new_kind.attributes.values()
@@ -136,7 +139,7 @@ def plan_migrations(
             if record.identity in skipped:
                 continue
             values, provenance, issues = _migrate_values(
-                old_kind.attributes, new_kind.attributes, record.values, attribution
+                old_kind.attributes, new_kind.attributes, record.values, attribution, sensitive
             )
             for issue in issues:
                 plan.issues.append(
@@ -160,7 +163,7 @@ def plan_migrations(
                 value = migrated.values.get(attribute.id)
                 if value is not None:
                     holders[(attribute.id, _value_text(value))].append(record.key)
-        plan.issues.extend(_duplicates(kind_id, unique, holders))
+        plan.issues.extend(_duplicates(kind_id, unique, holders, sensitive))
     for relation_id in sorted(old.relations.keys() & new.relations.keys()):
         old_relation, new_relation = old.relations[relation_id], new.relations[relation_id]
         if old_relation.attributes == new_relation.attributes:
@@ -169,7 +172,11 @@ def plan_migrations(
             if link.identity in skipped:
                 continue
             values, provenance, issues = _migrate_values(
-                old_relation.attributes, new_relation.attributes, link.values, attribution
+                old_relation.attributes,
+                new_relation.attributes,
+                link.values,
+                attribution,
+                sensitive,
             )
             plan.issues.extend(
                 issue.model_copy(
@@ -204,6 +211,7 @@ def _migrate_values(
     new_attributes: Mapping[str, Attribute],
     values: Mapping[str, JsonValue],
     attribution: _Attribution,
+    is_sensitive: Callable[[Attribute], bool],
 ) -> tuple[dict[str, JsonValue], dict[str, str], list[Issue]]:
     migrated: dict[str, JsonValue] = {}
     provenance: dict[str, str] = {}
@@ -222,22 +230,27 @@ def _migrate_values(
         try:
             converted: Any = cast(before.type, attribute.type, value)
         except CastError as error:
+            # Sensitive values are not quoted: the caller may lack the clearance to read them.
+            sensitive = is_sensitive(before) or is_sensitive(attribute)
+            details: dict[str, JsonValue] = {
+                "class": TYPE_COERCION_CLASS,
+                "from_type": before.type.describe(),
+                "to_type": attribute.type.describe(),
+            }
+            if not sensitive:
+                details["value"] = value
+            shown = "a value" if sensitive else f"value {value!r}"
             issues.append(
                 Issue(
                     code=IssueCode.VALUE_TYPE,
                     path=("values", attribute_id),
                     message=(
-                        f"{attribute.api_name!r} value {value!r} cannot be cast from "
-                        f"{before.type.describe()} to {attribute.type.describe()}: "
-                        f"{error.message}"
+                        f"{attribute.api_name!r} {shown} cannot be cast from "
+                        f"{before.type.describe()} to {attribute.type.describe()}"
+                        + ("" if sensitive else f": {error.message}")
                     ),
                     attribute=attribute_id,
-                    details={
-                        "class": TYPE_COERCION_CLASS,
-                        "from_type": before.type.describe(),
-                        "to_type": attribute.type.describe(),
-                        "value": value,
-                    },
+                    details=details,
                 )
             )
             migrated[attribute_id] = value
@@ -260,10 +273,42 @@ def _value_text(value: JsonValue) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _vault_changes(
+    kind_id: str, old: Mapping[str, Attribute], new: Mapping[str, Attribute]
+) -> list[Issue]:
+    """Vault storage is chosen when an Attribute is created: turning it on or off, or
+    retyping a vault Attribute, would leave Revisions holding values the other way."""
+    issues: list[Issue] = []
+    for attribute_id, attribute in new.items():
+        before = old.get(attribute_id)
+        if before is None:
+            continue
+        if before.in_vault != attribute.in_vault:
+            message = "vault storage cannot be turned on or off; add a new attribute instead"
+        elif attribute.in_vault and before.type != attribute.type:
+            message = "the type of a vault attribute cannot change; add a new attribute instead"
+        else:
+            continue
+        issues.append(
+            Issue(
+                code=IssueCode.SCHEMA_VAULT_INVALID,
+                path=("kinds", kind_id, "attributes", attribute_id, "vault"),
+                message=f"{attribute.api_name!r}: {message}",
+                kind=kind_id,
+                attribute=attribute_id,
+            )
+        )
+    return issues
+
+
 def _duplicates(
-    kind_id: str, unique: list[Attribute], holders: Mapping[tuple[str, str], list[str]]
+    kind_id: str,
+    unique: list[Attribute],
+    holders: Mapping[tuple[str, str], list[str]],
+    is_sensitive: Callable[[Attribute], bool],
 ) -> list[Issue]:
     names = {attribute.id: attribute.api_name for attribute in unique}
+    sensitive = {attribute.id for attribute in unique if is_sensitive(attribute)}
     issues: list[Issue] = []
     for (attribute_id, value), keys in sorted(holders.items()):
         if len(keys) < 2:
@@ -275,7 +320,7 @@ def _duplicates(
                 path=("migrations", kind_id, ordered[0], "values", attribute_id),
                 message=(
                     f"{names[attribute_id]!r} became unique but {len(keys)} Records share "
-                    f"the value {value}"
+                    + ("a value" if attribute_id in sensitive else f"the value {value}")
                 ),
                 kind=kind_id,
                 key=ordered[0],

@@ -34,6 +34,9 @@ class IssueCode(StrEnum):
     SCHEMA_ATTRIBUTE_FLAG_INVALID = "schema.attribute_flag_invalid"
     SCHEMA_AUTHORITY_UNKNOWN = "schema.authority_unknown"
     SCHEMA_EMBEDDING_TEMPLATE_INVALID = "schema.embedding_template_invalid"
+    SCHEMA_VAULT_INVALID = "schema.vault_invalid"
+    SCHEMA_SENSITIVE_ATTRIBUTE = "schema.sensitive_attribute"
+    SCHEMA_SENSITIVITY_INHERITED = "schema.sensitivity_inherited"
     # Schema: Relations
     SCHEMA_RELATION_ENDPOINT_UNKNOWN = "schema.relation_endpoint_unknown"
     SCHEMA_FOREIGN_KEY_INVALID = "schema.foreign_key_invalid"
@@ -69,6 +72,8 @@ class IssueCode(StrEnum):
     VALUE_ENUM_VALUES = "value.enum_values"
     VALUE_UNIQUE = "value.unique"
     VALUE_REFERENCE_MISSING = "value.reference_missing"
+    VALUE_VAULT_REFERENCE = "value.vault_reference"
+    VALUE_VAULT_UNAVAILABLE = "value.vault_unavailable"
     # Data: Records
     RECORD_KIND_UNKNOWN = "record.kind_unknown"
     RECORD_KEY_INVALID = "record.key_invalid"

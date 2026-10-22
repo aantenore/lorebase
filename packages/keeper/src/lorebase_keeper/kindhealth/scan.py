@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
@@ -30,7 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Kind, Record, Relation, Schema
+from lorebase_core.model import Attribute, Kind, Record, Relation, Schema
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.tree import kind_partition
 from lorebase_core.validate import validate_record
@@ -234,7 +234,12 @@ def duplicate_attributes(kind: Kind) -> list[str]:
 
 
 async def find_duplicates(
-    session: AsyncSession, where: Branch, kind: Kind, total: int, settings: HealthSettings
+    session: AsyncSession,
+    where: Branch,
+    kind: Kind,
+    total: int,
+    settings: HealthSettings,
+    sensitive: Callable[[Attribute], bool] = lambda a: a.is_sensitive,
 ) -> DuplicateReport:
     """Records of a Kind sharing a unique or title value, ignoring case and spacing."""
     ids = duplicate_attributes(kind)
@@ -268,7 +273,7 @@ async def find_duplicates(
             DuplicateGroup(
                 attribute=attribute.api_name,
                 unique=attribute.unique,
-                value=None if attribute.sensitivity else row.norm,
+                value=None if sensitive(attribute) else row.norm,
                 count=int(row.members),
                 keys=list(row.member_keys),
             )

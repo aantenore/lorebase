@@ -119,6 +119,11 @@ keeper:
       ttl_s: 300
       max_body_bytes: 1048576    # larger responses are not cached
       time_travel_max_entries: 128   # entries for reads at another Revision; 0 never caches them
+    sensitivity:                 # values of pii / confidential / restricted Attributes, shown only
+                                 # with pii.read / confidential.read / restricted.read
+      omit: false                # true: leave masked values out of Records
+      masked_value: "***"        # what masked values read as
+      erased_value: "[erased]"   # what erased vault values read as (cleared callers)
     prefer_replica: false        # true: read endpoints use the replicas of database.read_dsn
                                  # when one is fresh enough (see docs/deployment.md)
   readiness:
@@ -763,6 +768,16 @@ webhooks:
   pass_timeout_s: 60.0           # no attempt starts after this; the rest go to the next pass
   changed_keys_max: 100          # changed Record keys listed per event payload
   retention_s: 604800.0          # finished deliveries and handed-off events kept (7 days)
+
+# Personal data vault (design 13.5; docs/security.md): values of `pii` Attributes with
+# `vault: true` are stored encrypted here, Records hold tokens, and `lorebase admin erase`
+# erases them on every Revision. Keeper, Scribe and every committing process need the same keys.
+vault:
+  token_key: null                # secret://... (32+ characters) keying tokens and value
+                                 # fingerprints; never change it once values are stored
+  encryption_key: null           # secret://... (32+ characters) encrypting new values
+  key_id: "1"                    # id stored with values sealed under encryption_key
+  previous_keys: {}              # earlier encryption keys by id, still opened
 
 # Herald, the MCP server (design 11.2; docs/mcp.md). Short variables set by MCP host
 # configurations: LOREBASE_URL (keeper.base_url), LOREBASE_API_KEY (keeper.api_key),

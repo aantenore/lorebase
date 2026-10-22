@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -211,3 +212,36 @@ def test_plan_migrations_reports_new_duplicates() -> None:
     [issue] = plan.issues
     assert issue.code is IssueCode.VALUE_UNIQUE
     assert issue.details["keys"] == ["S-1", "S-2"]
+
+
+def test_plan_migrations_do_not_quote_values_tagged_elsewhere() -> None:
+    # On a branch forked before the default branch tagged rating, its own schema has no tag.
+    old = supply_schema()
+    new = old.model_copy(
+        update={"kinds": {**old.kinds, SUPPLIER: supplier_kind(rating=TypeSpec.of("integer"))}}
+    )
+    records = [
+        Record(
+            kind=SUPPLIER,
+            key="S-1",
+            values={SUPPLIER_CODE: "S-1", LEGAL_NAME: "A", RATING: "secret-42"},
+        )
+    ]
+
+    def plan(sensitive: object = None) -> list[Any]:
+        options: dict[str, Any] = {} if sensitive is None else {"sensitive": sensitive}
+        return plan_migrations(
+            old,
+            new,
+            records_of=lambda kind: records if kind == SUPPLIER else [],
+            links_of=lambda r: [],
+            actor="usr_t",
+            at=AT,
+            **options,
+        ).issues
+
+    [plain] = plan()
+    assert "secret-42" in plain.message
+    [masked] = plan(lambda a: a.is_sensitive or a.id == RATING)
+    assert "secret-42" not in masked.message
+    assert "value" not in masked.details

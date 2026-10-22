@@ -152,6 +152,10 @@ def _resolve(kind: Kind) -> KindTemplate | None:
             raise TemplateError(f"{{{name}}} is not an Attribute of Kind {kind.api_name!r}")
         if attribute.is_derived:
             raise TemplateError(f"{{{name}}} is derived; templates read stored values only")
+        if attribute.in_vault:
+            raise TemplateError(
+                f"{{{name}}} is stored in the vault; templates cannot read vault values"
+            )
         if attribute.sensitivity and not allow_sensitive:
             raise TemplateError(
                 f"{{{name}}} is sensitive ({', '.join(attribute.sensitivity)}); set "

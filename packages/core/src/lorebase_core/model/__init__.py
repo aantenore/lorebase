@@ -102,6 +102,12 @@ from lorebase_core.model.source import (
     TransformName,
 )
 from lorebase_core.model.trait import Trait, TraitAttribute
+from lorebase_core.model.vault import (
+    VAULT_KEY,
+    looks_like_reference,
+    vault_reference,
+    vault_token,
+)
 from lorebase_core.model.yaml_schema import (
     SCHEMA_FORMAT,
     SchemaYamlError,
@@ -130,6 +136,7 @@ def validate_schema(schema: Schema, rules: SchemaRules | None = None) -> list[Is
 __all__ = [
     "SCHEMA_FORMAT",
     "SECRET_REFERENCE_PREFIX",
+    "VAULT_KEY",
     "AggregateDerivation",
     "AggregateFunction",
     "Attribute",
@@ -217,6 +224,7 @@ __all__ = [
     "is_valid_api_name",
     "load_schema",
     "locate_issues",
+    "looks_like_reference",
     "new_id",
     "new_ulid",
     "parse_ref",
@@ -227,5 +235,7 @@ __all__ = [
     "snake_case",
     "validate_schema",
     "validate_schema_yaml",
+    "vault_reference",
+    "vault_token",
     "yaml_path",
 ]

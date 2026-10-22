@@ -17,7 +17,7 @@ nothing. Everything runs in the caller's transaction.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from lorebase_core.canonical import hex
+from lorebase_core.expr.sensitivity import lowered_tags
 from lorebase_core.merge import (
     MergedTree,
     MergeInput,
@@ -48,6 +49,7 @@ from lorebase_core.tree import PARTITION_SCHEMA, Tree, TreeParams
 from lorebase_store.commit.errors import (
     BranchLockTimeoutError,
     BranchNotFoundError,
+    SensitivityLoweredError,
     StaleHeadError,
 )
 from lorebase_store.commit.pipeline import (
@@ -57,6 +59,7 @@ from lorebase_store.commit.pipeline import (
     _store_revision,
     utc_now,
 )
+from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.apply import MaterializedChange, apply_changeset
 from lorebase_store.materialize.background import delete_branch
 from lorebase_store.merging.attempts import (
@@ -73,6 +76,7 @@ from lorebase_store.objectstore import EncodedObject, SessionObjectStore
 from lorebase_store.repositories.domains import DomainRepository
 from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.repositories.index_view import MaterializedIndexView
+from lorebase_store.repositories.materialized import MaterializedRepository
 from lorebase_store.repositories.merges import (
     ConflictRepository,
     ConflictRow,
@@ -127,6 +131,10 @@ class MergeRequest:
     idempotency_key: str | None = None
     #: Delete the source branch after a successful merge (auto-close).
     delete_source: bool = False
+    #: Called with the target's schema and the merged schema when a clean merge would remove
+    #: sensitivity tags; raises to refuse it. Without it such merges are refused
+    #: (`SensitivityLoweredError`).
+    schema_guard: Callable[[Schema, Schema], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)
@@ -381,6 +389,18 @@ class MergeService:
             return target.head
         session, domain_id = self._session, self._domain
         settings = self._runtime.settings
+        compiled = await MaterializedRepository(
+            session, domain_id, target.name, writes=settings.writes
+        ).schema()
+        if compiled is not None:
+            target_schema = load_compiled(compiled.compiled)
+            lowered = lowered_tags(target_schema, prepared.schema)
+            if lowered:
+                # Fails closed: only a caller-supplied guard (which checks clearance) may
+                # let a merge remove sensitivity tags.
+                if request.schema_guard is None:
+                    raise SensitivityLoweredError(t.value for t in lowered)
+                await request.schema_guard(target_schema, prepared.schema)
         merged = prepared.merged
         changes = [
             MaterializedChange(entry, prepared.bodies[(entry.partition, entry.key)])

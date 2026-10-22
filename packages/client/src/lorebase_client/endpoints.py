@@ -583,6 +583,12 @@ def diff(
 # Administration ---------------------------------------------------------------------------
 
 
+def erase_vault(domain: str, body: m.EraseRequest) -> Call[m.EraseResult]:
+    return Call(
+        "POST", f"{_domain(domain)}/vault/erase", parse_model(m.EraseResult), body=body.payload()
+    )
+
+
 def create_api_key(domain: str, body: m.CreateApiKey) -> Call[m.ApiKeyCreated]:
     return Call(
         "POST", f"{_domain(domain)}/api-keys", parse_model(m.ApiKeyCreated), body=body.payload()

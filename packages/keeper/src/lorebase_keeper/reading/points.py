@@ -26,6 +26,7 @@ from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, ProblemError
 from lorebase_keeper.reading.caching import not_modified
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.sensitivity import UNCLEARED, Disclosure, Masking, masking_for
 from lorebase_keeper.services.reads import ReadGuard, ReadTarget, StoreReadSource
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.layout import BranchLayout
@@ -80,9 +81,10 @@ class KindScope:
 
 @dataclass(frozen=True, slots=True)
 class ReadPoint:
-    """A resolved read: the Domain, the branch, the Revision served, its schema and the Kinds
-    the caller may read there. `layout` says where the branch's materialized rows live (its
-    own, or an overlay over a base branch); materialized reads take their rows from it."""
+    """A resolved read: the Domain, the branch, the Revision served, its schema, the Kinds
+    the caller may read there and how sensitive values are masked for it (`masking`).
+    `layout` says where the branch's materialized rows live (its own, or an overlay over a
+    base branch); materialized reads take their rows from it."""
 
     domain: DomainRow
     branch: str
@@ -91,6 +93,17 @@ class ReadPoint:
     served_from: ServedFrom
     scope: KindScope
     layout: BranchLayout
+    masking: Masking = UNCLEARED
+
+    @property
+    def variant(self) -> str:
+        """What a cached response depends on besides the request: readable Kinds and
+        clearance."""
+        return "|".join(part for part in (self.scope.variant, self.masking.variant) if part)
+
+    def disclosure(self, session: AsyncSession, runtime: ReadRuntime) -> Disclosure:
+        """Resolves vault references in this read's responses."""
+        return Disclosure(session, self.domain.id, (self.schema,), self.masking, runtime.vault)
 
     @property
     def materialized(self) -> bool:
@@ -184,7 +197,12 @@ async def open_revision(
 
 
 async def unchanged_head(
-    session: AsyncSession, guard: ReadGuard, request: Request, *, branch: str | None
+    session: AsyncSession,
+    runtime: ReadRuntime,
+    guard: ReadGuard,
+    request: Request,
+    *,
+    branch: str | None,
 ) -> Response | None:
     """304 for a conditional GET at a branch head, decided from the head Revision alone.
 
@@ -204,8 +222,18 @@ async def unchanged_head(
     head = await head_revision(session, domain.id, name)
     if head is None:
         return None
+    # The tag of a full read depends on the caller's clearance and the default branch's tags
+    # too (`ReadPoint.variant`): an older body must not be revalidated after a tag change.
+    reference = await branch_schema(session, runtime, domain.id, domain.default_branch)
+    masking = await masking_for(
+        guard.authorizer, guard.principal, domain.id, reference, runtime.sensitivity
+    )
     return not_modified(
-        request, domain_id=domain.id, revision=head.hex(), headers={REVISION_HEADER: head.hex()}
+        request,
+        domain_id=domain.id,
+        revision=head.hex(),
+        headers={REVISION_HEADER: head.hex()},
+        variant=masking.variant,
     )
 
 
@@ -233,14 +261,27 @@ async def resolve_point(
         ref, revision = await _locate_point(session, guard, domain, branch, at)
         scope = KindScope(guard, granted)
     layout = ref.layout
+    reference = await branch_schema(session, runtime, domain.id, domain.default_branch)
+    masking = await masking_for(
+        guard.authorizer, guard.principal, domain.id, reference, runtime.sensitivity
+    )
     if revision.id == ref.head:
         schema = await branch_schema(session, runtime, domain.id, ref.name)
         if schema is not None:
             return ReadPoint(
-                domain, ref.name, revision, schema, ServedFrom.MATERIALIZED, scope, layout
+                domain,
+                ref.name,
+                revision,
+                schema,
+                ServedFrom.MATERIALIZED,
+                scope,
+                layout,
+                masking.over(schema),
             )
     schema = await schema_at(session, runtime, domain.id, revision)
-    return ReadPoint(domain, ref.name, revision, schema, ServedFrom.TREE, scope, layout)
+    return ReadPoint(
+        domain, ref.name, revision, schema, ServedFrom.TREE, scope, layout, masking.over(schema)
+    )
 
 
 async def branch_schema(

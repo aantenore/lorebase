@@ -368,6 +368,12 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
         None,
     ),
     (
+        "vault-without-pii",
+        lambda s: replace_attribute(s, SUPPLIER, SUPPLIER_CITY, vault=True),
+        {C.SCHEMA_VAULT_INVALID},
+        None,
+    ),
+    (
         "title-unknown",
         lambda s: replace_kind(s, PLANT, title_attribute=ident("att", 999)),
         {C.SCHEMA_TITLE_ATTRIBUTE_UNKNOWN},
@@ -800,7 +806,9 @@ def test_reserved_names_are_configurable() -> None:
 
 def test_every_schema_code_is_exercised() -> None:
     exercised = {code for _, _, codes, _ in NEGATIVE for code in codes} | {
-        C.SCHEMA_DEFAULT_CONFLICT
+        C.SCHEMA_DEFAULT_CONFLICT,
+        C.SCHEMA_SENSITIVE_ATTRIBUTE,  # test_vault_rules
+        C.SCHEMA_SENSITIVITY_INHERITED,  # test_vault_rules
     }
     schema_codes = {code for code in IssueCode if code.value.startswith("schema.")}
     assert schema_codes == exercised

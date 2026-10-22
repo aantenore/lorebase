@@ -60,6 +60,7 @@ from lorebase_core.validate import (
     RecordDelete,
     RecordUpsert,
 )
+from lorebase_keeper.reading.sensitivity import UNCLEARED, Masking
 from lorebase_keeper.services.errors import Finding
 
 IMPORT_RECORDS = "import_records"
@@ -675,8 +676,11 @@ def batches(
 # Responses ------------------------------------------------------------------------------------
 
 
-def edit_document(schema: Schema, change: DataChange) -> dict[str, Any]:
-    """An edit with api names instead of ids."""
+def edit_document(
+    schema: Schema, change: DataChange, masking: Masking = UNCLEARED
+) -> dict[str, Any]:
+    """An edit with api names instead of ids, and the values the caller may not read masked
+    (an update carries the Record's current values too)."""
     if isinstance(change, RecordUpsert | RecordDelete):
         kind_id = change.record.kind if isinstance(change, RecordUpsert) else change.kind
         kind = schema.kinds.get(kind_id)
@@ -686,7 +690,11 @@ def edit_document(schema: Schema, change: DataChange) -> dict[str, Any]:
             "key": change.identity.key,
         }
         if isinstance(change, RecordUpsert):
-            body["values"] = _named(kind.attributes if kind else {}, change.record.values)
+            body["values"] = (
+                masking.kind_values(kind, change.record.values, omit=False)
+                if kind
+                else masking.value_map({}, (kind_id,), dict(change.record.values))
+            )
         return body
     relation_id = change.link.relation if isinstance(change, LinkUpsert) else change.relation
     relation = schema.relations.get(relation_id)
@@ -698,11 +706,9 @@ def edit_document(schema: Schema, change: DataChange) -> dict[str, Any]:
         "to": identity.to_key,
     }
     if isinstance(change, LinkUpsert):
-        body["values"] = _named(relation.attributes if relation else {}, change.link.values)
+        body["values"] = (
+            masking.link_values(schema, relation, change.link.values)
+            if relation
+            else masking.value_map({}, (), dict(change.link.values))
+        )
     return body
-
-
-def _named(attributes: Mapping[str, Attribute], values: Mapping[str, JsonValue]) -> dict[str, Any]:
-    return {
-        (attributes[a].api_name if a in attributes else a): value for a, value in values.items()
-    }

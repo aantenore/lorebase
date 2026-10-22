@@ -19,6 +19,7 @@ from lorebase_core.validate.schema_rules import (
     DEFAULT_RESERVED_ATTRIBUTE_NAMES,
     KEYABLE_TYPES,
     SchemaRules,
+    operation_sensitivity_issues,
     validate_schema,
 )
 
@@ -40,6 +41,7 @@ __all__ = [
     "check_values",
     "evaluate_changeset",
     "has_errors",
+    "operation_sensitivity_issues",
     "validate_changeset",
     "validate_link",
     "validate_record",
