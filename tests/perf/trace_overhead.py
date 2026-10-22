@@ -121,7 +121,9 @@ async def measure_trace_overhead(
             for index in range(warmup + iterations):
                 session = f"{SESSION_PREFIX}{name.replace(' ', '-')}-{index}"
                 traced = {trace.opt_in_header: OPT_IN_VALUE, trace.session_header: session}
-                for opted_in, rng, measurement in cases:
+                # Each case goes first in turn: the second call with the same key finds its
+                # pages cached.
+                for opted_in, rng, measurement in cases[index % 2 :] + cases[: index % 2]:
                     headers = traced if opted_in else {}
                     started = time.perf_counter()
                     response = await request(http, base, rng, headers)
