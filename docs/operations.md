@@ -407,8 +407,8 @@ exception. Fix the cause, then requeue the rows with `status = 'queued', attempt
 
 #### LorebaseJobQueueStalled
 
-Jobs have been queued (`lorebase_jobs_queue_depth{status="queued"}`, reported by the scheduler leader) while no
-worker claimed one (`lorebase_jobs_claimed_total`) in the last 15 minutes. Scribe workers are not running, cannot
+Claimable jobs have been queued (`lorebase_jobs_queue_depth{status="queued"}`, reported by the scheduler leader;
+jobs waiting for a retry delay are counted as `retrying` and do not count) while no worker claimed one (`lorebase_jobs_claimed_total`) in the last 15 minutes. Scribe workers are not running, cannot
 claim (database down), or every job hangs. The Scribe dashboard shows the queue depth by type. Check the Scribe pods
 and logs, `SELECT type, status, count(*) FROM jobs GROUP BY 1, 2`, and rows locked for longer than `store.jobs.stale_after_seconds` (the scheduler requeues those).
 `python -m lorebase_store.jobs work` drains the queue from a shell.
@@ -437,8 +437,10 @@ by another pass. Many timeouts with a steady `released` count mean slow receiver
 
 #### LorebaseGcNotRun
 
-No garbage collection completed in 3 days (`lorebase_gc_runs_total`, dry runs excluded) although Scribe is
-scheduling work. Check `scribe.scheduler.gc_schedule` (null disables the schedule; change the window in the rule if
+No garbage collection completed in 3 days (`lorebase_gc_runs_total{dry_run="false"}`) although the scheduler
+queued real collections (`lorebase_gc_scheduled_total{dry_run="false"}`). A schedule set to dry runs
+(`scribe.scheduler.gc_dry_run: true`) queues only dry runs and does not raise the alert; nor does a null schedule. Check
+`scribe.scheduler.gc_schedule` (null disables the schedule; change the window in the rule if
 you collect less often), the `gc` rows of `jobs` and the Scribe logs; a collection that never ends makes the next ones fail with `GcBusyError`. Run one by hand with
 `python -m lorebase_store.gc --all` ([garbage collection](#garbage-collection)).
 

@@ -127,8 +127,14 @@ _STALE = text(
 )
 
 _DEPTH = text(
-    "SELECT type, status, count(*) FROM jobs WHERE status IN ('queued', 'running') "
-    "GROUP BY type, status"
+    """
+    SELECT type,
+           CASE WHEN status = 'queued' AND run_after > :now THEN 'retrying'
+                ELSE CAST(status AS text) END,
+           count(*)
+    FROM jobs WHERE status IN ('queued', 'running')
+    GROUP BY 1, 2
+    """
 )
 
 
@@ -280,10 +286,13 @@ async def claim_jobs(
     return claimed
 
 
-async def queue_depth(session: AsyncSession) -> dict[tuple[str, str], int]:
-    """Jobs waiting (`queued`) or `running`, counted by (type, status), across Domains."""
+async def queue_depth(
+    session: AsyncSession, *, now: datetime | None = None
+) -> dict[tuple[str, str], int]:
+    """Jobs counted by (type, state) across Domains: `queued` (claimable now), `retrying`
+    (queued with a `run_after` still ahead, such as a retry delay) or `running`."""
     async with rls_scope(session, bypass=True):
-        rows = (await session.execute(_DEPTH)).all()
+        rows = (await session.execute(_DEPTH, {"now": now or _now()})).all()
     return {(job_type, status): int(count) for job_type, status, count in rows}
 
 

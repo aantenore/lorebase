@@ -13,13 +13,14 @@ Each tick of the leader:
 - queues an `audit_verify` pass every `audit_verify_interval_s` (reused like the webhook pass);
 - queues an `audit_checkpoint` job every `scribe.audit_checkpoints.interval_s` when
   checkpoints are enabled (reused like the webhook pass);
-- queues a `gc` job per Domain at each firing of `gc_schedule`;
+- queues a `gc` job per Domain at each firing of `gc_schedule`, counted by `lorebase.gc.scheduled`
+  with its `dry_run` mode;
 - queues an `embeddings` pass per Domain every `embeddings_interval_s` (an identical queued
   pass is reused);
 - queues a `source_sync` job for each Source whose `schedule` fired, read from the schema of
   the Domain's default branch;
-- counts the waiting and running jobs for the `lorebase.jobs.queue_depth` gauge (reported by
-  the leader only).
+- counts the claimable, retrying and running jobs for the `lorebase.jobs.queue_depth` gauge
+  (reported by the leader only).
 
 A cron job is due when its latest firing time is later than the `run_after` of the newest job
 it queued before (jobs are queued with `run_after` set to the firing time) or, with no such
@@ -43,7 +44,7 @@ from lorebase_core.model import ElementStatus
 from lorebase_scribe.cron import CronError, parse_cron
 from lorebase_scribe.jobs import AUDIT_CHECKPOINT_JOB, AUDIT_VERIFY_JOB, WEBHOOK_DELIVERY_JOB
 from lorebase_scribe.settings import SchedulerSettings
-from lorebase_scribe.telemetry import QUEUE_DEPTH, SCHEDULED, tracer
+from lorebase_scribe.telemetry import GC_SCHEDULED, QUEUE_DEPTH, SCHEDULED, tracer
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import (
@@ -105,6 +106,7 @@ class Scheduler:
         self._connection: AsyncConnection | None = None
         self._leader_since: datetime | None = None
         self._last: dict[str, datetime] = {}
+        self._gc_queued = 0
 
     @property
     def is_leader(self) -> bool:
@@ -168,9 +170,12 @@ class Scheduler:
                     log.warning("stale jobs requeued", extra={"jobs": stale})
                 queued.extend(await self._intervals(session, now))
                 queued.extend(await self._domains(session, now))
-                QUEUE_DEPTH.update(await queue_depth(session))
+                QUEUE_DEPTH.update(await queue_depth(session, now=now))
         if queued:
             SCHEDULED.add(len(queued))
+        if self._settings.gc_schedule:
+            dry_run = "true" if self._settings.gc_dry_run else "false"
+            GC_SCHEDULED.add(self._gc_queued, {"dry_run": dry_run})
         return queued
 
     async def _intervals(self, session: AsyncSession, now: datetime) -> list[int]:
@@ -222,6 +227,7 @@ class Scheduler:
     async def _domains(self, session: AsyncSession, now: datetime) -> list[int]:
         gc = parse_cron(self._settings.gc_schedule) if self._settings.gc_schedule else None
         embed = self._interval_due(EMBEDDINGS_JOB, self._settings.embeddings_interval_s, now)
+        self._gc_queued = 0
         queued: list[int] = []
         after: str | None = None
         while True:
@@ -245,6 +251,7 @@ class Scheduler:
                                 unique=True,
                             )
                         )
+                        self._gc_queued += 1
                 if embed:
                     queued.append(
                         await enqueue_job(

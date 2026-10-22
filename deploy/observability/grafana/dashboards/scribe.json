@@ -354,7 +354,7 @@
         "x": 0,
         "y": 13
       },
-      "description": "Rows of the jobs table waiting (queued, including jobs waiting for a retry delay) or running, counted by the scheduler leader at each tick. Absent when no Scribe holds leadership.",
+      "description": "Rows of the jobs table waiting or running, counted by the scheduler leader at each tick: queued (claimable now), retrying (waiting for a retry delay or a later run_after) and running. Absent when no Scribe holds leadership.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -932,7 +932,7 @@
         "x": 0,
         "y": 62
       },
-      "description": "Completed garbage collections of a Domain.",
+      "description": "Completed garbage collections of a Domain, and the gc jobs the scheduler queued at gc_schedule, by dry run.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -941,7 +941,12 @@
         {
           "refId": "A",
           "expr": "sum by (dry_run) (increase(lorebase_gc_runs_total[1h]))",
-          "legendFormat": "dry_run={{dry_run}}"
+          "legendFormat": "completed dry_run={{dry_run}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (dry_run) (increase(lorebase_gc_scheduled_total[1h]))",
+          "legendFormat": "scheduled dry_run={{dry_run}}"
         }
       ],
       "fieldConfig": {
