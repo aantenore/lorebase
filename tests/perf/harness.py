@@ -513,9 +513,10 @@ async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: 
     Only the materialized head is copied, which every read reads: Revisions, trees and
     objects stay those of the loaded copy, and the copies' rows point to its Revisions and
     objects. Search vectors are copied (titles equal to the key are renumbered); the word
-    lexicon counts the new rows through its triggers; per-Attribute indexes are dropped and
-    built again afterwards. A replica already present (its first Supplier exists) is
-    skipped, so an interrupted run resumes."""
+    lexicon of `main` is counted again from the search vectors afterwards (its triggers,
+    which serialize parallel writers on shared words, are off meanwhile); per-Attribute
+    indexes are dropped and built again afterwards. A replica already present (its first
+    Supplier exists) is skipped, so an interrupted run resumes."""
     unique = sorted(a.id for k in schema.kinds.values() for a in k.attributes.values() if a.unique)
     module = generator()
     prefixes = {kind: module.KEY_PREFIX[kind].rstrip("-") for kind in REPLICA_KINDS}
@@ -569,8 +570,44 @@ async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: 
             _progress(f"replica {replica}: written")
 
     _progress(f"replicating {len(keys):,} Records {replicas - 1} times")
-    await asyncio.gather(*(one(replica) for replica in range(1, replicas)))
+    await _lexicon_triggers(engine, enabled=False)
+    try:
+        await asyncio.gather(*(one(replica) for replica in range(1, replicas)))
+    finally:
+        await _lexicon_triggers(engine, enabled=True)
+    await _recount_lexicon(engine)
     await _create_attribute_indexes(engine, attribute_indexes)
+
+
+LEXICON_TRIGGERS = ("lb_lexicon_insert", "lb_lexicon_update", "lb_lexicon_delete")
+
+
+async def _lexicon_triggers(engine: AsyncEngine, *, enabled: bool) -> None:
+    action = "ENABLE" if enabled else "DISABLE"
+    async with engine.begin() as connection:
+        for name in LEXICON_TRIGGERS:
+            await connection.exec_driver_sql(f"ALTER TABLE mat_records {action} TRIGGER {name}")
+
+
+async def _recount_lexicon(engine: AsyncEngine) -> None:
+    """The word lexicon of `main` counted from its search vectors, as migration `0018`
+    fills it."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM mat_lexicon WHERE domain_id = :d AND branch = 'main'"),
+            {"d": DOMAIN},
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO mat_lexicon (domain_id, branch, kind_id, word, records) "
+                "SELECT m.domain_id, m.branch, m.kind_id, w.lexeme, count(*) "
+                "FROM mat_records m CROSS JOIN LATERAL unnest(m.search) AS w "
+                "WHERE m.domain_id = :d AND m.branch = 'main' AND m.search IS NOT NULL "
+                "AND NOT m.deleted AND lb_lexicon_word(w.lexeme) "
+                "GROUP BY m.domain_id, m.branch, m.kind_id, w.lexeme"
+            ),
+            {"d": DOMAIN},
+        )
 
 
 async def _drop_attribute_indexes(engine: AsyncEngine) -> list[str]:
