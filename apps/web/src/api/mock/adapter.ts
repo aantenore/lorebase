@@ -478,6 +478,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
           key,
           created: null,
           changes: data.log.length,
+          changes_truncated: false,
           attributes,
           sources: extracted ? [] : ['erp.vendors'],
           proposals: [],
