@@ -75,6 +75,7 @@ RESPONSES: dict[type[m.Model], str] = {
     m.TraverseResult: "TraverseResponse",
     m.NeighborhoodResult: "NeighborhoodResponse",
     m.SearchHit: "SearchHit",
+    m.SearchCorrection: "SearchCorrection",
     m.SearchResult: "SearchResponse",
     m.Revision: "RevisionOut",
     m.LogPage: "LogPage",

@@ -135,9 +135,25 @@ class SearchHit(BaseModel):
     score: float
 
 
+class SearchCorrection(BaseModel):
+    """A query word the branch does not hold and the words searched in its place as well.
+
+    Words are lexemes of the text search configuration (lowercased, stemmed by its
+    dictionaries), as full-text search compares them.
+    """
+
+    word: str
+    replacements: list[str]
+
+
 class SearchResponse(Served):
     mode: str
     items: list[SearchHit]
+    corrections: list[SearchCorrection] = Field(
+        default_factory=list,
+        description="Typo corrections applied to q; hits found only through them come after "
+        "the others.",
+    )
 
 
 # Rendering ----------------------------------------------------------------------------------

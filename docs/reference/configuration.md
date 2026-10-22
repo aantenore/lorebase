@@ -936,8 +936,10 @@ Search (design 8.4). Keeper never computes embeddings: semantic and hybrid searc
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `search.candidates` | `200` | rows of each ranked list before fusion and paging |
-| `search.trigram_threshold` | `0.3` | least title similarity for a typo-tolerant hit |
-| `search.trigram_weight` | `0.5` | weight of title similarity added to ts_rank_cd |
+| `search.trigram_threshold` | `0.3` | Typo tolerance: a query word the branch does not hold is corrected to its closest words in the branch's word lexicon (trigram similarity) and searched as (word \| correction ...). least similarity of a correction to the query word |
+| `search.trigram_weight` | `0.5` | weight of ts_rank_cd for hits found only through corrections (they always rank after the hits of q as written) |
+| `search.typo_candidates` | `3` | corrections tried per unknown word; 0 turns typo tolerance off |
+| `search.typo_min_length` | `4` | shortest query word (characters) that is corrected |
 | `search.headline_options` | `"MaxWords=30, MinWords=10, MaxFragments=2"` | ts_headline of snippets |
 
 ### `search.semantic`

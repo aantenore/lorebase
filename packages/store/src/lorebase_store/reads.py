@@ -12,13 +12,15 @@ reports, run the reads of one request in a `REPEATABLE READ` transaction.
 - `links_to_record`: one page of the Links pointing at a Record along one Relation.
 - `query_by_attribute`: comparisons served by the per-Attribute partial indexes.
 - `search_records`: full-text search over the GIN index, ranking a bounded candidate set.
+- `search_corrections`: typo corrections of query words from the branch's word lexicon.
 
 Incoming foreign-key Links, attribute queries and search compare with functions Postgres does
 not mark leakproof, so under row-level security plain SQL cannot use their indexes. With
 `store.reads.use_definer_functions` (the default) they run through the security definer
-functions of revision 0005 (`lb_links_in`, `lb_query_by_attribute`, `lb_search`), which take
-the Domain as an argument: only these primitives call them, with the Domain their caller has
-already authorized (store schema notes). Otherwise the same statements run as plain SQL.
+functions of revisions 0005 and 0018 (`lb_links_in`, `lb_query_by_attribute`,
+`lb_search_corrected`, `lb_search_corrections`), which take the Domain as an argument: only
+these primitives call them, with the Domain their caller has already authorized (store schema
+notes). Otherwise the same statements run as plain SQL.
 
 Every primitive that reads rows takes the branch as a name or as its `BranchLayout`
 (`lorebase_store.layout`); a name costs one more primary-key read to find the layout. On an
@@ -121,10 +123,13 @@ class LinkRef:
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
+    """A search match; `exact` is false when it matched only through a typo correction."""
+
     kind_id: str
     key: str
     title: str | None
     score: float
+    exact: bool = True
 
 
 def _runtime(runtime: StoreRuntime | None) -> StoreRuntime:
@@ -655,57 +660,179 @@ _QUERY = "websearch_to_tsquery(CAST(:config AS regconfig), :query)"
 
 
 @dataclass(frozen=True, slots=True)
-class TitleSimilarity:
-    """Typo-tolerant title matches by trigram similarity (`pg_trgm`, trigram index on titles).
+class TypoTolerance:
+    """Typo-tolerant search through the words of the branch (`mat_lexicon`, revision 0018).
 
-    Titles at least `threshold` similar to the query match too, and `weight` times the
-    similarity is added to the rank.
+    A query word of at least `min_length` characters that the branch does not hold (nor its
+    base, for an overlay) is corrected to its `candidates` closest words at least `threshold`
+    similar by trigrams (`pg_trgm`). Search then matches the word or any of them; hits that
+    match only through a correction rank after the others, at `weight` times their rank.
     """
 
     threshold: float
     weight: float
+    candidates: int
+    min_length: int
 
 
-def search_sql(*, by_kind: bool, titles: bool = False, records: str = "mat_records m") -> str:
+@dataclass(frozen=True, slots=True)
+class Correction:
+    """A query word (a lexeme of the text search configuration) and its replacements, best
+    first."""
+
+    word: str
+    replacements: tuple[str, ...]
+
+
+_WORDS = (
+    "SELECT DISTINCT replace(replace(t.m[2], '''''', ''''), '\\\\', '\\') AS word "
+    "FROM regexp_matches(CAST(" + _QUERY + " AS text), '(!?)''((?:[^'']|'''')*)''', 'g') "
+    "AS t(m) WHERE t.m[1] = ''"
+)
+"""The lexemes of the query as full-text search reads it (tsquery output doubles quotes and
+backslashes), but negated ones, as in `lb_search_corrections`."""
+
+_CORRECTIONS_SQL = text(
+    f"""
+    SELECT w.word, c.word AS replacement
+    FROM ({_WORDS}) AS w
+    CROSS JOIN LATERAL (
+        SELECT l.word, max(similarity(l.word, w.word)) AS similarity, sum(l.records) AS records
+        FROM mat_lexicon l
+        WHERE l.domain_id = :domain AND l.branch = ANY(CAST(:branches AS text[]))
+          AND l.records > 0 AND l.word % w.word
+          AND (CAST(:kinds AS text[]) IS NULL OR l.kind_id = ANY(CAST(:kinds AS text[])))
+        GROUP BY l.word
+        ORDER BY 2 DESC, 3 DESC, l.word
+        LIMIT :candidates) AS c
+    WHERE char_length(w.word) >= :min_length AND lb_lexicon_word(w.word)
+      AND NOT EXISTS (
+          SELECT 1 FROM mat_lexicon x
+          WHERE x.domain_id = :domain AND x.branch = ANY(CAST(:branches AS text[]))
+            AND x.word = w.word AND x.records > 0
+            AND (CAST(:kinds AS text[]) IS NULL OR x.kind_id = ANY(CAST(:kinds AS text[]))))
+    ORDER BY w.word, c.similarity DESC, c.records DESC, c.word
+    """
+)
+_CORRECTIONS_DEFINER = text(
+    "SELECT word, replacement FROM lb_search_corrections(:domain, :branch, "
+    "CAST(:kinds AS text[]), CAST(:config AS regconfig), :query, CAST(:threshold AS real), "
+    "CAST(:candidates AS integer), CAST(:min_length AS integer))"
+)
+_SIMILARITY_THRESHOLD = text(
+    "SELECT set_config('pg_trgm.similarity_threshold', "
+    "CAST(CAST(:threshold AS real) AS text), true)"
+)
+
+
+async def search_corrections(
+    session: AsyncSession,
+    domain_id: str,
+    branch: str | BranchLayout,
+    query: str,
+    typos: TypoTolerance,
+    *,
+    kind_ids: Sequence[str] | None = None,
+    runtime: StoreRuntime | None = None,
+) -> list[Correction]:
+    """Corrections of the words of `query` (web search syntax) the Records of `kind_ids`
+    (`None`: every Kind) on the branch do not hold, from words of those Kinds, in word order;
+    empty when every word is known (or too short, has a digit or is negated).
+
+    The plain SQL path sets `pg_trgm.similarity_threshold` for the transaction, the function
+    only for its own call.
+    """
+    if typos.candidates < 1:
+        return []
+    settings = _runtime(runtime).settings
+    layout = await resolve_layout(session, domain_id, branch)
+    params: dict[str, Any] = {
+        "domain": domain_id,
+        "config": settings.materialize.text_search_config,
+        "query": query,
+        "candidates": _cap(typos.candidates, settings.reads.max_search_rows),
+        "min_length": typos.min_length,
+        "kinds": None if kind_ids is None else list(kind_ids),
+    }
+    if _definer(runtime):
+        record_definer_call("lb_search_corrections")
+        params.update(branch=layout.branch, threshold=typos.threshold)
+        statement = _CORRECTIONS_DEFINER
+    else:
+        await session.execute(_SIMILARITY_THRESHOLD, {"threshold": typos.threshold})
+        params["branches"] = [layout.branch, *([layout.base] if layout.base else [])]
+        statement = _CORRECTIONS_SQL
+    found: dict[str, list[str]] = {}
+    for word, replacement in (await session.execute(statement, params)).all():
+        found.setdefault(word, []).append(replacement)
+    return [Correction(word, tuple(replacements)) for word, replacements in found.items()]
+
+
+def _corrected_query(corrections: int) -> str:
+    """The query with the words of `corrections` replacements rewritten, as SQL text over
+    `:word_<n>` and `:replacements_<n>` (`lb_lexeme_query`, as `lb_search_corrected` does)."""
+    fixed = _QUERY
+    for n in range(corrections):
+        fixed = (
+            f"ts_rewrite({fixed}, lb_lexeme_query(:word_{n}), "
+            f"lb_lexeme_query(:word_{n}, CAST(:replacements_{n} AS text[])))"
+        )
+    return fixed
+
+
+def search_sql(*, by_kind: bool, corrections: int = 0, records: str = "mat_records m") -> str:
     """Full-text search: the GIN index finds at most `:candidates` matches of the branch, and
     only those are ranked (`ts_rank_cd` reads each candidate's vector).
 
     Parameters: `:domain`, `:branch`, `:config`, `:query` (web search syntax), `:candidates`,
-    `:limit`, `:kinds` (text array) when `by_kind`, and `:title_weight` when `titles` (the
-    threshold is the transaction's `pg_trgm.similarity_threshold`). `records` is the FROM item
-    of the rows, aliased `m` (`BranchLayout.records_from("m")`).
+    `:limit`, `:kinds` (text array) when `by_kind`. With `corrections`, `:word_<n>`,
+    `:replacements_<n>` (text array) for each and `:weight`: up to `:candidates` more rows
+    that match only the corrected query come after the exact matches, ranked at `:weight`
+    times their rank. `records` is the FROM item of the rows, aliased `m`
+    (`BranchLayout.records_from("m")`).
     """
     kinds = "AND m.kind_id = ANY(CAST(:kinds AS text[])) " if by_kind else ""
-    match = f"m.search @@ {_QUERY}"
-    score = f"ts_rank_cd(c.search, {_QUERY})"
-    if titles:
-        match = f"({match} OR m.title % :query)"
-        score += " + CAST(:title_weight AS real) * similarity(coalesce(c.title, ''), :query)"
+
+    def rows(exact: bool, match: str) -> str:
+        return (
+            f"SELECT m.kind_id, m.key, m.title, m.search, {str(exact).lower()} AS exact "
+            f"FROM {records} WHERE {_SCOPE} {kinds}AND {match} LIMIT :candidates"
+        )
+
+    if not corrections:
+        return (
+            f"SELECT c.kind_id, c.key, c.title, "
+            f"CAST(ts_rank_cd(c.search, {_QUERY}) AS real) AS score, c.exact "
+            f"FROM ({rows(True, f'm.search @@ {_QUERY}')}) AS c "
+            f"ORDER BY score DESC, c.kind_id, c.key LIMIT :limit"
+        )
+    fixed = _corrected_query(corrections)
+    score = (
+        f"CASE WHEN c.exact THEN ts_rank_cd(c.search, {_QUERY}) "
+        f"ELSE CAST(:weight AS real) * ts_rank_cd(c.search, {fixed}) END"
+    )
     return (
-        f"SELECT c.kind_id, c.key, c.title, CAST({score} AS real) AS score "
-        f"FROM (SELECT m.kind_id, m.key, m.title, m.search FROM {records} "
-        f"WHERE {_SCOPE} {kinds}AND {match} LIMIT :candidates) AS c "
-        f"ORDER BY score DESC, c.kind_id, c.key LIMIT :limit"
+        f"SELECT c.kind_id, c.key, c.title, CAST({score} AS real) AS score, c.exact "
+        f"FROM (({rows(True, f'm.search @@ {_QUERY}')}) UNION ALL "
+        f"({rows(False, f'm.search @@ {fixed} AND NOT m.search @@ {_QUERY}')})) AS c "
+        f"ORDER BY c.exact DESC, score DESC, c.kind_id, c.key LIMIT :limit"
     )
 
 
 @lru_cache(maxsize=256)
-def _search(records: str, by_kind: bool, titles: bool) -> TextClause:
-    return text(search_sql(by_kind=by_kind, titles=titles, records=records))
+def _search(records: str, by_kind: bool, corrections: int) -> TextClause:
+    return text(search_sql(by_kind=by_kind, corrections=corrections, records=records))
 
 
 _SEARCH_DEFINER = {
     function: text(
         f"SELECT * FROM {function}(:domain, :branch, CAST(:kinds AS text[]), "
         "CAST(:config AS regconfig), :query, CAST(:candidates AS integer), "
-        "CAST(:limit AS integer), CAST(:threshold AS real), CAST(:title_weight AS real))"
+        "CAST(:limit AS integer), CAST(:words AS text[]), CAST(:replacements AS text[]), "
+        "CAST(:weight AS real))"
     )
-    for function in ("lb_search", "lb_search_overlay")
+    for function in ("lb_search_corrected", "lb_search_corrected_overlay")
 }
-_SIMILARITY_THRESHOLD = text(
-    "SELECT set_config('pg_trgm.similarity_threshold', "
-    "CAST(CAST(:threshold AS real) AS text), true)"
-)
 
 
 async def search_records(
@@ -716,17 +843,20 @@ async def search_records(
     *,
     limit: int,
     kind_ids: Sequence[str] | None = None,
-    titles: TitleSimilarity | None = None,
+    corrections: Sequence[Correction] = (),
+    correction_weight: float = 1.0,
     runtime: StoreRuntime | None = None,
 ) -> list[SearchHit]:
     """Best `limit` lexical matches of `query` (web search syntax) on the branch head.
 
-    `kind_ids` restricts the Kinds searched (`None`: every Kind); `titles` adds typo-tolerant
-    title matches (the plain SQL path sets `pg_trgm.similarity_threshold` for the
-    transaction, the function only for its own call).
+    `kind_ids` restricts the Kinds searched (`None`: every Kind). `corrections`
+    (`search_corrections`) widens each corrected word to its replacements: hits found only
+    that way have `exact` false and come after the others, ranked at `correction_weight`
+    times their rank.
     """
     settings = _runtime(runtime).settings
     layout = await resolve_layout(session, domain_id, branch)
+    fixes = [c for c in corrections if c.replacements]
     params: dict[str, Any] = {
         "domain": domain_id,
         "branch": layout.branch,
@@ -734,25 +864,29 @@ async def search_records(
         "query": query,
         "candidates": settings.reads.search_candidates,
         "limit": _cap(limit, settings.reads.max_search_rows),
+        "weight": correction_weight,
     }
     kinds = None if kind_ids is None else list(kind_ids)
     if _definer(runtime):
         params.update(
             kinds=kinds,
-            threshold=None if titles is None else titles.threshold,
-            title_weight=0.0 if titles is None else titles.weight,
+            words=[c.word for c in fixes for _ in c.replacements],
+            replacements=[r for c in fixes for r in c.replacements],
         )
-        statement = _SEARCH_DEFINER[_function("lb_search", layout)]
+        statement = _SEARCH_DEFINER[_function("lb_search_corrected", layout)]
     else:
-        if titles is not None:
-            await session.execute(_SIMILARITY_THRESHOLD, {"threshold": titles.threshold})
-            params["title_weight"] = titles.weight
+        for n, correction in enumerate(fixes):
+            params[f"word_{n}"] = correction.word
+            params[f"replacements_{n}"] = list(correction.replacements)
         if kinds is not None:
             params["kinds"] = kinds
         records = layout.records_from("m", probe=False)
-        statement = _search(records, kinds is not None, titles is not None)
+        statement = _search(records, kinds is not None, len(fixes))
     rows = (await session.execute(statement, params)).all()
-    return [SearchHit(kind_id, key, title, float(score)) for kind_id, key, title, score in rows]
+    return [
+        SearchHit(kind_id, key, title, float(score), bool(exact))
+        for kind_id, key, title, score, exact in rows
+    ]
 
 
 # Title matching (entity resolution) -------------------------------------------------------------

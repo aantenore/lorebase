@@ -617,8 +617,23 @@ async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> No
     scores = [hit["score"] for hit in lexical["items"]]
     assert scores == sorted(scores, reverse=True)
 
+    assert lexical["corrections"] == []
     typo = await post_ok(http, "/search", {"q": "Kavsen Aloys", "kinds": ["Supplier"]})
     assert "S-1001" in [hit["key"] for hit in typo["items"]]
+    assert [c["word"] for c in typo["corrections"]] == ["aloys"]
+    assert "alloys" in typo["corrections"][0]["replacements"]
+    assert "alloys" in (typo["items"][0]["snippet"] or "").lower()
+    filtered_typo = await post_ok(
+        http,
+        "/search",
+        {
+            "q": "Kavsen Aloys",
+            "kinds": ["Supplier"],
+            "where": {"attr": "country", "op": "eq", "value": "PL"},
+        },
+    )
+    assert filtered_typo["items"][0]["key"] == "S-1001"
+    assert filtered_typo["corrections"] == typo["corrections"]
 
     filtered = await post_ok(
         http,

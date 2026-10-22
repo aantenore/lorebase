@@ -163,6 +163,46 @@ the branch's 8,075 rows, and 271 in the overlay half. Warm calls of `lb_search` 
 `lb_search_overlay` with titles, p50 over 200 random title words: copy 17.1 ms and overlay
 30.0 ms with the shared index, 10.3 and 10.6 ms with the composite.
 
+### Word lexicon (typo tolerance)
+
+At 1M Records the branch-scoped trigram index on titles still read about 150,000 rows for a
+common word: two Kinds have sentence-like titles that contain it and are never similar to it
+as a whole, and a GIN bitmap cannot stop at `LIMIT`. Revision `0018` drops
+`ix_mat_records_branch_title` and moves trigram matching to the distinct words of a branch
+(the pg_trgm documentation's approach for unique words):
+
+- `mat_lexicon(domain_id, branch, kind_id, word, records)`: per Kind, the lexemes of the
+  branch's own search vectors and the number of its rows that hold each, without lexemes that
+  have a digit or more than 64 characters (`lb_lexicon_word`; codes and keys are not
+  corrected). Per Kind, so a caller whose grant names some Kinds gets corrections from the
+  words of those Kinds only, as search returns their Records only. Primary key
+  `(domain_id, branch, kind_id, word)`, trigram GIN `ix_mat_lexicon_branch_word` on `(domain_id,
+  branch, word gin_trgm_ops)`, and a partial index on `(domain_id, branch) WHERE records <= 0`
+  for the spent words a trigger deletes. Rows go with their ref (`ON DELETE CASCADE`);
+  row-level security as for the other Domain tables.
+- Three statement-level `AFTER` triggers on `mat_records` (`INSERT`, `UPDATE`, `DELETE`,
+  with transition tables) run `lb_lexicon_maintain`, which sums the changes per word with
+  one statement planned for the rows at hand (`EXECUTE`: a cached plan of a one-row statement
+  would compare every pair of rows of a 10,000-row commit), upserts the words that gained
+  rows, decrements the others and deletes those that reach 0. Unchanged search vectors (most
+  `UPDATE`s) are skipped by an anti-join; old rows of a branch whose ref is gone (a
+  cascading delete) are skipped. The function runs as the writer, so the writer's Domain
+  scope applies to its writes. Words are counted per branch, sorted, so two writers of one
+  branch (which the branch lock already serializes) take the row locks in one order.
+- An overlay holds the words of its own rows only. `lb_search_corrections` and the plain SQL
+  path look a word up in the overlay and its base: a superset of the words the overlay
+  reads (the base may have gained words since the fork), which can only add a correction
+  candidate that matches nothing. A promotion copies the base rows in, and their words with
+  them.
+- `lb_lexeme_query(word, alternatives)` builds `'word' | 'alternative' | ...` as tsquery
+  input (quotes and backslashes doubled), so lexemes are used as they are; the search
+  functions and the plain SQL search rewrite the query with it (`ts_rewrite`).
+
+The upgrade backfills the lexicon from every search vector under the lock that creating the
+triggers takes on `mat_records`; downgrade rebuilds the title index of `0011` concurrently.
+The search functions of revisions `0005` and `0010` stay for processes that still call them
+during an upgrade; their trigram branch has no index any more.
+
 ## Row-level security
 
 - Every table with a `domain_id` column, partitions included, has `ENABLE` and `FORCE ROW LEVEL
@@ -208,6 +248,8 @@ SQL otherwise:
 | `lb_links_in(domain, branch, relation, to_key, limit, after, from_kind, attribute)` | Links pointing at a Record along one Relation, stored or foreign-key backed |
 | `lb_neighborhood(domain, branch, seeds, depth, relations, fanout, max_steps, max_nodes)` | the recursive neighborhood walk |
 | `lb_query_by_attribute(domain, branch, kind, attribute, type, op, value, limit, after_value, after_key)` | comparisons on a per-Attribute partial index |
+| `lb_search_corrections(domain, branch, kinds, config, query, threshold, candidates, min_length)` | typo corrections of the query words (negated ones aside) the Kinds of a branch (and of its base) do not hold, from the word lexicon (revision `0018`) |
+| `lb_search_corrected(domain, branch, kinds, config, query, candidates, limit, words, replacements, weight)` | full-text search with corrected words widened to their replacements, exact matches first (revision `0018`; replaces `lb_search` in the store) |
 
 Why this keeps Domains isolated:
 

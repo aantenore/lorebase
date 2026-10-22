@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
@@ -198,3 +198,33 @@ def scans(plan: dict[str, Any]) -> list[tuple[str, str | None]]:
         for node in plan_nodes(plan)
         if "Relation Name" in node or "Index Name" in node
     ]
+
+
+_LEXICON = text(
+    "SELECT kind_id, word, records FROM mat_lexicon WHERE domain_id = :d AND branch = :b"
+)
+_LEXICON_RECOMPUTED = text(
+    "SELECT m.kind_id, w.lexeme, count(*) FROM mat_records m "
+    "CROSS JOIN LATERAL unnest(m.search) AS w "
+    "WHERE m.domain_id = :d AND m.branch = :b AND m.search IS NOT NULL AND NOT m.deleted "
+    "AND lb_lexicon_word(w.lexeme) GROUP BY m.kind_id, w.lexeme"
+)
+
+
+async def lexicon(session: AsyncSession, branch: str, domain_id: str = DOMAIN) -> dict[str, int]:
+    """The word lexicon of a branch's own rows, as the triggers of revision 0018 keep it:
+    rows holding each word, all Kinds together."""
+    found: dict[str, int] = {}
+    for _, word, records in (await session.execute(_LEXICON, {"d": domain_id, "b": branch})).all():
+        found[word] = found.get(word, 0) + int(records)
+    return found
+
+
+async def assert_lexicon_in_step(
+    session: AsyncSession, branch: str, domain_id: str = DOMAIN
+) -> None:
+    """The kept lexicon equals one recomputed from the branch's own search vectors, per Kind."""
+    params = {"d": domain_id, "b": branch}
+    kept = {(k, w): int(n) for k, w, n in (await session.execute(_LEXICON, params)).all()}
+    rows = (await session.execute(_LEXICON_RECOMPUTED, params)).all()
+    assert kept == {(k, w): int(n) for k, w, n in rows}, branch

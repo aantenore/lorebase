@@ -47,7 +47,7 @@ class MatRecord(Base):
     __table_args__ = (
         _branch_fk(),
         # btree_gin (revision 0011): a search's Domain and branch are index conditions of the
-        # search vector and trigram title indexes.
+        # search vector index.
         Index(
             "ix_mat_records_branch_search",
             "domain_id",
@@ -60,14 +60,6 @@ class MatRecord(Base):
             "values",
             postgresql_using="gin",
             postgresql_ops={"values": "jsonb_path_ops"},
-        ),
-        Index(
-            "ix_mat_records_branch_title",
-            "domain_id",
-            "branch",
-            "title",
-            postgresql_using="gin",
-            postgresql_ops={"title": "gin_trgm_ops"},
         ),
         HASH_PARTITIONED,
     )
@@ -108,6 +100,35 @@ class MatLink(Base):
     lineage: Mapped[dict[str, Any]]
     revision_generation: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     deleted: Mapped[bool] = mapped_column(server_default=text("false"))
+
+
+class MatLexicon(Base):
+    """Per Kind, the words of a branch's own search vectors and how many of its rows hold
+    each (revision 0018): typo-tolerant search matches query words against them by trigrams.
+
+    Kept by triggers on `mat_records`; words with a digit or longer than 64 characters are
+    left out. An overlay holds the words of its own rows, and its readers add its base's.
+    """
+
+    __tablename__ = "mat_lexicon"
+    __table_args__ = (
+        _branch_fk(),
+        Index(
+            "ix_mat_lexicon_branch_word",
+            "domain_id",
+            "branch",
+            "word",
+            postgresql_using="gin",
+            postgresql_ops={"word": "gin_trgm_ops"},
+        ),
+        Index("ix_mat_lexicon_spent", "domain_id", "branch", postgresql_where=text("records <= 0")),
+    )
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    kind_id: Mapped[str] = mapped_column(primary_key=True)
+    word: Mapped[str] = mapped_column(primary_key=True)
+    records: Mapped[int] = mapped_column(BigInteger)
 
 
 class MatHistory(Base):
@@ -171,7 +192,7 @@ class EmbeddingCursor(Base):
 
 
 class BranchMaterialization(Base):
-    """Progress of turning an overlay into a full copy in batches (revision 0017).
+    """Progress of turning an overlay into a full copy in batches (revision 0018).
 
     One row per branch whose rows a `store.materialize` job copies: a copy branch created
     as an overlay, or an overlay promoted in the background. `phase` and `cursor` say where

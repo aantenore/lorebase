@@ -41,7 +41,7 @@ from lorebase_store.models.enums import Materialization
 from lorebase_store.reads import (
     Comparison,
     Direction,
-    TitleSimilarity,
+    TypoTolerance,
     get_record,
     head_schema,
     hydrate_records,
@@ -50,6 +50,7 @@ from lorebase_store.reads import (
     links_to_record,
     list_records,
     query_by_attribute,
+    search_corrections,
     search_records,
 )
 from lorebase_store.repositories import MaterializedRepository, RefRepository, scope_to_domain
@@ -57,7 +58,14 @@ from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import MaterializeSettings, ReadSettings, StoreSettings
 from lorebase_store.traverse import neighborhood
 
-from .read_support import SOURCED_FROM, part_with, rated_supplier, seed_graph
+from .read_support import (
+    SOURCED_FROM,
+    assert_lexicon_in_step,
+    lexicon,
+    part_with,
+    rated_supplier,
+    seed_graph,
+)
 from .support import (
     AUTHOR,
     DOMAIN,
@@ -83,6 +91,7 @@ OVERLAY = "agent/task-1"
 COPY = "copy-1"
 PART_COUNT = ident("att", 199)
 PART_COUNT_DERIVATION = ident("drv", 1)
+TYPOS = TypoTolerance(threshold=0.3, weight=0.5, candidates=10, min_length=3)
 
 
 def counted_supplier() -> Kind:
@@ -267,16 +276,21 @@ async def snapshot(
     for words in ("bearing", "seal", "Alpha", "Delta"):
         hits = await search_records(session, DOMAIN, branch, words, limit=20, runtime=runtime)
         found[f"search {words}"] = [(h.kind_id, h.key, h.title, round(h.score, 6)) for h in hits]
-    typo = await search_records(
-        session,
-        DOMAIN,
-        branch,
-        "Bearngs",
-        limit=20,
-        titles=TitleSimilarity(threshold=0.2, weight=0.5),
-        runtime=runtime,
-    )
-    found["search typo"] = [(h.kind_id, h.key, h.title, round(h.score, 6)) for h in typo]
+    for words in ("Bearngs", "Gama filtres"):
+        fixes = await search_corrections(session, DOMAIN, branch, words, TYPOS, runtime=runtime)
+        typo = await search_records(
+            session,
+            DOMAIN,
+            branch,
+            words,
+            limit=20,
+            corrections=fixes,
+            correction_weight=TYPOS.weight,
+            runtime=runtime,
+        )
+        found[f"search typo {words}"] = [
+            (h.kind_id, h.key, h.title, round(h.score, 6), h.exact) for h in typo
+        ]
     for kind_id, key in ((PART, "P-1"), (SUPPLIER, "S-1")):
         hood = await neighborhood(
             session, DOMAIN, branch, schema, [(kind_id, key)], depth=2, runtime=runtime
@@ -316,6 +330,12 @@ async def assert_same_reads(sessions: Sessions, runtime: StoreRuntime) -> None:
             overlay = await snapshot(session, OVERLAY, found.schema, reader)
             copy = await snapshot(session, COPY, found.schema, reader)
             assert overlay == copy
+        for branch in ("main", OVERLAY, COPY):
+            await assert_lexicon_in_step(session, branch)
+        # Corrections on the overlay look up its words and its base's: every word it reads.
+        assert set(await lexicon(session, COPY)) <= set(await lexicon(session, OVERLAY)) | set(
+            await lexicon(session, "main")
+        )
     for branch in ("main", OVERLAY, COPY):
         async with sessions() as session:
             report = await verify(session, DOMAIN, branch, runtime=runtime, deep=True, derived=True)
@@ -574,6 +594,10 @@ async def test_refork_moves_a_merged_overlay_to_the_base_head(
     assert record.title == "Moved on"
     assert log[-1].reason == "branch.refork"
     assert await own_rows(sessions, "agent/task-2") == 0
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        assert await lexicon(session, "agent/task-2") == {}
+        await assert_lexicon_in_step(session, OVERLAY)
     async with sessions() as session:
         report = await verify(session, DOMAIN, "agent/task-2", runtime=runtime, derived=True)
     assert report.ok, report.divergences
@@ -604,6 +628,12 @@ async def test_deleting_or_rebuilding_a_base_promotes_its_overlays(
         async with sessions() as session:
             report = await verify(session, DOMAIN, branch, runtime=runtime, deep=True)
         assert report.ok, (branch, report.divergences)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        assert await lexicon(session, "base") == {}, "the words go with the branch"
+        for branch in ("main", OVERLAY, "agent/task-2", "agent/task-3"):
+            await assert_lexicon_in_step(session, branch)
+            assert await lexicon(session, branch), "promoted overlays hold every word"
 
 
 async def test_branch_mode_defaults_and_fallbacks(sessions: Sessions) -> None:

@@ -153,10 +153,26 @@ class SearchSettings(SectionModel):
         default=200, ge=1, description="Rows of each ranked list before fusion and paging."
     )
     trigram_threshold: float = Field(
-        default=0.3, ge=0, le=1, description="Least title similarity for a typo-tolerant hit."
+        default=0.3,
+        gt=0,
+        le=1,
+        description="Least trigram similarity between a query word the branch does not hold "
+        "and a word of the branch that corrects it.",
     )
     trigram_weight: float = Field(
-        default=0.5, ge=0, description="Weight of title similarity added to ts_rank_cd."
+        default=0.5,
+        ge=0,
+        description="Weight of ts_rank_cd for hits found only through a corrected word; they "
+        "always rank after the hits of the query as written.",
+    )
+    typo_candidates: int = Field(
+        default=3,
+        ge=0,
+        description="Corrections tried per unknown query word, most similar first; 0 turns "
+        "typo tolerance off.",
+    )
+    typo_min_length: int = Field(
+        default=4, ge=1, description="Shortest query word (in characters) that is corrected."
     )
     headline_options: str = Field(
         default="MaxWords=30, MinWords=10, MaxFragments=2",

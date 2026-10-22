@@ -393,6 +393,10 @@ def search_view(body: m.SearchResult, output: OutputSettings) -> View:
         output.max_items,
     )
     view: View = {"revision": body.revision, "mode": body.mode, "items": items}
+    if body.corrections:
+        view["corrections"] = [
+            {"word": c.word, "replacements": c.replacements} for c in body.corrections
+        ]
     if omitted:
         view["omitted"] = omitted
     return view
@@ -400,6 +404,10 @@ def search_view(body: m.SearchResult, output: OutputSettings) -> View:
 
 def search_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     lines = [f"rev {view['revision']} ({view['mode']}): {len(view['items'])} hits"]
+    for correction in view.get("corrections", []):
+        lines.append(
+            f"also searched {correction['word']} as {', '.join(correction['replacements'])}"
+        )
     for index, hit in enumerate(view["items"], start=1):
         snippet = hit.get("snippet")
         tail = f" - {value_text(snippet, output.max_value_chars)}" if snippet else ""
