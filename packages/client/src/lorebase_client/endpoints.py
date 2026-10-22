@@ -367,6 +367,39 @@ def get_record(
     )
 
 
+def record_history(
+    domain: str,
+    kind: str,
+    key: str,
+    *,
+    branch: str | None = None,
+    values: bool = False,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.RecordHistory]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/history",
+        parse_model(m.RecordHistory),
+        params={"branch": branch, "values": values or None, "limit": limit, "cursor": cursor},
+        safe=True,
+        cacheable=True,
+    )
+
+
+def record_lineage(
+    domain: str, kind: str, key: str, *, branch: str | None = None
+) -> Call[m.RecordLineage]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/lineage",
+        parse_model(m.RecordLineage),
+        params={"branch": branch},
+        safe=True,
+        cacheable=True,
+    )
+
+
 def list_record_links(
     domain: str,
     kind: str,

@@ -914,6 +914,57 @@ def m_context(**members: Any) -> Any:
     return ContextRequest(**members)
 
 
+def test_record_history_and_lineage(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    served = {
+        "revision": "aa",
+        "served_from": "tree",
+        "branch": "work",
+        "kind": "Part",
+        "key": "P-1",
+    }
+    change = {
+        "revision": "aa",
+        "generation": 1,
+        "at": "2026-01-01T00:00:00Z",
+        "author": "ada",
+        "message": "add",
+        "origin": {"type": "operation"},
+        "change": "created",
+        "attributes": [{"name": "title", "after": "Bolt"}],
+    }
+    history = http.get("/domains/supply/kinds/Part/records/P-1/history")
+    history.side_effect = [
+        httpx.Response(200, json={**served, "items": [change], "next_cursor": "c2"}),
+        httpx.Response(200, json={**served, "items": [change], "next_cursor": "c2"}),
+        httpx.Response(200, json={**served, "items": [change], "next_cursor": None}),
+    ]
+    lineage = http.get("/domains/supply/kinds/Part/records/P-1/lineage")
+    lineage.respond(
+        200,
+        json={
+            **served,
+            "created": change,
+            "changes": 1,
+            "attributes": [{"name": "title", "value": "Bolt"}],
+            "sources": [],
+            "proposals": [],
+        },
+    )
+    with make(sleeps) as client:
+        page = client.records.history("supply", "Part", "P-1", branch="work", values=True, limit=1)
+        every = list(client.records.iterate_history("supply", "Part", "P-1", page_size=1))
+        traced = client.records.lineage("supply", "Part", "P-1", branch="work")
+    assert page.items[0].attributes[0].after == "Bolt"
+    assert page.next_cursor == "c2"
+    assert len(every) == 2
+    assert [dict(c.request.url.params) for c in history.calls[:1]] == [
+        {"branch": "work", "values": "true", "limit": "1"}
+    ]
+    assert dict(history.calls[2].request.url.params) == {"limit": "1", "cursor": "c2"}
+    assert traced.created is not None
+    assert dict(lineage.calls[0].request.url.params) == {"branch": "work"}
+
+
 def test_explain_json_and_markdown(http: respx.MockRouter, sleeps: Sleeps) -> None:
     route = http.get("/domains/supply/kinds/Part/records/P-1/explain")
     explained = {

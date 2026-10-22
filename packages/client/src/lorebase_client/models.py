@@ -21,6 +21,7 @@ SchemaSection = Literal["kinds", "relations", "traits", "operations", "derivatio
 SearchMode = Literal["lexical", "semantic", "hybrid"]
 BranchMode = Literal["copy", "overlay"]
 ServedFrom = Literal["materialized", "tree"]
+ChangeKind = Literal["created", "updated", "deleted"]
 LinkDirection = Literal["forward", "inverse"]
 ProposalStatus = Literal["open", "merged", "closed"]
 ProposalOrigin = Literal["manual", "source_sync", "extraction", "operation"]
@@ -939,6 +940,89 @@ class Explain(Model):
     links_truncated: bool
     history: dict[str, Any]
     proposals: list[dict[str, Any]]
+
+
+class Provenance(Model):
+    """Where a change came from."""
+
+    id: str
+    origin_type: str
+    origin: dict[str, JsonValue]
+    actor: str
+    at: datetime
+
+
+class AttributeChange(Model):
+    name: str
+    before: JsonValue = None
+    after: JsonValue = None
+    provenance: Provenance | None = None
+
+
+class RecordChange(Model):
+    """One change of a Record in one Revision."""
+
+    revision: str
+    generation: int
+    at: datetime
+    author: str
+    on_behalf_of: str | None = None
+    message: str
+    origin: dict[str, JsonValue]
+    change: ChangeKind
+    attributes: list[AttributeChange]
+    provenance: Provenance | None = None
+
+
+class RecordHistory(Served):
+    branch: str
+    kind: str
+    key: str
+    items: list[RecordChange]
+    next_cursor: str | None = None
+
+
+class LineageProposal(Model):
+    id: str
+    title: str
+    status: str
+    merged_revision: str | None = None
+
+
+class ExtractionEvidence(Model):
+    job_id: str
+    document_id: str
+    span_start: int
+    span_end: int
+    model_id: str
+    prompt_version: str
+
+
+class ValueLineage(Model):
+    """The current value of an Attribute and the change behind it."""
+
+    name: str
+    value: JsonValue = None
+    provenance: Provenance | None = None
+    revision: str | None = None
+    revision_at: datetime | None = None
+    author: str | None = None
+    message: str | None = None
+    source: str | None = None
+    operation: str | None = None
+    extraction: ExtractionEvidence | None = None
+    proposal: LineageProposal | None = None
+
+
+class RecordLineage(Served):
+    branch: str
+    kind: str
+    key: str
+    created: RecordChange | None = None
+    changes: int
+    attributes: list[ValueLineage]
+    sources: list[str]
+    proposals: list[LineageProposal]
 
 
 class HealthSummary(Model):
