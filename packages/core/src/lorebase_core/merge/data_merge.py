@@ -409,7 +409,13 @@ class _PartitionMerge:
         if self.partition in self.ctx.frozen:
             self.ctx.open_keys.add((self.partition, key))
             return b
-        resolution = self.ctx.decide(conflict, self.element_id, attribute_id)
+        target = None if self.merged is None else self.merged.attributes.get(attribute_id)
+        resolution = self.ctx.decide(
+            conflict,
+            self.element_id,
+            attribute_id,
+            attribute_authority=None if target is None else target.authority,
+        )
         if resolution is None:
             self.ctx.report(conflict)
             self.ctx.open_keys.add((self.partition, key))

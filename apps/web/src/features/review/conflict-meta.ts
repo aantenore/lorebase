@@ -1,5 +1,12 @@
 import { GROUPED_KINDS } from '@/api/conflict-rules';
-import type { Conflict, ConflictCode, JsonValue, ResolutionChoice, Schema } from '@/api/types';
+import type {
+  AutoResolution,
+  Conflict,
+  ConflictCode,
+  JsonValue,
+  ResolutionChoice,
+  Schema,
+} from '@/api/types';
 import { parseAttributeType, type ValueSpec } from '@/api/values';
 
 /** Display names of the Conflict codes (design 6.9). */
@@ -166,4 +173,31 @@ export function specOf(conflict: Conflict, schema: Schema | undefined): ValueSpe
     constraints: attribute.constraints,
   };
   return parseAttributeType(spec.type) === null ? null : spec;
+}
+
+const asText = (value: JsonValue | undefined) => (typeof value === 'string' ? value : null);
+
+/**
+ * Why a Lineage-based policy picked its side, from the details of the automatic resolution:
+ * the winning and losing origins (`authority`) or change times (`newest_wins`). `null` when
+ * the resolution carries no reason (`prefer`, `cascade_dangling`, defaults).
+ */
+export function policyReason(auto: AutoResolution): string | null {
+  const details = auto.details ?? {};
+  const winner = auto.choice === 'ours' ? 'ours' : 'theirs';
+  const loser = winner === 'ours' ? 'theirs' : 'ours';
+  if (auto.resolver === 'policy:authority') {
+    const won = asText(details[`${winner}_origin`]);
+    const lost = asText(details[`${loser}_origin`]) ?? 'an unranked origin';
+    return won === null ? null : `${won} outranks ${lost}`;
+  }
+  if (auto.resolver === 'policy:newest_wins') {
+    const won = asText(details[`${winner}_at`]);
+    const lost = asText(details[`${loser}_at`]);
+    if (won === null || lost === null) return null;
+    return details.tie_break === undefined
+      ? `changed ${won}, after ${lost}`
+      : `same time ${won}, greater provenance id`;
+  }
+  return null;
 }

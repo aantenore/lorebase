@@ -292,6 +292,11 @@ existing Record are kept, and Links of other Relations are left alone.
 | `auto_when_clean` | Merged at once when no Conflict remains; otherwise left open with its Conflicts |
 | `auto_with_authority` | As `auto_when_clean`, and value Conflicts on Attributes whose `authority` is this Source are resolved in the Source's favor |
 
+Every Source merge also applies the Domain's `merge_policy` setting, so its `authority`
+ranking (for example `["source:<erp source id>", "principal:usr_ops"]`) and `newest_wins`
+decide the remaining value Conflicts from the Lineage of both branches
+([design 6.10](design.md#610-resolution-flows)).
+
 Automatic merges into a protected target happen only with `auto_merge_protected` (default
 true): the policy is part of the reviewed schema. With it off, those Proposals stay open. A run
 with no changes leaves an open Proposal untouched; with an automatic policy it retries its merge.

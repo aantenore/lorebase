@@ -40,7 +40,10 @@ export const GROUPED_KINDS: ReadonlySet<ConflictCode> = new Set<ConflictCode>([
   'XS9',
 ]);
 
-/** Kinds a merge policy can resolve without a person (`prefer` and `cascade_dangling`). */
+/**
+ * Kinds a merge policy can resolve without a person (`prefer` and `cascade_dangling`;
+ * `authority` and `newest_wins` for DV1 and DV3).
+ */
 export const MACHINE_RESOLVABLE: ReadonlySet<ConflictCode> = new Set<ConflictCode>([
   'DV1',
   'DV2',

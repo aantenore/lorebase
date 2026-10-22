@@ -22,7 +22,7 @@ Engine and storage
 - [x] Canonical HAMT trees, tree diff, immutable Revisions, ancestry and merge base
 - [x] Data validation against the schema
 - [x] Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies `prefer`, cascade and defaults
-- [ ] Merge policies `authority` and `newest_wins`
+- [x] Merge policies `authority` and `newest_wins`
 - [x] Postgres schema and Alembic migrations, row-level security, store repositories
 - [x] Commit pipeline, materializer and verification
 - [x] In-memory merge demo ([examples/merge_demo.py](../examples/merge_demo.py))

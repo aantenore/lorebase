@@ -1,5 +1,5 @@
-import type { Conflict } from '@/api/types';
-import { locationOf, messageOf, partitionName, specOf } from './conflict-meta';
+import type { AutoResolution, Conflict } from '@/api/types';
+import { locationOf, messageOf, partitionName, policyReason, specOf } from './conflict-meta';
 import { makeConflict } from '@/api/mock/conflicts';
 import { mapSchema } from '@/api/live/schema';
 import fixture from '@/api/live/fixtures/supply-schema.json';
@@ -49,5 +49,45 @@ describe('Conflicts as Keeper reports them', () => {
       type: 'integer',
       constraints: { min: 0, max: 100 },
     });
+  });
+});
+
+describe('policyReason', () => {
+  const auto: AutoResolution = {
+    kind: 'DV1',
+    fingerprint: 'f',
+    partition: 'k:knd_x',
+    key: 'S-1',
+    attribute: 'att_x',
+    choice: 'theirs',
+    resolver: 'policy:authority',
+    count: 1,
+    sample: [],
+  };
+
+  it('names the winning and losing origins of authority', () => {
+    const details = { theirs_origin: 'source:src_erp', ours_origin: null };
+    expect(policyReason({ ...auto, details })).toBe('source:src_erp outranks an unranked origin');
+  });
+
+  it('names the compared times of newest_wins', () => {
+    const details = {
+      ours_at: '2026-03-02T10:00:00+00:00',
+      theirs_at: '2026-03-01T10:00:00+00:00',
+    };
+    expect(policyReason({ ...auto, choice: 'ours', resolver: 'policy:newest_wins', details })).toBe(
+      'changed 2026-03-02T10:00:00+00:00, after 2026-03-01T10:00:00+00:00',
+    );
+    expect(
+      policyReason({
+        ...auto,
+        resolver: 'policy:newest_wins',
+        details: { ...details, tie_break: 'provenance_id' },
+      }),
+    ).toBe('same time 2026-03-01T10:00:00+00:00, greater provenance id');
+  });
+
+  it('has no reason for prefer', () => {
+    expect(policyReason({ ...auto, resolver: 'policy:prefer' })).toBeNull();
   });
 });

@@ -765,7 +765,10 @@ export interface Conflict {
   details: Record<string, JsonValue>;
   /** Choices accepted for this Conflict (`CHOICES` of its kind). */
   choices: ResolutionChoice[];
-  /** A merge policy (`prefer`, `cascade_dangling`) can resolve this kind without a person. */
+  /**
+   * A merge policy (`prefer`, `authority`, `newest_wins`, `cascade_dangling`) can resolve this
+   * kind without a person.
+   */
   machine_resolvable: boolean;
   /** Keeper: the Conflict id, equal to `fingerprint`. */
   id?: string;
@@ -804,6 +807,11 @@ export interface AutoResolution {
   resolver: string;
   count: number;
   sample: string[];
+  /**
+   * Why a Lineage-based policy decided: `ours_origin`/`theirs_origin` (`policy:authority`),
+   * `ours_at`/`theirs_at` and `tie_break` (`policy:newest_wins`), and the provenance entries.
+   */
+  details?: Record<string, JsonValue>;
 }
 
 /**

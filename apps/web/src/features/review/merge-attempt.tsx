@@ -15,7 +15,7 @@ import { Badge, EmptyState, QueryBoundary, Section } from '@/ui/layout';
 import { useToast } from '@/ui/toast';
 import { BulkBar, FilterBar } from './attempt-toolbar';
 import { ConflictList, listOrder, neighbor } from './conflict-list';
-import { buildNames, partitionName, specOf, type Names } from './conflict-meta';
+import { buildNames, partitionName, policyReason, specOf, type Names } from './conflict-meta';
 import { ConflictResolver } from './conflict-resolver';
 import {
   filterConflicts,
@@ -55,12 +55,16 @@ function AutoResolutions({ attempt, names }: { attempt: MergeAttempt; names: Nam
         Resolved by policy ({attempt.auto_resolutions.length})
       </summary>
       <ul className="mt-1 list-disc pl-5 text-muted">
-        {attempt.auto_resolutions.map((auto) => (
-          <li key={auto.fingerprint}>
-            {auto.kind} {partitionName(auto.partition, names)}
-            {auto.key === null ? '' : `/${auto.key}`}: {auto.choice} by {auto.resolver}
-          </li>
-        ))}
+        {attempt.auto_resolutions.map((auto) => {
+          const reason = policyReason(auto);
+          return (
+            <li key={auto.fingerprint}>
+              {auto.kind} {partitionName(auto.partition, names)}
+              {auto.key === null ? '' : `/${auto.key}`}: {auto.choice} by {auto.resolver}
+              {reason === null ? '' : ` (${reason})`}
+            </li>
+          );
+        })}
       </ul>
     </details>
   );

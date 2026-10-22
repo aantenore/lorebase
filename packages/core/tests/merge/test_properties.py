@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from lorebase_core.merge import Conflict, MergeAttempt, MergedTree, MergePolicy, MergeResult
-from lorebase_core.model import Record
+from lorebase_core.merge import (
+    ChangeStamp,
+    Conflict,
+    ConflictKind,
+    LineageLoader,
+    MergeAttempt,
+    MergedTree,
+    MergePolicy,
+    MergeResult,
+)
+from lorebase_core.model import ProvenanceEntry, Record, SourceSyncOrigin
+from lorebase_core.tree import kind_partition
 
-from .support import Edit, Repo, base_schema, supplier
+from .support import NAME, SUPPLIER, Edit, Repo, base_schema, ident, supplier
 
 _SETTINGS = settings(max_examples=40, deadline=None)
 
@@ -149,3 +160,126 @@ def test_same_changes_on_both_sides_merge_to_them(world: World) -> None:
     assert isinstance(result, MergedTree)
     assert result.root == repo.roots[ours] == repo.roots[twin]
     assert result.changes == ()
+
+
+# Lineage-based policies ---------------------------------------------------------------------
+
+_SOURCES = (ident("src", 1), ident("src", 2), ident("src", 3))
+_LINEAGE_POLICIES = st.sampled_from(
+    [
+        MergePolicy(newest_wins=True),
+        MergePolicy(authority=tuple(f"source:{s}" for s in _SOURCES[:2])),
+        MergePolicy(authority=(f"source:{_SOURCES[0]}",), newest_wins=True),
+        MergePolicy(newest_wins_attributes=frozenset({NAME})),
+    ]
+)
+
+
+@dataclass(frozen=True)
+class Stamped:
+    """A world plus, per Supplier and side, the Source and hour of its last rename."""
+
+    world: World
+    stamps: tuple[tuple[tuple[int, int], tuple[int, int]], ...]
+
+
+@st.composite
+def stamped_worlds(draw: st.DrawFn) -> Stamped:
+    world = draw(worlds(disjoint=False))
+    stamp = st.tuples(st.integers(0, len(_SOURCES) - 1), st.integers(0, 3))
+    stamps = draw(st.lists(st.tuples(stamp, stamp), min_size=world.size, max_size=world.size))
+    return Stamped(world, tuple(stamps))
+
+
+def _lineage(stamped: Stamped, ours: bytes, theirs: bytes) -> LineageLoader:
+    """Lineage of the Supplier names on both sides; entry ids differ per side and key."""
+    partition = kind_partition(SUPPLIER)
+    tables: dict[bytes, dict[str, dict[str, ChangeStamp]]] = {ours: {}, theirs: {}}
+    for i, pair in enumerate(stamped.stamps):
+        for n, (revision, (source, hour)) in enumerate(zip((ours, theirs), pair, strict=True)):
+            entry = ProvenanceEntry(
+                id=ident("prv", 2 * i + n + 1),
+                origin=SourceSyncOrigin(source_id=_SOURCES[source], run_id="r"),
+                actor="scribe",
+                at=f"2026-01-01T0{hour}:00:00Z",
+            )
+            tables[revision][f"S-{i}"] = {NAME: ChangeStamp.of(entry)}
+
+    def load(revision: bytes, part: str, key: str) -> Mapping[str, ChangeStamp]:
+        return tables.get(revision, {}).get(key, {}) if part == partition else {}
+
+    return load
+
+
+def _outcome_key(outcome: MergedTree | MergeAttempt) -> tuple[object, ...]:
+    if isinstance(outcome, MergedTree):
+        return ("merged", outcome.root, outcome.auto_resolutions)
+    return ("attempt", outcome.conflicts, outcome.auto_resolutions)
+
+
+def _open(outcome: MergedTree | MergeAttempt) -> set[str]:
+    if isinstance(outcome, MergeAttempt):
+        return {c.fingerprint for c in outcome.conflicts}
+    return set()
+
+
+@_SETTINGS
+@given(stamped_worlds(), _LINEAGE_POLICIES)
+def test_lineage_policies_are_deterministic(stamped: Stamped, policy: MergePolicy) -> None:
+    repo, _, ours, theirs, _, _ = _build(stamped.world)
+    loader = _lineage(stamped, ours, theirs)
+    first = repo.merge(ours, theirs, policy=policy, lineage=loader)
+    second = repo.merge(ours, theirs, policy=policy, lineage=loader)
+    assert _outcome_key(first) == _outcome_key(second)
+
+
+@_SETTINGS
+@given(stamped_worlds(), _LINEAGE_POLICIES)
+def test_lineage_policies_lose_no_conflict(stamped: Stamped, policy: MergePolicy) -> None:
+    """Every Conflict of the plain merge stays open or is recorded as resolved by the policy."""
+    repo, _, ours, theirs, _, _ = _build(stamped.world)
+    loader = _lineage(stamped, ours, theirs)
+    before = _open(repo.merge(ours, theirs, lineage=loader))
+    with_policy = repo.merge(ours, theirs, policy=policy, lineage=loader)
+    after = _open(with_policy)
+    auto = {a.fingerprint: a for a in with_policy.auto_resolutions}
+    assert after.isdisjoint(auto)
+    assert after | auto.keys() == before
+    for resolution in auto.values():
+        assert resolution.kind is ConflictKind.ATTRIBUTE_VALUE
+        assert resolution.resolver in {"policy:authority", "policy:newest_wins"}
+        assert resolution.details
+
+
+@_SETTINGS
+@given(stamped_worlds(), _LINEAGE_POLICIES)
+def test_lineage_policies_do_not_depend_on_which_side_is_ours(
+    stamped: Stamped, policy: MergePolicy
+) -> None:
+    repo, _, ours, theirs, _, _ = _build(stamped.world)
+    loader = _lineage(stamped, ours, theirs)
+    forward = repo.merge(ours, theirs, policy=policy, lineage=loader)
+    backward = repo.merge(theirs, ours, policy=policy, lineage=loader)
+    assert type(forward) is type(backward)
+    if isinstance(forward, MergedTree):
+        assert isinstance(backward, MergedTree)
+        assert forward.root == backward.root
+    else:
+        assert isinstance(backward, MergeAttempt)
+        assert _labels(forward.conflicts) == _labels(backward.conflicts, swap=True)
+    assert len(forward.auto_resolutions) == len(backward.auto_resolutions)
+
+
+@_SETTINGS
+@given(stamped_worlds(), _LINEAGE_POLICIES)
+def test_a_policy_merge_is_idempotent(stamped: Stamped, policy: MergePolicy) -> None:
+    repo, _, ours, theirs, _, _ = _build(stamped.world)
+    loader = _lineage(stamped, ours, theirs)
+    outcome = repo.merge(ours, theirs, policy=policy, lineage=loader)
+    if not isinstance(outcome, MergedTree):
+        return
+    result = repo.add("merged", outcome.root, ours, theirs)
+    again = repo.merge(result, theirs, policy=policy, lineage=loader)
+    assert isinstance(again, MergedTree)
+    assert again.result is MergeResult.UP_TO_DATE
+    assert again.root == outcome.root

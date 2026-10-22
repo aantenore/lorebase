@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Final
@@ -24,7 +24,15 @@ from lorebase_core.merge.conflicts import (
     conflict_fingerprint,
 )
 from lorebase_core.merge.objects import ObjectStore, SchemaLoader, load_object
-from lorebase_core.merge.policies import MergePolicy
+from lorebase_core.merge.policies import (
+    ChangeStamp,
+    MergePolicy,
+    PolicyDecision,
+    PolicyName,
+    PolicyRule,
+    decide_authority,
+    decide_newest,
+)
 from lorebase_core.model import Schema
 from lorebase_core.tree import NodeStore, TreeParams
 from lorebase_core.validate import SchemaRules
@@ -35,6 +43,7 @@ __all__ = [
     "Context",
     "Directives",
     "Group",
+    "LineageLookup",
     "Missing",
     "Payload",
     "Stage",
@@ -70,6 +79,12 @@ _PREFERABLE = frozenset(
         ConflictKind.SCHEMA_DELETE_MODIFY,
     }
 )
+#: Conflicts on one Attribute: the only ones Lineage-based policies decide.
+_ATTRIBUTE_KINDS = frozenset({ConflictKind.ATTRIBUTE_VALUE, ConflictKind.ADD_ADD})
+
+LineageLookup = Callable[[Side, str, str], Mapping[str, ChangeStamp]]
+"""``(side, partition, key) -> {attribute id: change stamp}`` of the last change of each
+Attribute of an element on ``ours`` or ``theirs``."""
 
 
 def same(a: Value, b: Value) -> bool:
@@ -195,6 +210,8 @@ class Context:
     virtual: bool = False
     #: Options of the static checks of the merged schema.
     rules: SchemaRules = field(default_factory=SchemaRules)
+    #: Lineage of the sides, read by the ``authority`` and ``newest_wins`` policies.
+    lineage: LineageLookup | None = None
     conflicts: list[Conflict] = field(default_factory=list)
     auto: list[AutoResolution] = field(default_factory=list)
     out: Directives = field(default_factory=Directives)
@@ -279,23 +296,61 @@ class Context:
         )
 
     def decide(
-        self, conflict: Conflict, element: str | None, attribute: str | None
+        self,
+        conflict: Conflict,
+        element: str | None,
+        attribute: str | None,
+        *,
+        attribute_authority: str | None = None,
     ) -> Resolution | None:
-        """The resolution of ``conflict``: given by a resolver, else by policy, else none."""
+        """The resolution of ``conflict``: given by a resolver, else by policy, else none.
+
+        Policy rules are tried in the order of ``MergePolicy.rules``; the first that decides
+        resolves the Conflict and is recorded as an automatic resolution with its reasons.
+        """
         resolution = self.resolutions.get(conflict.fingerprint)
         if resolution is not None:
             check_choice(conflict, resolution)
             return resolution
         if self.virtual or conflict.kind not in _PREFERABLE:
             return None
-        side = self.policy.preferred(element, attribute)
-        if side is None:
-            return None
-        choice = ResolutionChoice(side.value)
-        self.record_auto(conflict, choice, "policy:prefer")
-        return Resolution(fingerprint=conflict.fingerprint, choice=choice, resolver="policy:prefer")
+        rules = self.policy.rules(element, attribute, attribute_authority=attribute_authority)
+        for rule in rules:
+            decision = self._apply(rule, conflict)
+            if decision is None:
+                continue
+            choice = ResolutionChoice(decision.side.value)
+            resolver = decision.name.resolver
+            self.record_auto(conflict, choice, resolver, details=decision.details)
+            return Resolution(fingerprint=conflict.fingerprint, choice=choice, resolver=resolver)
+        return None
 
-    def record_auto(self, conflict: Conflict, choice: ResolutionChoice, resolver: str) -> None:
+    def _apply(self, rule: PolicyRule, conflict: Conflict) -> PolicyDecision | None:
+        if rule.name is PolicyName.PREFER:
+            assert rule.side is not None
+            return PolicyDecision(PolicyName.PREFER, rule.side)
+        if conflict.kind not in _ATTRIBUTE_KINDS:
+            return None
+        ours = self.lineage_entry(Side.OURS, conflict)
+        theirs = self.lineage_entry(Side.THEIRS, conflict)
+        if rule.name is PolicyName.AUTHORITY:
+            return decide_authority(rule.ranking, ours, theirs)
+        return decide_newest(ours, theirs)
+
+    def lineage_entry(self, side: Side, conflict: Conflict) -> ChangeStamp | None:
+        """The stamp of ``side``'s last change of the Conflict's Attribute."""
+        if self.lineage is None or conflict.key is None or conflict.attribute is None:
+            return None
+        return self.lineage(side, conflict.partition, conflict.key).get(conflict.attribute)
+
+    def record_auto(
+        self,
+        conflict: Conflict,
+        choice: ResolutionChoice,
+        resolver: str,
+        *,
+        details: Mapping[str, JsonValue] | None = None,
+    ) -> None:
         if self.virtual:
             return
         self.auto.append(
@@ -309,6 +364,7 @@ class Context:
                 resolver=resolver,
                 count=conflict.count,
                 sample=conflict.sample,
+                details=dict(details or {}),
             )
         )
 

@@ -494,6 +494,50 @@ DOMAIN_SCOPED_TABLES = (
 )
 
 
+async def test_lineage_policies_resolve_conflicts_from_provenance(
+    keeper: Any, installation_admin: Any, loader: Loader
+) -> None:
+    """`newest_wins` and `authority` read the Lineage of both branches from Postgres."""
+    admin = installation_admin.headers
+    policy = {"newest_wins": True, "authority": ["actor:usr_nobody"]}
+    async with keeper(proposals={"required_approvals": 0}) as http:
+        created = await http.post(
+            f"{API}/domains",
+            json={"id": "supply", "settings": {"merge_policy": policy}},
+            headers=admin,
+        )
+        assert created.status_code == 201, created.text
+        await loader.load()
+        for name in ("left", "right"):
+            branch = await http.post(f"{DOMAIN}/branches", json={"name": name}, headers=admin)
+            assert branch.status_code == 201, branch.text
+        await loader.edit("left", "S-1001", city="Gdansk")
+        await loader.edit("right", "S-1001", city="Warsaw")  # the later change
+
+        opened = await http.post(PROPOSALS, json=proposal_body("right", "left"), headers=admin)
+        assert opened.status_code == 201, opened.text
+        proposal = opened.json()
+        attempt = proposal["attempt"]
+        assert attempt["open_conflicts"] == 0
+        assert attempt["policy"] == policy
+        [auto] = attempt["auto_resolutions"]
+        assert (auto["kind"], auto["key"], auto["attribute"]) == ("DV1", "S-1001", CITY)
+        assert (auto["choice"], auto["resolver"]) == ("theirs", "policy:newest_wins")
+        assert auto["details"]["theirs_at"] > auto["details"]["ours_at"]
+
+        merged = await http.post(f"{PROPOSALS}/{proposal['id']}/merge", headers=admin)
+        assert merged.status_code == 200, merged.text
+        assert merged.json()["result"] == "merged"
+        lineage = await http.get(
+            f"{DOMAIN}/kinds/Supplier/records/S-1001/lineage",
+            params={"branch": "left"},
+            headers=admin,
+        )
+        city = next(a for a in lineage.json()["attributes"] if a["name"] == "city")
+        assert city["value"] == "Warsaw"
+        assert city["provenance"]["origin"]["resolver"] == "policy:newest_wins"
+
+
 async def test_deleting_a_domain_removes_its_history_and_keeps_the_audit_log(
     keeper: Any, installation_admin: Any, loader: Loader
 ) -> None:
