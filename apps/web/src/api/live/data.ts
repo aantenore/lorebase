@@ -11,10 +11,6 @@ import type {
   DiffResponse,
   GraphEdge,
   GraphNode,
-  HistoryEntry,
-  HistoryResponse,
-  LineageEntry,
-  LineageResponse,
   LinkedRecord,
   LinksResponse,
   NeighborhoodResponse,
@@ -129,65 +125,6 @@ export function mapTraverse(out: S['TraverseResponse']): TraverseResponse {
     }
   }
   return { revision: out.revision, records };
-}
-
-// ------------------------------------------------------- lineage and history
-
-/**
- * The Revision and message of an Attribute's last write. `explain` stamps every Attribute with
- * the Revision that last touched the Record, so the Attributes written when the Record was
- * created (the same provenance time as its creation) take the creating Revision instead.
- */
-function writeOf(
-  entry: S['AttributeLineageOut'],
-  out: S['ExplainOut'],
-): { revision: string; message: string } {
-  const created = out.created;
-  if (created?.revision != null && created.at === entry.at) {
-    return { revision: created.revision, message: created.message ?? '' };
-  }
-  return { revision: entry.revision ?? '', message: entry.message ?? '' };
-}
-
-/** Lineage of a Record's Attributes, as `explain` reports them. */
-export function mapLineage(out: S['ExplainOut']): LineageResponse {
-  const lineage: LineageEntry[] = out.attributes.map((entry) => ({
-    attribute: entry.name,
-    value: entry.value,
-    origin_type: (entry.origin_type ?? 'operation') as LineageEntry['origin_type'],
-    origin: entry.origin ?? {},
-    actor: entry.actor ?? '',
-    at: entry.at ?? '',
-    revision: writeOf(entry, out).revision,
-  }));
-  return { revision: out.revision, lineage };
-}
-
-/**
- * Keeper keeps no list of the Revisions that touched one Record. `explain` says when each
- * Attribute was last written, so the entries are those writes, newest first, each with the
- * Attributes it wrote.
- */
-export function mapHistory(out: S['ExplainOut']): HistoryResponse {
-  const byWrite = new Map<string, HistoryEntry>();
-  for (const entry of out.attributes) {
-    const at = entry.at ?? '';
-    const existing = byWrite.get(at);
-    if (existing === undefined) {
-      const { revision, message } = writeOf(entry, out);
-      byWrite.set(at, {
-        revision,
-        at,
-        actor: entry.actor ?? '',
-        message,
-        changed_attributes: [entry.name],
-      });
-    } else {
-      existing.changed_attributes.push(entry.name);
-    }
-  }
-  const entries = [...byWrite.values()].sort((a, b) => b.at.localeCompare(a.at));
-  return { entries, next_cursor: null };
 }
 
 // --------------------------------------------------------------------- diff

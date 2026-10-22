@@ -188,11 +188,20 @@ export function useLineage(scope: QueryScope, kind: string, key: string) {
   });
 }
 
+/** The changes of a Record with their values, newest first, one page more per `fetchNextPage`. */
 export function useHistory(scope: QueryScope, kind: string, key: string) {
   const api = useKeeperApi();
-  return useQuery({
+  const { pageSize } = useConfig();
+  return useInfiniteQuery({
     queryKey: keys.history(scope, kind, key),
-    queryFn: () => api.records.history(toReadScope(scope), kind, key),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.records.history(toReadScope(scope), kind, key, {
+        values: true,
+        limit: pageSize,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (last) => last.next_cursor ?? null,
   });
 }
 

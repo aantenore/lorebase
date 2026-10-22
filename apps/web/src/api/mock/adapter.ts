@@ -417,32 +417,84 @@ export function createMockApi(options: MockOptions): KeeperApi {
         const { data, revision } = scoped(scope);
         const rec = findRecord(data, kind, key);
         const origin = data.log[data.log.length - 1];
-        const lineage = Object.entries(rec.values).map(([attribute, value]) => ({
-          attribute,
+        const extracted = kind === 'Contract';
+        const at = origin?.created_at ?? '';
+        const attributes = Object.entries(rec.values).map(([name, value]) => ({
+          name,
           value,
-          origin_type: kind === 'Contract' ? ('extraction' as const) : ('source_sync' as const),
-          origin:
-            kind === 'Contract'
+          provenance: {
+            id: `prov_${name}`,
+            origin_type: extracted ? 'extraction' : 'source_sync',
+            origin: extracted
               ? { job: 'job_42', document: 'doc_contracts_oct' }
               : { source: 'erp.vendors', run: 'run_6' },
-          actor: kind === 'Contract' ? 'svc_scribe' : 'svc_scribe',
-          at: origin?.created_at ?? '',
+            actor: 'svc_scribe',
+            at,
+          },
           revision: origin?.id ?? revision,
+          revision_at: at,
+          author: origin?.author.principal ?? 'svc_scribe',
+          message: origin?.message ?? '',
+          source: extracted ? null : 'erp.vendors',
+          operation: null,
+          extraction: extracted
+            ? {
+                job_id: 'job_42',
+                document_id: 'doc_contracts_oct',
+                span_start: 0,
+                span_end: 40,
+                model_id: 'extractor-1',
+                prompt_version: 'v3',
+              }
+            : null,
+          proposal: null,
         }));
-        return Promise.resolve({ revision, lineage });
+        return Promise.resolve({
+          revision,
+          served_from: 'tree' as const,
+          branch: scope.branch ?? '',
+          kind,
+          key,
+          created: null,
+          changes: data.log.length,
+          attributes,
+          sources: extracted ? [] : ['erp.vendors'],
+          proposals: [],
+        });
       },
       history: (scope, kind, key, params) => {
-        const { data } = scoped(scope);
+        const { data, revision } = scoped(scope);
         const rec = findRecord(data, kind, key);
-        const changed = Object.keys(rec.values).slice(0, 2);
-        const entries = data.log.slice(0, params?.limit ?? options.pageSize).map((r) => ({
+        const changed = Object.entries(rec.values).slice(0, 2);
+        const offset = decodeCursor(params?.cursor);
+        const limit = params?.limit ?? options.pageSize;
+        const items = data.log.slice(offset, offset + limit).map((r, index) => ({
           revision: r.id,
+          generation: data.log.length - offset - index,
           at: r.created_at,
-          actor: r.author.principal,
+          author: r.author.principal,
+          on_behalf_of: r.author.on_behalf_of,
           message: r.message,
-          changed_attributes: changed,
+          origin: { type: r.origin.type, ref: r.origin.ref },
+          change:
+            offset + index === data.log.length - 1 ? ('created' as const) : ('updated' as const),
+          attributes: changed.map(([name, value]) => ({
+            name,
+            ...(params?.values === true ? { before: null, after: value } : {}),
+            provenance: null,
+          })),
+          provenance: null,
         }));
-        return Promise.resolve({ entries, next_cursor: null });
+        const next = offset + limit < data.log.length ? encodeCursor(offset + limit) : null;
+        return Promise.resolve({
+          revision,
+          served_from: 'tree' as const,
+          branch: scope.branch ?? '',
+          kind,
+          key,
+          items,
+          next_cursor: next,
+        });
       },
     },
 

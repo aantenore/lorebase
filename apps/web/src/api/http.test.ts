@@ -240,64 +240,43 @@ describe('live adapter: reads', () => {
     expect(graph.nodes[1]).toMatchObject({ ref: 'Part/P-1', kind: 'Part' });
   });
 
-  it('builds lineage and history from the explanation of the Record', async () => {
-    const explained = {
-      domain: 'supply',
-      branch: 'work',
+  it('reads lineage and history of a Record from their own routes', async () => {
+    const base = {
       revision: 'r9',
-      record: { ref: 'Supplier/S-1', kind: 'Supplier', key: 'S-1', values: {} },
-      created: { revision: 'r1', at: '2026-10-01T00:00:00Z', actor: 'a', message: 'Import' },
-      attributes: [
-        {
-          name: 'status',
-          value: 'active',
-          revision: 'r1',
-          at: '2026-10-01T00:00:00Z',
-          actor: 'a',
-          origin_type: 'import',
-          origin: { ref: 'inv_1' },
-          message: 'Import',
-        },
-        {
-          name: 'tier',
-          value: '1',
-          revision: 'r1',
-          at: '2026-10-01T00:00:00Z',
-          actor: 'a',
-          origin_type: 'import',
-          message: 'Import',
-        },
-        {
-          name: 'risk_score',
-          value: '80',
-          revision: 'r2',
-          at: '2026-10-02T00:00:00Z',
-          actor: 'b',
-          origin_type: 'operation',
-          message: 'Update',
-        },
-      ],
-      links: [],
-      links_truncated: false,
-      history: { changes: 2 },
+      served_from: 'tree',
+      branch: 'work',
+      kind: 'Supplier',
+      key: 'S-1',
+    };
+    const lineage = {
+      ...base,
+      created: null,
+      changes: 2,
+      attributes: [],
+      sources: [],
       proposals: [],
     };
+    const history = { ...base, items: [], next_cursor: 'c2' };
     const { api, calls } = fakeKeeper({
-      'GET /domains/supply/kinds/Supplier/records/S-1/explain': explained,
+      'GET /domains/supply/kinds/Supplier/records/S-1/lineage': lineage,
+      'GET /domains/supply/kinds/Supplier/records/S-1/history': history,
     });
     const scope = { domain: 'supply', branch: 'work' };
-    const lineage = await api.records.lineage(scope, 'Supplier', 'S-1');
-    expect(lineage.lineage[0]).toMatchObject({
-      attribute: 'status',
-      origin_type: 'import',
-      actor: 'a',
-    });
-    const history = await api.records.history(scope, 'Supplier', 'S-1');
-    expect(history.entries.map((e) => [e.revision, e.changed_attributes])).toEqual([
-      ['r2', ['risk_score']],
-      ['r1', ['status', 'tier']],
-    ]);
+    expect(await api.records.lineage(scope, 'Supplier', 'S-1')).toEqual(lineage);
     expect(calls[0]?.url.searchParams.get('branch')).toBe('work');
+    const page = await api.records.history(scope, 'Supplier', 'S-1', {
+      values: true,
+      limit: 10,
+      cursor: 'c1',
+    });
+    expect(page.next_cursor).toBe('c2');
+    const query = calls[1]?.url.searchParams;
+    expect([
+      query?.get('branch'),
+      query?.get('values'),
+      query?.get('limit'),
+      query?.get('cursor'),
+    ]).toEqual(['work', 'true', '10', 'c1']);
     await expect(
       api.records.lineage({ ...scope, at: 'r1' }, 'Supplier', 'S-1'),
     ).rejects.toMatchObject({
