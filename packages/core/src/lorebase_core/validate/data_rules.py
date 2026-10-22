@@ -18,7 +18,7 @@ from lorebase_core.model.kind import Kind
 from lorebase_core.model.record import Link, Record, record_key
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.model.schema import Schema
-from lorebase_core.model.vault import looks_like_reference, vault_token
+from lorebase_core.model.vault import VAULT_KEY, looks_like_reference, vault_token
 from lorebase_core.types import (
     CastError,
     ConstraintName,
@@ -38,6 +38,21 @@ CONSTRAINT_CODES: dict[ConstraintName, IssueCode] = {
     ConstraintName.PATTERN: IssueCode.VALUE_PATTERN,
     ConstraintName.ENUM_VALUES: IssueCode.VALUE_ENUM_VALUES,
 }
+
+
+def holds_reference(value: object) -> bool:
+    """Whether a vault reference (or anything shaped like one) is nested inside `value`, at
+    any depth of its objects and arrays."""
+    stack: list[object] = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            if VAULT_KEY in current:
+                return True
+            stack.extend(current.values())
+        elif isinstance(current, list):
+            stack.extend(current)
+    return False
 
 
 class RecordExistence(Protocol):
@@ -96,6 +111,15 @@ def check_values(
                     attribute_id,
                     f"{name!r} does not take a vault reference",
                 )
+            continue
+        if isinstance(value, dict | list) and holds_reference(value):
+            # Only a vault Attribute holds a reference, and only as its whole value: one
+            # nested in another value would be stored as it is and read back as a token.
+            report(
+                IssueCode.VALUE_VAULT_REFERENCE,
+                attribute_id,
+                f"{name!r} holds a vault reference inside its value",
+            )
             continue
         try:
             canonical = encode_value(attribute.type, value)
