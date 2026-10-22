@@ -16,6 +16,7 @@ What changed in each release, newest first. The notes are written for the person
 
 ### Changed
 
+- The performance harness (`tests/perf/bench.py`) reports p99 next to p50 and p95, times Record history and lineage, and with `--seed-database NAME` keeps the loaded dataset in its own database and measures a copy of it, so a run at 1M Records loads once. The 1M-Record run is in [performance](docs/performance.md#1m-records): every read is within budget except typo-tolerant title search (about 120 ms at p95 against 50 ms), the 2-hop neighborhood on branches other than `main` (29 to 34 ms against 30 ms) and lineage against the 10 ms proposed for it; creating or deleting a copy branch at that size takes longer than the default `database.statement_timeout_ms`.
 - The web app Canvas lays large graphs out in a web worker instead of on the main thread: the graph is drawn at once and refined while it is on screen, the layout stops when it settles or at a time budget and can be paused, and large graphs use Barnes-Hut, hide edge labels and most node labels, and hide edges while panning. On a generated graph of 5,000 nodes and 10,000 edges the first render takes about 0.6 s instead of 1.7 s ([performance](docs/performance.md#web-app-canvas-5000-nodes-10000-edges)). The limits are configurable (`VITE_CANVAS_*`), and `pnpm perf:canvas` with `VITE_MOCK_PERF_NODES` measures a generated graph.
 
 ## 0.1.0 - 2026-10-21
