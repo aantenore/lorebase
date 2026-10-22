@@ -412,6 +412,40 @@ to 2.4 s at p50 cold). The run used the change without the per-Kind split of the
 (`kind_id` in its key, which narrows corrections to the Kinds a caller may read); lookups and
 statements are otherwise the same.
 
+### 1M Records: run with the 10M harness
+
+The same fixture measured again on 2026-10-22 in the evening with the code of the 10M run
+(`make perf-1m`: measured in place, a full copy and an overlay, paired reads alternating which
+branch reads first) while other workloads kept the machine busy (load average 12 to 166,
+median 21). p95 in milliseconds; `rls` reads the keys `owner` just read, so it is the warm
+figure.
+
+| Read | Budget | owner | rls | copy, rls | overlay, rls |
+|------|-------:|------:|----:|----------:|-------------:|
+| get by key | 5 | 13.26 | 8.33 | 7.69 | 7.49 |
+| list page of 50 | 20 | 19.45 | 10.86 | 11.06 | 12.06 |
+| links of a record | 10 | 28.78 | 9.66 | 12.88 | 13.64 |
+| 2-hop neighborhood | 30 | 129.84 | 20.47 | 64.51 | 77.23 |
+| query by indexed attribute | 25 | 8.95 | 11.12 | 7.44 | 8.35 |
+| full-text search | 50 | 25.30 | 19.53 | 14.42 | 17.83 |
+| typo-tolerant full-text search | 50 | 27.18 | 19.92 | 17.73 | 22.32 |
+| partial-match full-text search | 50 | 46.32 | 36.13 | 31.15 | 37.56 |
+| record history page | 10\* | 19.26 | 15.76 | 13.46 | 14.58 |
+| record lineage | 10\* | 15.41 | 14.43 | 13.29 | 12.77 |
+
+- Every figure is two to four times the morning's run, `full-text search` included, whose code
+  did not change: the machine, not the code, moved. Search, typo tolerance and partial
+  matching stay within budget at 1M.
+- The neighborhood is the clearest case of cold against warm pages: 130 ms at p95 for the
+  first pass over random keys, 20 ms for the second pass over the same keys, 65 to 77 ms on
+  the copy and the overlay, whose rows are other pages. The overlay costs 20% more than the
+  copy at p50 and p95 in this run.
+- Writes: a copy is a 165 ms request and a 408 s background job (2,710 batches, 142 ms at p50,
+  4 million rows); deleting it a 37 ms request and a 377 s job; an overlay 49 ms; a commit of
+  1,000 changes 3.5 s at p50.
+- Agent trace, through Keeper: +1 to +6% at p95 and p50 for get by key, search and the
+  neighborhood, within the run's noise.
+
 ### Open issues
 
 - **Typo-tolerant title search** (fixed since this run, see
@@ -678,6 +712,9 @@ them are already in shared buffers or the VM's page cache.
 - The same keys read a second time: in the overlay comparison of this run each call read the
   keys `main` had just read, and took 15.5 ms at p50 and 29.6 at p95 against 110 and 181 for
   `main` (the harness now alternates which branch reads first).
+- At 1M Records, with the reads alternating fairly, the copy measured 64.5 ms and the overlay
+  77.2 ms at p95 (`rls`), and `main` 20.5 ms on keys the first pass had just read
+  ([1M Records: run with the 10M harness](#1m-records-run-with-the-10m-harness)).
 
 Options evaluated:
 
