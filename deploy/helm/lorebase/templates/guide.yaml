@@ -1,0 +1,31 @@
+{{- if .Values.guide.enabled }}
+{{- $checksums := dict "checksum/config" (include "lorebase.appConfig" . | sha256sum) -}}
+{{- if include "lorebase.managedSecret" . }}
+{{- $_ := set $checksums "checksum/secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) }}
+{{- end }}
+{{ include "lorebase.deployment" (dict
+  "ctx" .
+  "component" "guide"
+  "cfg" .Values.guide
+  "image" (include "lorebase.backendImage" .)
+  "pullPolicy" .Values.image.pullPolicy
+  "command" .Values.guide.command
+  "port" .Values.guide.port
+  "env" (include "lorebase.guideEnv" .)
+  "volumes" (include "lorebase.configVolume" .)
+  "mounts" (include "lorebase.configMount" .)
+  "podSecurity" .Values.podSecurityContext
+  "checksums" $checksums
+  "preStop" 0
+) }}
+---
+{{ include "lorebase.service" (dict "ctx" . "component" "guide" "cfg" .Values.guide) }}
+{{- if .Values.guide.autoscaling.enabled }}
+---
+{{ include "lorebase.hpa" (dict "ctx" . "component" "guide" "cfg" .Values.guide) }}
+{{- end }}
+{{- if .Values.guide.pdb.enabled }}
+---
+{{ include "lorebase.pdb" (dict "ctx" . "component" "guide" "cfg" .Values.guide) }}
+{{- end }}
+{{- end }}

@@ -1,7 +1,7 @@
 {{- if .Values.ingress.enabled }}
 {{- $ctx := . }}
-{{- $enabled := dict "keeper" true "herald" .Values.herald.enabled "web" .Values.web.enabled }}
-{{- $ports := dict "keeper" .Values.keeper.service.port "herald" .Values.herald.service.port "web" .Values.web.service.port }}
+{{- $enabled := dict "keeper" true "herald" .Values.herald.enabled "guide" .Values.guide.enabled "web" .Values.web.enabled }}
+{{- $ports := dict "keeper" .Values.keeper.service.port "herald" .Values.herald.service.port "guide" .Values.guide.service.port "web" .Values.web.service.port }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

@@ -108,6 +108,7 @@ nav:
   - Guides:
       - Agents: agents.md
       - MCP server: mcp.md
+      - Exploration assistant: guide.md
       - Schema inference: inference.md
       - LinkML: linkml.md
       - Inference providers: inference-providers.md

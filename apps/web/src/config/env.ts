@@ -24,6 +24,8 @@ export interface AppConfig {
   apiMode: ApiMode;
   /** Keeper origin without the API path. `null` in mock mode. */
   keeperBaseUrl: string | null;
+  /** Guide origin (`VITE_GUIDE_URL`), without a trailing slash. `null` when the assistant is not configured. */
+  guideUrl: string | null;
   /** From `VITE_AUTH_MODE`. Always `token` in mock mode. */
   authMode: AuthMode;
   /**
@@ -230,17 +232,17 @@ function mockPerfGraph(raw: RawEnv): AppConfig['mockPerfGraph'] {
   };
 }
 
-function parseBaseUrl(value: string): string {
+function parseBaseUrl(value: string, key = 'VITE_KEEPER_BASE_URL'): string {
   // A path on the app's own origin, for a deployment that proxies /api/v1 to Keeper.
   if (value.startsWith('/')) return value.replace(/\/+$/, '');
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new ConfigError(`VITE_KEEPER_BASE_URL is not a valid URL or path: "${value}".`);
+    throw new ConfigError(`${key} is not a valid URL or path: "${value}".`);
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new ConfigError('VITE_KEEPER_BASE_URL must use http or https.');
+    throw new ConfigError(`${key} must use http or https.`);
   }
   return url.origin + url.pathname.replace(/\/+$/, '');
 }
@@ -249,6 +251,7 @@ function parseBaseUrl(value: string): string {
 const RUNTIME_ALIASES: Readonly<Record<string, string>> = {
   apiMode: 'VITE_API_MODE',
   keeperBaseUrl: 'VITE_KEEPER_BASE_URL',
+  guideUrl: 'VITE_GUIDE_URL',
   authMode: 'VITE_AUTH_MODE',
   apiToken: 'VITE_API_TOKEN',
   token: 'VITE_API_TOKEN',
@@ -297,6 +300,9 @@ export function loadConfig(raw: RawEnv): AppConfig {
     keeperBaseUrl = parseBaseUrl(base);
   }
 
+  const guideText = text(raw, 'VITE_GUIDE_URL');
+  const guideUrl = guideText === undefined ? null : parseBaseUrl(guideText, 'VITE_GUIDE_URL');
+
   const authText = text(raw, 'VITE_AUTH_MODE') ?? 'token';
   if (authText !== 'token' && authText !== 'session') {
     throw new ConfigError(
@@ -308,6 +314,7 @@ export function loadConfig(raw: RawEnv): AppConfig {
   return {
     apiMode: mode,
     keeperBaseUrl,
+    guideUrl,
     authMode,
     apiToken:
       mode === 'live' && authMode === 'token' ? (text(raw, 'VITE_API_TOKEN') ?? null) : null,

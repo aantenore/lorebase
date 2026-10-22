@@ -22,6 +22,7 @@ members = [
     "lorebase-cli",
     "lorebase-client",
     "lorebase-core",
+    "lorebase-guide",
     "lorebase-herald",
     "lorebase-inference",
     "lorebase-keeper",
@@ -1813,6 +1814,7 @@ dependencies = [
     { name = "lorebase-cli" },
     { name = "lorebase-client" },
     { name = "lorebase-core" },
+    { name = "lorebase-guide" },
     { name = "lorebase-herald" },
     { name = "lorebase-inference" },
     { name = "lorebase-keeper" },
@@ -1849,6 +1851,7 @@ requires-dist = [
     { name = "lorebase-cli", editable = "packages/cli" },
     { name = "lorebase-client", editable = "packages/client" },
     { name = "lorebase-core", editable = "packages/core" },
+    { name = "lorebase-guide", editable = "packages/guide" },
     { name = "lorebase-herald", editable = "packages/herald" },
     { name = "lorebase-inference", editable = "packages/inference" },
     { name = "lorebase-keeper", editable = "packages/keeper" },
@@ -1939,6 +1942,40 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
+
+[[package]]
+name = "lorebase-guide"
+version = "0.1.0"
+source = { editable = "packages/guide" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "lorebase-client" },
+    { name = "lorebase-inference" },
+    { name = "lorebase-platform" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+fastembed = [
+    { name = "lorebase-inference", extra = ["fastembed"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "lorebase-client", editable = "packages/client" },
+    { name = "lorebase-inference", editable = "packages/inference" },
+    { name = "lorebase-inference", extras = ["fastembed"], marker = "extra == 'fastembed'", editable = "packages/inference" },
+    { name = "lorebase-platform", editable = "packages/platform" },
+    { name = "opentelemetry-api", specifier = ">=1.25" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "uvicorn", specifier = ">=0.30" },
+]
+provides-extras = ["fastembed"]
 
 [[package]]
 name = "lorebase-herald"

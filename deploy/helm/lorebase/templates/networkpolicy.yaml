@@ -69,7 +69,7 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.keeper.port }}
-{{- range $component := list "herald" "web" }}
+{{- range $component := list "herald" "guide" "web" }}
 {{- if get $ctx.Values $component | dig "enabled" false }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -115,6 +115,11 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "lorebase.selectorLabels" (dict "ctx" . "component" "scribe") | nindent 14 }}
+        {{- if $ctx.Values.guide.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "lorebase.selectorLabels" (dict "ctx" . "component" "guide") | nindent 14 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.ollama.port }}
@@ -160,6 +165,9 @@ spec:
 {{- end }}
 {{- if .Values.herald.enabled }}
 {{- $_ := set $workloads "herald" (concat $dns $keeper (default list $extra.herald)) }}
+{{- end }}
+{{- if .Values.guide.enabled }}
+{{- $_ := set $workloads "guide" (concat $dns $keeper $model (default list $extra.guide)) }}
 {{- end }}
 {{- if .Values.web.enabled }}
 {{- /* nginx serves static files only: no egress unless configured. */}}

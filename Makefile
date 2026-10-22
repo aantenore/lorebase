@@ -9,7 +9,7 @@ PIP_AUDIT ?= pip-audit@2.10.1
 WEB_AUDIT_LEVEL ?= high
 PY_PATHS := packages scripts tests
 STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src \
-	packages/client/src packages/cli/src packages/scribe/src
+	packages/client/src packages/cli/src packages/scribe/src packages/guide/src
 OTHER_SRC := packages/platform/src packages/inference/src
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
@@ -30,7 +30,7 @@ lint: ## Ruff (check and format check) and import-linter contracts
 	$(UV) run ruff format --check $(PY_PATHS)
 	$(UV) run lint-imports
 
-type: ## mypy: strict for core, store, keeper, herald, client, cli and scribe; default settings for the rest
+type: ## mypy: strict for core, store, keeper, herald, client, cli, scribe and guide; default settings for the rest
 	$(UV) run mypy --strict $(STRICT_SRC)
 	$(UV) run mypy $(OTHER_SRC)
 

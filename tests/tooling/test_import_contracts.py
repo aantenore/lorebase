@@ -22,6 +22,7 @@ ROOT_PACKAGES = [
     "lorebase_cli",
     "lorebase_herald",
     "lorebase_scribe",
+    "lorebase_guide",
 ]
 
 
@@ -83,6 +84,21 @@ def test_repository_respects_contracts() -> None:
         (
             ("lorebase_keeper", "lorebase_scribe"),
             "keeper depends on store and never on inference",
+        ),
+        (("lorebase_keeper", "lorebase_guide"), "keeper depends on store and never on inference"),
+        (
+            ("lorebase_herald", "lorebase_guide"),
+            "herald depends on platform and client only and never on inference",
+        ),
+        (("lorebase_store", "lorebase_guide"), "store depends on core and platform only"),
+        (("lorebase_core", "lorebase_guide"), "core has no internal dependencies"),
+        (
+            ("lorebase_guide", "lorebase_keeper"),
+            "guide depends on platform, inference and client only",
+        ),
+        (
+            ("lorebase_guide", "lorebase_store"),
+            "guide depends on platform, inference and client only",
         ),
     ],
 )

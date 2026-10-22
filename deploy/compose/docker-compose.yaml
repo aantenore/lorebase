@@ -7,6 +7,8 @@
 #   local-models   Ollama with the model named by OLLAMA_MODEL pulled at start, and a one-shot
 #                  `inference-check` that probes it through the application's own client
 #   litellm        LiteLLM proxy in front of hosted providers (docs/inference-providers.md)
+#   assistant      Guide, the optional exploration assistant (embeddings and chat over Keeper reads;
+#                  needs a model endpoint, see LLM_* in .env.example)
 #   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
 #   scale-out      second Keeper, Postgres streaming replica, nginx in front of the Keepers
 #                  (set KEEPER_RATE_LIMIT_BACKEND=postgres so both Keepers share their rate
@@ -212,6 +214,48 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  # ---- profile assistant ----------------------------------------------------------------
+  # Guide: holds no Keeper credential, it forwards the caller's own Authorization or session
+  # cookie to Keeper. Embeddings default to fastembed, which needs the image built with
+  # UV_SYNC_ARGS="--extra fastembed" (or inference.embeddings.provider: openai_compatible).
+
+  guide:
+    <<: *backend
+    profiles: [assistant]
+    command: ["lorebase-guide"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      <<: *inference
+      LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
+      LOREBASE__GUIDE__HOST: 0.0.0.0
+      LOREBASE__GUIDE__PORT: ${GUIDE_PORT:-8095}
+      LOREBASE__GUIDE__KEEPER__BASE_URL: http://keeper:${KEEPER_PORT:-8080}
+      LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS: ${GUIDE_ALLOWED_ORIGINS:-[]}
+      LOREBASE__GUIDE__HTTP__ALLOW_ANONYMOUS: ${GUIDE_ALLOW_ANONYMOUS:-false}
+      LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+      LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
+      LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-guide
+      LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
+    volumes:
+      - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+    ports:
+      - "${GUIDE_BIND:-127.0.0.1}:${GUIDE_HOST_PORT:-8095}:${GUIDE_PORT:-8095}"
+    depends_on:
+      keeper:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${GUIDE_PORT:-8095}/readyz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
   # ---- profile local-models -------------------------------------------------------------
 

@@ -28,12 +28,22 @@ from lorebase_client.core import (
 _ACCEPTED = 202
 
 
+_DOT_SEGMENTS = frozenset({"", ".", ".."})
+
+
 def _seg(value: str) -> str:
+    """One path segment, percent-encoded. Empty and dot segments are refused: an HTTP client
+    or proxy would resolve them and send the request to another route."""
+    if value in _DOT_SEGMENTS:
+        raise ValueError(f"invalid path segment {value!r}")
     return quote(value, safe="")
 
 
 def _branch(name: str) -> str:
-    """Branch names are hierarchical: slashes stay in the path."""
+    """Branch names are hierarchical: slashes stay in the path, but no part may be empty or a
+    dot segment."""
+    if any(part in _DOT_SEGMENTS for part in name.split("/")):
+        raise ValueError(f"invalid branch name {name!r}")
     return quote(name, safe="/")
 
 

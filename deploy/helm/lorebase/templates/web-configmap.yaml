@@ -3,6 +3,9 @@
 {{- if eq .Values.web.config.apiMode "live" }}
 {{- $_ := set $browser "VITE_KEEPER_BASE_URL" (include "lorebase.webKeeperUrl" .) }}
 {{- end }}
+{{- with .Values.web.config.guideUrl }}
+{{- $_ := set $browser "VITE_GUIDE_URL" . }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

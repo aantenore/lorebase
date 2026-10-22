@@ -2,8 +2,8 @@
 # Runs when the web container starts (the nginx image runs every script of /docker-entrypoint.d).
 #
 # 1. Writes the security headers that nginx includes in every response (default.conf), among them
-#    the Content-Security-Policy. connect-src allows this origin and the origin of
-#    VITE_KEEPER_BASE_URL. Environment:
+#    the Content-Security-Policy. connect-src allows this origin and the origins of
+#    VITE_KEEPER_BASE_URL and VITE_GUIDE_URL. Environment:
 #      LOREBASE_WEB_CSP              the whole policy, replacing the one built here
 #      LOREBASE_WEB_CSP_CONNECT_SRC  further connect-src sources, space separated
 #      LOREBASE_WEB_HSTS             Strict-Transport-Security value, e.g. "max-age=31536000"; empty: off
@@ -43,6 +43,10 @@ write_headers() {
     keeper_origin="$(origin_of "${VITE_KEEPER_BASE_URL:-}")"
     if [ -n "$keeper_origin" ]; then
       connect="$connect $keeper_origin"
+    fi
+    guide_origin="$(origin_of "${VITE_GUIDE_URL:-}")"
+    if [ -n "$guide_origin" ]; then
+      connect="$connect $guide_origin"
     fi
     if [ -n "${LOREBASE_WEB_CSP_CONNECT_SRC:-}" ]; then
       connect="$connect $LOREBASE_WEB_CSP_CONNECT_SRC"
