@@ -21,6 +21,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from opentelemetry import metrics
@@ -229,6 +230,7 @@ class AuditMiddleware:
                 domain_id=draft.domain_id or _path_param(scope, "domain_id"),
                 target=draft.target or kind,
                 details=details,
+                at=datetime.now(UTC),
             )
         )
 

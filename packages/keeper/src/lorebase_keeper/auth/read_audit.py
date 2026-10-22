@@ -5,7 +5,8 @@ which applies the filters and the sampling and queues the record; a background t
 the queue in batches to the read stream of the audit log (`audit_read_log`, hash chains of its
 own: `lorebase_store.auth.audit`). Nothing waits for the database on the request path: when the
 queue is full a record is dropped, and a batch that cannot be written is dropped; both are
-counted in `lorebase.audit.reads.dropped` by reason.
+counted in `lorebase.audit.reads.dropped` by reason and sensitivity. The last tenth of the queue
+takes only records of sensitive reads, and a batch holding one is tried twice.
 
 Code that renders values reports reads of sensitive Attributes with `note_sensitive`
 (`shown` to a cleared caller, `masked` otherwise); the middleware collects the notes of the
@@ -36,6 +37,12 @@ logger = logging.getLogger("lorebase.keeper.audit")
 
 SensitiveOutcome = Literal["shown", "masked"]
 READ_ACTION = "read"
+SENSITIVE_RESERVE = 10
+"""1/SENSITIVE_RESERVE of the queue only takes records of sensitive reads."""
+
+
+def _sensitive(entry: NewAuditEntry) -> bool:
+    return bool(entry.details.get("sensitive"))
 
 
 @dataclass
@@ -134,12 +141,19 @@ class ReadAuditor:
         return settings.sample_rate >= 1 or self._sample() < settings.sample_rate
 
     def offer(self, entry: NewAuditEntry) -> bool:
-        """Queue a record without waiting; false when it was dropped."""
+        """Queue a record without waiting; false when it was dropped. The last tenth of the
+        queue is kept for sensitive reads, so a flood of ordinary reads cannot crowd them out."""
         self._ensure_running()
+        sensitive = _sensitive(entry)
+        reserve = max(1, self._settings.queue_size // SENSITIVE_RESERVE)
+        if not sensitive and self._queue.qsize() >= self._settings.queue_size - reserve:
+            self._dropped.add(1, {"reason": "queue_full", "sensitive": False})
+            return False
         try:
             self._queue.put_nowait(entry)
         except asyncio.QueueFull:
-            self._dropped.add(1, {"reason": "queue_full"})
+            self._dropped.add(1, {"reason": "queue_full", "sensitive": sensitive})
+            logger.error("sensitive read record dropped: the read audit queue is full")
             return False
         return True
 
@@ -171,18 +185,30 @@ class ReadAuditor:
         return batch
 
     async def _write(self, batch: Sequence[NewAuditEntry]) -> None:
-        try:
-            async with asyncio.timeout(self._settings.write_timeout_s):
-                await self._sink(batch)
-        except Exception as exc:
-            self._dropped.add(len(batch), {"reason": "write_failed"})
-            logger.error(
-                "read audit records dropped",
-                exc_info=not isinstance(exc, TimeoutError),
-                extra={"records": len(batch), "reason": type(exc).__name__},
-            )
+        attempts = 2 if any(map(_sensitive, batch)) else 1  # sensitive reads get a retry
+        for attempt in range(attempts):
+            try:
+                async with asyncio.timeout(self._settings.write_timeout_s):
+                    await self._sink(batch)
+            except Exception as exc:
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(self._settings.flush_interval_s)
+                    continue
+                self._drop_batch(batch, exc)
+                return
+            self._recorded.add(len(batch))
             return
-        self._recorded.add(len(batch))
+
+    def _drop_batch(self, batch: Sequence[NewAuditEntry], exc: Exception) -> None:
+        sensitive = sum(map(_sensitive, batch))
+        for flag, count in ((True, sensitive), (False, len(batch) - sensitive)):
+            if count:
+                self._dropped.add(count, {"reason": "write_failed", "sensitive": flag})
+        logger.error(
+            "read audit records dropped",
+            exc_info=not isinstance(exc, TimeoutError),
+            extra={"records": len(batch), "sensitive": sensitive, "reason": type(exc).__name__},
+        )
 
     async def _run(self) -> None:
         while True:
@@ -206,5 +232,6 @@ class ReadAuditor:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        if not self._queue.empty():
-            self._dropped.add(self._queue.qsize(), {"reason": "shutdown"})
+        while not self._queue.empty():
+            entry = self._queue.get_nowait()
+            self._dropped.add(1, {"reason": "shutdown", "sensitive": _sensitive(entry)})

@@ -25,7 +25,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -136,6 +136,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="FILE",
         help="PEM Ed25519 public key the checkpoints are signed with",
+    )
+    verify.add_argument(
+        "--max-age",
+        type=float,
+        metavar="SECONDS",
+        help="fail when the newest checkpoint is older (publication stopped)",
     )
     return parser
 
@@ -266,6 +272,9 @@ def verification_report(
     if anchored is not None:
         report["checkpoints"] = {
             "checked": anchored.checked,
+            "newest_at": anchored.newest.isoformat() if anchored.newest else None,
+            "newest_age_s": anchored.age_s,
+            "problems": anchored.problems,
             "invalid": anchored.invalid,
             "findings": [
                 {
@@ -288,10 +297,29 @@ class Anchoring:
     checked: int
     invalid: list[str]
     findings: list[CheckpointFinding]
+    newest: datetime | None = None
+    max_age_s: float | None = None
+    now: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def age_s(self) -> float | None:
+        """Age of the newest checkpoint compared."""
+        return None if self.newest is None else (self.now - self.newest).total_seconds()
+
+    @property
+    def problems(self) -> list[str]:
+        """Why the comparison does not vouch for the log, besides the findings."""
+        found = [f"invalid checkpoint {problem}" for problem in self.invalid]
+        if self.checked == 0:
+            found.append("no valid checkpoint of this stream was found")
+        age = self.age_s
+        if self.max_age_s is not None and age is not None and age > self.max_age_s:
+            found.append(f"the newest checkpoint is {age:.0f} s old (--max-age {self.max_age_s:g})")
+        return found
 
     @property
     def ok(self) -> bool:
-        return not self.invalid and not self.findings
+        return not self.problems and not self.findings
 
 
 def _checkpoint_files(paths: Sequence[Path]) -> list[Path]:
@@ -343,7 +371,8 @@ async def _verify_audit(settings: Settings, args: argparse.Namespace) -> None:
             if args.checkpoints:
                 domains = None if isinstance(chain, Chains) else [chain]
                 findings = await compare(repository, checkpoints, domain_ids=domains)
-                anchored = Anchoring(len(checkpoints), invalid, findings)
+                newest = max((c.at for c in checkpoints), default=None)
+                anchored = Anchoring(len(checkpoints), invalid, findings, newest, args.max_age)
     finally:
         await dispose()
     if args.json:
@@ -361,9 +390,10 @@ async def _verify_audit(settings: Settings, args: argparse.Namespace) -> None:
             f"{result.checked} entries verified before it"
         )
     if anchored is not None and not args.json:
-        print(f"checkpoints compared: {anchored.checked}")
-        for problem in anchored.invalid:
-            print(f"invalid checkpoint {problem}")
+        age = "-" if anchored.age_s is None else f"{anchored.age_s:.0f} s"
+        print(f"checkpoints compared: {anchored.checked}, newest {age} old")
+        for problem in anchored.problems:
+            print(problem)
         for finding in anchored.findings:
             where = finding.domain_id or "installation"
             print(

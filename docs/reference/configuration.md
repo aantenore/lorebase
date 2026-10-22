@@ -106,7 +106,9 @@ Token buckets per principal (API key id or user) and request class; refusals are
 | `keeper.limits.rate.postgres.timeout_s` | `0.25` | budget of one query; slower counts as a failure |
 | `keeper.limits.rate.postgres.on_error` | `local` | database down or slow: local (limits in this process), allow or deny; failed-authentication buckets always deny |
 | `keeper.limits.rate.postgres.error_retry_after_s` | `1` | Retry-After of a refusal caused by the database |
-| `keeper.limits.rate.postgres.check_cache_s` | `1.0` | reuse of a failed-authentication bucket reading by the check before each authentication (failures are written at once) |
+| `keeper.limits.rate.postgres.check_cache_s` | `0.5` | reuse of a failed-authentication bucket reading by the check before each authentication (failures are written at once) |
+| `keeper.limits.rate.postgres.auth_failures_timeout_s` | `1.0` | budget of a failed-authentication query; then 429 |
+| `keeper.limits.rate.postgres.stale_reading_s` | `30.0` | during an outage a reading this recent still decides, so only clients without one are refused |
 | `keeper.limits.rate.postgres.prune_interval_s` | `60.0` | deletion of rows of buckets that are full again |
 | `keeper.limits.rate.postgres.prune_batch` | `1000` |  |
 | `keeper.limits.rate.max_buckets` | `100000` | buckets kept in memory; least recently used are dropped |
