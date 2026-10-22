@@ -406,7 +406,7 @@ class SourceSync:
     async def _run(
         self, domain: DomainRow, schema: Schema, source: Source, report: SyncReport
     ) -> None:
-        mapper = RowMapper(schema, source)
+        mapper = RowMapper(schema, source, limits=self._runtime.schema.expression_limits)
         since = await self._since(domain.id, source)
         read = await self._read(mapper, source, since, report)
         async with self._sessions() as session, session.begin():

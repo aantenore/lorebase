@@ -130,16 +130,31 @@ def test_missing_columns_are_reported(supply_schema: Schema) -> None:
         mapper.check_columns([c for c in SUPPLIER_ROW if c != "risk_score"])
 
 
+def test_expression_mappings_start_from_the_row(supply_schema: Schema) -> None:
+    suppliers = source(supply_schema, "approved.suppliers")
+    legal_name = attribute_id(supply_schema, "Supplier", "legal_name")
+    city = attribute_id(supply_schema, "Supplier", "city")
+    mapping = dict(suppliers.attribute_mapping)
+    mapping[legal_name] = AttributeMapping(
+        expression='legal_name.trim() + " (" + country.upper() + ")"',
+        transforms=(Transform(name="upper"),),
+    )
+    mapping[city] = AttributeMapping(expression='row["city"]')
+    mapper = RowMapper(supply_schema, suppliers.model_copy(update={"attribute_mapping": mapping}))
+    mapped = mapper.map(SUPPLIER_ROW, "suppliers.csv:2")
+    assert mapped.values[legal_name] == "KAVSEN ALLOYS SP. Z O.O. (PL)"
+    assert mapped.values[city] == "Poznan"
+    # Columns an expression reads are not required up front: the row decides.
+    assert "legal_name" not in mapper.columns
+    broken = {**mapping, city: AttributeMapping(expression="town")}
+    failing = RowMapper(supply_schema, suppliers.model_copy(update={"attribute_mapping": broken}))
+    with pytest.raises(RowError, match="city"):
+        failing.map(SUPPLIER_ROW, "suppliers.csv:2")
+
+
 def test_definition_errors(supply_schema: Schema) -> None:
     suppliers = source(supply_schema, "approved.suppliers")
     legal_name = attribute_id(supply_schema, "Supplier", "legal_name")
-    with pytest.raises(SourceDefinitionError, match="expression"):
-        RowMapper(
-            supply_schema,
-            suppliers.model_copy(
-                update={"attribute_mapping": {legal_name: AttributeMapping(expression="x")}}
-            ),
-        )
     with pytest.raises(SourceDefinitionError, match="cast needs"):
         RowMapper(
             supply_schema,

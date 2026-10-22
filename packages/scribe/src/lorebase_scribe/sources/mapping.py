@@ -15,7 +15,9 @@ a definition problem). `map` turns one source row into a `MappedRow`:
   Attribute's type; the primary key Attributes are set from it;
 - each Relation mapping names the columns holding the primary key of the `to` Record.
 
-Expression mappings are not evaluated by Scribe yet: a Source using one is refused.
+An Attribute mapped by `expression` instead of `column` takes the value of a CEL expression over
+the row (`lorebase_core.expr.rows`: columns are variables, `row` holds them all); the transforms
+and the coercion then apply to that value like to a column's.
 """
 
 from __future__ import annotations
@@ -29,6 +31,13 @@ from typing import Any
 
 from pydantic import JsonValue
 
+from lorebase_core.expr import (
+    ExprError,
+    ExprLimits,
+    compile_row_expression,
+    evaluate_row_expression,
+)
+from lorebase_core.expr.compiler import CompiledExpression
 from lorebase_core.model import (
     Attribute,
     Kind,
@@ -227,7 +236,8 @@ def apply_transform(transform: Transform, value: Any, row: Row) -> Any:
 @dataclass(frozen=True)
 class _AttributeRule:
     attribute: Attribute
-    column: str
+    column: str | None
+    expression: str | None
     transforms: tuple[Transform, ...]
 
 
@@ -241,7 +251,10 @@ class _LinkRule:
 class RowMapper:
     """Maps rows of one Source onto its target Kind."""
 
-    def __init__(self, schema: Schema, source: Source) -> None:
+    def __init__(self, schema: Schema, source: Source, *, limits: ExprLimits | None = None) -> None:
+        self._schema = schema
+        self._limits = limits
+        self._programs: dict[tuple[str, frozenset[str]], CompiledExpression] = {}
         kind = schema.kinds.get(source.target_kind)
         if kind is None:
             raise SourceDefinitionError(f"unknown target Kind {source.target_kind}")
@@ -270,15 +283,13 @@ class RowMapper:
                 raise SourceDefinitionError(f"{attribute_id} is not an Attribute of the Kind")
             if attribute.is_derived:
                 raise SourceDefinitionError(f"derived Attribute {attribute.api_name!r} mapped")
-            if mapping.column is None:
-                raise SourceDefinitionError(
-                    f"{attribute.api_name}: expression mappings are not supported by Scribe yet"
-                )
             if attribute_id in kind.primary_key:
                 continue  # primary key Attributes come from key_mapping
             for transform in mapping.transforms:
                 _check_transform(transform, attribute.api_name)
-            rules.append(_AttributeRule(attribute, mapping.column, mapping.transforms))
+            rules.append(
+                _AttributeRule(attribute, mapping.column, mapping.expression, mapping.transforms)
+            )
         return rules
 
     @staticmethod
@@ -324,7 +335,7 @@ class RowMapper:
     def columns(self) -> frozenset[str]:
         """Every column the mapping reads."""
         names = {column for _, column in self._keys}
-        names.update(rule.column for rule in self._rules)
+        names.update(rule.column for rule in self._rules if rule.column is not None)
         for rule in self._rules:
             for transform in rule.transforms:
                 if transform.name is TransformName.CONCAT:
@@ -358,6 +369,17 @@ class RowMapper:
             raise RowError(locator, "the key cannot be derived")
         return key, values
 
+    def _input(self, rule: _AttributeRule, row: Row) -> Any:
+        """The value a rule starts from: its column, or the expression over the row."""
+        if rule.expression is None:
+            return row.get(str(rule.column))
+        key = (rule.expression, frozenset(row))
+        program = self._programs.get(key)
+        if program is None:
+            program = compile_row_expression(self._schema, rule.expression, row, self._limits)
+            self._programs[key] = program
+        return evaluate_row_expression(program, row, now=datetime.now(UTC))
+
     def map(self, row: Row, locator: str) -> MappedRow:
         """Map one row; raises `RowError` when a value does not fit."""
         key, values = self._key(row, locator)
@@ -365,12 +387,18 @@ class RowMapper:
         if tombstone_column is not None and not _is_empty(row.get(tombstone_column)):
             return MappedRow(key=key, values=values, locator=locator, tombstone=True)
         for rule in self._rules:
-            value = row.get(rule.column)
             try:
+                value = self._input(rule, row)
                 for transform in rule.transforms:
                     value = apply_transform(transform, value, row)
                 values[rule.attribute.id] = coerce(value, rule.attribute.type)
-            except (TypeSystemError, ValueError, InvalidOperation, ArithmeticError) as error:
+            except (
+                TypeSystemError,
+                ValueError,
+                InvalidOperation,
+                ArithmeticError,
+                ExprError,
+            ) as error:
                 raise RowError(
                     locator, f"{rule.attribute.api_name}: {error}", column=rule.column
                 ) from None

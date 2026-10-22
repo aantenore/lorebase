@@ -309,8 +309,12 @@ are encoded directly, empty text is an absent value and timestamps without a zon
 UTC. The key comes from `key_mapping`, one column per primary key Attribute, and sets those
 Attributes. Each Relation mapping names the columns holding the primary key of the `to`
 Record; empty columns mean no Link. A row whose values do not fit is skipped and reported; more
-than `max_row_errors` such rows fail the run without committing anything. Expression mappings
-are not evaluated yet: a Source using one is refused.
+than `max_row_errors` such rows fail the run without committing anything. An Attribute mapped
+by `expression` instead of `column` starts from a CEL expression over the row: each column
+whose name is an identifier is a variable of unknown type (`dyn`, so CSV text needs
+`int(price)`), and `row["Legal name"]` reads any column. The expression is bounded by
+`schema.expression_limits`; its result then goes through the transforms and the coercion like a
+column's, and the Modeler previews it (`POST /domains/{d}/sources:preview`).
 
 The Source owns its mapped Attributes and its mapped Relations. Other Attributes of an
 existing Record are kept, and Links of other Relations are left alone.
