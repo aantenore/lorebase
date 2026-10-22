@@ -284,6 +284,16 @@ class MaterializeSettings(SectionModel):
         description="Delay before a branch job that found no free slot, a busy branch or a "
         "deletion waiting for its overlays runs again.",
     )
+    refresh_branches_on_tag: bool = Field(
+        default=True,
+        description="When a commit or merge on a Domain's default branch adds a sensitivity "
+        "tag to an existing Attribute, queue a store.sensitivity_refresh job for every other "
+        "branch: it rewrites, in batches of job_batch_rows, the titles and search vectors the "
+        "branch materialized before the tag (verification reports them as sensitivity_stale). "
+        "The branch's schema is left as it is: POST .../branches/{b}/rebase-tags copies the "
+        "tags into it. Off: stale rows stay until rewritten that way, by a rebuild or by the "
+        "next schema change of their Kind on the branch.",
+    )
 
 
 class GcSettings(SectionModel):

@@ -286,6 +286,23 @@ class Branches(_Resource):
     def delete(self, domain: str, name: str) -> None:
         self._c.send(ep.delete_branch(domain, name))
 
+    def rebase_tags(
+        self,
+        domain: str,
+        name: str,
+        *,
+        message: str | None = None,
+        expected_head: str | None = None,
+        dry_run: bool = False,
+        rows_only: bool = False,
+    ) -> m.RebaseTagsResult:
+        """Commit the default branch's sensitivity tags to the branch's schema (or, with
+        `rows_only`, queue the rewrite of its stale titles and search vectors)."""
+        body = m.RebaseTagsRequest(
+            message=message, expected_head=expected_head, dry_run=dry_run, rows_only=rows_only
+        )
+        return self._c.send(ep.rebase_branch_tags(domain, name, body))
+
 
 class Tags(_Resource):
     def list(

@@ -149,6 +149,19 @@ def delete_branch(domain: str, branch: str) -> Call[None]:
     return Call("DELETE", f"{_domain(domain)}/branches/{_branch(branch)}", parse_none, safe=True)
 
 
+def rebase_branch_tags(
+    domain: str, branch: str, body: m.RebaseTagsRequest
+) -> Call[m.RebaseTagsResult]:
+    """Give a branch the sensitivity tags of the default branch (or, with `rows_only`, queue
+    the rewrite of its stale titles and search vectors)."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/branches/{_branch(branch)}/rebase-tags",
+        parse_model(m.RebaseTagsResult),
+        body=body.payload(),
+    )
+
+
 def list_tags(
     domain: str, *, limit: int | None = None, cursor: str | None = None
 ) -> Call[m.Page[m.Tag]]:

@@ -372,6 +372,7 @@ $ lorebase branch [OPTIONS] COMMAND [ARGS]...
 * `create`: Create a branch from a branch, a tag or a...
 * `delete`: Delete a branch (its Revisions stay...
 * `protect`: Protect a branch: changes reach it through...
+* `rebase-tags`: Give a branch forked before the default...
 
 #### `lorebase branch list`
 
@@ -476,6 +477,34 @@ $ lorebase branch protect [OPTIONS] {NAME}
 **Options**:
 
 * `--off`: Remove the protection instead.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase branch rebase-tags`
+
+Give a branch forked before the default branch tagged an Attribute the tags it lacks.
+
+One schema change adds the default branch&#x27;s sensitivity tags (never removes one) and
+recomputes the titles and search vectors the branch stored before them. Protected
+branches refuse it; --rows-only only queues the rewrite of those rows.
+
+**Usage**:
+
+```console
+$ lorebase branch rebase-tags [OPTIONS] {BRANCH}
+```
+
+**Arguments**:
+
+* `BRANCH`: Branch name.  [required]
+
+**Options**:
+
+* `-m, --message <str>`: Revision message.
+* `--dry-run`: Plan only; write nothing.
+* `--rows-only`: Leave the schema alone: queue the rewrite of the stale titles and search vectors only.
+* `--expected-head <str>`: Fail unless the branch is at this Revision.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.

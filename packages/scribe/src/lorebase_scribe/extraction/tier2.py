@@ -533,18 +533,25 @@ async def _links(
                 confidence=settings.confidence.tier2,
                 tier=2,
                 model=model,
-                values=_link_values(entry.get("values"), relation, chunk, document_id, result),
+                values=_link_values(
+                    entry.get("values"), relation, ontology, chunk, document_id, result
+                ),
             )
         )
 
 
 def _link_values(
-    raw: Any, relation: Relation, chunk: Chunk, document_id: str, result: Tier2Result
+    raw: Any,
+    relation: Relation,
+    ontology: Ontology,
+    chunk: Chunk,
+    document_id: str,
+    result: Tier2Result,
 ) -> dict[str, Any]:
     """Encoded link Attribute values by Attribute id; unverified or ungrounded ones are dropped."""
     if not isinstance(raw, dict):
         return {}
-    attributes = {a.api_name: a for a in link_attributes(relation)}
+    attributes = {a.api_name: a for a in link_attributes(relation, ontology.tags)}
     found: dict[str, Any] = {}
     for name, item in raw.items():
         attribute = attributes.get(name)

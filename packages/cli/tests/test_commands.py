@@ -359,6 +359,39 @@ def test_branch_commands(http: respx.MockRouter) -> None:
     assert "ahead" in run("branch", "get", "work", "-d", "supply").stdout
 
 
+def test_branch_rebase_tags(http: respx.MockRouter) -> None:
+    rebase = http.post("/domains/supply/branches/agent/x/rebase-tags").respond(
+        200,
+        json={
+            "status": "committed",
+            "branch": "agent/x",
+            "head": "ab" * 32,
+            "revision": "cd" * 32,
+            "tags": [
+                {"section": "kinds", "owner": "Supplier", "attribute": "phone", "tags": ["pii"]}
+            ],
+            "changes": [
+                {"op": "update", "section": "kinds", "id": "knd_1", "api_name": "Supplier"}
+            ],
+            "change_count": 1,
+            "issues": [],
+            "issue_count": 0,
+            "job": None,
+        },
+    )
+    done = run("branch", "rebase-tags", "agent/x", "-m", "Take the tags", "-d", "supply")
+    assert done.exit_code == 0, done.stderr
+    assert "committed" in done.stdout
+    assert "phone" in done.stdout
+    assert request_bodies(rebase)[0] == {
+        "message": "Take the tags",
+        "dry_run": False,
+        "rows_only": False,
+    }
+    run("branch", "rebase-tags", "agent/x", "--rows-only", "--dry-run", "-d", "supply")
+    assert request_bodies(rebase)[1] == {"dry_run": True, "rows_only": True}
+
+
 def _copy_branch(
     status: str, phase: str = "records", done: int = 0, **progress: Any
 ) -> dict[str, Any]:

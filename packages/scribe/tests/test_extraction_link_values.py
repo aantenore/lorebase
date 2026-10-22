@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from lorebase_core.model import Schema
+from lorebase_core.model import Schema, Sensitivity
 from lorebase_scribe.extraction.assemble import CurrentState, assemble_items
 from lorebase_scribe.extraction.candidates import LinkCandidate, MatchCandidate
 from lorebase_scribe.extraction.matching import Dictionary, Resolver
@@ -175,3 +175,26 @@ async def test_answer_without_quantity_stays_pending_with_a_reason(
     assert item.decision is ItemDecision.PENDING
     assert item.match is not None
     assert item.match["missing"] == ["quantity"]
+
+
+def test_the_default_branch_tags_keep_attributes_out_of_extraction(
+    supply_schema: Schema,
+) -> None:
+    # A schema forked before the default branch tagged `quantity` and Supplier's `country`:
+    # extraction follows the effective tags, as reads do.
+    supplier = supply_schema.kind_by_api_name("Supplier")
+    assert supplier is not None
+    country = supplier.attribute_by_api_name("country")
+    assert country is not None
+    quantity = quantity_id(supply_schema)
+    reference = {quantity: frozenset({Sensitivity.PII}), country.id: frozenset({Sensitivity.PII})}
+    plain = build_ontology(supply_schema, None)
+    tagged = build_ontology(supply_schema, None, reference)
+    assert country.id in {a.id for a in plain.kinds[supplier.id].attributes}
+    assert country.id not in {a.id for a in tagged.kinds[supplier.id].attributes}
+    schema = fragment_schema(tagged, list(tagged.kinds))
+    assert not [
+        b for b in branches(schema) if b["properties"]["relation"] == {"const": "stocked_at"}
+    ]
+    _, user = build_messages(tagged, list(tagged.kinds), Chunk(0, 0, 4, "text"), [])
+    assert "link attribute quantity" not in user.content

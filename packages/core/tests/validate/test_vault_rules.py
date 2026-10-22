@@ -6,7 +6,13 @@ from typing import Any
 
 import pytest
 
-from lorebase_core.expr.sensitivity import effective_tags, lowered_tags, with_tags
+from lorebase_core.expr.sensitivity import (
+    effective_tags,
+    lowered_tags,
+    raised_tags,
+    rebased_tags,
+    with_tags,
+)
 from lorebase_core.model import (
     AggregateDerivation,
     AggregateFunction,
@@ -261,6 +267,30 @@ def test_effective_tags_follow_the_reference_and_derivations() -> None:
     assert raised.kinds[SUPPLIER].attributes[RISK_SCORE].sensitivity == PII
     # Validated with the reference's tags, the untagged derived copy is refused.
     assert C.SCHEMA_SENSITIVITY_INHERITED in {i.code for i in validate_schema(raised)}
+
+
+def test_rebased_tags_give_a_forked_branch_the_reference_tags() -> None:
+    reference = replace_attribute(supply_schema(), SUPPLIER, RISK_SCORE, sensitivity=PII)
+    branch = _max_risk(supply_schema())  # forked before the tag, with a derived max
+    assert raised_tags(supply_schema(), reference) == frozenset(PII)
+    assert raised_tags(reference, supply_schema()) == frozenset()
+    rebased = rebased_tags(branch, {RISK_SCORE: frozenset(PII)})
+    assert rebased.kinds[SUPPLIER].attributes[RISK_SCORE].sensitivity == PII
+    # The derived copy takes the tag of what it reads, so the schema validates.
+    derived = next(k for k in rebased.kinds.values() if SUPPLIER_COUNT in k.attributes)
+    assert derived.attributes[SUPPLIER_COUNT].sensitivity == PII
+    assert C.SCHEMA_SENSITIVITY_INHERITED not in {i.code for i in validate_schema(rebased)}
+    # Only tags are added: nothing else changes, and a tag the branch has stays.
+    confidential = replace_attribute(
+        branch, SUPPLIER, TIER, sensitivity=(Sensitivity.CONFIDENTIAL,)
+    )
+    kept = rebased_tags(confidential, {TIER: frozenset(PII)})
+    assert set(kept.kinds[SUPPLIER].attributes[TIER].sensitivity) == {
+        Sensitivity.CONFIDENTIAL,
+        Sensitivity.PII,
+    }
+    assert lowered_tags(confidential, kept) == frozenset()
+    assert rebased_tags(supply_schema(), {}) == supply_schema()
 
 
 def test_step_targets_read_no_sensitive_attribute() -> None:

@@ -88,6 +88,10 @@ RESPONSES: dict[type[m.Model], str] = {
     m.ApiKey: "ApiKeyOut",
     m.ApiKeyCreated: "ApiKeyCreated",
     m.EraseResult: "EraseOut",
+    m.VaultKeys: "VaultKeysOut",
+    m.VaultRotation: "RotationQueued",
+    m.RebaseTagsResult: "RebaseTagsOut",
+    m.TagChange: "TagChangeOut",
     m.Principal: "PrincipalOut",
     m.Grant: "GrantOut",
     m.AuditEntry: "AuditEntryOut",
@@ -148,6 +152,7 @@ RESPONSES: dict[type[m.Model], str] = {
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
     m.EraseRequest: "EraseIn",
+    m.RebaseTagsRequest: "RebaseTagsRequest",
     m.DomainCreate: "DomainCreate",
     m.DomainUpdate: "DomainUpdate",
     m.BranchCreate: "BranchCreate",
@@ -301,6 +306,9 @@ def sample_calls() -> list[Any]:
         ep.diff(d, "a", "b"),
         ep.create_api_key(d, m.CreateApiKey(name="bot")),
         ep.erase_vault(d, m.EraseRequest(kind="Supplier", key="S-1")),
+        ep.vault_keys(),
+        ep.rotate_vault(),
+        ep.rebase_branch_tags(d, "work", m.RebaseTagsRequest()),
         ep.list_api_keys(d),
         ep.revoke_api_key(d, "key"),
         ep.list_principals(),

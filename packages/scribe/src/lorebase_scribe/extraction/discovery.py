@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
 
-from lorebase_core.expr.sensitivity import effective_tags
 from lorebase_core.infer.suggestions import (
     PROPOSED,
     Observation,
@@ -448,7 +447,7 @@ class Discovery:
         """The observations to aggregate: new to the schema, never about a sensitive
         Attribute, without evidence holding a sensitive value of the Records in `records`
         (what the job read of the target branch)."""
-        tags = effective_tags(self.schema)
+        tags = self.ontology.tags
         secrets = _sensitive_values(records, tags)
         kept: list[Observation] = []
         fields = dangling_reference_names(self.schema)

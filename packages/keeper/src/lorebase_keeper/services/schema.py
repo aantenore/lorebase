@@ -7,6 +7,9 @@ are turned into the target `Schema` (ids of existing elements are kept: an expli
 otherwise the element with the same api name keeps its id), validated statically, and diffed
 against the current schema into `SchemaUpsert` and `SchemaDelete` changes that the commit
 pipeline applies as one Revision, data migrations included.
+
+A tag rebase (`rebase_tags`) is a schema change computed from the default branch: it gives a
+branch forked before the default branch tagged an Attribute the tags it lacks.
 """
 
 from __future__ import annotations
@@ -19,7 +22,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.expr.sensitivity import rebased_tags, schema_tags
 from lorebase_core.model import (
+    Attribute,
     Schema,
     SchemaYamlError,
     Sensitivity,
@@ -60,12 +65,15 @@ from lorebase_store.commit import (
 )
 from lorebase_store.commit.schema import schema_elements
 from lorebase_store.materialize.rebuild import load_schema as load_tree_schema
+from lorebase_store.materialize.sensitivity import default_branch_schema
+from lorebase_store.materialize.stale import queue_stale_refresh
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.repositories import MaterializedRepository, RevisionRow
 from lorebase_store.runtime import StoreRuntime
 
 SCHEMA_CHANGE_ORIGIN = "schema_change"
 DEFAULT_MESSAGE = "Schema change"
+REBASE_TAGS_MESSAGE = "Take the sensitivity tags of the default branch"
 DOCUMENT_ISSUE = "schema.document_invalid"
 SECTIONS = ("kinds", "relations", "traits", "operations", "derivations", "sources")
 
@@ -124,6 +132,24 @@ class ChangeSetInvalidError(Exception):
     def __init__(self, issues: Sequence[Finding]) -> None:
         super().__init__(f"{len(issues)} issue(s)")
         self.issues = list(issues)
+
+
+@dataclass(frozen=True)
+class TagChange:
+    """Sensitivity tags a tag rebase adds to one Attribute of a Kind or Relation."""
+
+    section: str
+    owner: str
+    attribute: str
+    tags: list[Sensitivity]
+
+
+@dataclass(frozen=True)
+class TagRebase:
+    """Result of `rebase_tags`: the schema change and the tags it adds."""
+
+    outcome: ChangeSetOutcome
+    tags: list[TagChange]
 
 
 class RemovalBlockedError(Exception):
@@ -325,47 +351,183 @@ async def apply(
             changes, described = diff_schemas(current, target)
             if not cascade:
                 await _check_removals(session, domain_id, branch, current, changes, store)
-            outcome = ChangeSetOutcome(
-                status=ChangeStatus.DRY_RUN if dry_run else ChangeStatus.COMMITTED,
-                head=ref.head,
-                revision=None,
-                changes=described,
+            return await _commit_target(
+                session,
+                store,
+                domain_id,
+                branch,
+                principal,
+                ref.head,
+                target,
+                changes,
+                described,
+                message=message or DEFAULT_MESSAGE,
+                expected_head=expected_head,
+                dry_run=dry_run,
+                cleared=cleared,
+                clearance=clearance,
             )
-            try:
-                result = await commit(
-                    session,
-                    domain_id,
-                    branch,
-                    [],
-                    schema_changes=changes,
-                    author=author_of(principal),
-                    message=message or DEFAULT_MESSAGE,
-                    origin=Origin(type=SCHEMA_CHANGE_ORIGIN),
-                    expected_head=expected_head,
-                    runtime=store.runtime,
-                    clock=store.clock,
-                    allowed_lowering=cleared,
-                )
-            except ValidationFailedError as error:
-                reference = await default_schema(session, domain_id, store.runtime)
-                masking = Masking(
-                    clearance or Clearance(),
-                    reference=MappingProxyType(reference_tags(reference)),
-                ).over(target)
-                issues = located(target, generalize_issues(error.issues, (target,), masking))
-                if not dry_run:
-                    raise ChangeSetInvalidError(issues) from error
-                outcome.issues = issues
-                return outcome
-            _fill(outcome, result)
-            if dry_run:
-                outcome.revision = None
-                return outcome
-            await session.commit()
-            return outcome
         finally:
             if session.in_transaction():
                 await session.rollback()
+
+
+async def rebase_tags(
+    store: StoreAccess,
+    domain_id: str,
+    branch: str,
+    principal: Principal,
+    *,
+    message: str | None,
+    expected_head: bytes | None,
+    dry_run: bool,
+) -> TagRebase:
+    """Commit to a branch the sensitivity tags of the default branch's schema (design 10.2).
+
+    The branch's schema gets, on every Attribute both schemas have, the tags the default
+    branch gives it, and on its derived Attributes the tags of what their Derivations read
+    (`lorebase_core.expr.sensitivity.rebased_tags`); no tag is removed. The commit recomputes
+    the titles and search vectors of the Kinds it changes, in its transaction, so none the
+    branch materialized before the tags stays stored. On the default branch, or a branch
+    that already has the tags, nothing changes (`no_op`).
+
+    Raises `ProtectedBranchError` when there is something to commit to a protected branch
+    (not for a dry run), `ChangeSetInvalidError` when the branch's schema stays invalid with
+    the tags, and the `CommitError`s of the pipeline.
+    """
+    async with store.sessions() as session:
+        await session.begin()
+        try:
+            await require_domain(session, domain_id)
+            ref = await require_branch(session, domain_id, branch)
+            head_revision = await require_revision(session, domain_id, ref.head)
+            current = await schema_at(session, domain_id, head_revision, store.runtime)
+            reference = await default_branch_schema(session, domain_id, runtime=store.runtime)
+            target = rebased_tags(
+                current, schema_tags(reference), store.runtime.schema.expression_limits
+            )
+            changes, described = diff_schemas(current, target)
+            added = _added_tags(current, target)
+            if not changes:
+                return TagRebase(
+                    ChangeSetOutcome(ChangeStatus.NO_OP, ref.head, ref.head, []), added
+                )
+            if ref.protected and not dry_run:
+                raise ProtectedBranchError(branch)
+            outcome = await _commit_target(
+                session,
+                store,
+                domain_id,
+                branch,
+                principal,
+                ref.head,
+                target,
+                changes,
+                described,
+                message=message or REBASE_TAGS_MESSAGE,
+                expected_head=expected_head,
+                dry_run=dry_run,
+            )
+            return TagRebase(outcome, added)
+        finally:
+            if session.in_transaction():
+                await session.rollback()
+
+
+async def queue_tag_refresh(
+    store: StoreAccess, domain_id: str, branch: str, *, dry_run: bool
+) -> tuple[bytes, int | None]:
+    """Queue the batched rewrite of the titles and search vectors a branch materialized
+    before the default branch tagged an Attribute, without changing its schema
+    (`lorebase_store.materialize.stale`). Returns the branch head and the job id (None for
+    a dry run, which only checks the branch)."""
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        ref = await require_branch(session, domain_id, branch)
+        if dry_run:
+            return ref.head, None
+        return ref.head, await queue_stale_refresh(session, domain_id, branch)
+
+
+async def _commit_target(
+    session: AsyncSession,
+    store: StoreAccess,
+    domain_id: str,
+    branch: str,
+    principal: Principal,
+    head: bytes,
+    target: Schema,
+    changes: Sequence[SchemaChange],
+    described: list[ElementChange],
+    *,
+    message: str,
+    expected_head: bytes | None,
+    dry_run: bool,
+    cleared: frozenset[Sensitivity] = frozenset(),
+    clearance: Clearance | None = None,
+) -> ChangeSetOutcome:
+    """Commit `changes` (turning the branch's schema into `target`) in the open transaction
+    of `session`, and commit the transaction unless `dry_run`."""
+    outcome = ChangeSetOutcome(
+        status=ChangeStatus.DRY_RUN if dry_run else ChangeStatus.COMMITTED,
+        head=head,
+        revision=None,
+        changes=described,
+    )
+    try:
+        result = await commit(
+            session,
+            domain_id,
+            branch,
+            [],
+            schema_changes=changes,
+            author=author_of(principal),
+            message=message,
+            origin=Origin(type=SCHEMA_CHANGE_ORIGIN),
+            expected_head=expected_head,
+            runtime=store.runtime,
+            clock=store.clock,
+            allowed_lowering=cleared,
+        )
+    except ValidationFailedError as error:
+        reference = await default_schema(session, domain_id, store.runtime)
+        masking = Masking(
+            clearance or Clearance(),
+            reference=MappingProxyType(reference_tags(reference)),
+        ).over(target)
+        issues = located(target, generalize_issues(error.issues, (target,), masking))
+        if not dry_run:
+            raise ChangeSetInvalidError(issues) from error
+        outcome.issues = issues
+        return outcome
+    _fill(outcome, result)
+    if dry_run:
+        outcome.revision = None
+        return outcome
+    await session.commit()
+    return outcome
+
+
+def _added_tags(current: Schema, target: Schema) -> list[TagChange]:
+    """The tags `target` adds to Attributes of `current`, by owner and Attribute api name."""
+    owners: list[tuple[str, str, Mapping[str, Attribute], Mapping[str, Attribute]]] = [
+        ("kinds", kind.api_name, kind.attributes, target.kinds[kind.id].attributes)
+        for kind in current.kinds.values()
+        if kind.id in target.kinds
+    ]
+    owners += [
+        ("relations", rel.api_name, rel.attributes, target.relations[rel.id].attributes)
+        for rel in current.relations.values()
+        if rel.id in target.relations
+    ]
+    added: list[TagChange] = []
+    for section, owner, before, after in owners:
+        for attribute_id, attribute in before.items():
+            new = after.get(attribute_id)
+            gained = set() if new is None else set(new.sensitivity) - set(attribute.sensitivity)
+            if gained:
+                added.append(TagChange(section, owner, attribute.api_name, sorted(gained)))
+    return added
 
 
 def _fill(outcome: ChangeSetOutcome, result: CommitResult) -> None:
@@ -420,9 +582,13 @@ __all__ = [
     "ElementChange",
     "ElementRemoval",
     "RemovalBlockedError",
+    "TagChange",
+    "TagRebase",
     "apply",
     "diff_schemas",
+    "queue_tag_refresh",
     "read",
+    "rebase_tags",
     "schema_at",
     "target_schema",
     "validate",

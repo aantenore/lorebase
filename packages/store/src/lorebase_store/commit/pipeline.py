@@ -108,6 +108,7 @@ from lorebase_store.materialize.rows import (
     split_link_key,
 )
 from lorebase_store.materialize.sensitivity import default_branch_schema
+from lorebase_store.materialize.stale import queue_after_tagging
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.nodestore import NodeRepository, PgNodeStore
 from lorebase_store.objectstore import EncodedObject, PgObjectStore, encode_object
@@ -352,6 +353,10 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
     )
     if indexes is not None:
         await indexes.ensure(prepared.schema)
+    if prepared.schema_hash is not None and branch == domain.default_branch:
+        await queue_after_tagging(
+            session, domain_id, branch, old_schema, prepared.schema, runtime=request.runtime
+        )
     try:
         version = await refs.compare_and_swap(
             branch,
