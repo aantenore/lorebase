@@ -341,3 +341,26 @@ def test_role_hook_needs_a_route_to_the_api_server(chart: Path) -> None:
     result = helm(chart, *IN_CLUSTER, "--set", "networkPolicy.egress.kubernetesApi.to=null")
     assert result.returncode != 0
     assert "networkPolicy.egress.kubernetesApi.to" in result.stderr
+
+
+def test_the_roles_hook_may_read_every_role_password_secret(chart: Path, tmp_path: Path) -> None:
+    """Each role of `postgresql.cluster.roles` may name its own password Secret; the hook
+    checks whether each exists, so its Role grants `get` on all of them."""
+    profile = yaml.safe_load((PROFILES / "local-models-values.yaml").read_text())
+    roles = profile.get("postgresql", {}).get("cluster", {}).get("roles")
+    if roles is None:
+        values = yaml.safe_load((chart / "values.yaml").read_text())
+        roles = values["postgresql"]["cluster"]["roles"]
+    extra = {
+        **roles[0],
+        "name": "lorebase_report",
+        "passwordSecret": {"name": "lorebase-db-report"},
+    }
+    overrides = tmp_path / "roles.yaml"
+    overrides.write_text(yaml.safe_dump({"postgresql": {"cluster": {"roles": [*roles, extra]}}}))
+    manifests = render(
+        chart, "-f", str(PROFILES / "local-models-values.yaml"), "-f", str(overrides)
+    )
+    role = hooks(manifests, "pg-roles")["Role"]
+    secrets = next(rule for rule in role["rules"] if rule["resources"] == ["secrets"])
+    assert secrets["resourceNames"] == ["lorebase-db-app", "lorebase-db-report"]
