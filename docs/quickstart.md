@@ -9,6 +9,7 @@ repository root unless the step says otherwise.
 |------|--------------|--------------------------------|
 | [2](#2-five-minute-path) | Postgres, Keeper, the web app, the sample Domain, a first query | 1.5 minutes measured; a few minutes more on a machine that has never pulled the base images |
 | [3](#3-connect-an-agent-over-mcp) | An agent reading the Domain through the MCP server (Herald) | under a minute |
+| [2.7](#27-guide-scribe-and-the-example-documents) | Guide and Scribe with `make up PROFILES=assistant`: query embeddings, semantic search, schema suggestions from the example documents | a few minutes for the second image |
 | [4](#4-use-a-real-model) | A chat model for document extraction: Ollama, or a hosted endpoint | seconds with Ollama already on the machine or a hosted endpoint; about 11 minutes the first time for Ollama in Docker |
 | [5](#5-stop-and-clean-up) | Stop the stack, keep or delete its data | seconds |
 | [6](#6-troubleshooting) | What to do when a step fails | |
@@ -169,8 +170,9 @@ Settings.
 The page and the API share one origin: the `web` service of the compose file
 (`deploy/docker/web.Dockerfile`, nginx) serves the built app and forwards `/api/` to Keeper on
 the compose network, event streams included, so Keeper needs no CORS setting. The Content
-Security Policy allows connections to that origin only. With the `assistant` profile, set
-`WEB_GUIDE_URL=/guide` in `.env`: `/guide/` is forwarded to Guide the same way. The web
+Security Policy allows connections to that origin only. With `make up PROFILES=assistant`
+([2.7](#27-guide-scribe-and-the-example-documents)) `/guide/` is forwarded to Guide the same way.
+The web
 settings are in [`.env.example`](https://github.com/aantenore/lorebase/blob/main/.env.example);
 [apps/web/README.md](https://github.com/aantenore/lorebase/blob/main/apps/web/README.md#live-mode)
 lists the variables of the app itself, and a mock mode with built-in sample data and no Keeper is
@@ -210,6 +212,70 @@ LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
 Open the URL it prints (`http://localhost:5173`, or the next free port). The dev server forwards
 `/api` to Keeper, so no CORS setting is needed here either. Use `KEEPER_HOST_PORT` in the proxy
 URL if you changed it.
+
+### 2.7 Guide, Scribe and the example documents
+
+Guide (the exploration assistant, `/embed` for query vectors) and Scribe (the worker: extraction,
+embeddings) are not part of the plain `make up`. Start them with the `assistant` profile:
+
+```bash
+make up PROFILES=assistant     # or: make up-assistant
+```
+
+It builds a second image, `lorebase-ml` (target `backend-ml` of the backend Dockerfile: the
+backend image plus fastembed and the embedding model `BAAI/bge-small-en-v1.5`, downloaded at
+build time so nothing is fetched at run time; 844 MB against 453 MB for the backend image, which
+is why Keeper, the migrations and Herald stay on the small one), starts Guide and Scribe next to
+the default services, and adds the overlay `deploy/compose/assistant.yaml`: the web app learns
+its Guide at `/guide` and Guide accepts calls without credentials, which is only right while
+Keeper runs with authentication off as here. `make down` stops every profile `make up` can
+start. `EMBEDDING_MODEL` in `.env` names another model to bake in (empty: none, and the model is
+downloaded on first use into a writable `inference.embeddings.cache_dir`).
+
+**Semantic search.** The `supply` schema gives `Part` and `Supplier` an embedding template, so
+Scribe embeds them on its next pass (every `scribe.scheduler.embeddings_interval_s`, 60 s).
+Guide embeds the query, and the vector goes to the search:
+
+```bash
+curl -s http://127.0.0.1:8090/guide/embed -H 'Content-Type: application/json' \
+  -d '{"text": "protects a rotating shaft from oil leaks", "mode": "query"}' \
+  | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["vector"]))' > query.json
+uv run lorebase search "protects a rotating shaft from oil leaks" --kind Part \
+  --mode semantic --vector-file query.json -n 3
+```
+
+```text
+kind  key      title                       score  snippet
+Part  P-10028  Radial shaft seal 25x42x7   0.732  Radial shaft seal 25x42x7 Stock item for machine tool spind...
+```
+
+The first hits are radial shaft seals although the query shares no word with the name. `/embed`
+needs no chat model. Guide's questions (`/explore`, the Explore panel) do: set `LLM_*` as in
+[section 4](#4-use-a-real-model).
+
+**Schema suggestions.** Extraction reports what the documents hold that the schema has no place
+for, and lists a suggestion once `schema.suggestions.min_support` observations (2) support it. A
+single document supports each of its suggestions once, so uploading only the contract C-3099
+lists nothing (`lorebase schema suggestions list --weak` shows the one it made, an Attribute
+`buyer` of Contract). The step below uploads that contract and the four documents of
+`examples/supply/documents`, rules tier only, so it needs no model, and prints the suggestions:
+
+```bash
+make example-documents
+```
+
+```text
+id                              type       name               of        support  docs  status   samples
+ssg_...                         attribute  ends               Supplier  3        1     pending  2026-02-07, 2026-02-09, 2026-04-12
+ssg_...                         relation   sole_source_parts  Supplier  3        1     pending
+ssg_...                         attribute  buyer              Contract  2        2     pending  Corvane Industries, purchasing entity of the Distribution d...
+```
+
+`buyer` is supported by two documents (C-3099 and C-3025), `ends` and `sole_source_parts` by the
+three rows of the supplier review. The contract C-3099 also opens a Proposal with its new
+Contract Record; the other documents describe Records that `make example-data` loaded. Review
+the suggestions in the web app (Review, Schema suggestions) or with
+`uv run lorebase schema suggestions accept ID`; see [extraction](extraction.md#schema-suggestions).
 
 ## 3. Connect an agent over MCP
 
@@ -327,8 +393,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
 Providers that do not speak the OpenAI protocol go through the LiteLLM proxy (profile `litellm`);
 per-task routing, prices and embeddings are in [inference-providers.md](inference-providers.md).
 
-**Extract a document.** Start Scribe with the same files (add `-f deploy/compose/hosted-model.yaml`
-for a hosted key) and upload a contract that the sample does not hold yet; tier 0 uses rules
+**Extract a document.** Start Scribe with the same files (`make up PROFILES=assistant` starts it;
+or, by hand, add `-f deploy/compose/hosted-model.yaml` for a hosted key) and upload a contract that the sample does not hold yet; tier 0 uses rules
 only, tier 2 adds the chat model:
 
 ```bash
@@ -349,14 +415,14 @@ seconds; a small model on the CPU inside Docker takes several minutes.
 ## 5. Stop and clean up
 
 ```bash
-make down          # stop the containers, keep the data
+make down          # stop the containers of every profile `make up` can start, keep the data
 make clean-stack   # stop them and delete the volumes: database, pulled models
 ```
 
 `make clean-stack` runs `docker compose ... --profile "*" down -v --remove-orphans`, so the
 Ollama and observability containers go too. (If you started the contributor dev server, stop it with Ctrl+C.) To remove the built images as
-well: `docker image rm lorebase:dev lorebase-web:dev` (the `LOREBASE_IMAGE`, `LOREBASE_WEB_IMAGE`
-and `LOREBASE_TAG` of `.env`). Delete the clone and nothing else is left on the machine.
+well: `docker image rm lorebase:dev lorebase-ml:dev lorebase-web:dev` (the `LOREBASE_IMAGE`,
+`LOREBASE_ML_IMAGE`, `LOREBASE_WEB_IMAGE` and `LOREBASE_TAG` of `.env`). Delete the clone and nothing else is left on the machine.
 
 ## 6. Troubleshooting
 
@@ -375,7 +441,10 @@ and `LOREBASE_TAG` of `.env`). Delete the clone and nothing else is left on the 
 | The web app shows "This Branch has no Kinds yet" | It is on a branch without the sample: pick `main` or `work` in the top bar, or run `make example-data`. |
 | The web app at `http://127.0.0.1:8090` shows a network error or `502 Bad Gateway` on `/api/` | Keeper is not up (or restarting): `docker compose --env-file .env -f deploy/compose/docker-compose.yaml ps keeper web` and `logs keeper web`. The web service reaches Keeper at `keeper:KEEPER_PORT`, so `KEEPER_PORT` must be the port Keeper listens on. |
 | The web app does not load, or the browser blocks requests (CSP) | Open it at the address `make up` printed (`LOREBASE_WEB_PORT`), not through another host name or a tunnel: the policy allows connections to the origin that served the page. Add other origins with `LOREBASE_WEB_CSP_CONNECT_SRC` on the `web` service. |
-| The assistant (Guide) does not answer from the web app | Start the `assistant` profile and set `WEB_GUIDE_URL=/guide` in `.env`, then `make up` again. A `502` on `/guide/` means Guide is not running. |
+| The assistant (Guide) does not answer from the web app | Start it with `make up PROFILES=assistant`. A `502` on `/guide/` means Guide is not running. With plain compose, add the profile and `-f deploy/compose/assistant.yaml`, or set `WEB_GUIDE_URL=/guide` and `GUIDE_ALLOW_ANONYMOUS=true` in `.env`. |
+| `/guide/embed` answers 502 | The service runs on the plain backend image: build the `lorebase-ml` image (`make up PROFILES=assistant` does) or point `inference.embeddings` at an OpenAI-compatible endpoint. |
+| `make example-documents` waits and gives up | Scribe is not running: `make up PROFILES=assistant`. |
+| Schema suggestions are empty after one upload | A pending suggestion is listed from `schema.suggestions.min_support` (2) observations: run `make example-documents`, or `lorebase schema suggestions list --weak`. |
 | The contributor dev server (`pnpm dev`) cannot reach Keeper | `LOREBASE_KEEPER_PROXY` must be set when `pnpm dev` starts and must name Keeper's port; `.env.local` must hold `VITE_API_MODE=live` and `VITE_KEEPER_BASE_URL=/`. Restart `pnpm dev` after a change. |
 | The MCP host shows no Lorebase tools | The host could not start `uv`: give its absolute path (`which uv`) in `command`, and the absolute path of the clone after `--directory`. Check Herald with the script of [section 3](#3-connect-an-agent-over-mcp). |
 | Herald answers `[not-found]` | `LOREBASE_DOMAIN` names a Domain that does not exist, or `LOREBASE_BRANCH` a branch without the Record. |
@@ -407,6 +476,9 @@ machine; a machine that has never pulled them spends a few more minutes in `make
 | 4 | `inference-check` with the hosted overlay and a key file | 5 s |
 | 4 | extraction of contract C-3099, tiers 0 and 2, `lfm2.5:8b` on the host | 91 s; tier 0 alone under 1 s |
 | 5 | `make down`; `make clean-stack` | 1 s; under 1 s |
+
+`make up PROFILES=assistant` adds the `lorebase-ml` image: 844 MB against 453 MB for the backend
+image (fastembed with ONNX Runtime, and a 65 MB model).
 
 The five-minute path (2.1 to 2.6) took about 80 seconds end to end.
 

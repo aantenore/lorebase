@@ -27,6 +27,15 @@ image:
   tag: ""
   # Kubernetes image pull policy of the backend image.
   pullPolicy: IfNotPresent
+# Image of Scribe and Guide: the backend image plus fastembed and a baked embedding model
+# (target `backend-ml` of deploy/docker/backend.Dockerfile, about 390 MB larger), needed by the
+# default embeddings (`config.inference.embeddings`, Guide `/embed`, Scribe embedding jobs).
+# Same tag as `image`. Empty `repository`: use `image` for them (embeddings through an
+# openai_compatible endpoint, or your own build with UV_SYNC_ARGS="--extra fastembed").
+imageMl:
+  repository: ghcr.io/aantenore/lorebase-ml
+  # Empty: the chart appVersion. Pin it with `image.tag`.
+  tag: ""
 # Pull secrets for private registries (list of {name: secret}). Used by every pod of the release.
 imagePullSecrets: []
 
@@ -591,8 +600,8 @@ guide:
   # Each caller's own Authorization or session cookie is forwarded to Keeper, so Guide holds no
   # Keeper credential. It calls the model endpoint of `config.inference` (LLM_API_KEY from
   # `secrets.values.llmApiKey`; with `ollama.enabled` and `ollama.wireScribe`, the in-cluster Ollama).
-  # The default fastembed embeddings need an image built with UV_SYNC_ARGS="--extra fastembed";
-  # otherwise set config.inference.embeddings.provider to openai_compatible.
+  # Runs on `imageMl`, which carries the default fastembed embeddings; with an empty
+  # `imageMl.repository` set config.inference.embeddings.provider to openai_compatible.
   enabled: false
   command: ["lorebase-guide"]
   replicaCount: 1

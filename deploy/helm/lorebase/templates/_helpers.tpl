@@ -79,6 +79,15 @@ annotations:
 {{- include "lorebase.image" (dict "ctx" . "image" .Values.image) -}}
 {{- end -}}
 
+{{/* Image of Scribe and Guide: imageMl, or the backend image when imageMl.repository is empty. */}}
+{{- define "lorebase.mlImage" -}}
+{{- if .Values.imageMl.repository -}}
+{{- include "lorebase.image" (dict "ctx" . "image" (dict "repository" .Values.imageMl.repository "tag" (default .Values.image.tag .Values.imageMl.tag))) -}}
+{{- else -}}
+{{- include "lorebase.backendImage" . -}}
+{{- end -}}
+{{- end -}}
+
 {{/* ---- Secrets and database ------------------------------------------------------------ */}}
 
 {{/* Name of the Secret holding the chart-managed or existing values. */}}

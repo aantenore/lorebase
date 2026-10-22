@@ -11,7 +11,9 @@
 #                  `inference-check` that probes it through the application's own client
 #   litellm        LiteLLM proxy in front of hosted providers (docs/inference-providers.md)
 #   assistant      Guide, the optional exploration assistant (embeddings and chat over Keeper reads;
-#                  needs a model endpoint, see LLM_* in .env.example)
+#                  needs a model endpoint, see LLM_* in .env.example). Together with Scribe it
+#                  runs on the backend-ml image (fastembed and a small embedding model).
+#                  `make up PROFILES=assistant` starts it with the overlay assistant.yaml
 #   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
 #   scale-out      second Keeper, Postgres streaming replica, nginx in front of the Keepers
 #                  (set KEEPER_RATE_LIMIT_BACKEND=postgres so both Keepers share their rate
@@ -34,6 +36,22 @@ x-backend: &backend
     - no-new-privileges:true
   cap_drop:
     - ALL
+
+# Image of the services that embed text (Scribe, Guide): the backend image plus fastembed and a
+# pre-downloaded embedding model, target `backend-ml` of the same Dockerfile (about 390 MB more
+# than the backend image). The model is baked in, so embeddings work offline with the read-only
+# root file system; EMBEDDING_MODEL names it (empty: none baked, then set
+# inference.embeddings.cache_dir to a writable volume and the model downloads on first use).
+x-backend-ml: &backend-ml
+  <<: *backend
+  image: ${LOREBASE_ML_IMAGE:-lorebase-ml}:${LOREBASE_TAG:-dev}
+  build:
+    context: ../..
+    dockerfile: deploy/docker/backend.Dockerfile
+    target: backend-ml
+    args:
+      UV_SYNC_ARGS: ${UV_SYNC_ARGS:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL-BAAI/bge-small-en-v1.5}
 
 x-database: &database
   # The connection string is passed as a secret reference (design 16): the value of
@@ -241,7 +259,7 @@ services:
   # SKIP LOCKED and one process at a time schedules. CSV Sources read files under
   # /data/sources; the supply example data is mounted there read-only for development.
   scribe:
-    <<: *backend
+    <<: *backend-ml
     command: ["lorebase-scribe"]
     read_only: true
     tmpfs:
@@ -274,11 +292,13 @@ services:
 
   # ---- profile assistant ----------------------------------------------------------------
   # Guide: holds no Keeper credential, it forwards the caller's own Authorization or session
-  # cookie to Keeper. Embeddings default to fastembed, which needs the image built with
-  # UV_SYNC_ARGS="--extra fastembed" (or inference.embeddings.provider: openai_compatible).
+  # cookie to Keeper. Embeddings default to fastembed, which the backend-ml image carries
+  # (or set inference.embeddings.provider: openai_compatible).
+  # `make up PROFILES=assistant` (scripts/quickstart.sh) starts this profile with Scribe and the
+  # overlay assistant.yaml, which points the web app at it.
 
   guide:
-    <<: *backend
+    <<: *backend-ml
     profiles: [assistant]
     command: ["lorebase-guide"]
     read_only: true
@@ -353,8 +373,8 @@ services:
   #   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
   #     --profile local-models run --rm inference-check
   # and add --no-deps when LLM_BASE_URL points at a model server outside this stack.
-  # Embeddings are skipped: the default fastembed provider is an optional extra that the stock
-  # image does not contain (see docs/inference-providers.md).
+  # Embeddings are skipped: the default fastembed provider is in the backend-ml image only
+  # (see docs/inference-providers.md).
   inference-check:
     <<: *backend
     profiles: [local-models]

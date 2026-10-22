@@ -210,13 +210,25 @@ guide:
 ```
 
 ```bash
+make up PROFILES=assistant      # Guide and Scribe, with the web app pointed at /guide
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
-  --profile local-models --profile assistant up -d
+  --profile local-models up -d ollama ollama-pull     # the model server, when it runs in compose
 ```
 
-`/embed` and semantic search need the embedding model Scribe uses: fastembed is an optional extra
-of the backend image (`UV_SYNC_ARGS="--extra fastembed"`), or point `inference.embeddings` at an
-OpenAI-compatible endpoint. Without a usable embedding model, `/embed` answers 502 and the agent
+`make up PROFILES=assistant` (or `make up-assistant`) builds the `lorebase-ml` image for Guide and
+Scribe, starts both next to the default services and adds the overlay
+`deploy/compose/assistant.yaml`: the web app reads Guide at `/guide` and Guide accepts calls
+without credentials, which suits only a Keeper in auth mode none ([quickstart](quickstart.md#27-guide-scribe-and-the-example-documents)).
+Without the helper, add `--profile assistant` and `-f deploy/compose/assistant.yaml` to the
+compose command. `make down` stops the profile too.
+
+`/embed` and semantic search need the embedding model Scribe uses. The `lorebase-ml` image
+(target `backend-ml` of `deploy/docker/backend.Dockerfile`) is the backend image plus fastembed
+and one embedding model baked in at build time (`EMBEDDING_MODEL`, default
+`BAAI/bge-small-en-v1.5`), so Guide and Scribe embed offline with a read-only root file system.
+It is 391 MB larger than the backend image, which is why only Guide and Scribe use it; in the
+Helm chart it is `imageMl`. Or point `inference.embeddings` at an OpenAI-compatible endpoint and
+use the backend image. Without a usable embedding model, `/embed` answers 502 and the agent
 searches lexically.
 
 ## Setup with Anthropic

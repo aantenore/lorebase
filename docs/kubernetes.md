@@ -47,6 +47,10 @@ The chart is installed from the repository or from the `lorebase-0.1.0.tgz` pack
 #    --set image.repository=registry.example.com/lorebase --set image.tag=<tag> in step 4:
 #    docker build -f deploy/docker/backend.Dockerfile -t registry.example.com/lorebase:<tag> .
 docker pull ghcr.io/aantenore/lorebase:0.1.0      # optional: check that the image is reachable
+#    Scribe and Guide run on ghcr.io/aantenore/lorebase-ml (`imageMl`): the same image plus fastembed
+#    and a baked embedding model, built with --target backend-ml. With your own build push both, or
+#    set --set imageMl.repository= to run them on `image` (then embeddings need an openai_compatible
+#    endpoint, or an image built with UV_SYNC_ARGS="--extra fastembed").
 
 # 2. The chart declares one optional dependency (CloudNativePG); fetch it once, even if unused.
 helm dependency build deploy/helm/lorebase

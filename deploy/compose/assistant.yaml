@@ -1,0 +1,16 @@
+# Overlay of `make up PROFILES=assistant` (scripts/quickstart.sh): the local stack with Guide and
+# Scribe. Add it after the main file together with the profile, from the repository root:
+#
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+#     -f deploy/compose/assistant.yaml --profile assistant up -d --wait guide scribe web
+#
+# It points the web app at Guide (the /guide/ path of the web service) and, for the quickstart
+# Keeper in auth mode none, lets Guide accept calls without credentials. With an authenticating
+# Keeper set GUIDE_ALLOW_ANONYMOUS=false in .env: a value set there wins over this default.
+services:
+  web:
+    environment:
+      VITE_GUIDE_URL: ${WEB_GUIDE_URL:-/guide}
+  guide:
+    environment:
+      LOREBASE__GUIDE__HTTP__ALLOW_ANONYMOUS: ${GUIDE_ALLOW_ANONYMOUS:-true}

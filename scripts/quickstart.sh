@@ -6,31 +6,66 @@
 #                         values in it are filled in)
 #   quickstart.sh up      build the backend and web images from this checkout and start postgres,
 #                         db-roles, migrate, keeper and web; returns when both are healthy and
-#                         prints the URL of the web app
+#                         prints the URL of the web app. With PROFILES=assistant it also builds
+#                         the backend-ml image and starts Guide and Scribe (overlay
+#                         deploy/compose/assistant.yaml)
 #   quickstart.sh data    load the supply sample through the CLI: Domain, schema and data on
 #                         branch `work`, then a Proposal merged into `main`. A Domain
 #                         `supply` that already holds the sample is left alone.
-#   quickstart.sh down    stop the stack, keep the data
+#   quickstart.sh documents
+#                         extract the example documents with the rules tier (needs Scribe, so
+#                         PROFILES=assistant): the new contract C-3099 and the four documents of
+#                         examples/supply/documents. Two documents that share a field are what
+#                         schema suggestions need to be listed (schema.suggestions.min_support)
+#   quickstart.sh down    stop the stack, whatever profiles it started, keep the data
 #   quickstart.sh clean   stop the stack and delete its volumes (data, pulled models)
 #
 # Settings (environment):
+#   PROFILES              compose profiles `up` starts besides the default services; only
+#                         `assistant` (Guide and Scribe), several separated by spaces or commas
 #   LOREBASE_ENV_FILE     environment file of compose            (<repo>/.env)
 #   LOREBASE_URL          Keeper URL used by `data`               (http://127.0.0.1:KEEPER_HOST_PORT)
 #   QUICKSTART_APPROVALS  required_approvals of that Domain       (0: the only principal of a
 #                         stack with authentication off can merge its own Proposal)
+#   QUICKSTART_DOCS_TIMEOUT  seconds `documents` waits for the extraction jobs  (180)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${LOREBASE_ENV_FILE:-$ROOT/.env}"
 COMPOSE_FILE="$ROOT/deploy/compose/docker-compose.yaml"
 DATA="$ROOT/examples/supply/data"
+OVERLAY_DIR="$ROOT/deploy/compose"
+# Extraction input of `documents`: the one contract the sample lacks, then the sample documents.
+DOCUMENTS=("$ROOT/examples/five_day_demo/documents/contract-c-3099-wexrix-filtration.md"
+  "$ROOT"/examples/supply/documents/*.md)
 UV="${UV:-uv}"
 cd "$ROOT"
 
 say() { printf '[quickstart] %s\n' "$*" >&2; }
 
+# Profiles `up` can start, as a list of words; anything else is refused before any command runs.
+PROFILE_WORDS="$(printf '%s' "${PROFILES:-}" | tr ',' ' ')"
+for word in $PROFILE_WORDS; do
+  case "$word" in
+    assistant) ;;
+    *)
+      say "PROFILES=$word is not supported here (only: assistant); start other profiles with docker compose"
+      exit 2
+      ;;
+  esac
+done
+
+has_profile() {
+  case " $PROFILE_WORDS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 compose() {
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  local files=(-f "$COMPOSE_FILE")
+  if has_profile assistant; then files+=(-f "$OVERLAY_DIR/assistant.yaml" --profile assistant); fi
+  docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
 }
 
 # Value of NAME in the environment file, empty when unset.
@@ -79,10 +114,15 @@ require_env() {
 
 up() {
   require_env
+  local args=(postgres migrate keeper web)
+  if has_profile assistant; then args+=(guide scribe); fi
   say "building the images and starting project $(env_value COMPOSE_PROJECT_NAME)"
-  compose up -d --build --wait postgres migrate keeper web >&2
+  compose up -d --build --wait "${args[@]}" >&2
   say "Keeper is ready at $(keeper_url)"
   say "Web app: $(web_url)"
+  if has_profile assistant; then
+    say "Guide: $(web_url)/guide/ (POST /embed), Scribe is running; try \`make example-documents\`"
+  fi
 }
 
 web_url() {
@@ -156,20 +196,71 @@ load_data() {
   say "loaded the supply sample into Domain $domain (branches main and work)"
 }
 
+# Number of documents of the Domain whose extraction has no finished job yet (queued or running).
+pending_jobs() {
+  "$UV" run python - "$LOREBASE_URL" "$LOREBASE_DOMAIN" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+base = f"{sys.argv[1]}/api/v1/domains/{sys.argv[2]}/documents"
+key = os.environ.get("LOREBASE_API_KEY")
+
+
+def get(url: str) -> dict:
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"} if key else {})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+pending = 0
+for document in get(f"{base}?limit=200")["items"]:
+    jobs = get(f"{base}/{document['id']}")["extraction_jobs"]
+    if not jobs or any(job["status"] in ("queued", "running") for job in jobs):
+        pending += 1
+print(pending)
+PY
+}
+
+# Upload the example documents with the rules tier and wait for their jobs, then list what
+# extraction suggests for the schema.
+extract_documents() {
+  require_env
+  export LOREBASE_URL="$(keeper_url)" LOREBASE_DOMAIN=supply
+  local file waited=0 timeout="${QUICKSTART_DOCS_TIMEOUT:-180}" pending
+  for file in "${DOCUMENTS[@]}"; do
+    say "uploading $(basename "$file")"
+    "$UV" run lorebase documents upload "$file" --tiers 0 >/dev/null
+  done
+  say "waiting for Scribe to extract ${#DOCUMENTS[@]} documents (needs \`make up PROFILES=assistant\`)"
+  until pending="$(pending_jobs)" && [ "$pending" = 0 ]; do
+    waited=$((waited + 2))
+    if [ "$waited" -gt "$timeout" ]; then
+      say "$pending extraction jobs are not finished after ${timeout}s: is Scribe running?"
+      exit 1
+    fi
+    sleep 2
+  done
+  "$UV" run lorebase schema suggestions list
+}
+
 case "${1:-}" in
   env) make_env ;;
   up) up ;;
   data) load_data ;;
+  documents) extract_documents ;;
   down)
     require_env
-    compose down
+    # Every profile `up` can start: a container of one that is no longer asked for would stay.
+    compose --profile "*" down --remove-orphans
     ;;
   clean)
     require_env
     compose --profile "*" down -v --remove-orphans
     ;;
   *)
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2
     exit 2
     ;;
 esac

@@ -21,6 +21,8 @@ kinds:
     title_attribute: legal_name
     icon: factory
     color: "#2a6f97"
+    search:
+      embedding_template: "{legal_name}, {city} ({country}). Tier {tier}, {status}."
     attributes:
       supplier_code:
         id: att_01KEZF7C00HDZZHMNS4181SKMX
@@ -92,6 +94,8 @@ kinds:
     title_attribute: name
     icon: cog
     color: "#6a994e"
+    search:
+      embedding_template: "{name}: {summary} Category {category}."
     attributes:
       part_number:
         id: att_01KEZF7C00V0MZ56VTARJ76YAC
