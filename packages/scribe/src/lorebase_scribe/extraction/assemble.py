@@ -11,7 +11,9 @@
 - Items below `min_confidence` are dropped. An item is accepted at once when its confidence
   reaches `auto_accept_threshold`, its match is not ambiguous, and, for a new Record, nothing
   required is missing; a Link is accepted at once only when its endpoints exist or are accepted
-  at once too.
+  at once too. Items that set a value of a vault Attribute are never accepted at once: the
+  extraction commit checks vault values against erased ones, so a reviewer decides (design
+  13.5).
 """
 
 from __future__ import annotations
@@ -174,7 +176,12 @@ def assemble_items(
         if confidence < settings.min_confidence:
             result.count("below_min_confidence")
             continue
-        confident = confidence >= threshold and not missing and not missing_links
+        vaulted = any(
+            view.kind.attributes[a].in_vault
+            for a, v in record_values.items()
+            if v is not None and a in view.kind.attributes
+        )
+        confident = confidence >= threshold and not missing and not missing_links and not vaulted
         if confident:
             auto_records.add(element)
         decision, by, at = decide(confident)
@@ -227,7 +234,12 @@ def assemble_items(
                 result.count("below_min_confidence")
                 continue
             resolution = value.subject.resolution
-            confident = value.confidence >= threshold and resolution.status == "matched"
+            target = schema.kinds[element[0]].attributes.get(attribute_id)
+            confident = (
+                value.confidence >= threshold
+                and resolution.status == "matched"
+                and not (target is not None and target.in_vault)
+            )
             decision, by, at = decide(confident)
             partition, element_key = record_element(*element)
             drafts.append(

@@ -9,6 +9,11 @@ from typing import Any
 
 import pytest
 import yaml
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from lorebase_keeper.services.pii_import import installation_vault_sources
+from lorebase_store.db import create_engine
+from lorebase_store.settings import DatabaseSettings, WriteSettings
 
 from .conftest import PEPPER, InstallationAdmin
 
@@ -101,7 +106,7 @@ async def _import(http: Any, headers: Any, row: dict[str, Any]) -> Any:
 
 
 async def test_vault_values_need_pii_import_through_imports_and_sources(
-    keeper: Any, installation_admin: InstallationAdmin, role_key: Any
+    keeper: Any, installation_admin: InstallationAdmin, role_key: Any, database_url: str
 ) -> None:
     admin = installation_admin.headers
     async with keeper({"vault": VAULT}, **_settings(installation_admin)) as http:
@@ -152,6 +157,18 @@ async def test_vault_values_need_pii_import_through_imports_and_sources(
         assert plain.status_code == 202, plain.text
         granted = await http.post(f"{sources}/{VAULT_SOURCE}/sync", headers=importer)
         assert granted.status_code == 202, granted.text
+
+        # The upgrade check lists the Sources feeding vault Attributes, scheduled or not.
+        engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+        try:
+            listed = await installation_vault_sources(
+                async_sessionmaker(engine, expire_on_commit=False), WriteSettings(), batch=1
+            )
+        finally:
+            await engine.dispose()
+        assert [(s.domain, s.api_name, s.kind, s.attributes) for s in listed] == [
+            ("supply", VAULT_SOURCE, "Supplier", ("email",))
+        ]
 
         # Imports holding a vault value need pii.import, dry runs included; others do not.
         _refused(await _import(http, editor, {**SUPPLIER, "email": "guess@example.com"}))

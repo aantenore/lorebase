@@ -10,16 +10,23 @@ Feeding values of vault Attributes through these paths needs `pii.import` on the
   Attribute (`import_rows_vault_attributes`);
 - schema changes and merges that add a Source mapping columns to vault Attributes, change such
   a Source, or make an Attribute a Source maps a vault Attribute (`fed_vault_sources`);
-- triggering a synchronization of a Source that maps vault Attributes (`source_vault_targets`).
+- triggering a synchronization of a Source that maps vault Attributes (`source_vault_targets`);
+- reviewer edits of extraction items that set a value of a vault Attribute
+  (`item_edits_vault_attributes`). Scribe never accepts such items at once: a reviewer does.
 
 Scheduled synchronizations run as configured: the Source was vetted when it was defined.
+Sources defined before `pii.import` existed were not: `python -m lorebase_keeper sources vault`
+lists the Sources that map vault Attributes (`installation_vault_sources`), for an
+administrator to confirm or disable.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from pydantic import JsonValue
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema, Source
 from lorebase_keeper.auth.deps import missing_permission
@@ -32,6 +39,11 @@ from lorebase_keeper.services.operation_catalog import (
     Action,
     BuiltinOperation,
 )
+from lorebase_store.commit.schema import load_compiled
+from lorebase_store.extraction import ItemEditError, normalize_edits
+from lorebase_store.repositories import DomainRepository, MaterializedRepository, scope_to_domain
+from lorebase_store.repositories.proposal_items import LINK_ITEM, ItemRow
+from lorebase_store.settings import WriteSettings
 
 
 def source_vault_targets(schema: Schema, source: Source) -> frozenset[str]:
@@ -42,6 +54,43 @@ def source_vault_targets(schema: Schema, source: Source) -> frozenset[str]:
     return frozenset(
         attribute_id
         for attribute_id in source.attribute_mapping
+        if (attribute := kind.attributes.get(attribute_id)) is not None and attribute.in_vault
+    )
+
+
+def vault_sources(schema: Schema) -> list[tuple[Source, list[str]]]:
+    """The Sources of `schema` that map vault Attributes, with those Attributes' api names,
+    by Source api name."""
+    found: list[tuple[Source, list[str]]] = []
+    for source in sorted(schema.sources.values(), key=lambda s: s.api_name):
+        targets = source_vault_targets(schema, source)
+        if targets:
+            kind = schema.kinds[source.target_kind]
+            found.append((source, sorted(kind.attributes[a].api_name for a in targets)))
+    return found
+
+
+def item_edits_vault_attributes(
+    schema: Schema, item: ItemRow, edits: Mapping[str, object]
+) -> list[str]:
+    """Api names of the vault Attributes whose value reviewer `edits` of an extraction item
+    set. Invalid edits are left to the review, which refuses them."""
+    if item.item_type == LINK_ITEM:
+        return []  # Link Attributes are never in the vault
+    kind = schema.kinds.get(str(item.subject.get("kind")))
+    if kind is None:
+        return []
+    try:
+        normalized = normalize_edits(item, edits, schema)
+    except ItemEditError:
+        return []
+    values = normalized.get("values") or {}
+    set_ids = {attribute_id for attribute_id, value in values.items() if value is not None}
+    if normalized.get("value") is not None:
+        set_ids.add(str(item.subject.get("attribute")))
+    return sorted(
+        attribute.api_name
+        for attribute_id in set_ids
         if (attribute := kind.attributes.get(attribute_id)) is not None and attribute.in_vault
     )
 
@@ -112,3 +161,62 @@ async def require_schema_change(
     feeding vault Attributes need `pii.import`."""
     await require_lowering(authorizer, principal, domain_id, old, new)
     await require_source_feeding(authorizer, principal, domain_id, old, new)
+
+
+@dataclass(frozen=True, slots=True)
+class VaultSource:
+    """A Source of a Domain's default branch that maps vault Attributes."""
+
+    domain: str
+    source: str
+    api_name: str
+    kind: str
+    attributes: tuple[str, ...]
+    schedule: str | None
+    status: str
+
+    def document(self) -> dict[str, object]:
+        return {
+            "domain": self.domain,
+            "source": self.source,
+            "api_name": self.api_name,
+            "kind": self.kind,
+            "attributes": list(self.attributes),
+            "schedule": self.schedule,
+            "status": self.status,
+        }
+
+
+async def installation_vault_sources(
+    sessions: async_sessionmaker[AsyncSession], writes: WriteSettings, *, batch: int = 100
+) -> list[VaultSource]:
+    """The Sources mapping vault Attributes in the default branch of every Domain: Sources
+    defined before `pii.import` existed were not vetted by a holder of it."""
+    found: list[VaultSource] = []
+    after: str | None = None
+    while True:
+        async with sessions() as session, session.begin():
+            domains = await DomainRepository(session).list(limit=batch, after=after)
+            for domain in domains:
+                await scope_to_domain(session, domain.id)
+                compiled = await MaterializedRepository(
+                    session, domain.id, domain.default_branch, writes=writes
+                ).schema()
+                if compiled is None:
+                    continue
+                schema = load_compiled(compiled.compiled)
+                found.extend(
+                    VaultSource(
+                        domain=domain.id,
+                        source=source.id,
+                        api_name=source.api_name,
+                        kind=schema.kinds[source.target_kind].api_name,
+                        attributes=tuple(names),
+                        schedule=source.schedule,
+                        status=source.status.value,
+                    )
+                    for source, names in vault_sources(schema)
+                )
+        if len(domains) < batch:
+            return found
+        after = domains[-1].id

@@ -24,8 +24,9 @@ Role semantics where the design table leaves room:
   values (`pii.erase`) and feed values of vault Attributes through the built-in imports and
   Source synchronizations (`pii.import`, see `services.pii_import`); custom roles grant the
   clearances to others. `admin` also reads the agent traces of other principals in its Domain
-  (`trace.read`) and the query plans of traced requests (`trace.explain`); every principal reads its own traces. `domain.create` is
-  installation-level: installation administrators hold it, and so do admins of any Domain;
+  (`trace.read`) and the query plans of traced requests (`trace.explain`); every principal
+  reads its own traces. `domain.create` is installation-level: installation administrators
+  hold it, and so do admins of any Domain;
 - `vault.manage` (vault key rotation and its status) is held by installation administrators
   only: no role, built in or custom, contains it.
 """
