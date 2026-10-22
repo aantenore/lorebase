@@ -399,7 +399,7 @@ async def seed(
                 runtime=runtime,
             )
     if scale.replicas > 1:
-        await replicate(engine, schema, loaded.factor, scale.replicas)
+        await replicate(engine, runtime, schema, loaded.factor, scale.replicas)
     _progress(f"seed: {batches} commits, building indexes")
     await _create_deferred_indexes(engine)
     await build_indexes(engine, runtime)
@@ -510,7 +510,9 @@ REPLICA_KINDS = {
 REPLICA_PARALLEL = 4
 
 
-async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: int) -> None:
+async def replicate(
+    engine: AsyncEngine, runtime: StoreRuntime, schema: Schema, factor: int, replicas: int
+) -> None:
     """Grow `main` to `replicas` copies of the Records, Links and history loaded at generator
     scale `factor`, with renumbered keys, by set-based SQL: at 10M Records the commit
     pipeline needs about ten hours on a laptop, mostly random index reads and writes of
@@ -534,7 +536,7 @@ async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: 
     found = schema.kind_by_api_name("Supplier")
     assert found is not None
     supplier_kind = found.id
-    attribute_indexes = await _drop_attribute_indexes(engine)
+    await _main_indexes(engine, runtime, schema, drop=True)
     gate = asyncio.Semaphore(REPLICA_PARALLEL)
 
     async def one(replica: int) -> None:
@@ -567,7 +569,7 @@ async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: 
     finally:
         await _lexicon_triggers(engine, enabled=True)
     await _recount_lexicon(engine)
-    await _create_attribute_indexes(engine, attribute_indexes)
+    await _main_indexes(engine, runtime, schema, drop=False)
 
 
 LEXICON_TRIGGERS = ("lb_lexicon_insert", "lb_lexicon_update", "lb_lexicon_delete")
@@ -601,32 +603,22 @@ async def _recount_lexicon(engine: AsyncEngine) -> None:
         )
 
 
-async def _drop_attribute_indexes(engine: AsyncEngine) -> list[str]:
-    """Drop the per-Attribute indexes of `main`; returns the statements that build them."""
-    async with engine.begin() as connection:
-        found = (
-            await connection.execute(
-                text(
-                    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' "
-                    "AND indexname LIKE 'mat_records_attr_%' AND indexdef LIKE :branch"
-                ),
-                {"branch": "%branch = 'main'::text%"},
-            )
-        ).all()
-        for name, _ in found:
-            await connection.exec_driver_sql(f"DROP INDEX {name}")
-    return [definition for _, definition in found]
-
-
-async def _create_attribute_indexes(engine: AsyncEngine, statements: Sequence[str]) -> None:
-    gate = asyncio.Semaphore(REPLICA_PARALLEL)
-
-    async def one(statement: str) -> None:
-        async with gate, engine.begin() as connection:
-            await connection.exec_driver_sql("SET LOCAL maintenance_work_mem = '512MB'")
-            await connection.exec_driver_sql(statement)
-
-    await asyncio.gather(*(one(statement) for statement in statements))
+async def _main_indexes(
+    engine: AsyncEngine, runtime: StoreRuntime, schema: Schema, *, drop: bool
+) -> None:
+    """Drop the per-Attribute indexes of `main` (run now), or queue those `schema` plans and
+    `main` lacks (run by the caller's `build_indexes`), as the store maintains them."""
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    settings = runtime.settings.indexes
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        indexes = BranchIndexes(session, DOMAIN, "main", settings=settings, defer=True)
+        if drop:
+            await indexes.drop_all()
+        else:
+            await indexes.sync(schema)
+    if drop:
+        await build_indexes(engine, runtime)
 
 
 async def _create_schema(
@@ -1154,6 +1146,8 @@ async def remove_perf_branches(engine: AsyncEngine, runtime: StoreRuntime) -> li
             await scope_to_domain(session, DOMAIN)
             await BranchIndexes(session, DOMAIN, name, settings=runtime.settings.indexes).drop_all()
         _progress(f"removed branch {name}")
+    # The index drops are queued jobs: run them, or the partition keeps the indexes.
+    await build_indexes(engine, runtime)
     return names
 
 
