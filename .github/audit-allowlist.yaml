@@ -1,0 +1,13 @@
+# Advisories accepted for now, checked by scripts/audit_check.py in `make security` and in the
+# Audit workflow. An advisory that is not listed here fails both. An entry that has expired fails
+# them too: review it again, then either remove it (the dependency was fixed) or renew `expires`.
+#
+# Add an entry only when no fixed version exists or the vulnerable code path is not reachable;
+# otherwise upgrade the dependency. Fields:
+#   id         advisory id or one of its aliases (GHSA-..., PYSEC-..., CVE-...)
+#   package    package name as the audit tool prints it
+#   ecosystem  python or npm
+#   reason     why the risk is accepted
+#   reviewed   date of the review (YYYY-MM-DD)
+#   expires    date by which it must be reviewed again (YYYY-MM-DD)
+entries: []

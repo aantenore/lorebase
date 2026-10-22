@@ -35,7 +35,7 @@ make security                     # dependency advisories (see below)
 
 ### Dependency advisories
 
-`make security` exports the locked Python runtime dependencies with `uv export` and checks them with `uvx pip-audit`, then runs `pnpm audit --audit-level=high` in `apps/web`. Advisories that have no fixed version yet are reported but do not fail the target; any advisory with a fix does. It needs network access. Dependabot opens weekly grouped update pull requests for Python, npm, GitHub Actions and container images.
+`make security` exports the locked Python runtime dependencies with `uv export` and checks them with `uvx pip-audit`, then runs `pnpm audit --prod --audit-level=high` in `apps/web`. `scripts/audit_check.py` fails on any advisory that is not in `.github/audit-allowlist.yaml` and on expired allowlist entries; allowlisted advisories are printed as warnings. The same checks run in CI (`audit.yaml`) on every pull request, on `main` and weekly. An allowlist entry names the advisory, package, ecosystem, reason, review date and an expiry date; add one only when no fixed version exists or the vulnerable code is not reachable, in the pull request that accepts the risk, and review it again before it expires. It needs network access. Dependency versions are updated by hand: no Dependabot or Renovate version updates run.
 
 ### Testing policy
 

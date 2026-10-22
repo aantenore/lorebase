@@ -36,10 +36,10 @@ The full suite is for releases; day to day, `make test-changed` is enough.
 
 ### 4. Security scans
 
-- [ ] `make security`: `pip-audit` on the locked runtime dependencies and `pnpm audit --audit-level=high`. Advisories with a fixed version are fixed or recorded with a reason; the rest are listed in the notes.
+- [ ] `make security`: `pip-audit` on the locked runtime dependencies and `pnpm audit --audit-level=high`, the same checks as the Audit workflow. Advisories with a fixed version are fixed; the ones in `.github/audit-allowlist.yaml` are reviewed, renewed or removed, and listed in the notes.
 - [ ] CodeQL and Scorecard have run on `main` and their open alerts are triaged (the Security tab).
 - [ ] [SECURITY.md](../SECURITY.md) still names the right contact and supported versions.
-- [ ] Dependabot pull requests that fix a vulnerability are merged.
+- [ ] The latest Audit workflow run on `main` is green, and no allowlist entry in `.github/audit-allowlist.yaml` has expired.
 - [ ] SBOMs: the workflow generates them (`sbom.yaml`); `workflow_dispatch` on that workflow shows them before the tag if you want to look first.
 
 ### 5. Documentation
