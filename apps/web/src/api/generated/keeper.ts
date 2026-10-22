@@ -510,6 +510,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/branches/{branch}/rebase-tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take the default branch's sensitivity tags
+         * @description Give a branch forked before the default branch tagged an Attribute the tags it lacks.
+         *
+         *     One schema change adds, to every Attribute the branch shares with the default branch, the
+         *     tags the default branch gives it, and to derived Attributes the tags of what they read;
+         *     no tag is removed. It recomputes the titles and search vectors of the Kinds it changes,
+         *     so verification no longer reports them as `sensitivity_stale`. A branch that already has
+         *     the tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:
+         *     then only a `store.sensitivity_refresh` job is queued, which rewrites those rows in
+         *     batches and leaves the schema as it is.
+         */
+        post: operations["rebase_tags_api_v1_domains__domain_id__branches__branch__rebase_tags_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/schema:infer": {
         parameters: {
             query?: never;
@@ -3131,6 +3159,12 @@ export interface components {
              * @description Vault values erased by this request.
              */
             erased: number;
+            /**
+             * Unopenable
+             * @description Rows looked at that are sealed under a key no longer configured: their fingerprints could not be made again, so a case variant among them may be missed.
+             * @default 0
+             */
+            unopenable: number;
         };
         /**
          * ExecuteRequest
@@ -4625,6 +4659,74 @@ export interface components {
                 [key: string]: components["schemas"]["CheckReport"];
             };
         };
+        /**
+         * RebaseTagsOut
+         * @description Outcome of a tag rebase.
+         */
+        RebaseTagsOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "committed" | "dry_run" | "no_op" | "queued";
+            /** Branch */
+            branch: string;
+            /**
+             * Head
+             * @description Branch head the rebase was planned against.
+             */
+            head: string;
+            /**
+             * Revision
+             * @description New Revision; null for dry runs and rows_only.
+             */
+            revision: string | null;
+            /**
+             * Tags
+             * @description Tags the schema change adds.
+             */
+            tags: components["schemas"]["TagChangeOut"][];
+            /** Changes */
+            changes: components["schemas"]["ElementChangeOut"][];
+            /** Change Count */
+            change_count: number;
+            /** Issues */
+            issues: {
+                [key: string]: unknown;
+            }[];
+            /** Issue Count */
+            issue_count: number;
+            /**
+             * Job
+             * @description The queued store.sensitivity_refresh job (rows_only).
+             */
+            job?: number | null;
+        };
+        /**
+         * RebaseTagsRequest
+         * @description A tag rebase of one branch.
+         */
+        RebaseTagsRequest: {
+            /** Message */
+            message?: string | null;
+            /**
+             * Expected Head
+             * @description Fail with 409 unless the branch head is this Revision.
+             */
+            expected_head?: string | null;
+            /**
+             * Dry Run
+             * @description Plan without committing or queueing.
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * Rows Only
+             * @description Leave the branch's schema as it is: queue the batched rewrite of the titles and search vectors it materialized before the default branch's tags.
+             * @default false
+             */
+            rows_only: boolean;
+        };
         /** RecordAddress */
         RecordAddress: {
             /** Kind */
@@ -5317,6 +5419,11 @@ export interface components {
             candidates?: number | null;
         };
         /**
+         * Sensitivity
+         * @enum {string}
+         */
+        Sensitivity: "pii" | "confidential" | "restricted";
+        /**
          * ServedFrom
          * @enum {string}
          */
@@ -5587,6 +5694,29 @@ export interface components {
              * @default false
              */
             dry_run: boolean;
+        };
+        /**
+         * TagChangeOut
+         * @description Sensitivity tags added to one Attribute.
+         */
+        TagChangeOut: {
+            /**
+             * Section
+             * @enum {string}
+             */
+            section: "kinds" | "relations";
+            /**
+             * Owner
+             * @description Api name of the Kind or Relation.
+             */
+            owner: string;
+            /**
+             * Attribute
+             * @description Api name of the Attribute.
+             */
+            attribute: string;
+            /** Tags */
+            tags: components["schemas"]["Sensitivity"][];
         };
         /**
          * TagCreate
@@ -7934,6 +8064,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SchemaChangeOut"];
+                };
+            };
+            /** @description The caller lacks the permission named in the body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch, Revision or element not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Protected branch or moved head. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The change set is invalid; `issues` locate why. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rebase_tags_api_v1_domains__domain_id__branches__branch__rebase_tags_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                branch: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RebaseTagsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebaseTagsOut"];
                 };
             };
             /** @description The caller lacks the permission named in the body. */
