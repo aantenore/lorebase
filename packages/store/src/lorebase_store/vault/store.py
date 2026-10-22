@@ -70,11 +70,8 @@ MAX_GENERATIONS = 64
 """Erased generations of one value of one Record tried before a write is refused."""
 
 MAX_LINKED_KEYS = 1000
-"""Keys of one data subject erasure by key follows through `vault_lineage` at most."""
-
-
-class LineageTooLongError(Exception):
-    """Erasure by key found more linked keys than `MAX_LINKED_KEYS`."""
+"""Keys of one data subject above which an erasure by key is flagged for an administrator
+(`Erasure.linked`); it still erases every one of them."""
 
 
 class VaultLockTimeoutError(Exception):
@@ -123,6 +120,8 @@ class Tokenized:
     rows: list[VaultRow]
     issues: list[Issue]
     lineage: list[Lineage] = field(default_factory=list)
+    moved: list[tuple[str, str]] = field(default_factory=list)
+    """Tokens a key change took over, with the key their value moved to (`mark_moved`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +130,7 @@ class _Binding:
     attribute_id: str
     record_key: str
     erased: bool
+    moved_to: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,11 +182,28 @@ def lock_vault(sync: Session, domain_id: str, *, timeout_ms: int = 0) -> None:
     sync.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": str(previous)})
 
 
-async def lock_vault_exclusive(session: AsyncSession, domain_id: str) -> None:
-    """Hold the Domain's vault lock exclusively until the transaction ends (module doc)."""
+async def lock_vault_exclusive(
+    session: AsyncSession, domain_id: str, *, timeout_ms: int = 0
+) -> None:
+    """Hold the Domain's vault lock exclusively until the transaction ends (module doc),
+    waiting at most `timeout_ms` (0: no limit); raises `VaultLockTimeoutError`."""
+    statement = text(_LOCK.format(function="pg_advisory_xact_lock"))
+    if timeout_ms <= 0:
+        await session.execute(statement, {"domain": domain_id})
+        return
+    previous = await session.scalar(text("SELECT current_setting('lock_timeout')"))
     await session.execute(
-        text(_LOCK.format(function="pg_advisory_xact_lock")), {"domain": domain_id}
+        text("SELECT set_config('lock_timeout', :t, true)"), {"t": f"{timeout_ms}ms"}
     )
+    try:
+        await session.execute(statement, {"domain": domain_id})
+    except DBAPIError as error:
+        if sqlstate(error) == LOCK_NOT_AVAILABLE:
+            raise VaultLockTimeoutError(
+                f"the vault of Domain {domain_id!r} stayed locked for {timeout_ms} ms"
+            ) from error
+        raise
+    await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": str(previous)})
 
 
 def tokenize(
@@ -248,7 +265,9 @@ def tokenize(
     if not plain and not claimed:
         return Tokenized(list(changes), [], issues)
     lock_vault(sync, domain_id, timeout_ms=lock_timeout_ms)
-    taken, lineage, claim_issues = _check_claims(sync, domain_id, claimed, deleted, current, keys)
+    taken, lineage, moved, claim_issues = _check_claims(
+        sync, domain_id, claimed, deleted, current, keys
+    )
     issues.extend(claim_issues)
     plain.extend(taken)
     if plain and keys is None:
@@ -298,7 +317,7 @@ def tokenize(
             update={"values": {**upsert.record.values, **values}}
         )
         out[index] = RecordUpsert(record=updated)
-    return Tokenized(out, rows, [], lineage)
+    return Tokenized(out, rows, [], lineage, moved)
 
 
 def _issue(code: IssueCode, item: _Plain | _Claim, message: str) -> Issue:
@@ -319,16 +338,19 @@ def _check_claims(
     deleted: Collection[tuple[str, str]],
     current: RecordValues,
     keys: VaultKeys | None,
-) -> tuple[list[_Plain], list[Lineage], list[Issue]]:
+) -> tuple[list[_Plain], list[Lineage], list[tuple[str, str]], list[Issue]]:
     """References no vault row binds to the Record and Attribute claiming them: the values of
-    key changes to store again under the new key, the lineage they make, and issues for the
-    others."""
+    key changes to store again under the new key, the lineage they make, the tokens they move
+    and issues for the others. A token moved once (`moved_to`) is taken over by no other key
+    change and claimed again by no Record; its rows are locked, so two commits cannot move it
+    at the same time."""
     if not claimed:
-        return [], [], []
-    bindings = _bindings(sync, domain_id, {claim.token for claim in claimed})
+        return [], [], [], []
+    bindings = _bindings(sync, domain_id, {claim.token for claim in claimed}, for_update=True)
     claims_per_token = Counter(claim.token for claim in claimed)
     taken: list[tuple[_Claim, str]] = []
     lineage: dict[tuple[str, str, str], Lineage] = {}
+    moved: dict[str, str] = {}
     issues: list[Issue] = []
     for claim in claimed:
         found = bindings.get(claim.token)
@@ -336,12 +358,18 @@ def _check_claims(
             claim.kind_id,
             claim.attribute_id,
         ):
-            if found.record_key == claim.key:
+            if found.record_key == claim.key and found.moved_to is None:
                 continue
-            if claims_per_token[claim.token] == 1 and _moved(claim, found, deleted, current):
+            if (
+                found.record_key != claim.key
+                and found.moved_to is None
+                and claims_per_token[claim.token] == 1
+                and _moved(claim, found, deleted, current)
+            ):
                 lineage[(claim.kind_id, claim.key, found.record_key)] = Lineage(
                     claim.kind_id, claim.key, found.record_key
                 )
+                moved[claim.token] = claim.key
                 if not found.erased:
                     taken.append((claim, found.record_key))
                 continue  # an erased value moves as the erased reference it is
@@ -353,7 +381,7 @@ def _check_claims(
             )
         )
     if issues or not taken:
-        return [], list(lineage.values()), issues
+        return [], list(lineage.values()), sorted(moved.items()), issues
     opened = _open_sync(sync, domain_id, [claim.token for claim, _ in taken], keys)
     plain: list[_Plain] = []
     for claim, _ in taken:
@@ -368,7 +396,7 @@ def _check_claims(
             )
         else:
             plain.append(_Plain(claim.index, claim.kind_id, claim.key, claim.attribute_id, value))
-    return plain, list(lineage.values()), issues
+    return plain, list(lineage.values()), sorted(moved.items()), issues
 
 
 def _moved(
@@ -448,19 +476,29 @@ def _tombstoned(
     }
 
 
-def _bindings(sync: Session, domain_id: str, tokens: Collection[str]) -> dict[str, _Binding]:
+def _bindings(
+    sync: Session, domain_id: str, tokens: Collection[str], *, for_update: bool = False
+) -> dict[str, _Binding]:
     v = VAULT
     found: dict[str, _Binding] = {}
     ordered = sorted(tokens)
     for start in range(0, len(ordered), _CHUNK):
-        rows = sync.execute(
-            select(v.c.id, v.c.kind_id, v.c.attribute_id, v.c.record_key, v.c.erased_at).where(
-                v.c.domain_id == domain_id, v.c.id.in_(ordered[start : start + _CHUNK])
+        query = (
+            select(
+                v.c.id, v.c.kind_id, v.c.attribute_id, v.c.record_key, v.c.erased_at, v.c.moved_to
             )
+            .where(v.c.domain_id == domain_id, v.c.id.in_(ordered[start : start + _CHUNK]))
+            .order_by(v.c.id)
         )
-        for row in rows:
+        if for_update:
+            query = query.with_for_update()
+        for row in sync.execute(query):
             found[row.id] = _Binding(
-                row.kind_id, row.attribute_id, row.record_key, row.erased_at is not None
+                row.kind_id,
+                row.attribute_id,
+                row.record_key,
+                row.erased_at is not None,
+                row.moved_to,
             )
     return found
 
@@ -676,25 +714,24 @@ async def open_values(
 
 
 async def linked_keys(session: AsyncSession, domain_id: str, kind_id: str, key: str) -> list[str]:
-    """`key` and every key of the Kind linked to it by `vault_lineage`, in both directions."""
+    """`key` and every key of the Kind linked to it by `vault_lineage`, in both directions, read
+    a batch of keys at a time (no limit: erasure never stops short)."""
     seen = {key}
-    frontier = {key}
+    frontier = sorted(seen)
     lin = LINEAGE
     while frontier:
-        if len(seen) > MAX_LINKED_KEYS:
-            raise LineageTooLongError(
-                f"{key!r} is linked to more than {MAX_LINKED_KEYS} keys by key changes"
+        found: set[str] = set()
+        for start in range(0, len(frontier), _CHUNK):
+            batch = frontier[start : start + _CHUNK]
+            rows = await session.execute(
+                select(lin.c.record_key, lin.c.previous_key).where(
+                    lin.c.domain_id == domain_id,
+                    lin.c.kind_id == kind_id,
+                    (lin.c.record_key.in_(batch)) | (lin.c.previous_key.in_(batch)),
+                )
             )
-        batch = sorted(frontier)
-        rows = await session.execute(
-            select(lin.c.record_key, lin.c.previous_key).where(
-                lin.c.domain_id == domain_id,
-                lin.c.kind_id == kind_id,
-                (lin.c.record_key.in_(batch)) | (lin.c.previous_key.in_(batch)),
-            )
-        )
-        found = {k for row in rows for k in (row.record_key, row.previous_key)}
-        frontier = found - seen
+            found.update(k for row in rows for k in (row.record_key, row.previous_key))
+        frontier = sorted(found - seen)
         seen |= found
     return sorted(seen)
 
@@ -703,10 +740,17 @@ async def linked_keys(session: AsyncSession, domain_id: str, kind_id: str, key: 
 class Erasure:
     """What an erasure did: `erased` rows erased now; `unopenable` rows it looked at that are
     sealed under a key no longer configured, whose fingerprints could not be made again (an
-    erasure by value may miss a case variant among them)."""
+    erasure by value may miss a case variant among them); `keys` Record keys it covered
+    (`linked`: more than `MAX_LINKED_KEYS`, which an administrator should look at: a data
+    subject is rarely renamed that often)."""
 
     erased: int
     unopenable: int = 0
+    keys: int = 1
+
+    @property
+    def linked(self) -> bool:
+        return self.keys > MAX_LINKED_KEYS
 
 
 async def erase_record(
@@ -718,24 +762,32 @@ async def erase_record(
     *,
     keys: VaultKeys | None = None,
     at: datetime | None = None,
+    lock_timeout_ms: int = 0,
 ) -> Erasure:
     """Erase every vaulted value a Record ever held (of `attribute_ids` only, when given), on
-    every branch and Revision and under every key it had (`vault_lineage`). With `keys`, the
-    rows' fingerprints are made again under the current keys first, so the tombstones match
-    case variants written later. Raises `LineageTooLongError`."""
+    every branch and Revision and under every key it had (`vault_lineage`).
+
+    The Domain's vault lock is taken first (waiting at most `lock_timeout_ms`, else
+    `VaultLockTimeoutError`): the keys are read under it, so a key change committing meanwhile
+    is either seen or waits. With `keys`, the rows' fingerprints are made again under the
+    current keys before they are recorded as tombstones, so those match case variants written
+    later. Keys are erased a batch at a time."""
+    await lock_vault_exclusive(session, domain_id, timeout_ms=lock_timeout_ms)
     v = VAULT
-    condition = [
-        v.c.domain_id == domain_id,
-        v.c.kind_id == kind_id,
-        v.c.record_key.in_(await linked_keys(session, domain_id, kind_id, key)),
-    ]
-    if attribute_ids is not None:
-        condition.append(v.c.attribute_id.in_(sorted(attribute_ids)))
-    unopenable = 0
-    if keys is not None:
-        unopenable = await _refresh(session, keys, condition)
-    await lock_vault_exclusive(session, domain_id)
-    return Erasure(await _erase(session, domain_id, condition, at), unopenable)
+    found = await linked_keys(session, domain_id, kind_id, key)
+    erased = unopenable = 0
+    for start in range(0, len(found), _CHUNK):
+        condition = [
+            v.c.domain_id == domain_id,
+            v.c.kind_id == kind_id,
+            v.c.record_key.in_(found[start : start + _CHUNK]),
+        ]
+        if attribute_ids is not None:
+            condition.append(v.c.attribute_id.in_(sorted(attribute_ids)))
+        if keys is not None:
+            unopenable += await _refresh(session, keys, condition)
+        erased += await _erase(session, domain_id, condition, at)
+    return Erasure(erased, unopenable, len(found))
 
 
 async def erase_matching(
@@ -747,14 +799,16 @@ async def erase_matching(
     keys: VaultKeys,
     *,
     at: datetime | None = None,
+    lock_timeout_ms: int = 0,
 ) -> Erasure:
     """Erase the canonical `value` and its case variants (same matching form) in every Record
-    of the Kind. Rows whose fingerprints were made under an earlier key or scheme are made
-    again first, before the vault lock is taken, so none that opens is missed."""
+    of the Kind. Under the Domain's vault lock (taken first, see `erase_record`), rows whose
+    fingerprints were made under an earlier key or scheme are made again, so none that opens
+    is missed."""
+    await lock_vault_exclusive(session, domain_id, timeout_ms=lock_timeout_ms)
     v = VAULT
     scope = [v.c.domain_id == domain_id, v.c.kind_id == kind_id, v.c.attribute_id == attribute_id]
     unopenable = await _refresh(session, keys, scope)
-    await lock_vault_exclusive(session, domain_id)
     await session.execute(
         insert(TOMBSTONES).values(
             domain_id=domain_id,
@@ -769,6 +823,17 @@ async def erase_matching(
     fingerprints = keys.fingerprints(domain_id, kind_id, attribute_id, value)
     erased = await _erase(session, domain_id, [*scope, v.c.fingerprint.in_(fingerprints)], at)
     return Erasure(erased, unopenable)
+
+
+async def mark_moved(
+    session: AsyncSession, domain_id: str, moved: Sequence[tuple[str, str]]
+) -> None:
+    """Record the key changes `tokenize` found: token -> the key its value moved to."""
+    v = VAULT
+    for token, key in moved:
+        await session.execute(
+            update(v).where(v.c.domain_id == domain_id, v.c.id == token).values(moved_to=key)
+        )
 
 
 async def _refresh(session: AsyncSession, keys: VaultKeys, condition: list[Any]) -> int:

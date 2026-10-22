@@ -41,6 +41,7 @@ from lorebase_store.vault import (
     rotate,
     usage,
 )
+from lorebase_store.vault.store import MAX_LINKED_KEYS, VaultLockTimeoutError
 
 from .support import (
     AUTHOR,
@@ -562,3 +563,96 @@ async def test_rows_without_a_current_fingerprint_are_made_again_before_erasure(
             )
         )
     assert await erase_value(sessions, runtime, "ada@example.com") == 1
+
+
+async def _domain_scope(session: AsyncSession) -> None:
+    await session.execute(text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN})
+
+
+async def test_a_moved_reference_cannot_be_taken_over_or_claimed_again(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-1", "ada@example.com"))
+    held = await stored_email(sessions, "S-1")
+    await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-1"), person("S-2", held))
+    # Recreating S-1 with its old reference, then moving it once more, would copy the value.
+    with pytest.raises(ValidationFailedError) as raised:
+        await write(sessions, runtime, person("S-1", held))
+    assert [i.code for i in raised.value.issues] == [IssueCode.VALUE_VAULT_REFERENCE]
+
+
+async def test_erasure_reads_the_lineage_under_the_lock(
+    sessions: Sessions, runtime: StoreRuntime, engine: AsyncEngine
+) -> None:
+    await write(sessions, runtime, person("S-1", "ada@example.com"))
+    holder = await engine.connect()
+    transaction = await holder.begin()
+    try:
+        # A commit in flight holds the vault lock shared and links S-1 to S-2.
+        await holder.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        await holder.execute(
+            text(
+                "SELECT pg_advisory_xact_lock_shared(hashtextextended('lorebase.vault/' || :d, 0))"
+            ),
+            {"d": DOMAIN},
+        )
+        await holder.execute(
+            text(
+                "INSERT INTO vault_lineage (domain_id, kind_id, record_key, previous_key) "
+                "VALUES (:d, :k, 'S-2', 'S-1')"
+            ),
+            {"d": DOMAIN, "k": SUPPLIER},
+        )
+        await holder.execute(
+            text(
+                "INSERT INTO vault (domain_id, id, kind_id, attribute_id, record_key, "
+                "fingerprint, value_ciphertext, key_id) VALUES "
+                "(:d, :t, :k, :a, 'S-2', '\\x00', '\\x00', 'k1')"
+            ),
+            {"d": DOMAIN, "t": "vlt_" + "2" * 32, "k": SUPPLIER, "a": EMAIL},
+        )
+        erasing = asyncio.create_task(erase_key(sessions, "S-1"))
+        await asyncio.sleep(0.5)
+        assert not erasing.done()  # waits for the commit
+        await transaction.commit()
+    finally:
+        await holder.close()
+    assert await erasing == 2  # the row the commit added under S-2 too
+
+
+async def test_erasure_never_stops_at_a_long_lineage(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-0", "ada@example.com"))
+    async with sessions() as session, session.begin():
+        await _domain_scope(session)
+        await session.execute(
+            text(
+                "INSERT INTO vault_lineage (domain_id, kind_id, record_key, previous_key) "
+                "SELECT :d, :k, 'S-' || n, 'S-' || (n - 1) FROM generate_series(1, :n) AS n"
+            ),
+            {"d": DOMAIN, "k": SUPPLIER, "n": MAX_LINKED_KEYS + 5},
+        )
+    async with sessions() as session, session.begin():
+        await _domain_scope(session)
+        erasure = await erase_record(session, DOMAIN, SUPPLIER, f"S-{MAX_LINKED_KEYS + 5}")
+    assert (erasure.erased, erasure.linked) == (1, True)
+
+
+async def test_an_erasure_gives_up_after_its_lock_timeout(
+    sessions: Sessions, runtime: StoreRuntime, engine: AsyncEngine
+) -> None:
+    async with engine.begin() as holder:
+        await holder.execute(
+            text(
+                "SELECT pg_advisory_xact_lock_shared(hashtextextended('lorebase.vault/' || :d, 0))"
+            ),
+            {"d": DOMAIN},
+        )
+        async with sessions() as session, session.begin():
+            await _domain_scope(session)
+            with pytest.raises(VaultLockTimeoutError):
+                await erase_record(session, DOMAIN, SUPPLIER, "S-1", lock_timeout_ms=200)
+            await session.rollback()

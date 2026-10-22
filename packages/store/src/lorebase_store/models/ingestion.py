@@ -215,6 +215,7 @@ class VaultEntry(Base):
     value_ciphertext: Mapped[bytes | None]
     key_id: Mapped[str | None]
     fingerprint_key: Mapped[str | None]
+    moved_to: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
     erased_at: Mapped[datetime | None]
 

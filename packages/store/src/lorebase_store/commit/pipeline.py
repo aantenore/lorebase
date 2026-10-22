@@ -130,6 +130,7 @@ from lorebase_store.vault.store import (
     VaultRow,
     insert_lineage,
     insert_rows,
+    mark_moved,
     tokenize,
 )
 
@@ -161,6 +162,7 @@ class _Prepared:
     derived: list[DataChange] = field(default_factory=list)
     vault_rows: list[VaultRow] = field(default_factory=list)
     vault_lineage: list[Lineage] = field(default_factory=list)
+    vault_moved: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +506,7 @@ def _prepare(
         derived=list(report.derived_changes),
         vault_rows=vaulted.rows,
         vault_lineage=vaulted.lineage,
+        vault_moved=vaulted.moved,
     )
 
 
@@ -587,6 +590,7 @@ async def _store_revision(
     ).put_many(prepared.objects)
     await insert_rows(session, domain_id, prepared.vault_rows, at=revision.created_at)
     await insert_lineage(session, domain_id, prepared.vault_lineage, at=revision.created_at)
+    await mark_moved(session, domain_id, prepared.vault_moved)
     await NodeRepository(
         session,
         domain_id,

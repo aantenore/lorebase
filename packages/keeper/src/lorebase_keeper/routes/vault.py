@@ -26,6 +26,7 @@ keys, in batches, continuing where it stopped.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Literal, Self
 
 from fastapi import APIRouter, Depends, Request
@@ -40,6 +41,7 @@ from lorebase_keeper.context import StoreDep, require_domain
 from lorebase_keeper.errors import (
     CONFLICT,
     NOT_FOUND,
+    UNAVAILABLE,
     Problem,
     ProblemError,
     ValidationProblem,
@@ -50,9 +52,10 @@ from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import VAULT_ROTATE_JOB, enqueue_job
 from lorebase_store.repositories import MaterializedRepository
 from lorebase_store.vault import erase_matching, erase_record, usage
-from lorebase_store.vault.store import LineageTooLongError
+from lorebase_store.vault.store import VaultLockTimeoutError
 
 router = APIRouter(tags=["vault"])
+log = logging.getLogger("lorebase.keeper.vault")
 
 ERASE_ACTION = "vault.erase"
 KEY_DIGEST = "erased_record_key"
@@ -62,6 +65,7 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks pii.erase on the Domain."},
     404: {"model": Problem, "description": "Domain, branch or Kind not found."},
     409: {"model": Problem, "description": "Erasure by value needs the vault keys."},
+    503: {"model": Problem, "description": "The vault of the Domain stayed locked."},
     422: {"model": ValidationProblem, "description": "Invalid request."},
 }
 
@@ -131,27 +135,27 @@ async def erase(
 ) -> EraseOut:
     """Erase the vaulted values of a Record or a value in a Kind, on every Revision."""
     annotate(request, action=ERASE_ACTION, target=body.kind)
-    async with store.sessions() as session, session.begin():
-        domain = await require_domain(session, domain_id)
-        branch = body.branch or domain.default_branch
-        compiled = await MaterializedRepository(
-            session, domain_id, branch, writes=store.runtime.settings.writes
-        ).schema()
-        if compiled is None:
-            raise ProblemError(NOT_FOUND, f"Branch {branch!r} not found or not materialized.")
-        schema = load_compiled(compiled.compiled)
-        kind = _kind(schema, body.kind)
-        at = store.clock()
-        if body.key is not None:
-            attribute_ids = (
-                None
-                if body.attributes is None
-                else [
-                    _vault_attribute(kind, name, f"/body/attributes/{index}")
-                    for index, name in enumerate(body.attributes)
-                ]
-            )
-            try:
+    try:
+        async with store.sessions() as session, session.begin():
+            domain = await require_domain(session, domain_id)
+            branch = body.branch or domain.default_branch
+            compiled = await MaterializedRepository(
+                session, domain_id, branch, writes=store.runtime.settings.writes
+            ).schema()
+            if compiled is None:
+                raise ProblemError(NOT_FOUND, f"Branch {branch!r} not found or not materialized.")
+            schema = load_compiled(compiled.compiled)
+            kind = _kind(schema, body.kind)
+            at = store.clock()
+            if body.key is not None:
+                attribute_ids = (
+                    None
+                    if body.attributes is None
+                    else [
+                        _vault_attribute(kind, name, f"/body/attributes/{index}")
+                        for index, name in enumerate(body.attributes)
+                    ]
+                )
                 erasure = await erase_record(
                     session,
                     domain_id,
@@ -160,47 +164,66 @@ async def erase(
                     attribute_ids,
                     keys=store.runtime.vault,
                     at=at,
+                    lock_timeout_ms=store.runtime.vault_settings.erase_lock_timeout_ms,
                 )
-            except LineageTooLongError as error:
-                raise ProblemError(CONFLICT, str(error)) from None
-            mode: Literal["record", "value"] = "record"
-            digests = await store.runtime.digests.ready(session)
-            key_digest = digests.digest(domain_id, KEY_DIGEST, f"{kind.id}/{body.key}".encode())
-            target = f"{kind.api_name}/#{key_digest[:16]}"
-            details: dict[str, Any] = {"kind": kind.id, "key_digest": key_digest}
-            if body.attributes is not None:
-                details["attributes"] = attribute_ids
-        else:
-            assert body.attribute is not None
-            attribute_id = _vault_attribute(kind, body.attribute, "/body/attribute")
-            keys = store.runtime.vault
-            if keys is None:
-                raise ProblemError(
-                    CONFLICT, "Erasure by value needs vault.token_key and vault.encryption_key."
+                mode: Literal["record", "value"] = "record"
+                digests = await store.runtime.digests.ready(session)
+                key_digest = digests.digest(domain_id, KEY_DIGEST, f"{kind.id}/{body.key}".encode())
+                target = f"{kind.api_name}/#{key_digest[:16]}"
+                details: dict[str, Any] = {"kind": kind.id, "key_digest": key_digest}
+                if body.attributes is not None:
+                    details["attributes"] = attribute_ids
+            else:
+                assert body.attribute is not None
+                attribute_id = _vault_attribute(kind, body.attribute, "/body/attribute")
+                keys = store.runtime.vault
+                if keys is None:
+                    raise ProblemError(
+                        CONFLICT, "Erasure by value needs vault.token_key and vault.encryption_key."
+                    )
+                try:
+                    canonical = encode_value(kind.attributes[attribute_id].type, body.value)
+                except EncodingError as error:
+                    raise invalid("/body/value", str(error), "value_invalid") from None
+                erasure = await erase_matching(
+                    session,
+                    domain_id,
+                    kind.id,
+                    attribute_id,
+                    canonical,
+                    keys,
+                    at=at,
+                    lock_timeout_ms=store.runtime.vault_settings.erase_lock_timeout_ms,
                 )
-            try:
-                canonical = encode_value(kind.attributes[attribute_id].type, body.value)
-            except EncodingError as error:
-                raise invalid("/body/value", str(error), "value_invalid") from None
-            erasure = await erase_matching(
-                session, domain_id, kind.id, attribute_id, canonical, keys, at=at
+                mode = "value"
+                target = f"{kind.api_name}.{body.attribute}"
+                details = {"kind": kind.id, "attribute": attribute_id}
+            details["erased"] = erasure.erased
+            if erasure.unopenable:
+                details["unopenable"] = erasure.unopenable
+            if erasure.linked:
+                # Flagged for an administrator: the subject's keys were changed unusually often.
+                details["linked_keys"] = erasure.keys
+                log.warning(
+                    "erasure followed many key changes",
+                    extra={"domain_id": domain_id, "kind": kind.id, "linked_keys": erasure.keys},
+                )
+            await AuditRepository(session).append(
+                NewAuditEntry(
+                    actor=access.principal.id,
+                    action=ERASE_ACTION,
+                    domain_id=domain_id,
+                    target=target,
+                    details={"mode": mode, **details},
+                    at=at,
+                )
             )
-            mode = "value"
-            target = f"{kind.api_name}.{body.attribute}"
-            details = {"kind": kind.id, "attribute": attribute_id}
-        details["erased"] = erasure.erased
-        if erasure.unopenable:
-            details["unopenable"] = erasure.unopenable
-        await AuditRepository(session).append(
-            NewAuditEntry(
-                actor=access.principal.id,
-                action=ERASE_ACTION,
-                domain_id=domain_id,
-                target=target,
-                details={"mode": mode, **details},
-                at=at,
-            )
-        )
+    except VaultLockTimeoutError as error:
+        raise ProblemError(
+            UNAVAILABLE,
+            f"{error}; retry later.",
+            headers={"Retry-After": "5"},
+        ) from None
     # The entry above is the audit record of the erasure; the request's own entry would repeat it.
     suppress(request)
     return EraseOut(
