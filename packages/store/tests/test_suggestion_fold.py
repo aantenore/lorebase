@@ -155,3 +155,24 @@ def test_stored_variants_combine_into_the_kept_suggestion() -> None:
     assert values["labels"] == ["renewal_notice_days", "renewal_proposal_notice_days"]
     assert values["sources"] == ["rules", "m"]
     assert len(values["examples"]) == OPTIONS.max_examples
+
+
+def test_combine_inherits_the_target_and_orders_examples_by_document() -> None:
+    def row(name: str, document: str, target: str | None) -> dict:
+        return {
+            "name": name,
+            "target_ref": target,
+            "observations": {document: {"n": 1}},  # a legacy share without confidence
+            "examples": [{"document_id": document, "start": s, "end": s + 1} for s in (1, 2, 3)],
+            "samples": [],
+            "labels": [],
+            "sources": [],
+        }
+
+    kept = row("a", "doc_a", None)
+    values = combine(kept, [row("b", "doc_b", "knd_x"), row("c", "doc_c", "knd_y")], OPTIONS)
+    assert values["target_ref"] == "knd_x"
+    assert values["support"] == 3
+    assert values["confidence"] == 0.0
+    roomy = combine(kept, [row("b", "doc_b", None)], SuggestionOptions(max_examples=5))
+    assert [e["document_id"] for e in roomy["examples"]] == ["doc_a"] * 3 + ["doc_b"] * 2

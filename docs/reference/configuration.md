@@ -1592,6 +1592,10 @@ Schema suggestions: what the tiers see outside the schema
 | `scribe.extraction.discovery.tier2` | `true` | tier 2: the model lists `unlisted` facts (verified evidence) |
 | `scribe.extraction.discovery.llm_pass` | `false` | a dedicated call per chunk through the schema_discovery route |
 | `scribe.extraction.discovery.llm_max_items` | `20` | proposals of each list that call may return |
+| `scribe.extraction.discovery.llm_max_tokens` | `200000` | token cap of that pass per job (0: none); apart from max_tokens_per_job |
+| `scribe.extraction.discovery.llm_max_quote_chars` | `300` | proposals quoting more are discarded |
+| `scribe.extraction.discovery.llm_max_quote_share` | `0.5` | ... or quoting more than this share of the chunk |
+| `scribe.extraction.discovery.llm_quote_share_min_chunk_chars` | `400` | ... of chunks at least this long |
 | `scribe.extraction.discovery.min_confidence` | `0.3` | weaker observations are dropped |
 | `scribe.extraction.discovery.field_confidence` | `0.6` | a field line or table column |
 | `scribe.extraction.discovery.heading_confidence` | `0.5` | a Kind named by a heading |

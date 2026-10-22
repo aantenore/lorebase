@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -13,7 +14,13 @@ from lorebase_inference.fake import FakeChatModel, prompt_hash
 from lorebase_inference.interfaces import ChatOptions, ChatResult, Message, Usage
 from lorebase_inference.settings import FakeSettings, LlmSettings, LlmTaskOverride
 from lorebase_scribe.extraction.discovery import Discovery
-from lorebase_scribe.extraction.llm_discovery import TASK, build_messages, run_llm_discovery
+from lorebase_scribe.extraction.llm_discovery import (
+    SYSTEM_PROMPT,
+    TASK,
+    build_messages,
+    cache_key,
+    run_llm_discovery,
+)
 from lorebase_scribe.extraction.ontology import Ontology, build_ontology
 from lorebase_scribe.extraction.pipeline import build_models
 from lorebase_scribe.extraction.settings import DiscoverySettings, ExtractionSettings
@@ -25,6 +32,7 @@ TEXT = (
     "Supplier S-1025 has a payment term of 45 days."
 )
 CHUNK = Chunk(0, 100, 100 + len(TEXT), TEXT)
+MARK = "TEXT-fixed"
 
 
 @pytest.fixture
@@ -52,7 +60,7 @@ ANSWER: dict[str, Any] = {
 
 
 def fake_chat(ontology: Ontology, answer: dict[str, Any]) -> FakeChatModel:
-    key = prompt_hash(build_messages(ontology, CHUNK))
+    key = prompt_hash(build_messages(ontology, CHUNK, MARK))
     return FakeChatModel(LlmSettings(provider="fake"), FakeSettings(), fixtures={key: answer})
 
 
@@ -67,16 +75,25 @@ class Cache:
         self.items[key] = (data, usage, model)
 
 
-async def discover(ontology: Ontology, chat: Any, cache: Cache | None = None) -> Any:
+async def discover(
+    ontology: Ontology,
+    chat: Any,
+    cache: Cache | None = None,
+    settings: ExtractionSettings = SETTINGS,
+    chunk: Chunk = CHUNK,
+    **extra: Any,
+) -> Any:
     return await run_llm_discovery(
         chat,
         ontology,
-        CHUNK,
+        chunk,
         document_id="doc_1",
         schema_hash=b"\0" * 32,
         model_key="fake:test",
-        settings=SETTINGS,
+        settings=settings,
         cache=cache,
+        delimiter=MARK,
+        **extra,
     )
 
 
@@ -195,3 +212,101 @@ def test_messages_list_the_kinds_without_records(ontology: Ontology) -> None:
     assert isinstance(system, Message)
     assert "Kind Supplier:" in user.content
     assert TEXT in user.content
+
+
+def test_the_text_sits_between_a_random_delimiter_and_is_declared_untrusted(
+    ontology: Ontology,
+) -> None:
+    first = build_messages(ontology, CHUNK)
+    second = build_messages(ontology, CHUNK)
+    assert first[1].content != second[1].content  # a fresh delimiter per call
+    marks = set(re.findall(r"<<</?(TEXT-[0-9a-f]{16})>>>", first[1].content))
+    assert len(marks) == 1  # opened and closed by the same delimiter
+    assert "untrusted" in SYSTEM_PROMPT
+
+
+def test_the_proposal_limit_is_part_of_the_cache_key() -> None:
+    args = ("m", "v1", b"\0" * 32, CHUNK)
+    assert cache_key(*args, 20) != cache_key(*args, 5)
+    assert cache_key(*args, 20) == cache_key(*args, 20)
+
+
+async def test_quotes_that_are_long_or_cover_the_chunk_are_discarded(ontology: Ontology) -> None:
+    answer = {
+        "kinds": [
+            {"name": "Carrier", "example": "CR-1", "evidence": "Carrier Beta (CR-1)"},
+            {"name": "Everything", "example": "CR-1", "evidence": TEXT},
+        ],
+        "attributes": [],
+    }
+    long_chunks = ExtractionSettings(
+        discovery=DiscoverySettings(llm_quote_share_min_chunk_chars=len(TEXT))
+    )
+    result = await discover(ontology, fake_chat(ontology, answer), settings=long_chunks)
+    assert [o.name for o in result.observations] == ["Carrier"]
+    assert result.discarded == {"unverified_evidence": 1}
+    tight = ExtractionSettings(discovery=DiscoverySettings(llm_max_quote_chars=16))
+    result = await discover(ontology, fake_chat(ontology, answer), settings=tight)
+    assert result.observations == []
+
+
+async def test_a_quote_may_cover_most_of_a_short_chunk(ontology: Ontology) -> None:
+    answer = {
+        "kinds": [{"name": "Everything", "example": "CR-1", "evidence": TEXT}],
+        "attributes": [],
+    }
+    assert len(TEXT) < SETTINGS.discovery.llm_quote_share_min_chunk_chars
+    result = await discover(ontology, fake_chat(ontology, answer))
+    assert [o.name for o in result.observations] == ["Everything"]
+    assert result.discarded == {}
+
+
+async def test_a_kind_example_counts_only_when_its_quote_holds_it(ontology: Ontology) -> None:
+    answer = {
+        "kinds": [{"name": "Carrier", "example": "CR-9", "evidence": "Carrier Beta (CR-1)"}],
+        "attributes": [],
+    }
+    result = await discover(ontology, fake_chat(ontology, answer))
+    assert [(o.name, o.value) for o in result.observations] == [("Carrier", None)]
+    assert result.discarded == {"ungrounded_example": 1}
+
+
+async def test_the_call_is_capped_to_the_tokens_left_or_skipped(ontology: Ontology) -> None:
+    class Spy:
+        def __init__(self) -> None:
+            self.options: list[ChatOptions | None] = []
+
+        async def complete_json(
+            self, messages: Any, schema: Any, options: ChatOptions | None = None
+        ) -> ChatResult:
+            self.options.append(options)
+            return ChatResult(data={"kinds": [], "attributes": []}, usage=Usage(5, 2), model="m")
+
+    spy = Spy()
+    messages = build_messages(ontology, CHUNK, MARK)
+    estimate = sum(len(m.content) for m in messages) // 4
+    assert (await discover(ontology, spy, token_budget=estimate + 1000)).skipped is False
+    assert spy.options[0] is not None
+    assert spy.options[0].task == TASK
+    assert 0 < (spy.options[0].max_tokens or 0) <= 1000
+    skipped = await discover(ontology, spy, token_budget=estimate)  # no room for an answer
+    assert skipped.skipped is True
+    assert len(spy.options) == 1
+    await discover(ontology, spy)  # no budget: no cap
+    assert spy.options[1] is not None
+    assert spy.options[1].max_tokens is None
+
+
+def test_attributes_of_a_filtered_kind_are_dropped(ontology: Ontology) -> None:
+    discovery = Discovery(ontology, DiscoverySettings(), SuggestionOptions())
+    kind = Observation(SuggestionType.KIND, "Supplier", "doc_1", 0.8, "m", value="S-1025")
+    owned = Observation(
+        SuggestionType.ATTRIBUTE, "rating", "doc_1", 0.8, "m", kind="+Supplier", value="A"
+    )
+    other = Observation(SuggestionType.KIND, "Carrier", "doc_1", 0.8, "m", value="CR-1")
+    carried = Observation(
+        SuggestionType.ATTRIBUTE, "region", "doc_1", 0.8, "m", kind="+Carrier", value="EU"
+    )
+    discovery.extend([owned, kind, other, carried])
+    assert [o.name for o in discovery.finish({})] == ["Carrier", "region"]
+    assert discovery.stats["suggestions_orphaned"] == 1

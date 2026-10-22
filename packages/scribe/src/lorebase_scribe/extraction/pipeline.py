@@ -39,6 +39,7 @@ import lorebase_inference
 from lorebase_core.expr.sensitivity import Tags
 from lorebase_core.model import Schema, new_ulid
 from lorebase_inference import (
+    InferenceError,
     InferenceSettings,
     InvalidOutputError,
     ProviderUnavailableError,
@@ -122,6 +123,7 @@ from lorebase_store.runtime import StoreRuntime
 
 log = logging.getLogger("lorebase.scribe.extraction")
 
+DISCOVERY_TOKENS = "discovery_tokens"
 JOB_PREFIX = "exj"
 PROPOSAL_PREFIX = "prp"
 SUGGESTION_PREFIX = "ssg"
@@ -677,10 +679,6 @@ class ExtractionRun:
                     model=models.relation_model,
                 )
         found.mentions.extend(resolved)
-        if discovery is not None and models.discovery_chat is not None:
-            await self._llm_discovery(
-                models, ontology, chunks, document, schema_hash, report, discovery
-            )
         if models.chat is not None:
             await self._tier2(
                 models,
@@ -693,6 +691,11 @@ class ExtractionRun:
                 report,
                 found,
                 discovery,
+            )
+        if discovery is not None and models.discovery_chat is not None:
+            # After tier 2, so its calls come first in the job's token budget.
+            await self._llm_discovery(
+                models, ontology, chunks, document, schema_hash, report, discovery
             )
 
     async def _spans(
@@ -796,7 +799,12 @@ class ExtractionRun:
         budget = self._settings.max_tokens_per_job
         cache = StoreCache(self._sessions) if self._settings.cache else None
         for chunk in chunks:
-            used = report.usage["input_tokens"] + report.usage["output_tokens"]
+            # The discovery pass has a budget of its own: its tokens do not count here.
+            used = (
+                report.usage["input_tokens"]
+                + report.usage["output_tokens"]
+                - int(report.stats.get(DISCOVERY_TOKENS, 0))
+            )
             if budget and used >= budget:
                 report.count("chunks_over_budget")
                 continue
@@ -845,14 +853,21 @@ class ExtractionRun:
         report: ExtractionReport,
         discovery: Discovery,
     ) -> None:
-        """The dedicated discovery pass over the chunks of one document, within the budget."""
+        """The dedicated discovery pass over the chunks of one document, within its own token
+        cap (`discovery.llm_max_tokens`); a provider error costs that chunk, not the job."""
         assert models.discovery_chat is not None
-        budget = self._settings.max_tokens_per_job
+        cap = self._settings.discovery.llm_max_tokens
         cache = StoreCache(self._sessions) if self._settings.cache else None
+
+        def spend(usage: Usage) -> None:
+            report.usage["input_tokens"] += usage.input_tokens
+            report.usage["output_tokens"] += usage.output_tokens
+            report.count(DISCOVERY_TOKENS, usage.input_tokens + usage.output_tokens)
+
         for chunk in chunks:
-            used = report.usage["input_tokens"] + report.usage["output_tokens"]
-            if budget and used >= budget:
-                report.count("chunks_over_budget")
+            left = None if not cap else max(cap - int(report.stats.get(DISCOVERY_TOKENS, 0)), 0)
+            if left == 0:
+                report.count("discovery_chunks_over_budget")
                 continue
             try:
                 result = await run_llm_discovery(
@@ -864,18 +879,27 @@ class ExtractionRun:
                     model_key=models.discovery_model,
                     settings=self._settings,
                     cache=cache,
+                    token_budget=left,
                 )
             except InvalidOutputError as error:
                 report.count("discovery_calls")
                 report.count("discovery_invalid_answers")
-                report.usage["input_tokens"] += error.usage.input_tokens
-                report.usage["output_tokens"] += error.usage.output_tokens
+                spend(error.usage)
                 report.warnings.append(f"{document.id}: chunk {chunk.seq}: discovery: {error}")
+                continue
+            except InferenceError as error:
+                report.count("discovery_errors")
+                log.warning(
+                    "discovery call failed for %s chunk %s: %s", document.id, chunk.seq, error
+                )
+                report.warnings.append(f"{document.id}: chunk {chunk.seq}: discovery: {error}")
+                continue
+            if result.skipped:
+                report.count("discovery_chunks_over_budget")
                 continue
             report.count("discovery_calls", 0 if result.cached else 1)
             report.count("discovery_cache_hits", 1 if result.cached else 0)
-            report.usage["input_tokens"] += result.usage.input_tokens
-            report.usage["output_tokens"] += result.usage.output_tokens
+            spend(result.usage)
             for reason, count in result.discarded.items():
                 report.count(f"discovery_discarded_{reason}", count)
             discovery.extend(result.observations)

@@ -161,7 +161,34 @@ class DiscoverySettings(SectionModel):
         description="Run a dedicated discovery call per chunk through the "
         "`inference.llm.tasks.schema_discovery` route (any chat model; the extraction route "
         "when the task has no override) that proposes Kinds and Attributes from the document "
-        "text. Needs no tier 2; its tokens count against `max_tokens_per_job`.",
+        "text. Needs no tier 2. It runs after tier 2 of each document and has its own token cap "
+        "(`llm_max_tokens`), so it never takes tokens from `max_tokens_per_job`.",
+    )
+    llm_max_tokens: int = Field(
+        default=200_000,
+        ge=0,
+        description="The dedicated discovery calls stop once a job used this many tokens "
+        "(input and output, estimated before each call); 0 means no limit. Separate from "
+        "`max_tokens_per_job`, which tier 2 alone spends.",
+    )
+    llm_max_quote_chars: int = Field(
+        default=300,
+        ge=16,
+        description="A proposal of the dedicated call whose evidence quote is longer is discarded.",
+    )
+    llm_max_quote_share: float = Field(
+        default=0.5,
+        gt=0,
+        le=1,
+        description="A proposal whose evidence quote covers more than this share of the "
+        "chunk is discarded: it quotes the text instead of pointing at a fact. Applies only to "
+        "chunks of at least `llm_quote_share_min_chunk_chars` characters.",
+    )
+    llm_quote_share_min_chunk_chars: int = Field(
+        default=400,
+        ge=0,
+        description="Shorter chunks are exempt from `llm_max_quote_share`: a legitimate quote "
+        "can cover most of a short chunk.",
     )
     llm_max_items: int = Field(
         default=20, ge=1, description="Proposals of each list the dedicated call may return."
