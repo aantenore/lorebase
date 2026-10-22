@@ -158,6 +158,35 @@ class PostgresSourceSettings(SectionModel):
     fetch_rows: int = Field(default=5000, ge=1, description="Rows fetched per round trip.")
 
 
+class MysqlSourceSettings(SectionModel):
+    """Reading MySQL and MariaDB Sources (needs the `mysql` extra: asyncmy): read-only
+    session, bounded statements."""
+
+    statement_timeout_ms: int = Field(
+        default=60000,
+        ge=1,
+        description="Longest execution of the read: MAX_EXECUTION_TIME on MySQL, "
+        "max_statement_time on MariaDB (whole seconds, rounded up).",
+    )
+    connect_timeout_s: float = Field(default=10.0, gt=0, description="Connection timeout.")
+    fetch_rows: int = Field(default=5000, ge=1, description="Rows fetched per round trip.")
+
+
+class MssqlSourceSettings(SectionModel):
+    """Reading SQL Server Sources (needs the `mssql` extra: pymssql, run in worker threads).
+
+    SQL Server has no read-only transaction: connect with a login that can only read."""
+
+    statement_timeout_ms: int = Field(
+        default=60000,
+        ge=1,
+        description="Longest wait for a result (driver query timeout, whole seconds rounded "
+        "up) and for a lock (LOCK_TIMEOUT).",
+    )
+    connect_timeout_s: float = Field(default=10.0, gt=0, description="Login timeout.")
+    fetch_rows: int = Field(default=5000, ge=1, description="Rows fetched per round trip.")
+
+
 class JsonSourceSettings(SectionModel):
     """Reading `json` documents and `jsonl` (JSON Lines) files from local paths."""
 
@@ -273,6 +302,8 @@ class SourceSettings(SectionModel):
     parquet: ParquetSourceSettings = Field(default_factory=ParquetSourceSettings)
     http_json: HttpJsonSourceSettings = Field(default_factory=HttpJsonSourceSettings)
     postgres: PostgresSourceSettings = Field(default_factory=PostgresSourceSettings)
+    mysql: MysqlSourceSettings = Field(default_factory=MysqlSourceSettings)
+    mssql: MssqlSourceSettings = Field(default_factory=MssqlSourceSettings)
 
 
 class EmbeddingRetrySettings(SectionModel):

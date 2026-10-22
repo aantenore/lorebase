@@ -60,6 +60,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 
 - [x] Scribe job runner on the Postgres job queue, with a leader-elected scheduler ([scribe](scribe.md))
 - [x] CSV, Parquet and Postgres Sources, snapshot and incremental sync, plus JSON and JSON Lines file Sources ([scribe](scribe.md#sources)); Parquet Sources need the `lorebase-scribe[parquet]` extra
+- [x] MySQL/MariaDB and SQL Server Sources (`mysql_table`, `mysql_query`, `mssql_table`, `mssql_query`) with the optional `lorebase-scribe[mysql]` (asyncmy) and `lorebase-scribe[mssql]` (pymssql) extras ([scribe](scribe.md#sources))
 - [x] Schema inference from CSV, JSON, JSON Lines and Parquet files and Postgres tables, with a golden test on the example `supply` schema ([inference](inference.md)); any Source can be profiled through its connector, but syncs do not run inference
 - [x] Source branches, merge policies and Lineage for syncs
 - [x] OIDC login with BFF sessions for the web app: authorization code with PKCE, server-side sessions in Postgres (migration `0013`), CSRF checks, refresh and RP-initiated logout ([deployment](deployment.md#web-sign-in)); the web app signs in with `VITE_AUTH_MODE=session`

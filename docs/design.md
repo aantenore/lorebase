@@ -316,9 +316,9 @@ Custom code Derivations (Python functions) are out of scope until after M5; when
 
 | Field | Notes |
 |-------|-------|
-| id, api_name, type | `postgres_table`, `postgres_query`, `csv`, `json`, `jsonl`, `parquet`, `http_json` |
+| id, api_name, type | `postgres_table`, `postgres_query`, `mysql_table`, `mysql_query`, `mssql_table`, `mssql_query`, `csv`, `json`, `jsonl`, `parquet`, `http_json` |
 | connection | reference to a secret, never a literal: `secret://env/ERP_DSN` or `secret://file/erp.dsn` |
-| table, query | `postgres_table`: table name, optionally schema-qualified (default: last segment of the api name); `postgres_query`: read-only `SELECT` |
+| table, query | `postgres_table`, `mysql_table`, `mssql_table`: table name, optionally schema-qualified (default: last segment of the api name); `postgres_query`, `mysql_query`, `mssql_query`: read-only `SELECT` |
 | records_path, flatten_separator, http | `json`, `http_json`: dotted path of the records array; `json`, `jsonl`, `parquet`, `http_json`: nested objects as `parent<sep>child` columns (default: JSON values); `http_json`: headers (credentials as secret references only), pagination (`cursor`, `page`, `offset`, `link`), watermark query parameter, page cap |
 | target_kind | Kind id |
 | key_mapping | source columns to primary key |

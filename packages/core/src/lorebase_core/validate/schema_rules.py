@@ -81,6 +81,9 @@ SEARCHABLE_TYPES = TEXTUAL_TYPES | {AttributeType.ENUM}
 #: Aggregates that need a numeric source Attribute.
 _NUMERIC_AGGREGATES = frozenset({AggregateFunction.SUM, AggregateFunction.AVG})
 _NUMERIC_TYPES = frozenset({AttributeType.INTEGER, AttributeType.DECIMAL, AttributeType.FLOAT})
+_QUERY_SOURCE_TYPES = frozenset(
+    {SourceType.POSTGRES_QUERY, SourceType.MYSQL_QUERY, SourceType.MSSQL_QUERY}
+)
 #: Source fields that only some Source types read.
 _SOURCE_TYPE_FIELDS: dict[str, tuple[SourceType, ...]] = {
     "records_path": (SourceType.JSON, SourceType.HTTP_JSON),
@@ -1143,11 +1146,11 @@ class _Checker:
                 f"connection must be a secret reference ({SECRET_REFERENCE_PREFIX}...), "
                 "never a literal",
             )
-        if source.type is SourceType.POSTGRES_QUERY and not (source.query or "").strip():
+        if source.type in _QUERY_SOURCE_TYPES and not (source.query or "").strip():
             self.add(
                 IssueCode.SCHEMA_SOURCE_INVALID,
                 (*base, "query"),
-                "postgres_query Sources need a query",
+                f"{source.type.value} Sources need a query",
             )
         for name, types in _SOURCE_TYPE_FIELDS.items():
             if getattr(source, name) is not None and source.type not in types:

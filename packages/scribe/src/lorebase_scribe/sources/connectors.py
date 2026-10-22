@@ -1,5 +1,5 @@
 """Readers of Source rows (design 9.1): CSV, JSON, JSON Lines and Parquet files, JSON APIs,
-Postgres tables and queries.
+Postgres, MySQL/MariaDB and SQL Server tables and queries.
 
 A connector yields `(locator, row)` pairs; the locator (`name:row number`) becomes the row
 locator of the provenance entries. The connection of a Source is a secret reference; its
@@ -17,6 +17,8 @@ value is the file location, the URL or the Postgres DSN.
 - Postgres: the `table` (default: the last segment of the Source api name) or the `query` of
   the Source, filtered by `scope_filter`, read in one read-only transaction with a statement
   timeout and fetched `fetch_rows` at a time.
+- MySQL/MariaDB (`mysql_table`, `mysql_query`) and SQL Server (`mssql_table`, `mssql_query`):
+  the same, see `sql`; their drivers come with the `mysql` and `mssql` extras.
 
 Incremental Sources read only rows whose watermark column is greater than the highest watermark
 of the previous successful run (compared in SQL with the column's own type for Postgres, as text
@@ -30,7 +32,6 @@ import asyncio
 import csv
 import io
 import os
-import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,7 @@ from lorebase_scribe.sources.access import (
 from lorebase_scribe.sources.http_json import HttpJsonConnector
 from lorebase_scribe.sources.mapping import Row, SourceDefinitionError
 from lorebase_scribe.sources.records import JsonConnector, JsonLinesConnector, ParquetConnector
+from lorebase_scribe.sources.sql import MssqlConnector, MysqlConnector, quote_identifier
 from lorebase_store.db import async_url
 from lorebase_store.webhooks.delivery import Resolver, resolve_host
 
@@ -67,14 +69,16 @@ __all__ = [
     "HttpJsonConnector",
     "JsonConnector",
     "JsonLinesConnector",
+    "MssqlConnector",
+    "MysqlConnector",
     "ParquetConnector",
     "PostgresConnector",
     "SourceReadError",
     "check_connection",
     "default_connector",
+    "quote_identifier",
 ]
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 APPLICATION_NAME = "lorebase-scribe"
 CSV_SECTION = "scribe.sources.csv"
 
@@ -108,14 +112,6 @@ def check_connection(source: Source, settings: SourceSettings) -> None:
         raise SourceDefinitionError(
             f"connection {source.connection!r} is not in scribe.sources.allowed_connections"
         )
-
-
-def quote_identifier(name: str) -> str:
-    """A dotted SQL identifier, each part checked and double-quoted."""
-    parts = name.split(".")
-    if not parts or any(_IDENTIFIER.fullmatch(part) is None for part in parts):
-        raise SourceDefinitionError(f"not a plain SQL identifier: {name!r}")
-    return ".".join(f'"{part}"' for part in parts)
 
 
 # CSV ----------------------------------------------------------------------------------------
@@ -317,4 +313,8 @@ def default_connector(source: Source, settings: SourceSettings) -> Connector:
         return HttpJsonConnector(source, settings.http_json, settings.allowed_connections)
     if source.type in (SourceType.POSTGRES_TABLE, SourceType.POSTGRES_QUERY):
         return PostgresConnector(source, settings.postgres)
+    if source.type in (SourceType.MYSQL_TABLE, SourceType.MYSQL_QUERY):
+        return MysqlConnector(source, settings.mysql)
+    if source.type in (SourceType.MSSQL_TABLE, SourceType.MSSQL_QUERY):
+        return MssqlConnector(source, settings.mssql)
     raise SourceDefinitionError(f"Source type {source.type.value!r} is not supported")

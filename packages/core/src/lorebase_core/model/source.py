@@ -17,6 +17,10 @@ SECRET_REFERENCE_PREFIX = "secret://"
 class SourceType(StrEnum):
     POSTGRES_TABLE = "postgres_table"
     POSTGRES_QUERY = "postgres_query"
+    MYSQL_TABLE = "mysql_table"
+    MYSQL_QUERY = "mysql_query"
+    MSSQL_TABLE = "mssql_table"
+    MSSQL_QUERY = "mssql_query"
     CSV = "csv"
     JSON = "json"
     JSONL = "jsonl"
@@ -171,10 +175,11 @@ class Source(SchemaElement):
     id: SourceId
     type: SourceType
     connection: str
-    #: Table of a ``postgres_table`` Source, optionally schema-qualified (``erp.orders``);
-    #: ``None`` reads the table named by the last segment of the api name.
+    #: Table of a ``postgres_table``, ``mysql_table`` or ``mssql_table`` Source, optionally
+    #: schema-qualified (``erp.orders``); ``None`` reads the table named by the last segment
+    #: of the api name.
     table: str | None = None
-    #: Read-only ``SELECT`` of a ``postgres_query`` Source.
+    #: Read-only ``SELECT`` of a ``postgres_query``, ``mysql_query`` or ``mssql_query`` Source.
     query: str | None = None
     #: ``json`` and ``http_json``: dotted path of the array of records in the document
     #: (``data.items``); ``None``: the document is the array.

@@ -1252,6 +1252,26 @@ Http_json Sources (GET, JSON responses, pagination)
 | `scribe.sources.postgres.connect_timeout_s` | `10.0` |  |
 | `scribe.sources.postgres.fetch_rows` | `5000` | rows fetched per round trip |
 
+#### `scribe.sources.mysql`
+
+MySQL and MariaDB Sources; needs lorebase-scribe[mysql]
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.sources.mysql.statement_timeout_ms` | `60000` | max_execution_time (MariaDB: max_statement_time, seconds) |
+| `scribe.sources.mysql.connect_timeout_s` | `10.0` |  |
+| `scribe.sources.mysql.fetch_rows` | `5000` | rows fetched per round trip |
+
+#### `scribe.sources.mssql`
+
+SQL Server Sources; needs lorebase-scribe[mssql]
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.sources.mssql.statement_timeout_ms` | `60000` | query timeout and LOCK_TIMEOUT |
+| `scribe.sources.mssql.connect_timeout_s` | `10.0` | login timeout |
+| `scribe.sources.mssql.fetch_rows` | `5000` | rows fetched per round trip |
+
 ### `scribe.extraction`
 
 Documents into reviewable Proposals (docs/extraction.md)
