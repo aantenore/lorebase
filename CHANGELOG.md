@@ -22,6 +22,10 @@ What changed in each release, newest first. The notes are written for the person
 - A [threat model](docs/threat-model.md): STRIDE per trust boundary (web sign-in, API keys and OIDC, authorization in Keeper, Scribe connectors and document intake, Herald, Postgres roles and row-level security, webhooks, inference providers, the release pipeline), each mitigation with the file that implements it, and the residual risks in order of priority.
 - An [API stability policy](docs/api-stability.md) for `/api/v1`: what is stable, which changes are compatible or breaking, the deprecation process with `Deprecation` and `Sunset` headers (none is deprecated yet, so Keeper sends neither), client compatibility, MCP tool stability and the `lorebase.schema/v1` format. It binds from 1.0; before it, breaking changes are named in the changelog.
 
+### Fixed
+
+- The compose `db-roles` step grants the application role EXECUTE on all eight security definer read functions of a database migrated before the role existed (it granted only the four of revision 0005), reading them from the catalog like the Helm chart's role setup does.
+
 ### Changed
 
 - Deleting a branch above `store.materialize.async_delete_min_rows` rows returns 204 at once while its rows are deleted in the background; until then its name stays taken, and creating a branch with it answers 409 `already-exists` with `Retry-After`. Copies above `async_copy_min_rows` answer with `materialization: overlay` until their copy is done. Set both thresholds very high to keep copies and deletions in the request transaction.

@@ -52,11 +52,13 @@ SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
 \gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
               'GRANT USAGE, SELECT ON SEQUENCES TO %I', current_user, :'role') \gexec
--- A volume migrated before the role existed: grant the read functions of revision 0005
--- (lorebase_store.definer.READ_FUNCTIONS), as the migration does for a new database.
+-- A volume migrated before the role existed: grant EXECUTE on the security definer read
+-- functions the owner created (revisions 0005 and 0010, lorebase_store.definer.READ_FUNCTIONS),
+-- as the migration does for a new database. Read from the catalog, so a later one is covered.
 SELECT format('GRANT EXECUTE ON FUNCTION %s TO %I', CAST(p.oid AS regprocedure), :'role')
 FROM pg_proc p
-WHERE p.proname IN ('lb_search', 'lb_links_in', 'lb_neighborhood', 'lb_query_by_attribute')
+WHERE p.prosecdef
   AND p.pronamespace = CAST('public' AS regnamespace)
+  AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
 \gexec
 SQL
