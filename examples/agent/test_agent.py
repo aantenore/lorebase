@@ -252,6 +252,52 @@ async def test_flag_critical_writes_only_through_a_proposal(
     assert "lbk_" not in printed
 
 
+async def test_summary_reports_the_committed_keys_not_the_dry_run_ones(
+    herald: Client, keeper: Any, chat_stub: Any
+) -> None:
+    def execute(request: httpx.Request) -> httpx.Response:
+        dry_run = json.loads(request.content)["dry_run"]
+        key = "RF-dry" if dry_run else "RF-committed"
+        body = {
+            **fake_keeper.EXECUTION,
+            "operation": "flag_supplier_risk",
+            "status": "dry_run" if dry_run else "committed",
+            "edits": [{"op": "upsert", "kind": "RiskFlag", "key": key}],
+        }
+        return httpx.Response(200, json=body)
+
+    keeper.on("POST", f"{API}/operations/flag_supplier_risk/execute", execute)
+    parameters = {"supplier": "S-1001", "severity": "critical", "reason": "r"}
+    stub = chat_stub(
+        [
+            call(
+                EXECUTE_TOOL,
+                {"operation": "flag_supplier_risk", "parameters": parameters},
+                "c1",
+            ),
+            call(
+                EXECUTE_TOOL,
+                {"operation": "flag_supplier_risk", "parameters": parameters, "dry_run": False},
+                "c2",
+            ),
+            final("Flagged RiskFlag/RF-dry."),
+        ]
+    )
+    task_text, spec, task_slug = resolve_task(parse_args(["--task", "flag-critical"]))
+    guard = WriteGuard(spec.operations, task_slug, "Flag critical suppliers", spec.max_writes)
+    async with herald as client:
+        result = await run_agent(
+            session=client,
+            chat=chat_for(stub),
+            task_text=task_text,
+            guard=guard,
+            domain="supply",
+            out=io.StringIO(),
+        )
+
+    assert result.committed == ["RiskFlag/RF-committed"]
+
+
 async def test_read_only_task_has_no_write_tool_and_refuses_one(
     herald: Client, keeper: Any, chat_stub: Any
 ) -> None:

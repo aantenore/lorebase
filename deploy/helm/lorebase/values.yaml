@@ -647,6 +647,19 @@ guide:
   extraEnv: []
   extraVolumes: []
   extraVolumeMounts: []
+  # State directory (guide.data_dir, /var/lib/lorebase/guide): the structured output mode memory.
+  # The root file system is read-only, so it is an emptyDir by default and the memory is lost
+  # when the pod is replaced (Guide asks the model again which mode it accepts). Enable
+  # persistence to keep it on a PersistentVolumeClaim.
+  persistence:
+    enabled: false
+    # Use an existing claim instead of creating one.
+    existingClaim: ""
+    size: 100Mi
+    # Storage class; empty: the cluster default.
+    storageClass: ""
+    # With more than one replica use ReadWriteMany, or leave persistence off.
+    accessModes: ["ReadWriteOnce"]
   service:
     type: ClusterIP
     port: 8095

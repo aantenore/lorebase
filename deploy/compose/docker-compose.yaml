@@ -289,6 +289,9 @@ services:
       LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
       LOREBASE__GUIDE__HOST: 0.0.0.0
       LOREBASE__GUIDE__PORT: ${GUIDE_PORT:-8095}
+      # Writable state (structured output mode memory) on the guide-data volume; the root file
+      # system stays read-only.
+      LOREBASE__GUIDE__DATA_DIR: /var/lib/lorebase/guide
       LOREBASE__GUIDE__KEEPER__BASE_URL: http://keeper:${KEEPER_PORT:-8080}
       LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS: ${GUIDE_ALLOWED_ORIGINS:-["http://127.0.0.1:${LOREBASE_WEB_PORT:-8090}","http://localhost:${LOREBASE_WEB_PORT:-8090}"]}
       # The web service's origins, used when GUIDE_ALLOWED_ORIGINS is an empty list ([]).
@@ -300,6 +303,7 @@ services:
       LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
     volumes:
       - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+      - guide-data:/var/lib/lorebase/guide
     ports:
       - "${GUIDE_BIND:-127.0.0.1}:${GUIDE_HOST_PORT:-8095}:${GUIDE_PORT:-8095}"
     depends_on:
@@ -556,5 +560,6 @@ volumes:
   postgres-data:
   postgres-replica-data:
   ollama-data:
+  guide-data:
   prometheus-data:
   grafana-data:

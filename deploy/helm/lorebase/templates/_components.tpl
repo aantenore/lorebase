@@ -102,11 +102,29 @@ postgres
   value: 0.0.0.0
 - name: LOREBASE__GUIDE__PORT
   value: {{ .Values.guide.port | quote }}
+- name: LOREBASE__GUIDE__DATA_DIR
+  value: /var/lib/lorebase/guide
 - name: LOREBASE__GUIDE__KEEPER__BASE_URL
   value: {{ default (include "lorebase.keeperUrl" .) .Values.guide.keeperUrl | quote }}
 - name: LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS
   value: {{ .Values.guide.allowedOrigins | toJson | quote }}
 {{- include "lorebase.scribeEnv" . }}
+{{- end -}}
+
+{{/* Guide state directory: a PersistentVolumeClaim when guide.persistence.enabled, else an emptyDir. */}}
+{{- define "lorebase.guideDataVolume" -}}
+- name: data
+  {{- if .cfg.persistence.enabled }}
+  persistentVolumeClaim:
+    claimName: {{ default .claim .cfg.persistence.existingClaim }}
+  {{- else }}
+  emptyDir: {}
+  {{- end }}
+{{- end -}}
+
+{{- define "lorebase.guideDataMount" -}}
+- name: data
+  mountPath: /var/lib/lorebase/guide
 {{- end -}}
 
 {{/* The lorebase.yaml ConfigMap, mounted read-only at /etc/lorebase. */}}

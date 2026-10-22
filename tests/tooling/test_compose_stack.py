@@ -238,6 +238,16 @@ def test_guide_accepts_the_origin_of_the_web_service() -> None:
     assert defaults == origins
 
 
+def test_guide_keeps_a_read_only_root_with_a_named_volume_for_its_state() -> None:
+    guide = services(BASE_ENV, "assistant")["guide"]
+    assert guide["read_only"] is True
+    data_dir = guide["environment"]["LOREBASE__GUIDE__DATA_DIR"]
+    mounts = {v["target"]: v for v in guide["volumes"]}
+    assert mounts[data_dir]["type"] == "volume"
+    assert mounts[data_dir]["source"] == "guide-data"
+    assert not mounts[data_dir].get("read_only")
+
+
 def test_web_proxy_template_forwards_api_and_guide_without_buffering() -> None:
     text = WEB_TEMPLATE.read_text()
     for prefix, upstream in (("/api/", "keeper"), ("/guide/", "guide")):

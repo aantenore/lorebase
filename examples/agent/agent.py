@@ -428,6 +428,22 @@ class RunResult:
     cited: list[str] = field(default_factory=list)
     unverified: list[str] = field(default_factory=list)
     proposals: list[str] = field(default_factory=list)
+    committed: list[str] = field(default_factory=list)
+
+
+def committed_edits(observed: str) -> list[str]:
+    """`Kind/key` of the edits listed in the response to a committing Operation call."""
+    found: list[str] = []
+    for line in observed.splitlines():
+        if not line.startswith("- {"):
+            continue
+        try:
+            edit = json.loads(line[2:])
+        except ValueError:  # a line cut short by Herald's value limit
+            continue
+        if isinstance(edit, dict) and edit.get("kind") and edit.get("key"):
+            found.append(f"{edit['kind']}/{edit['key']}")
+    return found
 
 
 def summarize_args(arguments: dict[str, Any], width: int = 110) -> str:
@@ -470,6 +486,7 @@ async def run_agent(
     ]
     seen_text: list[str] = []
     proposals: list[str] = []
+    committed: list[str] = []
     tokens = 0
     deadline = time.monotonic() + limits.timeout_s
     stop, answer, step = "max-steps", "", 0
@@ -536,7 +553,9 @@ async def run_agent(
                     observed, is_error = f"tool call failed: {type(error).__name__}", True
             say(f"          -> {summarize_result(observed, is_error)}")
             seen_text.append(observed)
-            if name == EXECUTE_TOOL and not is_error:
+            if name == EXECUTE_TOOL and not is_error and arguments.get("dry_run") is False:
+                # Only the response to the real execution: a dry run may name other keys.
+                committed += [ref for ref in committed_edits(observed) if ref not in committed]
                 proposals += [
                     f"{pid} ({status})"
                     for pid, status in re.findall(r"Proposal (prp_\w+) \((\w+)\)", observed)
@@ -579,6 +598,7 @@ async def run_agent(
         [ref for ref in cited if ref not in unverified],
         unverified,
         proposals,
+        committed,
     )
 
 
@@ -824,6 +844,8 @@ async def main_async(args: argparse.Namespace) -> int:
     print(f"Records cited: {', '.join(result.cited) or 'none'}")
     if result.unverified:
         print(f"WARNING cited but never read from the graph: {', '.join(result.unverified)}")
+    if result.committed:
+        print(f"Committed edits: {', '.join(result.committed)}")
     for proposal in result.proposals:
         print(f"Proposal opened: {proposal} (waiting for a reviewer)")
     if trace.active:
