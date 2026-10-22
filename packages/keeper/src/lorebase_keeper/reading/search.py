@@ -239,8 +239,9 @@ async def search(
             literal(settings.headline_options),
         )
     # A lexical list puts full matches first, then the hits of q as written; fusion ranks by
-    # position already.
-    exact_first = [ranked.c[c].desc() for c in ("full", "exact") if c in ranked.c]
+    # position already (its `full` is null for semantic-only hits, which DESC would put first).
+    fused = len(lists) > 1
+    exact_first = [] if fused else [ranked.c[c].desc() for c in ("full", "exact") if c in ranked.c]
     full = ranked.c.full if "full" in ranked.c else literal(None, Boolean)
     query = (
         select(
