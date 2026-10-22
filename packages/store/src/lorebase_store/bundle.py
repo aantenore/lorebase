@@ -17,6 +17,7 @@ Layout (the `.jsonl` names carry `.gz` when `store.bundle.compression` is gzip):
     provenance.jsonl   provenance entries
     nodes.jsonl        tree nodes: hash and base64 body
     objects.jsonl      objects: hash, type and canonical body
+    vault.jsonl        only with vault values: token, binding, value or erased (see below)
     schemas/<ref>.yaml schema at the head of each branch (informational)
 
 Revisions are ordered by generation, so a parent always precedes its children. Everything is
@@ -29,9 +30,19 @@ nothing behind.
 Revision ids include the Domain id, so a bundle can only be imported under the id it was
 exported with.
 
-Values of vault Attributes travel as the references Record objects hold, never as values: the
-vault is not exported, so after an import they read as unknown (masked), and import refuses a
-Record whose vault Attribute holds anything but a well-formed reference (design 13.5).
+Values of vault Attributes travel as the references Record objects hold: by default the vault
+is not exported, so after an import they read as unknown (masked), and import refuses a Record
+whose vault Attribute holds anything but a well-formed reference (design 13.5).
+
+An export with `include_vault_values` also writes `vault.jsonl`: for every token the exported
+Record objects reference, the Kind, Attribute and Record key it is bound to and the opened value,
+or `erased` (`lorebase_store.vault.transfer`). The file is listed in the manifest with its
+sha256 like the others, and objects keep their hashes. It needs the vault keys, holds personal
+data in plain text (the file and tarball are created readable by their owner only), and every
+such export appends an audit entry (`bundle.export_plain`: Domain, heads and counts, never
+values); when that entry cannot be written, the output is removed. Import stores each entry
+again, sealed under the target's keys, after checking that a Record object of the bundle holds
+that token in that Attribute; erased entries stay erased.
 """
 
 from __future__ import annotations
@@ -46,6 +57,7 @@ import itertools
 import json
 import logging
 import os
+import shutil
 import stat
 import sys
 import tarfile
@@ -75,6 +87,7 @@ from lorebase_core.revision import (
     revision_id,
 )
 from lorebase_core.tree import decode_node
+from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.bulk import OnConflict, bulk_write
 from lorebase_store.gc import Marker
 from lorebase_store.materialize import rebuild, verify
@@ -90,6 +103,14 @@ from lorebase_store.repositories.revisions import REVISION_PARENTS, REVISIONS, R
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.settings import BundleSettings
+from lorebase_store.vault import VaultKeys, open_values
+from lorebase_store.vault.transfer import (
+    VaultEntry,
+    VaultTransferError,
+    exported_entry,
+    parse_entry,
+    restore_entries,
+)
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +119,15 @@ FORMAT_VERSION = 1
 MANIFEST = "manifest.json"
 SCHEMAS_DIR = "schemas"
 TAR_SUFFIX = ".tar"
+VAULT = "vault"
+EXPORT_PLAIN_ACTION = "bundle.export_plain"
+"""Audit action of an export holding vault values."""
+BUNDLE_ACTOR = "system:bundle"
+"""Default audit actor of the bundle command."""
+PLAIN_TEXT_WARNING = (
+    "warning: {path} holds personal data in plain text (vault values); keep it as such and "
+    "delete it once imported\n"
+)
 
 _JSONL = ("revisions", "changesets", "provenance", "ref_log", "nodes", "objects")
 _PLAIN = ("domain.json", "refs.json")
@@ -115,6 +145,10 @@ class DomainNotEmptyError(BundleError):
     """The target Domain already has Revisions or refs."""
 
 
+class VaultNotConfiguredError(BundleError):
+    """Vault values are asked for or carried, but the vault keys are not configured."""
+
+
 @dataclass(slots=True)
 class BundleReport:
     """What an export or import moved."""
@@ -129,6 +163,8 @@ class BundleReport:
     refs: int = 0
     ref_log: int = 0
     schemas: int = 0
+    vault_values: int = 0
+    vault_erased: int = 0
     rebuilt_branches: list[str] = field(default_factory=list)
     seconds: float = 0.0
 
@@ -146,6 +182,11 @@ def _jsonl_name(base: str, compression: str) -> str:
 
 def _dumps(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _create(path: Path) -> BinaryIO:
+    """A new file only its owner may read or write."""
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600), "wb")
 
 
 def _sha256(path: Path) -> tuple[str, int]:
@@ -168,10 +209,11 @@ class _Output:
         self.files: dict[str, dict[str, Any]] = {}
 
     @contextmanager
-    def jsonl(self, base: str) -> Iterator[_LineWriter]:
+    def jsonl(self, base: str, *, private: bool = False) -> Iterator[_LineWriter]:
+        """Lines of `base`; `private` creates the file readable by its owner only."""
         name = _jsonl_name(base, self.compression)
         path = self.root / name
-        raw = path.open("wb")
+        raw = _create(path) if private else path.open("wb")
         stream: _Sink = raw
         if self.compression == "gzip":
             stream = gzip.GzipFile(
@@ -324,24 +366,64 @@ async def export_domain(
     destination: str | Path,
     *,
     runtime: StoreRuntime | None = None,
+    include_vault_values: bool = False,
+    actor: str = BUNDLE_ACTOR,
 ) -> BundleReport:
     """Write a bundle of `domain_id` to `destination`: a new directory, or a `.tar` file.
 
     Reads one consistent snapshot; commits made meanwhile are not part of the bundle.
+    `include_vault_values` also writes the opened vault values in plain text and appends an
+    audit entry for `actor` (module doc); it raises `VaultNotConfiguredError` without the
+    vault keys. When such an export fails, nothing of it is left.
     """
     runtime = runtime or default_runtime()
+    keys = runtime.vault if include_vault_values else None
+    if include_vault_values and keys is None:
+        raise VaultNotConfiguredError(
+            "exporting vault values needs vault.token_key and vault.encryption_key"
+        )
     target = Path(destination)
     started = time.monotonic()
     as_tar = target.suffix == TAR_SUFFIX
     _check_destination(target, as_tar)
     if as_tar:
         with tempfile.TemporaryDirectory(dir=target.parent, prefix=".bundle-") as work:
-            report = await _export(engine, domain_id, Path(work), runtime, str(target))
-            _pack(Path(work), target)
+            report, heads = await _export(engine, domain_id, Path(work), runtime, str(target), keys)
+            if keys is not None:
+                await _audit_plain_export(engine, report, heads, actor)
+            _pack(Path(work), target, private=keys is not None)
     else:
-        report = await _export(engine, domain_id, target, runtime, str(target))
+        try:
+            report, heads = await _export(engine, domain_id, target, runtime, str(target), keys)
+            if keys is not None:
+                await _audit_plain_export(engine, report, heads, actor)
+        except BaseException:
+            if keys is not None:
+                shutil.rmtree(target, ignore_errors=True)
+            raise
     report.seconds = time.monotonic() - started
     return report
+
+
+async def _audit_plain_export(
+    engine: AsyncEngine, report: BundleReport, heads: Mapping[str, str], actor: str
+) -> None:
+    """The audit entry of an export holding vault values: counts, never the values."""
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session, session.begin():
+        await AuditRepository(session).append(
+            NewAuditEntry(
+                actor=actor,
+                action=EXPORT_PLAIN_ACTION,
+                domain_id=report.domain_id,
+                target=report.domain_id,
+                details={
+                    "heads": dict(heads),
+                    "values": report.vault_values,
+                    "erased": report.vault_erased,
+                },
+            )
+        )
 
 
 def _check_destination(target: Path, as_tar: bool) -> None:
@@ -355,18 +437,31 @@ def _check_destination(target: Path, as_tar: bool) -> None:
         target.mkdir(parents=True, exist_ok=True)
 
 
-def _pack(work: Path, target: Path) -> None:
+def _pack(work: Path, target: Path, *, private: bool = False) -> None:
+    """Pack `work` into `target`; `private` makes it readable by its owner only."""
     partial = target.with_name(target.name + ".partial")
-    with tarfile.open(partial, "w") as archive:
-        for path in sorted(work.rglob("*")):
-            if path.is_file():
-                archive.add(path, arcname=path.relative_to(work).as_posix())
+    try:
+        with (
+            _create(partial) if private else partial.open("wb") as sink,
+            tarfile.open(fileobj=sink, mode="w") as archive,
+        ):
+            for path in sorted(work.rglob("*")):
+                if path.is_file():
+                    archive.add(path, arcname=path.relative_to(work).as_posix())
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
     partial.rename(target)
 
 
 async def _export(
-    engine: AsyncEngine, domain_id: str, root: Path, runtime: StoreRuntime, label: str
-) -> BundleReport:
+    engine: AsyncEngine,
+    domain_id: str,
+    root: Path,
+    runtime: StoreRuntime,
+    label: str,
+    keys: VaultKeys | None,
+) -> tuple[BundleReport, dict[str, str]]:
     settings = runtime.settings
     batch = settings.bundle.batch_rows
     out = _Output(root, settings.bundle.compression, settings.bundle.compression_level)
@@ -394,7 +489,8 @@ async def _export(
         report.provenance = await _export_provenance(session, out, domain_id, batch)
         report.ref_log = await _export_ref_log(session, out, domain_id, batch)
         report.nodes = await _export_nodes(session, out, domain_id, batch)
-        report.objects = await _export_objects(session, out, domain_id, batch)
+        bindings: dict[str, _Binding] | None = None if keys is None else {}
+        report.objects = await _export_objects(session, out, domain_id, batch, bindings)
         for name, got, want in (
             ("revisions", report.revisions, marked.revisions),
             ("nodes", report.nodes, marked.nodes),
@@ -403,8 +499,22 @@ async def _export(
             if got != want:
                 raise BundleError(f"expected {want} {name} but the store holds {got}")
         report.schemas = await _export_schemas(session, out, domain_id, refs, runtime)
+        if keys is not None and bindings is not None:
+            await _export_vault(session, out, domain_id, batch, bindings, keys, report)
         await marker.drop()
 
+    heads = {ref["name"]: to_hex(bytes(ref["head"])) for ref in refs}
+    counts = {
+        "revisions": report.revisions,
+        "changesets": report.changesets,
+        "provenance": report.provenance,
+        "ref_log": report.ref_log,
+        "nodes": report.nodes,
+        "objects": report.objects,
+        "refs": report.refs,
+    }
+    if keys is not None:
+        counts[VAULT] = report.vault_values + report.vault_erased
     manifest = {
         "format": FORMAT,
         "format_version": FORMAT_VERSION,
@@ -412,20 +522,12 @@ async def _export(
         "domain_id": domain_id,
         "created_at": format_timestamp(datetime.now(UTC)),
         "compression": out.compression,
-        "heads": {ref["name"]: to_hex(bytes(ref["head"])) for ref in refs},
-        "counts": {
-            "revisions": report.revisions,
-            "changesets": report.changesets,
-            "provenance": report.provenance,
-            "ref_log": report.ref_log,
-            "nodes": report.nodes,
-            "objects": report.objects,
-            "refs": report.refs,
-        },
+        "heads": heads,
+        "counts": counts,
         "files": out.files,
     }
     (root / MANIFEST).write_bytes(json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n")
-    return report
+    return report, heads
 
 
 def _lorebase_version() -> str:
@@ -587,7 +689,14 @@ async def _export_nodes(session: AsyncSession, out: _Output, domain: str, batch:
             last = bytes(rows[-1].hash)
 
 
-async def _export_objects(session: AsyncSession, out: _Output, domain: str, batch: int) -> int:
+async def _export_objects(
+    session: AsyncSession,
+    out: _Output,
+    domain: str,
+    batch: int,
+    bindings: dict[str, _Binding] | None = None,
+) -> int:
+    """Write the marked objects; with `bindings`, collect the vault tokens of Record objects."""
     last = b""
     with out.jsonl("objects") as lines:
         while True:
@@ -595,14 +704,71 @@ async def _export_objects(session: AsyncSession, out: _Output, domain: str, batc
             if not rows:
                 return lines.records
             for row in rows:
-                lines.write(
-                    {
-                        "hash": to_hex(bytes(row.hash)),
-                        "type": OBJECT_TYPES_BY_CODE[row.object_type].value,
-                        "body": row.body,
-                    }
-                )
+                object_type = OBJECT_TYPES_BY_CODE[row.object_type]
+                line = {
+                    "hash": to_hex(bytes(row.hash)),
+                    "type": object_type.value,
+                    "body": row.body,
+                }
+                if bindings is not None and object_type is ObjectType.RECORD:
+                    _bind_tokens(line, bindings)
+                lines.write(line)
             last = bytes(rows[-1].hash)
+
+
+@dataclass(frozen=True, slots=True)
+class _Binding:
+    """The Record and Attribute holding a vault token in a bundle's objects."""
+
+    kind_id: str
+    attribute_id: str
+    record_key: str
+
+
+def _bind_tokens(line: Mapping[str, Any], bindings: dict[str, _Binding]) -> None:
+    """Add the vault tokens a Record object holds; a token held by two Records or Attributes
+    is refused."""
+    body = line.get("body") or {}
+    values = body.get("values") or {}
+    if not isinstance(values, dict):
+        return
+    for attribute_id, value in values.items():
+        token = vault_token(value)
+        if token is None:
+            continue
+        binding = _Binding(str(body.get("kind")), str(attribute_id), str(body.get("key")))
+        if bindings.setdefault(token, binding) != binding:
+            raise BundleError(f"vault token {token} is held by two Records or Attributes")
+
+
+async def _export_vault(
+    session: AsyncSession,
+    out: _Output,
+    domain: str,
+    batch: int,
+    bindings: Mapping[str, _Binding],
+    keys: VaultKeys,
+    report: BundleReport,
+) -> None:
+    """Write the opened value (or `erased`) of every token the exported objects hold."""
+    tokens = sorted(bindings)
+    with out.jsonl(VAULT, private=True) as lines:
+        for start in range(0, len(tokens), batch):
+            chunk = tokens[start : start + batch]
+            opened = await open_values(session, domain, chunk, keys)
+            for token in chunk:
+                bound = bindings[token]
+                try:
+                    entry = exported_entry(
+                        token, bound.kind_id, bound.attribute_id, bound.record_key, opened[token]
+                    )
+                except VaultTransferError as error:
+                    raise BundleError(str(error)) from error
+                if entry.erased:
+                    report.vault_erased += 1
+                else:
+                    report.vault_values += 1
+                lines.write(entry.as_json())
 
 
 async def _export_schemas(
@@ -920,7 +1086,9 @@ async def import_bundle(
                 session, root, manifest, target, runtime, settings.bundle.batch_rows, report
             )
             await _prepare_domain(context)
-            await _import_objects(context)
+            bindings = await _import_objects(context)
+            if bindings is not None:
+                await _import_vault(context, bindings)
             await _import_nodes(context)
             await _import_revisions(context)
             await _import_changesets(context)
@@ -999,15 +1167,29 @@ def _check_vault_values(line: dict[str, Any], vaulted: dict[str, set[str]]) -> N
             )
 
 
-async def _import_objects(c: _Import) -> None:
+def _carries_vault(c: _Import) -> bool:
+    """Whether the bundle holds vault values; the manifest's count and file agree on it."""
+    listed = _jsonl_name(VAULT, c.manifest["compression"]) in c.manifest["files"]
+    if listed != (VAULT in c.manifest["counts"]):
+        raise BundleError(f"{MANIFEST} lists the vault file and its count inconsistently")
+    return listed
+
+
+async def _import_objects(c: _Import) -> dict[str, _Binding] | None:
+    """Store the objects; when the bundle carries vault values, the tokens Record objects
+    hold."""
     store = PgObjectStore(c.session, c.domain_id, writes=c.runtime.settings.writes, batch=c.batch)
     vaulted = _vault_attributes(c)
+    bindings: dict[str, _Binding] | None = {} if _carries_vault(c) else None
     total = 0
     for batch in _batches(c.lines("objects"), c.batch):
         encoded = []
         for line in batch:
-            if vaulted and line.get("type") == ObjectType.RECORD.value:
-                _check_vault_values(line, vaulted)
+            if line.get("type") == ObjectType.RECORD.value:
+                if vaulted:
+                    _check_vault_values(line, vaulted)
+                if bindings is not None:
+                    _bind_tokens(line, bindings)
             try:
                 item = encode_object(ObjectType(line["type"]), line["body"])
             except (ValueError, KeyError, TypeError) as error:
@@ -1019,6 +1201,45 @@ async def _import_objects(c: _Import) -> None:
         total += len(batch)
     c.report.objects = total
     c.expect("objects", total)
+    return bindings
+
+
+async def _import_vault(c: _Import, bindings: Mapping[str, _Binding]) -> None:
+    """Store the vault entries again under the target's keys. Each entry must be well formed,
+    appear once, and be bound to the Record and Attribute whose object holds its token."""
+    seen: set[str] = set()
+    at = datetime.now(UTC)
+    for batch in _batches(enumerate(c.lines(VAULT), start=1), c.batch):
+        entries: list[VaultEntry] = []
+        for number, line in batch:
+            try:
+                entry = parse_entry(line)
+            except VaultTransferError as error:
+                raise BundleError(f"vault line {number}: {error}") from error
+            bound = bindings.get(entry.token)
+            if bound != _Binding(entry.kind_id, entry.attribute_id, entry.record_key):
+                raise BundleError(
+                    f"vault line {number}: no Record object of the bundle holds {entry.token} "
+                    "in that Attribute"
+                )
+            if entry.token in seen:
+                raise BundleError(f"vault line {number}: {entry.token} appears twice")
+            seen.add(entry.token)
+            entries.append(entry)
+            if entry.erased:
+                c.report.vault_erased += 1
+            else:
+                c.report.vault_values += 1
+        if c.runtime.vault is None and c.report.vault_values:
+            raise VaultNotConfiguredError(
+                "the bundle holds vault values; importing them needs vault.token_key and "
+                "vault.encryption_key"
+            )
+        try:
+            await restore_entries(c.session, c.domain_id, entries, c.runtime.vault, at=at)
+        except VaultTransferError as error:
+            raise BundleError(str(error)) from error
+    c.expect(VAULT, len(seen))
 
 
 async def _import_nodes(c: _Import) -> None:
@@ -1292,6 +1513,16 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument(
         "--out", required=True, type=Path, help="New directory, or a path ending in .tar."
     )
+    export.add_argument(
+        "--include-vault-values",
+        action="store_true",
+        help="Also write the vault values, in plain text (needs the vault keys; audited).",
+    )
+    export.add_argument(
+        "--actor",
+        default=BUNDLE_ACTOR,
+        help="Who exports, recorded in the audit entry of --include-vault-values.",
+    )
     load = commands.add_parser("import", help="Import a bundle into an empty Domain.")
     load.add_argument("--in", dest="source", required=True, type=Path, help="Directory or .tar.")
     load.add_argument("--domain", default=None, help="Target Domain id (must equal the bundle's).")
@@ -1311,7 +1542,16 @@ async def _main(args: argparse.Namespace) -> int:
     engine = create_engine(database_settings(settings), pooled=False, statement_timeout_ms=0)
     try:
         if args.command == "export":
-            report = await export_domain(engine, args.domain, args.out, runtime=runtime)
+            report = await export_domain(
+                engine,
+                args.domain,
+                args.out,
+                runtime=runtime,
+                include_vault_values=args.include_vault_values,
+                actor=args.actor,
+            )
+            if args.include_vault_values:
+                sys.stderr.write(PLAIN_TEXT_WARNING.format(path=args.out))
         else:
             report = await import_bundle(
                 engine,
