@@ -65,7 +65,7 @@ from lorebase_store.merging.attempts import (
     compute_attempt,
     decisions_of,
 )
-from lorebase_store.merging.lineage import BranchLineage
+from lorebase_store.merging.lineage import BranchLineage, MergeLineage
 from lorebase_store.models.enums import MergeAttemptStatus, ProposalStatus, RefKind
 from lorebase_store.nodestore import PgNodeStore
 from lorebase_store.objectstore import EncodedObject, SessionObjectStore
@@ -283,6 +283,9 @@ class MergeService:
                 theirs=source.head,
                 index_view=lambda _head: index,
                 provenance=BranchLineage(sync, domain_id, source.name),
+                lineage=MergeLineage(
+                    sync, domain_id, {target.head: target.name, source.head: source.name}
+                ),
                 policy=request.policy,
                 tree_params=TreeParams(domain.leaf_size),
                 schema_rules=runtime.schema.rules(),

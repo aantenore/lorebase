@@ -32,7 +32,7 @@ from lorebase_core.merge.objects import (
     data_object_type,
     tree_schema_loader,
 )
-from lorebase_core.merge.policies import MergePolicy
+from lorebase_core.merge.policies import ChangeStamp, MergePolicy
 from lorebase_core.merge.resolve import emit_groups
 from lorebase_core.merge.schema_merge import SchemaMerge, known_static_issues, merge_schema
 from lorebase_core.merge.state import SIDES, Context, Directives, check_choice
@@ -58,6 +58,7 @@ from lorebase_core.validate import IndexView, SchemaRules
 
 __all__ = [
     "IndexViewFactory",
+    "LineageLoader",
     "MergeAttempt",
     "MergeInput",
     "MergeOutcome",
@@ -74,6 +75,12 @@ IndexViewFactory = Callable[[bytes], IndexView]
 ProvenanceLoader = Callable[[bytes, str, str], Mapping[str, str]]
 """``(revision id, partition, key) -> {attribute id: provenance id}`` of an element."""
 
+LineageLoader = Callable[[bytes, str, str], Mapping[str, ChangeStamp]]
+"""``(revision id, partition, key) -> {attribute id: change stamp}``: the provenance stamp of
+the last change of each Attribute of an element at a Revision. Read by the ``authority``
+and ``newest_wins`` policies for ``ours`` and ``theirs``; an element without Lineage maps to
+an empty mapping."""
+
 _VIRTUAL_LABEL = b"lb1\x00virtual-base\x00"
 
 
@@ -84,7 +91,9 @@ class MergeInput:
     ``base`` overrides the merge base search. Without ``schema_loader`` schemas are read from
     the ``schema`` partition; without ``index_view`` the target head is read from its tree.
     ``resolutions`` are matched to Conflicts by fingerprint. ``schema_rules`` are the options
-    of the static checks of the merged schema (the defaults when unset).
+    of the static checks of the merged schema (the defaults when unset). ``lineage`` gives the
+    ``authority`` and ``newest_wins`` policies the provenance entries of both sides; without
+    it those policies never decide.
     """
 
     store: NodeStore
@@ -97,6 +106,7 @@ class MergeInput:
     schema_loader: SchemaLoader | None = None
     index_view: IndexViewFactory | None = None
     provenance: ProvenanceLoader | None = None
+    lineage: LineageLoader | None = None
     policy: MergePolicy = field(default_factory=MergePolicy)
     tree_params: TreeParams = field(default_factory=TreeParams)
     resolutions: tuple[Resolution, ...] = ()
@@ -209,6 +219,7 @@ class _Engine:
             merge_input.store, merge_input.objects
         )
         self.virtual_roots: dict[bytes, bytes] = {}
+        self.lineage_cache: dict[tuple[Side, str, str], Mapping[str, ChangeStamp]] = {}
 
     def root_of(self, revision: bytes | None) -> bytes | None:
         if revision is None:
@@ -353,6 +364,7 @@ class _Engine:
             directives=directives.copy(),
             virtual=index is None,
             rules=self.input.schema_rules or SchemaRules(),
+            lineage=None if self.input.lineage is None else self.lineage_of,
         )
         ctx.schema_hashes = {side: _schema_hashes(self.store, root) for side, root in roots.items()}
         if index is not None:
@@ -423,6 +435,19 @@ class _Engine:
 
     def provenance(self, revision: bytes, entry: ChangesetEntry) -> Mapping[str, str]:
         return self.provenance_of(revision, entry.partition, entry.key)
+
+    def lineage_of(self, side: Side, partition: str, key: str) -> Mapping[str, ChangeStamp]:
+        """Lineage entries of an element on ``ours`` or ``theirs``, loaded once per merge."""
+        loader = self.input.lineage
+        if loader is None or side is Side.BASE:
+            return {}
+        found = self.lineage_cache.get((side, partition, key))
+        if found is None:
+            revision = self.input.ours if side is Side.OURS else self.input.theirs
+            found = self.lineage_cache[(side, partition, key)] = dict(
+                loader(revision, partition, key)
+            )
+        return found
 
     # Virtual merge base (AC-13) -----------------------------------------------------------
 

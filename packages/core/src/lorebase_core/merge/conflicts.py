@@ -108,7 +108,8 @@ CHOICES: dict[ConflictKind, tuple[ResolutionChoice, ...]] = {
     ConflictKind.BROKEN_REFERENCE: (_C.CUSTOM, _C.RESTORE),
 }
 
-#: Kinds a ``MergePolicy`` can resolve without a person (``prefer`` and ``cascade_dangling``).
+#: Kinds a ``MergePolicy`` can resolve without a person (``prefer`` and ``cascade_dangling``;
+#: ``authority`` and ``newest_wins`` for the Attribute Conflicts ``DV1`` and ``DV3``).
 MACHINE_RESOLVABLE = frozenset(
     {
         ConflictKind.ATTRIBUTE_VALUE,
@@ -231,7 +232,11 @@ class Resolution(_Frozen):
 
 
 class AutoResolution(_Frozen):
-    """A Conflict resolved by the engine or by a policy, recorded for Lineage and review."""
+    """A Conflict resolved by the engine or by a policy, recorded for Lineage and review.
+
+    ``details`` say why a Lineage-based policy decided: the origins matched by ``authority``,
+    the timestamps compared by ``newest_wins``, and the provenance entries they come from.
+    """
 
     kind: ConflictKind
     fingerprint: str
@@ -242,6 +247,7 @@ class AutoResolution(_Frozen):
     resolver: str
     count: int = Field(default=1, ge=1)
     sample: tuple[str, ...] = ()
+    details: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ResolutionError(ValueError):

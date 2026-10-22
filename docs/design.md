@@ -574,8 +574,8 @@ Grouped Conflicts (XS classes over many Records) are presented as one Conflict w
 - **Interactive.** Review shows base, ours and theirs side by side; the resolver picks a choice or enters a custom value (validated against the merged schema). Grouped Conflicts offer bulk choices.
 - **Policies.** A Proposal or a Source can carry merge policies applied before humans see anything:
   - `prefer: ours | theirs` per Kind or per Attribute;
-  - `authority`: the Source that owns an Attribute wins for that Attribute (`auto_with_authority`);
-  - `newest_wins` by provenance timestamp for specified Attributes;
+  - `authority`: a ranked list of origins (Sources, principals, actors, origin types); the side whose change comes from the higher ranked origin wins per Attribute, and the Source that owns an Attribute can rank first (`schema_authority`; Source syncs with `auto_with_authority` prefer the Source's side on those Attributes);
+  - `newest_wins` by provenance timestamp, globally or for specified Attributes, ties decided by provenance entry id;
   - `cascade_dangling: true`.
   Policy resolutions are recorded as resolutions with resolver `policy:{name}`.
 - **Stale attempts.** If the target head moves while Conflicts are being resolved, the merge attempt is recomputed against the new head. Resolutions whose fingerprints still match are re-applied automatically; new or changed Conflicts are shown as unresolved. This makes long reviews safe.
@@ -688,9 +688,20 @@ Choice meanings: `ours`, `theirs`, `base` take that side's value, element or sta
 | `allow_checked_casts` | `true` | Cast values written under a changed type with `checked` rules; failures are `XS3`. When `false`, every such value is `XS3` |
 | `cascade_dangling` | `true` | Drop a Link to a deleted Record when its Relation has `on_delete = cascade` |
 | `apply_defaults` | `true` | A newly required Attribute takes its default when it has one |
-| `prefer`, `prefer_elements`, `prefer_attributes` | none | Resolve `DV1` to `DV3`, `SC1`, `SC2` for `ours` or `theirs`; the most specific wins (Attribute, then Kind or Relation id, then global) |
+| `prefer`, `prefer_elements`, `prefer_attributes` | none | Resolve `DV1` to `DV3`, `SC1`, `SC2` for `ours` or `theirs`, globally, per Kind or Relation id, or per Attribute id |
+| `authority`, `authority_attributes` | none | Ranked origin labels, highest first, globally or per Attribute id: on `DV1` and `DV3` the side whose last change of the Attribute comes from the higher ranked origin wins |
+| `schema_authority` | `false` | An Attribute's schema `authority` (a Source) ranks first for that Attribute |
+| `newest_wins`, `newest_wins_attributes` | off | On `DV1` and `DV3`, globally or for the listed Attribute ids, the side whose last change of the Attribute is the more recent wins |
 | `sample_size` | `10` | Member keys listed in a grouped Conflict |
 | `atomic_properties` | `type`, `default`, `definition` | Schema properties merged as whole values instead of entry by entry |
+
+**Policy rules.** `MergePolicy.rules` gives the rules tried on one Conflict, from the most specific to the least: per Attribute `prefer`, `authority`, `newest_wins`; per Kind or Relation `prefer`; global `authority`, `newest_wins`, `prefer`. The first rule that decides resolves the Conflict, recorded as an `AutoResolution` with resolver `policy:{name}`; when none decides, the Conflict is reported. A resolution given by a person always comes first, and the virtual base run applies no policy.
+
+- Lineage input: `MergeInput.lineage` is a `LineageLoader`, `(revision, partition, key) -> {attribute id: ChangeStamp}`, the provenance stamp of the last change of each Attribute on `ours` and `theirs`. A `ChangeStamp` holds the provenance entry id, its time and the origin labels a ranking matches: `source:{source id}` (Source syncs), `principal:{principal}` and `operation:{api name}` (Operations), `actor:{actor}` and `origin:{origin type}` (every entry). The core reads nothing else; without a loader `authority` and `newest_wins` never decide. In the store, `MergeLineage` reads the Lineage of both materialized branch heads and the provenance rows, once per merge.
+- `authority`: a side whose stamp matches no label ranks below every listed origin. No decision when both sides rank the same, neither is listed, or a side has no stamp (unknown Lineage).
+- `newest_wins`: compares the stamp times as instants. Equal times are decided by the greater provenance entry id (a ULID, so normally the later-created entry), which does not depend on which branch is ours; equal ids, or a side without a stamp, give no decision.
+- Scope: both apply only to Attribute Conflicts (`DV1`, `DV3`); delete/modify, schema and cross-cutting Conflicts are left to `prefer`, `cascade_dangling` and people.
+- Audit: the `AutoResolution` carries `details` (the matched origins, or the compared times and `tie_break`, and both provenance entry ids); it is stored with the merge attempt, and a value taken from theirs gets a `merge_resolution` provenance entry naming `policy:{name}` as resolver. A value kept from ours keeps its own Lineage, so on the next merge `newest_wins` compares the time of the merge resolution when theirs won and of the original change when ours won.
 
 **Expressions** (`expr/`, AC-06)
 - cel-python supplies the CEL grammar and parser; type checking and evaluation are Lorebase's own, over a small AST, because cel-python has no static checker, no decimal and no evaluation budget. Regular expressions run on RE2.
@@ -714,8 +725,6 @@ Choice meanings: `ours`, `theirs`, `base` take that side's value, element or sta
 **Not implemented yet**
 - `path` Derivations (virtual Relations at query time), and indexes on derived Attributes (`indexed` has no effect on them).
 - Changes two hops away (a filter reading `links` of the aggregated Records) are seen by a full rebuild or the next change of the aggregated Records, not incrementally.
-- The `authority` merge policy: `Attribute.authority` is stored and validated as a Source reference, but the merge does not consult it.
-- The `newest_wins` merge policy.
 - Per-Attribute cast rules in merge policies: cast rules are defined per type pair (5.4) and `allow_checked_casts` is global.
 
 ---

@@ -16,6 +16,7 @@ from lorebase_core.merge.conflicts import (
 )
 from lorebase_core.merge.engine import (
     IndexViewFactory,
+    LineageLoader,
     MergeAttempt,
     MergedTree,
     MergeInput,
@@ -37,7 +38,14 @@ from lorebase_core.merge.objects import (
     schema_from_documents,
     tree_schema_loader,
 )
-from lorebase_core.merge.policies import DEFAULT_ATOMIC_PROPERTIES, MergePolicy
+from lorebase_core.merge.policies import (
+    DEFAULT_ATOMIC_PROPERTIES,
+    ORIGIN_LABEL_PREFIXES,
+    ChangeStamp,
+    MergePolicy,
+    PolicyName,
+    origin_labels,
+)
 
 __all__ = [
     "CHOICES",
@@ -45,11 +53,14 @@ __all__ = [
     "DOMAIN_KEY",
     "GROUPED_KINDS",
     "MACHINE_RESOLVABLE",
+    "ORIGIN_LABEL_PREFIXES",
     "AutoResolution",
+    "ChangeStamp",
     "Conflict",
     "ConflictKind",
     "InMemoryObjectStore",
     "IndexViewFactory",
+    "LineageLoader",
     "MergeAttempt",
     "MergeInput",
     "MergeOutcome",
@@ -58,6 +69,7 @@ __all__ = [
     "MergedTree",
     "MissingObjectError",
     "ObjectStore",
+    "PolicyName",
     "ProvenanceLoader",
     "Resolution",
     "ResolutionChoice",
@@ -70,6 +82,7 @@ __all__ = [
     "conflict_fingerprint",
     "load_schema",
     "merge",
+    "origin_labels",
     "put_schema",
     "schema_from_documents",
     "tree_schema_loader",

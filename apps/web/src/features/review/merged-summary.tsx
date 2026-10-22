@@ -3,7 +3,7 @@ import { useRevision } from '@/api/queries';
 import type { MergeAttempt, RevisionId } from '@/api/types';
 import { Badge, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
-import { CODE_LABEL, locationOf, partitionName, type Names } from './conflict-meta';
+import { CODE_LABEL, locationOf, partitionName, policyReason, type Names } from './conflict-meta';
 import { countByChoice } from './conflict-state';
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -106,7 +106,12 @@ export function MergedSummary({
                   {auto.key === null ? '' : `/${auto.key}`}
                 </TD>
                 <TD>{auto.choice}</TD>
-                <TD>{auto.resolver}</TD>
+                <TD>
+                  {auto.resolver}
+                  {policyReason(auto) === null ? null : (
+                    <span className="block text-xs text-muted">{policyReason(auto)}</span>
+                  )}
+                </TD>
               </TR>
             ))}
           </TBody>

@@ -1,14 +1,16 @@
-"""Provenance of the source side of a merge, read from its materialized head."""
+"""Provenance of the sides of a merge, read from their materialized heads."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lorebase_core.merge import ChangeStamp
 from lorebase_store.layout import BranchLayout, load_layout_sync
 from lorebase_store.materialize.rows import PartitionType, parse_partition, split_link_key
+from lorebase_store.repositories.provenance import PROVENANCE
 
 
 class BranchLineage:
@@ -68,3 +70,54 @@ class BranchLineage:
             )
         found = self._session.execute(query).scalar_one_or_none()
         return {str(k): str(v) for k, v in (found or {}).items()}
+
+
+class MergeLineage:
+    """Core `LineageLoader`: the change stamps of both sides of a merge.
+
+    `branches` maps the head Revision of each merged branch to its name; the Lineage of an
+    element is read from that branch's materialized head (see `BranchLineage`) and its
+    provenance ids are resolved to stamps (origin labels and time) from the provenance table.
+    Provenance rows are read once per merge.
+    """
+
+    def __init__(self, session: Session, domain_id: str, branches: Mapping[bytes, str]) -> None:
+        self._session = session
+        self._domain = domain_id
+        self._branches = {
+            revision: BranchLineage(session, domain_id, name) for revision, name in branches.items()
+        }
+        self._stamps: dict[str, ChangeStamp | None] = {}
+
+    def __call__(self, revision: bytes, partition: str, key: str) -> Mapping[str, ChangeStamp]:
+        branch = self._branches.get(revision)
+        if branch is None:
+            return {}
+        ids = branch(revision, partition, key)
+        self._load(ids.values())
+        found: dict[str, ChangeStamp] = {}
+        for attribute, provenance_id in ids.items():
+            stamp = self._stamps.get(provenance_id)
+            if stamp is not None:
+                found[attribute] = stamp
+        return found
+
+    def _load(self, ids: Iterable[str]) -> None:
+        missing = sorted({i for i in ids if i not in self._stamps})
+        if not missing:
+            return
+        rows = self._session.execute(
+            select(
+                PROVENANCE.c.id,
+                PROVENANCE.c.origin_type,
+                PROVENANCE.c.origin_ref,
+                PROVENANCE.c.actor,
+                PROVENANCE.c.at,
+            ).where(PROVENANCE.c.domain_id == self._domain, PROVENANCE.c.id.in_(missing))
+        )
+        for row in rows:
+            self._stamps[row.id] = ChangeStamp.from_stored(
+                row.id, row.origin_type, row.origin_ref or {}, row.actor, row.at
+            )
+        for provenance_id in missing:
+            self._stamps.setdefault(provenance_id, None)
