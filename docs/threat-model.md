@@ -273,6 +273,13 @@ see the [security review](security-review.md#hardening-from-the-threat-model)):
   `packages/keeper/src/lorebase_keeper/services/operations.py`; tests
   `packages/core/tests/validate/test_vault_rules.py`,
   `packages/keeper/tests/reading/test_sensitivity.py`) (TB3).
+- **Bundles lost vault values.** `python -m lorebase_store.bundle export
+  --include-vault-values` (an operator tool that already runs with the database owner's
+  credentials and the vault keys, so no API permission applies) writes them in plain text to an
+  owner-only `vault.jsonl` covered by the manifest and records a `bundle.export_plain` audit
+  entry without values; import seals them under the target's keys after checking the binding of
+  every token (`packages/store/src/lorebase_store/vault/transfer.py`, test
+  `packages/store/tests/test_bundle_vault_values.py`) (TB6).
 - **Erasure value on the command line.** `lorebase admin erase --value` accepts only `-`
   (standard input, no echo on a terminal) or `@FILE` (`packages/cli/src/lorebase_cli/commands/admin.py`,
   test `packages/cli/tests/test_commands.py`) (TB2).

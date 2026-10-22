@@ -140,11 +140,19 @@ python -m lorebase_store.bundle import --in /backups/supply.tar [--domain supply
   the Domain id, so a bundle can only be restored under the id it was exported with.
 - Unreachable data (collected or not yet collected garbage) is not exported, so restoring a
   bundle also compacts the Domain.
+- Vault values are not exported by default: after a restore they read as unknown. `export
+  --include-vault-values [--actor <principal>]` also writes `vault.jsonl` with every value the
+  exported Records reference, in plain text, or `erased`. It needs the vault keys, creates the
+  file and tarball readable by their owner only, and appends a `bundle.export_plain` audit
+  entry (Domain, heads and counts, never values); if the entry cannot be written the output is
+  removed. Import seals the values under the target's vault keys (refused without them) and
+  checks that each token is held by that Record and Attribute in the bundle. Treat such a
+  bundle as personal data and delete it once restored.
 
 Not in a bundle: the audit log, principals, groups, grants and API keys (installation-wide, not
 Domain content), and per-Domain operational tables: Proposals and reviews, merge attempts,
-Source runs, documents and chunks, extraction jobs, vault entries, embeddings, Operation
-invocations, outbox and jobs. Back these up with `pg_dump`, which also covers a whole
+Source runs, documents and chunks, extraction jobs, vault entries (unless exported with their
+values), embeddings, Operation invocations, outbox and jobs. Back these up with `pg_dump`, which also covers a whole
 installation in one step:
 
 ```
