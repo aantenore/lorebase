@@ -51,6 +51,7 @@ from lorebase_store.materialize import (
     create_branch,
     delete_branch,
 )
+from lorebase_store.models.enums import RefKind
 from lorebase_store.reads import (
     Comparison,
     get_record,
@@ -135,6 +136,16 @@ class Scale:
     extra_links: int
     commit_batch: int = 10000
     seed: int = 20260115
+    #: Largest generator scale built at once (about 1.1M Records). A larger factor is built
+    #: in shards of at most this scale with their own seeds and key ranges, so that memory
+    #: stays bounded; a shard links only its own Records.
+    shard_factor: int = 6000
+
+    def shards(self) -> list[int]:
+        """Generator scale of each shard."""
+        count = -(-self.factor // self.shard_factor)
+        size, larger = divmod(self.factor, count)
+        return [size + 1] * larger + [size] * (count - larger)
 
 
 @dataclass
@@ -203,14 +214,60 @@ def _typed(attribute: Any, raw: str) -> Any:
 def build_changes(schema: Schema, scale: Scale) -> Iterator[list[DataChange]]:
     """Batches of changes, each a group of Records with the Links their Kind requires.
 
-    Built lazily, one Kind at a time, so that only the generator's tables and one Kind's
-    changes are in memory at once.
+    Built lazily, one shard and one Kind at a time, so that only one shard's generator tables
+    and one Kind's changes are in memory at once.
     """
     module = generator()
-    tables = module.build_dataset(
-        module.Settings(scale.factor, scale.seed, date.fromisoformat(module.DEFAULT_AS_OF))
-    )
-    _densify(tables, scale, random.Random(scale.seed))
+    offsets = dict.fromkeys(KEY_COLUMNS, 0)
+    for shard, factor in enumerate(scale.shards()):
+        seed = scale.seed + shard
+        tables = module.build_dataset(
+            module.Settings(factor, seed, date.fromisoformat(module.DEFAULT_AS_OF))
+        )
+        _densify(tables, scale, random.Random(seed))
+        if shard:
+            _shift_keys(module, tables, offsets)
+        for stem in offsets:
+            offsets[stem] += len(tables[stem])
+        yield from _batches(schema, scale, tables)
+
+
+#: Record files with numbered keys: the key column and the generator's key kind.
+KEY_COLUMNS = {
+    "supplier": ("supplier_code", "supplier"),
+    "part": ("part_number", "part"),
+    "plant": ("plant_code", "plant"),
+    "purchase_order": ("po_number", "order"),
+    "contract": ("contract_number", "contract"),
+}
+
+
+def _shift_keys(
+    module: ModuleType, tables: dict[str, list[dict[str, str]]], offsets: dict[str, int]
+) -> None:
+    """Renumber a shard's keys after those of the shards before it, in every column that
+    holds one; VAT numbers follow the Supplier's number, as the generator derives them."""
+    renamed: dict[str, str] = {}
+    for stem, (column, kind) in KEY_COLUMNS.items():
+        prefix, start = module.KEY_PREFIX[kind], module.KEY_START[kind]
+        for row in tables[stem]:
+            index = int(row[column].removeprefix(prefix)) - start + offsets[stem]
+            new = module.key(kind, index)
+            renamed[row[column]] = new
+            row[column] = new
+            if stem == "supplier":
+                row["vat_number"] = f"{row['country']}{(index + 1) * 7919 % 10**9:09d}"
+    for row in tables["purchase_order"]:
+        row["supplier"] = renamed[row["supplier"]]
+    for stem in LINK_FILES:
+        for row in tables[stem]:
+            row["from_key"] = renamed.get(row["from_key"], row["from_key"])
+            row["to_key"] = renamed.get(row["to_key"], row["to_key"])
+
+
+def _batches(
+    schema: Schema, scale: Scale, tables: dict[str, list[dict[str, str]]]
+) -> Iterator[list[DataChange]]:
     for stem, link_stems in GROUPS:
         kind = schema.kind_by_api_name(RECORD_FILES[stem])
         assert kind is not None
@@ -294,7 +351,15 @@ def _densify(tables: dict[str, list[dict[str, str]]], scale: Scale, rng: random.
 
 
 async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> SeedReport:
-    """Create the Domain, its schema and the dataset on `main`; refresh statistics."""
+    """Create the Domain, its schema and the dataset on `main`; refresh statistics.
+
+    The load sends materialized rows through COPY from `LOAD_COPY_THRESHOLD_ROWS` rows on
+    (a seed commit writes a few thousand per Kind or Relation); the measurements use
+    `runtime` as given."""
+    writes = runtime.settings.writes.model_copy(
+        update={"copy_threshold_rows": LOAD_COPY_THRESHOLD_ROWS}
+    )
+    runtime = StoreRuntime.from_settings(runtime.settings.model_copy(update={"writes": writes}))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     schema = perf_schema()
     started = time.perf_counter()
@@ -314,6 +379,7 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
             origin=ORIGIN,
             runtime=runtime,
         )
+    deferred = await _drop_deferred_indexes(engine)
     batches = 0
     for batch in build_changes(schema, scale):
         batches += 1
@@ -331,6 +397,7 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
                 runtime=runtime,
             )
     _progress(f"seed: {batches} commits, building indexes")
+    await _create_deferred_indexes(engine, deferred)
     await build_indexes(engine, runtime)
     await _analyze(engine)
     seconds = time.perf_counter() - started
@@ -350,6 +417,38 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
             )
         ).scalar_one()
     return SeedReport(int(records), int(links), seconds, batches + 1)
+
+
+LOAD_COPY_THRESHOLD_ROWS = 500
+
+#: Indexes no commit reads, dropped while the dataset loads and built once afterwards (a GIN
+#: index is cheaper to build than to maintain row by row): full-text search and values.
+DEFERRED_INDEXES = ("ix_mat_records_branch_search", "ix_mat_records_values")
+
+
+async def _drop_deferred_indexes(engine: AsyncEngine) -> list[str]:
+    """Drop `DEFERRED_INDEXES`; returns the statements that create them again."""
+    async with engine.begin() as connection:
+        found = (
+            await connection.execute(
+                text(
+                    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' "
+                    "AND indexname = ANY(CAST(:names AS text[])) ORDER BY indexname"
+                ),
+                {"names": list(DEFERRED_INDEXES)},
+            )
+        ).all()
+        for name, _ in found:
+            await connection.exec_driver_sql(f"DROP INDEX {name}")
+    # Defined on the partitioned table: without ONLY, CREATE INDEX builds every partition.
+    return [definition.replace(" ON ONLY ", " ON ") for _, definition in found]
+
+
+async def _create_deferred_indexes(engine: AsyncEngine, statements: Sequence[str]) -> None:
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("SET LOCAL maintenance_work_mem = '1GB'")
+        for statement in statements:
+            await connection.exec_driver_sql(statement)
 
 
 def _progress(message: str) -> None:
@@ -783,6 +882,33 @@ async def measure_branch_copy(
 
 OVERLAY_BRANCH = "agent/perf"
 COPY_BRANCH = "perf-copy"
+#: Prefixes of the branches the measurements create.
+PERF_BRANCH_PREFIXES = ("perf-", "agent/perf")
+
+
+async def remove_perf_branches(engine: AsyncEngine, runtime: StoreRuntime) -> list[str]:
+    """Delete the branches the measurements create (left by an earlier run on the same
+    database), rows and per-Attribute indexes included; returns their names."""
+    materialize = runtime.settings.materialize.model_copy(update={"async_delete_min_rows": 0})
+    runtime = StoreRuntime.from_settings(
+        runtime.settings.model_copy(update={"materialize": materialize})
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        refs = await RefRepository(session, DOMAIN).all(RefKind.BRANCH)
+    names = [r.name for r in refs if r.name.startswith(PERF_BRANCH_PREFIXES)]
+    for name in names:
+        async with sessions() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            deletion = await delete_branch(session, DOMAIN, name, runtime=runtime)
+        if deletion is BranchDeletion.SCHEDULED:
+            await _run_steps(engine, runtime, name, "delete", None)
+        async with sessions() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            await BranchIndexes(session, DOMAIN, name, settings=runtime.settings.indexes).drop_all()
+        _progress(f"removed branch {name}")
+    return names
 
 
 async def measure_branch_overlay(

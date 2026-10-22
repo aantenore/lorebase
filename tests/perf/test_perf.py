@@ -40,6 +40,7 @@ def test_small_scale_baseline() -> None:
             "50",
         ]
     )
+    assert report is not None
     assert report.seeded.records > 500
     assert report.seeded.links > report.seeded.records
     assert set(report.owner) == set(bench.harness.TARGETS_MS)
