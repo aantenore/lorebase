@@ -524,9 +524,17 @@ class SearchHit(Model):
     score: float
 
 
+class SearchCorrection(Model):
+    """A query word the branch does not hold and the words searched in its place as well."""
+
+    word: str
+    replacements: list[str]
+
+
 class SearchResult(Served):
     mode: str
     items: list[SearchHit]
+    corrections: list[SearchCorrection] = Field(default_factory=list)
 
 
 class QueryRequest(RequestModel):

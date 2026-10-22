@@ -36,6 +36,7 @@ from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
 from lorebase_keeper.reading.points import KindScope, ReadPoint, ServedFrom
 from lorebase_keeper.reading.record_history import record_history, record_lineage
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.search import typo_tolerance
 from lorebase_keeper.reading.settings import ReadSettings, SearchSettings
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
@@ -52,13 +53,13 @@ from lorebase_store.materialize import (
 )
 from lorebase_store.reads import (
     Comparison,
-    TitleSimilarity,
     get_record,
     head_schema,
     index_spec,
     links_of_record,
     list_records,
     query_by_attribute,
+    search_corrections,
     search_records,
 )
 from lorebase_store.repositories import (
@@ -96,6 +97,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("risk_flag", ("flags",)),
 )
 
+#: Keeper's lexical search with its typo tolerance defaults (`search.trigram_threshold`,
+#: `search.typo_*`), on a misspelled title word (`misspelled`): corrections, then search.
+TYPO_SEARCH = "typo-tolerant full-text search"
+
 TARGETS_MS = {
     "get by key": 5.0,
     "list page of 50": 20.0,
@@ -103,15 +108,20 @@ TARGETS_MS = {
     "2-hop neighborhood": 30.0,
     "query by indexed attribute": 25.0,
     "full-text search": 50.0,
-    "full-text search with typo-tolerant titles": 50.0,
+    TYPO_SEARCH: 50.0,
     "record history page": 10.0,
     "record lineage": 10.0,
 }
 #: Reads without a budget in design 8.7: held to the budget of Links of a Record, the other
 #: per-Record index range read.
 PROPOSED_TARGETS = frozenset({"record history page", "record lineage"})
-#: Keeper's lexical search defaults (`search.trigram_threshold`, `search.trigram_weight`).
-TITLE_SIMILARITY = TitleSimilarity(threshold=0.3, weight=0.5)
+
+
+def misspelled(word: str) -> str:
+    """`word` with the two letters in its middle swapped (`supplier` -> `suplpier`)."""
+    middle = len(word) // 2
+    swapped = word[: middle - 1] + word[middle] + word[middle - 1] + word[middle + 1 :]
+    return swapped if swapped != word else word + word[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,7 +363,7 @@ async def _analyze(engine: AsyncEngine) -> None:
     async with engine.connect() as connection:
         auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
         await auto.exec_driver_sql(
-            "VACUUM (PARALLEL 0, ANALYZE) mat_records, mat_links, refs, mat_schema"
+            "VACUUM (PARALLEL 0, ANALYZE) mat_records, mat_links, mat_lexicon, refs, mat_schema"
         )
 
 
@@ -538,14 +548,20 @@ def read_operations(
             max_changes=reading.read.history.lineage_max_changes,
         )
 
-    async def search_titles(session: AsyncSession, rng: random.Random) -> Any:
+    typos = typo_tolerance(reading)
+
+    async def search_typos(session: AsyncSession, rng: random.Random) -> Any:
+        # Keeper's lexical search: the corrections, then the search with them.
+        query = misspelled(rng.choice(work.words))
+        fixes = await search_corrections(session, DOMAIN, branch, query, typos, runtime=runtime)
         return await search_records(
             session,
             DOMAIN,
             branch,
-            rng.choice(work.words),
+            query,
             limit=20,
-            titles=TITLE_SIMILARITY,
+            corrections=fixes,
+            correction_weight=typos.weight,
             runtime=runtime,
         )
 
@@ -556,7 +572,7 @@ def read_operations(
         "2-hop neighborhood": hood,
         "query by indexed attribute": by_attribute,
         "full-text search": search,
-        "full-text search with typo-tolerant titles": search_titles,
+        TYPO_SEARCH: search_typos,
         "record history page": history,
         "record lineage": lineage,
     }

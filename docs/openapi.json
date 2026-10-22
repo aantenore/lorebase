@@ -17487,6 +17487,28 @@
         "title": "SchemaValidationOut",
         "description": "Static validation of a change set."
       },
+      "SearchCorrection": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "title": "Word"
+          },
+          "replacements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Replacements"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "replacements"
+        ],
+        "title": "SearchCorrection",
+        "description": "A query word the branch does not hold and the words searched in its place as well.\n\nWords are lexemes of the text search configuration (lowercased, stemmed by its\ndictionaries), as full-text search compares them."
+      },
       "SearchHit": {
         "properties": {
           "kind": {
@@ -17680,6 +17702,14 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "corrections": {
+            "items": {
+              "$ref": "#/components/schemas/SearchCorrection"
+            },
+            "type": "array",
+            "title": "Corrections",
+            "description": "Typo corrections applied to q; hits found only through them come after the others."
           }
         },
         "type": "object",

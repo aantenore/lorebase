@@ -59,13 +59,14 @@ ANALYSIS = """\
 - The functions build each statement with the Domain, branch and Kind as literals, so every
   call is planned with them (partial index predicates match) and runs without JIT; the
   planning time is part of the numbers above.
-- Search reads the GIN indexes on `(domain_id, branch, search)` and `(domain_id, branch,
-  title gin_trgm_ops)` (revision `0011`, `btree_gin`): the Domain and branch are index
-  conditions, so a search reads its branch's matches only, however many branches share the
-  partition (here `main`, a copy and an overlay). It ranks at most
-  `store.reads.search_candidates` matches, so very common terms cost a bounded amount.
-  Typo-tolerant titles (trigram similarity, Keeper's lexical search) add the branch's
-  trigram matches on titles to the candidates.
+- Search reads the GIN index on `(domain_id, branch, search)` (revision `0011`,
+  `btree_gin`): the Domain and branch are index conditions, so a search reads its branch's
+  matches only, however many branches share the partition (here `main`, a copy and an
+  overlay). It ranks at most `store.reads.search_candidates` matches, so very common terms
+  cost a bounded amount. Typo-tolerant search (revision `0018`, Keeper's lexical search)
+  queries a misspelled title word: the word is looked up in the branch's word lexicon
+  (`mat_lexicon`, and the base's for an overlay), its closest words come from the trigram
+  index on the lexicon, and the search runs with `(word | correction ...)`.
 - Times come from a laptop shared with other work; repeated runs differ by a few milliseconds
   at p95, up to ten for typo-tolerant search.
 - A copy branch of `main` is created as an overlay (the request) and copied by its background

@@ -46,7 +46,7 @@ from lorebase_store.repositories import (
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, MaterializeSettings, StoreSettings
 
-from .read_support import part_with
+from .read_support import assert_lexicon_in_step, lexicon, part_with
 from .support import DOMAIN, PART, SUPPLIER, VAT, supplied, supplier, wait_for_lock_waiter
 from .test_overlay import (
     counted_supplier,
@@ -176,6 +176,9 @@ async def assert_reads_like(sessions: Sessions, branch: str, reference: str) -> 
             assert await snapshot(session, branch, found.schema, reader) == await snapshot(
                 session, reference, found.schema, reader
             )
+        # The word lexicon follows the batches and the switch.
+        for name in (branch, reference):
+            await assert_lexicon_in_step(session, name)
     for kind_id, key in ((SUPPLIER, "S-1"), (SUPPLIER, "S-2"), (PART, "P-1"), (PART, "P-4")):
         assert await history(sessions, branch, kind_id, key) == await history(
             sessions, reference, kind_id, key
@@ -459,6 +462,7 @@ async def test_a_large_deletion_hides_the_branch_and_deletes_its_rows_in_batches
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
         assert await RefRepository(session, DOMAIN).get_deleting("doomed") is None
+        assert await lexicon(session, "doomed") == {}
     await assert_reads_like(sessions, "agent/reader", REFERENCE)
     # The name is free again; a small branch is deleted at once.
     await create(sessions, "doomed", INLINE)

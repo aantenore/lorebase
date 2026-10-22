@@ -4630,6 +4630,19 @@ export interface components {
             /** Changes */
             changes: components["schemas"]["ElementChangeOut"][];
         };
+        /**
+         * SearchCorrection
+         * @description A query word the branch does not hold and the words searched in its place as well.
+         *
+         *     Words are lexemes of the text search configuration (lowercased, stemmed by its
+         *     dictionaries), as full-text search compares them.
+         */
+        SearchCorrection: {
+            /** Word */
+            word: string;
+            /** Replacements */
+            replacements: string[];
+        };
         /** SearchHit */
         SearchHit: {
             /** Kind */
@@ -4690,6 +4703,11 @@ export interface components {
             mode: string;
             /** Items */
             items: components["schemas"]["SearchHit"][];
+            /**
+             * Corrections
+             * @description Typo corrections applied to q; hits found only through them come after the others.
+             */
+            corrections?: components["schemas"]["SearchCorrection"][];
         };
         /**
          * ServedFrom

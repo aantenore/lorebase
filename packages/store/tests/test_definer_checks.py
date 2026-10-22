@@ -52,16 +52,22 @@ _COUNTS = {
     "lb_query_by_attribute": ("p_limit",),
     "lb_neighborhood": ("p_depth", "p_fanout", "p_max_steps", "p_max_nodes"),
 }
+_TEMPLATES["lb_search_corrected"] = _TEMPLATES["lb_search"]
+_COUNTS["lb_search_corrected"] = _COUNTS["lb_search"]
 CALLS = {
     **{name: sql.format(name=name, branch="'main'") for name, sql in _TEMPLATES.items()},
     **{
         f"{name}_overlay": sql.format(name=f"{name}_overlay", branch=f"'{OVERLAY}'")
         for name, sql in _TEMPLATES.items()
     },
+    # One function for both layouts: it adds the base's words on an overlay.
+    "lb_search_corrections": f"SELECT * FROM lb_search_corrections(:domain, '{OVERLAY}', "
+    "NULL, 'simple', 'bearng', CAST(0.3 AS real), CAST(:p_candidates AS integer), 3)",
 }
 COUNTS = {
     **_COUNTS,
     **{f"{name}_overlay": counts for name, counts in _COUNTS.items()},
+    "lb_search_corrections": ("p_candidates",),
 }
 ARGUMENTS: dict[str, Any] = {
     "domain": DOMAIN,
@@ -249,7 +255,11 @@ def test_upgrade_and_downgrade_keep_the_grants(
     names = sorted(READ_FUNCTIONS)
     checked = [(name, True, False, True) for name in names]
     assert _privileges(database_url, application_role) == checked
-    plain = sorted(name for name in READ_FUNCTIONS if not name.endswith("_overlay"))
+    plain = ["lb_links_in", "lb_neighborhood", "lb_query_by_attribute", "lb_search"]
+    migrations.downgrade("0017", database=database, store=store, url=database_url)
+    assert _privileges(database_url, application_role) == [
+        (name, True, False, True) for name in names if "_correct" not in name
+    ]
     migrations.downgrade("0009", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [
         (name, True, False, True) for name in plain

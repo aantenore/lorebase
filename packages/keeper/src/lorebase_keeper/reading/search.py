@@ -1,8 +1,11 @@
 """Search over the materialized head (design 8.4).
 
-- lexical: `search @@ websearch_to_tsquery(q)` or trigram similarity of the title (`%`, with
-  `pg_trgm.similarity_threshold` from settings), ranked by `ts_rank_cd` plus the weighted title
-  similarity;
+- lexical: `search @@ websearch_to_tsquery(q)`, ranked by `ts_rank_cd`, with typo tolerance:
+  each word of `q` the branch does not hold is corrected to its closest words in the branch's
+  lexicon (`lorebase_store.reads.search_corrections`, `search.trigram_threshold` and
+  `search.typo_*`) and searched as `(word | correction | ...)`. Hits of `q` as written come
+  first; the others follow at `search.trigram_weight` times their rank. The response lists
+  the corrections;
 - semantic: cosine distance between the caller's `query_vector` and the stored embedding of
   each Record's object hash for the configured model (Keeper never computes vectors);
 - hybrid: reciprocal rank fusion of both candidate lists, computed in SQL:
@@ -13,9 +16,9 @@ over the title and the searchable Attributes.
 
 Lexical search without `where` goes through the store primitive `search_records` (design
 8.7): at most `store.reads.search_candidates` matches are ranked, through the security
-definer function `lb_search`, so its index plans hold under row-level security; snippets
-are computed for the returned page only. Filtered, semantic and hybrid searches are compiled
-here.
+definer function `lb_search_corrected`, so its index plans hold under row-level security;
+snippets are computed for the returned page only. Filtered, semantic and hybrid searches are
+compiled here.
 """
 
 from __future__ import annotations
@@ -24,18 +27,23 @@ from typing import Any
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
+    ARRAY,
     Boolean,
     ColumnElement,
     Float,
     Select,
     Table,
+    Text,
     and_,
+    case,
     cast,
     func,
     literal,
+    not_,
     or_,
     over,
     select,
+    true,
     tuple_,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,9 +56,15 @@ from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupp
 from lorebase_keeper.reading.records import compiler_for
 from lorebase_keeper.reading.requests import SearchMode, SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
-from lorebase_keeper.reading.views import SearchHit, SearchResponse, kind_name, served
+from lorebase_keeper.reading.views import (
+    SearchCorrection,
+    SearchHit,
+    SearchResponse,
+    kind_name,
+    served,
+)
 from lorebase_store.models import metadata
-from lorebase_store.reads import TitleSimilarity, search_records
+from lorebase_store.reads import Correction, TypoTolerance, search_corrections, search_records
 
 EMBEDDINGS: Table = metadata.tables["embeddings"]
 
@@ -132,9 +146,22 @@ async def search(
         point.scope.require(condition_kinds(where))
 
     compiler = compiler_for(point, runtime)
+    corrections: list[Correction] = []
+    if request.q is not None and mode in ("lexical", "hybrid"):
+        corrections = await search_corrections(
+            session,
+            point.domain.id,
+            point.layout,
+            request.q,
+            typo_tolerance(runtime),
+            kind_ids=list(target.kind_ids),
+            runtime=runtime.store,
+        )
     if mode == "lexical" and where is None:
         assert request.q is not None
-        return await _lexical_page(session, runtime, compiler, point, target, request.q, limit)
+        return await _lexical_page(
+            session, runtime, compiler, point, target, request.q, limit, corrections
+        )
     r = compiler.records("r")
     base = [compiler.record_scope(r, target)]
     if where is not None:
@@ -143,15 +170,11 @@ async def search(
     lists: list[tuple[Select[Any], float]] = []
     if mode in ("lexical", "hybrid"):
         assert request.q is not None
-        await session.execute(
-            select(
-                func.set_config(
-                    "pg_trgm.similarity_threshold", str(settings.trigram_threshold), True
-                )
-            )
-        )
         lists.append(
-            (_lexical(compiler, r, base, request.q, runtime), settings.hybrid.lexical_weight)
+            (
+                _lexical(compiler, r, base, request.q, corrections, runtime),
+                settings.hybrid.lexical_weight,
+            )
         )
     if mode in ("semantic", "hybrid"):
         assert request.query_vector is not None
@@ -169,9 +192,11 @@ async def search(
         snippet = func.ts_headline(
             compiler.regconfig(),
             func.concat_ws(" ", final.c.title, *_searchable_text(final, target)),
-            compiler.tsquery(request.q),
+            _corrected(compiler, request.q, corrections),
             literal(settings.headline_options),
         )
+    # A lexical list puts the hits of q as written first; fusion ranks by position already.
+    exact_first = [ranked.c.exact.desc()] if "exact" in ranked.c else []
     query = (
         select(
             ranked.c.kind_id, ranked.c.key, ranked.c.score, final.c.title, snippet.label("snippet")
@@ -186,7 +211,7 @@ async def search(
                 final.c.key == ranked.c.key,
             ),
         )
-        .order_by(ranked.c.score.desc(), ranked.c.kind_id, ranked.c.key)
+        .order_by(*exact_first, ranked.c.score.desc(), ranked.c.kind_id, ranked.c.key)
         .limit(limit)
     )
     rows = (await session.execute(query)).mappings()
@@ -200,7 +225,43 @@ async def search(
         )
         for row in rows
     ]
-    return SearchResponse(**served(point), mode=mode, items=items)
+    return SearchResponse(
+        **served(point), mode=mode, items=items, corrections=_applied(corrections)
+    )
+
+
+def typo_tolerance(runtime: ReadRuntime) -> TypoTolerance:
+    """Typo tolerance of lexical search from the `search` settings."""
+    settings = runtime.search
+    return TypoTolerance(
+        threshold=settings.trigram_threshold,
+        weight=settings.trigram_weight,
+        candidates=settings.typo_candidates,
+        min_length=settings.typo_min_length,
+    )
+
+
+def _applied(corrections: list[Correction]) -> list[SearchCorrection]:
+    return [
+        SearchCorrection(word=c.word, replacements=list(c.replacements))
+        for c in corrections
+        if c.replacements
+    ]
+
+
+def _corrected(compiler: Compiler, q: str, corrections: list[Correction]) -> ColumnElement[Any]:
+    """The tsquery of q with each corrected word widened to `(word | replacement | ...)`, as
+    the store's search does (`lb_lexeme_query`, revision 0018)."""
+    query = compiler.tsquery(q)
+    for correction in corrections:
+        if not correction.replacements:
+            continue
+        word = literal(correction.word, Text)
+        alternatives = literal(list(correction.replacements), ARRAY(Text))
+        query = func.ts_rewrite(
+            query, func.lb_lexeme_query(word), func.lb_lexeme_query(word, alternatives)
+        )
+    return query
 
 
 async def _lexical_page(
@@ -211,6 +272,7 @@ async def _lexical_page(
     target: Target,
     q: str,
     limit: int,
+    corrections: list[Correction],
 ) -> SearchResponse:
     """Lexical search without filters: the store primitive ranks a bounded candidate set
     (index plans under row-level security too), then snippets for the page by key."""
@@ -222,7 +284,8 @@ async def _lexical_page(
         q,
         limit=limit,
         kind_ids=list(target.kind_ids),
-        titles=TitleSimilarity(settings.trigram_threshold, settings.trigram_weight),
+        corrections=corrections,
+        correction_weight=settings.trigram_weight,
         runtime=runtime.store,
     )
     snippets: dict[tuple[str, str], str | None] = {}
@@ -231,7 +294,7 @@ async def _lexical_page(
         headline = func.ts_headline(
             compiler.regconfig(),
             func.concat_ws(" ", hit.c.title, *_searchable_text(hit, target)),
-            compiler.tsquery(q),
+            _corrected(compiler, q, corrections),
             literal(settings.headline_options),
         )
         query = select(hit.c.kind_id, hit.c.key, headline.label("snippet")).where(
@@ -251,27 +314,40 @@ async def _lexical_page(
         )
         for h in hits
     ]
-    return SearchResponse(**served(point), mode="lexical", items=items)
+    return SearchResponse(
+        **served(point), mode="lexical", items=items, corrections=_applied(corrections)
+    )
 
 
 def _lexical(
-    compiler: Compiler, r: Any, base: list[ColumnElement[bool]], q: str, runtime: ReadRuntime
+    compiler: Compiler,
+    r: Any,
+    base: list[ColumnElement[bool]],
+    q: str,
+    corrections: list[Correction],
+    runtime: ReadRuntime,
 ) -> Select[Any]:
+    """Lexical candidates with an `exact` column: matches of q as written first, then those
+    found only through a correction at `trigram_weight` times their rank."""
     settings = runtime.search
     tsquery = compiler.tsquery(q)
-    score = func.ts_rank_cd(r.c.search, tsquery) + literal(settings.trigram_weight, Float) * (
-        func.similarity(func.coalesce(r.c.title, ""), literal(q))
-    )
-    return (
-        select(r.c.kind_id, r.c.key, cast(score, Float).label("score"))
-        .where(
-            *base,
-            or_(
-                r.c.search.op("@@", return_type=Boolean)(tsquery),
-                r.c.title.op("%", return_type=Boolean)(literal(q)),
-            ),
+    exact: ColumnElement[bool] = r.c.search.op("@@", return_type=Boolean)(tsquery)
+    score: ColumnElement[Any] = func.ts_rank_cd(r.c.search, tsquery)
+    match: ColumnElement[bool] = exact
+    if any(c.replacements for c in corrections):
+        fixed = _corrected(compiler, q, corrections)
+        match = or_(exact, r.c.search.op("@@", return_type=Boolean)(fixed))
+        score = case(
+            (exact, score),
+            else_=literal(settings.trigram_weight, Float) * func.ts_rank_cd(r.c.search, fixed),
         )
-        .order_by(score.desc(), r.c.kind_id, r.c.key)
+    else:
+        exact = true()
+    flag = func.coalesce(exact, False)
+    return (
+        select(r.c.kind_id, r.c.key, cast(score, Float).label("score"), flag.label("exact"))
+        .where(*base, match)
+        .order_by(not_(flag), score.desc(), r.c.kind_id, r.c.key)
         .limit(settings.candidates)
     )
 
@@ -307,9 +383,10 @@ def _fused(lists: list[tuple[Select[Any], float]], runtime: ReadRuntime) -> Any:
     ranked = []
     for index, (candidates, weight) in enumerate(lists):
         inner = candidates.subquery(f"c{index}")
+        exact_first = [inner.c.exact.desc()] if "exact" in inner.c else []
         position = over(
             func.row_number(),
-            order_by=(inner.c.score.desc(), inner.c.kind_id, inner.c.key),
+            order_by=(*exact_first, inner.c.score.desc(), inner.c.kind_id, inner.c.key),
         )
         ranked.append(
             (

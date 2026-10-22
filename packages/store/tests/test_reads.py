@@ -20,8 +20,9 @@ from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.reads import (
     Comparison,
+    Correction,
     Direction,
-    TitleSimilarity,
+    TypoTolerance,
     get_record,
     head_revision,
     head_schema,
@@ -31,6 +32,7 @@ from lorebase_store.reads import (
     links_to_record,
     list_records,
     query_by_attribute,
+    search_corrections,
     search_records,
 )
 from lorebase_store.repositories import scope_to_domain
@@ -41,7 +43,9 @@ from lorebase_store.traverse import neighborhood
 
 from .read_support import (
     SOURCED_FROM,
+    assert_lexicon_in_step,
     captured,
+    lexicon,
     nested_plans,
     plan_nodes,
     plan_of,
@@ -118,6 +122,11 @@ async def test_head_and_schema_cache(sessions: Sessions, runtime: StoreRuntime) 
     assert third is not None
     assert third.revision == moved.revision_id != head
     assert third.schema.kinds[SUPPLIER].attributes[VAT].description == "Tax id."
+
+
+LEGACY_FUNCTIONS = frozenset({"lb_search", "lb_search_overlay"})
+"""Search functions of revision 0005 and 0010, kept for older processes; search calls
+`lb_search_corrected` since revision 0018."""
 
 
 def reads_runtime(*, definer: bool) -> StoreRuntime:
@@ -224,18 +233,63 @@ async def test_records_links_queries_and_search(sessions: Sessions, definer: boo
         )
         assert [h.key for h in suppliers] == ["S-1"]
         assert await search_records(session, DOMAIN, "main", "bearing", limit=5, kind_ids=[]) == []
+        typos = TypoTolerance(threshold=0.3, weight=0.5, candidates=3, min_length=3)
+        fixes = await search_corrections(
+            session, DOMAIN, "main", "Gama Filtres", typos, runtime=runtime
+        )
+        # Lexemes of the text search configuration, in word order; known words are not
+        # corrected.
+        assert [(c.word, c.replacements[0]) for c in fixes] == [
+            ("filtres", "filters"),
+            ("gama", "gamma"),
+        ]
+        assert await search_corrections(session, DOMAIN, "main", "gamma 42", typos) == []
+        # Words come from the Kinds searched only; a negated word is not corrected.
+        parts_only = await search_corrections(
+            session, DOMAIN, "main", "Gama Filtres", typos, kind_ids=[PART], runtime=runtime
+        )
+        assert not {"gamma", "filters"} & {r for c in parts_only for r in c.replacements}
+        negated = await search_corrections(
+            session, DOMAIN, "main", "filters -Gama", typos, runtime=runtime
+        )
+        assert negated == []
+        assert (
+            await search_corrections(
+                session,
+                DOMAIN,
+                "main",
+                "Gama",
+                TypoTolerance(threshold=0.3, weight=0.5, candidates=3, min_length=5),
+                runtime=runtime,
+            )
+            == []
+        )
         typo = await search_records(
             session,
             DOMAIN,
             "main",
             "Gama Filtres",
             limit=5,
-            titles=TitleSimilarity(threshold=0.3, weight=0.5),
+            corrections=fixes,
+            correction_weight=typos.weight,
             runtime=runtime,
         )
-        assert [h.key for h in typo] == ["S-3"]
+        assert [(h.key, h.exact) for h in typo] == [("S-3", False)]
         assert typo[0].score > 0
         assert await search_records(session, DOMAIN, "main", "Gama Filtres", limit=5) == []
+        # Exact matches first, then those found through a correction.
+        mixed = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "Gamma Filtres or bearing",
+            limit=10,
+            corrections=[Correction("filtres", ("filters",))],
+            runtime=runtime,
+        )
+        assert [h.exact for h in mixed] == sorted((h.exact for h in mixed), reverse=True)
+        assert {h.key for h in mixed if h.exact} == {"P-1", "P-3"}
+        assert [h.key for h in mixed if not h.exact] == ["S-3"]
 
         supplied = schema.relations[SUPPLIED_BY]
         first = await links_to_record(
@@ -365,14 +419,11 @@ async def _exercise(
             session, DOMAIN, branch, spec, comparison, value, limit=50, runtime=runtime
         )
     await search_records(session, DOMAIN, branch, "metal42", limit=20, runtime=runtime)
+    typos = TypoTolerance(threshold=0.6, weight=0.5, candidates=3, min_length=4)
+    fixes = await search_corrections(session, DOMAIN, branch, "Suplier 77", typos, runtime=runtime)
+    assert [c.word for c in fixes] == ["suplier"]
     await search_records(
-        session,
-        DOMAIN,
-        branch,
-        "Suplier 77",
-        limit=20,
-        titles=TitleSimilarity(threshold=0.6, weight=0.5),
-        runtime=runtime,
+        session, DOMAIN, branch, "Suplier 77", limit=20, corrections=fixes, runtime=runtime
     )
 
 
@@ -386,7 +437,7 @@ def _assert_index_kinds(plans: list[list[tuple[str, str | None]]]) -> None:
     used = {name for plan in plans for _, name in plan if name}
     assert any(name.startswith("mat_records_attr_") for name in used), used
     assert any(name.endswith("search_idx") for name in used), used
-    assert any(name.endswith("title_idx") for name in used), used
+    assert any("mat_lexicon" in name for name in used), used
     assert any("pkey" in name for name in used), used
     assert any("to_key" in name for name in used), "incoming Links use the reverse index"
 
@@ -461,7 +512,9 @@ async def test_definer_functions_keep_index_plans_under_row_level_security(
         for node in plan_nodes(plan)
         if node.get("Function Name", "").startswith("lb_")
     ]
-    assert set(functions) == {f for f in READ_FUNCTIONS if not f.endswith("_overlay")}
+    assert set(functions) == {
+        f for f in READ_FUNCTIONS if not f.endswith("_overlay") and f not in LEGACY_FUNCTIONS
+    }
     _assert_index_plans(reading)
     _assert_index_kinds(reading)
 
@@ -574,7 +627,9 @@ async def test_overlay_reads_keep_index_plans(
         for node in plan_nodes(plan)
         if node.get("Function Name", "").startswith("lb_")
     }
-    assert functions == {f for f in READ_FUNCTIONS if f.endswith("_overlay")}
+    assert functions == {
+        f for f in READ_FUNCTIONS if f.endswith("_overlay") and f not in LEGACY_FUNCTIONS
+    } | {"lb_search_corrections"}
     _assert_overlay_plans(nested, own)
     assert changed is not None
     assert changed.title is not None
@@ -584,6 +639,49 @@ async def test_overlay_reads_keep_index_plans(
 
 
 RIVAL = "rival"
+
+
+@pytest.mark.integration
+async def test_lexicon_is_kept_and_read_under_row_level_security(
+    engine: AsyncEngine, sessions: Sessions
+) -> None:
+    """A role subject to RLS keeps the lexicon when it writes Records (the triggers run as
+    the writer), finds corrections through both paths, and sees no other Domain's words."""
+    typos = TypoTolerance(threshold=0.3, weight=0.5, candidates=3, min_length=4)
+    async with reader_role(engine, functions=True) as role:
+        async with engine.connect() as connection:
+            auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
+            await auto.exec_driver_sql(
+                f"GRANT INSERT, UPDATE, DELETE ON mat_records, mat_lexicon TO {role}"
+            )
+        async with sessions() as session, session.begin():
+            await session.execute(text(f"SET LOCAL ROLE {role}"))
+            await scope_to_domain(session, DOMAIN)
+            await session.execute(
+                text(
+                    "UPDATE mat_records SET search = to_tsvector('simple', 'Zirconium washer') "
+                    "WHERE domain_id = :d AND branch = 'main' AND kind_id = :k AND key = 'P-2'"
+                ),
+                {"d": DOMAIN, "k": PART},
+            )
+            assert (await lexicon(session, "main"))["zirconium"] == 1
+            await assert_lexicon_in_step(session, "main")
+            for definer in (True, False):
+                reader = reads_runtime(definer=definer)
+                fixes = await search_corrections(
+                    session, DOMAIN, "main", "zirconum", typos, runtime=reader
+                )
+                assert [(c.word, c.replacements[0]) for c in fixes] == [("zirconum", "zirconium")]
+        async with sessions() as session, session.begin():
+            await session.execute(text(f"SET LOCAL ROLE {role}"))
+            await scope_to_domain(session, RIVAL)
+            assert await lexicon(session, "main") == {}
+            assert (
+                await search_corrections(
+                    session, DOMAIN, "main", "zirconum", typos, runtime=reads_runtime(definer=False)
+                )
+                == []
+            )
 
 
 @pytest.mark.integration

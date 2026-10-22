@@ -2,12 +2,12 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
-The sections from Dataset to Reading the results are the 100k-Record baseline of 2026-10-21. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except typo-tolerant title search, the 2-hop neighborhood on branches other than `main`, and Record lineage against the budget proposed for it.
+The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)).
 
 ## Dataset
 
 - `supply` Domain from `examples/supply/scripts/make_supply_data.py --scale 540`, plus 4 extra `supplied_by` and `stocked_at` Links per Part.
-- 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (161 s, then `VACUUM ANALYZE`).
+- 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (148 s, then `VACUUM ANALYZE`).
 - 300 timed calls per read after 30 warm-up calls, random keys from the dataset.
 
 ## Environment
@@ -19,51 +19,60 @@ The sections from Dataset to Reading the results are the 100k-Record baseline of
 - memory: 24 GiB
 - postgres: 16.15 (Debian 16.15-1.pgdg12+2)
 - shared_buffers: 128MB
+- effective_cache_size: 4GB
 - work_mem: 4MB
-- run: 2026-10-21, Postgres in Docker on the same machine, default container settings.
+- run: 2026-10-22, Postgres in Docker on the same machine, container defaults except the settings above.
 
 ## Reads (milliseconds)
 
 `owner`: a role not subject to row-level security (superuser in the container). `rls`: a role subject to the `domain_isolation` policies, like the application role in production.
 
-| Operation | Target p95 | owner p50 | owner p95 | rls p50 | rls p95 |
-|-----------|-----------:|----------:|----------:|--------:|--------:|
-| get by key | 5.00 | 1.01 | 1.07 | 1.17 | 1.25 |
-| list page of 50 | 20.00 | 1.40 | 1.57 | 1.55 | 1.65 |
-| links of a record | 10.00 | 1.22 | 1.30 | 1.35 | 1.58 |
-| 2-hop neighborhood | 30.00 | 4.38 | 5.67 | 4.51 | 5.11 |
-| query by indexed attribute | 25.00 | 1.54 | 1.71 | 1.78 | 1.86 |
-| full-text search | 50.00 | 2.16 | 2.58 | 2.32 | 2.75 |
-| full-text search with typo-tolerant titles | 50.00 | 10.20 | 22.32 | 10.65 | 22.64 |
+| Operation | Target p95 | owner p50 | owner p95 | owner p99 | rls p50 | rls p95 | rls p99 |
+|-----------|-----------:|----------:|----------:|----------:|--------:|--------:|--------:|
+| get by key | 5.00 | 1.10 | 1.31 | 1.52 | 1.31 | 1.39 | 1.43 |
+| list page of 50 | 20.00 | 1.56 | 1.80 | 2.82 | 1.66 | 1.81 | 1.88 |
+| links of a record | 10.00 | 1.42 | 1.94 | 3.23 | 1.49 | 1.94 | 2.51 |
+| 2-hop neighborhood | 30.00 | 4.73 | 5.43 | 8.78 | 4.98 | 6.01 | 8.19 |
+| query by indexed attribute | 25.00 | 1.75 | 1.95 | 2.50 | 1.98 | 3.23 | 4.75 |
+| full-text search | 50.00 | 2.18 | 3.15 | 3.87 | 2.32 | 2.80 | 3.40 |
+| typo-tolerant full-text search | 50.00 | 3.09 | 4.12 | 4.45 | 3.35 | 4.80 | 5.89 |
+| record history page | 10.00\* | 2.69 | 3.16 | 3.87 | 2.91 | 3.19 | 3.65 |
+| record lineage | 10.00\* | 3.54 | 3.86 | 4.40 | 3.78 | 4.56 | 6.41 |
+
+\* No budget in design 8.7; held to the budget of Links of a Record, the other per-Record index range read.
 
 ## Writes (milliseconds)
 
-| Operation | Runs | p50 | p95 |
-|-----------|-----:|----:|----:|
-| branch creation (copy) | 3 | 7280.91 | 7315.67 |
-| branch creation (overlay) | 20 | 11.71 | 13.83 |
-| commit of 1000 changes | 5 | 364.60 | 547.02 |
+| Operation | Runs | p50 | p95 | p99 |
+|-----------|-----:|----:|----:|----:|
+| branch creation (copy) | 3 | 8162.80 | 8311.81 | 8311.81 |
+| branch creation (overlay) | 20 | 13.17 | 14.96 | 15.83 |
+| commit of 1000 changes | 5 | 397.32 | 527.19 | 527.19 |
 
 ## Overlay branches (milliseconds)
 
 `agent/perf` (overlay) and `perf-copy` (copy) forked from `main` and got the same commit of 1000 Part updates; `main` then committed 1000 other Part updates. The overlay stores 2,000 rows (its changes, its derived and copied-on-write rows), the copy 402,840. Reads alternate between the two branches call by call, with the same random keys, 300 timed calls each.
 
-| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | overhead p50 | overhead p95 |
-|-----------|------|---------:|------------:|---------:|------------:|-------------:|-------------:|
-| get by key | owner | 1.02 | 1.04 | 1.13 | 1.16 | +2% | +3% |
-| get by key | rls | 1.17 | 1.19 | 1.27 | 1.29 | +2% | +1% |
-| list page of 50 | owner | 1.48 | 1.47 | 1.62 | 1.63 | -1% | +1% |
-| list page of 50 | rls | 1.65 | 1.60 | 1.80 | 1.72 | -3% | -5% |
-| links of a record | owner | 1.29 | 1.58 | 1.45 | 1.79 | +23% | +23% |
-| links of a record | rls | 1.44 | 1.76 | 1.57 | 1.91 | +22% | +22% |
-| 2-hop neighborhood | owner | 5.06 | 6.49 | 6.57 | 7.73 | +28% | +18% |
-| 2-hop neighborhood | rls | 4.98 | 6.28 | 6.13 | 7.60 | +26% | +24% |
-| query by indexed attribute | owner | 1.92 | 2.27 | 2.16 | 2.51 | +18% | +16% |
-| query by indexed attribute | rls | 1.90 | 2.29 | 2.29 | 2.64 | +21% | +15% |
-| full-text search | owner | 2.38 | 2.92 | 2.77 | 3.29 | +23% | +19% |
-| full-text search | rls | 2.64 | 3.18 | 3.07 | 3.64 | +20% | +19% |
-| full-text search with typo-tolerant titles | owner | 11.16 | 11.80 | 25.27 | 27.04 | +6% | +7% |
-| full-text search with typo-tolerant titles | rls | 11.53 | 12.08 | 25.97 | 27.75 | +5% | +7% |
+| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | copy p99 | overlay p99 | overhead p50 | overhead p95 |
+|-----------|------|---------:|------------:|---------:|------------:|---------:|------------:|-------------:|-------------:|
+| get by key | owner | 1.12 | 1.14 | 1.27 | 1.30 | 1.35 | 1.55 | +1% | +3% |
+| get by key | rls | 1.30 | 1.29 | 1.70 | 1.80 | 3.37 | 3.28 | -1% | +6% |
+| list page of 50 | owner | 1.65 | 1.61 | 1.80 | 1.81 | 1.96 | 2.00 | -2% | +0% |
+| list page of 50 | rls | 1.91 | 1.85 | 2.20 | 2.14 | 2.42 | 2.27 | -4% | -3% |
+| links of a record | owner | 1.43 | 1.82 | 1.62 | 2.03 | 1.92 | 2.17 | +28% | +25% |
+| links of a record | rls | 1.79 | 2.10 | 2.19 | 2.46 | 2.70 | 2.80 | +18% | +12% |
+| 2-hop neighborhood | owner | 5.19 | 6.44 | 6.26 | 7.66 | 6.80 | 8.95 | +24% | +22% |
+| 2-hop neighborhood | rls | 6.38 | 7.31 | 10.46 | 9.19 | 42.65 | 10.65 | +15% | -12% |
+| query by indexed attribute | owner | 1.84 | 2.19 | 2.19 | 2.76 | 2.41 | 2.93 | +19% | +26% |
+| query by indexed attribute | rls | 1.98 | 2.36 | 2.68 | 3.07 | 3.34 | 3.88 | +19% | +15% |
+| full-text search | owner | 2.42 | 2.87 | 2.94 | 3.40 | 3.30 | 4.10 | +19% | +16% |
+| full-text search | rls | 2.42 | 2.96 | 3.08 | 3.71 | 3.51 | 4.33 | +22% | +21% |
+| typo-tolerant full-text search | owner | 3.53 | 4.67 | 4.82 | 5.94 | 5.13 | 6.84 | +32% | +23% |
+| typo-tolerant full-text search | rls | 3.73 | 4.92 | 4.90 | 6.17 | 5.59 | 6.58 | +32% | +26% |
+| record history page | owner | 3.14 | 2.99 | 5.12 | 3.94 | 7.52 | 6.12 | -4% | -23% |
+| record history page | rls | 3.37 | 3.38 | 4.05 | 3.81 | 4.71 | 4.53 | +1% | -6% |
+| record lineage | owner | 3.60 | 3.91 | 4.26 | 4.74 | 4.80 | 5.66 | +9% | +11% |
+| record lineage | rls | 4.02 | 4.40 | 4.47 | 5.04 | 5.40 | 6.07 | +9% | +13% |
 
 ## Plans
 
@@ -77,7 +86,9 @@ Scan nodes of the statements of one call of each read, statements run inside the
 | 2-hop neighborhood | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_attr_e90c8d94b5cd137b3bb8375b<br>Index Scan mat_links_p3_domain_id_branch_relation_id_to_key_idx<br>Index Scan mat_links_p3_pkey<br>Index Scan mat_records_p3_pkey | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_attr_e90c8d94b5cd137b3bb8375b<br>Index Scan mat_links_p3_domain_id_branch_relation_id_to_key_idx<br>Index Scan mat_links_p3_pkey<br>Index Scan mat_records_p3_pkey |
 | query by indexed attribute | Index Scan mat_records_attr_71d8b499dff05dab64f394fe | Index Scan mat_records_attr_71d8b499dff05dab64f394fe |
 | full-text search | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx |
-| full-text search with typo-tolerant titles | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Bitmap Index Scan mat_records_p3_domain_id_branch_title_idx | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Bitmap Index Scan mat_records_p3_domain_id_branch_title_idx |
+| typo-tolerant full-text search | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Index Scan pk_mat_lexicon<br>Seq Scan mat_lexicon<br>Seq Scan refs | Bitmap Heap Scan mat_records_p3<br>Bitmap Index Scan mat_records_p3_domain_id_branch_search_idx<br>Index Scan pk_mat_lexicon<br>Seq Scan mat_lexicon<br>Seq Scan refs |
+| record history page | Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs | Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs |
+| record lineage | Index Scan ix_proposals_domain_id_target_ref_status<br>Index Scan mat_records_p3_pkey<br>Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs | Index Scan ix_proposals_domain_id_target_ref_status<br>Index Scan mat_records_p3_pkey<br>Index Scan objects_p3_pkey<br>Index Scan pk_domains<br>Index Scan pk_mat_history<br>Index Scan pk_provenance<br>Index Scan pk_revision_parents<br>Index Scan pk_revisions<br>Seq Scan refs |
 
 ## Reading the results
 
@@ -92,25 +103,19 @@ Scan nodes of the statements of one call of each read, statements run inside the
   measured, at p95 for that role, 28.06 ms for Links of a Record (inbound foreign-key Links
   filter every purchase order), 136.73 ms for the neighborhood and 68.14 ms for search (a scan
   of the Domain's partition).
-- Record history and lineage (`GET .../records/{key}/history`, `/lineage`) were added to the
-  harness after this run; their numbers are in [1M Records](#1m-records). They read `mat_history` by its primary key prefix `(domain_id, branch,
-  partition, element_key)` joined to `revisions` by id: one index range per Record whose size
-  is the number of changes of that Record, never a walk of the branch's Revisions. History
-  pages are keyset pages on `(generation, revision)`; lineage reads at most
-  `read.history.lineage_max_changes` changes. The conditions compare text and `bytea` columns,
-  so the plans hold under row-level security without definer functions.
 - Key, page and stored-Link reads compare text columns only; text equality and ordering are
   leakproof, so they keep their index plans as plain SQL under row-level security.
 - The functions build each statement with the Domain, branch and Kind as literals, so every
   call is planned with them (partial index predicates match) and runs without JIT; the
   planning time is part of the numbers above.
-- Search reads the GIN indexes on `(domain_id, branch, search)` and `(domain_id, branch,
-  title gin_trgm_ops)` (revision `0011`, `btree_gin`): the Domain and branch are index
-  conditions, so a search reads its branch's matches only, however many branches share the
-  partition (here `main`, a copy and an overlay). It ranks at most
-  `store.reads.search_candidates` matches, so very common terms cost a bounded amount.
-  Typo-tolerant titles (trigram similarity, Keeper's lexical search) add the branch's
-  trigram matches on titles to the candidates.
+- Search reads the GIN index on `(domain_id, branch, search)` (revision `0011`,
+  `btree_gin`): the Domain and branch are index conditions, so a search reads its branch's
+  matches only, however many branches share the partition (here `main`, a copy and an
+  overlay). It ranks at most `store.reads.search_candidates` matches, so very common terms
+  cost a bounded amount. Typo-tolerant search (revision `0018`, Keeper's lexical search)
+  queries a misspelled title word: the word is looked up in the branch's word lexicon
+  (`mat_lexicon`, and the base's for an overlay), its closest words come from the trigram
+  index on the lexicon, and the search runs with `(word | correction ...)`.
 - Times come from a laptop shared with other work; repeated runs differ by a few milliseconds
   at p95, up to ten for typo-tolerant search.
 - Branch creation copies the Records, Links and history rows of `main` (about twice the Records
@@ -179,6 +184,28 @@ machine, with `tests/perf/bench.py --scale 540 --extra-links 4 --branch-iteratio
   was not available, and loading it takes about 33 minutes), the batches stay the same size and
   the copy and deletion jobs scale with the rows, about ten times longer in total; no
   transaction depends on the size of the Domain any more.
+
+## Word lexicon: before and after (100k Records)
+
+Typo-tolerant search before migration `0018` matched whole titles by trigram similarity on a
+correctly spelled title word; since, it corrects a misspelled title word (two letters in its
+middle swapped, `tests/perf/harness.py` `misspelled`) from the branch's word lexicon and
+searches with the corrections. Both runs on 2026-10-22, same machine and container settings,
+the "before" run on `origin/main` before the change.
+
+| Operation | before p50 | before p95 | after p50 | after p95 |
+|-----------|-----------:|-----------:|----------:|----------:|
+| typo-tolerant search, owner | 11.64 | 31.06 | 3.09 | 4.12 |
+| typo-tolerant search, rls | 11.24 | 26.91 | 3.35 | 4.80 |
+| typo-tolerant search, overlay, rls | 11.86 | 28.19 | 4.92 | 6.17 |
+| commit of 1000 changes | 355.22 | 536.19 | 397.32 | 527.19 |
+| branch creation (copy) | 7,712.82 | 7,984.67 | 8,162.80 | 8,311.81 |
+
+The commit pays for the lexicon triggers: one call per `mat_records` statement, and the
+pipeline runs many one-row statements (`executemany`), so the trigger sums small statements
+with a cached plan and plans only large ones (more than 64 rows). Without the triggers the
+same commit measured 262 to 297 ms against 320 to 388 ms with them (scale 60, five commits
+each). A copy branch also counts the words of every copied row.
 
 ## 1M Records
 
@@ -293,17 +320,53 @@ was at 29.45 to 33.02 at p95 and typo-tolerant search at 149 to 168.
   fall from 23 to 14 ms at p50 as the cache warms. Nothing in the statement scales with the
   Domain; the budget holds when the working set is in memory, which the reference hardware of
   design 6.14 (32 GB) gives and this VM does not.
-- Typo-tolerant title search misses its budget, at 1.4 to 3.4 times it at p95, on every
-  branch and for both roles. Plain full-text search stays at 8 to 12 ms. See Open issues.
+- Typo-tolerant title search misses its budget in this run, at 1.4 to 3.4 times it at p95,
+  on every branch and for both roles. Plain full-text search stays at 8 to 12 ms. With the
+  word lexicon it is 7.6 to 14 ms ([1M Records: word lexicon](#1m-records-word-lexicon)).
 - Branch creation by copy grows with the Domain (85 to 95 s for 4 million rows); an overlay
   takes 24 to 26 ms, as at 100k. A commit of 1,000 Part updates takes 1.4 to 2.4 s at p50
   (0.36 s at 100k); the load committed 10,000 changes per Revision in about 4.8 s each, at the
   5 s target of design 6.14.
 
+### 1M Records: word lexicon
+
+The same fixture and harness on 2026-10-22 after migration `0018`: typo tolerance corrects a
+query word the branch does not hold from the branch's word lexicon (`mat_lexicon`, trigram
+GIN index on the words) and runs full-text search with the corrections. The timed read takes
+a title word with two letters in its middle swapped (`harness.misspelled`), so every call
+looks the word up, finds its corrections and searches with them; the run before searched the
+word as written. `shared_buffers` 2GB, 1,000 calls per read and role; the fixture was loaded
+again (1,831 s for the load, against 1,961 s before: the title trigram index is gone and the
+triggers count the words).
+
+| Operation | Target p95 | owner p50 | owner p95 | owner p99 | rls p50 | rls p95 | rls p99 |
+|-----------|-----------:|----------:|----------:|----------:|--------:|--------:|--------:|
+| full-text search | 50.00 | 4.42 | 5.85 | 10.33 | 4.62 | 6.04 | 10.60 |
+| typo-tolerant full-text search | 50.00 | 5.49 | 7.55 | 11.79 | 5.74 | 7.91 | 11.97 |
+| typo-tolerant, copy branch | 50.00 | 7.62 | 11.80 | 14.19 | 7.77 | 12.99 | 18.22 |
+| typo-tolerant, overlay branch | 50.00 | 8.26 | 12.35 | 16.35 | 8.47 | 13.98 | 20.48 |
+
+At p95 that is 7.6 to 14 ms against 116 to 123 ms for the whole-title trigram match (15 times
+less on `main`), and the overlay stays within 10% of the copy. The other reads stayed in the
+range of the first run (the neighborhood on branches 34 to 42 ms at p95, as before over its
+budget when the working set leaves memory), except the commit, measured right after the two
+copies of 4 million rows each with the page cache full of them (5.5 s at p50). Measured again
+on a copy of the loaded fixture, warm, four commits of 1,000 Part updates per setting, twice:
+
+| Commit of 1000 changes (ms) | first round | second round |
+|-----------------------------|-------------|--------------|
+| lexicon triggers on | 653, 699, 727, 755 | 654, 700, 702, 711 |
+| lexicon triggers off | 675, 684, 690, 700 | 642, 665, 666, 749 |
+
+The triggers cost about 5% of a commit at this size (the run before this change measured 1.4
+to 2.4 s at p50 cold). The run used the change without the per-Kind split of the lexicon
+(`kind_id` in its key, which narrows corrections to the Kinds a caller may read); lookups and
+statements are otherwise the same.
+
 ### Open issues
 
-- **Typo-tolerant title search** (`TitleSimilarity`, Keeper's lexical search with
-  `search.trigram_threshold`). `title % query` on the GIN trigram index `(domain_id, branch,
+- **Typo-tolerant title search** (fixed since this run, see
+  [1M Records: word lexicon](#1m-records-word-lexicon)). `title % query` on the GIN trigram index `(domain_id, branch,
   title gin_trgm_ops)` is lossy: the index keeps a row when it holds enough of the query's
   trigrams (3 of 9 for `supplier` at 0.3), whatever the length of the title. On this fixture
   the index returns 154,298 rows for `supplier` and every one fails the recheck: the sentence
@@ -316,10 +379,9 @@ was at 29.45 to 33.02 at p95 and typo-tolerant search at 149 to 168.
   with nested partial GIN indexes on `cardinality(show_trgm(title)) <= 16, 32, 48`, which the
   security definer function would pick through a literal bound, took p50 from 49 to 9 ms and
   p95 from 246 to 102 ms over 300 workload words: still twice the budget, for three more
-  indexes to maintain on every commit. The remaining options change behavior and need a design decision: match titles by word
-  (`<%`, `word_similarity`) instead of whole-title similarity; run trigram matching only when
-  full-text search finds fewer than `limit` matches; or keep a short name per Kind (the title
-  of name-like Kinds only) for trigram matching. Until then the budget is not met at 1M.
+  indexes to maintain on every commit. The decision taken: trigram matching on the distinct
+  words of each branch (migration `0018`), the approach of the pg_trgm documentation for
+  unique words.
 - **Copy branches at 1M Records** (fixed since this run). Creating a copy (`INSERT ...
   SELECT` of the Records, Links and history of `main`) took 85 to 95 s, and deleting it also
   took longer than 30 s: both exceeded the default `database.statement_timeout_ms`, so `POST

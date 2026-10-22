@@ -260,6 +260,26 @@ async def test_search_is_lexical_unless_a_vector_is_given(
     assert "[query-required]" in missing
 
 
+async def test_search_lists_the_typo_corrections_keeper_applied(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on(
+        "POST",
+        f"{API}/search",
+        {
+            "revision": REVISION,
+            "served_from": "materialized",
+            "mode": "lexical",
+            "items": [{"kind": "Part", "key": "P-1", "title": "Bearing", "score": 0.2}],
+            "corrections": [{"word": "bearng", "replacements": ["bearing", "bearings"]}],
+        },
+    )
+    async with connect() as client:
+        out = text(await client.call_tool("lorebase_search", {"query": "bearng"}))
+    assert out.splitlines()[1] == "also searched bearng as bearing, bearings"
+    assert out.splitlines()[2] == '1. Part/P-1 "Bearing" (0.2)'
+
+
 async def test_neighborhood_renders_nodes_edges_and_truncation(
     connect: Connect, fake: FakeKeeper
 ) -> None:
