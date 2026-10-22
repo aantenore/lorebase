@@ -188,3 +188,87 @@ describe('describeError', () => {
     expect(describeError('x')).toBe('The request failed.');
   });
 });
+
+describe('session support', () => {
+  const base = { baseUrl: 'https://keeper.test' };
+
+  it('passes credentials to fetch and the method to the headers hook', async () => {
+    const seen: string[] = [];
+    let credentials: RequestCredentials | undefined;
+    const fetchStub = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      credentials = init?.credentials;
+      return Promise.resolve(json({}));
+    }) as typeof fetch;
+    const fetcher = createFetcher({
+      ...base,
+      fetch: fetchStub,
+      credentials: 'include',
+      headers: (method) => {
+        seen.push(method);
+        const extra: Record<string, string> = method === 'GET' ? {} : { 'X-CSRF': 't' };
+        return extra;
+      },
+    });
+    await fetcher.json('GET', '/a');
+    await fetcher.json('POST', '/a', { body: {} });
+    expect(credentials).toBe('include');
+    expect(seen).toEqual(['GET', 'POST']);
+  });
+
+  it('calls onUnauthorized on a 401 and still throws', async () => {
+    const { fetchStub } = scripted(problem(401, 'unauthorized'));
+    const onUnauthorized = vi.fn();
+    const fetcher = createFetcher({ ...base, fetch: fetchStub, onUnauthorized });
+    await expect(fetcher.json('GET', '/a')).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(onUnauthorized).toHaveBeenCalledOnce();
+  });
+
+  it('retries once after a CSRF rejection when the hook renews the token', async () => {
+    let token = 'old';
+    const { calls, fetchStub } = scripted(
+      problem(403, 'forbidden', { reason: 'csrf' }),
+      json({ ok: true }),
+    );
+    const fetcher = createFetcher({
+      ...base,
+      fetch: fetchStub,
+      headers: () => ({ 'X-CSRF': token }),
+      onCsrfRejected: () => {
+        token = 'new';
+        return Promise.resolve(true);
+      },
+    });
+    await expect(fetcher.json('POST', '/a', { body: {} })).resolves.toEqual({ ok: true });
+    expect(calls.map((call) => call.headers['X-CSRF'])).toEqual(['old', 'new']);
+  });
+
+  it('does not retry twice, nor for other 403s, nor when the hook declines', async () => {
+    const csrf = () => problem(403, 'forbidden', { reason: 'csrf' });
+    const twice = scripted(csrf(), csrf());
+    const hook = vi.fn(() => Promise.resolve(true));
+    await expect(
+      createFetcher({ ...base, fetch: twice.fetchStub, onCsrfRejected: hook }).json('POST', '/a'),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(twice.calls).toHaveLength(2);
+
+    const other = scripted(problem(403, 'forbidden'));
+    const otherHook = vi.fn(() => Promise.resolve(true));
+    await expect(
+      createFetcher({ ...base, fetch: other.fetchStub, onCsrfRejected: otherHook }).json(
+        'POST',
+        '/a',
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(otherHook).not.toHaveBeenCalled();
+
+    const declined = scripted(csrf());
+    await expect(
+      createFetcher({
+        ...base,
+        fetch: declined.fetchStub,
+        onCsrfRejected: () => Promise.resolve(false),
+      }).json('POST', '/a'),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(declined.calls).toHaveLength(1);
+  });
+});

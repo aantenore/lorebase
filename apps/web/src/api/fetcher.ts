@@ -17,8 +17,20 @@ export interface FetcherOptions {
   baseUrl: string;
   /** Injected for tests; defaults to the global fetch. */
   fetch?: typeof fetch;
-  /** Headers added to every request, read per request so a changed token applies at once. */
-  headers?: () => Record<string, string>;
+  /**
+   * Headers added to every request, read per request so a changed token applies at once. The
+   * method lets a caller add headers to unsafe requests only (the CSRF header of a session).
+   */
+  headers?: (method: Method) => Record<string, string>;
+  /** Passed to `fetch`; `include` sends the session cookie to a Keeper on another origin. */
+  credentials?: RequestCredentials;
+  /** Called when Keeper answers 401; the error is still thrown. */
+  onUnauthorized?: () => void;
+  /**
+   * Called when Keeper answers 403 with `reason: "csrf"`. When it resolves true (the CSRF
+   * token was renewed), the request is sent once more.
+   */
+  onCsrfRejected?: () => Promise<boolean>;
   /** Mints the `Idempotency-Key` of a create; defaults to a random UUID. */
   idempotencyKey?: () => string;
   /** How many GET answers are kept for `If-None-Match`; 0 turns the cache off. */
@@ -93,6 +105,16 @@ async function readProblem(response: Response): Promise<ProblemDetails> {
   }
 }
 
+/** Keeper marks a request refused for a missing or wrong CSRF token with `reason: "csrf"`. */
+async function isCsrfRejection(response: Response): Promise<boolean> {
+  try {
+    const body = (await response.clone().json()) as { reason?: unknown } | null;
+    return body !== null && typeof body === 'object' && body.reason === 'csrf';
+  } catch {
+    return false;
+  }
+}
+
 interface Kept {
   etag: string;
   data: unknown;
@@ -127,33 +149,52 @@ export function createFetcher(options: FetcherOptions): Fetcher {
     path: string,
     init: RequestOptions = {},
   ): Promise<Fetched<T>> {
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      ...options.headers?.(),
-      ...init.headers,
+    const prepare = () => {
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        ...options.headers?.(method),
+        ...init.headers,
+      };
+      if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+      if (init.idempotent === true) headers['Idempotency-Key'] = mintKey();
+
+      const url = `${root}${path}${toSearch(init.query ?? {})}`;
+      const cacheKey = `${headers['Authorization'] ?? ''} ${url}`;
+      const previous = method === 'GET' ? kept.get(cacheKey) : undefined;
+      if (previous !== undefined) headers['If-None-Match'] = previous.etag;
+      return { headers, url, cacheKey, previous };
     };
-    if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-    if (init.idempotent === true) headers['Idempotency-Key'] = mintKey();
 
-    const url = `${root}${path}${toSearch(init.query ?? {})}`;
-    const cacheKey = `${headers['Authorization'] ?? ''} ${url}`;
-    const previous = method === 'GET' ? kept.get(cacheKey) : undefined;
-    if (previous !== undefined) headers['If-None-Match'] = previous.etag;
+    const transmit = async (sent: ReturnType<typeof prepare>): Promise<Response> => {
+      try {
+        return await doFetch(sent.url, {
+          method,
+          headers: sent.headers,
+          ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+          ...(init.form === undefined
+            ? init.body === undefined
+              ? {}
+              : { body: JSON.stringify(init.body) }
+            : { body: init.form }),
+        });
+      } catch (error) {
+        throw new NetworkError(error instanceof Error ? error.message : 'The request failed.');
+      }
+    };
 
-    let response: Response;
-    try {
-      response = await doFetch(url, {
-        method,
-        headers,
-        ...(init.form === undefined
-          ? init.body === undefined
-            ? {}
-            : { body: JSON.stringify(init.body) }
-          : { body: init.form }),
-      });
-    } catch (error) {
-      throw new NetworkError(error instanceof Error ? error.message : 'The request failed.');
+    let sent = prepare();
+    let response = await transmit(sent);
+    if (
+      response.status === 403 &&
+      options.onCsrfRejected !== undefined &&
+      (await isCsrfRejection(response)) &&
+      (await options.onCsrfRejected())
+    ) {
+      sent = prepare();
+      response = await transmit(sent);
     }
+    const { cacheKey, previous } = sent;
+    if (response.status === 401) options.onUnauthorized?.();
 
     if (response.status === 304 && previous !== undefined) {
       return {

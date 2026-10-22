@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useSyncExternalStore } from 'react';
 import { describeError } from '@/api';
-import { useCredentials, useKeeperApi } from '@/api/provider';
+import { useCredentials, useKeeperApi, useSession, useSessionInfo } from '@/api/provider';
 import { useConfig } from '@/config/context';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
@@ -79,6 +79,8 @@ function WhoAmI() {
 export function ConnectionSection() {
   const config = useConfig();
   const credentials = useCredentials();
+  const session = useSession();
+  const signedIn = useSessionInfo();
   const toast = useToast();
   const queryClient = useQueryClient();
   const source = useSyncExternalStore(credentials.subscribe, credentials.source);
@@ -116,11 +118,18 @@ export function ConnectionSection() {
                 : 'not used in mock mode'
             }
           />
-          <Row name="API token" value={live ? SOURCE_LABEL[source] : 'not used in mock mode'} />
+          {session === null ? (
+            <Row name="API token" value={live ? SOURCE_LABEL[source] : 'not used in mock mode'} />
+          ) : (
+            <Row
+              name="Sign-in"
+              value={`single sign-on through Keeper${signedIn === null ? '' : `, as ${signedIn.display_name}`}`}
+            />
+          )}
         </TBody>
       </Table>
 
-      {live && (
+      {session === null && live && (
         <form
           aria-label="Store an API token"
           className="mt-3 flex max-w-xl flex-col gap-2"
@@ -154,6 +163,12 @@ export function ConnectionSection() {
             </Button>
           </div>
         </form>
+      )}
+
+      {session !== null && (
+        <p className="mt-3 max-w-xl text-sm text-muted">
+          This app signs in through Keeper (single sign-on) and keeps no API token in the browser.
+        </p>
       )}
 
       <div className="mt-4">

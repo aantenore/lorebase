@@ -65,6 +65,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start a browser sign-in
+         * @description Send the browser to the identity provider (authorization code flow with PKCE). The
+         *     sign-in state travels in a short-lived, encrypted, HttpOnly cookie.
+         */
+        get: operations["login_api_v1_auth_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finish a browser sign-in
+         * @description The provider's redirect after sign-in. Checks state, redeems the code with the PKCE
+         *     verifier, verifies the ID token and its nonce, maps the user to a principal as for bearer
+         *     tokens, and starts a session with a new id.
+         */
+        get: operations["callback_api_v1_auth_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe the browser session
+         * @description Who is signed in, until when, and the CSRF token the web app sends with unsafe
+         *     requests. Requests authenticated by an API key or bearer token get 401.
+         */
+        get: operations["session_info_api_v1_auth_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out of the browser session
+         * @description End the session of the cookie (CSRF token required), clear the cookie and return the
+         *     provider's end-session URL for RP-initiated logout. Without a session it only clears the
+         *     cookie.
+         */
+        post: operations["logout_api_v1_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/api-keys": {
         parameters: {
             query?: never;
@@ -3179,6 +3265,17 @@ export interface components {
             next_cursor?: string | null;
         };
         /**
+         * LogoutResult
+         * @description Where to send the browser to sign out at the identity provider too.
+         */
+        LogoutResult: {
+            /**
+             * Logout Url
+             * @description The provider's end-session URL; null when it offers none or no session was open.
+             */
+            logout_url: string | null;
+        };
+        /**
          * MatchCondition
          * @description Full-text match of the Record (title and searchable Attributes).
          */
@@ -4451,6 +4548,37 @@ export interface components {
          * @enum {string}
          */
         ServedFrom: "materialized" | "tree";
+        /**
+         * SessionInfo
+         * @description The browser session of the caller.
+         */
+        SessionInfo: {
+            /** Principal Id */
+            principal_id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Csrf Header
+             * @description Header to send the CSRF token in on unsafe requests.
+             */
+            csrf_header: string;
+            /**
+             * Csrf Token
+             * @description CSRF token of this session.
+             */
+            csrf_token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description End of the session's absolute lifetime.
+             */
+            expires_at: string;
+            /**
+             * Idle Timeout S
+             * @description The session ends after this long without use.
+             */
+            idle_timeout_s: number;
+        };
         /** SourceRunOut */
         SourceRunOut: {
             /** Id */
@@ -4966,6 +5094,193 @@ export interface operations {
             };
             /** @description No valid credential. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    login_api_v1_auth_login_get: {
+        parameters: {
+            query?: {
+                /** @description Path on the web app's origin to return to after signing in. */
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the identity provider. */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description return_to is not a path of the web app. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Web sign-in is not enabled. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    callback_api_v1_auth_callback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed in: redirect to the return path with the session cookie. Failed: redirect to the app's error path with ?error=<code>. */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Web sign-in is not enabled. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    session_info_api_v1_auth_session_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInfo"];
+                };
+            };
+            /** @description No valid session cookie. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Web sign-in is not enabled. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    logout_api_v1_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoutResult"];
+                };
+            };
+            /** @description CSRF check failed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Web sign-in is not enabled. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
