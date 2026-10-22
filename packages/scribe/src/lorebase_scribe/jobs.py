@@ -11,6 +11,7 @@
 | `extraction` | `{"documents", "tiers", "requested_by"}`, Domain set | `ExtractionRun.run` |
 | `embeddings` | `{"branches", "reindex", "resume"}` optional, Domain set | `EmbeddingPass.run` |
 | `audit_verify` | none | `lorebase_store.auth.AuditRepository.verify` over every chain |
+| `audit_checkpoint` | none | `checkpoints.publish_checkpoints` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -23,8 +24,13 @@ complete queues its continuation (same payload plus `resume`) and succeeds.
 of them run at once across workers, and one that has to wait queues itself again.
 
 An `audit_verify` job succeeds whether the chains verify or not: its result and the
-`lorebase.audit.verifications` counter (outcome `intact` or `broken`) carry the answer, and a
-broken chain is logged at error level.
+`lorebase.audit.verifications` counter (outcome `intact` or `broken`, by stream) carry the
+answer, and a broken chain is logged at error level. It verifies the chains of actions and,
+under `reads`, those of the read stream.
+
+An `audit_checkpoint` job signs the head of every chain of `scribe.audit_checkpoints.streams`
+and stores one checkpoint per stream in the configured sink; `lorebase.audit.checkpoints`
+counts them by outcome. A failure fails the attempt (it is retried like any job).
 
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
@@ -43,6 +49,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_inference import InferenceSettings
+from lorebase_scribe.checkpoints import CheckpointSink, build_sink, publish_checkpoints
 from lorebase_scribe.embeddings import PERMANENT_ERRORS as EMBEDDING_ERRORS
 from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass
 from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
@@ -51,10 +58,10 @@ from lorebase_scribe.settings import ScribeSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
 from lorebase_scribe.sources.sync import utc_now
-from lorebase_scribe.telemetry import AUDIT_VERIFICATIONS
+from lorebase_scribe.telemetry import AUDIT_CHECKPOINTS, AUDIT_VERIFICATIONS
 from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
-from lorebase_store.auth import AuditRepository, Chains
+from lorebase_store.auth import AuditRepository, AuditStream, Chains
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
@@ -75,6 +82,7 @@ from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
 WEBHOOK_DELIVERY_JOB = "webhook_delivery"
 AUDIT_VERIFY_JOB = "audit_verify"
+AUDIT_CHECKPOINT_JOB = "audit_checkpoint"
 
 log = logging.getLogger("lorebase.scribe.jobs")
 
@@ -88,6 +96,7 @@ JOB_TYPES = (
     EXTRACTION_JOB,
     EMBEDDINGS_JOB,
     AUDIT_VERIFY_JOB,
+    AUDIT_CHECKPOINT_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -99,7 +108,8 @@ class JobContext:
     `ddl_engine` runs per-Attribute index DDL: the maintenance engine
     (`database.maintenance_dsn`) when configured, else `engine`. `extraction_models` replaces
     the models built from `inference` (tests). `embedding_models` is the process's embedding
-    model, created on first use from `inference` unless given."""
+    model, created on first use from `inference` unless given. `checkpoint_sink` replaces
+    the sink of `scribe.audit_checkpoints` (tests)."""
 
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
@@ -114,6 +124,7 @@ class JobContext:
     inference: InferenceSettings = field(default_factory=InferenceSettings)
     extraction_models: Callable[[Sequence[int]], ExtractionModels] | None = None
     embedding_models: EmbeddingModels | None = None
+    checkpoint_sink: CheckpointSink | None = None
 
     def embedding_pass(self) -> EmbeddingPass:
         """An embedding pass sharing the process's model."""
@@ -264,10 +275,11 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                 )
         return result
 
-    async def audit_verify(job: JobRow) -> Mapping[str, Any]:
+    async def verify_stream(stream: AuditStream) -> dict[str, Any]:
         async with context.sessions() as session, session.begin():
-            result = await AuditRepository(session).verify(domain_id=Chains.ALL)
-        AUDIT_VERIFICATIONS.add(1, {"outcome": "intact" if result.ok else "broken"})
+            result = await AuditRepository(session, stream).verify(domain_id=Chains.ALL)
+        outcome = "intact" if result.ok else "broken"
+        AUDIT_VERIFICATIONS.add(1, {"outcome": outcome, "stream": stream.value})
         report: dict[str, Any] = {
             "intact": result.ok,
             "checked": result.checked,
@@ -280,8 +292,30 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                 "domain_id": result.bad_domain_id,
                 "reason": result.reason,
             }
-            log.error("audit chain broken", extra=report["first_broken"])
+            log.error(
+                "audit chain broken", extra={**report["first_broken"], "stream": stream.value}
+            )
         return report
+
+    async def audit_verify(job: JobRow) -> Mapping[str, Any]:
+        report = await verify_stream(AuditStream.ACTIONS)
+        report["reads"] = await verify_stream(AuditStream.READS)
+        return report
+
+    async def audit_checkpoint(job: JobRow) -> Mapping[str, Any]:
+        settings = context.settings.audit_checkpoints
+        if not settings.enabled:
+            raise PermanentJobError("scribe.audit_checkpoints is not enabled")
+        sink = context.checkpoint_sink or build_sink(settings, context.http)
+        try:
+            published = await publish_checkpoints(
+                context.sessions, settings, sink, clock=context.clock
+            )
+        except Exception:
+            AUDIT_CHECKPOINTS.add(1, {"outcome": "failed"})
+            raise
+        AUDIT_CHECKPOINTS.add(len(published), {"outcome": "published"})
+        return {"published": [item.as_dict() for item in published]}
 
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
@@ -293,6 +327,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         EXTRACTION_JOB: extraction,
         EMBEDDINGS_JOB: embeddings,
         AUDIT_VERIFY_JOB: audit_verify,
+        AUDIT_CHECKPOINT_JOB: audit_checkpoint,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())

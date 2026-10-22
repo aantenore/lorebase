@@ -98,6 +98,7 @@ def test_the_application_role_is_created_without_privileges_that_skip_rls() -> N
     grant = script.index("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES")
     assert script.index("REVOKE UPDATE, DELETE, TRUNCATE") > grant
     assert "public.audit_log" in script
+    assert "public.audit_read_log" in script
     roles = services(BASE_ENV)["db-roles"]
     assert roles["environment"]["APP_USER"] == "app"
     assert roles["environment"]["POSTGRES_USER"] == "owner"

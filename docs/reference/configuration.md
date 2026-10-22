@@ -99,7 +99,16 @@ Token buckets per principal (API key id or user) and request class; refusals are
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `keeper.limits.rate.enabled` | `true` |  |
-| `keeper.limits.rate.backend` | `memory` | per process: N Keeper processes allow N times the limits |
+| `keeper.limits.rate.backend` | `local` | local (alias memory): per process, N Keepers allow N times the limits; postgres: buckets shared by every Keeper (use it with more than one; compose scale-out and Helm with replicas &gt; 1) |
+| `keeper.limits.rate.postgres` |  | the shared backend: UNLOGGED table rate_limit_buckets |
+| `keeper.limits.rate.postgres.lease_tokens` | `10` | tokens taken per query and served from memory (at most a quarter of a bucket); unused ones expire, never overspent |
+| `keeper.limits.rate.postgres.lease_ttl_s` | `2.0` | leased tokens not used in this time are dropped |
+| `keeper.limits.rate.postgres.timeout_s` | `0.25` | budget of one query; slower counts as a failure |
+| `keeper.limits.rate.postgres.on_error` | `local` | database down or slow: local (limits in this process), allow or deny; failed-authentication buckets always deny |
+| `keeper.limits.rate.postgres.error_retry_after_s` | `1` | Retry-After of a refusal caused by the database |
+| `keeper.limits.rate.postgres.check_cache_s` | `1.0` | reuse of a failed-authentication bucket reading by the check before each authentication (failures are written at once) |
+| `keeper.limits.rate.postgres.prune_interval_s` | `60.0` | deletion of rows of buckets that are full again |
+| `keeper.limits.rate.postgres.prune_batch` | `1000` |  |
 | `keeper.limits.rate.max_buckets` | `100000` | buckets kept in memory; least recently used are dropped |
 | `keeper.limits.rate.exempt_paths` | `[/healthz, /readyz]` | route paths without the API prefix, never limited |
 | `keeper.limits.rate.reads` |  | GETs, query, traverse, neighborhood |
@@ -256,6 +265,15 @@ Bearer tokens of any OpenID Connect provider
 | `keeper.auth.audit.enabled` | `true` | hash-chained log of mutations and denied requests; needs the `database` section |
 | `keeper.auth.audit.record_denied` | `true` | also record requests rejected with 401 or 403 |
 | `keeper.auth.audit.write_timeout_s` | `2` | a failed or slow write is logged and counted, never surfaced |
+| `keeper.auth.audit.reads` |  | records of successful reads, in audit_read_log (hash chains of their own), written in batches off the request path |
+| `keeper.auth.audit.reads.enabled` | `false` |  |
+| `keeper.auth.audit.reads.sample_rate` | `1.0` | share of the reads passing the filters that are recorded |
+| `keeper.auth.audit.reads.principal_types` | `[]` | user, service, api_key; empty: every type |
+| `keeper.auth.audit.reads.kinds` | `[]` | Kind api names in the route; empty: every read reads that showed or masked a sensitive value are always recorded, whatever the sampling and the filters |
+| `keeper.auth.audit.reads.queue_size` | `10000` | past it records are dropped (lorebase.audit.reads.dropped) |
+| `keeper.auth.audit.reads.batch_size` | `500` | records per transaction |
+| `keeper.auth.audit.reads.flush_interval_s` | `1.0` | longest wait before queued records are written |
+| `keeper.auth.audit.reads.write_timeout_s` | `5.0` | a failed batch is dropped and counted |
 
 #### `keeper.auth.sessions`
 
@@ -1419,3 +1437,48 @@ Retries of a failed call, after the provider's own retries
 | `scribe.embeddings.retry.attempts` | `2` | attempts per call, the first included |
 | `scribe.embeddings.retry.backoff_s` | `2.0` | pause before the first retry; doubles each time |
 | `scribe.embeddings.retry.backoff_max_s` | `60.0` | longest pause |
+
+### `scribe.audit_checkpoints`
+
+Signed heads of the audit chains published outside the database; `python -m lorebase_keeper audit verify --checkpoints` then detects entries cut from a chain's end
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.audit_checkpoints.enabled` | `false` |  |
+| `scribe.audit_checkpoints.interval_s` | `3600.0` | newer entries are not covered until the next checkpoint |
+| `scribe.audit_checkpoints.streams` | `[actions, reads]` | audit_log and audit_read_log |
+| `scribe.audit_checkpoints.signing_key` | `null` | Ed25519 PEM, e.g. secret://file//run/secrets/checkpoint.pem (openssl genpkey -algorithm ed25519); verifiers need only the public key (openssl pkey -pubout) |
+| `scribe.audit_checkpoints.key_id` | `main` | recorded in each checkpoint |
+| `scribe.audit_checkpoints.prefix` | `lorebase-audit/` | object names: {prefix}{stream}/{UTC time}.json |
+| `scribe.audit_checkpoints.sink` | `file` | file \| http \| s3 |
+| `scribe.audit_checkpoints.directory` | `null` | file: a directory the database host cannot write |
+
+#### `scribe.audit_checkpoints.http`
+
+Http: PUT or POST of each checkpoint
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.audit_checkpoints.http.url` | `null` | {name} is replaced by the object name |
+| `scribe.audit_checkpoints.http.method` | `PUT` |  |
+| `scribe.audit_checkpoints.http.headers` | `{}` | values may be secret references |
+| `scribe.audit_checkpoints.http.allowed_schemes` | `[https]` |  |
+| `scribe.audit_checkpoints.http.allow_private_targets` | `false` | off: global unicast addresses only, pinned, no redirects |
+| `scribe.audit_checkpoints.http.timeout_s` | `10.0` |  |
+
+#### `scribe.audit_checkpoints.s3`
+
+S3: PUT signed with Signature Version 4; use a bucket with versioning or object lock and PutObject-only credentials
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.audit_checkpoints.s3.endpoint` | `null` | e.g. https://s3.eu-west-1.amazonaws.com |
+| `scribe.audit_checkpoints.s3.bucket` | `null` |  |
+| `scribe.audit_checkpoints.s3.region` | `us-east-1` |  |
+| `scribe.audit_checkpoints.s3.path_style` | `true` | endpoint/bucket/key; false: bucket.endpoint/key |
+| `scribe.audit_checkpoints.s3.access_key_id` | `null` | secret references, e.g. secret://env/CHECKPOINT_KEY_ID |
+| `scribe.audit_checkpoints.s3.secret_access_key` | `null` |  |
+| `scribe.audit_checkpoints.s3.session_token` | `null` |  |
+| `scribe.audit_checkpoints.s3.allowed_schemes` | `[https]` |  |
+| `scribe.audit_checkpoints.s3.allow_private_targets` | `false` |  |
+| `scribe.audit_checkpoints.s3.timeout_s` | `10.0` |  |

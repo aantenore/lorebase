@@ -74,6 +74,7 @@ from lorebase_core.query import (
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext, Authorizer
+from lorebase_keeper.auth.read_audit import note_sensitive
 from lorebase_keeper.errors import FORBIDDEN, ProblemError
 from lorebase_keeper.reading.problems import invalid
 from lorebase_keeper.settings import SensitivitySettings
@@ -284,9 +285,12 @@ class Masking:
             if attribute_id not in source:
                 continue
             if self.hidden(attribute, kinds):
+                note_sensitive("masked")
                 if not leave_out:
                     out[attribute.api_name] = self.masked
                 continue
+            if self.sensitive(attribute):
+                note_sensitive("shown")
             out[attribute.api_name] = source[attribute_id]
         return out
 
@@ -298,7 +302,12 @@ class Masking:
             return None
         if attribute is None:
             return value if self.clearance.covers(Sensitivity, kinds) else self.masked
-        return self.masked if self.hidden(attribute, kinds) else value
+        if self.hidden(attribute, kinds):
+            note_sensitive("masked")
+            return self.masked
+        if self.sensitive(attribute):
+            note_sensitive("shown")
+        return value
 
     def kind_values(self, kind: Kind, values: Mapping[str, Any], **options: Any) -> dict[str, Any]:
         return self.values(kind.attributes, values, (kind.id,), **options)
@@ -449,8 +458,10 @@ class Disclosure:
         out: dict[str, JsonValue] = {}
         for token, found in opened.items():
             if not self._cleared(found.kind_id, found.attribute_id):
+                note_sensitive("masked")
                 out[token] = settings.masked_value
             elif found.state is VaultState.VALUE:
+                note_sensitive("shown")
                 out[token] = found.value
             elif found.state is VaultState.ERASED:
                 out[token] = settings.erased_value

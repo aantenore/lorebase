@@ -13,11 +13,13 @@ from starlette.middleware.cors import CORSMiddleware
 
 from lorebase_keeper import __version__
 from lorebase_keeper.auth.audit import AuditMiddleware
+from lorebase_keeper.auth.config import AuditSettings
 from lorebase_keeper.auth.ports import AuthStore
+from lorebase_keeper.auth.read_audit import ReadAuditor, ReadSink, database_sink
 from lorebase_keeper.auth.runtime import build_runtime
 from lorebase_keeper.client_address import ClientAddresses
 from lorebase_keeper.client_address import install as install_client_addresses
-from lorebase_keeper.db import create_database
+from lorebase_keeper.db import Database, create_database
 from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handlers
 from lorebase_keeper.health import router as health_router
 from lorebase_keeper.middleware import (
@@ -64,6 +66,7 @@ def create_app(
     auth_store: AuthStore | None = None,
     http_client: httpx.AsyncClient | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    read_audit_sink: ReadSink | None = None,
 ) -> FastAPI:
     """Build the Keeper ASGI application.
 
@@ -77,7 +80,8 @@ def create_app(
     `keeper.readiness.database_section`), or `auth_store` when given. With `keeper.auth.mode:
     none` the database is optional and only enables the audit log. `http_client` serves
     identity provider requests (default: a client built from the OIDC settings) and `clock` the
-    expiry checks.
+    expiry checks. `read_audit_sink` replaces the database as the writer of read records
+    (`keeper.auth.audit.reads`).
     """
     settings = settings or load_settings()
     keeper = keeper_settings(settings)
@@ -133,7 +137,12 @@ def create_app(
         keeper.limits.rate,
         keeper.limits.quota,
         auth,
+        sessions=database.sessions if database is not None else None,
         meter_provider=telemetry.meter_provider if telemetry else None,
+    )
+
+    reads = _read_auditor(
+        keeper.auth.audit, auth.audit_writer is not None, database, read_audit_sink, telemetry
     )
 
     @asynccontextmanager
@@ -141,6 +150,8 @@ def create_app(
         try:
             yield
         finally:
+            if reads is not None:
+                await reads.aclose()
             if limits is not None:
                 await limits.aclose()
             await auth.aclose()
@@ -166,6 +177,7 @@ def create_app(
     app.state.auth = auth
     app.state.database = database
     app.state.limits = limits
+    app.state.read_audit = reads
     install_client_addresses(app.state, keeper.trusted_proxies)
 
     install_error_handlers(app, renderer)
@@ -212,6 +224,8 @@ def create_app(
             writer=auth.audit_writer,
             settings=keeper.auth.audit,
             api_prefix=keeper.api_prefix,
+            reads=reads,
+            is_read=keeper.limits.rate.routes.only_reads,
         )
     app.add_middleware(
         RequestContextMiddleware,
@@ -228,3 +242,27 @@ def create_app(
             proxies=ClientAddresses(keeper.trusted_proxies),
         )
     return app
+
+
+def _read_auditor(
+    audit: AuditSettings,
+    writes_audit: bool,
+    database: Database | None,
+    sink: ReadSink | None,
+    telemetry: Telemetry | None,
+) -> ReadAuditor | None:
+    """The read auditor when `audit.reads` is on (it needs the audit log and a database)."""
+    if not audit.reads.enabled:
+        return None
+    if sink is None and database is not None:
+        sink = database_sink(database.sessions)
+    if not writes_audit or sink is None:
+        raise ConfigError(
+            [
+                "keeper.auth.audit.reads.enabled needs keeper.auth.audit.enabled and the "
+                "database section"
+            ]
+        )
+    return ReadAuditor(
+        audit.reads, sink, meter_provider=telemetry.meter_provider if telemetry else None
+    )

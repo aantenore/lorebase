@@ -11,6 +11,8 @@ Each tick of the leader:
 - queues a `webhook_delivery` pass every `webhook_interval_s` (an identical queued job is
   reused, so a backlog never piles up);
 - queues an `audit_verify` pass every `audit_verify_interval_s` (reused like the webhook pass);
+- queues an `audit_checkpoint` job every `scribe.audit_checkpoints.interval_s` when
+  checkpoints are enabled (reused like the webhook pass);
 - queues a `gc` job per Domain at each firing of `gc_schedule`;
 - queues an `embeddings` pass per Domain every `embeddings_interval_s` (an identical queued
   pass is reused);
@@ -39,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, a
 
 from lorebase_core.model import ElementStatus
 from lorebase_scribe.cron import CronError, parse_cron
-from lorebase_scribe.jobs import AUDIT_VERIFY_JOB, WEBHOOK_DELIVERY_JOB
+from lorebase_scribe.jobs import AUDIT_CHECKPOINT_JOB, AUDIT_VERIFY_JOB, WEBHOOK_DELIVERY_JOB
 from lorebase_scribe.settings import SchedulerSettings
 from lorebase_scribe.telemetry import QUEUE_DEPTH, SCHEDULED, tracer
 from lorebase_store.auth.scope import rls_scope
@@ -90,8 +92,10 @@ class Scheduler:
         jobs: JobSettings,
         writes: WriteSettings,
         clock: Callable[[], datetime] = utc_now,
+        checkpoint_interval_s: float = 0.0,
     ) -> None:
         self._engine = engine
+        self._checkpoint_interval_s = checkpoint_interval_s
         self._sessions = sessions
         self._settings = settings
         self._jobs = jobs
@@ -174,6 +178,7 @@ class Scheduler:
         intervals = (
             (WEBHOOK_DELIVERY_JOB, self._settings.webhook_interval_s),
             (AUDIT_VERIFY_JOB, self._settings.audit_verify_interval_s),
+            (AUDIT_CHECKPOINT_JOB, self._checkpoint_interval_s),
         )
         for job_type, interval in intervals:
             last = self._last.get(job_type)

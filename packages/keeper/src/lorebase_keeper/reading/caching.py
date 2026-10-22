@@ -28,6 +28,7 @@ from fastapi import Request, Response
 from opentelemetry import metrics
 from pydantic import BaseModel
 
+from lorebase_keeper.auth.read_audit import note_all, noted_sensitive
 from lorebase_keeper.settings import ReadCacheSettings
 
 JSON = "application/json"
@@ -59,6 +60,9 @@ class CachedResponse:
     headers: Mapping[str, str] = field(default_factory=dict)
     time_travel: bool = False
     media_type: str = JSON
+    sensitive: frozenset[str] = frozenset()
+    """Sensitive values the first rendering showed or masked (`read_audit.note_sensitive`),
+    reported again by every answer from the cache."""
 
 
 class ResponseCache(Protocol):
@@ -224,6 +228,7 @@ async def respond_with(
     result = "bypass" if cache is None else "miss" if cached is None else "hit"
     _LOOKUPS.add(1, {"result": result})
     if cached is not None:
+        note_all(cached.sensitive)
         return Response(
             await _sent(cached.body, cached.media_type, disclose),
             media_type=cached.media_type,
@@ -231,7 +236,10 @@ async def respond_with(
         )
     body, media_type = await produce()
     if cache is not None:
-        await cache.put(key, CachedResponse(body, dict(headers or {}), time_travel, media_type))
+        await cache.put(
+            key,
+            CachedResponse(body, dict(headers or {}), time_travel, media_type, noted_sensitive()),
+        )
     return Response(await _sent(body, media_type, disclose), media_type=media_type, headers=common)
 
 

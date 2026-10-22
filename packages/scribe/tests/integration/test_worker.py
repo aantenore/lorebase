@@ -385,7 +385,13 @@ async def test_audit_verify_job_reports_the_first_broken_entry(
     assert await worker.run_once() == 1
     status, _, result = await job_state(sessions, intact)
     assert status == "succeeded"
-    assert result == {"intact": True, "checked": 3, "chains": 1, "last_seq": seqs[2]}
+    assert result == {
+        "intact": True,
+        "checked": 3,
+        "chains": 1,
+        "last_seq": seqs[2],
+        "reads": {"intact": True, "checked": 0, "chains": 0, "last_seq": None},
+    }
 
     async with engine.begin() as connection:
         await connection.execute(

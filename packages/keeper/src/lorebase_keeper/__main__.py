@@ -7,8 +7,12 @@ python -m lorebase_keeper bootstrap [--principal ID] [--name NAME] [--force]
 python -m lorebase_keeper principal create ID [--name NAME]
     Add a service principal with a chosen id; nothing happens when it exists.
 python -m lorebase_keeper audit verify (DOMAIN | --installation | --all) [--after-seq N] [--json]
-    Recompute the hash chains of the audit log and report the first broken entry; the exit
-    status is 1 when an entry does not verify.
+        [--reads] [--checkpoints PATH ... --checkpoint-key FILE]
+    Recompute the hash chains of the audit log (the read stream with --reads) and report the
+    first broken entry; with --checkpoints, also compare the log with the signed checkpoints
+    Scribe published (files or directories of them) to detect removed or rewritten entries.
+    The exit status is 1 when an entry does not verify, a checkpointed entry is missing or
+    changed, or a checkpoint is invalid.
 
 The installation commands connect with `database.maintenance_dsn` when it is set, else with
 `database.dsn`.
@@ -21,7 +25,9 @@ import asyncio
 import json
 import sys
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -38,7 +44,15 @@ from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.logging import configure_logging
 from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import setup_telemetry
-from lorebase_store.auth import Chains, ChainVerification, SqlAuthStore
+from lorebase_store.auth import AuditStream, Chains, ChainVerification, SqlAuthStore
+from lorebase_store.auth.checkpoints import (
+    Checkpoint,
+    CheckpointError,
+    CheckpointFinding,
+    compare,
+    load_public_key,
+    parse_document,
+)
 from lorebase_store.db import create_engine
 from lorebase_store.settings import DatabaseSettings
 
@@ -106,6 +120,23 @@ def _parser() -> argparse.ArgumentParser:
         help="start after entry N, trusting it (the last_seq of an earlier run); default 0",
     )
     verify.add_argument("--json", action="store_true", help="print the result as JSON")
+    verify.add_argument(
+        "--reads", action="store_true", help="the read stream (audit_read_log) instead of actions"
+    )
+    verify.add_argument(
+        "--checkpoints",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="PATH",
+        help="checkpoint file, or directory searched for *.json (repeatable)",
+    )
+    verify.add_argument(
+        "--checkpoint-key",
+        type=Path,
+        metavar="FILE",
+        help="PEM Ed25519 public key the checkpoints are signed with",
+    )
     return parser
 
 
@@ -211,35 +242,112 @@ def _chain_of(args: argparse.Namespace) -> str | Chains | None:
     return None if args.installation else str(args.domain)
 
 
-def verification_report(chain: str | Chains | None, result: ChainVerification) -> dict[str, Any]:
+def verification_report(
+    chain: str | Chains | None,
+    result: ChainVerification,
+    stream: AuditStream = AuditStream.ACTIONS,
+    anchored: Anchoring | None = None,
+) -> dict[str, Any]:
     """JSON form of a verification, as `audit verify --json` prints it."""
     broken = (
         None
         if result.ok
         else {"seq": result.bad_seq, "domain_id": result.bad_domain_id, "reason": result.reason}
     )
-    return {
+    report: dict[str, Any] = {
+        "stream": stream.value,
         "chain": chain.value if isinstance(chain, Chains) else chain,
-        "intact": result.ok,
+        "intact": result.ok and (anchored is None or anchored.ok),
         "checked": result.checked,
         "chains": result.chains,
         "last_seq": result.last_seq,
         "first_broken": broken,
     }
+    if anchored is not None:
+        report["checkpoints"] = {
+            "checked": anchored.checked,
+            "invalid": anchored.invalid,
+            "findings": [
+                {
+                    "checkpoint_at": f.checkpoint_at.isoformat(),
+                    "domain_id": f.domain_id,
+                    "seq": f.seq,
+                    "problem": f.problem,
+                }
+                for f in anchored.findings
+            ],
+        }
+    return report
+
+
+@dataclass(frozen=True)
+class Anchoring:
+    """Comparison of the log with checkpoints: how many were compared, the files that are
+    not valid checkpoints, and the checkpointed entries the log no longer holds as they were."""
+
+    checked: int
+    invalid: list[str]
+    findings: list[CheckpointFinding]
+
+    @property
+    def ok(self) -> bool:
+        return not self.invalid and not self.findings
+
+
+def _checkpoint_files(paths: Sequence[Path]) -> list[Path]:
+    files: list[Path] = []
+    for path in paths:
+        files.extend(sorted(path.rglob("*.json")) if path.is_dir() else [path])
+    return files
+
+
+def _load_checkpoints(
+    paths: Sequence[Path], key_file: Path, stream: AuditStream
+) -> tuple[list[Checkpoint], list[str]]:
+    """Valid checkpoints of `stream` and the files that are not valid checkpoints."""
+    try:
+        key = load_public_key(key_file.read_text(encoding="utf-8"))
+    except (OSError, CheckpointError) as error:
+        raise BootstrapError(f"--checkpoint-key: {error}") from None
+    found: list[Checkpoint] = []
+    invalid: list[str] = []
+    for file in _checkpoint_files(paths):
+        try:
+            checkpoint = parse_document(file.read_bytes(), key)
+        except (OSError, CheckpointError) as error:
+            invalid.append(f"{file}: {error}")
+            continue
+        if checkpoint.stream is stream:
+            found.append(checkpoint)
+    return found, invalid
 
 
 async def _verify_audit(settings: Settings, args: argparse.Namespace) -> None:
     if args.after_seq < 0:
         raise BootstrapError("--after-seq must not be negative")
+    if args.checkpoints and args.checkpoint_key is None:
+        raise BootstrapError("--checkpoints needs --checkpoint-key")
     chain = _chain_of(args)
+    stream = AuditStream.READS if args.reads else AuditStream.ACTIONS
+    checkpoints, invalid = (
+        _load_checkpoints(args.checkpoints, args.checkpoint_key, stream)
+        if args.checkpoints
+        else ([], [])
+    )
+    anchored: Anchoring | None = None
     store, dispose = _store(settings)
     try:
         async with store.unit() as unit:
-            result = await unit.audit.verify(after_seq=args.after_seq, domain_id=chain)
+            repository = unit.read_audit if args.reads else unit.audit
+            result = await repository.verify(after_seq=args.after_seq, domain_id=chain)
+            if args.checkpoints:
+                domains = None if isinstance(chain, Chains) else [chain]
+                findings = await compare(repository, checkpoints, domain_ids=domains)
+                anchored = Anchoring(len(checkpoints), invalid, findings)
     finally:
         await dispose()
     if args.json:
-        print(json.dumps(verification_report(chain, result)))
+        print(json.dumps(verification_report(chain, result, stream, anchored)))
     elif result.ok:
         last = "-" if result.last_seq is None else result.last_seq
         print(
@@ -252,7 +360,17 @@ async def _verify_audit(settings: Settings, args: argparse.Namespace) -> None:
             f"audit log broken at seq {result.bad_seq} (chain {where}): {result.reason}; "
             f"{result.checked} entries verified before it"
         )
-    if not result.ok:
+    if anchored is not None and not args.json:
+        print(f"checkpoints compared: {anchored.checked}")
+        for problem in anchored.invalid:
+            print(f"invalid checkpoint {problem}")
+        for finding in anchored.findings:
+            where = finding.domain_id or "installation"
+            print(
+                f"entry seq {finding.seq} (chain {where}) of the checkpoint of "
+                f"{finding.checkpoint_at.isoformat()} is {finding.problem}"
+            )
+    if not result.ok or (anchored is not None and not anchored.ok):
         sys.exit(1)
 
 

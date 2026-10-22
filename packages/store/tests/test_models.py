@@ -40,6 +40,8 @@ DESIGN_TABLES = {
     "web_sessions",
     "operation_invocations",
     "audit_log",
+    "audit_read_log",
+    "rate_limit_buckets",
     "outbox",
     "outbox_consumers",
     "outbox_pending",
@@ -103,5 +105,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_schema_suggestions_migration() -> None:
-    assert head_revisions() == ("0021",)
+def test_head_revision_is_the_read_audit_migration() -> None:
+    assert head_revisions() == ("0022",)

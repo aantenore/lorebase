@@ -7,13 +7,15 @@ come from `store.jobs`, webhook delivery from `webhooks`, garbage collection fro
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
+from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel, Settings, register_section
 from lorebase_scribe.cron import CronError, parse_cron
 from lorebase_scribe.extraction.settings import ExtractionSettings
+from lorebase_store.auth.checkpoints import CheckpointError, load_private_key
 
 SECTION = "scribe"
 
@@ -350,6 +352,135 @@ class EmbeddingJobSettings(SectionModel):
     retry: EmbeddingRetrySettings = Field(default_factory=EmbeddingRetrySettings)
 
 
+class CheckpointHttpSettings(SectionModel):
+    """An HTTP endpoint receiving each checkpoint (a webhook, or an object store accepting a
+    PUT with a bearer token)."""
+
+    url: str | None = Field(
+        default=None,
+        description="Target URL; `{name}` is replaced by the checkpoint's object name "
+        "(prefix, stream, time), e.g. https://audit.example.com/lorebase/{name}.",
+    )
+    method: Literal["PUT", "POST"] = Field(default="PUT", description="Request method.")
+    headers: dict[str, SecretValue] = Field(
+        default_factory=dict,
+        description="Extra request headers; values may be secret references, e.g. "
+        "Authorization: secret://env/LOREBASE_CHECKPOINT_TOKEN.",
+    )
+    allowed_schemes: tuple[str, ...] = Field(
+        default=("https",), min_length=1, description="URL schemes the URL may use."
+    )
+    allow_private_targets: bool = Field(
+        default=False,
+        description="Allow a host resolving to loopback, private or link-local addresses (an "
+        "in-cluster store). Off by default: every resolved address must be global unicast and "
+        "the connection is pinned to the checked addresses; redirects are never followed.",
+    )
+    timeout_s: float = Field(default=10.0, gt=0, description="Time budget of one upload.")
+
+
+class CheckpointS3Settings(SectionModel):
+    """An S3-compatible object store (AWS S3, MinIO, Ceph...), written with a PUT signed with
+    Signature Version 4. Turn on versioning or object lock on the bucket and give these
+    credentials `PutObject` only, so that checkpoints cannot be replaced or deleted."""
+
+    endpoint: str | None = Field(
+        default=None, description="Endpoint URL, e.g. https://s3.eu-west-1.amazonaws.com."
+    )
+    bucket: str | None = Field(default=None, description="Bucket name.")
+    region: str = Field(default="us-east-1", min_length=1, description="Signing region.")
+    path_style: bool = Field(
+        default=True,
+        description="Address the bucket in the path (endpoint/bucket/key) rather than in the "
+        "host name (bucket.endpoint/key).",
+    )
+    access_key_id: SecretValue | None = Field(default=None, description="Access key id.")
+    secret_access_key: SecretValue | None = Field(default=None, description="Secret key.")
+    session_token: SecretValue | None = Field(
+        default=None, description="Session token of temporary credentials."
+    )
+    allowed_schemes: tuple[str, ...] = Field(
+        default=("https",), min_length=1, description="URL schemes the endpoint may use."
+    )
+    allow_private_targets: bool = Field(
+        default=False,
+        description="Allow an endpoint resolving to private addresses (as for `http`).",
+    )
+    timeout_s: float = Field(default=10.0, gt=0, description="Time budget of one upload.")
+
+
+class AuditCheckpointSettings(SectionModel):
+    """Signed checkpoints of the audit chains published outside the database
+    (`audit_checkpoint` jobs), against which `python -m lorebase_keeper audit verify
+    --checkpoints` detects entries removed from the end of a chain, or rewritten."""
+
+    enabled: bool = Field(default=False, description="Publish checkpoints.")
+    interval_s: float = Field(
+        default=3600.0,
+        gt=0,
+        description="Queue a checkpoint this often. Entries newer than the latest published "
+        "checkpoint are not covered.",
+    )
+    streams: tuple[Literal["actions", "reads"], ...] = Field(
+        default=("actions", "reads"),
+        min_length=1,
+        description="Audit streams checkpointed: actions (audit_log), reads (audit_read_log).",
+    )
+    signing_key: SecretValue | None = Field(
+        default=None,
+        description="Ed25519 private key in PEM (openssl genpkey -algorithm ed25519), usually "
+        "secret://file//run/secrets/checkpoint.pem. Verifiers need only its public key.",
+    )
+    key_id: str = Field(
+        default="main", min_length=1, description="Name of the key, recorded in checkpoints."
+    )
+    prefix: str = Field(
+        default="lorebase-audit/",
+        description="Prefix of the object names: {prefix}{stream}/{UTC time}.json.",
+    )
+    sink: Literal["file", "http", "s3"] = Field(
+        default="file", description="Where checkpoints go: file, http or s3."
+    )
+    directory: str | None = Field(
+        default=None,
+        description="Directory of the file sink, on storage the database host cannot write "
+        "(a separate volume, or a mounted object store).",
+    )
+    http: CheckpointHttpSettings = Field(default_factory=CheckpointHttpSettings)
+    s3: CheckpointS3Settings = Field(default_factory=CheckpointS3Settings)
+
+    @field_validator("prefix")
+    @classmethod
+    def _relative(cls, value: str) -> str:
+        if value.startswith("/") or "\\" in value or ".." in value.split("/"):
+            raise ValueError("prefix must be a relative name without '..'")
+        return value
+
+    @model_validator(mode="after")
+    def _complete(self) -> Self:
+        if not self.enabled:
+            return self
+        missing = []
+        if self.signing_key is None:
+            missing.append("signing_key")
+        if self.sink == "file" and not self.directory:
+            missing.append("directory")
+        if self.sink == "http" and not self.http.url:
+            missing.append("http.url")
+        if self.sink == "s3":
+            for name in ("endpoint", "bucket", "access_key_id", "secret_access_key"):
+                if getattr(self.s3, name) is None:
+                    missing.append(f"s3.{name}")
+        if missing:
+            raise ValueError(f"enabled checkpoints need {', '.join(missing)}")
+        if self.signing_key is not None:
+            try:
+                load_private_key(self.signing_key.get_secret_value())
+            except CheckpointError as error:
+                raise ValueError(f"signing_key: {error}") from None
+        return self
+
+
 class ScribeSettings(SectionModel):
     """Scribe, the ingestion and maintenance worker."""
 
@@ -358,6 +489,7 @@ class ScribeSettings(SectionModel):
     sources: SourceSettings = Field(default_factory=SourceSettings)
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
     embeddings: EmbeddingJobSettings = Field(default_factory=EmbeddingJobSettings)
+    audit_checkpoints: AuditCheckpointSettings = Field(default_factory=AuditCheckpointSettings)
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

@@ -9,13 +9,17 @@ or was denied (401, 403 when `audit.record_denied`).
 Writing happens after the response has been produced and never changes it: a failed or slow
 write is logged, counted in the `lorebase.audit.write_failures` metric, and dropped. Request
 bodies, headers and credentials are never recorded.
+
+With a `ReadAuditor` (`audit.reads.enabled`), successful reads (GET and HEAD, and the POST
+routes that only read: `keeper.limits.rate.routes`) of an authenticated caller are handed to
+it, with the sensitive values the request showed or masked (`read_audit.collecting`).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +30,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lorebase_keeper.auth.config import AuditSettings
 from lorebase_keeper.auth.ports import AuthStore
+from lorebase_keeper.auth.read_audit import READ_ACTION, ReadAuditor, ReadNotes, collecting
 from lorebase_keeper.errors import request_id_of
 from lorebase_store.auth import NewAuditEntry
 
@@ -46,6 +51,7 @@ class AuditDraft:
     action: str | None = None
     target: str | None = None
     permission: str | None = None
+    principal_type: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
     suppressed: bool = False
 
@@ -65,6 +71,7 @@ def annotate(
     action: str | None = None,
     target: str | None = None,
     permission: str | None = None,
+    principal_type: str | None = None,
     **details: Any,
 ) -> None:
     """Add facts to the request's audit entry. Later calls overwrite earlier values."""
@@ -77,6 +84,7 @@ def annotate(
         ("action", action),
         ("target", target),
         ("permission", permission),
+        ("principal_type", principal_type),
     ):
         if value is not None:
             setattr(draft, name, value)
@@ -134,16 +142,30 @@ class AuditWriter:
         return True
 
 
+ReadClassifier = Callable[[str, str], bool]
+"""Whether a request (method, route template without the API prefix) only reads."""
+
+
 class AuditMiddleware:
-    """Records one audit entry per mutating or denied request."""
+    """Records one audit entry per mutating or denied request, and hands reads to the read
+    auditor when there is one."""
 
     def __init__(
-        self, app: ASGIApp, *, writer: AuditWriter, settings: AuditSettings, api_prefix: str = ""
+        self,
+        app: ASGIApp,
+        *,
+        writer: AuditWriter,
+        settings: AuditSettings,
+        api_prefix: str = "",
+        reads: ReadAuditor | None = None,
+        is_read: ReadClassifier | None = None,
     ) -> None:
         self.app = app
         self._writer = writer
         self._record_denied = settings.record_denied
         self._api_prefix = api_prefix
+        self._reads = reads
+        self._is_read = is_read
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -160,13 +182,55 @@ class AuditMiddleware:
                 status = message["status"]
             await send(message)
 
-        try:
-            await self.app(scope, receive, send_and_note)
-        finally:
-            entry = self._entry(scope, draft, status)
-            if entry is not None:
-                # Shielded: a client disconnect must not cancel the write half way.
-                await asyncio.shield(self._writer.write(entry))
+        with collecting() as notes:
+            try:
+                await self.app(scope, receive, send_and_note)
+            finally:
+                entry = self._entry(scope, draft, status)
+                if entry is not None:
+                    # Shielded: a client disconnect must not cancel the write half way.
+                    await asyncio.shield(self._writer.write(entry))
+                elif self._reads is not None:
+                    self._offer_read(scope, draft, status, notes)
+
+    def _offer_read(self, scope: Scope, draft: AuditDraft, status: int, notes: ReadNotes) -> None:
+        """Hand a successful read of an authenticated caller to the read auditor."""
+        reads = self._reads
+        if reads is None or draft.suppressed or draft.actor is None or not 200 <= status < 300:
+            return
+        route = self._route_template(scope)
+        relative = route[len(self._api_prefix) :] if route.startswith(self._api_prefix) else route
+        if self._is_read is None or not self._is_read(scope["method"], relative or "/"):
+            return
+        kind = _path_param(scope, "kind")
+        sensitive = sorted(notes.sensitive)
+        if not reads.wants(draft.principal_type, kind, bool(sensitive)):
+            return
+        details: dict[str, Any] = {
+            "outcome": "success",
+            "status": status,
+            "method": scope["method"],
+            "route": route,
+        }
+        if draft.principal_type:
+            details["principal_type"] = draft.principal_type
+        if kind:
+            details["kind"] = kind
+        if sensitive:
+            details["sensitive"] = sensitive
+        if draft.permission:
+            details["permission"] = draft.permission
+        if request_id := request_id_of(scope.get("state")):
+            details["request_id"] = request_id
+        reads.offer(
+            NewAuditEntry(
+                actor=draft.actor,
+                action=READ_ACTION,
+                domain_id=draft.domain_id or _path_param(scope, "domain_id"),
+                target=draft.target or kind,
+                details=details,
+            )
+        )
 
     def _route_template(self, scope: Scope) -> str:
         """Route path with its parameters unexpanded, including the API prefix."""

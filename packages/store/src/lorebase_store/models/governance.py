@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Double,
     ForeignKey,
     Identity,
     Index,
@@ -183,7 +184,21 @@ class OperationInvocation(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
 
 
-class AuditEntry(Base):
+class _AuditColumns:
+    """Columns of a hash-chained audit table."""
+
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    domain_id: Mapped[str | None]
+    at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    actor: Mapped[str]
+    action: Mapped[str]
+    target: Mapped[str | None]
+    details: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    prev_hash: Mapped[H32 | None]
+    entry_hash: Mapped[H32]
+
+
+class AuditEntry(_AuditColumns, Base):
     """Hash-chained audit entry: `entry_hash = sha256(prev_hash || canonical entry)`.
 
     `domain_id` is null for installation-wide actions and has no foreign key, so audit
@@ -197,12 +212,38 @@ class AuditEntry(Base):
         Index(None, "entry_hash", unique=True),
     )
 
-    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    domain_id: Mapped[str | None]
-    at: Mapped[datetime] = mapped_column(server_default=text("now()"))
-    actor: Mapped[str]
-    action: Mapped[str]
-    target: Mapped[str | None]
-    details: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
-    prev_hash: Mapped[H32 | None]
-    entry_hash: Mapped[H32]
+
+class AuditReadEntry(_AuditColumns, Base):
+    """Hash-chained record of a read (`keeper.auth.audit.reads`), chained like `audit_log` but
+    in chains of its own, so sampled, best-effort read records never touch the chains of
+    actions."""
+
+    __tablename__ = "audit_read_log"
+    __table_args__ = (
+        h32_check("entry_hash"),
+        Index(None, "domain_id", "seq"),
+        Index(None, "entry_hash", unique=True),
+    )
+
+
+class RateLimitBucket(Base):
+    """Shared token bucket of Keeper's rate limits (`keeper.limits.rate.backend: postgres`).
+
+    UNLOGGED: buckets are lost on a crash of the server and start full again. `key` is the
+    SHA-256 of the bucket name, so client addresses and principal ids are not stored;
+    `full_at` (epoch seconds) is when the bucket will be full, after which the row is
+    redundant and may be deleted.
+    """
+
+    __tablename__ = "rate_limit_buckets"
+    __table_args__ = (
+        h32_check("key"),
+        Index(None, "full_at"),
+        {"prefixes": ["UNLOGGED"]},
+    )
+
+    key: Mapped[H32] = mapped_column(primary_key=True)
+    tokens: Mapped[float] = mapped_column(Double)
+    updated: Mapped[float] = mapped_column(Double)
+    full_at: Mapped[float] = mapped_column(Double)
+    granted: Mapped[float] = mapped_column(Double)

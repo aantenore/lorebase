@@ -27,7 +27,7 @@ from lorebase_store.auth import SqlAuthStore
 from lorebase_store.commit import SchemaUpsert, commit
 from lorebase_store.db import create_engine
 from lorebase_store.materialize import create_branch
-from lorebase_store.models import AuditEntry
+from lorebase_store.models import AuditEntry, AuditReadEntry
 from lorebase_store.models.enums import GrantScope, PrincipalType
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
@@ -314,3 +314,29 @@ async def test_early_not_modified_depends_on_the_default_branch_tags(seeded: See
             headers={"Authorization": f"Bearer {key}", "If-None-Match": before},
         )
         assert stale.status_code == 200
+
+
+async def test_sensitive_reads_are_audited_whatever_the_sampling(seeded: Seeded) -> None:
+    facts = seeded.facts
+    section = _section()
+    section["auth"]["audit"] = {"reads": {"enabled": True, "sample_rate": 0}}
+    async with keeper(seeded.app_url, section, vault=VAULT) as http:
+        # the second read of the viewer is answered from the response cache
+        for name in ("viewer", "viewer", "cleared"):
+            _values(await _get(http, facts[name], RECORD))
+        branches = await _get(http, facts["viewer"], "/branches")
+        assert branches.status_code == 200, branches.text  # no values: sampled out
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        rows = (
+            await session.execute(
+                select(AuditReadEntry.domain_id, AuditReadEntry.details).order_by(
+                    AuditReadEntry.seq
+                )
+            )
+        ).all()
+    # the pii reader sees the pii values; a confidential Attribute stays masked for it
+    expected = [["masked"], ["masked"], ["masked", "shown"]]
+    assert [row.details["sensitive"] for row in rows] == expected
+    assert {row.domain_id for row in rows} == {DOMAIN}
+    assert not any(secret in str(rows) for secret in SECRETS)

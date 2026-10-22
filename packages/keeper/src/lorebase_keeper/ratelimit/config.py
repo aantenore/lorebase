@@ -68,6 +68,15 @@ class RouteClassing(SectionModel):
         description="POST routes ending in one of these only read: they are `reads`.",
     )
 
+    def only_reads(self, method: str, route_path: str) -> bool:
+        """Whether a request only reads: GET, HEAD, or a POST search, context or read route
+        (the reads recorded by `keeper.auth.audit.reads`)."""
+        if method in ("GET", "HEAD"):
+            return True
+        return method == "POST" and route_path.endswith(
+            (*self.search_suffixes, *self.context_suffixes, *self.read_post_suffixes)
+        )
+
 
 class AuthFailureSettings(BucketSettings):
     """Buckets of failed authentications: one per client address and, unless
@@ -109,16 +118,68 @@ class ThrottleAuditSettings(SectionModel):
     max_tracked: int = Field(default=10_000, ge=1, description="Principals counted at once.")
 
 
+class PostgresRateSettings(SectionModel):
+    """The shared backend (`backend: postgres`): buckets in the UNLOGGED `rate_limit_buckets`
+    table of the application database, leased to each Keeper a few tokens at a time."""
+
+    lease_tokens: int = Field(
+        default=10,
+        ge=1,
+        description="Tokens a Keeper takes from a shared bucket per round trip and then serves "
+        "from memory; at most a quarter of the bucket (at least 1). Larger leases mean fewer "
+        "queries; unused leased tokens are lost when the lease expires, which only makes the "
+        "limit stricter. Failed-authentication buckets always take one token at a time.",
+    )
+    lease_ttl_s: float = Field(
+        default=2.0,
+        gt=0,
+        description="Leased tokens not used within this time are dropped, so an idle Keeper "
+        "does not hold a principal's tokens back.",
+    )
+    timeout_s: float = Field(
+        default=0.25,
+        gt=0,
+        description="Time budget of one query to the shared buckets; slower counts as failed.",
+    )
+    on_error: Literal["local", "allow", "deny"] = Field(
+        default="local",
+        description="When the database fails or is slow: `local` enforces the limits in this "
+        "process meanwhile (as backend local), `allow` lets the request through, `deny` "
+        "answers 429. Failed-authentication buckets always fail closed (429).",
+    )
+    error_retry_after_s: int = Field(
+        default=1,
+        ge=1,
+        description="Retry-After of a request refused because the shared buckets could not be "
+        "read (`deny`, and failed-authentication buckets).",
+    )
+    check_cache_s: float = Field(
+        default=1.0,
+        ge=0,
+        description="How long a reading of a failed-authentication bucket serves the checks "
+        "made before each authentication (which take nothing). Failures themselves are always "
+        "written at once.",
+    )
+    prune_interval_s: float = Field(
+        default=60.0,
+        gt=0,
+        description="How often each Keeper deletes rows of buckets that are full again.",
+    )
+    prune_batch: int = Field(default=1000, ge=1, description="Rows deleted per prune.")
+
+
 class RateLimitSettings(SectionModel):
     """Token buckets per principal and request class (design 13.6)."""
 
     enabled: bool = Field(default=True, description="Apply rate limits.")
-    backend: Literal["memory"] = Field(
-        default="memory",
-        description="Where bucket state lives. `memory` is per process: with N Keeper "
-        "processes a principal may use up to N times the limits. A shared store (Valkey or "
-        "Redis) implements `lorebase_keeper.ratelimit.RateStore` and joins this list.",
+    backend: Literal["local", "memory", "postgres"] = Field(
+        default="local",
+        description="Where bucket state lives. `local` (`memory` is an alias) is per process: "
+        "with N Keeper processes a principal may use up to N times the limits. `postgres` "
+        "shares the buckets of every Keeper through the application database (see "
+        "`postgres`); use it with more than one Keeper.",
     )
+    postgres: PostgresRateSettings = Field(default_factory=PostgresRateSettings)
     max_buckets: int = Field(
         default=100_000, ge=1, description="Buckets kept in memory; the least recently used go."
     )

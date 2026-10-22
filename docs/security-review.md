@@ -371,6 +371,67 @@ default of the form `tag@sha256:<index digest>`, the multi-arch index so amd64 a
 get the same content; [release](release.md#base-images) describes the bump. Test:
 `tests/tooling/test_dockerfile_pins.py` fails on an external `FROM` without a 64-hex digest.
 
+**Shared rate limits across Keepers** (`packages/keeper/src/lorebase_keeper/ratelimit/shared.py`,
+`packages/store/src/lorebase_store/ratelimit.py`, revision `0022`). With
+`keeper.limits.rate.backend: postgres` the token buckets live in the UNLOGGED `rate_limit_buckets`
+table, keyed by the SHA-256 of the bucket name (client addresses and principal ids are not
+stored). One upsert refills a bucket on the database clock and leases up to `lease_tokens` whole
+tokens (at most a quarter of the bucket) to the Keeper, which serves requests from memory until
+the lease is used or expires (`lease_ttl_s`); tokens leave the shared bucket only through leases,
+so all Keepers together never exceed a limit. Failed-authentication buckets lease one token per
+failure, are read before each authentication from a reading at most `check_cache_s` old, and fail
+closed (429) when the database does not answer within `timeout_s`; other buckets follow
+`on_error` (`local` by default: the in-process buckets meanwhile). The Helm chart sets the backend
+when `replicaCount > 1` or the HPA is on. Tests:
+`packages/store/tests/test_ratelimit_buckets_integration.py` (concurrent leases never exceed the
+bucket, refill, prune, names not stored), `packages/keeper/tests/ratelimit/test_shared_store.py`
+(local, allow, deny, fail closed on a slow database),
+`packages/keeper/tests/integration/test_limits_postgres.py` (two applications on one database
+share a bucket and the failed-authentication buckets), `tests/tooling/test_helm_db_roles.py`.
+
+**Read auditing** (`packages/keeper/src/lorebase_keeper/auth/read_audit.py`, `auth/audit.py`,
+revision `0022`). With `keeper.auth.audit.reads.enabled` the audit middleware hands every
+successful read of an authenticated caller (GET, HEAD and the read-only POST routes of
+`keeper.limits.rate.routes`) to a bounded queue; a background task writes batches in one
+transaction to `audit_read_log`. The read stream has hash chains of its own, per Domain and
+installation-wide, rather than sharing those of `audit_log`: reads are sampled and dropped under
+pressure, so their volume and gaps must not touch the chains of actions, whose appends (inside
+commits too) would otherwise wait on read traffic for the chain lock; each stream is verified,
+checkpointed and kept for its own retention. Filters (`principal_types`, `kinds`) and
+`sample_rate` apply except to reads that showed or masked a sensitive value: the masking and
+vault disclosure code notes those in a context variable of the request, and cached bodies carry
+the notes of their first rendering. Records hold the route template, never query strings, bodies
+or values. A full queue or a failed batch drops records, counted in
+`lorebase.audit.reads.dropped` by reason. The table is append-only for the application role like
+`audit_log` (compose `db-roles` and the chart's `db-roles.py` included). Tests:
+`packages/keeper/tests/auth/test_read_audit.py`,
+`packages/keeper/tests/integration/test_sensitivity_api.py` (masked and cleared reads recorded at
+`sample_rate: 0`, cached answers included, no value in the records),
+`packages/store/tests/auth/test_audit_streams_integration.py`,
+`packages/store/tests/auth/test_audit_append_only_integration.py`.
+
+**Audit chain checkpoints outside the database**
+(`packages/store/src/lorebase_store/auth/checkpoints.py`,
+`packages/scribe/src/lorebase_scribe/checkpoints.py`, `packages/keeper/src/lorebase_keeper/__main__.py`).
+An `audit_checkpoint` job, queued every `scribe.audit_checkpoints.interval_s` by the scheduler
+leader, reads the newest entry of every chain of each stream and writes a JSON checkpoint signed
+with Ed25519 over its RFC 8785 form. Sinks: a file that is never replaced (written to a temporary
+name, synced and hard-linked into place, refused outside the directory); an HTTP PUT or POST;
+or an S3-compatible PUT signed with Signature Version 4. HTTP targets pass the checks of webhook
+targets (`check_target`: allowed schemes, every address global unicast unless
+`allow_private_targets`, connection pinned to the checked address with the host name kept for
+TLS, no redirects, no proxy from the environment, response body never read). The signing key is
+a secret reference, refused at start unless it is an Ed25519 PEM. `audit verify --checkpoints
+PATH --checkpoint-key PUB` verifies each checkpoint's signature (a file that does not verify is
+reported and fails the run) and reports checkpointed entries that are missing or whose hash
+changed, which a table owner cutting a chain's tail or recomputing a chain cannot hide without
+the signing key. Tests: `packages/store/tests/auth/test_audit_streams_integration.py` (truncation
+and rewrite detected, forged and altered documents refused),
+`packages/scribe/tests/test_checkpoint_sinks.py` (the published Signature Version 4 example,
+file sink never replaces or escapes, pinned HTTP, private targets, schemes and redirects refused,
+settings), `packages/scribe/tests/integration/test_audit_checkpoints.py`,
+`packages/keeper/tests/test_main.py`.
+
 **Helm chart: the services no longer connect as the table owner**
 (`deploy/helm/lorebase/templates/_helpers.tpl`, `templates/migrate.yaml`,
 `deploy/helm/lorebase/files/db-roles.py`). The chart ran the migration Job, Keeper and Scribe with

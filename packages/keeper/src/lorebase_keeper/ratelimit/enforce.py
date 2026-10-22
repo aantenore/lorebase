@@ -19,6 +19,7 @@ from typing import Any, cast
 
 from fastapi import Request, Response
 from opentelemetry.metrics import MeterProvider
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -33,6 +34,8 @@ from lorebase_keeper.ratelimit.bucket import Decision, InMemoryRateStore
 from lorebase_keeper.ratelimit.config import QuotaSettings, RateLimitSettings, RouteClass
 from lorebase_keeper.ratelimit.limiter import AUTH_FAILURES, RateLimiter, ThrottleWatch
 from lorebase_keeper.ratelimit.quotas import QuotaKind, QuotaSnapshot, QuotaTracker
+from lorebase_keeper.ratelimit.shared import PostgresRateStore
+from lorebase_platform.settings import ConfigError
 from lorebase_store.auth import NewAuditEntry
 
 logger = logging.getLogger("lorebase.keeper.limits")
@@ -57,6 +60,7 @@ class LimitRuntime:
     quotas: QuotaTracker | None
     watch: ThrottleWatch | None
     auth: AuthRuntime
+    stores: tuple[PostgresRateStore, ...] = ()
 
     def exempt(self, route_path: str) -> bool:
         """Whether the route (path template without the API prefix) is neither limited nor
@@ -67,6 +71,35 @@ class LimitRuntime:
         """Write the counted use that is still in memory."""
         if self.quotas is not None:
             await self.quotas.aclose()
+        for store in self.stores:
+            await store.aclose()
+
+
+def _shared_stores(
+    rate: RateLimitSettings,
+    sessions: async_sessionmaker[AsyncSession],
+    meter_provider: MeterProvider | None,
+) -> tuple[PostgresRateStore, PostgresRateStore]:
+    """The shared stores of principals' buckets and of failed authentications."""
+    principals = PostgresRateStore(
+        sessions,
+        rate.postgres,
+        max_buckets=rate.max_buckets,
+        fallback=InMemoryRateStore(rate.max_buckets),
+        prune=True,
+        label="principals",
+        meter_provider=meter_provider,
+    )
+    failures = PostgresRateStore(
+        sessions,
+        rate.postgres,
+        max_buckets=rate.max_buckets,
+        fail_closed=True,
+        lease_tokens=1,
+        label=AUTH_FAILURES,
+        meter_provider=meter_provider,
+    )
+    return principals, failures
 
 
 def build_limits(
@@ -74,14 +107,29 @@ def build_limits(
     quota: QuotaSettings,
     auth: AuthRuntime,
     *,
+    sessions: async_sessionmaker[AsyncSession] | None = None,
     meter_provider: MeterProvider | None = None,
 ) -> LimitRuntime | None:
-    """The components for the settings; `None` when neither limit applies."""
-    limiter = (
-        RateLimiter(rate, InMemoryRateStore(rate.max_buckets), meter_provider=meter_provider)
-        if rate.enabled
-        else None
-    )
+    """The components for the settings; `None` when neither limit applies. The `postgres`
+    backend needs `sessions` on the application database."""
+    limiter: RateLimiter | None = None
+    stores: tuple[PostgresRateStore, ...] = ()
+    if rate.enabled and rate.backend == "postgres":
+        if sessions is None:
+            raise ConfigError(
+                [
+                    "keeper.limits.rate.backend: postgres needs a database; configure the database "
+                    "section or use backend local"
+                ]
+            )
+        stores = _shared_stores(rate, sessions, meter_provider)
+        limiter = RateLimiter(
+            rate, stores[0], failure_store=stores[1], meter_provider=meter_provider
+        )
+    elif rate.enabled:
+        limiter = RateLimiter(
+            rate, InMemoryRateStore(rate.max_buckets), meter_provider=meter_provider
+        )
     quotas = (
         QuotaTracker(quota, auth.store, clock=auth.clock, meter_provider=meter_provider)
         if quota.enabled and auth.store is not None and auth.settings.uses_api_keys
@@ -95,7 +143,7 @@ def build_limits(
         if audit.threshold > 0
         else None
     )
-    return LimitRuntime(rate, quota, limiter, quotas, watch, auth)
+    return LimitRuntime(rate, quota, limiter, quotas, watch, auth, stores)
 
 
 def limits_of(request: Request) -> LimitRuntime | None:

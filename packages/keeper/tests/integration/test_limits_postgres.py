@@ -95,3 +95,40 @@ async def test_rate_limits_and_quotas_hold_across_restarts(
         assert over.headers["retry-after"] == str(12 * 3600)
 
     assert await stored_usage(database_url) == [(date(2026, 10, 20), 5, 0)]
+
+
+async def test_two_keepers_share_their_buckets(database_url: str, app_database_url: str) -> None:
+    key = await seed(database_url)
+    headers = {"Authorization": f"Bearer {key}"}
+    limits: dict[str, Any] = {
+        "rate": {
+            "backend": "postgres",
+            "admin": {"requests_per_minute": SLOW, "burst": 8},
+            "auth_failures": {"requests_per_minute": SLOW, "burst": 3},
+            "postgres": {"lease_tokens": 2, "check_cache_s": 0},
+        },
+        "quota": {"enabled": False},
+    }
+    async with (
+        running(app_database_url, limits) as one,
+        running(app_database_url, limits) as two,
+    ):
+        keepers = (one, two)
+        statuses = [
+            (await keepers[n % 2].get(f"{BASE}/grants", headers=headers)).status_code
+            for n in range(12)
+        ]
+        # each Keeper alone would allow 8; together they share one bucket of 8
+        assert statuses == [200] * 8 + [429] * 4
+
+        wrong = {"Authorization": f"Bearer {key[:-4]}abcd"}
+        failures = [(await keepers[n % 2].get(WHOAMI, headers=wrong)).status_code for n in range(5)]
+        assert failures == [401, 401, 401, 429, 429]
+
+    engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+    try:
+        async with engine.connect() as connection:
+            stored = await connection.execute(text("SELECT count(*) FROM rate_limit_buckets"))
+            assert stored.scalar_one() >= 2  # the admin bucket and the failure buckets
+    finally:
+        await engine.dispose()
