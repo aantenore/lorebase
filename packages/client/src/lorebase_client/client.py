@@ -387,10 +387,29 @@ class SchemaApi(_Resource):
         )
 
     def infer_files(
-        self, domain: str, files: Mapping[str, bytes], *, options: JsonObject | None = None
+        self,
+        domain: str,
+        files: Mapping[str, bytes],
+        *,
+        options: JsonObject | None = None,
+        records_path: str | None = None,
     ) -> dict[str, Any]:
-        """Propose a schema from CSV or TSV files (file name to content)."""
-        return self._c.send(ep.infer_schema_files(domain, files, options=options))
+        """Propose a schema from data files (file name to content); `records_path` (dotted keys)
+        locates the records array of JSON documents that hold it under a key."""
+        return self._c.send(
+            ep.infer_schema_files(domain, files, options=options, records_path=records_path)
+        )
+
+    def preview_files(
+        self,
+        domain: str,
+        files: Mapping[str, bytes],
+        *,
+        rows: int | None = None,
+        records_path: str | None = None,
+    ) -> dict[str, Any]:
+        """The first rows of each data file as Keeper reads them; nothing is stored."""
+        return self._c.send(ep.preview_files(domain, files, rows=rows, records_path=records_path))
 
     def suggestions(
         self,

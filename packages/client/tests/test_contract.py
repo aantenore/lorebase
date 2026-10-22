@@ -314,6 +314,7 @@ def sample_calls() -> list[Any]:
         ep.add_trace_note("s1", m.NoteRequest(text="x")),
         ep.infer_schema_postgres(d, {"postgres": {"dsn": "secret://env/ERP_DSN"}}),
         ep.infer_schema_files(d, {"parts.csv": b"id\n1\n"}),
+        ep.preview_files(d, {"parts.parquet": b"PAR1"}, rows=5),
         ep.create_proposal(d, m.ProposalCreate(source_ref="a", target_ref="b", title="t")),
         ep.list_proposals(d),
         ep.get_proposal(d, "p"),

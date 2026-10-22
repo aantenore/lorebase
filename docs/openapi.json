@@ -2729,7 +2729,7 @@
           "schema"
         ],
         "summary": "Propose a schema from tables or data files",
-        "description": "Profile the uploaded files (CSV, TSV, JSON, JSON Lines, Parquet) or the Postgres tables\nand propose Kinds, typed Attributes, keys and Relations with evidence. Deterministic and\nmodel-free; nothing is written.",
+        "description": "Profile the uploaded files (CSV, TSV, JSON, JSON Lines, Parquet) or the tables of a\nPostgres, MySQL, MariaDB or SQL Server source and propose Kinds, typed Attributes, keys and\nRelations with evidence. Deterministic and model-free; nothing is written.",
         "operationId": "infer_api_v1_domains__domain_id__schema_infer_post",
         "security": [
           {
@@ -2848,6 +2848,10 @@
                   "options": {
                     "type": "string",
                     "description": "JSON object of InferenceOptions overrides."
+                  },
+                  "records_path": {
+                    "type": "string",
+                    "description": "Dotted keys of the records array of JSON documents that hold it under a key, e.g. data.items."
                   }
                 },
                 "required": [
@@ -2881,13 +2885,187 @@
                       "dsn"
                     ]
                   },
+                  "mysql": {
+                    "type": "object",
+                    "description": "A MySQL or MariaDB source, in place of postgres.",
+                    "properties": {
+                      "dsn": {
+                        "type": "string",
+                        "example": "secret://env/ERP_DSN"
+                      },
+                      "schema": {
+                        "type": "string"
+                      },
+                      "tables": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "dsn"
+                    ]
+                  },
+                  "mssql": {
+                    "type": "object",
+                    "description": "A SQL Server source, in place of postgres.",
+                    "properties": {
+                      "dsn": {
+                        "type": "string",
+                        "example": "secret://env/ERP_DSN"
+                      },
+                      "schema": {
+                        "type": "string"
+                      },
+                      "tables": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "dsn"
+                    ]
+                  },
                   "options": {
                     "type": "object",
                     "description": "InferenceOptions overrides."
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/schema:preview": {
+      "post": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Read the first rows of uploaded data files",
+        "description": "Return the first rows of each uploaded file (CSV, TSV, JSON, JSON Lines, Parquet) as\nrecords, under the permission and size limits of `schema:infer`. Nothing is stored; a\nclient uses it to show the rows of a format it cannot read itself.",
+        "operationId": "preview_api_v1_domains__domain_id__schema_preview_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "rows",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Rows per file; default and cap are settings.",
+              "title": "Rows"
+            },
+            "description": "Rows per file; default and cap are settings."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks schema.write in the Domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A file or the upload is too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid files, source or options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The source database cannot be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "CSV, TSV, JSON, JSON Lines or Parquet files, read by suffix."
+                  },
+                  "records_path": {
+                    "type": "string",
+                    "description": "Dotted keys of the records array of JSON documents that hold it under a key, e.g. data.items."
+                  }
                 },
                 "required": [
-                  "postgres"
+                  "files"
                 ]
               }
             }
@@ -13835,6 +14013,50 @@
         "title": "FieldProblem",
         "description": "One invalid request member."
       },
+      "FilePreviewOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "Records; dates and decimals as text, nested values as JSON."
+          },
+          "row_count": {
+            "type": "integer",
+            "title": "Row Count",
+            "description": "Rows in the file (those read, for CSV and JSON Lines)."
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "Whether the file has more rows than `rows` returned."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "columns",
+          "rows",
+          "row_count",
+          "truncated"
+        ],
+        "title": "FilePreviewOut",
+        "description": "The first rows of one uploaded file."
+      },
       "FingerprintedResolutionIn": {
         "properties": {
           "choice": {
@@ -16197,6 +16419,28 @@
           "relation"
         ],
         "title": "PartitionType"
+      },
+      "PreviewOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/FilePreviewOut"
+            },
+            "type": "array",
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "files"
+        ],
+        "title": "PreviewOut",
+        "description": "First rows of uploaded files; nothing is stored."
       },
       "PrincipalOut": {
         "properties": {

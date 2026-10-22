@@ -1,9 +1,10 @@
 """Profilers of structured sources for schema inference (``lorebase_core.infer``).
 
-They read CSV and TSV files (``delimited``), Postgres tables (``postgres``), rows read as
-records (``records``: JSON, JSON Lines, Parquet and API Sources, whose readers live in Scribe)
-and uploaded JSON, JSON Lines and Parquet files (``record_files``) into ``TableProfile``
-objects. Limits come from the ``store.profiling`` settings.
+They read CSV and TSV files (``delimited``), Postgres tables (``postgres``), MySQL, MariaDB
+and SQL Server tables (``sql_databases``), rows read as records (``records``: JSON, JSON Lines,
+Parquet and API Sources, whose readers live in Scribe) and uploaded JSON, JSON Lines and
+Parquet files (``record_files``) into ``TableProfile`` objects.
+Limits come from the ``store.profiling`` settings.
 """
 
 from lorebase_store.profiling.delimited import (
@@ -26,6 +27,12 @@ from lorebase_store.profiling.records import (
     RowSampler,
     profile_records,
 )
+from lorebase_store.profiling.sql_databases import (
+    SqlDialect,
+    SqlDriverError,
+    SqlProfileError,
+    profile_sql_database,
+)
 
 __all__ = [
     "CsvProfileError",
@@ -34,6 +41,9 @@ __all__ = [
     "RecordProfileError",
     "RecordProfiler",
     "RowSampler",
+    "SqlDialect",
+    "SqlDriverError",
+    "SqlProfileError",
     "profile_bytes",
     "profile_file",
     "profile_json_bytes",
@@ -41,6 +51,7 @@ __all__ = [
     "profile_parquet_bytes",
     "profile_postgres",
     "profile_records",
+    "profile_sql_database",
     "profile_text",
     "table_name",
     "type_spec",

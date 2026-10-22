@@ -17,7 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-parquet = ["pyarrow>=15"]  # Parquet uploads of POST schema:infer
+parquet = ["pyarrow>=15"]  # Parquet uploads of POST schema:infer and schema:preview
+mysql = ["asyncmy>=0.2.10"]  # MySQL and MariaDB sources of POST schema:infer
+mssql = ["pymssql>=2.3"]  # SQL Server sources of POST schema:infer
 
 [project.scripts]
 lorebase-keeper = "lorebase_keeper.__main__:main"

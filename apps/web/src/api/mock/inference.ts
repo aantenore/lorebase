@@ -155,6 +155,16 @@ export function createInferenceMock(
           return Promise.reject(error instanceof Error ? error : new Error(String(error)));
         }
       },
+      // Mock mode keeps no data files: only a real Keeper reads Parquet.
+      preview: () =>
+        Promise.reject(
+          problem(
+            422,
+            'Invalid request',
+            'Mock mode cannot read data files; point the app at a Keeper to preview Parquet.',
+            'invalid_request',
+          ),
+        ),
     },
   };
 }

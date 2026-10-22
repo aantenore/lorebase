@@ -601,6 +601,44 @@ describe('live adapter: agents, inference and webhooks', () => {
     expect(calls[0]?.headers['Content-Type']).toBeUndefined();
   });
 
+  it('passes the records path of JSON uploads to schema:infer', async () => {
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/schema:infer': { domain: 'supply', yaml: '' },
+    });
+    await api.inference.infer('supply', {
+      files: [new File(['{}'], 'supplier.json')],
+      recordsPath: 'data.items',
+    });
+    const form = calls[0]?.body;
+    expect(form instanceof FormData && form.get('records_path')).toBe('data.items');
+  });
+
+  it('previews a file on Keeper and returns the first file with the rows cap in the query', async () => {
+    const preview = {
+      name: 'days.parquet',
+      columns: ['id'],
+      rows: [{ id: 1 }],
+      row_count: 9,
+      truncated: true,
+    };
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/schema:preview': { domain: 'supply', files: [preview] },
+    });
+    const answer = await api.inference.preview('supply', new File(['PAR1'], 'days.parquet'), {
+      rows: 5,
+      recordsPath: 'data',
+    });
+    expect(answer).toEqual(preview);
+    expect(calls[0]?.url.search).toBe('?rows=5');
+    const form = calls[0]?.body;
+    expect(form).toBeInstanceOf(FormData);
+    if (!(form instanceof FormData)) return;
+    expect(form.getAll('files').map((f) => (f instanceof File ? f.name : f))).toEqual([
+      'days.parquet',
+    ]);
+    expect(form.get('records_path')).toBe('data');
+  });
+
   it('posts a Postgres source reference to schema:infer as JSON', async () => {
     const { api, calls } = fakeKeeper({
       'POST /domains/supply/schema:infer': { domain: 'supply', yaml: '' },

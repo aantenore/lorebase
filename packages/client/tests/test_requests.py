@@ -1315,7 +1315,9 @@ def test_schema_inference_from_postgres_and_files(http: respx.MockRouter, sleeps
         result = client.schema.infer_postgres(
             "supply", "secret://env/ERP_DSN", tables=["parts"], options={"sample": 10}
         )
-        client.schema.infer_files("supply", {"parts.csv": b"id\nP-1\n"}, options={"sample": 10})
+        client.schema.infer_files(
+            "supply", {"parts.json": b"{}"}, options={"sample": 10}, records_path="data.items"
+        )
     assert result["yaml"] == "kinds: {}\n"
     posted, uploaded = (c.request for c in route.calls)
     assert json.loads(posted.content) == {
@@ -1324,9 +1326,10 @@ def test_schema_inference_from_postgres_and_files(http: respx.MockRouter, sleeps
     }
     assert posted.url.params["format"] == "json"
     assert uploaded.headers["content-type"].startswith("multipart/form-data; boundary=")
-    assert b'name="files"; filename="parts.csv"' in uploaded.content
+    assert b'name="files"; filename="parts.json"' in uploaded.content
     assert b'name="options"' in uploaded.content
-    assert b"id\nP-1\n" in uploaded.content
+    assert b'name="records_path"' in uploaded.content
+    assert b"data.items" in uploaded.content
 
 
 async def test_async_proposals_agents_and_webhooks(http: respx.MockRouter, sleeps: Sleeps) -> None:

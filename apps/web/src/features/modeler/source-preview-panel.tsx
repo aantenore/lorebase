@@ -1,7 +1,10 @@
 import { useState } from 'react';
+import type { KeeperApi } from '@/api/client';
+import { useOptionalKeeperApi } from '@/api/provider';
+import { useOptionalScope } from '@/app/scope';
 import type { SchemaDocument } from './document';
 import { asText, isRecord, typeLabel } from './form-helpers';
-import { mapRows, readSample, type MappedCell, type Sample } from './source-preview';
+import { flatten, mapRows, readSample, type MappedCell, type Sample } from './source-preview';
 
 /** Rows shown, and the part of the file read to find them. */
 const PREVIEW_ROWS = 5;
@@ -24,6 +27,24 @@ function mappableTypes(document: SchemaDocument, kind: string): Record<string, s
   );
 }
 
+/** Parquet cannot be read in the browser: Keeper reads the file and returns its first rows. */
+async function readParquet(
+  file: File,
+  api: KeeperApi | null,
+  domain: string | undefined,
+  flattenSeparator: string,
+): Promise<Sample> {
+  if (api === null || domain === undefined) {
+    return { rows: [], error: 'Parquet files are read by Keeper, which this view is not using.' };
+  }
+  try {
+    const preview = await api.inference.preview(domain, file, { rows: PREVIEW_ROWS });
+    return { rows: preview.rows.map((row) => flatten(row, flattenSeparator)) };
+  } catch (error) {
+    return { rows: [], error: error instanceof Error ? error.message : 'Keeper cannot read it.' };
+  }
+}
+
 async function readFile(file: File): Promise<string> {
   const part = file.slice(0, READ_BYTES);
   const text = await part.text();
@@ -39,8 +60,9 @@ function Cell({ cell }: { cell: MappedCell }) {
 }
 
 /**
- * The first rows of a sample file as the Source would map them onto the target Kind. The file is
- * read in the browser only; nothing is sent to Keeper.
+ * The first rows of a sample file as the Source would map them onto the target Kind. CSV, TSV,
+ * JSON and JSON Lines files are read in the browser only; a Parquet file is sent to Keeper,
+ * which returns its first rows and stores nothing.
  */
 export function SourcePreview({
   name,
@@ -52,6 +74,8 @@ export function SourcePreview({
   document: SchemaDocument;
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const api = useOptionalKeeperApi();
+  const domain = useOptionalScope()?.domain;
   const kind = asText(source['target_kind']);
   const types = mappableTypes(document, kind);
   const columns = Object.keys(types).filter(
@@ -59,6 +83,11 @@ export function SourcePreview({
   );
 
   const read = async (file: File) => {
+    if (/\.parquet$/i.test(file.name)) {
+      const parquet = await readParquet(file, api, domain, asText(source['flatten_separator']));
+      setLoaded({ fileName: file.name, sample: parquet });
+      return;
+    }
     const sample = readSample(file.name, await readFile(file), {
       recordsPath: asText(source['records_path']),
       flattenSeparator: asText(source['flatten_separator']),
@@ -72,15 +101,16 @@ export function SourcePreview({
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted">
-        Pick a sample of the data (CSV, TSV, JSON or JSON Lines) to see its first {PREVIEW_ROWS}{' '}
-        rows mapped onto {kind === '' ? 'the target Kind' : kind} by the mapping above, as edited.
-        The file is read in this browser and is not uploaded.
+        Pick a sample of the data (CSV, TSV, JSON, JSON Lines or Parquet) to see its first{' '}
+        {PREVIEW_ROWS} rows mapped onto {kind === '' ? 'the target Kind' : kind} by the mapping
+        above, as edited. CSV, TSV and JSON files are read in this browser and not uploaded; a
+        Parquet file is sent to Keeper, which returns its first rows and stores nothing.
       </p>
       <label className="flex flex-col gap-1 text-xs font-medium text-muted">
         Sample file for {name}
         <input
           type="file"
-          accept=".csv,.tsv,.json,.jsonl,.ndjson"
+          accept=".csv,.tsv,.json,.jsonl,.ndjson,.parquet"
           className="text-sm text-ink"
           onChange={(event) => {
             const file = event.target.files?.[0];

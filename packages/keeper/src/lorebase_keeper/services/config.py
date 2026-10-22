@@ -195,11 +195,13 @@ class ProposalSettings(SectionModel):
 
 
 class SchemaInferenceSettings(SectionModel):
-    """Schema inference from uploaded files or Postgres tables (design 9.1, tier 0).
+    """Schema inference from uploaded files or Postgres, MySQL, MariaDB and SQL Server tables
+    (design 9.1, tier 0).
 
     Uploads are CSV or TSV text, JSON documents, JSON Lines or Parquet files (Parquet needs the
     `lorebase-keeper[parquet]` extra); they are also bounded by
-    `keeper.limits.max_request_body_bytes`.
+    `keeper.limits.max_request_body_bytes`. A preview returns the first rows of the uploads
+    instead of a proposal, under the same limits.
     """
 
     max_files: int = Field(default=50, ge=1, description="Files accepted by one request.")
@@ -222,15 +224,22 @@ class SchemaInferenceSettings(SectionModel):
     )
     allowed_sources: tuple[str, ...] = Field(
         default=(),
-        description="Secret references (secret://env/NAME, secret://file/PATH) holding Postgres "
-        "URLs that callers may name as sources. The default of every Domain not listed in "
-        "`domain_sources`. Empty: Postgres inference is disabled for those Domains.",
+        description="Secret references (secret://env/NAME, secret://file/PATH) holding Postgres, "
+        "MySQL, MariaDB or SQL Server URLs that callers may name as sources. The default of every "
+        "Domain not listed in `domain_sources`. Empty: database inference is disabled for those "
+        "Domains.",
     )
     domain_sources: dict[DomainSlug, tuple[str, ...]] = Field(
         default_factory=dict,
         description="Per-Domain source lists keyed by Domain id. A listed Domain may name only "
-        "its own secret references (an empty list disables Postgres inference for it); "
+        "its own secret references (an empty list disables database inference for it); "
         "`allowed_sources` does not apply to it.",
+    )
+    preview_rows: int = Field(
+        default=20, ge=1, description="Rows returned by a preview when the request names none."
+    )
+    preview_max_rows: int = Field(
+        default=200, ge=1, description="Most rows a preview may ask for (422 above)."
     )
     max_issues: int = Field(default=500, ge=1, description="Issues listed in one response.")
     options: InferenceOptions = Field(

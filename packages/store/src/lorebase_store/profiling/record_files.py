@@ -1,11 +1,11 @@
 """Profilers of uploaded record files: JSON documents, JSON Lines and Parquet files.
 
-The bytes are already bounded by the caller (an upload). A JSON document is an array of objects;
-JSON Lines hold one object per line (blank lines skipped); both are UTF-8, with or without a
-byte order mark. Parquet needs pyarrow (an optional extra of the installing package;
-``ParquetUnavailableError`` without it) and is decoded ``batch_rows`` rows at a time. Values
-keep their JSON or Arrow types and nested objects stay JSON values; the table is named after
-the file (``delimited.table_name``).
+The bytes are already bounded by the caller (an upload). A JSON document is an array of
+objects, or holds one at ``records_path`` (dotted keys); JSON Lines hold one object per line
+(blank lines skipped); both are UTF-8, with or without a byte order mark. Parquet needs
+pyarrow (an optional extra of the installing package; ``ParquetUnavailableError`` without it)
+and is decoded ``batch_rows`` rows at a time. Values keep their JSON or Arrow types and nested
+objects stay JSON values; the table is named after the file (``delimited.table_name``).
 """
 
 from __future__ import annotations
@@ -47,14 +47,34 @@ def _profile(
     return profiler.profile(table_name(name))
 
 
-def profile_json_bytes(data: bytes, name: str, settings: RecordProfilingSettings) -> TableProfile:
-    """Profile a JSON document holding an array of objects."""
+def _records_at(document: Any, path: str | None, name: str) -> list[Any]:
+    """The array of records of a JSON document: the document itself, or the array at the dotted
+    key ``path`` (``data.items``); null there is no records."""
+    node = document
+    if path is not None:
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                raise RecordProfileError(f"{name}: no {path!r} in the document")
+            node = node[part]
+        if node is None:
+            return []
+    if not isinstance(node, list):
+        what = "the document" if path is None else repr(path)
+        hint = "" if path is not None else " (give records_path)"
+        raise RecordProfileError(f"{name}: {what} is not an array of records{hint}")
+    return node
+
+
+def profile_json_bytes(
+    data: bytes, name: str, settings: RecordProfilingSettings, records_path: str | None = None
+) -> TableProfile:
+    """Profile a JSON document holding an array of objects, or the array at ``records_path``
+    (dotted keys) of an object."""
     try:
         document = json.loads(_text(data, name))
     except ValueError as error:
         raise RecordProfileError(f"{name}: not valid JSON ({error})") from None
-    if not isinstance(document, list):
-        raise RecordProfileError(f"{name}: the document is not an array of records")
+    document = _records_at(document, records_path, name)
 
     def rows() -> Iterator[Mapping[str, Any]]:
         for number, record in enumerate(document, start=1):

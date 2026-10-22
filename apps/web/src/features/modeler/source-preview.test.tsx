@@ -154,7 +154,7 @@ describe('Source preview', () => {
     renderForm(SourcesForm, document());
     await user.upload(
       screen.getByLabelText('Sample file for approved.suppliers'),
-      new File(['x'], 'data.parquet'),
+      new File(['x'], 'data.xlsx'),
     );
     expect(await screen.findByRole('alert')).toHaveTextContent(/CSV, TSV, JSON/);
   });

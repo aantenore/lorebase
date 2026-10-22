@@ -844,6 +844,18 @@ Rows read as records: JSON, JSON Lines, Parquet, HTTP JSON
 | `store.profiling.postgres.statement_timeout_ms` | `15000` |  |
 | `store.profiling.postgres.exact_row_count` | `false` | true: count(\*) per table; false: planner estimate |
 
+#### `store.profiling.sql`
+
+MySQL, MariaDB and SQL Server tables (drivers: keeper extras)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.profiling.sql.sample_rows` | `10000` | rows read per table (LIMIT / TOP) |
+| `store.profiling.sql.max_tables` | `200` | tables profiled per request |
+| `store.profiling.sql.statement_timeout_ms` | `15000` |  |
+| `store.profiling.sql.connect_timeout_s` | `10.0` |  |
+| `store.profiling.sql.count_rows` | `true` | count(\*) per table so a partial sample is known as such |
+
 ### `store.indexes`
 
 Per-Attribute partial indexes on mat_records

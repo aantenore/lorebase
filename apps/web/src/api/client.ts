@@ -76,7 +76,12 @@ import type {
   ItemListParams,
   UploadDocumentInput,
 } from './extraction-types';
-import type { InferRequest, SchemaProposalDraft } from './inference-types';
+import type {
+  FilePreview,
+  InferRequest,
+  PreviewOptions,
+  SchemaProposalDraft,
+} from './inference-types';
 import type {
   DecideSuggestionsInput,
   DecideSuggestionsResult,
@@ -260,6 +265,12 @@ export interface KeeperApi {
      * proposal as a schema change set.
      */
     infer(domain: DomainId, request: InferRequest): Promise<SchemaProposalDraft>;
+    /**
+     * Reads the first rows of one data file on Keeper (`POST .../schema:preview`), for formats
+     * the browser cannot read (Parquet). Same permission and size limits as `infer`; nothing
+     * is stored.
+     */
+    preview(domain: DomainId, file: File, options?: PreviewOptions): Promise<FilePreview>;
   };
 
   readonly suggestions: {

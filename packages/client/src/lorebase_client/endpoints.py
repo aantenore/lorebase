@@ -256,16 +256,46 @@ def infer_schema_postgres(domain: str, body: Mapping[str, Any]) -> Call[dict[str
 
 
 def infer_schema_files(
-    domain: str, files: Mapping[str, bytes], *, options: Mapping[str, Any] | None = None
+    domain: str,
+    files: Mapping[str, bytes],
+    *,
+    options: Mapping[str, Any] | None = None,
+    records_path: str | None = None,
 ) -> Call[dict[str, Any]]:
-    """Propose a schema from CSV or TSV files (file name to content); the name is the table."""
+    """Propose a schema from data files (file name to content); the name is the table.
+    `records_path` (dotted keys) locates the records array of JSON documents that hold it under
+    a key."""
+    form = {} if not options else {"options": json.dumps(options, separators=(",", ":"))}
+    if records_path is not None:
+        form["records_path"] = records_path
     return Call(
         "POST",
         f"{_domain(domain)}/schema:infer",
         parse_json,
         params={"format": "json"},
         files=tuple(("files", name, data) for name, data in files.items()),
-        form={} if not options else {"options": json.dumps(options, separators=(",", ":"))},
+        form=form,
+        safe=True,
+    )
+
+
+def preview_files(
+    domain: str,
+    files: Mapping[str, bytes],
+    *,
+    rows: int | None = None,
+    records_path: str | None = None,
+) -> Call[dict[str, Any]]:
+    """The first rows of each data file (file name to content) as Keeper reads them; nothing
+    is stored. `rows` per file is capped by Keeper's settings."""
+    form = {} if records_path is None else {"records_path": records_path}
+    return Call(
+        "POST",
+        f"{_domain(domain)}/schema:preview",
+        parse_json,
+        params={"rows": rows},
+        files=tuple(("files", name, data) for name, data in files.items()),
+        form=form,
         safe=True,
     )
 

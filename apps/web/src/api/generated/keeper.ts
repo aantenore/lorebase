@@ -500,11 +500,33 @@ export interface paths {
         put?: never;
         /**
          * Propose a schema from tables or data files
-         * @description Profile the uploaded files (CSV, TSV, JSON, JSON Lines, Parquet) or the Postgres tables
-         *     and propose Kinds, typed Attributes, keys and Relations with evidence. Deterministic and
-         *     model-free; nothing is written.
+         * @description Profile the uploaded files (CSV, TSV, JSON, JSON Lines, Parquet) or the tables of a
+         *     Postgres, MySQL, MariaDB or SQL Server source and propose Kinds, typed Attributes, keys and
+         *     Relations with evidence. Deterministic and model-free; nothing is written.
          */
         post: operations["infer_api_v1_domains__domain_id__schema_infer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/schema:preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the first rows of uploaded data files
+         * @description Return the first rows of each uploaded file (CSV, TSV, JSON, JSON Lines, Parquet) as
+         *     records, under the permission and size limits of `schema:infer`. Nothing is stored; a
+         *     client uses it to show the rows of a format it cannot read itself.
+         */
+        post: operations["preview_api_v1_domains__domain_id__schema_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3131,6 +3153,33 @@ export interface components {
             /** Code */
             code: string;
         };
+        /**
+         * FilePreviewOut
+         * @description The first rows of one uploaded file.
+         */
+        FilePreviewOut: {
+            /** Name */
+            name: string;
+            /** Columns */
+            columns: string[];
+            /**
+             * Rows
+             * @description Records; dates and decimals as text, nested values as JSON.
+             */
+            rows: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Row Count
+             * @description Rows in the file (those read, for CSV and JSON Lines).
+             */
+            row_count: number;
+            /**
+             * Truncated
+             * @description Whether the file has more rows than `rows` returned.
+             */
+            truncated: boolean;
+        };
         /** FingerprintedResolutionIn */
         FingerprintedResolutionIn: {
             /** Choice */
@@ -3998,6 +4047,16 @@ export interface components {
          * @enum {string}
          */
         PartitionType: "schema" | "kind" | "relation";
+        /**
+         * PreviewOut
+         * @description First rows of uploaded files; nothing is stored.
+         */
+        PreviewOut: {
+            /** Domain */
+            domain: string;
+            /** Files */
+            files: components["schemas"]["FilePreviewOut"][];
+        };
         /**
          * PrincipalOut
          * @description A user or service principal.
@@ -7468,12 +7527,28 @@ export interface operations {
                     files: string[];
                     /** @description JSON object of InferenceOptions overrides. */
                     options?: string;
+                    /** @description Dotted keys of the records array of JSON documents that hold it under a key, e.g. data.items. */
+                    records_path?: string;
                 };
                 "application/json": {
-                    postgres: {
+                    postgres?: {
                         /** @example secret://env/ERP_DSN */
                         dsn: string;
                         /** @default public */
+                        schema?: string;
+                        tables?: string[];
+                    };
+                    /** @description A MySQL or MariaDB source, in place of postgres. */
+                    mysql?: {
+                        /** @example secret://env/ERP_DSN */
+                        dsn: string;
+                        schema?: string;
+                        tables?: string[];
+                    };
+                    /** @description A SQL Server source, in place of postgres. */
+                    mssql?: {
+                        /** @example secret://env/ERP_DSN */
+                        dsn: string;
                         schema?: string;
                         tables?: string[];
                     };
@@ -7491,6 +7566,85 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["lorebase_keeper__routes__schema_inference__ProposalOut"];
                     "text/yaml": unknown;
+                };
+            };
+            /** @description The caller lacks schema.write in the Domain. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A file or the upload is too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid files, source or options. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The source database cannot be read. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_api_v1_domains__domain_id__schema_preview_post: {
+        parameters: {
+            query?: {
+                /** @description Rows per file; default and cap are settings. */
+                rows?: number | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** @description CSV, TSV, JSON, JSON Lines or Parquet files, read by suffix. */
+                    files: string[];
+                    /** @description Dotted keys of the records array of JSON documents that hold it under a key, e.g. data.items. */
+                    records_path?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewOut"];
                 };
             };
             /** @description The caller lacks schema.write in the Domain. */

@@ -33,6 +33,11 @@ export function useKeeperApi(): KeeperApi {
   return api;
 }
 
+/** The Keeper API when there is one: for screens that also work without it (tests). */
+export function useOptionalKeeperApi(): KeeperApi | null {
+  return use(ApiContext);
+}
+
 /** The API token of this browser session (live mode); see `createCredentials`. */
 export function useCredentials(): Credentials {
   const credentials = use(CredentialsContext);
