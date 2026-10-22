@@ -275,3 +275,25 @@ def test_upgrade_refuses_an_application_role_that_may_create_in_the_table_schema
         _execute(empty_database_url, f"REVOKE CREATE ON SCHEMA public FROM {application_role}")
     )
     migrations.upgrade(database=database, store=StoreSettings(), url=empty_database_url)
+
+
+@pytest.mark.integration
+def test_read_functions_are_every_definer_function(database_url: str) -> None:
+    """The Helm db-roles.py grants READ_FUNCTIONS, the compose app-role.sh every SECURITY
+    DEFINER function of the owner: both cover the same functions only while this holds."""
+
+    async def definers() -> set[str]:
+        engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+        try:
+            async with engine.connect() as connection:
+                rows = await connection.execute(
+                    text(
+                        "SELECT proname FROM pg_proc WHERE prosecdef "
+                        "AND pronamespace = CAST('public' AS regnamespace)"
+                    )
+                )
+                return set(rows.scalars())
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(definers()) == set(READ_FUNCTIONS)

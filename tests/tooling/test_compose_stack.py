@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
+
+from lorebase_store.definer import READ_FUNCTIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = ROOT / "deploy" / "compose" / "docker-compose.yaml"
@@ -98,6 +101,22 @@ def test_the_application_role_is_created_without_privileges_that_skip_rls() -> N
     roles = services(BASE_ENV)["db-roles"]
     assert roles["environment"]["APP_USER"] == "app"
     assert roles["environment"]["POSTGRES_USER"] == "owner"
+
+
+def test_the_role_script_grants_every_definer_function_from_the_catalog() -> None:
+    script = ROLE_SCRIPT.read_text()
+    # No list of names to keep in step with the migrations and the Helm db-roles.py.
+    assert "p.prosecdef" in script
+    assert not re.search(r"proname\s*(=|IN|ANY)", script)
+    assert not [name for name in READ_FUNCTIONS if name in script]
+
+
+@pytest.mark.skipif(not shutil.which("sh"), reason="no POSIX shell")
+def test_the_role_script_is_valid_shell() -> None:
+    result = subprocess.run(
+        ["sh", "-n", str(ROLE_SCRIPT)], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 GUARD_SCRIPT = ROOT / "deploy" / "compose" / "require-secrets.sh"
