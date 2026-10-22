@@ -780,6 +780,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/derivations:preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview a candidate Derivation
+         * @description Evaluate a Derivation, as edited and not yet saved, on sample Records of its Kind.
+         *
+         *     The candidate schema is checked like a schema change; reading follows Record reads
+         *     (permissions per Kind, masking of sensitive values). Nothing is written.
+         */
+        post: operations["preview_derivation_api_v1_domains__domain_id__derivations_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/health": {
         parameters: {
             query?: never;
@@ -901,6 +924,27 @@ export interface paths {
          * @description Remove a webhook and its pending deliveries.
          */
         delete: operations["delete_webhook_api_v1_domains__domain_id__webhooks__webhook_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/sources:preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview the expression mappings of a candidate Source
+         * @description Evaluate the `expression` mappings of a Source, as edited and not yet saved, on sample
+         *     rows. Nothing is read from the Source and nothing is written.
+         */
+        post: operations["preview_source_api_v1_domains__domain_id__sources_preview_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2632,6 +2676,76 @@ export interface components {
             proposal?: components["schemas"]["SuggestionProposalOut"] | null;
         };
         /**
+         * DerivationPreviewOut
+         * @description Values a candidate Derivation computes on sample Records.
+         */
+        DerivationPreviewOut: {
+            /** Domain */
+            domain: string;
+            /** Branch */
+            branch: string;
+            /**
+             * Revision
+             * @description Revision whose Records were evaluated.
+             */
+            revision: string;
+            /** Served From */
+            served_from: string;
+            /** Derivation */
+            derivation: string;
+            /** Kind */
+            kind: string;
+            /** Attribute */
+            attribute: string;
+            /** Items */
+            items: components["schemas"]["PreviewItemOut"][];
+        };
+        /**
+         * DerivationPreviewRequest
+         * @description A candidate schema change set and the Derivation to evaluate in it.
+         */
+        DerivationPreviewRequest: {
+            /**
+             * Yaml
+             * @description Full schema document; elements it leaves out are removed.
+             */
+            yaml?: string | null;
+            /**
+             * Patch
+             * @description Partial document (same layout as the YAML document): each element replaces the element with the same api name, or is added.
+             */
+            patch?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Remove */
+            remove?: components["schemas"]["ElementRemoval"][];
+            /**
+             * Derivation
+             * @description Api name of the `expression` or `aggregate` Derivation to evaluate in the schema the change set produces.
+             */
+            derivation: string;
+            /**
+             * Branch
+             * @description Default: the default branch.
+             */
+            branch?: string | null;
+            /**
+             * At
+             * @description Revision id, tag or branch name; only the branch head.
+             */
+            at?: string | null;
+            /**
+             * Limit
+             * @description Records to evaluate; default and maximum: `read.derivation_preview`.
+             */
+            limit?: number | null;
+            /**
+             * Keys
+             * @description Keys of the Records to evaluate instead of the first ones by key.
+             */
+            keys?: string[] | null;
+        };
+        /**
          * DerivedCondition
          * @description Compare a derived Attribute with a value.
          */
@@ -3167,6 +3281,15 @@ export interface components {
             updated_revision?: string | null;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /**
+         * ExpressionCellOut
+         * @description The value of one expression mapping for one row, before the transforms.
+         */
+        ExpressionCellOut: {
+            /** @description Null when there is none or `error` is set. */
+            value: components["schemas"]["JsonValue"];
+            error?: components["schemas"]["PreviewErrorOut"] | null;
         };
         /**
          * ExtractionEvidenceOut
@@ -4165,6 +4288,34 @@ export interface components {
          * @enum {string}
          */
         PartitionType: "schema" | "kind" | "relation";
+        /**
+         * PreviewErrorOut
+         * @description Why a value could not be computed for a Record.
+         */
+        PreviewErrorOut: {
+            /** Code */
+            code: string;
+            /**
+             * Message
+             * @description Null when the value is masked: messages quote values.
+             */
+            message: string | null;
+        };
+        /**
+         * PreviewItemOut
+         * @description The computed value for one sample Record.
+         */
+        PreviewItemOut: {
+            /** Key */
+            key: string;
+            /** Title */
+            title: string | null;
+            /** @description The canonical value; null when there is none, the masked value (or null with `keeper.reads.sensitivity.omit`) when `masked`. */
+            value: components["schemas"]["JsonValue"];
+            /** Masked */
+            masked: boolean;
+            error?: components["schemas"]["PreviewErrorOut"] | null;
+        };
         /**
          * PreviewOut
          * @description First rows of uploaded files; nothing is stored.
@@ -5196,6 +5347,79 @@ export interface components {
              * @description The session ends after this long without use.
              */
             idle_timeout_s: number;
+        };
+        /**
+         * SourcePreviewOut
+         * @description Values of the expression mappings of a candidate Source on sample rows.
+         */
+        SourcePreviewOut: {
+            /** Domain */
+            domain: string;
+            /** Branch */
+            branch: string | null;
+            /**
+             * Revision
+             * @description Revision whose schema the change set was applied to.
+             */
+            revision: string;
+            /** Source */
+            source: string;
+            /** Target Kind */
+            target_kind: string;
+            /**
+             * Attributes
+             * @description Attributes mapped by an expression, by api name.
+             */
+            attributes: string[];
+            /**
+             * Rows
+             * @description One entry per row sent: the cell of each Attribute in `attributes`.
+             */
+            rows: {
+                [key: string]: components["schemas"]["ExpressionCellOut"];
+            }[];
+        };
+        /**
+         * SourcePreviewRequest
+         * @description A candidate schema change set, the Source to preview in it and sample rows.
+         */
+        SourcePreviewRequest: {
+            /**
+             * Yaml
+             * @description Full schema document; elements it leaves out are removed.
+             */
+            yaml?: string | null;
+            /**
+             * Patch
+             * @description Partial document (same layout as the YAML document): each element replaces the element with the same api name, or is added.
+             */
+            patch?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Remove */
+            remove?: components["schemas"]["ElementRemoval"][];
+            /**
+             * Source
+             * @description Api name of the Source in the schema the change set produces.
+             */
+            source: string;
+            /**
+             * Rows
+             * @description Sample rows: column name to value (text for CSV, native values for JSON). At most `read.source_preview_max_rows`.
+             */
+            rows: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            /**
+             * Branch
+             * @description Default: the default branch.
+             */
+            branch?: string | null;
+            /**
+             * At
+             * @description Revision id, tag or branch name.
+             */
+            at?: string | null;
         };
         /** SourceRunOut */
         SourceRunOut: {
@@ -8742,6 +8966,68 @@ export interface operations {
             };
         };
     };
+    preview_derivation_api_v1_domains__domain_id__derivations_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DerivationPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DerivationPreviewOut"];
+                };
+            };
+            /** @description The caller lacks data.read for a Kind the Derivation touches, or schema.read. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or Revision not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or a candidate schema that fails validation (`issues` locate why). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     domain_health_api_v1_domains__domain_id__health_get: {
         parameters: {
             query?: {
@@ -9209,6 +9495,68 @@ export interface operations {
                 };
             };
             /** @description Invalid request. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_source_api_v1_domains__domain_id__sources_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourcePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcePreviewOut"];
+                };
+            };
+            /** @description The caller lacks schema.read for the branch. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or Revision not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or a candidate schema that fails validation (`issues` locate why). */
             422: {
                 headers: {
                     [name: string]: unknown;

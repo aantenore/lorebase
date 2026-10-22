@@ -30,6 +30,7 @@ import { createDocumentsMock } from './documents';
 import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
+import { previewDerivation, previewExpressions } from './previews';
 import { createSourcesMock } from './sources';
 import { createSuggestionsMock } from './suggestions';
 import { createTraceMock } from './trace';
@@ -382,6 +383,13 @@ export function createMockApi(options: MockOptions): KeeperApi {
         data.links = evaluation.next.links;
         data.log = [committed, ...data.log];
         return Promise.resolve({ valid, revision: committed.id, violations, migrations });
+      },
+    },
+
+    derivations: {
+      preview: (scope, request) => {
+        const { data } = scoped(scope);
+        return Promise.resolve(previewDerivation(data, request, options.pageSize));
       },
     },
 
@@ -755,7 +763,13 @@ export function createMockApi(options: MockOptions): KeeperApi {
     trace: createTraceMock(),
     documents: documents.api,
     inference: inference.api,
-    sources: sources.api,
+    sources: {
+      ...sources.api,
+      previewExpressions: (scope, request) => {
+        scoped(scope);
+        return Promise.resolve(previewExpressions(request));
+      },
+    },
     suggestions: suggestions.api,
     admin: admin.api,
   };

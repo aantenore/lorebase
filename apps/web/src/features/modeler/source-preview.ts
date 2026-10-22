@@ -256,14 +256,38 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Cannot be mapped.';
 }
 
+/** What Keeper's evaluation of an expression mapping gave for one row, before the transforms. */
+export interface ExpressionResult {
+  value?: unknown;
+  error?: string;
+}
+
+/** The results of the expression mappings of each row, by Attribute, in row order. */
+export type ExpressionResults = Record<string, ExpressionResult>[];
+
+/** The Attributes of a Source mapped by an expression. */
+export function expressionAttributes(source: Doc): string[] {
+  const mapping = isRecord(source['attribute_mapping']) ? source['attribute_mapping'] : {};
+  return Object.entries(mapping)
+    .filter(([, entry]) => isRecord(entry) && typeof entry['expression'] === 'string')
+    .map(([attribute]) => attribute);
+}
+
 /**
  * Maps `rows` the way the Source maps them. `types` holds the type label of each Attribute of
- * the target Kind that a Source can map (derived Attributes left out).
+ * the target Kind that a Source can map (derived Attributes left out). An expression mapping
+ * starts from `expressions`, the values Keeper evaluated for each row: the expression language
+ * is Keeper's, and the transforms and the coercion that follow are applied here.
  */
-export function mapRows(rows: Row[], source: Doc, types: Record<string, string>): MappedRow[] {
+export function mapRows(
+  rows: Row[],
+  source: Doc,
+  types: Record<string, string>,
+  expressions?: ExpressionResults,
+): MappedRow[] {
   const keyColumns = asList(source['key_mapping']).map(asText);
   const mapping = isRecord(source['attribute_mapping']) ? source['attribute_mapping'] : {};
-  return rows.map((row) => {
+  return rows.map((row, index) => {
     const keys = keyColumns.map((column) => row[column]);
     const key: MappedCell = keys.some(isEmpty)
       ? { error: 'The key is empty.' }
@@ -272,12 +296,22 @@ export function mapRows(rows: Row[], source: Doc, types: Record<string, string>)
     for (const [attribute, type] of Object.entries(types)) {
       const entry = mapping[attribute];
       if (!isRecord(entry)) continue;
-      if (typeof entry['expression'] === 'string') {
-        cells[attribute] = { error: 'Expression mappings are not read by Scribe yet.' };
-        continue;
-      }
       try {
-        let value: unknown = row[asText(entry['column'])];
+        let value: unknown;
+        if (typeof entry['expression'] === 'string') {
+          const result = expressions?.[index]?.[attribute];
+          if (result === undefined) {
+            cells[attribute] = { error: 'Keeper has not evaluated the expression yet.' };
+            continue;
+          }
+          if (result.error !== undefined) {
+            cells[attribute] = { error: result.error };
+            continue;
+          }
+          value = result.value;
+        } else {
+          value = row[asText(entry['column'])];
+        }
         for (const transform of asList(entry['transforms'])) {
           if (isRecord(transform)) value = applyTransform(transform, value, row);
         }

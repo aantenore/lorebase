@@ -6,7 +6,7 @@ import { decodeCursor, encodeCursor } from './engine';
 import { buildSourceRuns } from './sample/sources';
 
 export interface SourcesMock {
-  api: KeeperApi['sources'];
+  api: Omit<KeeperApi['sources'], 'previewExpressions'>;
 }
 
 /**
@@ -22,7 +22,7 @@ export function createSourcesMock(
   const runs = new Map(Object.entries(seed));
   let counter = 100;
 
-  const api: KeeperApi['sources'] = {
+  const api: SourcesMock['api'] = {
     runs: (domain, params) => {
       const all = (runs.get(domain) ?? []).filter(
         (r) => params?.source === undefined || r.source === params.source,

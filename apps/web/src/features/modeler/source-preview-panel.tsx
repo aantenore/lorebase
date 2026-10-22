@@ -4,7 +4,15 @@ import { useOptionalKeeperApi } from '@/api/provider';
 import { useOptionalScope } from '@/app/scope';
 import type { SchemaDocument } from './document';
 import { asText, isRecord, typeLabel } from './form-helpers';
-import { flatten, mapRows, readSample, type MappedCell, type Sample } from './source-preview';
+import {
+  expressionAttributes,
+  flatten,
+  mapRows,
+  readSample,
+  type MappedCell,
+  type Sample,
+} from './source-preview';
+import { ExpressionFeed, type ExpressionEvaluation } from './expression-feed';
 
 /** Rows shown, and the part of the file read to find them. */
 const PREVIEW_ROWS = 5;
@@ -61,8 +69,9 @@ function Cell({ cell }: { cell: MappedCell }) {
 
 /**
  * The first rows of a sample file as the Source would map them onto the target Kind. CSV, TSV,
- * JSON and JSON Lines files are read in the browser only; a Parquet file is sent to Keeper,
- * which returns its first rows and stores nothing.
+ * JSON and JSON Lines files are read in the browser; a Parquet file is sent to Keeper, which
+ * returns its first rows and stores nothing. When a mapping uses an expression, the sample rows
+ * are sent to Keeper, which evaluates the expressions (transforms and coercion are applied here).
  */
 export function SourcePreview({
   name,
@@ -95,8 +104,12 @@ export function SourcePreview({
     });
     setLoaded({ fileName: file.name, sample });
   };
+  const [evaluation, setEvaluation] = useState<ExpressionEvaluation>();
+  const sampleRows = loaded?.sample.rows ?? [];
+  const withExpressions = expressionAttributes(source).length > 0;
+  const expressions = withExpressions ? evaluation : undefined;
   // Mapped on every render, so the table follows the edits of the mapping above.
-  const rows = loaded === null ? [] : mapRows(loaded.sample.rows, source, types);
+  const rows = loaded === null ? [] : mapRows(sampleRows, source, types, expressions?.results);
 
   return (
     <div className="flex flex-col gap-3">
@@ -104,7 +117,10 @@ export function SourcePreview({
         Pick a sample of the data (CSV, TSV, JSON, JSON Lines or Parquet) to see its first{' '}
         {PREVIEW_ROWS} rows mapped onto {kind === '' ? 'the target Kind' : kind} by the mapping
         above, as edited. CSV, TSV and JSON files are read in this browser and not uploaded; a
-        Parquet file is sent to Keeper, which returns its first rows and stores nothing.
+        Parquet file is sent to Keeper, which returns its first rows and stores nothing
+        {withExpressions
+          ? '. To evaluate the expressions of the mapping, Keeper receives the sample rows shown below, and nothing else.'
+          : '.'}
       </p>
       <label className="flex flex-col gap-1 text-xs font-medium text-muted">
         Sample file for {name}
@@ -121,6 +137,19 @@ export function SourcePreview({
       {loaded?.sample.error !== undefined && (
         <p role="alert" className="text-sm text-danger">
           {loaded.sample.error}
+        </p>
+      )}
+      {withExpressions && sampleRows.length > 0 && (
+        <ExpressionFeed
+          name={name}
+          document={document}
+          rows={sampleRows}
+          onChange={setEvaluation}
+        />
+      )}
+      {expressions?.error !== undefined && (
+        <p role="alert" className="text-sm text-danger">
+          Keeper could not evaluate the expressions: {expressions.error}
         </p>
       )}
       {loaded !== null && loaded.sample.error === undefined && (

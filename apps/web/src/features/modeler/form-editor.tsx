@@ -31,7 +31,7 @@ export interface FormEditorProps {
   locked: boolean;
   /** Whether an Operation is saved on the Branch exactly as shown, so it can be dry run. */
   savedOperation?: (name: string) => boolean;
-  /** Whether a Derivation is saved on the Branch exactly as shown, so it can be previewed. */
+  /** Whether a Derivation is saved on the Branch exactly as shown (previewed as Records). */
   savedDerivation?: (name: string) => boolean;
 }
 

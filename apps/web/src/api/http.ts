@@ -48,6 +48,7 @@ import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
   Branch,
   HistoryResponse,
+  JsonValue,
   LineageResponse,
   Page,
   PageParams,
@@ -139,6 +140,14 @@ function newestFirst(a: SourceRun, b: SourceRun): number {
 
 function scopeParams(scope: ReadScope): QueryParams {
   return { branch: scope.branch, at: scope.at };
+}
+
+/** The branch and Revision of a scope as members of a request body. */
+function scopeBody(scope: ReadScope) {
+  return {
+    ...(scope.branch === undefined ? {} : { branch: scope.branch }),
+    ...(scope.at === undefined ? {} : { at: scope.at }),
+  };
 }
 
 function pageParams(params?: PageParams): QueryParams {
@@ -289,6 +298,32 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
           }
           throw error;
         }
+      },
+    },
+
+    derivations: {
+      preview: async (scope, request) => {
+        const out = await post<S['DerivationPreviewOut']>(
+          `${d(scope.domain)}/derivations:preview`,
+          {
+            yaml: documentText(request.document),
+            derivation: request.derivation,
+            ...(request.limit === undefined ? {} : { limit: request.limit }),
+            ...scopeBody(scope),
+          },
+        );
+        return {
+          revision: out.revision,
+          kind: out.kind,
+          attribute: out.attribute,
+          items: out.items.map((item) => ({
+            key: item.key,
+            title: item.title,
+            value: item.value as JsonValue,
+            masked: item.masked,
+            error: item.error ?? null,
+          })),
+        };
       },
     },
 
@@ -609,6 +644,25 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
         };
       },
       sync: (domain, source) => post(`${d(domain)}/sources/${enc(source)}/sync`),
+      previewExpressions: async (scope, request) => {
+        const out = await post<S['SourcePreviewOut']>(`${d(scope.domain)}/sources:preview`, {
+          yaml: documentText(request.document),
+          source: request.source,
+          rows: request.rows,
+          ...scopeBody(scope),
+        });
+        return {
+          attributes: out.attributes,
+          rows: out.rows.map((row) =>
+            Object.fromEntries(
+              Object.entries(row).map(([attribute, cell]) => [
+                attribute,
+                { value: cell.value as JsonValue, error: cell.error ?? null },
+              ]),
+            ),
+          ),
+        };
+      },
     },
 
     admin: {

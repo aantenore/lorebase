@@ -1024,4 +1024,59 @@ describe('live adapter: documents and extraction items', () => {
     expect(timeline.steps).toEqual([]);
     expect(calls[1]?.url.searchParams.get('actor')).toBe('svc_herald');
   });
+
+  it('previews an edited Derivation and the expression mappings of a Source', async () => {
+    const { api, calls } = fakeKeeper({
+      'POST /domains/supply/derivations:preview': {
+        domain: 'supply',
+        branch: 'main',
+        revision: 'r1',
+        served_from: 'materialized',
+        derivation: 'single_sourced',
+        kind: 'Part',
+        attribute: 'single_sourced',
+        items: [
+          { key: 'P-1', title: 'Bolt', value: true, masked: false, error: null },
+          { key: 'P-2', title: null, value: '***', masked: true },
+        ],
+      },
+      'POST /domains/supply/sources:preview': {
+        domain: 'supply',
+        branch: 'main',
+        revision: 'r1',
+        source: 'approved.suppliers',
+        target_kind: 'Supplier',
+        attributes: ['legal_name'],
+        rows: [
+          { legal_name: { value: 'Acme (PL)', error: null } },
+          { legal_name: { value: null, error: { code: 'expression.type', message: 'no x' } } },
+        ],
+      },
+    });
+    const preview = await api.derivations.preview(
+      { domain: 'supply', branch: 'model/risk' },
+      { document: { derivations: {} }, derivation: 'single_sourced', limit: 3 },
+    );
+    expect(calls[0]?.body).toEqual({
+      yaml: 'derivations: {}\n',
+      derivation: 'single_sourced',
+      limit: 3,
+      branch: 'model/risk',
+    });
+    expect(preview.items.map((i) => [i.key, i.value, i.masked, i.error])).toEqual([
+      ['P-1', true, false, null],
+      ['P-2', '***', true, null],
+    ]);
+    const mapped = await api.sources.previewExpressions(
+      { domain: 'supply' },
+      { document: {}, source: 'approved.suppliers', rows: [{ a: 'x' }, { a: 'y' }] },
+    );
+    expect(calls[1]?.body).toEqual({
+      yaml: '{}\n',
+      source: 'approved.suppliers',
+      rows: [{ a: 'x' }, { a: 'y' }],
+    });
+    expect(mapped.attributes).toEqual(['legal_name']);
+    expect(mapped.rows[1]?.['legal_name']?.error?.message).toBe('no x');
+  });
 });
