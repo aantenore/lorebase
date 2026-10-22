@@ -43,13 +43,15 @@ merge below produces. The Domain id of the document is replaced by the target Do
 branch is protected: apply to another branch and merge through a Proposal.
 
 Applying to a Domain that has a schema merges the import into it rather than replacing it. The
-LinkML schema owns Kinds, Attributes, Relations, Traits and enums. Operations, Derivations and
-Sources are kept, and so is every field of an element that the LinkML schema does not carry
-(`derivation`, `authority`, `indexed`, `icon`, ...). Elements match by `lorebase.id` when the
+LinkML schema owns Kinds, Attributes, Relations, Traits, enums and path Derivations. Operations,
+the other Derivations and Sources are kept, without a warning, and so is every field of an
+element that the LinkML schema does not carry (`derivation`, `authority`, `indexed`, `icon`,
+...). Elements match by `lorebase.id` when the
 schema has it, else by name, and keep their current id, so a rename in LinkML stays a rename.
 Kinds, Attributes, Relations and Traits that the LinkML schema leaves out stay too, each reported
-as a warning; `--prune` removes them (and the Relations of a removed Kind). A Domain or branch
-without a schema takes the document as it is.
+as a warning; `--prune` removes them (and the Relations of a removed Kind, with the path
+Derivations that use them); `--prune` without `--apply` or `--dry-run` is refused. A Domain or
+branch without a schema takes the document as it is.
 
 LinkML schemas rarely give a description to every slot, and never name a title attribute, both of
 which an active Kind needs. A class that lacks them is imported as a `draft` Kind with a warning
@@ -81,7 +83,8 @@ that lists what to add; set `status: active` once it is complete.
 | `required_from` | `required` of the forward slot | |
 | element `id` | `lorebase.id` | |
 | `indexed`, `searchable`, `search_weight`, `vault`, `icon`, `color`, `title_attribute`, `search`, `status`, `on_delete`, `backing`, link Attributes and any other field | `lorebase.<field>` | |
-| Operations, Derivations, Sources | schema annotations `lorebase.operations`, `lorebase.derivations`, `lorebase.sources` | export only |
+| path Derivation | a slot on the class where the path starts, with the class where it ends as range | annotations `lorebase.derivation_variant: path`, `lorebase.steps` (JSON), `lorebase.inverse_api_name`, `lorebase.materialized`, `lorebase.id`; `multivalued` when a step can reach several Records |
+| Operations, other Derivations, Sources | schema annotations `lorebase.operations`, `lorebase.derivations`, `lorebase.sources` | export only |
 
 Annotation values are scalars. Structured values (settings, link Attributes, Trait maps,
 Operations) are JSON text and are read back as JSON when the text is a JSON object or array.
@@ -90,9 +93,10 @@ Operations) are JSON text and are read back as JSON when the text is a JSON obje
 
 Each of these is reported as a warning.
 
-- Operations, Derivations and Sources, and the `derivation` and `authority` of Attributes that
-  refer to them: the annotations an export writes are not imported. Applying to a Domain keeps
-  the ones it has; printing the document does not include them.
+- Operations, expression and aggregate Derivations and Sources, and the `derivation` and
+  `authority` of Attributes that refer to them: the annotations an export writes are not
+  imported. Applying to a Domain keeps the ones it has, without a warning; printing the document,
+  or applying to a Domain without them, does not include them.
 - Inheritance: `is_a` is flattened, so a class gets copies of its parents' slots, and abstract
   classes are not Kinds. An attribute declared on the class replaces the inherited slot of the
   same name; `slot_usage` refines it.

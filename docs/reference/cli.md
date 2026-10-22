@@ -686,9 +686,9 @@ Translate a LinkML schema into a Lorebase schema document.
 Prints the document (or writes it with --output); warnings about what it leaves out go to
 standard error. --apply sends it to a branch like `schema apply`, --dry-run plans that. The
 import is merged into the current schema of the Domain: the LinkML schema owns Kinds,
-Attributes, Relations, Traits and enums; Operations, Derivations, Sources and the fields
-LinkML cannot carry (`derivation`, `authority`, ...) are kept. Elements the LinkML schema
-leaves out stay, with a warning, unless --prune removes them.
+Attributes, Relations, Traits, enums and path Derivations; Operations, other Derivations,
+Sources and the fields LinkML cannot carry (`derivation`, `authority`, ...) are kept.
+Elements the LinkML schema leaves out stay, with a warning, unless --prune removes them.
 
 **Usage**:
 
