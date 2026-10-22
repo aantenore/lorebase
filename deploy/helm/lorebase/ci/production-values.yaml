@@ -10,6 +10,7 @@ secrets:
     dbMaintenanceDsn: db-maintenance-dsn
     dbReadDsn: ""
     apiKeyPepper: api-key-pepper
+    webhookEncryptionKey: webhook-encryption-key
     llmApiKey: ""
 logLevel: INFO
 telemetry:

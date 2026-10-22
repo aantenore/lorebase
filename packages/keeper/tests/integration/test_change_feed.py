@@ -36,7 +36,11 @@ pytestmark = pytest.mark.integration
 
 BASE = f"/api/v1/domains/{DOMAIN}"
 FAST_FEED = {"feed": {"poll_interval_s": 0.05, "heartbeat_s": 0.3, "max_connection_s": 1.5}}
-LOCAL_WEBHOOKS = {"allowed_schemes": ["http", "https"], "allow_private_targets": True}
+LOCAL_WEBHOOKS = {
+    "allowed_schemes": ["http", "https"],
+    "allow_private_targets": True,
+    "encryption_key": "webhook-key-0123456789-0123456789-abcdef",
+}
 
 
 async def seed(

@@ -219,6 +219,16 @@ base-uri 'self'; frame-ancestors 'none'; form-action 'self'`. Values cannot cont
 a brace or a newline; the container refuses to start otherwise. The Helm chart renders the same headers from
 `web.security` ([Kubernetes](kubernetes.md#web-security-headers)).
 
+## Webhook signing keys
+
+Keeper stores the signing key of each webhook sealed under `webhooks.encryption_key` (32 characters or
+more, the same for Keeper and Scribe) and refuses to create a webhook without it (409,
+`encryption_key_required`). The compose stack passes it as `secret://env/LOREBASE_WEBHOOK_KEY`, which
+`make env` generates; the Helm chart reads it from the Secret (`secrets.keys.webhookEncryptionKey`).
+`webhooks.allow_unsealed_keys: true` stores new keys usable instead, for local development only.
+Webhooks created before the key was set keep working: each delivery pass seals their keys. Rotation goes
+through `webhooks.previous_encryption_keys` ([agents](agents.md)).
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot

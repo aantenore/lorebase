@@ -53,6 +53,12 @@ x-database: &database
   LOREBASE__DATABASE__MAINTENANCE_DSN: secret://env/LOREBASE_DB_MAINTENANCE_DSN
   LOREBASE_DB_MAINTENANCE_DSN: ${LOREBASE_DB_MAINTENANCE_DSN:-postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}}
 
+# Key that seals webhook signing keys in the database (webhooks.encryption_key); Keeper and
+# Scribe need the same value. Passed as a secret reference like the DSN; `make env` generates it.
+x-webhooks: &webhooks
+  LOREBASE__WEBHOOKS__ENCRYPTION_KEY: secret://env/LOREBASE_WEBHOOK_KEY
+  LOREBASE_WEBHOOK_KEY: ${LOREBASE_WEBHOOK_KEY:?set LOREBASE_WEBHOOK_KEY in the environment file}
+
 # Guard of a profile that needs a secret (require-secrets.sh): exits 1, naming the variable,
 # when a value is empty, still `change-me`, or too short. `${VAR:?}` cannot be used for these,
 # because compose interpolates every service whether its profile is enabled or not.
@@ -86,7 +92,7 @@ x-keeper: &keeper
   tmpfs:
     - /tmp
   environment:
-    <<: *database
+    <<: [*database, *webhooks]
     LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
     LOREBASE__KEEPER__HOST: 0.0.0.0
     # The container listens on all its interfaces so that the published port works; with the
@@ -244,7 +250,7 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
-      <<: [*database, *inference]
+      <<: [*database, *inference, *webhooks]
       LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
       LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
       LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}

@@ -17,6 +17,9 @@ function composeEnv(env: E2eEnv): NodeJS.ProcessEnv {
     // Keeper connects as the application role, subject to row-level security.
     LOREBASE_APP_USER: 'lorebase_app',
     LOREBASE_APP_PASSWORD: process.env['LOREBASE_E2E_APP_PASSWORD'] ?? 'lorebase-e2e-app',
+    // Seals webhook signing keys (webhooks.encryption_key): at least 32 characters.
+    LOREBASE_WEBHOOK_KEY:
+      process.env['LOREBASE_E2E_WEBHOOK_KEY'] ?? 'lorebase-e2e-webhook-key-0123456789abcdef',
     POSTGRES_HOST_PORT: String(env.postgresPort),
     KEEPER_HOST_PORT: String(env.keeperPort),
     LOREBASE_IMAGE: process.env['LOREBASE_E2E_IMAGE'] ?? 'lorebase-e2e',

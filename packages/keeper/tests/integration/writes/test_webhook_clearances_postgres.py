@@ -13,6 +13,7 @@ pytestmark = pytest.mark.integration
 
 API = "/api/v1"
 HOOKS = f"{API}/domains/acme/webhooks"
+SEALED = {"webhooks": {"encryption_key": "webhook-key-0123456789-0123456789-abcdef"}}
 
 
 async def test_clearances_need_the_matching_permission(
@@ -30,7 +31,7 @@ async def test_clearances_need_the_matching_permission(
             },
         },
     }
-    async with keeper(auth=auth) as http:
+    async with keeper(SEALED, auth=auth) as http:
         created = await http.post(
             f"{API}/domains", json={"id": "acme"}, headers=installation_admin.headers
         )
@@ -71,7 +72,7 @@ async def test_clearances_can_be_changed(
             },
         },
     }
-    async with keeper(auth=auth) as http:
+    async with keeper(SEALED, auth=auth) as http:
         created = await http.post(
             f"{API}/domains", json={"id": "acme"}, headers=installation_admin.headers
         )

@@ -58,6 +58,7 @@ LOREBASE_TAG=local
 POSTGRES_PASSWORD=$(secret postgres.password)
 LOREBASE_APP_USER=lorebase_app
 LOREBASE_APP_PASSWORD=$(secret app.password)
+LOREBASE_WEBHOOK_KEY=$(secret webhook.key)
 POSTGRES_HOST_PORT=$POSTGRES_PORT
 KEEPER_HOST_PORT=$KEEPER_PORT
 LOREBASE_CONFIG_FILE=$HERE/lorebase.demo.yaml

@@ -15,7 +15,8 @@ CHART = ROOT / "deploy" / "helm" / "lorebase"
 PROFILES = CHART / "ci"
 HELM = shutil.which("helm")
 EVERYWHERE = {"0.0.0.0/0", "::/0"}
-# The chart refuses to render without a database and a pepper; these make the defaults render.
+# The chart refuses to render without a database, a pepper and a webhook key; these make the
+# defaults render.
 REQUIRED = [
     "--set",
     "secrets.values.dbDsn=postgresql+asyncpg://lorebase_app:x@postgres.internal:5432/lorebase",
@@ -23,6 +24,8 @@ REQUIRED = [
     "secrets.values.dbMaintenanceDsn=postgresql+asyncpg://lorebase:x@postgres.internal:5432/lorebase",
     "--set",
     "secrets.values.apiKeyPepper=" + "p" * 32,
+    "--set",
+    "secrets.values.webhookEncryptionKey=" + "w" * 32,
 ]
 VALUES = {
     "defaults": [],

@@ -892,7 +892,10 @@ webhooks:
   max_per_domain: 20
   secret_bytes: 32               # random bytes of a new signing secret
   encryption_key: null           # secret://... (32+ characters) encrypting signing keys at rest;
-                                 # same value for Keeper and Scribe; null stores them usable
+                                 # same value for Keeper and Scribe; null: Keeper refuses to
+                                 # create webhooks (compose and Helm supply one)
+  allow_unsealed_keys: false     # local development only: without encryption_key, store new
+                                 # signing keys usable instead of refusing
   previous_encryption_keys: []   # earlier keys, tried to open; keys are re-encrypted under the new
   signature_header: Lorebase-Signature   # t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">
   event_header: Lorebase-Event

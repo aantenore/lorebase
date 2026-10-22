@@ -64,9 +64,10 @@ make env
 ```
 
 It copies `.env.example` to `.env` and fills `POSTGRES_PASSWORD` and `LOREBASE_APP_PASSWORD`
-with random values (`openssl rand -hex 24`); an existing `.env` keeps its values. Without make:
-`cp .env.example .env`, then set both passwords yourself (URL-safe characters only: they are
-embedded in connection strings). The other values have working defaults; this is where you
+with random values (`openssl rand -hex 24`), and `LOREBASE_WEBHOOK_KEY`, the key that seals
+webhook signing keys, with `openssl rand -hex 32`; an existing `.env` keeps its values. Without
+make: `cp .env.example .env`, then set the three yourself (URL-safe characters only for the
+passwords: they are embedded in connection strings). The other values have working defaults; this is where you
 change ports and `COMPOSE_PROJECT_NAME`.
 
 ### 2.3 Start Postgres, Keeper and the web app
@@ -362,7 +363,7 @@ and `LOREBASE_TAG` of `.env`). Delete the clone and nothing else is left on the 
 | Symptom | Cause and fix |
 |---------|---------------|
 | `Bind for 127.0.0.1:5432 failed: port is already allocated` (or 8080, 8090, 11434) | Another Postgres, service or Ollama holds the port. Set `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT` or `OLLAMA_HOST_PORT` in `.env`, run `make up` again, and use the new Keeper port in `LOREBASE_URL` (and `LOREBASE_KEEPER_PROXY` of the dev server). |
-| `required variable POSTGRES_PASSWORD is missing a value` or `set LOREBASE_APP_PASSWORD in the environment file` | `.env` is missing or a password is empty: `make env` fills them. |
+| `required variable POSTGRES_PASSWORD is missing a value`, `set LOREBASE_APP_PASSWORD in the environment file` or `set LOREBASE_WEBHOOK_KEY in the environment file` | `.env` is missing or a password or the webhook key is empty: `make env` fills them. |
 | Keeper unhealthy, `make up` fails with `dependency failed to start` | `docker compose --env-file .env -f deploy/compose/docker-compose.yaml logs migrate keeper` names the error. A password changed after the first start does not change the database: run `make clean-stack` (deletes the data) and `make up`. |
 | `curl: (52) Empty reply from server` right after `up -d` without `--wait` | Keeper is still starting; `make up` waits for its health check. |
 | The stack runs code older than the checkout | The image tag `lorebase:dev` is shared by every checkout on the machine. `make up` always passes `--build`; with plain compose add `--build`, or set `LOREBASE_TAG` per checkout. |
@@ -465,8 +466,8 @@ cp .env.example .env
 ```
 
 Edit `.env` and set `POSTGRES_PASSWORD` and `LOREBASE_APP_PASSWORD` (URL-safe characters
-only, for example `openssl rand -hex 24`; they are embedded in the connection strings). The
-other values have working defaults. Then:
+only, for example `openssl rand -hex 24`; they are embedded in the connection strings) and
+`LOREBASE_WEBHOOK_KEY` (`openssl rand -hex 32`). The other values have working defaults. Then:
 
 ```bash
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d --build --wait postgres migrate keeper

@@ -30,8 +30,13 @@ class WebhookSettings(SectionModel):
         default=None,
         description="Key (at least 32 characters) that encrypts webhook signing keys in the "
         "database, e.g. secret://env/LOREBASE_WEBHOOK_KEY; Keeper and Scribe need the same "
-        "value. Unset: signing keys are stored usable, as before. Once set, the delivery worker "
-        "encrypts the keys stored before.",
+        "value. Unset: Keeper refuses to create webhooks unless allow_unsealed_keys is true. "
+        "Once set, the delivery worker encrypts the keys stored usable before.",
+    )
+    allow_unsealed_keys: bool = Field(
+        default=False,
+        description="For local development only: without encryption_key, store the signing "
+        "keys of new webhooks usable instead of refusing to create them.",
     )
     previous_encryption_keys: tuple[SecretValue, ...] = Field(
         default=(),

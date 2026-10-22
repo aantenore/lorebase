@@ -278,9 +278,13 @@ async def app_sessions(url: str) -> AsyncIterator[async_sessionmaker[AsyncSessio
 
 
 async def test_webhooks_receive_sensitive_values_only_with_clearance(seeded: Seeded) -> None:
-    settings = WebhookSettings()
+    sealed = {"encryption_key": "webhook-key-0123456789-0123456789-abcdef"}
+    settings = WebhookSettings.model_validate(sealed)
     writes = StoreSettings().writes
-    async with keeper(seeded.app_url) as http, app_sessions(seeded.app_url) as sessions:
+    async with (
+        keeper(seeded.app_url, webhooks=sealed) as http,
+        app_sessions(seeded.app_url) as sessions,
+    ):
         await deliver_pending(sessions, settings, Sender(), writes=writes, resolve=public)
         unknown = await http.post(
             f"{BASE}/webhooks", json={"url": "https://x.example.com/", "events": ["ops.x"]}

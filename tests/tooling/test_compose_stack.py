@@ -29,6 +29,7 @@ BASE_ENV = {
     "POSTGRES_DB": "lorebase",
     "LOREBASE_APP_USER": "app",
     "LOREBASE_APP_PASSWORD": "app-secret",
+    "LOREBASE_WEBHOOK_KEY": "w" * 64,
 }
 APP_SERVICES = ("keeper", "keeper-2", "scribe")
 
@@ -89,6 +90,21 @@ def test_migrations_run_as_the_owner_and_grant_the_application_role() -> None:
     assert dsn_user(migrate) == "owner"
     assert migrate["environment"]["LOREBASE__DATABASE__APPLICATION_ROLE"] == "app"
     assert migrate["depends_on"]["db-roles"]["condition"] == "service_completed_successfully"
+
+
+def test_webhook_signing_keys_are_sealed_by_keeper_and_scribe() -> None:
+    found = services(BASE_ENV, "scale-out")
+    for name in APP_SERVICES:
+        env = found[name]["environment"]
+        assert env["LOREBASE__WEBHOOKS__ENCRYPTION_KEY"] == "secret://env/LOREBASE_WEBHOOK_KEY"
+        assert env["LOREBASE_WEBHOOK_KEY"] == "w" * 64, name
+
+
+def test_the_webhook_key_is_required() -> None:
+    env = {key: value for key, value in BASE_ENV.items() if key != "LOREBASE_WEBHOOK_KEY"}
+    result = render(env)
+    assert result.returncode != 0
+    assert "LOREBASE_WEBHOOK_KEY" in result.stderr
 
 
 def test_the_application_password_is_required() -> None:

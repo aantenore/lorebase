@@ -86,7 +86,7 @@ annotations:
 {{- default (include "lorebase.fullname" .) .Values.secrets.existingSecret -}}
 {{- end -}}
 
-{{/* "true" when the named entry (dbDsn, dbReadDsn, apiKeyPepper, llmApiKey) is wired into the pods. */}}
+{{/* "true" when the named entry (dbDsn, dbReadDsn, apiKeyPepper, llmApiKey, ...) is wired into the pods. */}}
 {{- define "lorebase.secretHas" -}}
 {{- $s := .ctx.Values.secrets -}}
 {{- $key := get $s.keys .name -}}
@@ -110,7 +110,7 @@ annotations:
 {{- define "lorebase.managedSecret" -}}
 {{- $s := .Values.secrets -}}
 {{- if not $s.existingSecret -}}
-{{- if or (and (not .Values.postgresql.enabled) (or (get $s.values "dbDsn") (get $s.values "dbMaintenanceDsn"))) (get $s.values "dbReadDsn") (get $s.values "apiKeyPepper") (get $s.values "llmApiKey") (get $s.values "oidcClientSecret") (get $s.values "sessionEncryptionKey") $s.extra -}}true{{- end -}}
+{{- if or (and (not .Values.postgresql.enabled) (or (get $s.values "dbDsn") (get $s.values "dbMaintenanceDsn"))) (get $s.values "dbReadDsn") (get $s.values "apiKeyPepper") (get $s.values "llmApiKey") (get $s.values "oidcClientSecret") (get $s.values "sessionEncryptionKey") (get $s.values "webhookEncryptionKey") $s.extra -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -270,6 +270,15 @@ role). External: `secrets.keys.dbDsn`.
       name: {{ include "lorebase.secretName" $ctx }}
       key: {{ $ctx.Values.secrets.keys.apiKeyPepper }}
 {{- end }}
+{{- if include "lorebase.secretHas" (dict "ctx" $ctx "name" "webhookEncryptionKey") }}
+- name: LOREBASE__WEBHOOKS__ENCRYPTION_KEY
+  value: secret://env/LOREBASE_WEBHOOK_KEY
+- name: LOREBASE_WEBHOOK_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "lorebase.secretName" $ctx }}
+      key: {{ $ctx.Values.secrets.keys.webhookEncryptionKey }}
+{{- end }}
 {{- $extra := list -}}
 {{- if $ctx.Values.secrets.existingSecret -}}
 {{- $extra = $ctx.Values.secrets.extraNames -}}
@@ -329,6 +338,10 @@ role). External: `secrets.keys.dbDsn`.
 {{- fail "no database: set secrets.values.dbDsn, or secrets.existingSecret with secrets.keys.dbDsn, or postgresql.enabled=true" -}}
 {{- end -}}
 {{- include "lorebase.validateRoles" . -}}
+{{- $webhooks := dig "webhooks" dict .Values.config -}}
+{{- if not (or (include "lorebase.secretHas" (dict "ctx" . "name" "webhookEncryptionKey")) (get $webhooks "encryption_key") (get $webhooks "allow_unsealed_keys")) -}}
+{{- fail "webhook signing keys are sealed: set secrets.values.webhookEncryptionKey (32 characters or more, for example openssl rand -hex 32), or secrets.existingSecret with secrets.keys.webhookEncryptionKey (config.webhooks.allow_unsealed_keys: true skips it, local development only)" -}}
+{{- end -}}
 {{- if include "lorebase.sessionsEnabled" . -}}
 {{- $sessions := dig "keeper" "auth" "sessions" dict .Values.config -}}
 {{- if not (contains "oidc" $mode) -}}

@@ -51,6 +51,7 @@ jobs:
         # .env.example leaves the required secrets empty; any value proves the file renders.
         env:
           LOREBASE_APP_PASSWORD: compose-config-check
+          LOREBASE_WEBHOOK_KEY: compose-config-check
         run: >-
           docker compose --env-file .env.example
           -f deploy/compose/docker-compose.yaml

@@ -22,6 +22,7 @@ SCRIPT = ROOT / "scripts" / "quickstart.sh"
 COMPOSE_FILE = ROOT / "deploy" / "compose" / "docker-compose.yaml"
 HOSTED_FILE = ROOT / "deploy" / "compose" / "hosted-model.yaml"
 PASSWORDS = ("POSTGRES_PASSWORD", "LOREBASE_APP_PASSWORD")
+GENERATED = (*PASSWORDS, "LOREBASE_WEBHOOK_KEY")
 
 
 def run_env(env_file: Path) -> subprocess.CompletedProcess[str]:
@@ -42,7 +43,7 @@ def values(env_file: Path) -> dict[str, str]:
     return {k: v for k, v in pairs if not k.startswith("#")}
 
 
-def test_env_creates_the_file_with_generated_passwords(tmp_path: Path) -> None:
+def test_env_creates_the_file_with_generated_passwords_and_webhook_key(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     run_env(env_file)
 
@@ -51,8 +52,9 @@ def test_env_creates_the_file_with_generated_passwords(tmp_path: Path) -> None:
     for name in PASSWORDS:
         assert re.fullmatch(r"[0-9a-f]{48}", got[name]), name
     assert got["POSTGRES_PASSWORD"] != got["LOREBASE_APP_PASSWORD"]
-    assert {k: v for k, v in got.items() if k not in PASSWORDS} == {
-        k: v for k, v in expected.items() if k not in PASSWORDS
+    assert re.fullmatch(r"[0-9a-f]{64}", got["LOREBASE_WEBHOOK_KEY"])
+    assert {k: v for k, v in got.items() if k not in GENERATED} == {
+        k: v for k, v in expected.items() if k not in GENERATED
     }
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
@@ -67,6 +69,8 @@ def test_env_keeps_set_values_and_fills_placeholders(tmp_path: Path) -> None:
     assert re.fullmatch(r"[0-9a-f]{48}", first["POSTGRES_PASSWORD"])
     assert first["LOREBASE_APP_PASSWORD"] == "mine"
     assert first["KEEPER_HOST_PORT"] == "18080"
+    # A file from before the webhook key gets one, appended.
+    assert re.fullmatch(r"[0-9a-f]{64}", first["LOREBASE_WEBHOOK_KEY"])
 
     run_env(env_file)
     assert values(env_file) == first
@@ -98,7 +102,12 @@ def render(*files: Path) -> dict[str, Any]:
     for file in files:
         args += ["-f", str(file)]
     kept = {k: v for k, v in os.environ.items() if k in {"PATH", "HOME"} or k.startswith("DOCKER_")}
-    env = {**kept, "POSTGRES_PASSWORD": "owner-secret", "LOREBASE_APP_PASSWORD": "app-secret"}
+    env = {
+        **kept,
+        "POSTGRES_PASSWORD": "owner-secret",
+        "LOREBASE_APP_PASSWORD": "app-secret",
+        "LOREBASE_WEBHOOK_KEY": "w" * 64,
+    }
     result = subprocess.run(
         [*args, "--profile", "local-models", "config", "--format", "json"],
         cwd=ROOT,

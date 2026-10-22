@@ -460,7 +460,9 @@ Deliveries became dead in the last hour (`lorebase_webhooks_deliveries_total{out
 dashboard shows `delivered`, `retrying` and `dead` side by side. Dead letters are rows of `webhook_deliveries`:
 `SELECT webhook_id, count(*), max(last_error) FROM webhook_deliveries WHERE status = 'dead' GROUP BY 1`. A target
 refused (scheme, private address) is dead at once; others after `webhooks.max_attempts`. Fix or disable the
-webhook; the pass retries what is still pending.
+webhook; the pass retries what is still pending. An error naming `webhooks.encryption_key` means the key
+that sealed the webhook's signing key is no longer configured: put it back, as the current key or in
+`webhooks.previous_encryption_keys`.
 
 The outbox keeps a backlog per consumer (`outbox_pending`): `SELECT consumer, count(*) FROM
 outbox_pending GROUP BY 1`. Events leave the outbox once every consumer handed them off and they
