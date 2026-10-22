@@ -5,7 +5,7 @@ Every validation run of the project in one place: what was run, where, how, what
 | Section | What it covers |
 |---------|----------------|
 | [How to reproduce](#how-to-reproduce) | The commands behind every run below |
-| [Performance baselines](#performance-baselines) | Read, write and branch latency at 100k and 1M Records; Canvas layout at 5,000 nodes |
+| [Performance baselines](#performance-baselines) | Read, write and branch latency at 100k, 1M and 10M Records; Canvas layout at 5,000 nodes |
 | [End-to-end](#end-to-end) | The five-day scenario and the web app's Playwright suite |
 | [Security reviews](#security-reviews) | Each review round, its findings and what remains |
 | [Interop and connectors](#interop-and-connectors) | LinkML, SQL Sources, JSON, Parquet and HTTP JSON |
@@ -21,6 +21,7 @@ The commands assume a checkout, [uv](https://docs.astral.sh/uv/), Docker with co
 | Unit tests, no external services | `make test-unit` | none |
 | Integration tests, including the SQL Source tests | `make test-int` | Docker |
 | Performance harness at a small scale | `make test-perf` | Docker |
+| Benchmarks at 1M and 10M Records on their own Postgres (`tests/perf/compose.yaml`; the seeded databases are kept, `make perf-down` deletes them) | `make perf-1m`, `make perf-10m` | Docker; about 15 GB of disk for 1M and 80 GB for 10M |
 | Dependency advisories | `make security` (`security-python`, `security-web`) | network |
 | Five-day scenario | `make demo` (`KEEP=1` leaves the stack up, `make demo-down` removes it) | Docker |
 | Documentation build, strict | `make docs` | none |
@@ -51,7 +52,7 @@ uv run pytest packages/scribe/tests/integration/test_sql_sources.py -m integrati
 uv run pytest tests/tooling/test_helm_db_roles.py        # needs a helm binary
 ```
 
-Other bench.py flags: `--iterations`, `--warmup`, `--branch-iterations`, `--commit-iterations`, `--commit-changes`, `--overlay-iterations`, `--overlay-changes`. Which suites run where in CI is described in each section.
+Other bench.py flags: `--iterations`, `--warmup`, `--branch-iterations`, `--commit-iterations`, `--commit-changes`, `--overlay-iterations`, `--overlay-changes`, `--trace-iterations` and `--trace-warmup` (agent trace overhead through Keeper), `--replicas` (load a share through the commit pipeline and copy its materialized rows), `--seed-only`, `--in-place` (measure the seed database itself), `--copy-batches` and `--no-pair-copy` (bound the branch copies at 10M). Which suites run where in CI is described in each section.
 
 ## Performance baselines
 
