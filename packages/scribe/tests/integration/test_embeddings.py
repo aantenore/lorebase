@@ -357,7 +357,10 @@ async def test_job_continuation_and_schedule(
         engine,
         sessions,
         settings=SchedulerSettings(
-            webhook_interval_s=0, gc_schedule=None, embeddings_interval_s=60
+            webhook_interval_s=0,
+            gc_schedule=None,
+            embeddings_interval_s=60,
+            audit_verify_interval_s=0,
         ),
         jobs=runtime.settings.jobs,
         writes=runtime.settings.writes,
