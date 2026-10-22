@@ -37,6 +37,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import JsonValue
@@ -60,25 +61,40 @@ from lorebase_core.expr import (
     plan_steps,
 )
 from lorebase_core.expr import Principal as ExpressionPrincipal
+from lorebase_core.expr.sensitivity import (
+    attributes_named,
+    expression_fields,
+    operation_reads,
+    with_tags,
+)
 from lorebase_core.model import (
+    Attribute,
     IdPrefix,
     ImportOrigin,
+    Kind,
     LinkDirection,
     Operation,
     OperationOrigin,
     ProvenanceEntry,
+    Relation,
     ReviewMode,
     Schema,
     new_id,
     new_ulid,
 )
 from lorebase_core.revision import Origin
-from lorebase_core.validate import DataChange
+from lorebase_core.validate import DataChange, operation_sensitivity_issues
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext
 from lorebase_keeper.context import StoreAccess, author_of, require_branch, require_domain
 from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, VALIDATION_FAILED, ProblemError
+from lorebase_keeper.reading.sensitivity import (
+    Clearance,
+    Masking,
+    default_schema,
+    reference_tags,
+)
 from lorebase_keeper.services.config import OperationSettings
 from lorebase_keeper.services.errors import (
     EXPRESSIONS_NOT_ENABLED,
@@ -113,13 +129,14 @@ from lorebase_store.commit import (
 )
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models.enums import InvocationStatus
-from lorebase_store.reads import Direction, links_of_record
+from lorebase_store.reads import Direction, head_schema, links_of_record
 from lorebase_store.repositories import (
     InvocationRepository,
     InvocationRow,
     MaterializedRepository,
     RefRepository,
 )
+from lorebase_store.vault import VaultKeys
 
 REVIEW_PROTECTED = "protected-branch"
 REVIEW_POLICY = "review-policy"
@@ -131,6 +148,8 @@ PRECONDITIONS_SKIPPED = "operation.preconditions_skipped"
 PRECONDITION_FAILED = "operation.precondition_failed"
 
 Check = Callable[[Permission, AccessContext], Awaitable[None]]
+Reveal = Callable[[AsyncSession], Awaitable[Masking]]
+"""The caller's masking in the Domain (`reading.sensitivity`), read in the given session."""
 LinkReader = Callable[[str, LinkDirection, str], Awaitable[Sequence[LinkedRecord]]]
 """Records linked to a key through a Relation id, traversed in a direction (`links()`)."""
 
@@ -175,6 +194,9 @@ class ExecutionOutcome:
     replayed: bool = False
     preconditions_failed: bool = False
     """A dry run found the violations in `violations` in failed preconditions."""
+    parameters: dict[str, Any] = field(default_factory=dict)
+    """The parameters as recorded (`recorded_parameters`): values that may be sensitive are
+    masked."""
 
 
 @dataclass(frozen=True)
@@ -184,15 +206,68 @@ class _Resolved:
     builtin: BuiltinOperation | None
 
 
-def parameters_hash(operation: str, branch: str, parameters: Mapping[str, JsonValue]) -> str:
-    """Stable digest of an invocation's inputs (idempotency, provenance, audit)."""
+REDACTED = "***"
+"""Stands for a parameter value that is not recorded."""
+
+
+def recorded_parameters(
+    schema: Schema,
+    resolved: _Resolved,
+    parameters: Mapping[str, JsonValue],
+    sensitive: Callable[[Attribute], bool] = lambda a: a.is_sensitive,
+) -> dict[str, JsonValue]:
+    """Parameters as kept in the invocation record and Proposal descriptions. A value that
+    may hold a value of a sensitive Attribute is replaced by `REDACTED`: those records are
+    read without clearance and erasure does not reach them (design 13.5). Built-in Operations
+    keep the values of non-sensitive Attributes; other parameters are kept only when nothing
+    the Operation writes is sensitive."""
+    owners: list[Kind | Relation | None]
+    builtin = resolved.builtin
+    if builtin is not None:
+        owners = [builtin.kind or builtin.relation]
+        if owners == [None]:
+            owners = [*schema.kinds.values(), *schema.relations.values()]
+    else:
+        assert resolved.custom is not None
+        owners = []
+        for step in resolved.custom.steps:
+            kind_id = getattr(step, "kind", None)
+            relation_id = getattr(step, "relation", None)
+            owners.append(
+                schema.kinds.get(kind_id) if kind_id else schema.relations.get(relation_id or "")
+            )
+    if not any(
+        owner is None or any(sensitive(a) for a in owner.attributes.values()) for owner in owners
+    ):
+        return dict(parameters)
+    plain: set[str] = set()
+    if builtin is not None and (builtin.kind or builtin.relation) is not None:
+        owner = builtin.kind or builtin.relation
+        assert owner is not None
+        plain = {a.api_name for a in owner.attributes.values() if not sensitive(a)}
+    return {name: value if name in plain else REDACTED for name, value in parameters.items()}
+
+
+def parameters_hash(
+    operation: str,
+    branch: str,
+    parameters: Mapping[str, JsonValue],
+    *,
+    domain_id: str = "",
+    keys: VaultKeys | None = None,
+) -> str:
+    """Stable digest of an invocation's inputs (idempotency, provenance, audit). With the
+    vault keys it is keyed (HMAC under `vault.token_key`), so a stored digest does not let
+    anyone confirm guessed parameter values; without them it is a plain SHA-256."""
     payload = json.dumps(
         {"operation": operation, "branch": branch, "parameters": parameters},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    ).encode("utf-8")
+    if keys is not None:
+        return keys.digest(domain_id, "parameters", payload)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def resolve(schema: Schema, name: str) -> _Resolved:
@@ -339,8 +414,11 @@ async def execute(
     *,
     check: Check,
     proposals_path: str,
+    reveal: Reveal | None = None,
 ) -> ExecutionOutcome:
-    """Run an Operation on a branch (default: the Domain's default branch).
+    """Run an Operation on a branch (default: the Domain's default branch). Edits in the
+    outcome are masked for the caller's clearance (`reveal`; without it, as for a caller
+    without clearances).
 
     Raises `ProblemError` for refusals and violations and the commit pipeline's `CommitError`s
     (`StaleHeadError`, `BranchLockTimeoutError`, ...), which the route maps.
@@ -359,6 +437,7 @@ async def execute(
                 check,
                 proposals_path,
                 started,
+                reveal,
             )
         finally:
             if session.in_transaction():
@@ -375,6 +454,7 @@ async def _execute(
     check: Check,
     proposals_path: str,
     started: float,
+    reveal: Reveal | None,
 ) -> ExecutionOutcome:
     domain = await require_domain(session, domain_id)
     branch = request.branch or domain.default_branch
@@ -384,7 +464,10 @@ async def _execute(
     compiled = await rows.schema()
     if compiled is None:
         raise BranchNotMaterializedError(f"branch {branch!r} has no materialized head")
-    schema = load_compiled(compiled.compiled)
+    # From the schema cache (by head Revision): the same object comes back, which keeps the
+    # effective tags of `reading.sensitivity` cached too.
+    cached = await head_schema(session, domain_id, branch, runtime=store.runtime)
+    schema = cached.schema if cached is not None else load_compiled(compiled.compiled)
     resolved = resolve(schema, request.operation)
     permission, context = _permission(resolved, branch)
     await check(permission, context)
@@ -392,7 +475,9 @@ async def _execute(
     if resolved.custom is not None:
         _check_operation_permissions(resolved.custom, principal)
         warnings = expressions_gate(resolved.custom, settings)
-    digest = parameters_hash(resolved.name, branch, request.parameters)
+    digest = parameters_hash(
+        resolved.name, branch, request.parameters, domain_id=domain_id, keys=store.runtime.vault
+    )
     invocations = InvocationRepository(session, domain_id)
     if request.idempotency_key is not None and not request.dry_run:
         found = await invocations.by_key(principal.id, request.idempotency_key)
@@ -417,6 +502,19 @@ async def _execute(
         raise StaleHeadError(branch, request.expected_head, ref.head)
 
     invocation_id = f"{INVOCATION_PREFIX}_{new_ulid()}"
+    if reveal is not None:
+        base = await reveal(session)
+    else:
+        base = execution_masking(None, await default_schema(session, domain_id, store.runtime))
+    masking = base.over(schema)
+    if resolved.custom is not None:
+        # The Operation may have been valid when the branch forked, before the default branch
+        # tagged what it reads: check it again with those tags.
+        stale = operation_sensitivity_issues(
+            with_tags(schema, masking.reference), resolved.custom, store.runtime.schema.rules()
+        )
+        if stale:
+            raise rejected(findings_of(stale), limit=settings.max_issues)
     outcome = ExecutionOutcome(
         status=ExecutionStatus.DRY_RUN if request.dry_run else ExecutionStatus.COMMITTED,
         operation=resolved.name,
@@ -426,10 +524,19 @@ async def _execute(
         head=ref.head,
         warnings=warnings,
         review_required=needs_review,
+        parameters=recorded_parameters(schema, resolved, request.parameters, masking.sensitive),
     )
     read_links = _link_reader(session, store, domain_id, branch, schema, rows)
     planned = await _plan(
-        schema, resolved, request, rows, read_links, settings, principal, store.clock()
+        schema,
+        resolved,
+        request,
+        rows,
+        read_links,
+        settings,
+        principal,
+        store.clock(),
+        redact=_redactor(schema, masking, resolved.custom),
     )
     changes, findings = planned.changes, planned.findings
     if planned.review and not needs_review and not request.reviewed_by_proposal:
@@ -437,7 +544,9 @@ async def _execute(
         if not request.dry_run:
             raise _review_problem(resolved.name, branch, proposals_path, REVIEW_POLICY)
     outcome.edit_count = len(changes)
-    outcome.edits = [edit_document(schema, c) for c in changes[: settings.dry_run_max_edits]]
+    outcome.edits = [
+        edit_document(schema, c, masking) for c in changes[: settings.dry_run_max_edits]
+    ]
     if findings:
         if request.dry_run:
             outcome.violations = findings
@@ -618,6 +727,8 @@ async def _plan(
     settings: OperationSettings,
     principal: Principal,
     now: datetime,
+    *,
+    redact: Redact | None = None,
 ) -> PlannedEdits:
     async def read(kind_id: str, keys: Sequence[str]) -> dict[str, Mapping[str, JsonValue]]:
         found = await rows.records(kind_id, keys)
@@ -642,6 +753,7 @@ async def _plan(
             now,
             settings,
             read_links=read_links,
+            redact=redact,
         )
     bound = bind(builtin, request.parameters)
     if bound.findings:
@@ -685,7 +797,42 @@ def _false_precondition(program: CompiledExpression, index: int, message: str) -
     )
 
 
-def _expression_finding(error: ExprError) -> Finding:
+def execution_masking(revealed: Masking | None, reference: Schema | None) -> Masking:
+    """The masking of an execution: the caller's (`reveal`), or without it (agent writes) no
+    clearance, the default branch's tags still deciding what is sensitive."""
+    if revealed is not None:
+        return revealed
+    return Masking(Clearance(), reference=MappingProxyType(reference_tags(reference)))
+
+
+Redact = Callable[[ExprError], bool]
+"""Whether an evaluation error must not be shown as it is (it may quote a value)."""
+
+REDACTED_ERROR = "Evaluating the expression failed on a value the caller may not read."
+
+
+def _redactor(schema: Schema, masking: Masking, operation: Operation | None = None) -> Redact:
+    """Errors of expressions that read values the caller is not cleared for, Domain-wide, are
+    redacted: their messages may quote the values (a cast, a missing Record's key)."""
+
+    def redact(error: ExprError) -> bool:
+        if error.source is None:
+            return False
+        read = (
+            attributes_named(schema, expression_fields(error.source))
+            if operation is None
+            else operation_reads(schema, operation, error.source)
+        )
+        return any(
+            masking.sensitive(a) and not masking.clearance.covers(masking.tags(a), ()) for a in read
+        )
+
+    return redact
+
+
+def _expression_finding(error: ExprError, redact: Redact | None = None) -> Finding:
+    if redact is not None and redact(error):
+        return Finding(error.code.value, REDACTED_ERROR, tuple(error.path))
     details: dict[str, Any] = {}
     if error.source is not None:
         details["expression"] = error.source
@@ -738,6 +885,7 @@ async def plan_custom(
     *,
     mint_key: Callable[[], str] = new_ulid,
     read_links: LinkReader | None = None,
+    redact: Redact | None = None,
 ) -> PlannedEdits:
     """Bind parameters, check preconditions, evaluate the review policy and plan the steps
     of a stored Operation with the expression engine (pure apart from `read` and
@@ -771,7 +919,7 @@ async def plan_custom(
         if failures:
             return PlannedEdits(
                 findings=[
-                    _expression_finding(f.error)
+                    _expression_finding(f.error, redact)
                     if f.error is not None
                     else _false_precondition(compiled.preconditions[f.index], f.index, f.message)
                     for f in failures
@@ -793,7 +941,7 @@ async def plan_custom(
             read_links,
         )
     except ExprError as error:
-        return PlannedEdits(findings=[_expression_finding(error)])
+        return PlannedEdits(findings=[_expression_finding(error, redact)])
     return PlannedEdits(changes=steps.changes, review=review)
 
 
@@ -840,7 +988,7 @@ async def _record(
             params={
                 "operation": resolved.name,
                 "branch": outcome.branch,
-                "parameters": dict(request.parameters),
+                "parameters": outcome.parameters,
                 "parameters_hash": outcome.parameters_hash,
                 "head": hex(outcome.head),
                 "revisions": revisions,

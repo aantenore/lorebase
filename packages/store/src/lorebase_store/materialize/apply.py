@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.expr import ExprLimits
+from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import Schema
 from lorebase_core.revision import ChangesetEntry
 from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
@@ -29,6 +30,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
+from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.repositories.materializations import BranchMaterializationRepository
 from lorebase_store.repositories.materialized import (
     HistoryRow,
@@ -79,6 +81,8 @@ async def apply_changeset(
     `BranchMaterializingError` (`materialize.background`).
     """
     runtime = runtime or StoreRuntime.from_settings(settings)
+    # Titles and search vectors use the default branch's tags too (`materialize.sensitivity`).
+    tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
     generation = (await RevisionRepository(session, domain_id).generations([revision_id]))[
         revision_id
     ]
@@ -140,7 +144,7 @@ async def apply_changeset(
                 repository,
                 parsed.element_id,
                 group,
-                schema,
+                tagged,
                 revision_id,
                 at,
                 applied,
@@ -162,7 +166,7 @@ async def apply_changeset(
         if kind_id not in refresh_kinds:
             await repository.refresh_search(
                 kind_id,
-                search_weights(schema.kinds.get(kind_id)),
+                search_weights(tagged.kinds.get(kind_id)),
                 config=search_config,
                 revision=revision_id,
             )
@@ -170,12 +174,12 @@ async def apply_changeset(
         if keys and kind_id not in refresh_kinds and derived and derived.searchable(kind_id):
             await repository.refresh_search(
                 kind_id,
-                search_weights(schema.kinds.get(kind_id)),
+                search_weights(tagged.kinds.get(kind_id)),
                 config=search_config,
                 keys=sorted(keys),
             )
     for kind_id in refresh_kinds:
-        await refresh_kind(repository, schema, kind_id, settings=settings)
+        await refresh_kind(repository, tagged, kind_id, settings=settings)
     await check_overlay(repository, generation=generation, runtime=runtime)
 
 

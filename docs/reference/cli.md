@@ -56,6 +56,7 @@ Exit codes: 0 success, 1 usage or configuration error (also not found), 2 valida
 * `record`: Read Records.
 * `revision`: Inspect Revisions.
 * `apikey`: Manage the API keys of a Domain.
+* `admin`: Administer the personal data of a Domain.
 * `audit`: Check the audit log of a Domain.
 * `proposal`: Propose, review and merge changes between...
 * `sources`: Synchronize the Sources of a Domain.
@@ -1017,6 +1018,53 @@ $ lorebase apikey revoke [OPTIONS] {KEY_ID}
 **Options**:
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+### `lorebase admin`
+
+Administer the personal data of a Domain.
+
+**Usage**:
+
+```console
+$ lorebase admin [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `erase`: Erase personal data from the vault, on...
+
+#### `lorebase admin erase`
+
+Erase personal data from the vault, on every branch and Revision. This cannot be undone.
+
+`--key K` erases what the Record ever held in its vault Attributes; `--attribute A --value
+V` erases V of A in every Record of the Kind. History keeps its shape: reads show the
+values as erased.
+
+**Usage**:
+
+```console
+$ lorebase admin erase [OPTIONS] {KIND}
+```
+
+**Arguments**:
+
+* `KIND`: Kind api name.  [required]
+
+**Options**:
+
+* `--key <str>`: Erase the values of the Record with this key.
+* `--attribute <str>`: Vault Attribute (api name). With --key: limit to it (repeatable); with --value: the Attribute whose value is erased in every Record.
+* `--value <str>`: Value to erase (JSON, or plain text when it is not valid JSON); - reads it from standard input, which keeps it out of the shell history.
+* `--branch <str>`: Branch whose schema names the Kind.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-y, --yes`: Do not ask for confirmation.
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 

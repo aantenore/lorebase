@@ -1,6 +1,6 @@
 """Routers of the Domain-scoped endpoints (Domains, schema, Operations, reads, agent reads,
-webhooks, Sources, change feed, health reports, Proposals, Revisions, branches), in
-registration order.
+webhooks, Sources, vault erasure, change feed, health reports, Proposals, Revisions,
+branches), in registration order.
 
 Routes taking a hierarchical branch name (`{branch:path}`) match any path suffix, so the
 routers holding them come after routers with more specific branch sub-resources, and the
@@ -26,6 +26,7 @@ from lorebase_keeper.routes import (
     schema,
     schema_inference,
     sources,
+    vault,
     webhooks,
 )
 
@@ -42,6 +43,7 @@ def domain_routers() -> list[APIRouter]:
         agents.router,
         webhooks.router,
         sources.router,
+        vault.router,
         documents.router,
         events.router,  # `/branches/{branch:path}/events` and `/changes` before the catch-all
         proposal_items.router,

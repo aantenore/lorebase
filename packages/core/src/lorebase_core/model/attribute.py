@@ -27,7 +27,13 @@ class SearchWeight(StrEnum):
 
 
 class Attribute(Model):
-    """A typed field. ``default`` is a value of ``type`` (stored in canonical form)."""
+    """A typed field. ``default`` is a value of ``type`` (stored in canonical form).
+
+    ``vault`` stores the values of a ``pii`` Attribute of a Kind in the vault (design 13.5):
+    Record objects hold a vault reference instead of the value (``lorebase_core.model.vault``).
+    Unset (None) keeps values inline; the field is then left out of canonical content, so
+    schemas written before it keep their hashes.
+    """
 
     id: AttributeId
     api_name: str
@@ -44,6 +50,7 @@ class Attribute(Model):
     search_weight: SearchWeight | None = None
     derivation_id: DerivationId | None = None
     authority: SourceId | None = None
+    vault: bool | None = None
 
     @field_validator("sensitivity")
     @classmethod
@@ -53,3 +60,13 @@ class Attribute(Model):
     @property
     def is_derived(self) -> bool:
         return self.derivation_id is not None
+
+    @property
+    def is_sensitive(self) -> bool:
+        """Whether reads need a clearance for this Attribute's values (design 10.2)."""
+        return bool(self.sensitivity)
+
+    @property
+    def in_vault(self) -> bool:
+        """Whether values are stored in the vault, Record objects holding references."""
+        return self.vault is True

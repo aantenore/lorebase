@@ -184,6 +184,8 @@ export interface Attribute {
   derivation_id: ElementId | null;
   /** Source that owns this Attribute's values, used by merge policies. */
   authority: ElementId | null;
+  /** Values are stored in the personal data vault (`pii` Attributes of a Kind only). */
+  vault?: boolean;
 }
 
 export interface TraitImplementation {

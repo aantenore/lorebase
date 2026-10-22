@@ -580,6 +580,21 @@ Revision `0002` adds what the merge API needs (design 6.10, 11.1):
   from every other role holding them, so the services can only `SELECT` and `INSERT`. No code
   prunes entries; retention or erasure, if ever needed, is done as the owner.
 
+## Personal data vault
+
+Revision `0019` (design 13.5). `vault` rows are keyed by `(domain_id, id)`, `id` being the token
+Record objects hold; `kind_id`, `attribute_id` and `record_key` bind the token to the value it
+stands for, and `fingerprint` is a keyed hash of the value without the Record key.
+
+- Rows are inserted by the commit pipeline in the commit's transaction, after the objects, with
+  `ON CONFLICT DO NOTHING`: the same value of the same Record is the same token.
+- Erasure by Record reads `(domain_id, kind_id, record_key)`, erasure by value
+  `(domain_id, kind_id, attribute_id, fingerprint)` (both indexed). It clears `value_ciphertext`,
+  `key_id` and `fingerprint` and sets `erased_at`; rows are never deleted, so erased tokens keep
+  reading as erased and a later write of the same value moves to a new token.
+- Row-level security on `domain_id` as for the other Domain tables. The downgrade refuses while
+  rows exist.
+
 ## Tests
 
 `lorebase_store.testing` provides the server: `LOREBASE_TEST_DATABASE_URL` if set (its role needs

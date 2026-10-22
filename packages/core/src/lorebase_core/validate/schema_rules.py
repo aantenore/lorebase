@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
-from lorebase_core.model.attribute import Attribute
+from lorebase_core.model.attribute import Attribute, Sensitivity
 from lorebase_core.model.base import ElementStatus, NameStyle, is_valid_api_name
 from lorebase_core.model.derivation import (
     AggregateDerivation,
@@ -25,6 +25,7 @@ from lorebase_core.model.operation import (
     CreateLinkStep,
     CreateRecordStep,
     DeleteLinkStep,
+    DeleteRecordStep,
     Operation,
     UpdateRecordStep,
     builtin_link_operation_names,
@@ -441,12 +442,105 @@ class _Checker:
                         f"Derivation {derivation.api_name!r} does not compute this attribute",
                         refs=refs,
                     )
+        self.check_sensitive(attribute, path, refs, relation_id=relation_id)
         if attribute.authority is not None and attribute.authority not in self.schema.sources:
             self.add(
                 IssueCode.SCHEMA_AUTHORITY_UNKNOWN,
                 (*path, "authority"),
                 f"unknown Source {attribute.authority}",
                 refs=refs,
+            )
+
+    def check_sensitive(
+        self,
+        attribute: Attribute,
+        path: tuple[PathPart, ...],
+        refs: Refs,
+        *,
+        relation_id: str | None,
+    ) -> None:
+        """Vault storage (design 13.5) and what sensitivity tags take out of search."""
+        if attribute.is_sensitive and attribute.searchable:
+            self.add(
+                IssueCode.SCHEMA_SENSITIVE_ATTRIBUTE,
+                (*path, "searchable"),
+                f"sensitive attribute {attribute.api_name!r} is left out of full-text search",
+                severity=Severity.WARNING,
+                refs=refs,
+            )
+        if attribute.vault is None:
+            return
+        problems: list[tuple[str, str]] = []
+        if Sensitivity.PII not in attribute.sensitivity:
+            problems.append(("sensitivity", "vault storage needs the pii sensitivity tag"))
+        if relation_id is not None:
+            problems.append(("vault", "link attributes cannot use vault storage"))
+        if attribute.is_derived:
+            problems.append(("vault", "derived attributes cannot use vault storage"))
+        if attribute.in_vault:
+            if attribute.unique:
+                problems.append(("unique", "vault attributes cannot be unique"))
+            if attribute.indexed:
+                problems.append(("indexed", "vault attributes cannot be indexed"))
+            if attribute.type.scalar.name is AttributeType.REF:
+                problems.append(("type", "references to Records cannot use vault storage"))
+        for field_name, message in problems:
+            self.add(
+                IssueCode.SCHEMA_VAULT_INVALID,
+                (*path, field_name),
+                f"attribute {attribute.api_name!r}: {message}",
+                refs=refs,
+            )
+
+    def check_vault_roles(self, kind: Kind) -> None:
+        """Vault attributes hold references, so they cannot key, label or link Records."""
+        base: tuple[PathPart, ...] = ("kinds", kind.id)
+        roles: list[tuple[str, tuple[PathPart, ...], str]] = [
+            (attribute_id, (*base, "primary_key", index), "a primary key attribute")
+            for index, attribute_id in enumerate(kind.primary_key)
+        ]
+        if kind.title_attribute is not None:
+            roles.append((kind.title_attribute, (*base, "title_attribute"), "the title attribute"))
+        for relation in self.schema.relations.values():
+            if relation.from_kind == kind.id and relation.foreign_key_attribute is not None:
+                roles.append(
+                    (
+                        relation.foreign_key_attribute,
+                        ("relations", relation.id, "foreign_key_attribute"),
+                        f"the foreign key of Relation {relation.api_name!r}",
+                    )
+                )
+        for attribute_id, path, role in roles:
+            attribute = kind.attributes.get(attribute_id)
+            if attribute is None:
+                continue
+            if attribute.in_vault:
+                self.add(
+                    IssueCode.SCHEMA_VAULT_INVALID,
+                    path,
+                    f"vault attribute {attribute.api_name!r} cannot be {role}",
+                    kind=kind.id,
+                    attribute=attribute_id,
+                )
+            elif attribute.is_sensitive and path[-1] != "title_attribute":
+                # Keys built from these values are shown to every reader of the Kind.
+                self.add(
+                    IssueCode.SCHEMA_SENSITIVE_ATTRIBUTE,
+                    path,
+                    f"sensitive attribute {attribute.api_name!r} cannot be {role}: Record "
+                    "keys are shown without clearance",
+                    kind=kind.id,
+                    attribute=attribute_id,
+                )
+        title = kind.attributes.get(kind.title_attribute or "")
+        if title is not None and title.is_sensitive and not title.in_vault:
+            self.add(
+                IssueCode.SCHEMA_SENSITIVE_ATTRIBUTE,
+                (*base, "title_attribute"),
+                f"title attribute {title.api_name!r} is sensitive: Record titles stay empty",
+                severity=Severity.WARNING,
+                kind=kind.id,
+                attribute=title.id,
             )
 
     # Kinds -----------------------------------------------------------------------
@@ -518,6 +612,7 @@ class _Checker:
                 kind=kind.id,
             )
 
+        self.check_vault_roles(kind)
         self.check_trait_implementations(kind)
 
     def check_trait_implementations(self, kind: Kind) -> None:
@@ -848,6 +943,128 @@ class _Checker:
                 attribute=source.id,
             )
 
+    def check_derivation_sensitivity(self) -> None:
+        """A derived value tells about what it reads: a derived Attribute carries every
+        sensitivity tag of the Attributes its Derivation may read, and never reads a vault
+        Attribute (which holds references)."""
+        from lorebase_core.expr.derivations import derivation_reads
+
+        for derivation in self.schema.derivations.values():
+            target = derivation.target
+            if target is None:
+                continue
+            kind = self.schema.kinds.get(target[0])
+            attribute = None if kind is None else kind.attributes.get(target[1])
+            if kind is None or attribute is None:
+                continue
+            needed: set[Sensitivity] = set()
+            vaulted: list[str] = []
+            reads = derivation_reads(self.schema, derivation, self.rules.expression_limits)
+            for kind_id, attribute_id in sorted(reads):
+                read_kind = self.schema.kinds.get(kind_id)
+                read = None if read_kind is None else read_kind.attributes.get(attribute_id)
+                if read is None or read.id == attribute.id:
+                    continue
+                needed.update(read.sensitivity)
+                if read.in_vault:
+                    vaulted.append(read.api_name)
+            path: tuple[PathPart, ...] = ("kinds", kind.id, "attributes", attribute.id)
+            missing = sorted(t.value for t in needed - set(attribute.sensitivity))
+            if missing:
+                self.add(
+                    IssueCode.SCHEMA_SENSITIVITY_INHERITED,
+                    (*path, "sensitivity"),
+                    f"derived attribute {attribute.api_name!r} reads sensitive values: it needs "
+                    f"the sensitivity tags {', '.join(missing)}",
+                    kind=kind.id,
+                    attribute=attribute.id,
+                )
+            if vaulted:
+                self.add(
+                    IssueCode.SCHEMA_VAULT_INVALID,
+                    (*path, "derivation_id"),
+                    f"derived attribute {attribute.api_name!r} reads vault attributes "
+                    f"({', '.join(vaulted)}), whose stored values are references",
+                    kind=kind.id,
+                    attribute=attribute.id,
+                )
+
+    def check_operation_sensitivity(self) -> None:
+        """What an Operation computes from Records tells about them: a step value carries the
+        tags of the Attributes its expression may read, and a precondition, whose outcome is
+        reported to the caller, reads no sensitive Attribute. Neither reads a vault Attribute
+        (Records hold references)."""
+
+        for operation in self.schema.operations.values():
+            self.check_one_operation_sensitivity(operation)
+
+    def check_one_operation_sensitivity(self, operation: Operation) -> None:
+        """`check_operation_sensitivity` for one Operation."""
+        from lorebase_core.expr.sensitivity import operation_reads
+
+        limits = self.rules.expression_limits
+        base: tuple[PathPart, ...] = ("operations", operation.id)
+
+        def quiet(expression: str, path: tuple[PathPart, ...], what: str) -> None:
+            """Expressions whose outcome reaches the caller (preconditions; the Records a step
+            addresses, echoed back when missing) read no sensitive or vault Attribute."""
+            read = operation_reads(self.schema, operation, expression, limits)
+            sensitive = sorted({a.api_name for a in read if a.is_sensitive or a.in_vault})
+            if sensitive:
+                self.add(
+                    IssueCode.SCHEMA_SENSITIVITY_INHERITED,
+                    path,
+                    f"{what} of Operation {operation.api_name!r} reads sensitive attributes "
+                    f"({', '.join(sensitive)}): its outcome would tell about their values",
+                )
+
+        for index, precondition in enumerate(operation.preconditions):
+            quiet(
+                precondition.expression,
+                (*base, "preconditions", index, "expression"),
+                "precondition",
+            )
+        for index, step in enumerate(operation.steps):
+            if isinstance(step, UpdateRecordStep | DeleteRecordStep):
+                quiet(step.target, (*base, "steps", index, "target"), "a step target")
+            if isinstance(step, CreateLinkStep | DeleteLinkStep):
+                quiet(step.from_, (*base, "steps", index, "from"), "a step source")
+                quiet(step.to, (*base, "steps", index, "to"), "a step target")
+        for index, step in enumerate(operation.steps):
+            owner = (
+                self.schema.kinds.get(step.kind)
+                if isinstance(step, CreateRecordStep | UpdateRecordStep)
+                else self.schema.relations.get(step.relation)
+                if isinstance(step, CreateLinkStep)
+                else None
+            )
+            if owner is None or isinstance(step, DeleteRecordStep | DeleteLinkStep):
+                continue
+            for attribute_id, expression in step.values.items():
+                target = owner.attributes.get(attribute_id)
+                if target is None:
+                    continue
+                read = operation_reads(self.schema, operation, expression, limits)
+                path = (*base, "steps", index, "values", attribute_id)
+                needed = {t for a in read for t in a.sensitivity} - set(target.sensitivity)
+                if needed:
+                    self.add(
+                        IssueCode.SCHEMA_SENSITIVITY_INHERITED,
+                        path,
+                        f"step value of {target.api_name!r} reads sensitive attributes: "
+                        f"the attribute needs the tags {', '.join(sorted(needed))}",
+                        attribute=target.id,
+                    )
+                vaulted = sorted({a.api_name for a in read if a.in_vault})
+                if vaulted:
+                    self.add(
+                        IssueCode.SCHEMA_VAULT_INVALID,
+                        path,
+                        f"step value of {target.api_name!r} reads vault attributes "
+                        f"({', '.join(vaulted)}), whose stored values are references",
+                        attribute=target.id,
+                    )
+
     def check_derivation_cycles(self) -> None:
         """Derivations must not depend on themselves through derived Attributes: an aggregate
         over a derived ``source_attribute``, or (with expressions enabled) an expression or
@@ -1018,6 +1235,8 @@ class _Checker:
         for derivation in self.schema.derivations.values():
             self.check_derivation(derivation)
         self.check_derivation_cycles()
+        self.check_derivation_sensitivity()
+        self.check_operation_sensitivity()
         for source in self.schema.sources.values():
             self.check_source(source)
         if self.rules.allow_expressions:
@@ -1035,3 +1254,14 @@ class _Checker:
 def validate_schema(schema: Schema, rules: SchemaRules | None = None) -> list[Issue]:
     """Return every static problem of ``schema``; an empty list means the schema is valid."""
     return _Checker(schema, rules or SchemaRules()).run()
+
+
+def operation_sensitivity_issues(
+    schema: Schema, operation: Operation, rules: SchemaRules | None = None
+) -> list[Issue]:
+    """The sensitivity rules of one Operation (``schema.sensitivity_inherited``,
+    ``schema.vault_invalid``) against ``schema``, for instance with the default branch's tags
+    added (``lorebase_core.expr.sensitivity.with_tags``)."""
+    checker = _Checker(schema, rules or SchemaRules())
+    checker.check_one_operation_sensitivity(operation)
+    return checker.issues

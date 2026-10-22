@@ -24,7 +24,13 @@ from typing import Any
 
 from lorebase_core.canonical import hex
 from lorebase_core.validate import Issue
-from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, ProblemError, ProblemType
+from lorebase_keeper.errors import (
+    FORBIDDEN,
+    NOT_FOUND,
+    VALIDATION_FAILED,
+    ProblemError,
+    ProblemType,
+)
 from lorebase_store.commit import (
     BranchLockTimeoutError,
     BranchMaterializingError,
@@ -32,6 +38,7 @@ from lorebase_store.commit import (
     BranchNotMaterializedError,
     CommitError,
     SchemaChangeError,
+    SensitivityLoweredError,
     StaleHeadError,
     ValidationFailedError,
 )
@@ -169,6 +176,13 @@ def commit_problem(
         )
     if isinstance(error, ValidationFailedError):
         return violations_problem(locate(error.issues), limit=max_issues)
+    if isinstance(error, SensitivityLoweredError):
+        return ProblemError(
+            FORBIDDEN,
+            f"The change removes the sensitivity tags {', '.join(error.tags)}; only a caller "
+            "cleared for them on the Domain may.",
+            extensions={"code": "sensitivity_lowered", "tags": error.tags},
+        )
     if isinstance(error, SchemaChangeError):
         return ProblemError(SCHEMA_CHANGE_INVALID, str(error))
     if isinstance(error, BranchNotFoundError):

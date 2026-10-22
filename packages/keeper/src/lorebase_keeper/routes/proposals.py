@@ -31,6 +31,8 @@ count.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -39,6 +41,7 @@ from pydantic import BaseModel, Field, JsonValue
 
 from lorebase_core.canonical import hex
 from lorebase_core.merge import ConflictKind
+from lorebase_core.model import Schema, Sensitivity
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, authorize, require
 from lorebase_keeper.auth.permissions import Permission
@@ -48,6 +51,14 @@ from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep
 from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, ValidationProblem
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.points import read_guard
+from lorebase_keeper.reading.sensitivity import (
+    Masking,
+    conflict_hidden,
+    default_schema,
+    mask_conflict,
+    masking_for,
+    require_lowering,
+)
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import proposals as service
@@ -60,15 +71,19 @@ from lorebase_keeper.services.proposal_reads import (
     visible_scope,
 )
 from lorebase_keeper.services.reads import ReadGuard
+from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
+from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.repositories import (
     ConflictRow,
+    MaterializedRepository,
     MergeAttemptRow,
     ProposalFilter,
     ProposalRow,
     ResolutionRow,
     ReviewRow,
+    scope_to_domain,
 )
 
 router = APIRouter(tags=["proposals"])
@@ -342,13 +357,20 @@ def _approval(approval: service.Approval) -> ApprovalOut:
     )
 
 
-def _resolution(row: ResolutionRow, unmatched: frozenset[str]) -> ResolutionOut:
+def _resolution(
+    row: ResolutionRow, unmatched: frozenset[str], masked: str | None = None
+) -> ResolutionOut:
+    """A stored resolution; with `masked`, its custom values are replaced by it."""
     body = row.resolution
+    value, values = body.get("value"), body.get("values")
+    if masked is not None:
+        value = None if value is None else masked
+        values = None if values is None else dict.fromkeys(values, masked)
     return ResolutionOut(
         fingerprint=row.fingerprint,
         choice=str(body.get("choice")),
-        value=body.get("value"),
-        values=body.get("values"),
+        value=value,
+        values=values,
         resolver=row.resolved_by,
         at=row.at,
         matched=row.fingerprint not in unmatched,
@@ -362,6 +384,7 @@ def _attempt_fields(
     *,
     recomputed: bool,
     stale: bool,
+    masked: Callable[[str], str | None] = lambda _fingerprint: None,
 ) -> dict[str, Any]:
     outcome = attempt.outcome or {}
     unmatched = [str(f) for f in outcome.get("unmatched_resolutions") or []]
@@ -387,7 +410,9 @@ def _attempt_fields(
         "counts": per_code,
         "recomputed": recomputed,
         "stale": stale,
-        "resolutions": [_resolution(r, frozenset(unmatched)) for r in resolutions],
+        "resolutions": [
+            _resolution(r, frozenset(unmatched), masked(r.fingerprint)) for r in resolutions
+        ],
         "unmatched_resolutions": unmatched,
         "auto_resolutions": list(outcome.get("auto_resolutions") or []),
     }
@@ -402,26 +427,72 @@ def _attempt_summary(attempt: MergeAttemptRow) -> AttemptOut:
     return AttemptOut(**fields)
 
 
-def _conflict(row: ConflictRow) -> ConflictOut:
+@dataclass(frozen=True)
+class _Visibility:
+    """What the caller may see of Conflict values: the target branch's schema (None when it
+    is not materialized) and the caller's masking."""
+
+    schema: Schema | None
+    masking: Masking
+
+    def hidden(self, payload: Mapping[str, Any]) -> bool:
+        return conflict_hidden(payload, self.schema, self.masking)
+
+
+async def _visibility(
+    store: StoreDep, guard: ReadGuard, domain_id: str, target: str, keeper: KeeperSettings
+) -> _Visibility:
+    writes = store.runtime.settings.writes
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        compiled = await MaterializedRepository(session, domain_id, target, writes=writes).schema()
+        reference = await default_schema(session, domain_id, store.runtime)
+    schema = None if compiled is None else load_compiled(compiled.compiled)
+    masking = await masking_for(
+        guard.authorizer, guard.principal, domain_id, reference, keeper.reads.sensitivity
+    )
+    return _Visibility(schema, masking if schema is None else masking.over(schema))
+
+
+def _conflict(row: ConflictRow, seen: _Visibility) -> ConflictOut:
+    payload = mask_conflict(row.payload, seen.schema, seen.masking)
+    resolution = row.resolution
+    if resolution is not None and seen.hidden(row.payload):
+        resolution = {
+            **resolution,
+            **{k: seen.masking.masked for k in ("value", "values") if resolution.get(k)},
+        }
     return ConflictOut(
         id=row.fingerprint,
         status="resolved" if row.resolved else "open",
-        resolution=row.resolution,
-        **row.payload,
+        resolution=resolution,
+        **payload,
     )
 
 
-def _conflicts(view: service.AttemptView) -> ConflictsOut:
+def _conflicts(view: service.AttemptView, seen: _Visibility) -> ConflictsOut:
+    hidden = {row.fingerprint for row in view.conflicts if seen.hidden(row.payload)}
+    shown = {row.fingerprint for row in view.conflicts} - hidden
+    full = seen.masking.clearance.covers(Sensitivity, ())
+
+    def masked(fingerprint: str) -> str | None:
+        # Resolutions of Conflicts outside this page are masked unless the caller is cleared
+        # for everything: their Attribute is not known here.
+        if fingerprint in shown or (fingerprint not in hidden and full):
+            return None
+        return seen.masking.masked
+
     fields = _attempt_fields(
         view.attempt,
         view.counts,
         view.resolutions,
         recomputed=view.recomputed,
         stale=view.stale,
+        masked=masked,
     )
     return ConflictsOut(
         **fields,
-        conflicts=[_conflict(row) for row in view.conflicts],
+        conflicts=[_conflict(row, seen) for row in view.conflicts],
         next_cursor=None if view.next_after is None else encode_cursor({"after": view.next_after}),
     )
 
@@ -742,10 +813,16 @@ async def merge_proposal(
             message=None if body is None else body.message,
             page_limit=keeper.pagination.default_limit,
             scope=scope,
+            schema_guard=lambda old, new: require_lowering(
+                auth.authorizer, principal, domain_id, old, new
+            ),
         )
     except CommitError as error:
         raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
-    attempt = _conflicts(outcome.view)
+    attempt = _conflicts(
+        outcome.view,
+        await _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+    )
     annotate(
         request,
         action="proposal.merge",
@@ -796,6 +873,7 @@ async def list_conflicts(
 ) -> ConflictsOut:
     """The current merge attempt with one page of its Conflicts, ordered by id."""
     scope = await _readable(store, guard, domain_id, proposal_id)
+    proposal = await service.target_of(store, domain_id, proposal_id)
     after = None if params.position is None else str(params.position.get("after", "")) or None
     try:
         view = await service.conflicts(
@@ -814,7 +892,7 @@ async def list_conflicts(
         )
     except CommitError as error:
         raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
-    return _conflicts(view)
+    return _conflicts(view, await _visibility(store, guard, domain_id, proposal.target_ref, keeper))
 
 
 @router.post(
@@ -921,4 +999,4 @@ async def resolve_conflicts(
         conflicts=[item.fingerprint for item in body.resolutions],
         attempt=view.attempt.id,
     )
-    return _conflicts(view)
+    return _conflicts(view, await _visibility(store, guard, domain_id, proposal.target_ref, keeper))

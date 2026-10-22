@@ -11,7 +11,7 @@ pipeline applies as one Revision, data migrations included.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lorebase_core.model import (
     Schema,
     SchemaYamlError,
+    Sensitivity,
     load_schema,
     locate_issues,
     schema_from_document,
@@ -59,6 +60,9 @@ SCHEMA_CHANGE_ORIGIN = "schema_change"
 DEFAULT_MESSAGE = "Schema change"
 DOCUMENT_ISSUE = "schema.document_invalid"
 SECTIONS = ("kinds", "relations", "traits", "operations", "derivations", "sources")
+
+SchemaGuard = Callable[[Schema, Schema], Awaitable[None]]
+"""Checks a schema change of any branch, `(current, target)`; raises to refuse it."""
 
 
 class ChangeStatus(StrEnum):
@@ -278,8 +282,14 @@ async def apply(
     expected_head: bytes | None,
     dry_run: bool,
     cascade: bool,
+    guard: SchemaGuard | None = None,
+    cleared: frozenset[Sensitivity] = frozenset(),
 ) -> ChangeSetOutcome:
     """Apply a change set to a branch as one Revision, or run it without committing.
+
+    `guard(current, target)` may refuse the change early (it raises), as for sensitivity tags
+    removed without the clearance (`reading.sensitivity`); the commit pipeline refuses, under
+    the branch lock, removing any tag outside `cleared` (the caller's Domain-wide clearance).
 
     Raises `ChangeSetInvalidError` (document, static or data issues), `RemovalBlockedError`,
     `ProtectedBranchError` for direct writes to a protected branch, and the other
@@ -298,6 +308,8 @@ async def apply(
             issues = static_issues(target, store.runtime.schema.rules())
             if issues:
                 raise ChangeSetInvalidError(issues)
+            if guard is not None:
+                await guard(current, target)
             changes, described = diff_schemas(current, target)
             if not cascade:
                 await _check_removals(session, domain_id, branch, current, changes, store)
@@ -320,6 +332,7 @@ async def apply(
                     expected_head=expected_head,
                     runtime=store.runtime,
                     clock=store.clock,
+                    allowed_lowering=cleared,
                 )
             except ValidationFailedError as error:
                 if not dry_run:

@@ -15,6 +15,7 @@ from lorebase_store.commit.errors import (
     BranchNotMaterializedError,
     CommitError,
     SchemaChangeError,
+    SensitivityLoweredError,
     StaleHeadError,
     ValidationFailedError,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "SchemaDelete",
     "SchemaElementModel",
     "SchemaUpsert",
+    "SensitivityLoweredError",
     "StaleHeadError",
     "ValidationFailedError",
     "commit",

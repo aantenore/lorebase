@@ -99,7 +99,7 @@ async def domain_health(
     return await respond_with(
         request,
         runtime.cache,
-        cache_key(request, point.domain.id, point.revision_hex, point.scope.variant),
+        cache_key(request, point.domain.id, point.revision_hex, point.variant),
         produce,
         headers={REVISION_HEADER: point.revision_hex},
     )
@@ -156,7 +156,7 @@ async def kind_health(
     return await respond_with(
         request,
         runtime.cache,
-        cache_key(request, point.domain.id, point.revision_hex, point.scope.variant),
+        cache_key(request, point.domain.id, point.revision_hex, point.variant),
         produce,
         headers={REVISION_HEADER: point.revision_hex},
     )

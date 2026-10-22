@@ -85,12 +85,13 @@ def next_lineage(
 
 
 def record_title(kind: Kind | None, values: Mapping[str, Any]) -> str | None:
-    """Text of the Kind's title Attribute, if any."""
+    """Text of the Kind's title Attribute, if any. A sensitive title Attribute gives no title:
+    titles are shown and searched without the clearance its values need (design 10.2)."""
     if kind is None or kind.title_attribute is None:
         return None
     value = values.get(kind.title_attribute)
     attribute = kind.attributes.get(kind.title_attribute)
-    if value is None or attribute is None:
+    if value is None or attribute is None or attribute.is_sensitive:
         return None
     if attribute.type.name in (AttributeType.JSON, AttributeType.ARRAY):
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -98,11 +99,15 @@ def record_title(kind: Kind | None, values: Mapping[str, Any]) -> str | None:
 
 
 def search_weights(kind: Kind | None) -> list[tuple[str, str]]:
-    """`(attribute_id, weight)` of the Kind's searchable Attributes, by Attribute id."""
+    """`(attribute_id, weight)` of the Kind's searchable Attributes, by Attribute id.
+
+    Sensitive Attributes are left out, like from embedding templates: the full-text index and
+    its snippets serve every reader of the Kind, cleared for sensitive values or not.
+    """
     if kind is None:
         return []
     return [
         (attribute.id, str(attribute.search_weight or DEFAULT_SEARCH_WEIGHT))
         for attribute in sorted(kind.attributes.values(), key=lambda a: a.id)
-        if attribute.searchable
+        if attribute.searchable and not attribute.is_sensitive
     ]

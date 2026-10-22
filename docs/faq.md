@@ -16,7 +16,7 @@ No. It is a service layer on top of Postgres 16. Postgres stores everything (the
 
 ### Is it ready to use?
 
-Not for production. It is pre-alpha: [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0) is the first pre-alpha release and interfaces may change. The engine, the REST API, the `lorebase` CLI, the Python client, the MCP server, CSV, JSON, Parquet, HTTP JSON and Postgres Sources, document extraction and the web app work and are tested; the [roadmap](roadmap.md) lists what is missing (the 1M-Record baseline, sensitivity masking, the PII vault). Try it to evaluate the model and the merge engine: run `uv run python examples/merge_demo.py` for the in-memory demo, `make demo` for the five-day scenario against a real stack ([demo](demo.md)), or follow the [quickstart](quickstart.md) to start Postgres and Keeper with docker compose and load the sample Domain.
+Not for production. It is pre-alpha: [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0) is the first pre-alpha release and interfaces may change. The engine, the REST API, the `lorebase` CLI, the Python client, the MCP server, CSV, JSON, Parquet, HTTP JSON and Postgres Sources, document extraction and the web app work and are tested; the [roadmap](roadmap.md) lists what is missing (the 1M-Record baseline, among others). Try it to evaluate the model and the merge engine: run `uv run python examples/merge_demo.py` for the in-memory demo, `make demo` for the five-day scenario against a real stack ([demo](demo.md)), or follow the [quickstart](quickstart.md) to start Postgres and Keeper with docker compose and load the sample Domain.
 
 ## Comparisons
 
@@ -70,7 +70,7 @@ Yes. Every change is an immutable Revision. Reads accept `at` with a Revision id
 
 ### Can I erase personal data from an immutable history?
 
-Not yet. The design handles it with a vault indirection so that erasure does not rewrite history; it is scheduled for M5.
+Yes, for values stored in the vault. Mark a `pii` Attribute with `vault: true`: Record objects then hold a token and the value is kept encrypted outside the history. `lorebase admin erase` (or `POST /api/v1/domains/{domain}/vault/erase`, permission `pii.erase`) erases a data subject's values by Record key or by value; every Revision keeps its hashes and reads show the value as erased. Values stored inline and Record keys stay in history, so keep personal data in vault Attributes ([design 13.5](design.md#135-personal-data-and-erasure)).
 
 ## Operations and scale
 
@@ -86,7 +86,7 @@ One organization per installation. Inside it, a Domain is the isolation boundary
 
 ### How is access controlled?
 
-Three authentication modes: none (development only), API keys for agents and services, and OIDC bearer tokens from any provider. Roles are granted per Domain to principals or to groups taken from an OIDC claim, and can be narrowed to a Kind, an Operation or a branch. Writes and administrative actions go to a hash-chained audit log. Sensitivity masking of attributes is planned for M3.
+Three authentication modes: none (development only), API keys for agents and services, and OIDC bearer tokens from any provider. Roles are granted per Domain to principals or to groups taken from an OIDC claim, and can be narrowed to a Kind, an Operation or a branch. Writes and administrative actions go to a hash-chained audit log. Values of Attributes tagged `pii`, `confidential` or `restricted` are masked for callers without the matching clearance (`pii.read`, `confidential.read`, `restricted.read`).
 
 ## Project
 

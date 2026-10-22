@@ -75,7 +75,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
 - [x] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP ([MCP server](mcp.md))
 - [ ] Custom Operations with CEL, review policies, outbox and webhooks (CEL and review policies work, see M1; the outbox and signed webhooks carry Revision events only, see [agents](agents.md); Operations cannot declare their own events)
-- [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (groups from the OIDC groups claim and Kind-scoped grants on reads are done; sensitivity masking is not)
+- [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (groups from the OIDC groups claim, Kind-scoped grants on reads and sensitivity masking with `pii.read`, `confidential.read` and `restricted.read` are done, see [design 13.5](design.md#135-personal-data-and-erasure))
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals
 - [x] Modeler with every editor: Kinds, Relations, Traits, Operations (with dry run), Derivations and Sources in one form and YAML document, with Keeper's validation and CEL type check next to the fields
@@ -96,7 +96,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 ## M5: Enterprise hardening and 1.0
 
 - [x] Overlay branch materialization (AC-16 implemented, migration `0010`, [store schema notes](store-schema-notes.md#overlay-branches)); landed early, `copy` stays the default mode outside the `agent/`, `extract/` and `source/` prefixes, and agent task branches are overlays (`keeper.agent_writes.branch_mode`). Overlays get their own per-Attribute indexes, and migrations `0011` (branch-scoped search index) and `0012` (overlay neighborhood lookups) keep overlay reads within 30% of a copy at p50 ([performance](performance.md#overlay-branches-milliseconds))
-- [ ] PII vault storage and erasure
+- [x] PII vault storage and erasure (`vault: true` Attributes, migration `0019`, `lorebase admin erase`, see [design 13.5](design.md#135-personal-data-and-erasure)); landed early
 - [x] Helm chart ([kubernetes](kubernetes.md)); landed early, validated by lint, template and kubeconform, not yet on a live cluster
 - [x] Garbage collection of unreachable objects ([operations](operations.md)); landed early
 - [x] Observability: a catalogue of every metric with explicit histogram buckets, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks and the OpenTelemetry Collector configuration, in compose and the Helm chart ([metrics](metrics.md), [operations](operations.md#dashboards-and-alerts)); landed early

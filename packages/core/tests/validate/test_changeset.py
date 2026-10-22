@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from lorebase_core.model import Link, OnDelete, Record, Schema
+from lorebase_core.model import Link, OnDelete, Record, Schema, Sensitivity
 from lorebase_core.validate import (
     DataChange,
     IssueCode,
@@ -24,7 +24,9 @@ from ..model.supply import (
     RISK_SCORE,
     SUPPLIED_BY,
     SUPPLIER,
+    VAT,
     WITH_SUPPLIER,
+    replace_attribute,
     replace_relation,
     supply_schema,
 )
@@ -263,3 +265,15 @@ def test_cardinality_issue_lists_competing_links() -> None:
 
 def test_empty_index_and_batch() -> None:
     assert validate_changeset(supply_schema(), MemoryIndex(), []) == []
+
+
+def test_uniqueness_of_a_sensitive_value_does_not_name_the_owner() -> None:
+    schema = replace_attribute(supply_schema(), SUPPLIER, VAT, sensitivity=(Sensitivity.PII,))
+    taken = [upsert(supplier("S-3", vat="IT001"))]
+    [issue] = evaluate_changeset(schema, existing_index(), taken).issues
+    assert issue.code is C.VALUE_UNIQUE
+    assert issue.details == {}
+    assert "S-1" not in issue.message
+    assert "IT001" not in issue.message
+    [plain] = evaluate_changeset(supply_schema(), existing_index(), taken).issues
+    assert plain.details == {"other_key": "S-1"}

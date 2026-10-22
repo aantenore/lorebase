@@ -45,6 +45,7 @@ export interface AttributeDocument {
   derivation?: string;
   /** Api name of the Source that owns the value. */
   authority?: string;
+  vault?: boolean;
 }
 
 export interface TraitImplementationDocument {
@@ -183,6 +184,7 @@ function attributeToDocument(attribute: Attribute, lookup: NameLookup): Attribut
   if (attribute.authority !== null) {
     out['authority'] = lookup.source(attribute.authority) ?? attribute.authority;
   }
+  if (attribute.vault === true) out['vault'] = true;
   return out as unknown as AttributeDocument;
 }
 
@@ -616,6 +618,7 @@ function attributeFromDocument(
     searchable: searchable ? weight : null,
     derivation_id: derivation === null ? null : (ctx.ids.derivations.get(derivation) ?? null),
     authority: authority === null ? null : (ctx.ids.sources.get(authority) ?? authority),
+    ...(reader.bool(value, 'vault', path, false) ? { vault: true } : {}),
   };
 }
 

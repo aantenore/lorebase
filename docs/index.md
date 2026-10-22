@@ -91,7 +91,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Reads | Semantic and hybrid search with caller-supplied vectors, embeddings computed by Scribe jobs ([scribe](scribe.md#embeddings)) | Done | M4 |
 | Governance | Built-in Operations (create, update, delete, link, unlink, bulk import) with dry run and idempotency | Done | M1 |
 | Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
-| Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies; events declared by Operations and sensitivity masking are planned (signed webhooks on Revision events exist) | M3 |
+| Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies, and sensitive values are masked without clearance; events declared by Operations are planned (signed webhooks on Revision events exist) | M3 |
 | Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
 | Operations | Observability bundle: metrics catalogue, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks, OpenTelemetry Collector to Prometheus and Jaeger or Tempo, in compose and the Helm chart ([metrics.md](metrics.md), [operations.md](operations.md#dashboards-and-alerts)) | Done | M1 |
 | Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
@@ -108,7 +108,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Operations | Helm chart: Keeper, migration hook, optional Scribe, Herald, web app, Ollama, Ingress, HPA, read replica DSNs ([kubernetes.md](kubernetes.md)) | Done, checked by lint, template and kubeconform; not yet run on a live cluster | M5, landed early |
 | Scale | Overlay branches that store only the rows they change, created in milliseconds whatever the size of the Domain ([store-schema-notes.md](store-schema-notes.md#overlay-branches)) | Done | M5, landed early |
 | Project | Documentation site with generated CLI, configuration and REST API reference ([aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/)) | Done | M5, landed early |
-| Scale | PII vault, 10M-Record performance | Planned | M5 |
+| Scale | PII vault, 10M-Record performance | Partly: the PII vault and erasure work; 10M-Record performance is planned | M5 |
 
 The milestone breakdown with checkboxes is in the [roadmap](roadmap.md).
 

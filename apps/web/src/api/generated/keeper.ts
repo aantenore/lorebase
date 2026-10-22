@@ -861,6 +861,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/vault/erase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Erase personal data from the vault
+         * @description Erase the vaulted values of a Record or a value in a Kind, on every Revision.
+         */
+        post: operations["erase_api_v1_domains__domain_id__vault_erase_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/documents": {
         parameters: {
             query?: never;
@@ -2715,6 +2735,57 @@ export interface components {
              * @description Length of a query vector.
              */
             dims: number;
+        };
+        /**
+         * EraseIn
+         * @description Whose values to erase: a Record (`key`, optional `attributes`) or a value
+         *     (`attribute` and `value`).
+         */
+        EraseIn: {
+            /**
+             * Kind
+             * @description Kind api name.
+             */
+            kind: string;
+            /**
+             * Key
+             * @description Key of the Record whose values to erase.
+             */
+            key?: string | null;
+            /**
+             * Attributes
+             * @description With `key`: only these vault Attributes (api names); default: all.
+             */
+            attributes?: string[] | null;
+            /**
+             * Attribute
+             * @description Vault Attribute (api name) whose `value` to erase.
+             */
+            attribute?: string | null;
+            /** @description With `attribute`: the value to erase in every Record. */
+            value?: components["schemas"]["JsonValue"];
+            /**
+             * Branch
+             * @description Branch whose schema names Kinds and Attributes.
+             */
+            branch?: string | null;
+        };
+        /** EraseOut */
+        EraseOut: {
+            /** Domain */
+            domain: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "record" | "value";
+            /**
+             * Erased
+             * @description Vault values erased by this request.
+             */
+            erased: number;
         };
         /**
          * ExecuteRequest
@@ -8190,6 +8261,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    erase_api_v1_domains__domain_id__vault_erase_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EraseIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EraseOut"];
+                };
+            };
+            /** @description The caller lacks pii.erase on the Domain. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or Kind not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Erasure by value needs the vault keys. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
                 };
             };
             /** @description Problem details (RFC 9457), media type application/problem+json. */

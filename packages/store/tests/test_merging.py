@@ -18,7 +18,15 @@ from lorebase_core.merge import (
     ResolutionError,
     put_schema,
 )
-from lorebase_core.model import Attribute, Domain, Kind, Record, Schema
+from lorebase_core.model import (
+    Attribute,
+    Domain,
+    Kind,
+    Record,
+    Schema,
+    Sensitivity,
+    vault_reference,
+)
 from lorebase_core.revision import ChangesetEntry, InMemoryRevisionGraph
 from lorebase_core.tree import InMemoryNodeStore, TreeChange, kind_partition, tree_apply
 from lorebase_core.types import TypeSpec
@@ -65,10 +73,11 @@ class Repo:
         self.objects = InMemoryObjectStore()
         self.graph = InMemoryRevisionGraph()
         self.roots: dict[bytes, bytes] = {}
+        self.schema = schema()
 
     def commit(self, label: str, records: list[Record], *parents: bytes) -> bytes:
         root = self.roots[parents[0]] if parents else None
-        changes = [] if parents else list(put_schema(self.objects, schema()))
+        changes = [] if parents else list(put_schema(self.objects, self.schema))
         changes.extend(
             TreeChange(
                 kind_partition(r.kind), r.key, self.objects.put(ObjectType.RECORD, r.content())
@@ -239,3 +248,45 @@ def test_complete_provenance_attributes_every_change() -> None:
     assert dict(completed[0].provenance) == {NAME: "prv_theirs", VAT: "prv_resolution"}
     assert dict(completed[1].provenance) == {ELEMENT_PROVENANCE_KEY: "prv_merge"}
     assert used == {"f" * 64}
+
+
+def vault_repo() -> Repo:
+    """A Repo whose `name` Attribute is stored in the vault: Records hold tokens."""
+    repo = Repo()
+    kind = repo.schema.kinds[SUPPLIER]
+    name = kind.attributes[NAME].model_copy(
+        update={"sensitivity": (Sensitivity.PII,), "vault": True}
+    )
+    repo.schema = repo.schema.model_copy(
+        update={
+            "kinds": {
+                SUPPLIER: kind.model_copy(update={"attributes": {**kind.attributes, NAME: name}})
+            }
+        }
+    )
+    return repo
+
+
+def token(label: str) -> dict[str, Any]:
+    return vault_reference("vlt_" + hashlib.sha256(label.encode()).hexdigest()[:32])
+
+
+def test_merges_compare_vault_tokens() -> None:
+    repo = vault_repo()
+    base = repo.commit("base", [supplier("S-1", "IT001", token("a"))])
+    same_ours = repo.commit("same-ours", [supplier("S-1", "IT001", token("b"))], base)
+    same_theirs = repo.commit("same-theirs", [supplier("S-1", "IT001", token("b"))], base)
+    # The same value on both sides is the same token: no Conflict.
+    assert compute_attempt(repo.input(same_ours, same_theirs), []).clean
+    theirs = repo.commit("theirs", [supplier("S-1", "IT001", token("c"))], base)
+    computed = compute_attempt(repo.input(same_ours, theirs), [])
+    [state] = computed.conflicts
+    assert (state.conflict.attribute, state.conflict.ours) == (NAME, token("b"))
+    picked = Resolution(fingerprint=state.conflict.fingerprint, choice=C.THEIRS, resolver="usr_r")
+    check_resolution(state.conflict, state.members, picked)
+    assert compute_attempt(repo.input(same_ours, theirs), [picked]).clean
+    # A custom value would bypass the vault, and a reference would copy another value.
+    for value in ("plain text", token("other")):
+        custom = Resolution(fingerprint=state.conflict.fingerprint, choice=C.CUSTOM, value=value)
+        with pytest.raises(ResolutionError):
+            check_resolution(state.conflict, state.members, custom)

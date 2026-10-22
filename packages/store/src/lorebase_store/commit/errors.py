@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from lorebase_core.validate import Issue
 
@@ -41,6 +41,15 @@ class BranchLockTimeoutError(CommitError):
 
 class SchemaChangeError(CommitError):
     """A schema change cannot be applied (unknown element, Domain removal, wrong Domain)."""
+
+
+class SensitivityLoweredError(CommitError):
+    """The change removes sensitivity tags (or sensitive Attributes) without having been
+    allowed to: only callers cleared for the tags may (design 10.2)."""
+
+    def __init__(self, tags: Iterable[str]) -> None:
+        self.tags = sorted(tags)
+        super().__init__(f"the change removes the sensitivity tags {', '.join(self.tags)}")
 
 
 class ValidationFailedError(CommitError):

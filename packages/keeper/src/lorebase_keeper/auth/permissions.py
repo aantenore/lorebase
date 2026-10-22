@@ -19,8 +19,10 @@ Role semantics where the design table leaves room:
   `reviewer` reviews them and resolves Conflicts; merging needs `proposal.merge`
   (`maintainer`), into protected and unprotected branches alike;
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
-  delete the Domain (`domain.delete`). `domain.create` is installation-level: installation
-  administrators hold it, and so do admins of any Domain.
+  delete the Domain (`domain.delete`), read values of sensitive Attributes (`pii.read`,
+  `confidential.read`, `restricted.read`; other callers see them masked) and erase vault
+  values (`pii.erase`); custom roles grant the clearances to others. `domain.create` is
+  installation-level: installation administrators hold it, and so do admins of any Domain.
 """
 
 from __future__ import annotations
@@ -57,6 +59,10 @@ class Permission(StrEnum):
     DOMAIN_CREATE = "domain.create"
     AUDIT_READ = "audit.read"
     PRINCIPAL_READ = "principal.read"
+    PII_READ = "pii.read"
+    CONFIDENTIAL_READ = "confidential.read"
+    RESTRICTED_READ = "restricted.read"
+    PII_ERASE = "pii.erase"
 
 
 INSTALLATION_PERMISSIONS = frozenset({Permission.PRINCIPAL_READ, Permission.DOMAIN_CREATE})

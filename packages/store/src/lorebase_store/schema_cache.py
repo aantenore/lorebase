@@ -13,7 +13,13 @@ from lorebase_core.model import Schema
 
 
 class SchemaCache:
-    """Bounded LRU mapping `(domain_id, revision_id)` to the schema at that Revision."""
+    """Bounded LRU mapping `(domain_id, revision_id)` to the schema at that Revision.
+
+    Keys are Revision ids only (never schema hashes): callers look a branch head's schema up
+    by its head Revision (`reads.head_schema`). The same object comes back for the same
+    Revision, which keeps caches keyed by schema identity (Keeper's effective sensitivity
+    tags) effective.
+    """
 
     def __init__(self, entries: int) -> None:
         self._entries = entries

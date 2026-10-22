@@ -2,9 +2,10 @@
 
 HKDF-SHA256 turns the secret into independent 256-bit keys (info `lorebase/<namespace>/<purpose>`),
 so a value sealed for one purpose never opens for another. Sealing is AES-256-GCM with a random
-96-bit nonce and the purpose as associated data; MACs are HMAC-SHA256. Keeper's web sessions
-(`keeper.auth.sessions.encryption_key`, namespace `keeper`) and webhook signing keys at rest
-(`webhooks.encryption_key`, namespace `webhooks`) use it.
+96-bit nonce and the purpose (plus an optional context) as associated data; MACs are
+HMAC-SHA256. Keeper's web sessions (`keeper.auth.sessions.encryption_key`, namespace `keeper`),
+webhook signing keys at rest (`webhooks.encryption_key`, namespace `webhooks`) and the
+personal data vault (`vault.encryption_key` and `vault.token_key`, namespace `vault`) use it.
 """
 
 from __future__ import annotations
@@ -41,22 +42,31 @@ class Keyring:
             self._keys[purpose] = key
         return key
 
-    def seal(self, purpose: str, plaintext: bytes) -> bytes:
-        """Encrypt and authenticate `plaintext` for `purpose`."""
+    def seal(self, purpose: str, plaintext: bytes, *, context: bytes = b"") -> bytes:
+        """Encrypt and authenticate `plaintext` for `purpose`. A non-empty `context` (such as
+        the row a value is stored in) is authenticated too: the value opens only with it."""
         nonce = os.urandom(_NONCE_BYTES)
-        return nonce + AESGCM(self._key(purpose)).encrypt(nonce, plaintext, purpose.encode())
+        aad = _associated(purpose, context)
+        return nonce + AESGCM(self._key(purpose)).encrypt(nonce, plaintext, aad)
 
-    def open(self, purpose: str, sealed: bytes) -> bytes | None:
-        """The plaintext of a value sealed for `purpose`; None when it was altered, sealed for
-        another purpose or under another secret."""
+    def open(self, purpose: str, sealed: bytes, *, context: bytes = b"") -> bytes | None:
+        """The plaintext of a value sealed for `purpose` (and `context`); None when it was
+        altered, sealed for another purpose or context, or under another secret."""
         if len(sealed) <= _NONCE_BYTES:
             return None
         nonce, ciphertext = sealed[:_NONCE_BYTES], sealed[_NONCE_BYTES:]
         try:
-            return AESGCM(self._key(purpose)).decrypt(nonce, ciphertext, purpose.encode())
+            return AESGCM(self._key(purpose)).decrypt(
+                nonce, ciphertext, _associated(purpose, context)
+            )
         except InvalidTag:
             return None
 
     def mac(self, purpose: str, message: bytes) -> bytes:
         """HMAC-SHA256 of `message` under the key of `purpose`."""
         return hmac.new(self._key(purpose), message, hashlib.sha256).digest()
+
+
+def _associated(purpose: str, context: bytes) -> bytes:
+    """Associated data: the purpose alone (as before contexts existed), or purpose and context."""
+    return purpose.encode() if not context else purpose.encode() + b"\x00" + context

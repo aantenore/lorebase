@@ -71,6 +71,7 @@ from lorebase_store.repositories import (
     RefRepository,
     RefRow,
 )
+from lorebase_store.vault import VaultKeys
 
 logger = logging.getLogger("lorebase.keeper.agent_writes")
 
@@ -561,14 +562,21 @@ def _check_ownership(
 
 
 def _check_replay(
-    prepared: _Prepared, request: ExecutionRequest, name: str
+    prepared: _Prepared,
+    request: ExecutionRequest,
+    name: str,
+    *,
+    domain_id: str,
+    keys: VaultKeys | None,
 ) -> InvocationRow | None:
     """The earlier execution under the idempotency key when it is this one; conflict when the
     key was used for something else."""
     found = prepared.invocation
     if found is None:
         return None
-    digest = operations_service.parameters_hash(request.operation, name, request.parameters)
+    digest = operations_service.parameters_hash(
+        request.operation, name, request.parameters, domain_id=domain_id, keys=keys
+    )
     if found.params.get("parameters_hash") != digest:
         raise ProblemError(
             IDEMPOTENCY_CONFLICT,
@@ -698,7 +706,7 @@ async def run(
 
     _check_ownership(prepared, settings, principal, name)
     exists = name in prepared.branches
-    replay = _check_replay(prepared, request, name)
+    replay = _check_replay(prepared, request, name, domain_id=domain_id, keys=store.runtime.vault)
     await check(Permission.DATA_READ, AccessContext(branch=target))
     await check(Permission.PROPOSAL_CREATE, context)
     if not exists:
@@ -771,9 +779,7 @@ async def run(
     else:
         executed = _recalled(replay, name)
 
-    parameters = (
-        replay.params.get("parameters", request.parameters) if replay else (request.parameters)
-    )
+    parameters = replay.params.get("parameters", {}) if replay else executed.parameters
     line = operation_line(request.operation, parameters, executed.invocation_id, settings)
     row, created = await _upsert_proposal(
         store,

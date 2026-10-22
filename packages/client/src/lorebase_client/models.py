@@ -678,6 +678,27 @@ class ChangesPage(Model):
 # Administration ---------------------------------------------------------------------------
 
 
+class EraseRequest(RequestModel):
+    """Erase the vaulted values of a Record (`key`, optional `attributes`) or a value of a
+    vault Attribute in every Record of a Kind (`attribute`, `value`)."""
+
+    kind: str
+    key: str | None = None
+    attributes: list[str] | None = None
+    attribute: str | None = None
+    value: JsonValue = None
+    branch: str | None = None
+
+
+class EraseResult(Model):
+    """Outcome of an erasure: `erased` vault values were erased by this request."""
+
+    domain: str
+    kind: str
+    mode: str
+    erased: int
+
+
 class CreateApiKey(RequestModel):
     """Request to create an API key for a Domain."""
 

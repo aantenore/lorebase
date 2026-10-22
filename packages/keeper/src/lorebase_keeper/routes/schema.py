@@ -35,6 +35,7 @@ from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.reading.runtime import ReadRuntime, ReadRuntimeDep
+from lorebase_keeper.reading.sensitivity import clearance_of, require_lowering
 from lorebase_keeper.services import schema as service
 from lorebase_keeper.services.errors import (
     ProtectedBranchError,
@@ -397,6 +398,7 @@ async def apply_schema_changes(
     store: StoreDep,
     keeper: KeeperSettingsDep,
     access: Annotated[Access, Depends(require(Permission.SCHEMA_WRITE, branch_param="branch"))],
+    auth: AuthDep,
     dry_run: Annotated[bool | None, Query(description="For YAML bodies.")] = None,
     cascade: Annotated[bool | None, Query(description="For YAML bodies.")] = None,
     message: Annotated[str | None, Query(description="For YAML bodies.")] = None,
@@ -434,6 +436,12 @@ async def apply_schema_changes(
             expected_head=expected,
             dry_run=body.dry_run,
             cascade=body.cascade,
+            guard=lambda old, new: require_lowering(
+                auth.authorizer, access.principal, domain_id, old, new
+            ),
+            cleared=(
+                await clearance_of(auth.authorizer, access.principal, domain_id, None)
+            ).everywhere,
         )
     except (service.ChangeSetInvalidError, service.RemovalBlockedError) as invalid:
         raise violations_problem(invalid.issues, limit=limits.max_issues) from None

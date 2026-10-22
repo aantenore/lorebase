@@ -2,7 +2,8 @@
 
 Responses use api names (design 8.1); values stay in canonical form (design 6.1): integers and
 decimals are JSON strings, timestamps RFC 3339 UTC with six fractional digits. Values of
-Attributes the schema no longer knows are left out.
+Attributes the schema no longer knows are left out; values of sensitive Attributes are masked
+for callers without the clearance (`reading.sensitivity`).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field, JsonValue
 from lorebase_core.model import LinkDirection, Relation, Schema
 from lorebase_core.query import FieldRef, FieldSource
 from lorebase_keeper.reading.points import ReadPoint, ServedFrom
+from lorebase_keeper.reading.sensitivity import Masking
 
 
 class Served(BaseModel):
@@ -168,32 +170,20 @@ def relation_name(relation: Relation, direction: LinkDirection) -> str:
     return relation.api_name if direction is LinkDirection.FORWARD else relation.inverse_api_name
 
 
-def named_values(
-    attributes: Mapping[str, Any],
-    values: Mapping[str, Any],
-    derived: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Values keyed by api name, in schema order; ids unknown to `attributes` are dropped."""
-    out: dict[str, Any] = {}
-    for attribute_id, attribute in attributes.items():
-        source = derived if attribute.is_derived and derived is not None else values
-        if attribute_id in source:
-            out[attribute.api_name] = source[attribute_id]
-    return out
-
-
 def record_out(
     schema: Schema,
     row: Mapping[Any, Any],
     *,
+    masking: Masking,
     select: Sequence[FieldRef] | None = None,
 ) -> RecordOut:
-    """API form of a materialized row (`record_columns`) or a tree Record."""
+    """API form of a materialized row (`record_columns`) or a tree Record, with the values the
+    caller is not cleared for masked."""
     kind_id = row["kind_id"]
     kind = schema.kinds.get(kind_id)
     values: Mapping[str, Any] = row.get("values") or {}
     derived: Mapping[str, Any] = row.get("derived") or {}
-    rendered = {} if kind is None else named_values(kind.attributes, values, derived)
+    rendered = {} if kind is None else masking.kind_values(kind, values, derived=derived)
     if select is not None:
         wanted = _selected(select, kind_id, kind.attributes if kind is not None else {})
         rendered = {name: value for name, value in rendered.items() if name in wanted}
@@ -201,7 +191,7 @@ def record_out(
     return RecordOut(
         kind=kind.api_name if kind is not None else kind_id,
         key=row["key"],
-        title=row.get("title"),
+        title=masking.title(schema, kind_id, row.get("title")),
         values=rendered,
         updated_revision=None if updated is None else bytes(updated).hex(),
         updated_at=row.get("updated_at"),
@@ -220,12 +210,23 @@ def _selected(select: Sequence[FieldRef], kind_id: str, attributes: Mapping[str,
     return wanted
 
 
-def record_ref(schema: Schema, kind_id: str, key: str, title: str | None = None) -> RecordRef:
-    return RecordRef(kind=kind_name(schema, kind_id), key=key, title=title)
+def record_ref(
+    schema: Schema,
+    kind_id: str,
+    key: str,
+    title: str | None = None,
+    masking: Masking | None = None,
+) -> RecordRef:
+    """A Record reference; a title needs `masking` to be shown."""
+    shown = None if masking is None else masking.title(schema, kind_id, title)
+    return RecordRef(kind=kind_name(schema, kind_id), key=key, title=shown)
 
 
-def link_values(relation: Relation, values: Mapping[str, Any] | None) -> dict[str, Any]:
-    return named_values(relation.attributes, values or {})
+def link_values(
+    schema: Schema, relation: Relation, values: Mapping[str, Any] | None, masking: Masking
+) -> dict[str, Any]:
+    """Link Attribute values keyed by api name, masked for the caller."""
+    return masking.link_values(schema, relation, values)
 
 
 def served(point: ReadPoint) -> dict[str, Any]:

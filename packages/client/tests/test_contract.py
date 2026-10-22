@@ -87,6 +87,7 @@ RESPONSES: dict[type[m.Model], str] = {
     m.ChangesPage: "ChangesPage",
     m.ApiKey: "ApiKeyOut",
     m.ApiKeyCreated: "ApiKeyCreated",
+    m.EraseResult: "EraseOut",
     m.Principal: "PrincipalOut",
     m.Grant: "GrantOut",
     m.AuditEntry: "AuditEntryOut",
@@ -132,6 +133,7 @@ RESPONSES: dict[type[m.Model], str] = {
     m.ItemsDecided: "DecideOut",
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
+    m.EraseRequest: "EraseIn",
     m.DomainCreate: "DomainCreate",
     m.DomainUpdate: "DomainUpdate",
     m.BranchCreate: "BranchCreate",
@@ -280,6 +282,7 @@ def sample_calls() -> list[Any]:
         ep.revision_changeset(d, r),
         ep.diff(d, "a", "b"),
         ep.create_api_key(d, m.CreateApiKey(name="bot")),
+        ep.erase_vault(d, m.EraseRequest(kind="Supplier", key="S-1")),
         ep.list_api_keys(d),
         ep.revoke_api_key(d, "key"),
         ep.list_principals(),

@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, link_key, relation_partition
 from lorebase_store.commit.schema import load_compiled
@@ -27,6 +28,7 @@ from lorebase_store.materialize.rows import (
     parse_partition,
     record_title,
 )
+from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
 from lorebase_store.repositories.materialized import MaterializedRepository
@@ -45,6 +47,9 @@ class DivergenceReason(StrEnum):
     VALUES_MISMATCH = "values_mismatch"
     COUNT_MISMATCH = "count_mismatch"
     DERIVED_MISMATCH = "derived_mismatch"
+    SENSITIVITY_STALE = "sensitivity_stale"
+    """A title materialized before the default branch tagged the title Attribute: stale,
+    not corrupt; the next change of the Kind on the branch, or a rebuild, recomputes it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +115,7 @@ async def verify(
     tree = await nodes.load_tree(head.root)
 
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
+    tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
     stored_schema = await repository.schema()
     if stored_schema is None:
         report.add(Divergence(DivergenceReason.SCHEMA_MISSING, PARTITION_SCHEMA))
@@ -149,7 +155,7 @@ async def verify(
         report.rows += len(actual)
         _compare_hashes(report, partition, expected, {k: v[0] for k, v in actual.items()})
         if deep:
-            await _compare_values(report, partition, expected, actual, objects, schema)
+            await _compare_values(report, partition, expected, actual, objects, tagged, schema)
     if derived:
         await _compare_derived(report, repository, schema, runtime, head.created_at)
     return report
@@ -238,7 +244,10 @@ async def _compare_values(
     actual: Mapping[str, tuple[bytes, dict[str, Any] | None, str | None]],
     objects: PgObjectStore,
     schema: Schema,
+    own: Schema | None = None,
 ) -> None:
+    """`schema` has the default branch's tags added; `own` is the branch's own schema, which
+    tells a stale title (`SENSITIVITY_STALE`) from a wrong one."""
     common = sorted(expected.keys() & actual.keys())
     bodies = await objects.get_many(expected[key] for key in common)
     parsed = parse_partition(partition)
@@ -249,9 +258,17 @@ async def _compare_values(
         _, got_values, got_title = actual[key]
         want_title = record_title(kind, want_values) if kind is not None else None
         if got_values != want_values or got_title != want_title:
+            own_kind = None if own is None else own.kinds.get(parsed.element_id)
+            stale = (
+                got_values == want_values
+                and own_kind is not None
+                and got_title == record_title(own_kind, want_values)
+            )
             report.add(
                 Divergence(
-                    DivergenceReason.VALUES_MISMATCH,
+                    DivergenceReason.SENSITIVITY_STALE
+                    if stale
+                    else DivergenceReason.VALUES_MISMATCH,
                     partition,
                     key,
                     expected={"values": want_values, "title": want_title},

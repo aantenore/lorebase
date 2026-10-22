@@ -25,6 +25,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, JsonValue
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.canonical import hex
 from lorebase_keeper.auth.audit import annotate
@@ -34,6 +35,7 @@ from lorebase_keeper.auth.rbac import AccessContext
 from lorebase_keeper.context import StoreDep, parse_revision_id
 from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep, get_idempotency_key
 from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError
+from lorebase_keeper.reading.sensitivity import Masking, default_schema, masking_for
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import operations as service
@@ -291,6 +293,12 @@ async def execute_operation(
     async def roles_of(context: AccessContext) -> frozenset[str]:
         return await auth.authorizer.roles_of(principal, domain_id, context)
 
+    async def reveal(session: AsyncSession) -> Masking:
+        reference = await default_schema(session, domain_id, store.runtime)
+        return await masking_for(
+            auth.authorizer, principal, domain_id, reference, keeper.reads.sensitivity
+        )
+
     outcome: service.ExecutionOutcome | agent_writes.AgentWriteOutcome
     try:
         try:
@@ -302,6 +310,7 @@ async def execute_operation(
                 settings,
                 check=check,
                 proposals_path=f"{keeper.api_prefix}/domains/{domain_id}/proposals",
+                reveal=reveal,
             )
         except ProblemError as refusal:
             if body.dry_run or not agent_writes.diverts(refusal):

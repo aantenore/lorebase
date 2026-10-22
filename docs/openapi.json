@@ -5088,6 +5088,104 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/vault/erase": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Erase personal data from the vault",
+        "description": "Erase the vaulted values of a Record or a value in a Kind, on every Revision.",
+        "operationId": "erase_api_v1_domains__domain_id__vault_erase_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EraseIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EraseOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks pii.erase on the Domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Kind not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Erasure by value needs the vault keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/documents": {
       "post": {
         "tags": [
@@ -12393,6 +12491,110 @@
         ],
         "title": "EmbeddingOut",
         "description": "The embedding model of a Domain: what a caller embeds `query_vector` with."
+      },
+      "EraseIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Kind api name."
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key",
+            "description": "Key of the Record whose values to erase."
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes",
+            "description": "With `key`: only these vault Attributes (api names); default: all."
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Vault Attribute (api name) whose `value` to erase."
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "With `attribute`: the value to erase in every Record."
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch",
+            "description": "Branch whose schema names Kinds and Attributes."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "EraseIn",
+        "description": "Whose values to erase: a Record (`key`, optional `attributes`) or a value\n(`attribute` and `value`)."
+      },
+      "EraseOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "record",
+              "value"
+            ],
+            "title": "Mode"
+          },
+          "erased": {
+            "type": "integer",
+            "title": "Erased",
+            "description": "Vault values erased by this request."
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "kind",
+          "mode",
+          "erased"
+        ],
+        "title": "EraseOut"
       },
       "ExecuteRequest": {
         "properties": {

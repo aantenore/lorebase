@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, Tree
 from lorebase_store.bulk import chunks
@@ -35,6 +36,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
+from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
@@ -132,6 +134,7 @@ async def materialize_revision(
     objects = PgObjectStore(session, domain_id, writes=settings.writes, batch=batch)
     tree = await nodes.load_tree(head.root)
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
+    tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
     indexes = BranchIndexes(
         session, domain_id, branch, settings=settings.indexes, maintenance=runtime.index_maintenance
     )
@@ -158,7 +161,7 @@ async def materialize_revision(
                             key,
                             values[key],
                             entries[key],
-                            schema,
+                            tagged,
                             folded.get(key),
                             head,
                         )
@@ -178,7 +181,7 @@ async def materialize_revision(
             records += len(entries)
             await repository.refresh_search(
                 parsed.element_id,
-                search_weights(schema.kinds.get(parsed.element_id)),
+                search_weights(tagged.kinds.get(parsed.element_id)),
                 config=settings.materialize.text_search_config,
             )
         else:
@@ -197,7 +200,7 @@ async def materialize_revision(
             if derived.searchable(kind_id):
                 await repository.refresh_search(
                     kind_id,
-                    search_weights(schema.kinds.get(kind_id)),
+                    search_weights(tagged.kinds.get(kind_id)),
                     config=settings.materialize.text_search_config,
                 )
     await indexes.ensure(schema)

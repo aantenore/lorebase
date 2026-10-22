@@ -145,11 +145,34 @@ class ReadCacheSettings(SectionModel):
     )
 
 
+class SensitivitySettings(SectionModel):
+    """How reads show values of sensitive Attributes (design 10.2, 13.5).
+
+    A caller sees the values of an Attribute tagged `pii`, `confidential` or `restricted` only
+    with the matching clearance (`pii.read`, `confidential.read`, `restricted.read`) on its
+    Kind; other callers get `masked_value`, or no value at all with `omit`.
+    """
+
+    omit: bool = Field(
+        default=False,
+        description="Leave masked values out of Records instead of showing masked_value. "
+        "Values shown outside Records (history, lineage, diffs, Conflicts) are always masked.",
+    )
+    masked_value: str = Field(
+        default="***", description="What a value is replaced by when it is masked."
+    )
+    erased_value: str = Field(
+        default="[erased]",
+        description="What cleared callers see for a vault value that was erased.",
+    )
+
+
 class ReadsSettings(SectionModel):
     """Read responses: authorization of Revisions named by id or tag, response cache, and the
     database serving them (design 15.3)."""
 
     cache: ReadCacheSettings = Field(default_factory=ReadCacheSettings)
+    sensitivity: SensitivitySettings = Field(default_factory=SensitivitySettings)
     reachability_max_depth: int = Field(
         default=1000,
         ge=1,

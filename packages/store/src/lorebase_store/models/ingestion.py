@@ -131,13 +131,26 @@ class ExtractionCacheEntry(Base):
 
 
 class VaultEntry(Base):
-    """Encrypted personal value referenced from Record objects; erasure clears it."""
+    """Encrypted personal value referenced from Record objects by its token (`id`); erasure
+    clears the ciphertext and the fingerprint and sets `erased_at` (`lorebase_store.vault`).
+
+    The Kind, Record key and Attribute bind a token to the value it stands for; `fingerprint`
+    (a keyed hash of the value without the Record key) finds the rows erasure by value erases.
+    """
 
     __tablename__ = "vault"
-    __table_args__ = (domain_fk(),)
+    __table_args__ = (
+        domain_fk(),
+        Index(None, "domain_id", "kind_id", "record_key"),
+        Index(None, "domain_id", "kind_id", "attribute_id", "fingerprint"),
+    )
 
     domain_id: Mapped[DomainKey]
     id: Mapped[str] = mapped_column(primary_key=True)
+    kind_id: Mapped[str]
+    attribute_id: Mapped[str]
+    record_key: Mapped[str]
+    fingerprint: Mapped[bytes | None]
     value_ciphertext: Mapped[bytes | None]
     key_id: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))

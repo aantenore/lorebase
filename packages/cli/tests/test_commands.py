@@ -1127,6 +1127,42 @@ def test_apikey_commands(http: respx.MockRouter) -> None:
     assert json.loads(run("apikey", "list", "-d", "supply", "--json").stdout)[0]["id"] == "key_1"
 
 
+def test_admin_erase_by_record_and_by_value(http: respx.MockRouter) -> None:
+    erase = http.post("/domains/supply/vault/erase").respond(
+        200, json={"domain": "supply", "kind": "Person", "mode": "record", "erased": 2}
+    )
+    by_key = run("admin", "erase", "Person", "--key", "P-1", "--yes", "-d", "supply")
+    assert by_key.exit_code == 0
+    assert "erased 2" in by_key.stderr + by_key.stdout
+    by_value = run(
+        "admin", "erase", "Person", "--attribute", "email", "--value", "a@b.c", "-y", "-d", "supply"
+    )
+    assert by_value.exit_code == 0
+    from_stdin = run(
+        "admin",
+        "erase",
+        "Person",
+        "--attribute",
+        "email",
+        "--value",
+        "-",
+        "-y",
+        "-d",
+        "supply",
+        input_="secret@b.c\n",
+    )
+    assert from_stdin.exit_code == 0
+    assert request_bodies(erase) == [
+        {"kind": "Person", "key": "P-1"},
+        {"kind": "Person", "attribute": "email", "value": "a@b.c"},
+        {"kind": "Person", "attribute": "email", "value": "secret@b.c"},
+    ]
+    # Irreversible: without --yes and a terminal, nothing is sent.
+    assert run("admin", "erase", "Person", "--key", "P-2", "-d", "supply").exit_code != 0
+    assert run("admin", "erase", "Person", "--value", "x", "-y", "-d", "supply").exit_code != 0
+    assert erase.call_count == 3
+
+
 def test_audit_verify_reports_an_intact_chain(http: respx.MockRouter) -> None:
     verify = http.get("/domains/supply/audit/verify").respond(
         200,

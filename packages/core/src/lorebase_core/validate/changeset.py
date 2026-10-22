@@ -338,15 +338,22 @@ class _Batch:
                 owner = self.unique_owner(identity, attribute, value, claimed)
                 if owner is None:
                     continue
+                # For a sensitive Attribute the owner is not named: a writer without the
+                # clearance would learn which Record holds a value it guessed.
+                sensitive = attribute.is_sensitive
                 self.add(
                     Issue(
                         code=IssueCode.VALUE_UNIQUE,
                         path=(*self.record_paths[identity], "values", attribute.id),
-                        message=f"{attribute.api_name!r} value {value!r} is used by {owner!r}",
+                        message=(
+                            f"{attribute.api_name!r} value is already used by another Record"
+                            if sensitive
+                            else f"{attribute.api_name!r} value {value!r} is used by {owner!r}"
+                        ),
                         kind=identity.kind,
                         key=identity.key,
                         attribute=attribute.id,
-                        details={"other_key": owner},
+                        details={} if sensitive else {"other_key": owner},
                     )
                 )
 

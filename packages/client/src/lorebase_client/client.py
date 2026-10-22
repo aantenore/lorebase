@@ -94,6 +94,7 @@ class LorebaseClient:
         self.records = Records(self)
         self.revisions = Revisions(self)
         self.api_keys = ApiKeys(self)
+        self.vault = Vault(self)
         self.grants = Grants(self)
         self.principals = Principals(self)
         self.audit = Audit(self)
@@ -814,6 +815,41 @@ class Revisions(_Resource):
             domain, from_, to, kinds=kinds, relations=relations, schema=schema, limit=page_size
         )
         return self._c.iterate(call)
+
+
+class Vault(_Resource):
+    """Erasure of personal data held in the vault (`pii.erase`)."""
+
+    def erase_record(
+        self,
+        domain: str,
+        kind: str,
+        key: str,
+        *,
+        attributes: Sequence[str] | None = None,
+        branch: str | None = None,
+    ) -> m.EraseResult:
+        """Erase every value the Record ever held in its vault Attributes (or `attributes`)."""
+        body = m.EraseRequest(
+            kind=kind,
+            key=key,
+            attributes=list(attributes) if attributes else None,
+            branch=branch,
+        )
+        return self._c.send(ep.erase_vault(domain, body))
+
+    def erase_value(
+        self,
+        domain: str,
+        kind: str,
+        attribute: str,
+        value: JsonValue,
+        *,
+        branch: str | None = None,
+    ) -> m.EraseResult:
+        """Erase `value` of a vault Attribute in every Record of the Kind."""
+        body = m.EraseRequest(kind=kind, attribute=attribute, value=value, branch=branch)
+        return self._c.send(ep.erase_vault(domain, body))
 
 
 class ApiKeys(_Resource):

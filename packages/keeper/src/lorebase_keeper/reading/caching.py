@@ -6,8 +6,9 @@ and the canonical query parameters, `Cache-Control: private, must-revalidate` an
 behind `ResponseCache`, keyed by `(Domain, Revision, path, canonical query)`. Revisions are
 immutable, so a commit never invalidates an entry: it moves the branch to a new Revision and
 therefore to new keys. The cache is consulted after the read is resolved and authorized, so it
-never serves a caller something it could not read; bodies hold no per-caller data (no masking
-yet).
+never serves a caller something it could not read. Bodies are masked for the caller's
+clearance, which is part of the key (`variant`), and hold vault references, not vault values:
+`disclose` replaces them on every answer, cached or not (`reading.sensitivity`).
 
 Only the in-process `InMemoryResponseCache` exists; a shared adapter (for example over Valkey)
 implements the same protocol.
@@ -30,6 +31,9 @@ from pydantic import BaseModel
 from lorebase_keeper.settings import ReadCacheSettings
 
 JSON = "application/json"
+
+Disclose = Callable[[bytes, str], Awaitable[bytes]]
+"""Rewrites a body of a media type as it is sent (vault references, `reading.sensitivity`)."""
 CACHE_CONTROL = "private, must-revalidate"
 
 _LOOKUPS = metrics.get_meter("lorebase.keeper").create_counter(
@@ -175,12 +179,14 @@ async def respond(
     time_travel: bool = False,
     headers: Mapping[str, str] | None = None,
     variant: str = "",
+    disclose: Disclose | None = None,
 ) -> Response:
     """Answer a GET read: 304, a cached body, or `produce()` serialized and cached.
 
     `revision` names everything the response depends on besides the request (one Revision id,
     or several joined for a diff); `variant` anything else it depends on, such as the Kinds
-    the caller may read; `headers` are added to every answer.
+    the caller may read and its clearance; `headers` are added to every answer; `disclose`
+    post-processes every body sent (not the cached one).
     """
 
     async def body() -> tuple[bytes, str]:
@@ -193,6 +199,7 @@ async def respond(
         body,
         time_travel=time_travel,
         headers=headers,
+        disclose=disclose,
     )
 
 
@@ -204,9 +211,11 @@ async def respond_with(
     *,
     time_travel: bool = False,
     headers: Mapping[str, str] | None = None,
+    disclose: Disclose | None = None,
 ) -> Response:
     """Answer a read under `key`: 304, a cached body, or `produce()` (body and media type),
-    cached. The ETag is `entity_tag(key)`."""
+    cached. The ETag is `entity_tag(key)`. `disclose`, when given, rewrites bodies as they are
+    sent."""
     tag = entity_tag(key)
     common = {"ETag": tag, "Cache-Control": CACHE_CONTROL, **(headers or {})}
     if _matches(request, tag):
@@ -216,9 +225,15 @@ async def respond_with(
     _LOOKUPS.add(1, {"result": result})
     if cached is not None:
         return Response(
-            cached.body, media_type=cached.media_type, headers={**cached.headers, **common}
+            await _sent(cached.body, cached.media_type, disclose),
+            media_type=cached.media_type,
+            headers={**cached.headers, **common},
         )
     body, media_type = await produce()
     if cache is not None:
         await cache.put(key, CachedResponse(body, dict(headers or {}), time_travel, media_type))
-    return Response(body, media_type=media_type, headers=common)
+    return Response(await _sent(body, media_type, disclose), media_type=media_type, headers=common)
+
+
+async def _sent(body: bytes, media_type: str, disclose: Disclose | None) -> bytes:
+    return body if disclose is None else await disclose(body, media_type)

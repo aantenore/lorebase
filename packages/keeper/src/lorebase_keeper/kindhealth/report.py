@@ -77,7 +77,9 @@ async def scan_branch(
                     violations=await scan.validate_records(
                         session, where, schema, kind, total, settings
                     ),
-                    duplicates=await scan.find_duplicates(session, where, kind, total, settings),
+                    duplicates=await scan.find_duplicates(
+                        session, where, kind, total, settings, point.masking.sensitive
+                    ),
                     derived=await scan.derived_status(session, where, kind, total),
                 )
             )

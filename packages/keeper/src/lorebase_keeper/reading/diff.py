@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.canonical import node_hash
-from lorebase_core.model import Schema
+from lorebase_core.model import Attribute, Schema
 from lorebase_core.tree import (
     BranchNode,
     DiffEntry,
@@ -35,6 +35,7 @@ from lorebase_core.tree import (
 )
 from lorebase_keeper.errors import VALIDATION_FAILED, ProblemError
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.sensitivity import Masking, relation_kinds
 from lorebase_store.materialize.rows import PartitionType, parse_partition, split_link_key
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore
@@ -280,8 +281,10 @@ async def expand(
     *,
     old_schema: Schema,
     new_schema: Schema,
+    masking: Masking,
 ) -> list[ChangeOut]:
-    """Element-level changes, attribute by attribute (see module doc)."""
+    """Element-level changes, attribute by attribute (see module doc), with the values the
+    caller is not cleared for masked."""
     objects = PgObjectStore(
         session,
         domain_id,
@@ -291,11 +294,14 @@ async def expand(
     hashes = {h for c in changes for h in (c.old_hash, c.new_hash) if h is not None}
     bodies = {digest: stored.body for digest, stored in (await objects.get_many(hashes)).items()}
     schemas = (new_schema, old_schema)
-    return [_expand(change, bodies, schemas) for change in changes]
+    return [_expand(change, bodies, schemas, masking) for change in changes]
 
 
 def _expand(
-    change: HashChange, bodies: Mapping[bytes, Mapping[str, Any]], schemas: Sequence[Schema]
+    change: HashChange,
+    bodies: Mapping[bytes, Mapping[str, Any]],
+    schemas: Sequence[Schema],
+    masking: Masking,
 ) -> ChangeOut:
     old = None if change.old_hash is None else bodies.get(change.old_hash, {})
     new = None if change.new_hash is None else bodies.get(change.new_hash, {})
@@ -330,9 +336,19 @@ def _expand(
     else:
         out.relation = name
         out.from_key, out.to_key = split_link_key(change.key)
-    out.changes = _value_changes(
-        (old or {}).get("values", {}), (new or {}).get("values", {}), lambda a: names.get(a, a)
-    )
+    attributes, kinds = _attributes(parsed.type, parsed.element_id, schemas)
+    out.changes = [
+        ValueChange(
+            name=value.name,
+            old=masking.value(attributes.get(value.name), kinds, value.old),
+            new=masking.value(attributes.get(value.name), kinds, value.new),
+        )
+        for value in _value_changes(
+            (old or {}).get("values", {}), (new or {}).get("values", {}), lambda a: a
+        )
+    ]
+    for value in out.changes:
+        value.name = names.get(value.name, value.name)
     if change.provenance is not None:
         out.provenance = {names.get(a, a): p for a, p in sorted(change.provenance.items())}
     return out
@@ -351,6 +367,27 @@ def _attribute_names(
         if owner is not None:
             names.update({a.id: a.api_name for a in owner.attributes.values()})
     return names
+
+
+def _attributes(
+    partition_type: PartitionType, element_id: str, schemas: Sequence[Schema]
+) -> tuple[dict[str, Attribute], tuple[str, ...]]:
+    """Attributes of a Kind or Relation by id (newer schemas win) and the api names of the
+    Kinds holding their values, for masking."""
+    found: dict[str, Attribute] = {}
+    kinds: tuple[str, ...] = ()
+    for schema in reversed(schemas):  # older first, newer definitions win
+        if partition_type is PartitionType.KIND:
+            kind = schema.kinds.get(element_id)
+            kinds = (element_id,)
+            if kind is not None:
+                found.update(kind.attributes)
+        else:
+            relation = schema.relations.get(element_id)
+            if relation is not None:
+                found.update(relation.attributes)
+                kinds = relation_kinds(schema, relation)
+    return found, kinds
 
 
 def _schema_type(element_id: str, schemas: Sequence[Schema]) -> str:

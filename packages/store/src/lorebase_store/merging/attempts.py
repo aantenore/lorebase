@@ -34,6 +34,7 @@ from lorebase_core.merge import (
     ResolutionError,
     merge,
 )
+from lorebase_core.model import looks_like_reference
 from lorebase_core.revision import ChangesetEntry
 from lorebase_core.tree import PARTITION_SCHEMA
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY, changed_attributes
@@ -153,6 +154,15 @@ def check_resolution(conflict: Conflict, members: Sequence[str], resolution: Res
             f"{resolution.choice.value} does not resolve a {conflict.kind.value} Conflict "
             f"(accepted: {allowed})"
         )
+    if resolution.choice is ResolutionChoice.CUSTOM and (
+        _holds_reference((conflict.base, conflict.ours, conflict.theirs))
+        or _holds_reference((resolution.value, resolution.values))
+    ):
+        # A custom value would bypass the vault (design 13.5), and a reference would copy
+        # another Record's value: vault values are resolved by picking a side.
+        raise ResolutionError(
+            "a Conflict over vault values takes one of its sides, not a custom value"
+        )
     if (
         resolution.choice is ResolutionChoice.CUSTOM
         and resolution.values is not None
@@ -164,6 +174,17 @@ def check_resolution(conflict: Conflict, members: Sequence[str], resolution: Res
             raise ResolutionError(
                 f"custom values miss {len(missing)} member(s), for example {missing[0]!r}"
             )
+
+
+def _holds_reference(value: Any) -> bool:
+    """Whether a vault reference appears anywhere in `value`."""
+    if looks_like_reference(value):
+        return True
+    if isinstance(value, Mapping):
+        return any(_holds_reference(item) for item in value.values())
+    if isinstance(value, list | tuple):
+        return any(_holds_reference(item) for item in value)
+    return False
 
 
 # Provenance -------------------------------------------------------------------------------

@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from sqlalchemy import ColumnElement, Table, and_, func, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Kind, LinkDirection, Relation
+from lorebase_core.model import Kind, LinkDirection
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.query import Hop, Target
 from lorebase_core.tree import kind_partition, link_key, relation_partition
@@ -360,7 +360,7 @@ async def explain_record(
         raise tree_unsupported("Explanations")
     fetched = await fetch_record(session, runtime, point, kind, key)
     row = fetched.row
-    record = record_out(point.schema, row)
+    record = record_out(point.schema, row, masking=point.masking)
     writes = runtime.store_settings.writes
     history = await MaterializedRepository(
         session, point.domain.id, point.branch, writes=writes, layout=point.layout
@@ -437,8 +437,11 @@ async def explain_record(
             "relation": hop.name,
             "direction": str(hop.direction),
             "ref": ref_of(far_kind, link.far_key),
-            "title": link.title,
-            "values": ordered_values(hop.relation, _named(hop.relation, link.values)) or None,
+            "title": point.masking.title(point.schema, hop.far.kind_ids[0], link.title),
+            "values": ordered_values(
+                hop.relation, point.masking.link_values(point.schema, hop.relation, link.values)
+            )
+            or None,
             **since,
         }
         link_out.append(_compact(entry))
@@ -478,14 +481,6 @@ async def explain_record(
             }
         ),
         "proposals": proposals,
-    }
-
-
-def _named(relation: Relation, values: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        attribute.api_name: values[attribute_id]
-        for attribute_id, attribute in relation.attributes.items()
-        if attribute_id in values
     }
 
 

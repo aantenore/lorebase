@@ -21,17 +21,20 @@ value or Link), the answer is 422 with the issues and nothing changes. Decisions
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from lorebase_core.model import Schema
+from lorebase_core.model import Schema, Sensitivity
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, authorize, require
 from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext
+from lorebase_keeper.auth.runtime import AuthRuntime
 from lorebase_keeper.context import StoreDep, require_domain
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import (
@@ -43,6 +46,12 @@ from lorebase_keeper.errors import (
     ValidationProblem,
 )
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
+from lorebase_keeper.reading.sensitivity import (
+    Masking,
+    default_schema,
+    masking_for,
+    relation_kinds,
+)
 from lorebase_keeper.services.errors import commit_problem
 from lorebase_store.commit import CommitError
 from lorebase_store.commit.schema import load_compiled
@@ -186,9 +195,85 @@ def _names(schema: Schema) -> dict[str, str]:
     return names
 
 
-def _item(row: ItemRow, names: dict[str, str], skipped: dict[str, Any]) -> ItemOut:
-    subject = row.subject
-    edits = row.edits or {}
+@dataclass(frozen=True)
+class _Shown:
+    """Which Attribute values of extraction items the caller may see."""
+
+    hidden: frozenset[str] = frozenset()
+    known: frozenset[str] | None = None
+    """Attribute ids of the schema; None trusts every id (no masking)."""
+    full: bool = True
+    masked: str = "***"
+
+    def masks(self, attribute_id: Any) -> bool:
+        """Values of a hidden Attribute, or of one the schema does not know unless the caller
+        is cleared for everything."""
+        if attribute_id in self.hidden:
+            return True
+        return self.known is not None and attribute_id not in self.known and not self.full
+
+
+def _shown(schema: Schema, masking: Masking) -> _Shown:
+    hidden = {
+        attribute.id
+        for kind in schema.kinds.values()
+        for attribute in kind.attributes.values()
+        if masking.hidden(attribute, (kind.id,))
+    }
+    hidden |= {
+        attribute.id
+        for relation in schema.relations.values()
+        for attribute in relation.attributes.values()
+        if masking.hidden(attribute, relation_kinds(schema, relation))
+    }
+    known = {a.id for kind in schema.kinds.values() for a in kind.attributes.values()}
+    known |= {a.id for relation in schema.relations.values() for a in relation.attributes.values()}
+    return _Shown(
+        frozenset(hidden),
+        frozenset(known),
+        masking.clearance.covers(Sensitivity, ()),
+        masking.masked,
+    )
+
+
+def _scrub(document: Any, shown: _Shown, attribute: Any = None) -> Any:
+    """An item's subject or edits with the values the caller may not see masked: entries of
+    `values`, and `value` and `current` when the item is about such an Attribute."""
+    if not isinstance(document, dict):
+        return document
+    out = dict(document)
+    if isinstance(out.get("values"), dict):
+        out["values"] = {
+            k: (shown.masked if shown.masks(k) and v is not None else v)
+            for k, v in out["values"].items()
+        }
+    about = attribute or out.get("attribute")
+    if about is not None and shown.masks(about):
+        for name in ("value", "current"):
+            if out.get(name) is not None:
+                out[name] = shown.masked
+    return out
+
+
+def _touches_masked(row: ItemRow, shown: _Shown) -> bool:
+    """Whether an item is about a value the caller may not see: its evidence and match quote
+    the document and candidate Records, so they are left out then."""
+    subject = row.subject or {}
+    keys = [subject.get("attribute"), *(subject.get("values") or {})]
+    keys += list((row.edits or {}).get("values") or {})
+    return any(key is not None and shown.masks(key) for key in keys)
+
+
+def _item(
+    row: ItemRow,
+    names: dict[str, str],
+    skipped: dict[str, Any],
+    shown: _Shown | None = None,
+) -> ItemOut:
+    shown = shown or _Shown()
+    subject = _scrub(row.subject, shown)
+    edits = _scrub(row.edits or {}, shown, subject.get("attribute"))
+    quoted = not _touches_masked(row, shown)
     values = {**(subject.get("values") or {}), **(edits.get("values") or {})}
     kind = subject.get("kind")
     relation = subject.get("relation")
@@ -213,9 +298,9 @@ def _item(row: ItemRow, names: dict[str, str], skipped: dict[str, Any]) -> ItemO
         },
         values={names.get(k, k): v for k, v in values.items()},
         subject=subject,
-        evidence=row.evidence,
-        match=row.match,
-        edits=row.edits,
+        evidence=row.evidence if quoted else None,
+        match=row.match if quoted else None,
+        edits=edits if row.edits else row.edits,
         decided_by=row.decided_by,
         decided_at=row.decided_at,
         not_applied=(
@@ -289,6 +374,16 @@ async def _schema(store: StoreDep, domain_id: str, proposal: ProposalRow) -> Sch
     return load_compiled(compiled.compiled)
 
 
+async def _masking(
+    store: StoreDep, auth: AuthRuntime, principal: Principal, domain_id: str, settings: Any
+) -> Masking:
+    """The caller's masking in the Domain: items quote stored values (`current`)."""
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        reference = await default_schema(session, domain_id, store.runtime)
+    return await masking_for(auth.authorizer, principal, domain_id, reference, settings)
+
+
 async def _proposal(store: StoreDep, domain_id: str, proposal_id: str) -> ProposalRow:
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
@@ -305,6 +400,8 @@ async def list_items(
     access: Read,
     store: StoreDep,
     params: PageParamsDep,
+    auth: AuthDep,
+    keeper: KeeperSettingsDep,
     status: Annotated[list[DecisionName] | None, Query()] = None,
     kind: Annotated[
         list[str] | None, Query(description="Kind or Relation api names (or ids).")
@@ -344,7 +441,12 @@ async def list_items(
     next_cursor = (
         encode_cursor({"seq": rows[-1].seq, "id": rows[-1].item_id}) if more and rows else None
     )
-    return Page[ItemOut](items=[_item(r, names, skipped) for r in rows], next_cursor=next_cursor)
+    masking = (
+        await _masking(store, auth, access.principal, domain_id, keeper.reads.sensitivity)
+    ).over(schema)
+    shown = _shown(schema, masking)
+    items = [_item(r, names, skipped, shown) for r in rows]
+    return Page[ItemOut](items=items, next_cursor=next_cursor)
 
 
 @router.post(ITEMS + ":decide", summary="Accept or reject extraction items", responses=_ERRORS)
@@ -413,10 +515,14 @@ async def decide(
         revision=None if outcome.revision is None else outcome.revision.hex(),
     )
     names = _names(schema)
+    masking = (await _masking(store, auth, principal, domain_id, keeper.reads.sensitivity)).over(
+        schema
+    )
+    shown = _shown(schema, masking)
     return DecideOut(
         proposal_id=reviewed.proposal.id,
         title=reviewed.proposal.title,
         checks=reviewed.proposal.checks or {},
-        items=[_item(r, names, outcome.skipped) for r in reviewed.items],
+        items=[_item(r, names, outcome.skipped, shown) for r in reviewed.items],
         materialized=MaterializedOut(**outcome.as_dict()),
     )

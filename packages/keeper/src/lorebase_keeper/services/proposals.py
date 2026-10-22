@@ -36,7 +36,7 @@ from lorebase_keeper.services.proposal_reads import (
     require_visible,
     visible_partitions,
 )
-from lorebase_keeper.services.schema import schema_at
+from lorebase_keeper.services.schema import SchemaGuard, schema_at
 from lorebase_store.merging import (
     AttemptResult,
     MergeRequest,
@@ -517,8 +517,12 @@ async def merge(
     message: str | None,
     page_limit: int,
     scope: ConflictScope = FULL_SCOPE,
+    schema_guard: SchemaGuard | None = None,
 ) -> MergeOutcome:
     """Run (or re-run) the merge of an open Proposal and commit it when no Conflict remains.
+
+    When the merge would remove sensitivity tags, `schema_guard(target schema, merged
+    schema)` decides (it raises to refuse); without one such merges are refused.
 
     A retried merge with the key of the merge that committed returns that merge (`replayed`).
     The returned attempt lists the Conflicts `scope` shows.
@@ -571,6 +575,7 @@ async def merge(
                     message=message,
                     idempotency_key=idempotency_key,
                     delete_source=delete_source,
+                    schema_guard=schema_guard,
                 )
             )
         except ProposalBranchMissingError as error:

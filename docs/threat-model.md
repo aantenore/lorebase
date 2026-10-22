@@ -22,8 +22,7 @@ disclosure, **D**enial of service, **E**levation of privilege.
 - Postgres, the model endpoints and the object storage of the deployment are run by the operator.
   Sources, webhook targets, documents and the identity provider are outside the installation.
 - Code at the commit of this page. Features that the design describes but the code does not have
-  yet (PII vault and erasure, read auditing with sampling, sensitivity masking in reads) are not
-  counted as mitigations.
+  yet (read auditing with sampling) are not counted as mitigations.
 
 ## Assets
 
@@ -102,7 +101,9 @@ Code: `packages/keeper/src/lorebase_keeper/auth/rbac.py`, `auth/permissions.py`,
 | T | Agent writes that bypass review | Agents write only through Operations with preconditions and review policies; protected branches need a Proposal; agent task branches and automatic merges are bounded by `keeper.agent_writes` (`allowed_roles_for_auto_merge` empty by default) and never skip required approvals | A Domain admin can widen `allowed_roles_for_auto_merge` per Domain |
 | T | Self-approval | `keeper.proposals.allow_self_approval` is false by default; the author's approvals are refused and not counted | None known |
 | E | Installation administration from a Domain role | Installation permissions (`principal.read`, `domain.create`) are held by installation administrators and by Domain-wide grants of roles holding them; API keys limited to Domains never hold them; Domain admins cannot mint keys for installation administrators or for principals without a grant in their Domain (`routes/admin.py`, `_check_key_holder`) | Domain admins see installation-wide principal lists (`principal.read` is in `admin`) |
-| I | Raw documents to readers | `document.read` is held by `editor`, `reviewer`, `maintainer` and `admin` only; `viewer`, `explorer` and `agent-reader` never read documents (`auth/permissions.py`) | Sensitivity tags are not enforced as masking on reads yet; restrict sensitive Kinds with Kind-narrowed grants |
+| I | Raw documents to readers | `document.read` is held by `editor`, `reviewer`, `maintainer` and `admin` only; `viewer`, `explorer` and `agent-reader` never read documents (`auth/permissions.py`) | Documents are unmasked input: whoever reads them reads the sensitive values they hold |
+| I | Sensitive values to readers without clearance | Values of `pii`, `confidential` and `restricted` Attributes are masked unless the caller holds `pii.read`, `confidential.read` or `restricted.read` for the read; responses are cached per clearance; filters, ordering and grouping on them need the clearance; sensitive Attributes are out of full-text vectors, the lexicon, snippets and titles; vault references are replaced after the cache and only for cleared callers (`reading/sensitivity.py`) | Validation messages quote values back to their writers; Kind health lists the keys of Records sharing a sensitive unique value (never the value); see residual risks 5 to 8 |
+| I | Personal data kept in history | `vault: true` Attributes store a reference in Record objects and the value encrypted in `vault`; erasure (`pii.erase`) clears it for every Revision and is audited in the same transaction (`lorebase_store/vault`, `routes/vault.py`) | Inline sensitive values (no vault) and Record keys stay in history; clients and caches outside Keeper keep what they read |
 | D | Expensive queries | DSL depth and fan-out caps, traverse and neighborhood limits, health scan caps, per-class rate limits | Statement timeout is the last line for queries that stay under the caps |
 
 ## TB4: Scribe connectors and other outbound reads
@@ -201,14 +202,51 @@ Remaining:
    showing it. Keep a recent `entry_hash` outside the database (TB6).
 2. **Rate limits per process.** A shared backend would make limits hold across Keeper replicas
    (TB2).
-3. **Reads are not audited and sensitivity masking is not enforced.** Both are in the design
-   ([13.6](design.md#136-threats-and-mitigations)) and not in the code; until then, use
-   Kind-narrowed grants for sensitive Kinds (TB2, TB3).
+3. **Reads are not audited.** It is in the design
+   ([13.6](design.md#136-threats-and-mitigations)) and not in the code (TB2, TB3).
 4. **Webhook signing keys stored usable by default.** `webhooks.encryption_key` is unset by
    default; set it (TB6, TB7).
 
+5. **Erasure covers vault values only.** Sensitive values stored inline, values quoted in
+   Revision messages, documents and the extraction evidence quoted from them stay in history;
+   store personal data in `vault: true` Attributes (TB3). Erasure by key misses the tokens a
+   Record held under an earlier key; erasure by value matches the canonical value exactly (a case
+   variant answers `erased: 0`); a later write of an erased value (a Source sync, say) stores it
+   again under a new token. An erasure racing a commit of the same value can leave the new write
+   reading `erased` (fails closed). The erasure audit entry keeps the Record key.
+6. **Vault keys in the services' configuration.** Whoever holds `vault.encryption_key` and a
+   database copy reads every vaulted value; `vault.token_key` cannot be rotated; value
+   fingerprints let whoever reads the database link Records of a Kind holding the same vaulted
+   value (TB6).
+7. **Small value oracles.** Without the vault keys, the parameter digest of Operation
+   invocations is a plain SHA-256, which confirms guessed parameter values; configure the vault.
+   Kind health lists which Records share a sensitive unique or title
+   value (never the value); validation issue codes on sensitive values tell their format; a
+   reference nested inside a `json` value of another Attribute is stored (it discloses nothing
+   the caller is not cleared for). Some answers show raw references instead of values to cleared
+   callers (the NDJSON diff stream, Operation edits): no value leaks, but none is shown. Key
+   changing Operations that copy vault references are refused (TB3).
+8. **Branches forked before a tag.** Once the default branch tags an Attribute that a
+   branch's schema searches, titles with or derives from, schema changes on that branch fail
+   validation until its schema is fixed (availability, not disclosure). Extraction on such a
+   branch decides what to extract from the branch's own tags; its output is masked on read and
+   validated on write. Titles and search vectors that branch materialized before the tag stay
+   stored until its Records are rewritten: Keeper keeps them out of responses, snippets and
+   lexical search for callers without the clearance, and verification reports them as
+   `sensitivity_stale` (TB3).
+9. **Conservative Operation analysis.** Fields an Operation expression reads from a Record
+   whose Kind cannot be told (inside a comprehension, say) are matched by name against every
+   Kind, so a same-named sensitive Attribute elsewhere can refuse a harmless Operation;
+   evaluation errors are shown in full only to callers cleared Domain-wide (TB3).
+10. **Erasure from the command line.** `lorebase admin erase --value V` puts the value in the
+    shell history and the process list; use `--value -` to read it from standard input (TB2).
+
 Fixed since this page was first published, in the order of the original list (each with tests,
 see the [security review](security-review.md#hardening-from-the-threat-model)):
+
+- **Sensitivity masking was not enforced on reads.** Masked unless cleared, on every read path,
+  with the PII vault and erasure (`packages/keeper/src/lorebase_keeper/reading/sensitivity.py`,
+  `packages/store/src/lorebase_store/vault/`, revision `0019`) (TB3).
 
 - **Application role could change `audit_log`.** Revision `0015` revokes `UPDATE, DELETE,
   TRUNCATE` from it (`packages/store/migrations/versions/0015_append_only_audit_log.py`,

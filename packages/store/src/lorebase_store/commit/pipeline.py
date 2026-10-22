@@ -2,8 +2,10 @@
 
 1. take the branch advisory lock; read head `H` and the ref version;
 2. validate the changes against the materialized head of `H` (bulk-prefetched `IndexView`);
-   schema changes add their data migrations;
-3. canonicalize and hash new objects; insert them with `ON CONFLICT DO NOTHING`;
+   schema changes add their data migrations; values of vault Attributes are validated, then
+   replaced by vault references (`lorebase_store.vault`) before the core rules run;
+3. canonicalize and hash new objects; insert them, and new vault rows, with
+   `ON CONFLICT DO NOTHING`;
 4. apply the changes to the tree by path copying; insert new nodes;
 5. insert the Revision with parent `H`, its changeset and provenance entries;
 6. apply the changeset to the materialized head; when the schema changed, per-Attribute
@@ -34,11 +36,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from lorebase_core.canonical import ObjectType, hex
+from lorebase_core.expr.sensitivity import lowered_tags, schema_tags, with_tags
 from lorebase_core.model import (
     Domain,
     IdPrefix,
     ProvenanceEntry,
     Schema,
+    Sensitivity,
     new_id,
     validate_schema,
 )
@@ -82,6 +86,7 @@ from lorebase_store.commit.errors import (
     BranchLockTimeoutError,
     BranchNotFoundError,
     BranchNotMaterializedError,
+    SensitivityLoweredError,
     StaleHeadError,
     ValidationFailedError,
 )
@@ -101,6 +106,7 @@ from lorebase_store.materialize.rows import (
     parse_partition,
     split_link_key,
 )
+from lorebase_store.materialize.sensitivity import default_branch_schema
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.nodestore import NodeRepository, PgNodeStore
 from lorebase_store.objectstore import EncodedObject, PgObjectStore, encode_object
@@ -115,6 +121,7 @@ from lorebase_store.repositories.revisions import RevisionRepository, RevisionRo
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import COMMIT_DURATION
+from lorebase_store.vault.store import VaultRow, insert_rows, tokenize
 
 COMMIT_ACTION = "revision.commit"
 COMMITTED_EVENT = "revision.committed"
@@ -142,6 +149,7 @@ class _Prepared:
     refresh_kinds: list[str] = field(default_factory=list)
     provenance: list[ProvenanceEntry] = field(default_factory=list)
     derived: list[DataChange] = field(default_factory=list)
+    vault_rows: list[VaultRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,8 +176,15 @@ async def commit(
     expected_head: bytes | None = None,
     runtime: StoreRuntime | None = None,
     clock: Clock = utc_now,
+    allowed_lowering: frozenset[Sensitivity] = frozenset(),
 ) -> CommitResult:
     """Commit data and schema changes to `branch` as one Revision.
+
+    Schema changes that remove sensitivity tags (or sensitive Attributes, Kinds, Relations)
+    raise `SensitivityLoweredError` for every tag not in `allowed_lowering` (the tags the
+    caller is cleared for), compared under the branch lock with the head actually changed.
+    Schemas and data are validated with the tags of the default branch's schema added
+    (`lorebase_core.expr.sensitivity.with_tags`).
 
     `provenance` lists entries referenced by `Change.provenance`; changes without one are
     attributed to an entry built from `origin` and `author`. `expected_head`, when given,
@@ -190,6 +205,7 @@ async def commit(
         expected_head=expected_head,
         runtime=runtime or default_runtime(),
         clock=clock,
+        allowed_lowering=allowed_lowering,
     )
     began = perf_counter()
     if session.in_transaction():
@@ -237,6 +253,7 @@ class _Request:
     expected_head: bytes | None
     runtime: StoreRuntime
     clock: Clock
+    allowed_lowering: frozenset[Sensitivity] = frozenset()
 
 
 async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
@@ -269,9 +286,15 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         at=created_at,
     )
     old_schema = load_compiled(compiled.compiled)
+    reference: Schema | None = old_schema
+    if branch != domain.default_branch:
+        reference = await default_branch_schema(session, domain_id, runtime=request.runtime)
+    reference_tags = schema_tags(reference)
 
     def prepare(sync: Session) -> _Prepared:
-        return _prepare(sync, request, domain, head.root, old_schema, own.id, created_at)
+        return _prepare(
+            sync, request, domain, head.root, old_schema, own.id, created_at, reference_tags
+        )
 
     prepared = await session.run_sync(prepare)
     if not prepared.changeset:
@@ -361,6 +384,7 @@ def _prepare(
     old_schema: Schema,
     own_provenance: str,
     created_at: datetime,
+    reference_tags: Mapping[str, frozenset[Sensitivity]],
 ) -> _Prepared:
     settings = request.runtime.settings
     view = MaterializedIndexView(
@@ -374,8 +398,15 @@ def _prepare(
         schema, upserted, removed = apply_schema_changes(
             old_schema, request.schema_changes, request.domain_id
         )
+        refused = lowered_tags(old_schema, schema) - request.allowed_lowering
+        if refused:
+            raise SensitivityLoweredError(t.value for t in refused)
         issues.extend(
-            i for i in validate_schema(schema, request.runtime.schema.rules()) if i.is_error
+            i
+            for i in validate_schema(
+                with_tags(schema, reference_tags), request.runtime.schema.rules()
+            )
+            if i.is_error
         )
         elements.extend(_schema_element(e) for e in upserted)
         elements.extend(_Element(PARTITION_SCHEMA, key, None) for key in removed)
@@ -385,6 +416,7 @@ def _prepare(
             records_of=view.records_of_kind,
             links_of=view.links_of_relation,
             skip=[c.change.identity for c in request.changes],
+            sensitive=lambda a: a.is_sensitive or a.id in reference_tags,
             actor=request.author.principal,
             at=created_at,
         )
@@ -392,7 +424,13 @@ def _prepare(
     validated = [*plan.changes, *request.changes]
     data = [c.change for c in validated]
     view.prefetch_for(schema, data)
-    report = evaluate_changeset(schema, view, data)
+    vaulted = tokenize(sync, request.domain_id, schema, data, request.runtime.vault, view)
+    issues.extend(vaulted.issues)
+    if issues:
+        raise ValidationFailedError(issues)
+    data = vaulted.changes
+    validated = [Change(d, c.provenance) for d, c in zip(data, validated, strict=True)]
+    report = evaluate_changeset(with_tags(schema, reference_tags), view, data)
     issues.extend(i for i in report.issues if i.is_error)
     if issues:
         raise ValidationFailedError(issues)
@@ -431,6 +469,7 @@ def _prepare(
         refresh_kinds=plan.refresh_kinds,
         provenance=plan.provenance,
         derived=list(report.derived_changes),
+        vault_rows=vaulted.rows,
     )
 
 
@@ -512,6 +551,7 @@ async def _store_revision(
     await PgObjectStore(
         session, domain_id, writes=settings.writes, batch=settings.nodes.prefetch_batch
     ).put_many(prepared.objects)
+    await insert_rows(session, domain_id, prepared.vault_rows, at=revision.created_at)
     await NodeRepository(
         session,
         domain_id,

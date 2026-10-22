@@ -26,6 +26,7 @@ from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupp
 from lorebase_keeper.reading.records import compiler_for, get_record, require_kind
 from lorebase_keeper.reading.requests import NeighborhoodRequest, TraverseRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.sensitivity import condition_fields, require_comparable
 from lorebase_keeper.reading.views import (
     Edge,
     NeighborhoodResponse,
@@ -46,8 +47,10 @@ def _edge(point: ReadPoint, hop: Hop, row: Mapping[Any, Any]) -> Edge:
     return Edge(
         relation=hop.name,
         source=record_ref(point.schema, hop.near_kind, row["near_key"]),
-        to=record_ref(point.schema, hop.far.kind_ids[0], row["far_key"], row["title"]),
-        values=link_values(hop.relation, row["link_values"]),
+        to=record_ref(
+            point.schema, hop.far.kind_ids[0], row["far_key"], row["title"], point.masking
+        ),
+        values=link_values(point.schema, hop.relation, row["link_values"], point.masking),
     )
 
 
@@ -90,6 +93,9 @@ async def traverse(
         except QueryError as error:
             raise query_problem(error, pointer) from None
         point.scope.require(condition_kinds(where))
+        require_comparable(
+            point.schema, point.masking, condition_fields(where, hop.far.kinds), f"{pointer}/where"
+        )
         rows: list[Mapping[Any, Any]] = []
         if frontier:
             query = compiler.neighbors(hop, frontier, where=where, limit=limit + 1)
@@ -98,7 +104,7 @@ async def traverse(
         rows = rows[:limit]
         reached: dict[str, RecordOut] = {}
         for row in rows:
-            reached.setdefault(row["far_key"], record_out(point.schema, row))
+            reached.setdefault(row["far_key"], record_out(point.schema, row, masking=point.masking))
         hops.append(
             TraverseHopOut(
                 relation=hop.name,
@@ -160,7 +166,9 @@ async def neighborhood(
         runtime=runtime.store,
     )
     titles = {(n.record.kind_id, n.record.key): n.record.title for n in walked.records}
-    nodes = [record_out(point.schema, _row(n.record)) for n in walked.records]
+    nodes = [
+        record_out(point.schema, _row(n.record), masking=point.masking) for n in walked.records
+    ]
     edges = []
     for link in walked.links:
         relation = point.schema.relations[link.relation_id]
@@ -173,8 +181,9 @@ async def neighborhood(
                     relation.to_kind,
                     link.to_key,
                     titles.get((relation.to_kind, link.to_key)),
+                    point.masking,
                 ),
-                values=link_values(relation, link.values),
+                values=link_values(point.schema, relation, link.values, point.masking),
             )
         )
     return NeighborhoodResponse(
