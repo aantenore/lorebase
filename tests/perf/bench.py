@@ -121,6 +121,12 @@ class Options:
     replicas: int = 1
     copy_batches: int | None = None
     pair_copy: bool = True
+    vocabulary: str = "zipf"
+
+    def scale_of(self) -> harness.Scale:
+        return harness.Scale(
+            self.scale, self.extra_links, replicas=self.replicas, vocabulary=self.vocabulary
+        )
 
 
 @dataclass
@@ -196,6 +202,13 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         help="with --seed-database: measure the seed database itself instead of a copy "
         "(no second copy on disk; the run's commits stay on main, its branches are deleted)",
     )
+    parser.add_argument(
+        "--vocabulary",
+        choices=("zipf", "demo"),
+        default="zipf",
+        help="text of the generated Records: zipf (realistic term frequencies) or demo (the "
+        "695 words of the committed example, the runs before 2026-10-23)",
+    )
     parser.add_argument("--out", type=Path, default=None, help="write the markdown report here")
     args = parser.parse_args(argv)
     if (args.seed_only or args.in_place) and args.seed_database is None:
@@ -219,6 +232,7 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         replicas=args.replicas,
         copy_batches=args.copy_batches,
         pair_copy=not args.no_pair_copy,
+        vocabulary=args.vocabulary,
     )
 
 
@@ -267,7 +281,7 @@ async def seed_only(options: Options, url: str, *, resume: bool = False) -> harn
     runtime = StoreRuntime.from_settings(StoreSettings())
     engine = _engine(url)
     try:
-        scale = harness.Scale(options.scale, options.extra_links, replicas=options.replicas)
+        scale = options.scale_of()
         return await harness.seed(engine, runtime, scale, resume=resume)
     finally:
         await engine.dispose()
@@ -278,7 +292,7 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
     engine = _engine(url)
     try:
         if seeded is None:
-            scale = harness.Scale(options.scale, options.extra_links, replicas=options.replicas)
+            scale = options.scale_of()
             seeded = await harness.seed(engine, runtime, scale)
         if options.in_place:
             await harness.remove_perf_branches(engine, runtime)
@@ -382,8 +396,9 @@ def render(report: Report) -> str:
         "",
         "## Dataset",
         "",
-        f"- `supply` Domain from `examples/supply/scripts/make_supply_data.py --scale {o.scale}`"
-        f", plus {o.extra_links} extra `supplied_by` and `stocked_at` Links per Part.",
+        "- `supply` Domain from `examples/supply/scripts/make_supply_data.py --scale "
+        f"{o.scale} --vocabulary {o.vocabulary}`, plus {o.extra_links} extra `supplied_by` "
+        "and `stocked_at` Links per Part.",
         f"- {report.seeded.records:,} Records and {report.seeded.links:,} Links on `main`, "
         f"loaded through the commit pipeline in {report.seeded.commits} commits "
         f"({report.seeded.seconds:.0f} s, then `VACUUM ANALYZE`).",
@@ -586,6 +601,9 @@ def _seeded_database(options: Options, server: str, name: str) -> harness.SeedRe
     wanted: dict[str, int] = {"scale": options.scale, "extra_links": options.extra_links}
     if options.replicas > 1:
         wanted["replicas"] = options.replicas
+    if options.vocabulary != "demo":
+        # Seeds without the key hold the demo text: they were loaded before the option.
+        wanted["vocabulary"] = options.vocabulary
     if found is not None:
         kept = json.loads(found)
         if kept["scale"] != wanted:
