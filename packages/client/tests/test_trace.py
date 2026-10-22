@@ -6,6 +6,7 @@ import json
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 import respx
 from pydantic import ValidationError
@@ -81,6 +82,34 @@ def test_session_options_become_headers(http: respx.MockRouter) -> None:
     assert sent["x-lorebase-session"] == "s-1"
     assert sent["x-lorebase-tool"] == "search"
     assert sent["x-lorebase-trace"] == "debug"
+
+
+def test_event_hooks_run_on_every_request(http: respx.MockRouter) -> None:
+    route = http.get("/domains").respond(200, json={"items": []})
+    count = 0
+
+    def stamp(request: httpx.Request) -> None:
+        nonlocal count
+        count += 1
+        request.headers["traceparent"] = f"hook-{count}"
+
+    with client(event_hooks={"request": [stamp]}) as c:
+        c.domains.list()
+        c.domains.list()
+    assert [call.request.headers["traceparent"] for call in route.calls] == ["hook-1", "hook-2"]
+
+
+async def test_async_event_hooks_run_on_every_request(http: respx.MockRouter) -> None:
+    route = http.get("/domains").respond(200, json={"items": []})
+
+    async def stamp(request: httpx.Request) -> None:
+        request.headers["x-hooked"] = "yes"
+
+    async with AsyncLorebaseClient(
+        BASE, api_key="lbk_test", env={}, event_hooks={"request": [stamp]}
+    ) as c:
+        await c.domains.list()
+    assert route.calls.last.request.headers["x-hooked"] == "yes"
 
 
 def test_no_session_options_send_no_trace_headers(http: respx.MockRouter) -> None:

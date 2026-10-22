@@ -1986,6 +1986,7 @@ dependencies = [
     { name = "lorebase-client" },
     { name = "lorebase-platform" },
     { name = "mcp" },
+    { name = "opentelemetry-api" },
     { name = "pydantic" },
 ]
 
@@ -1995,6 +1996,7 @@ requires-dist = [
     { name = "lorebase-client", editable = "packages/client" },
     { name = "lorebase-platform", editable = "packages/platform" },
     { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "opentelemetry-api", specifier = ">=1.25" },
     { name = "pydantic", specifier = ">=2.7" },
 ]
 

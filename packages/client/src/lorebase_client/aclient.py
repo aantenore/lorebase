@@ -39,7 +39,8 @@ JsonObject = Mapping[str, Any]
 class AsyncLorebaseClient:
     """Non-blocking client over `httpx.AsyncClient`; arguments as for `LorebaseClient`.
 
-    `transport` may be an `httpx.ASGITransport` to call an in-process application.
+    `transport` may be an `httpx.ASGITransport` to call an in-process application. `event_hooks`
+    holds coroutine functions (`request` / `response`) run on every HTTP request sent.
     """
 
     def __init__(
@@ -59,6 +60,7 @@ class AsyncLorebaseClient:
         trace: TraceMode | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         trust_env: bool = True,
+        event_hooks: Mapping[str, Sequence[Callable[..., Any]]] | None = None,
         env: Mapping[str, str] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -80,7 +82,10 @@ class AsyncLorebaseClient:
         self._core = RequestCore(self.config)
         self._sleep = sleep
         self._http = httpx.AsyncClient(
-            timeout=self.config.timeout_s, transport=transport, trust_env=trust_env
+            timeout=self.config.timeout_s,
+            transport=transport,
+            trust_env=trust_env,
+            event_hooks={k: list(v) for k, v in (event_hooks or {}).items()},
         )
         self._mount()
 

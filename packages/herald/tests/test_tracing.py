@@ -5,8 +5,18 @@ from __future__ import annotations
 import hashlib
 import re
 
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
 from lorebase_herald.settings import TraceSettings
-from lorebase_herald.tracing import Tracing, call_headers, trace_id_of
+from lorebase_herald.tracing import (
+    Tracing,
+    call_headers,
+    call_span,
+    request_traceparent,
+    tool_span,
+    trace_id_of,
+)
 
 from .conftest import Connect
 from .fake_keeper import API, SCHEMA, FakeKeeper
@@ -101,9 +111,61 @@ def test_begin_without_a_request_sends_no_session() -> None:
 def test_incoming_traceparent_is_continued_and_session_trace_ids_are_keyed() -> None:
     tracing = Tracing(TraceSettings())
     incoming = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-    sent = tracing.headers("lorebase_search", {"traceparent": incoming})["traceparent"]
-    assert sent.startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
-    assert sent != incoming  # a span of its own
+    tracing.begin(None, "lorebase_search")
+    assert call_span.get() is not None
+    span = tool_span(None, incoming)
+    assert span.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert span.parent_id == "00f067aa0ba902b7"  # the caller's span is its parent
+    assert span.span_id != span.parent_id  # a span of its own
     assert trace_id_of("default") == trace_id_of("default")
     # keyed per process: not the plain digest of the session id
     assert trace_id_of("default") != hashlib.sha256(b"default").hexdigest()[:32]
+
+
+def parts(traceparent: str) -> tuple[str, str]:
+    _, trace_id, span_id, _ = traceparent.split("-")
+    return trace_id, span_id
+
+
+def test_requests_of_one_tool_call_are_child_spans_with_fresh_ids() -> None:
+    tracing().begin(None, "lorebase_get")
+    tool = call_span.get()
+    assert tool is not None
+    sent = [request_traceparent() for _ in range(2)]
+    assert all(sent)
+    (trace_one, span_one), (trace_two, span_two) = (parts(v) for v in sent if v)
+    assert trace_one == trace_two == tool.trace_id
+    assert len({span_one, span_two, tool.span_id}) == 3
+    assert tool.child().parent_id == tool.span_id
+
+
+async def test_each_keeper_request_has_its_own_span(connect: Connect, fake: FakeKeeper) -> None:
+    fake.on("GET", f"{API}/schema", SCHEMA)
+    async with connect(trace={"session_id": "run-7"}) as client:
+        await client.call_tool("lorebase_schema", {})
+        await client.call_tool("lorebase_schema", {})
+    spans = [parts(r.headers["traceparent"]) for r in fake.requests]
+    assert {t for t, _ in spans} == {trace_id_of("run-7")}
+    assert len({s for _, s in spans}) == len(spans)
+
+
+def test_no_request_span_when_tracing_is_off() -> None:
+    tracing(enabled=False).begin(None, "lorebase_get")
+    assert request_traceparent() is None
+
+
+def test_active_opentelemetry_span_is_propagated() -> None:
+    context = SpanContext(
+        trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+        span_id=0x00F067AA0BA902B7,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    with trace.use_span(NonRecordingSpan(context)):
+        tracing().begin(None, "lorebase_get")
+        tool = call_span.get()
+        sent = request_traceparent()
+    assert tool is not None
+    assert tool.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert tool.span_id == "00f067aa0ba902b7"
+    assert sent == "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
