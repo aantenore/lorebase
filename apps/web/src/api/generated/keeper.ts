@@ -966,6 +966,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vault/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Show which keys the vault rows use
+         * @description Rows by encryption key and fingerprint key, and the earlier keys that can be removed.
+         */
+        get: operations["vault_keys_api_v1_vault_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vault/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a vault key rotation
+         * @description Queue the job that makes the rows stored under earlier keys again under the current
+         *     ones.
+         */
+        post: operations["rotate_vault_api_v1_vault_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/documents": {
         parameters: {
             query?: never;
@@ -4770,6 +4811,14 @@ export interface components {
              */
             created_at: string;
         };
+        /** RotationQueued */
+        RotationQueued: {
+            /**
+             * Job Id
+             * @description Id of the queued (or already pending) rotation job.
+             */
+            job_id: number;
+        };
         /** SchemaAttributeOut */
         SchemaAttributeOut: {
             /** Name */
@@ -5656,6 +5705,68 @@ export interface components {
             extraction?: components["schemas"]["ExtractionEvidenceOut"] | null;
             /** @description The Proposal merged in that Revision, or whose conflict resolution set the value. */
             proposal?: components["schemas"]["LineageProposalOut"] | null;
+        };
+        /**
+         * VaultKeysOut
+         * @description Which keys the vault rows use.
+         */
+        VaultKeysOut: {
+            /**
+             * Key Id
+             * @description Encryption key new values are sealed under.
+             */
+            key_id: string;
+            /**
+             * Token Key Id
+             * @description Token key new tokens and fingerprints use.
+             */
+            token_key_id: string;
+            /**
+             * Fingerprint Key
+             * @description Current fingerprint key: token key id/scheme.
+             */
+            fingerprint_key: string;
+            /**
+             * Encryption Keys
+             * @description Live rows by encryption key id.
+             */
+            encryption_keys: {
+                [key: string]: number;
+            };
+            /**
+             * Fingerprint Keys
+             * @description Live rows by fingerprint key (`legacy`: written before rotation).
+             */
+            fingerprint_keys: {
+                [key: string]: number;
+            };
+            /**
+             * Tombstone Keys
+             * @description Fingerprints of erased values by fingerprint key.
+             */
+            tombstone_keys: {
+                [key: string]: number;
+            };
+            /**
+             * Outdated
+             * @description Live rows the rotation job still has to make again.
+             */
+            outdated: number;
+            /**
+             * Removable Keys
+             * @description Ids in vault.previous_keys that no row uses: they can be removed.
+             */
+            removable_keys: string[];
+            /**
+             * Removable Token Keys
+             * @description Ids in vault.previous_token_keys that no row or tombstone uses.
+             */
+            removable_token_keys: string[];
+            /**
+             * Digests
+             * @description Key of the keyed digests: vault.digest_key, vault.token_key or installation (the database's own secret).
+             */
+            digests: string;
         };
         /**
          * ViaCondition
@@ -9252,6 +9363,100 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    vault_keys_api_v1_vault_keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultKeysOut"];
+                };
+            };
+            /** @description The caller is not an installation administrator. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The vault is not configured. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rotate_vault_api_v1_vault_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotationQueued"];
+                };
+            };
+            /** @description The caller is not an installation administrator. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The vault is not configured. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Problem details (RFC 9457), media type application/problem+json. */
