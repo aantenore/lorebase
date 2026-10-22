@@ -376,15 +376,16 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
 
     @server.tool(
         name="lorebase_lineage",
-        description="Where the current values of a Record came from: for each attribute its "
+        description="Where the values of a Record came from: for each attribute its "
         "value, origin, actor, Revision, and the Source, operation, extraction evidence "
-        "(document and span) or Proposal behind it.",
+        "(document and span) or Proposal behind it. `at` reads them at a past Revision.",
         annotations=READ,
         structured_output=False,
     )
     async def lorebase_lineage(
         ctx: Context,
         ref: RefArg,
+        at: AtArg = None,
         domain: DomainArg = None,
         branch: BranchArg = None,
         format: FormatArg = None,
@@ -394,6 +395,7 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
             record=ref,
             domain=domain,
             branch=branch,
+            at=at,
             fmt=format,
         )
 

@@ -996,7 +996,6 @@ Per-Record history pages and lineage
 |---------|---------|-------------|
 | `read.history.default_limit` | `50` |  |
 | `read.history.max_limit` | `500` |  |
-| `read.history.lineage_max_walk` | `10000` | Revisions walked back from an `at` off the branch chain |
 
 ## `read` (continued)
 

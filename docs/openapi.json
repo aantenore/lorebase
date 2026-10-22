@@ -4152,7 +4152,7 @@
           "read"
         ],
         "summary": "Lineage of a Record",
-        "description": "Where each current value of the Record came from: provenance, Revision, Source,\nOperation, extraction evidence and Proposal. Served at the branch head.",
+        "description": "Where each value of the Record came from: provenance, Revision, Source, Operation,\nextraction evidence and Proposal. At the branch head, or at `at` (from a snapshot).",
         "operationId": "get_record_lineage_api_v1_domains__domain_id__kinds__kind__records__key__lineage_get",
         "security": [
           {
@@ -4204,6 +4204,24 @@
               "title": "Branch"
             },
             "description": "Branch to read; default: the Domain's default branch."
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.",
+              "title": "At"
+            },
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           }
         ],
         "responses": {

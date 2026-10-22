@@ -696,8 +696,8 @@ export interface paths {
         };
         /**
          * Lineage of a Record
-         * @description Where each current value of the Record came from: provenance, Revision, Source,
-         *     Operation, extraction evidence and Proposal. Served at the branch head.
+         * @description Where each value of the Record came from: provenance, Revision, Source, Operation,
+         *     extraction evidence and Proposal. At the branch head, or at `at` (from a snapshot).
          */
         get: operations["get_record_lineage_api_v1_domains__domain_id__kinds__kind__records__key__lineage_get"];
         put?: never;
@@ -8802,6 +8802,8 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
+                /** @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision. */
+                at?: string | null;
             };
             header?: never;
             path: {

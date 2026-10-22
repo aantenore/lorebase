@@ -354,12 +354,13 @@ class LorebaseTools:
         domain: str | None,
         branch: str | None,
         fmt: str | None,
+        at: str | None = None,
     ) -> str:
         target = RecordRef.parse(record)
         name = self.domain(domain)
         async with self.session(credential) as client:
             found = await client.records.lineage(
-                name, target.kind, target.key, branch=self.branch(branch)
+                name, target.kind, target.key, branch=self.branch(branch), at=at
             )
         view = views.lineage_view(found, self.output)
         return render(view, views.lineage_text(view, self.output), self.fmt(fmt), self.output)
