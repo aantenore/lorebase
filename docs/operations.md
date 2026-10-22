@@ -34,9 +34,15 @@ stored before the default branch tagged an Attribute) and `store.lineage_backfil
 lineage revisions of rows materialized before migration `0032`; a starting worker queues the
 sweep once, and `python -m lorebase_store.jobs lineage-backfill [--domain D --branch B]
 [--recompute]` queues it by hand, `--recompute` also correcting rows of merges made before
-merges attributed only the values they change, and the history and rows of earlier
-fast-forwards) jobs by default (`--types` narrows it; see [Large
-branches](#large-branches)). Index jobs
+merges attributed only the values they change, and the history, Records and Links of
+earlier fast-forwards) jobs by default (`--types` narrows it; see [Large
+branches](#large-branches)). A fast-forward's history is written one Revision at a time only
+for ranges of at most `store.materialize.fast_forward_history_max_revisions` (1000)
+Revisions of the source head's first-parent chain, by the merge and by `--recompute` alike;
+a longer range, or one reached through a second parent, keeps one history row per element at
+the source head, so Record history and the lineage change count show fewer changes there than
+a rebuild. Raise the limit to cover longer ranges (each Revision of the range is one insert
+in the merge transaction). Index jobs
 build and drop per-Attribute indexes; they run as `database.maintenance_dsn` when it is set,
 because their DDL needs a role that owns `mat_records` ([store schema
 notes](store-schema-notes.md#physical-layout)). `indexes plan` prints that DDL for an

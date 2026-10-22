@@ -76,7 +76,8 @@ async def apply_changeset(
 
     `lineage_source` names the branch a fast-forward moves `branch` to: the branch's
     first-parent chain becomes the source's, so a written Record that the source holds with
-    the same object takes the source row's lineage, lineage revisions and update Revision, as
+    the same object takes the source row's lineage, lineage revisions and update Revision (a
+    Link, its lineage), as
     a rebuild folding that chain would (one primary-key read per batch of changed keys; a
     source row without lineage revisions is folded from the changeset instead).
     `fast_forward_from` is the branch's head before that fast-forward: when it lies on the
@@ -203,7 +204,7 @@ async def apply_changeset(
             )
             written_kinds.append(parsed.element_id)
         elif parsed.type is PartitionType.RELATION:
-            await _apply_links(repository, parsed.element_id, group)
+            await _apply_links(repository, parsed.element_id, group, source=source)
             applied.links[parsed.element_id].update(split_link_key(c.entry.key) for c in group)
     # A deferred schema change recomputes only what the changeset touched; the copy job
     # reconciles every other row after its switch.
@@ -380,7 +381,11 @@ async def _apply_records(
 
 
 async def _apply_links(
-    repository: MaterializedRepository, relation_id: str, changes: Sequence[MaterializedChange]
+    repository: MaterializedRepository,
+    relation_id: str,
+    changes: Sequence[MaterializedChange],
+    *,
+    source: MaterializedRepository | None = None,
 ) -> None:
     removed = [split_link_key(c.entry.key) for c in changes if c.body is None]
     written = [c for c in changes if c.body is not None]
@@ -390,6 +395,11 @@ async def _apply_links(
         return
     updated = [split_link_key(c.entry.key) for c in written if c.entry.old_hash is not None]
     previous = await repository.links(relation_id, updated) if updated else {}
+    sourced = (
+        {}
+        if source is None
+        else await source.links(relation_id, [split_link_key(c.entry.key) for c in written])
+    )
     rows: list[LinkRow] = []
     for change in written:
         assert change.body is not None
@@ -397,6 +407,20 @@ async def _apply_links(
         from_key, to_key = split_link_key(change.entry.key)
         values: dict[str, Any] = dict(change.body.get("values", {}))
         before = previous.get((from_key, to_key))
+        same = sourced.get((from_key, to_key))
+        if same is not None and same.object_hash == change.entry.new_hash:
+            # A fast-forward: the source's Lineage, as a rebuild folding its chain gives.
+            rows.append(
+                LinkRow(
+                    relation_id=relation_id,
+                    from_key=from_key,
+                    to_key=to_key,
+                    values=values,
+                    object_hash=change.entry.new_hash,
+                    lineage=dict(same.lineage),
+                )
+            )
+            continue
         rows.append(
             LinkRow(
                 relation_id=relation_id,
