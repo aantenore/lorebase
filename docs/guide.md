@@ -273,7 +273,9 @@ address) in `guide.mode_memory_file` under `guide.data_dir`
 (`~/.local/state/lorebase/guide/structured_output_modes.json` by default), written atomically
 under an exclusive lock (a `.lock` file next to it), so a restarted Guide does not try the
 refused mode again. Entries carry a timestamp and expire after `inference.mode_memory_ttl_s`
-(7 days); `lorebase-guide modes clear` deletes the file's entries. Mount a volume there in containers to
+(7 days); `lorebase-guide modes clear` deletes the file's entries. The compose stack mounts the volume
+`guide-data` at `/var/lib/lorebase/guide` and the Helm chart an emptyDir
+(`guide.persistence.enabled` keeps it on a claim); mount a volume there in other containers to
 keep it; when the file cannot be read or written, Guide logs a warning and remembers the mode
 for the life of the process only. Embeddings stay on fastembed or another provider: Anthropic has none.
 

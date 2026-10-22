@@ -1,4 +1,25 @@
 {{- if .Values.guide.enabled }}
+{{- $g := .Values.guide }}
+{{- $claim := printf "%s-data" (include "lorebase.componentName" (dict "ctx" . "component" "guide")) }}
+{{- if and $g.persistence.enabled (not $g.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $claim }}
+  labels:
+    {{- include "lorebase.labels" (dict "ctx" . "component" "guide") | nindent 4 }}
+  {{- include "lorebase.commonAnnotations" . | nindent 2 }}
+spec:
+  accessModes:
+    {{- toYaml $g.persistence.accessModes | nindent 4 }}
+  {{- with $g.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $g.persistence.size }}
+---
+{{- end }}
 {{- $checksums := dict "checksum/config" (include "lorebase.appConfig" . | sha256sum) -}}
 {{- if include "lorebase.managedSecret" . }}
 {{- $_ := set $checksums "checksum/secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) }}
@@ -12,8 +33,8 @@
   "command" .Values.guide.command
   "port" .Values.guide.port
   "env" (include "lorebase.guideEnv" .)
-  "volumes" (include "lorebase.configVolume" .)
-  "mounts" (include "lorebase.configMount" .)
+  "volumes" (printf "%s\n%s" (include "lorebase.configVolume" .) (include "lorebase.guideDataVolume" (dict "cfg" $g "claim" $claim)))
+  "mounts" (printf "%s\n%s" (include "lorebase.configMount" .) (include "lorebase.guideDataMount" .))
   "podSecurity" .Values.podSecurityContext
   "checksums" $checksums
   "preStop" 0

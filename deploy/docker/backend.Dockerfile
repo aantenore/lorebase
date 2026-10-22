@@ -54,7 +54,8 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1
 
 RUN groupadd --system --gid 10001 lorebase \
- && useradd --system --uid 10001 --gid lorebase --no-create-home --shell /usr/sbin/nologin lorebase
+ && useradd --system --uid 10001 --gid lorebase --no-create-home --shell /usr/sbin/nologin lorebase \
+ && install -d -o 10001 -g 10001 /var/lib/lorebase/guide
 
 COPY --from=build /app/.venv /app/.venv
 # Alembic configuration and revisions live beside the store sources, not in its wheel.
