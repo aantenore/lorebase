@@ -4,8 +4,9 @@
 #   quickstart.sh env     create .env from .env.example with generated database passwords
 #                         (an existing .env is left as it is; empty or `change-me` passwords in
 #                         it are filled in)
-#   quickstart.sh up      build the backend image from this checkout and start postgres,
-#                         db-roles, migrate and keeper; returns when Keeper is healthy
+#   quickstart.sh up      build the backend and web images from this checkout and start postgres,
+#                         db-roles, migrate, keeper and web; returns when both are healthy and
+#                         prints the URL of the web app
 #   quickstart.sh data    load the supply sample through the CLI: Domain, schema and data on
 #                         branch `work`, then a Proposal merged into `main`. A Domain
 #                         `supply` that already holds the sample is left alone.
@@ -76,9 +77,17 @@ require_env() {
 
 up() {
   require_env
-  say "building the image and starting project $(env_value COMPOSE_PROJECT_NAME)"
-  compose up -d --build --wait postgres migrate keeper >&2
+  say "building the images and starting project $(env_value COMPOSE_PROJECT_NAME)"
+  compose up -d --build --wait postgres migrate keeper web >&2
   say "Keeper is ready at $(keeper_url)"
+  say "Web app: $(web_url)"
+}
+
+web_url() {
+  local port bind
+  port="$(env_value LOREBASE_WEB_PORT)"
+  bind="$(env_value WEB_BIND)"
+  printf 'http://%s:%s' "${bind:-127.0.0.1}" "${port:-8090}"
 }
 
 keeper_url() {
@@ -158,7 +167,7 @@ case "${1:-}" in
     compose --profile "*" down -v --remove-orphans
     ;;
   *)
-    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
     ;;
 esac

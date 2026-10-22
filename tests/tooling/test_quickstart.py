@@ -72,6 +72,14 @@ def test_env_keeps_set_values_and_fills_placeholders(tmp_path: Path) -> None:
     assert values(env_file) == first
 
 
+def test_up_starts_the_web_service_and_prints_its_url() -> None:
+    text = SCRIPT.read_text()
+    assert "--wait postgres migrate keeper web" in text
+    assert "LOREBASE_WEB_PORT" in text
+    env = values(ROOT / ".env.example")
+    assert env["LOREBASE_WEB_PORT"] != env["KEEPER_HOST_PORT"]
+
+
 def test_unknown_command_prints_usage() -> None:
     if shutil.which("bash") is None:
         pytest.skip("bash not installed")

@@ -170,3 +170,64 @@ def test_the_guard_refuses_missing_placeholder_and_short_secrets(value: str | No
 
 def test_the_guard_accepts_a_generated_secret() -> None:
     assert guard("sk-" + "0123456789abcdef" * 3).returncode == 0
+
+
+WEB_TEMPLATE = ROOT / "deploy" / "compose" / "web" / "proxy.conf.template"
+WEB_DEFAULT_CONF = ROOT / "deploy" / "docker" / "web" / "default.conf"
+
+
+def test_web_is_part_of_the_default_stack_on_loopback() -> None:
+    web = services(BASE_ENV)["web"]
+    assert "profiles" not in web
+    assert web["depends_on"]["keeper"]["condition"] == "service_healthy"
+    (port,) = web["ports"]
+    assert (port["host_ip"], port["published"], port["target"]) == ("127.0.0.1", "8090", 8080)
+    assert web["build"]["dockerfile"] == "deploy/docker/web.Dockerfile"
+
+
+def test_web_port_and_bind_are_configurable() -> None:
+    web = services({**BASE_ENV, "LOREBASE_WEB_PORT": "18090", "WEB_BIND": "127.0.0.2"})["web"]
+    (port,) = web["ports"]
+    assert (port["host_ip"], port["published"]) == ("127.0.0.2", "18090")
+
+
+def test_web_runs_the_app_against_its_own_origin() -> None:
+    env = services(BASE_ENV)["web"]["environment"]
+    assert env["VITE_API_MODE"] == "live"
+    # A path: the browser calls the origin that served the app, the CSP stays on 'self'.
+    assert env["VITE_KEEPER_BASE_URL"] == "/"
+    assert env["VITE_GUIDE_URL"] in ("", None)
+    assert env["LOREBASE_WEB_PROXY_KEEPER_PORT"] == "8080"
+
+
+def test_web_proxy_follows_the_keeper_and_guide_ports() -> None:
+    env = services({**BASE_ENV, "KEEPER_PORT": "9000", "GUIDE_PORT": "9500"})["web"]["environment"]
+    assert env["LOREBASE_WEB_PROXY_KEEPER_PORT"] == "9000"
+    assert env["LOREBASE_WEB_PROXY_GUIDE_PORT"] == "9500"
+
+
+def test_guide_accepts_the_origin_of_the_web_service() -> None:
+    guide = services(BASE_ENV, "assistant")["guide"]
+    origins = json.loads(guide["environment"]["LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS"])
+    assert origins == ["http://127.0.0.1:8090", "http://localhost:8090"]
+
+
+def test_web_proxy_template_forwards_api_and_guide_without_buffering() -> None:
+    text = WEB_TEMPLATE.read_text()
+    for prefix, upstream in (("/api/", "keeper"), ("/guide/", "guide")):
+        block = text[text.index(f"location {prefix} {{") :].split("\n}\n")[0]
+        assert f"http://{upstream}:${{LOREBASE_WEB_PROXY_" in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_http_version 1.1;" in block
+    # Only the prefix of Guide is removed; Keeper serves its API under /api/v1.
+    assert "rewrite ^/guide/(.*)$ /$1 break;" in text
+    # Every substituted variable is one the service passes (nothing renders empty).
+    names = set(re.findall(r"\$\{(LOREBASE_WEB_PROXY_\w+)\}", text))
+    assert names <= set(services(BASE_ENV)["web"]["environment"])
+
+
+def test_web_image_includes_the_directory_the_proxy_is_rendered_into() -> None:
+    assert "include /etc/nginx/conf.d/lorebase.d/*.conf;" in WEB_DEFAULT_CONF.read_text()
+    env = services(BASE_ENV)["web"]["environment"]
+    assert env["NGINX_ENVSUBST_OUTPUT_DIR"] == "/etc/nginx/conf.d/lorebase.d"
+    assert env["NGINX_ENVSUBST_FILTER"] == "^LOREBASE_WEB_PROXY_"

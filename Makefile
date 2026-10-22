@@ -68,7 +68,7 @@ demo-down: ## Stop the demo stack and delete its data
 env: ## Create .env from .env.example with generated database passwords (keeps an existing one)
 	@scripts/quickstart.sh env
 
-up: ## Build the image and start Postgres, migrations and Keeper; waits until Keeper is healthy
+up: ## Build the images and start Postgres, migrations, Keeper and the web app; waits until healthy, prints the web URL
 	@scripts/quickstart.sh up
 
 example-data: ## Load the supply sample into the running Keeper (Domain supply, branches main and work)

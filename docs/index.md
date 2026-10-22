@@ -140,31 +140,25 @@ Screens of the web app. The first row runs on a real Keeper with the supply samp
 
 ## Getting started
 
-Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12), Docker with compose, `make`, `curl` and `openssl`; Node.js 24 with pnpm for the web app. Keeper uses port 8080 and Postgres port 5432 on `127.0.0.1`; change `KEEPER_HOST_PORT` and `POSTGRES_HOST_PORT` in `.env` if they are taken. The [prerequisites](quickstart.md#1-prerequisites) list versions, memory and disk.
+Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12), Docker with compose, `make`, `curl` and `openssl`; no Node.js needed (the web app runs in a container). Keeper uses port 8080, the web app port 8090 and Postgres port 5432 on `127.0.0.1`; change `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT` and `POSTGRES_HOST_PORT` in `.env` if they are taken. The [prerequisites](quickstart.md#1-prerequisites) list versions, memory and disk.
 
 ```bash
 git clone https://github.com/aantenore/lorebase.git && cd lorebase
 uv sync --all-packages
 
 make env            # .env from .env.example, with generated database passwords
-make up             # build the image, start Postgres, migrations and Keeper, wait until healthy
+make up             # build the images, start Postgres, migrations, Keeper and the web app; prints the web URL
 make example-data   # Domain `supply`: schema, 185 Records with their Links, merged into main
 
 export LOREBASE_URL=http://localhost:8080 LOREBASE_DOMAIN=supply
 uv run lorebase search bearing --kind Part     # first query
 ```
 
-Then open the web app at `http://localhost:5173`:
-
-```bash
-cd apps/web && pnpm install
-printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
-LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
-```
+Then open the web app at `http://127.0.0.1:8090` (the URL `make up` printed). It is served by the `web` container, which forwards `/api/` to Keeper, so nothing else is installed or configured. Contributors changing the app use the [dev server](quickstart.md#26-open-the-web-app) instead.
 
 There is nothing to sign in to: the example configuration runs with authentication off, on loopback only. `make down` stops the stack and `make clean-stack` deletes its data.
 
-The first `make up` builds the backend image (a few minutes); the rest takes about a minute ([timings](quickstart.md#timings)). Next steps, in the [quickstart](quickstart.md):
+The first `make up` builds the backend and web images (a few minutes); the rest takes about a minute ([timings](quickstart.md#timings)). Next steps, in the [quickstart](quickstart.md):
 
 1. [Connect an agent over MCP](quickstart.md#3-connect-an-agent-over-mcp): one `mcpServers` entry that starts Herald.
 2. [Use a real model](quickstart.md#4-use-a-real-model): Ollama by default, or any hosted OpenAI-compatible endpoint with its key in a file.
