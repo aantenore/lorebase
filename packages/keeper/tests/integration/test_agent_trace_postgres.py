@@ -11,8 +11,14 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import text
 
-from lorebase_store.tracing import NewTraceStep, TraceRepository, TraceVisibility
+from lorebase_store.tracing import (
+    NewTraceStep,
+    TraceRepository,
+    TraceSessionSummary,
+    TraceVisibility,
+)
 
 from .read_fixtures import Seeded, keeper, owner_session, seeded_database
 from .supply import DOMAIN, rows
@@ -263,3 +269,99 @@ async def test_inferred_sessions_split_on_idle_gaps_and_never_across_principals(
         ]
         assert all(s.inferred for s in found)
         assert len({s.session_id for s in found}) == 3
+
+
+async def test_the_cap_holds_across_concurrent_writers(seeded: Seeded) -> None:
+    now = datetime.now(UTC)
+    batch = [
+        NewTraceStep(session_id="race", actor="usr_r", type="call", at=now, domain_id="d1")
+        for _ in range(5)
+    ]
+
+    async def write() -> int:
+        async with owner_session(seeded.owner_url) as session, session.begin():
+            written = await TraceRepository(session).append_many(batch, max_per_session=7)
+            await asyncio.sleep(0.05)  # hold the session row while the other writers wait
+            return written
+
+    results = await asyncio.gather(*(write() for _ in range(4)))
+    assert sorted(results) == [0, 0, 2, 5]
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        own = TraceVisibility(owner="usr_r")
+        repository = TraceRepository(session)
+        assert len(await repository.steps("race", own, limit=50)) == 7
+        [summary] = await repository.sessions(own, limit=10)
+        assert (summary.session_id, summary.calls) == ("race", 7)
+
+
+async def test_sessions_are_listed_from_summaries_kept_by_writes_and_pruning(
+    seeded: Seeded,
+) -> None:
+    now = datetime.now(UTC)
+    old = now - timedelta(days=30)
+
+    def step(
+        domain: str | None, at: datetime, *, kind: str = "call", tool: str | None = None
+    ) -> NewTraceStep:
+        return NewTraceStep(
+            session_id="summary",
+            actor="usr_s",
+            type=kind,
+            at=at,
+            domain_id=domain,
+            tool=tool,
+            proposal_id="prp_1" if tool == "lorebase_write" else None,
+        )
+
+    def mine(found: list[TraceSessionSummary]) -> list[TraceSessionSummary]:
+        return [s for s in found if s.actor == "usr_s"]
+
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        repository = TraceRepository(session)
+        await repository.append_many(
+            [
+                step("d1", old, tool="lorebase_list"),
+                step("d1", now, tool="lorebase_write"),
+                step("d2", now, tool="lorebase_query"),
+                step(None, now, kind="note"),
+            ],
+            max_per_session=100,
+        )
+        await repository.append_many([step("d1", now, tool="lorebase_search")], max_per_session=100)
+
+        everyone = TraceVisibility(owner="nobody", domains=None, domainless=True)
+        [whole] = mine(await repository.sessions(everyone, limit=50))
+        assert (whole.calls, whole.notes, whole.started_at) == (4, 1, old)
+        assert whole.domains == ("d1", "d2")
+        assert whole.tools == (
+            "lorebase_list",
+            "lorebase_query",
+            "lorebase_search",
+            "lorebase_write",
+        )
+        assert whole.proposals == ("prp_1",)
+
+        d2 = TraceVisibility(owner="nobody", domains=frozenset({"d2"}))
+        [partial] = await repository.sessions(d2, limit=50, actor="usr_s")
+        assert (partial.calls, partial.notes, partial.tools) == (1, 0, ("lorebase_query",))
+        [filtered] = mine(await repository.sessions(everyone, limit=50, domain_id="d1"))
+        assert (filtered.calls, filtered.domains) == (3, ("d1",))
+
+        assert await repository.prune(now - timedelta(days=7), limit=100) >= 1
+        [pruned] = mine(await repository.sessions(everyone, limit=50))
+        assert (pruned.calls, pruned.notes, pruned.started_at) == (3, 1, now)
+        assert pruned.tools == ("lorebase_query", "lorebase_search", "lorebase_write")
+        held = await session.execute(
+            text(
+                "SELECT steps FROM agent_trace_sessions "
+                "WHERE actor = 'usr_s' AND session_id = 'summary'"
+            )
+        )
+        assert held.scalar_one() == 4
+
+        assert await repository.prune(now + timedelta(seconds=1), limit=100) >= 4
+        assert mine(await repository.sessions(everyone, limit=50)) == []
+        left = await session.execute(
+            text("SELECT count(*) FROM agent_trace_sessions WHERE actor = 'usr_s'")
+        )
+        assert left.scalar_one() == 0

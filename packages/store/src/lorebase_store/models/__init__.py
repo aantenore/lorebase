@@ -49,7 +49,11 @@ from lorebase_store.models.proposals import (
     ProposalReview,
 )
 from lorebase_store.models.queues import Job, OutboxConsumer, OutboxEvent, OutboxPending
-from lorebase_store.models.tracing import AgentTraceStep
+from lorebase_store.models.tracing import (
+    AgentTraceSession,
+    AgentTraceSessionDomain,
+    AgentTraceStep,
+)
 from lorebase_store.models.versioning import (
     ChangesetEntry,
     Domain,
@@ -66,6 +70,8 @@ from lorebase_store.models.webhooks import Webhook, WebhookDelivery
 metadata = Base.metadata
 
 __all__ = [
+    "AgentTraceSession",
+    "AgentTraceSessionDomain",
     "AgentTraceStep",
     "ApiKey",
     "ApiKeyUsage",
