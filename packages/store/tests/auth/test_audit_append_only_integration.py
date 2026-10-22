@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_store import migrations
-from lorebase_store.auth import AuditRepository, NewAuditEntry
+from lorebase_store.auth import AuditRepository, AuditStream, NewAuditEntry
 from lorebase_store.db import create_engine
 from lorebase_store.repositories.refs import sqlstate
 from lorebase_store.settings import DatabaseSettings, StoreSettings
@@ -154,3 +154,18 @@ def test_downgrade_gives_the_rights_back(
             await engine.dispose()
 
     assert asyncio.run(rights()) == (True, True)
+
+
+async def test_the_read_log_is_append_only_too(engine: AsyncEngine, roles: tuple[str, str]) -> None:
+    app, other = roles
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    for role in (app, other):
+        async with sessions() as session, session.begin():
+            await session.execute(text(f"SET LOCAL ROLE {role}"))
+            if role == app:
+                reads = AuditRepository(session, AuditStream.READS)
+                assert await reads.append_many([NewAuditEntry(actor="usr_1", action="read")])
+            await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+            for statement in CHANGES:
+                changed = statement.replace("audit_log", "audit_read_log")
+                assert await _refusal(session, changed) == INSUFFICIENT_PRIVILEGE, changed

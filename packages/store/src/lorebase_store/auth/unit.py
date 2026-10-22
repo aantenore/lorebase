@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_store.auth.api_keys import ApiKeyRepository
-from lorebase_store.auth.audit import AuditRepository
+from lorebase_store.auth.audit import AuditRepository, AuditStream
 from lorebase_store.auth.grants import GrantRepository
 from lorebase_store.auth.principals import GroupRepository, PrincipalRepository
 from lorebase_store.auth.sessions import SessionRepository
@@ -25,6 +25,8 @@ class AuthUnit:
     api_keys: ApiKeyRepository
     grants: GrantRepository
     audit: AuditRepository
+    read_audit: AuditRepository
+    """The read stream of the audit log (`audit_read_log`)."""
     usage: UsageRepository
     sessions: SessionRepository
 
@@ -45,6 +47,7 @@ class SqlAuthStore:
                 api_keys=ApiKeyRepository(session),
                 grants=GrantRepository(session),
                 audit=AuditRepository(session),
+                read_audit=AuditRepository(session, AuditStream.READS),
                 usage=UsageRepository(session),
                 sessions=SessionRepository(session),
             )

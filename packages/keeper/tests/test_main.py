@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from lorebase_keeper import __main__ as entrypoint
-from lorebase_store.auth import Chains, ChainVerification
+from lorebase_store.auth import AuditStream, ChainHead, Chains, ChainVerification
+from lorebase_store.auth.checkpoints import Checkpoint, signed_document
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +93,9 @@ class _Audit:
         self.calls.append(kwargs)
         return self.result
 
+    async def entry_hashes(self, positions: Any) -> dict[tuple[str | None, int], bytes]:
+        return {("acme", 3): b"\x01" * 32}
+
 
 def _fake_store(monkeypatch: pytest.MonkeyPatch, result: ChainVerification) -> _Audit:
     audit = _Audit(result)
@@ -95,6 +103,7 @@ def _fake_store(monkeypatch: pytest.MonkeyPatch, result: ChainVerification) -> _
     class _Unit:
         def __init__(self) -> None:
             self.audit = audit
+            self.read_audit = audit
 
     class _Store:
         @asynccontextmanager
@@ -135,6 +144,7 @@ def test_audit_verify_exits_1_on_a_broken_chain(
         entrypoint.main(["audit", "verify", "--all", "--json"])
     assert caught.value.code == 1
     assert json.loads(capsys.readouterr().out) == {
+        "stream": "actions",
         "chain": "all",
         "intact": False,
         "checked": 2,
@@ -149,3 +159,42 @@ def test_audit_verify_refuses_a_negative_checkpoint(monkeypatch: pytest.MonkeyPa
     with pytest.raises(SystemExit) as caught:
         entrypoint.main(["audit", "verify", "acme", "--after-seq", "-1"])
     assert "--after-seq" in str(caught.value)
+
+
+def test_audit_verify_compares_the_log_with_signed_checkpoints(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    key = Ed25519PrivateKey.generate()
+    public = tmp_path / "checkpoint.pub"
+    public.write_bytes(
+        key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    )
+    at = datetime(2026, 10, 25, 9, 0, tzinfo=UTC)
+    heads = (ChainHead("acme", 3, b"\x01" * 32), ChainHead("acme", 9, b"\x02" * 32))
+    folder = tmp_path / "checkpoints" / "actions"
+    folder.mkdir(parents=True)
+    for n, head in enumerate(heads):
+        checkpoint = Checkpoint(AuditStream.ACTIONS, at.replace(hour=n), "main", (head,))
+        (folder / f"{n}.json").write_bytes(signed_document(checkpoint, key))
+    reads = Checkpoint(AuditStream.READS, at, "main", (ChainHead("acme", 1, b"\x03" * 32),))
+    (folder / "reads.json").write_bytes(signed_document(reads, key))  # other stream: ignored
+    forged = Checkpoint(AuditStream.ACTIONS, at, "main", ())
+    (folder / "forged.json").write_bytes(signed_document(forged, Ed25519PrivateKey.generate()))
+    audit = _fake_store(monkeypatch, ChainVerification(5, chains=1, last_seq=8))
+    argv = ["audit", "verify", "acme", "--json", "--checkpoints", str(tmp_path / "checkpoints")]
+
+    with pytest.raises(SystemExit) as refused:
+        entrypoint.main(argv)
+    assert "--checkpoint-key" in str(refused.value)
+
+    with pytest.raises(SystemExit) as caught:
+        entrypoint.main([*argv, "--checkpoint-key", str(public)])
+    assert caught.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["intact"] is False
+    assert report["checkpoints"]["checked"] == 2
+    assert [f["seq"] for f in report["checkpoints"]["findings"]] == [9]  # cut from the tail
+    assert report["checkpoints"]["findings"][0]["problem"] == "missing"
+    [invalid] = report["checkpoints"]["invalid"]
+    assert "forged.json" in invalid
+    assert audit.calls == [{"after_seq": 0, "domain_id": "acme"}]

@@ -55,7 +55,13 @@ EMBEDDING_CALL_DURATION = meter.create_histogram(
 AUDIT_VERIFICATIONS = meter.create_counter(
     "lorebase.audit.verifications",
     unit="{verification}",
-    description="Verifications of the audit hash chains by audit_verify jobs, by outcome.",
+    description="Verifications of the audit hash chains by audit_verify jobs, by outcome and "
+    "stream.",
+)
+AUDIT_CHECKPOINTS = meter.create_counter(
+    "lorebase.audit.checkpoints",
+    unit="{checkpoint}",
+    description="Audit checkpoints published by audit_checkpoint jobs, by outcome.",
 )
 
 

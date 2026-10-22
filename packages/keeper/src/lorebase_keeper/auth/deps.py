@@ -58,7 +58,7 @@ async def current_principal(
             request.headers, client_address(request), request.method
         )
         state[_PRINCIPAL_KEY] = principal
-    annotate(request, actor=principal.id)
+    annotate(request, actor=principal.id, principal_type=principal.type.value)
     return cast(Principal, principal)
 
 

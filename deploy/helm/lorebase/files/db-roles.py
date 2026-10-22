@@ -13,7 +13,7 @@ maintenance role (the owner of the tables), and keeps the role named by the appl
   `public` (present ones, and later ones through default privileges of the maintenance role),
   `CONNECT, TEMPORARY` on the database and `EXECUTE` on the read functions an earlier migration
   created, and takes `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` and `TRIGGER` on `audit_log`
-  back (revision 0015).
+  and `audit_read_log` back (revisions 0015 and 0022).
 
 It is idempotent and refuses an application role equal to the maintenance role.
 
@@ -56,9 +56,12 @@ GRANTS = (
     "SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
     f"TO %I', {ROLE})",
     f"SELECT format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %I', {ROLE})",
-    # The audit log is append-only for the services (revision 0015).
+    # The audit logs are append-only for the services (revisions 0015 and 0022).
     "SELECT format('REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE "
     f"public.audit_log FROM %I', {ROLE}) WHERE to_regclass('public.audit_log') IS NOT NULL",
+    "SELECT format('REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE "
+    f"public.audit_read_log FROM %I', {ROLE}) "
+    "WHERE to_regclass('public.audit_read_log') IS NOT NULL",
     "SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, "
     f"UPDATE, DELETE ON TABLES TO %I', current_user, {ROLE})",
     "SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT USAGE, SELECT "

@@ -83,8 +83,9 @@ Three layers, like compose:
    refuses `none` on the pod address unless `keeper.auth.allow_insecure: true`). Source syncs need
    their connection references in `scribe.sources.allowed_connections`.
 2. Environment variables set by the chart override the file, for the deployment-level values only:
-   `LOREBASE__KEEPER__HOST/PORT`, `keeper.preferReplica`, `logLevel`, `telemetry.*`, the DSNs, the
-   pepper, the Ollama and LLM settings of Scribe. Do not repeat those in `config`.
+   `LOREBASE__KEEPER__HOST/PORT`, `keeper.preferReplica`, `keeper.rateLimitBackend`, `logLevel`,
+   `telemetry.*`, the DSNs, the pepper, the Ollama and LLM settings of Scribe. Do not repeat those
+   in `config`.
 3. Secrets are referenced as `secret://env/NAME`; the chart maps Secret keys to those variables.
    `secrets.extra` (chart-managed) or `secrets.extraNames` (existing Secret) add your own, for
    example hosted embedding credentials.
@@ -162,6 +163,10 @@ helm upgrade --install lorebase deploy/helm/lorebase -n lorebase \
   `db-read-dsn` key (`secrets.values.dbReadDsn` accepts a list) and set `keeper.preferReplica: true`.
   Reads then go to a replica that passes the freshness guard; writes and pinned reads stay on the
   primary. `/readyz` reports `database_replicas`.
+- **Rate limits.** With `keeper.replicaCount` above 1 or the HPA on, the chart sets
+  `keeper.limits.rate.backend: postgres`, so every Keeper draws from the same buckets in the
+  application database ([operations](operations.md#rate-limits-and-quotas)). `keeper.rateLimitBackend`
+  (`local` or `postgres`) or `config.keeper.limits.rate.backend` overrides the choice.
 - **Keepers.** The HPA runs 4 to 20 Keepers on CPU (65 percent of requests) and on a custom metric
   placeholder (`lorebase_http_requests_per_second`, 50 per pod). The services export OTLP only, so that
   metric needs an adapter you provide (Prometheus Adapter or KEDA fed from the collector); remove the

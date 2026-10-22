@@ -467,8 +467,58 @@ class AuthzSettings(SectionModel):
         return roles
 
 
+class ReadAuditSettings(SectionModel):
+    """Audit of reads (design 13.6): one record per successful read, sampled and filtered,
+    written in batches to the read stream of the audit log (`audit_read_log`, chains of its
+    own), off the request path.
+
+    A read that showed or masked a value of a sensitive Attribute (`pii`, `confidential`,
+    `restricted`, vault values included) is always recorded, whatever the sampling and the
+    filters. Records hold who, which route and Domain, the Kind when the route names one and
+    the outcome; never query strings, bodies or values.
+    """
+
+    enabled: bool = Field(default=False, description="Record reads. Needs the `database` section.")
+    sample_rate: float = Field(
+        default=1.0,
+        ge=0,
+        le=1,
+        description="Share of the reads that pass the filters recorded (0 to 1). Sensitive "
+        "reads are always recorded.",
+    )
+    principal_types: tuple[Literal["user", "service", "api_key"], ...] = Field(
+        default=(),
+        description="Record only reads by these principal types; empty records every type.",
+    )
+    kinds: tuple[str, ...] = Field(
+        default=(),
+        description="Record only reads of these Kinds (api names, as routes name them); reads "
+        "of routes that name no Kind are then left out. Empty records every read.",
+    )
+    queue_size: int = Field(
+        default=10_000,
+        ge=1,
+        description="Records waiting to be written; past it new records are dropped and "
+        "counted in `lorebase.audit.reads.dropped` (reason `queue_full`).",
+    )
+    batch_size: int = Field(
+        default=500, ge=1, description="Records written per transaction at most."
+    )
+    flush_interval_s: float = Field(
+        default=1.0,
+        gt=0,
+        description="Longest wait before records in the queue are written.",
+    )
+    write_timeout_s: float = Field(
+        default=5.0,
+        gt=0,
+        description="Time budget of one batch; a batch that fails is dropped and counted "
+        "(reason `write_failed`).",
+    )
+
+
 class AuditSettings(SectionModel):
-    """Audit log of mutations and denied requests (design 10.4)."""
+    """Audit log of mutations and denied requests (design 10.4), and optionally of reads."""
 
     enabled: bool = Field(
         default=True,
@@ -484,6 +534,7 @@ class AuditSettings(SectionModel):
         description="Time budget of one audit write. A failed write is logged and counted, "
         "never surfaced to the client.",
     )
+    reads: ReadAuditSettings = Field(default_factory=ReadAuditSettings)
 
 
 class AuthSettings(SectionModel):

@@ -186,9 +186,56 @@ The answer names the first entry that does not verify and why: `chain link broke
 `prev_hash` is not the hash of the entry before it: a row was removed, inserted or reordered)
 or `entry content changed` (the stored hash does not match the content: a row was edited).
 Entries before it verified. The chain shows that the log was not changed by someone who cannot
-also rewrite every later hash. It cannot show that the newest entries of a chain were deleted,
-and an owner of the database can recompute a whole chain. Keep a recent `last_seq` and its
-`entry_hash` outside the database (a ticket, a log shipper) when you need evidence against both.
+also rewrite every later hash. On its own it cannot show that the newest entries of a chain were
+deleted, and an owner of the database can recompute a whole chain: checkpoints cover both.
+
+### Checkpoints outside the database
+
+With `scribe.audit_checkpoints.enabled`, the scheduler leader queues an `audit_checkpoint` job
+every `interval_s` (one hour). It signs the head (`seq`, `entry_hash`) of every chain of each
+stream in `streams` with an Ed25519 key and stores one JSON document per stream as
+`{prefix}{stream}/{UTC time}.json` in the sink: `file` (a directory, ideally a volume the
+database host cannot write; files are never replaced), `http` (PUT or POST to `http.url`, with
+headers from secret references) or `s3` (a PUT signed with Signature Version 4 to an
+S3-compatible bucket; turn on versioning or object lock and give the key `PutObject` only). HTTP
+targets must use `https` and resolve to global unicast addresses unless `allow_private_targets`
+(an in-cluster store); redirects are not followed. `lorebase.audit.checkpoints` counts them by
+outcome; a failure fails the job attempt, which is retried.
+
+```bash
+openssl genpkey -algorithm ed25519 -out checkpoint.pem          # scribe.audit_checkpoints.signing_key
+openssl pkey -in checkpoint.pem -pubout -out checkpoint.pub     # for verifiers
+# copy the checkpoints locally (aws s3 sync s3://audit-anchors/lorebase-audit ./checkpoints, ...)
+python -m lorebase_keeper audit verify --all --checkpoints ./checkpoints --checkpoint-key checkpoint.pub
+```
+
+`--checkpoints` takes files or directories (searched for `*.json`) and is repeatable; only the
+checkpoints of the stream verified are compared (`--reads` for the read stream). The run exits 1
+when a checkpointed entry is `missing` (the tail of a chain was cut) or `changed` (a chain was
+recomputed), or when a file is not a checkpoint signed by that key; `--json` lists them under
+`checkpoints`. Entries newer than the latest checkpoint are not covered.
+
+### Read auditing
+
+`keeper.auth.audit.reads.enabled` (off by default, needs the audit log and the database) records
+successful reads of authenticated callers in `audit_read_log`: GET and HEAD, and the POST routes
+that only read (query, traverse, neighborhood, search, context). Each record has the actor, the
+Domain, action `read`, the route template, status, method, request id, principal type, the Kind
+when the route names one (also the target) and `sensitive` (`shown`, `masked`) when the read
+showed or masked a value of a `pii`, `confidential` or `restricted` Attribute, vault values
+included. Query strings, bodies and values are never recorded.
+
+- `principal_types` and `kinds` keep only some reads, then `sample_rate` keeps a share of them.
+  Sensitive reads are recorded whatever the filters and the sampling.
+- Records are queued (`queue_size`) and written in batches (`batch_size`, at least every
+  `flush_interval_s`), one transaction each, never on the request path. A full queue or a batch
+  that fails within `write_timeout_s` drops records: `lorebase.audit.reads.dropped{reason}`
+  (`queue_full`, `write_failed`, `shutdown`); written ones count in `lorebase.audit.reads.recorded`.
+- The read stream has hash chains of its own, so it never slows down or breaks those of
+  actions. Verify it with `audit verify --reads`; the daily `audit_verify` job checks both
+  streams (`lorebase_audit_verifications_total{stream}`), and checkpoints cover both.
+- Volume: one row per recorded read. Lower `sample_rate` or filter by Kind on busy
+  installations, and size the table's retention like the audit log's (as the owner).
 
 ## Rate limits and quotas
 
@@ -223,9 +270,20 @@ use a bucket of their own.
 - A principal refused `throttle_audit.threshold` times within `window_s` produces one audit
   entry `rate_limit.throttled` (actor, Domain, API key as target, `refusals`, `reason`); the
   refused requests themselves are not audited one by one.
-- The only backend is `memory`: buckets live in the process, so N Keeper processes allow N
-  times the limit. A shared store (Valkey, Redis) is a class implementing
-  `lorebase_keeper.ratelimit.RateStore.take`; nothing else changes.
+- `backend: local` (the default; `memory` is an alias) keeps the buckets in the process, so N
+  Keeper processes allow N times the limit. `backend: postgres` shares them through the
+  application database (the UNLOGGED table `rate_limit_buckets`, migration `0022`): a Keeper
+  leases up to `postgres.lease_tokens` tokens (at most a quarter of a bucket) in one query and
+  serves requests from them until they run out or `lease_ttl_s` passes, so most requests cost no
+  query and the Keepers together never exceed a limit (unused leased tokens are lost: limits are
+  slightly stricter, never looser). Failed-authentication buckets take one token per `401` and are
+  checked from a reading at most `check_cache_s` old. When a query does not answer within
+  `timeout_s`, failed-authentication checks answer `429` (fail closed) and the other buckets
+  follow `on_error`: `local` (default, the in-process buckets meanwhile), `allow` or `deny`;
+  `lorebase.ratelimit.shared.queries{store,outcome}` counts the queries. Rows of full buckets are
+  pruned every `prune_interval_s`. A crash of the database server empties the table (buckets
+  start full). Compose: set `KEEPER_RATE_LIMIT_BACKEND=postgres` with the `scale-out` profile;
+  the Helm chart sets it when more than one Keeper runs.
 
 **Daily quotas** apply to API keys, counted in UTC days: `requests_per_day` and
 `context_tokens_per_day` (the estimated tokens of context packs delivered, using

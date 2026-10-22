@@ -330,6 +330,10 @@ keeper:
   # Route read endpoints to the read replicas when one is fresh enough (keeper.reads.prefer_replica).
   # Needs `secrets.values.dbReadDsn`.
   preferReplica: false
+  # Rate limit buckets (keeper.limits.rate.backend): local (per pod) or postgres (shared by every
+  # pod, in the application database). Empty: postgres when replicaCount > 1 or the HPA is on,
+  # unless config.keeper.limits.rate.backend is set; otherwise the configuration's (local).
+  rateLimitBackend: ""
   # Rolling update: add a pod first, never go below the desired count.
   strategy:
     type: RollingUpdate

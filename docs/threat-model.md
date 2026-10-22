@@ -22,7 +22,7 @@ disclosure, **D**enial of service, **E**levation of privilege.
 - Postgres, the model endpoints and the object storage of the deployment are run by the operator.
   Sources, webhook targets, documents and the identity provider are outside the installation.
 - Code at the commit of this page. Features that the design describes but the code does not have
-  yet (read auditing with sampling) are not counted as mitigations.
+  yet are not counted as mitigations.
 
 ## Assets
 
@@ -87,7 +87,7 @@ Code: `packages/keeper/src/lorebase_keeper/auth/api_keys.py`, `auth/oidc.py`,
 | S | Anonymous access by misconfiguration | `auth.mode: none` is refused off loopback unless `keeper.auth.allow_insecure` (F3); API key modes need a pepper of 32 characters or more (`_mode_requirements`); `bootstrap` refuses a second administrator key without `--force` | `allow_insecure` is a deliberate switch; compose sets it for a port published on `127.0.0.1` |
 | R | Denied or mutating request without a trace | `AuditMiddleware` records every mutating request and every 401 and 403 (`auth/audit.py`, `keeper.auth.audit`) with actor, action, target and outcome | Reads are not audited. Audit writes are best effort: a failed write is logged and counted in `lorebase.audit.write_failures`, the request still succeeds |
 | I | Credentials in logs | Key prefixes only; the redaction filter scrubs registered secret values (`packages/platform/src/lorebase_platform/logging.py`); audit entries never hold bodies, headers or credentials | Values not registered as secrets and shorter than `logging.redact_min_length` are not scrubbed |
-| D | Flooding, oversized bodies, expensive reads | Rate limits per principal and route class, daily quotas per key (`keeper.limits`), request bodies capped at `limits.max_request_body_bytes` (1 MiB) with chunked bodies counted (`middleware.py`), read caps under `read.*` and a 30 s `statement_timeout_ms` (`packages/store/src/lorebase_store/settings.py`) | The rate limiter backend is in-process memory (`ratelimit/config.py`): with several Keeper replicas each enforces its own buckets |
+| D | Flooding, oversized bodies, expensive reads | Rate limits per principal and route class, daily quotas per key (`keeper.limits`), request bodies capped at `limits.max_request_body_bytes` (1 MiB) with chunked bodies counted (`middleware.py`), read caps under `read.*` and a 30 s `statement_timeout_ms` (`packages/store/src/lorebase_store/settings.py`) | With `keeper.limits.rate.backend: local` (the default) each Keeper enforces its own buckets; `postgres` shares them (`ratelimit/shared.py`), and the Helm chart sets it when more than one Keeper runs. The shared buckets are UNLOGGED: a crash of the database server refills them; while the database is unreachable the limits are per process (`postgres.on_error: local`) |
 
 ## TB3: Authorization inside Keeper
 
@@ -147,7 +147,7 @@ roles in [deployment](deployment.md#database-roles), policies in
 |-|--------|------------|---------------|
 | E | A query bug crossing Domains | `ENABLE` and `FORCE ROW LEVEL SECURITY` with `domain_isolation` on every table with `domain_id`; Keeper and Scribe connect as a role with neither `SUPERUSER` nor `BYPASSRLS` nor ownership of the tables, on compose and in the Helm chart, which refuses one role for both unless `database.allowSharedRole` (F6) | RLS reads `lorebase.domain_ids`, a setting any role can change in its own transaction: it stops query bugs, not a compromised application role |
 | E | Definer functions widening access | Fixed statement text, the Domain pinned as a literal in every predicate, counts bounded by `store.reads.definer_ceilings`, Domain required and in the transaction scope, `search_path` checked; migrations refuse to run while the application role can create objects in the schema (F12, F13); the services never connect as the owner of the functions (compose `db-roles`, the chart's migration Job) | `database.allowSharedRole` in the Helm chart (development only) runs the services as the owner |
-| T | Editing or deleting audit entries | Hash chain per Domain (`packages/store/src/lorebase_store/auth/audit.py`); `python -m lorebase_keeper audit verify`, `GET .../audit/verify` and the daily `audit_verify` job report the first broken entry, and `LorebaseAuditChainBroken` alerts ([operations](operations.md#audit-chain-verification)); the log is append-only for every role but its owner: `UPDATE`, `DELETE` and `TRUNCATE` revoked from `PUBLIC`, the application role and any other holder (`packages/store/migrations/versions/0015_append_only_audit_log.py`, `deploy/compose/postgres/app-role.sh`, `deploy/helm/lorebase/files/db-roles.py`) | The owner can still delete the newest entries of a chain, which is not detectable from the chain, or recompute a whole chain; Scribe (index DDL) and, by default, Keeper (`database.maintenanceDsnInKeeper`) hold the owner's DSN for maintenance, so a compromised pod can use it. Keep a recent `entry_hash` outside the database |
+| T | Editing or deleting audit entries | Hash chain per Domain (`packages/store/src/lorebase_store/auth/audit.py`); `python -m lorebase_keeper audit verify`, `GET .../audit/verify` and the daily `audit_verify` job report the first broken entry, and `LorebaseAuditChainBroken` alerts ([operations](operations.md#audit-chain-verification)); the log is append-only for every role but its owner: `UPDATE`, `DELETE` and `TRUNCATE` revoked from `PUBLIC`, the application role and any other holder (`packages/store/migrations/versions/0015_append_only_audit_log.py`, `deploy/compose/postgres/app-role.sh`, `deploy/helm/lorebase/files/db-roles.py`) | Scribe's `audit_checkpoint` jobs publish signed chain heads outside the database (`scribe.audit_checkpoints`, `packages/scribe/src/lorebase_scribe/checkpoints.py`) and `audit verify --checkpoints` reports a checkpointed entry that is missing or changed; entries newer than the latest checkpoint are not covered, and whoever holds Scribe's signing key and can write to the sink can publish false checkpoints. Scribe (index DDL) and, by default, Keeper (`database.maintenanceDsnInKeeper`) hold the owner's DSN for maintenance, so a compromised pod can use it |
 | T | Tampering with history | Revisions, tree nodes and objects are content addressed: changing one changes its id; bundle import recomputes every id and hash | A database owner can rewrite content and refs consistently |
 | I | Database or backup theft | Only hashes of API keys and session ids; provider tokens encrypted; Source and model secrets are references, never stored; webhook signing keys (`sha256(secret)`, the HMAC key) encrypted with AES-256-GCM under `webhooks.encryption_key`, keys stored before encrypted by the delivery worker (`packages/store/src/lorebase_store/webhooks/keys.py`, revision `0016`) | Without `webhooks.encryption_key` (unset by default) signing keys are stored usable, and a database reader can sign deliveries. Documents and Domain content are stored in clear |
 | D | Long statements, lock contention | `statement_timeout_ms` per connection, advisory locks per branch and per audit chain | Garbage collection and index builds run on the maintenance role with their own timeouts |
@@ -197,28 +197,20 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 
 Remaining:
 
-1. **No off-database anchor of the audit chain.** The application role can no longer change
-   `audit_log` (fixed, below), but its owner can still cut the tail of a chain without the chain
-   showing it. Keep a recent `entry_hash` outside the database (TB6).
-2. **Rate limits per process.** A shared backend would make limits hold across Keeper replicas
-   (TB2).
-3. **Reads are not audited.** It is in the design
-   ([13.6](design.md#136-threats-and-mitigations)) and not in the code (TB2, TB3).
-4. **Webhook signing keys stored usable by default.** `webhooks.encryption_key` is unset by
+1. **Webhook signing keys stored usable by default.** `webhooks.encryption_key` is unset by
    default; set it (TB6, TB7).
-
-5. **Erasure covers vault values only.** Sensitive values stored inline, values quoted in
+2. **Erasure covers vault values only.** Sensitive values stored inline, values quoted in
    Revision messages, documents and the extraction evidence quoted from them stay in history;
    store personal data in `vault: true` Attributes (TB3). Erasure by key misses the tokens a
    Record held under an earlier key; erasure by value matches the canonical value exactly (a case
    variant answers `erased: 0`); a later write of an erased value (a Source sync, say) stores it
    again under a new token. An erasure racing a commit of the same value can leave the new write
    reading `erased` (fails closed). The erasure audit entry keeps the Record key.
-6. **Vault keys in the services' configuration.** Whoever holds `vault.encryption_key` and a
+3. **Vault keys in the services' configuration.** Whoever holds `vault.encryption_key` and a
    database copy reads every vaulted value; `vault.token_key` cannot be rotated; value
    fingerprints let whoever reads the database link Records of a Kind holding the same vaulted
    value (TB6).
-7. **Small value oracles.** Without the vault keys, the parameter digest of Operation
+4. **Small value oracles.** Without the vault keys, the parameter digest of Operation
    invocations is a plain SHA-256, which confirms guessed parameter values; configure the vault.
    Kind health lists which Records share a sensitive unique or title
    value (never the value); validation issue codes on sensitive values tell their format; a
@@ -226,7 +218,7 @@ Remaining:
    the caller is not cleared for). Some answers show raw references instead of values to cleared
    callers (the NDJSON diff stream, Operation edits): no value leaks, but none is shown. Key
    changing Operations that copy vault references are refused (TB3).
-8. **Branches forked before a tag.** Once the default branch tags an Attribute that a
+5. **Branches forked before a tag.** Once the default branch tags an Attribute that a
    branch's schema searches, titles with or derives from, schema changes on that branch fail
    validation until its schema is fixed (availability, not disclosure). Extraction on such a
    branch decides what to extract from the branch's own tags; its output is masked on read and
@@ -234,16 +226,36 @@ Remaining:
    stored until its Records are rewritten: Keeper keeps them out of responses, snippets and
    lexical search for callers without the clearance, and verification reports them as
    `sensitivity_stale` (TB3).
-9. **Conservative Operation analysis.** Fields an Operation expression reads from a Record
+6. **Conservative Operation analysis.** Fields an Operation expression reads from a Record
    whose Kind cannot be told (inside a comprehension, say) are matched by name against every
    Kind, so a same-named sensitive Attribute elsewhere can refuse a harmless Operation;
    evaluation errors are shown in full only to callers cleared Domain-wide (TB3).
-10. **Erasure from the command line.** `lorebase admin erase --value V` puts the value in the
-    shell history and the process list; use `--value -` to read it from standard input (TB2).
+7. **Erasure from the command line.** `lorebase admin erase --value V` puts the value in the
+   shell history and the process list; use `--value -` to read it from standard input (TB2).
+8. **Limits of the read audit and of checkpoints.** Read records are sampled when
+   `sample_rate` is below 1 and dropped when the queue is full or a batch fails (counted in
+   `lorebase.audit.reads.dropped`), so the read stream is evidence of what it holds, not proof
+   that nothing else was read; reads that showed or masked a sensitive value are never sampled
+   out. Checkpoints cover the chains up to the latest one published (`interval_s`, one hour by
+   default) (TB2, TB3, TB6).
 
 Fixed since this page was first published, in the order of the original list (each with tests,
 see the [security review](security-review.md#hardening-from-the-threat-model)):
 
+- **No off-database anchor of the audit chain.** Scribe's `audit_checkpoint` job signs the
+  head of every chain (Ed25519) and writes it to a file, an HTTP endpoint or an S3-compatible
+  bucket with the SSRF checks of webhook targets; `python -m lorebase_keeper audit verify
+  --checkpoints DIR --checkpoint-key PUB` reports checkpointed entries that are missing (a cut
+  tail) or changed (a recomputed chain) (`packages/store/src/lorebase_store/auth/checkpoints.py`,
+  `packages/scribe/src/lorebase_scribe/checkpoints.py`) (TB6).
+- **Rate limits per process.** `keeper.limits.rate.backend: postgres` shares the buckets of
+  every Keeper in the UNLOGGED `rate_limit_buckets` table, leased a few tokens at a time; failed
+  authentication buckets fail closed when the database is slow (`ratelimit/shared.py`, revision
+  `0022`); the Helm chart chooses it for more than one Keeper (TB2).
+- **Reads were not audited.** `keeper.auth.audit.reads` records successful reads, sampled and
+  filtered by principal type and Kind, in batches off the request path, in `audit_read_log`, a
+  table with hash chains of its own and append-only like `audit_log`; reads that showed or
+  masked a sensitive value are always recorded (`auth/read_audit.py`, revision `0022`) (TB2, TB3).
 - **Sensitivity masking was not enforced on reads.** Masked unless cleared, on every read path,
   with the PII vault and erasure (`packages/keeper/src/lorebase_keeper/reading/sensitivity.py`,
   `packages/store/src/lorebase_store/vault/`, revision `0019`) (TB3).

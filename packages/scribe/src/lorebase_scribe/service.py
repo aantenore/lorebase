@@ -104,6 +104,9 @@ async def open_scribe(
                 settings=scribe.scheduler,
                 jobs=runtime.settings.jobs,
                 writes=runtime.settings.writes,
+                checkpoint_interval_s=(
+                    scribe.audit_checkpoints.interval_s if scribe.audit_checkpoints.enabled else 0
+                ),
             )
             yield Scribe(engine, context, worker, scheduler, scribe)
     finally:

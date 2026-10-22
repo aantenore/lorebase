@@ -121,6 +121,25 @@ def test_keeper_can_go_without_the_maintenance_dsn(chart: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("values", "backend"),
+    [
+        ([], None),  # one Keeper: the configuration decides (local)
+        (["keeper.replicaCount=3"], "postgres"),
+        (["keeper.autoscaling.enabled=true"], "postgres"),
+        (["keeper.replicaCount=3", "config.keeper.limits.rate.backend=local"], None),
+        (["keeper.replicaCount=3", "keeper.rateLimitBackend=local"], "local"),
+    ],
+)
+def test_several_keepers_share_their_rate_limits(
+    chart: Path, values: list[str], backend: str | None
+) -> None:
+    sets = [arg for value in values for arg in ("--set", value)]
+    manifests = render(chart, "-f", str(PROFILES / "minimal-values.yaml"), *sets)
+    keeper = env(pod(manifests, "Deployment", "keeper")["containers"][0])
+    assert keeper.get("LOREBASE__KEEPER__LIMITS__RATE__BACKEND") == backend
+
+
 def test_in_cluster_database_uses_an_operator_managed_role(chart: Path) -> None:
     manifests = render(chart, "-f", str(PROFILES / "local-models-values.yaml"))
     keeper = env(pod(manifests, "Deployment", "keeper")["containers"][0])

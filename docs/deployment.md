@@ -219,6 +219,8 @@ Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-repli
 
 ```bash
 cp .env.example .env      # set POSTGRES_PASSWORD, LOREBASE_APP_PASSWORD and REPLICATION_PASSWORD
+# share the rate limits of both Keepers (keeper.limits.rate.backend): set in .env
+#   KEEPER_RATE_LIMIT_BACKEND=postgres
 # route reads to the replica as the application role: uncomment/set in .env
 #   LOREBASE_DB_READ_DSN=postgresql+asyncpg://lorebase_app:<password>@postgres-replica:5432/lorebase
 #   KEEPER_PREFER_REPLICA=true
@@ -239,6 +241,9 @@ Choices:
 - The replica takes a base backup through its own replication slot on first start (empty volume)
   and resumes streaming afterwards. A slot keeps WAL for a replica that is down: drop the
   replica for good (`DROP` the slot) or the primary's disk fills.
+- **Rate limits.** With the default `local` backend each Keeper keeps its own buckets, so two
+  Keepers allow twice the limits; `KEEPER_RATE_LIMIT_BACKEND=postgres` makes them share the
+  buckets through the primary ([operations](operations.md#rate-limits-and-quotas)).
 - nginx spreads requests round-robin, skips a Keeper that fails and retries idempotent requests
   on the other one after an error or timeout (POST and PATCH are not replayed once sent). Terminate TLS
   here or in front of it; production uses the cluster's ingress instead.

@@ -104,6 +104,19 @@ class Sender(Protocol):
 
 
 Resolver = Callable[[str], Awaitable[Sequence[str]]]
+
+
+class TargetPolicy(Protocol):
+    """What the target checks read from settings (`WebhookSettings`, and the HTTP sinks of
+    audit checkpoints)."""
+
+    @property
+    def allowed_schemes(self) -> tuple[str, ...]: ...
+
+    @property
+    def allow_private_targets(self) -> bool: ...
+
+
 Clock = Callable[[], datetime]
 
 
@@ -130,7 +143,7 @@ def _private(address: str) -> bool:
     return not ip.is_global or ip.is_multicast or ip.is_reserved or site_local
 
 
-def scheme_problem(url: str, settings: WebhookSettings) -> str | None:
+def scheme_problem(url: str, settings: TargetPolicy) -> str | None:
     """Why `url` cannot be a webhook target by its form alone; None when it can."""
     parts = urlsplit(url)
     if parts.scheme not in settings.allowed_schemes:
@@ -155,7 +168,7 @@ class Target:
     addresses: tuple[str, ...] = ()
 
 
-async def check_target(url: str, settings: WebhookSettings, resolve: Resolver) -> Target:
+async def check_target(url: str, settings: TargetPolicy, resolve: Resolver) -> Target:
     """Resolve the host of `url` once and check its form and every address it resolves to.
 
     The addresses returned are the only ones a request to `url` may use: resolving the host
@@ -180,7 +193,7 @@ async def check_target(url: str, settings: WebhookSettings, resolve: Resolver) -
     return Target(None, addresses)
 
 
-async def target_problem(url: str, settings: WebhookSettings, resolve: Resolver) -> str | None:
+async def target_problem(url: str, settings: TargetPolicy, resolve: Resolver) -> str | None:
     """Why `url` may not be called now (form, or private addresses after resolution)."""
     return (await check_target(url, settings, resolve)).problem
 

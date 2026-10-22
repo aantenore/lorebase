@@ -1,5 +1,24 @@
 {{/* Environment, volumes and mounts specific to each component. */}}
 
+{{/*
+Rate limit backend of the Keepers (keeper.limits.rate.backend): keeper.rateLimitBackend when
+set; otherwise postgres (buckets shared by every replica) when more than one Keeper may run,
+unless config.keeper.limits.rate.backend chooses. Empty: the configuration decides.
+*/}}
+{{- define "lorebase.rateLimitBackend" -}}
+{{- $chosen := .Values.keeper.rateLimitBackend | default "" -}}
+{{- if not (has $chosen (list "" "local" "postgres")) -}}
+{{- fail (printf "keeper.rateLimitBackend must be local, postgres or empty, got %q" $chosen) -}}
+{{- end -}}
+{{- if $chosen -}}
+{{- $chosen -}}
+{{- else if not (dig "keeper" "limits" "rate" "backend" "" .Values.config) -}}
+{{- if or .Values.keeper.autoscaling.enabled (gt (int .Values.keeper.replicaCount) 1) -}}
+postgres
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "lorebase.keeperEnv" -}}
 - name: LOREBASE__KEEPER__HOST
   value: 0.0.0.0
@@ -7,6 +26,10 @@
   value: {{ .Values.keeper.port | quote }}
 - name: LOREBASE__KEEPER__READS__PREFER_REPLICA
   value: {{ .Values.keeper.preferReplica | quote }}
+{{- with include "lorebase.rateLimitBackend" . }}
+- name: LOREBASE__KEEPER__LIMITS__RATE__BACKEND
+  value: {{ . | quote }}
+{{- end }}
 {{- if include "lorebase.sessionsEnabled" . }}
 {{- if include "lorebase.secretHas" (dict "ctx" . "name" "oidcClientSecret") }}
 - name: LOREBASE__KEEPER__AUTH__SESSIONS__CLIENT_SECRET

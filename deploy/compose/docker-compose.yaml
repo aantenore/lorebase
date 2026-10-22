@@ -9,8 +9,9 @@
 #   litellm        LiteLLM proxy in front of hosted providers (docs/inference-providers.md)
 #   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
 #   scale-out      second Keeper, Postgres streaming replica, nginx in front of the Keepers
-#                  (set LOREBASE_DB_READ_DSN and KEEPER_PREFER_REPLICA to route reads to the
-#                  replica; see docs/deployment.md)
+#                  (set KEEPER_RATE_LIMIT_BACKEND=postgres so both Keepers share their rate
+#                  limits, and LOREBASE_DB_READ_DSN and KEEPER_PREFER_REPLICA to route reads to
+#                  the replica; see docs/deployment.md)
 #
 # Every value comes from the environment file; see .env.example for the full list.
 
@@ -88,6 +89,8 @@ x-keeper: &keeper
     LOREBASE__KEEPER__AUTH__ALLOW_INSECURE: ${KEEPER_ALLOW_INSECURE:-true}
     LOREBASE__KEEPER__PORT: ${KEEPER_PORT:-8080}
     LOREBASE__KEEPER__READS__PREFER_REPLICA: ${KEEPER_PREFER_REPLICA:-false}
+    # Rate limit buckets: local (per Keeper) or postgres (shared; set it with scale-out).
+    LOREBASE__KEEPER__LIMITS__RATE__BACKEND: ${KEEPER_RATE_LIMIT_BACKEND:-local}
     LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
     LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
     LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-keeper
