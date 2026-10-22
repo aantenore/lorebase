@@ -54,7 +54,13 @@ primary and foreign keys the catalog declares. MySQL sessions are `READ ONLY` an
 `max_execution_time` (MariaDB: `max_statement_time`); SQL Server has no read-only transaction, so
 the login must be able to read only. The drivers are the Keeper extras `lorebase-keeper[mysql]`
 and `lorebase-keeper[mssql]`, and a request without them is refused with a 422 naming the
-extra. `schema` is optional for those two (default: the connection's own). `allowed_sources`
+extra. `schema` is optional for those two (default: the connection's own); it must be a plain name
+of the catalog (no dots), and `keeper.schema_inference.allowed_schemas` (secret reference to
+schema names) restricts a source to some schemas. A request is bounded by `max_tables`, a total
+time (`total_timeout_s`) and `max_value_chars` per value: longer text is cut, binary columns
+without a small declared length and columns of unknown type are not read, and a table with
+nothing readable is skipped. pymssql cannot send `ApplicationIntent=ReadOnly`, so the SQL Server
+login itself must be read-only. `allowed_sources`
 applies to every Domain, so `schema.write` in any Domain may profile those sources. To bind sources to
 Domains, list them in `keeper.schema_inference.domain_sources` (Domain id to secret references):
 a listed Domain may name only its own references (`[]` names none) and `allowed_sources` no
@@ -75,7 +81,7 @@ answer is the YAML document only.
 and returns the first rows of each file as records (`rows` query parameter, default
 `keeper.schema_inference.preview_rows`, at most `preview_max_rows`) instead of a proposal:
 `{"files": [{"name", "columns", "rows", "row_count", "truncated"}]}`. Nothing is stored; dates
-and decimals come as text. The web Source preview uses it for Parquet files.
+and decimals come as text and text is cut to `preview_max_cell_chars`. The web Source preview uses it for Parquet files.
 
 From Python:
 

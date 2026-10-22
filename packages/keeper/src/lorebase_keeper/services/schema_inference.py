@@ -48,6 +48,7 @@ from lorebase_store.profiling import (
     PostgresProfileError,
     RecordProfileError,
     SqlDialect,
+    SqlDriverError,
     SqlProfileError,
     profile_bytes,
     profile_json_bytes,
@@ -224,9 +225,12 @@ async def infer_from_files(
     return await run_in_threadpool(run)
 
 
-def _json_value(value: Any) -> Any:
-    """A profiled value as JSON: dates as ISO text, decimals as text (exact), bytes as base64."""
-    if value is None or isinstance(value, bool | int | str):
+def _json_value(value: Any, limit: int) -> Any:
+    """A profiled value as JSON: dates as ISO text, decimals as text (exact), bytes as base64;
+    text is cut to `limit` characters."""
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + "..."
+    if value is None or isinstance(value, bool | int):
         return value
     if isinstance(value, float):
         return value if value == value and abs(value) != float("inf") else str(value)
@@ -239,9 +243,9 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, bytes | bytearray | memoryview):
         return b64encode(bytes(value)).decode("ascii")
     if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
+        return {str(key): _json_value(item, limit) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return [_json_value(item) for item in value]
+        return [_json_value(item, limit) for item in value]
     return str(value)
 
 
@@ -281,7 +285,7 @@ async def preview_files(
             kept = len(values[0]) if values else 0
             records = [
                 {
-                    name: _json_value(column[index])
+                    name: _json_value(column[index], settings.preview_max_cell_chars)
                     for name, column in zip(names, values, strict=True)
                 }
                 for index in range(kept)
@@ -366,10 +370,18 @@ async def infer_from_sql(
             profiling.records,
             schema=source.schema,
             tables=source.tables or None,
+            allowed_schemas=settings.allowed_schemas.get(source.dsn),
         )
+    except SqlDriverError as error:
+        # The server's own set-up problem: logged, not described to the caller.
+        logger.warning(
+            "schema inference driver unavailable",
+            extra={"source": source.dsn, "detail": str(error)},
+        )
+        raise ProblemError(UNAVAILABLE, "The source database cannot be read.") from None
     except SqlProfileError as error:
         raise invalid(f"/body/{dialect}", str(error)) from None
-    except (SQLAlchemyError, OSError) as error:
+    except Exception as error:  # driver, network and catalog failures all come from the worker
         logger.warning(
             "schema inference source unavailable",
             extra={"source": source.dsn, "error": type(error).__name__},

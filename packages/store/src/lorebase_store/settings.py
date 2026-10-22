@@ -482,7 +482,20 @@ class SqlProfilingSettings(SectionModel):
     (`lorebase-keeper[mysql]`, `lorebase-keeper[mssql]`)."""
 
     sample_rows: int = Field(default=10000, ge=1, description="Rows read per table (LIMIT/TOP).")
-    max_tables: int = Field(default=200, ge=1, description="Tables profiled per request.")
+    max_tables: int = Field(default=50, ge=1, description="Tables profiled per request.")
+    total_timeout_s: float = Field(
+        default=120.0,
+        gt=0,
+        description="Longest time a request may spend reading tables, checked before each "
+        "table; the request is refused when it is exceeded.",
+    )
+    max_value_chars: int = Field(
+        default=1000,
+        ge=1,
+        description="Longest text kept per value: longer text and unbounded text columns are "
+        "cut when read; binary columns without a declared length up to this size, and columns "
+        "of unknown type, are not read.",
+    )
     statement_timeout_ms: int = Field(
         default=15000,
         ge=1,

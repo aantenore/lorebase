@@ -241,6 +241,16 @@ class SchemaInferenceSettings(SectionModel):
     preview_max_rows: int = Field(
         default=200, ge=1, description="Most rows a preview may ask for (422 above)."
     )
+    preview_max_cell_chars: int = Field(
+        default=1000, ge=1, description="Longest text returned per value of a preview."
+    )
+    allowed_schemas: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict,
+        description="Schemas a MySQL, MariaDB or SQL Server source may be profiled in, keyed by "
+        "its secret reference (a database name for MySQL). A source not listed may name any "
+        "schema of its database; a listed one only these (the connection's own schema counts "
+        "when none is named).",
+    )
     max_issues: int = Field(default=500, ge=1, description="Issues listed in one response.")
     options: InferenceOptions = Field(
         default_factory=InferenceOptions,

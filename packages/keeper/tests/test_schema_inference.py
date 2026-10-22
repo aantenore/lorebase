@@ -405,7 +405,14 @@ async def test_sql_source_gives_a_proposal(
     seen: dict[str, Any] = {}
 
     async def fake_profile(
-        dialect: str, url: str, sql: object, records: object, *, schema: Any, tables: Any
+        dialect: str,
+        url: str,
+        sql: object,
+        records: object,
+        *,
+        schema: Any,
+        tables: Any,
+        allowed_schemas: Any,
     ) -> list[TableProfile]:
         seen.update(dialect=dialect, url=url, schema=schema, tables=tables)
         csv = CsvProfilingSettings()
@@ -539,3 +546,90 @@ async def test_preview_without_pyarrow_is_refused(
     response = await client.post(PREVIEW, files=files(("supplier.parquet", data)))
     assert response.status_code == 422, response.text
     assert "lorebase-keeper[parquet]" in response.json()["errors"][0]["message"]
+
+
+# Hardening of database sources and previews ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        schema_inference.SqlDriverError(
+            "mssql sources need pymssql: install lorebase-keeper[mssql]"
+        ),
+        RuntimeError("driver exploded on mssql://reader:hunter2-long@db"),
+    ],
+)
+async def test_server_side_failures_are_a_generic_503(
+    make_app: Callable[..., FastAPI],
+    client_for: ClientFor,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    monkeypatch.setenv("TEST_ERP_DSN", "mssql://reader:hunter2-long@db.example.test/erp")
+
+    async def broken(*_: Any, **__: Any) -> list[TableProfile]:
+        raise failure
+
+    monkeypatch.setattr(schema_inference, "profile_sql_database", broken)
+    async with client_for(_source_app(make_app)) as http:
+        response = await http.post(URL, json={"mssql": {"dsn": SOURCE}})
+    assert response.status_code == 503, response.text
+    assert "lorebase-keeper[" not in response.text
+    assert "hunter2" not in response.text
+
+
+async def test_allowed_schemas_of_a_source_reach_the_profiler(
+    make_app: Callable[..., FastAPI], client_for: ClientFor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_ERP_DSN", "mssql://reader@db.example.test/erp")
+    seen: list[Any] = []
+
+    async def fake_profile(*_: Any, allowed_schemas: Any, **__: Any) -> list[TableProfile]:
+        seen.append(allowed_schemas)
+        return [profile_file(SUPPLY_DATA / "supplier.csv", CsvProfilingSettings())]
+
+    monkeypatch.setattr(schema_inference, "profile_sql_database", fake_profile)
+    app = make_app(
+        {"schema_inference": {"allowed_sources": [SOURCE], "allowed_schemas": {SOURCE: ["dbo"]}}}
+    )
+    async with client_for(app) as http:
+        await http.post(URL, json={"mssql": {"dsn": SOURCE}})
+        unlisted = make_app({"schema_inference": {"allowed_sources": [SOURCE]}})
+    async with client_for(unlisted) as http:
+        await http.post(URL, json={"mssql": {"dsn": SOURCE}})
+    assert seen == [("dbo",), None]
+
+
+async def test_table_lists_are_bounded(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    async with client_for(_source_app(make_app)) as http:
+        too_many = await http.post(
+            URL, json={"mssql": {"dsn": SOURCE, "tables": [f"t{i}" for i in range(1001)]}}
+        )
+        too_long = await http.post(URL, json={"mssql": {"dsn": SOURCE, "tables": ["t" * 129]}})
+    assert too_many.status_code == too_long.status_code == 422
+
+
+async def test_preview_cuts_long_text(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    app = make_app({"schema_inference": {"preview_max_cell_chars": 10}})
+    long = _jsonl([{"id": 1, "note": "n" * 50, "nested": {"deep": "d" * 50}}])
+    async with client_for(app) as http:
+        response = await http.post(PREVIEW, files=files(("a.jsonl", long)))
+    assert response.status_code == 200, response.text
+    row = response.json()["files"][0]["rows"][0]
+    assert row["note"] == "n" * 10 + "..."
+    assert row["nested"] == {"deep": "d" * 10 + "..."}
+
+
+async def test_records_path_accepts_a_bare_array(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        PREVIEW,
+        files=files(("s.json", json.dumps(SUPPLIER_ROWS).encode())),
+        data={"records_path": "data.items"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["files"][0]["row_count"] == 3

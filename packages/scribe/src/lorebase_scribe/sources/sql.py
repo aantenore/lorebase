@@ -60,10 +60,10 @@ _OPAQUE = re.compile(
 )
 
 
-def top_level_words(query: str) -> list[str]:
-    """Upper-cased keywords of `query` outside parentheses, string literals, quoted
-    identifiers and comments."""
-    words: list[str] = []
+def top_level_words(query: str) -> list[tuple[str, int]]:
+    """Upper-cased keywords of `query` with their offsets, outside parentheses, string
+    literals, quoted identifiers and comments; a name after a dot (`t.top`) is not one."""
+    words: list[tuple[str, int]] = []
     depth = 0
     index = 0
     while index < len(query):
@@ -77,23 +77,50 @@ def top_level_words(query: str) -> list[str]:
         elif char == ")":
             depth = max(0, depth - 1)
         elif depth == 0 and (word := _WORD.match(query, index)) is not None:
-            words.append(word.group().upper())
+            if index == 0 or query[index - 1] != ".":
+                words.append((word.group().upper(), index))
             index = word.end()
             continue
         index += 1
     return words
 
 
+_SET_OPERATORS = frozenset({"UNION", "INTERSECT", "EXCEPT"})
+
+
+def _has_top(names: list[str]) -> bool:
+    """Whether the (single) SELECT of the query has a `TOP` clause: the word right after
+    `SELECT` and `DISTINCT` or `ALL`, so an alias named top does not count."""
+    if "SELECT" not in names:
+        return False
+    position = names.index("SELECT") + 1
+    while position < len(names) and names[position] in ("DISTINCT", "ALL"):
+        position += 1
+    return position < len(names) and names[position] == "TOP"
+
+
 def mssql_orderable(query: str) -> str:
-    """`query` made valid as a derived table: a top-level trailing `ORDER BY` with no `TOP`,
-    `OFFSET` or `FOR` clause gets `OFFSET 0 ROWS`, which keeps the order and all the rows."""
+    """`query` made valid as a derived table: a top-level trailing `ORDER BY` gets
+    `OFFSET 0 ROWS`, which keeps the order and all the rows. Left alone: a query without that
+    clause, one with `TOP` (without a set operator, whose `ORDER BY` covers all its SELECTs),
+    and one with `OFFSET`, `FETCH` or `FOR` after the `ORDER BY`. A trailing `OPTION (...)`
+    stays last."""
     words = top_level_words(query)
-    if "TOP" in words or "OFFSET" in words or "FOR" in words:
+    names = [name for name, _ in words]
+    last = next(
+        (i for i in range(len(names) - 1, 0, -1) if names[i - 1 : i + 1] == ["ORDER", "BY"]), None
+    )
+    if last is None:
         return query
-    for position in range(len(words) - 1, 0, -1):
-        if words[position] == "BY" and words[position - 1] == "ORDER":
-            return f"{query}\nOFFSET 0 ROWS"
-    return query
+    if not _SET_OPERATORS.intersection(names) and _has_top(names):
+        return query
+    after = names[last + 1 :]
+    if {"OFFSET", "FETCH", "FOR"}.intersection(after):
+        return query
+    if "OPTION" in after:
+        at = words[last + 1 + after.index("OPTION")][1]
+        return f"{query[:at].rstrip()}\nOFFSET 0 ROWS {query[at:]}"
+    return f"{query}\nOFFSET 0 ROWS"
 
 
 def _require_driver(module: str, extra: str, label: str) -> None:
