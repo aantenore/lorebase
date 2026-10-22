@@ -1002,7 +1002,7 @@ def _summary(measurement: Measurement, role: str | None) -> str:
     return f"{m.name} [{role or 'owner'}]: p50 {m.p50:.2f} p95 {m.p95:.2f} p99 {m.p99:.2f} ms"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class BranchJobs:
     """A copy of `main` and its deletion: the request transactions, and the background job
     that copies or deletes the rows (total time and each batch transaction)."""
@@ -1013,6 +1013,9 @@ class BranchJobs:
     delete: Measurement
     delete_job: Measurement
     delete_batches: Measurement
+    #: Rows the background copy read, and whether it stopped after `max_batches`.
+    copied_rows: list[int] = field(default_factory=list)
+    partial: bool = False
 
     def all(self) -> list[Measurement]:
         return [
@@ -1039,7 +1042,12 @@ async def _run_steps(
     name: str,
     job: str,
     batches: Measurement | None,
+    *,
+    max_batches: int | None = None,
+    rows: list[int] | None = None,
 ) -> float:
+    """Run the job's steps until it finishes, or for `max_batches` batches; adds the rows
+    read to `rows[0]` when given."""
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     settings = runtime.settings.materialize
     run = background._Run(job, name, background._Pace.of(settings))
@@ -1061,18 +1069,28 @@ async def _run_steps(
         if step.rows:
             # Sized like the job does (`background._batches`).
             run.pace.next(max(elapsed - step.waited_s, 0.0), contended=step.contended)
+            if rows is not None:
+                rows[0] += step.rows
+        if (
+            max_batches is not None
+            and batches is not None
+            and len(batches.samples_ms) >= max_batches
+        ):
+            return (time.perf_counter() - total) * 1000
         if step.finished is not None:
             assert step.finished["status"] == "done", step.finished
             return (time.perf_counter() - total) * 1000
 
 
 async def measure_branch_copy(
-    engine: AsyncEngine, runtime: StoreRuntime, *, iterations: int
+    engine: AsyncEngine, runtime: StoreRuntime, *, iterations: int, max_batches: int | None = None
 ) -> BranchJobs:
     """Create a copy of `main`, run its background copy, then delete it and run the
     background deletion. `engine` keeps the default `database.statement_timeout_ms`: every
     transaction must finish within it. Both always go to the background here, whatever
-    `async_copy_min_rows` and `async_delete_min_rows` say."""
+    `async_copy_min_rows` and `async_delete_min_rows` say. With `max_batches` the copy stops
+    after that many batches (`partial`): the batches and their throughput are measured, and
+    the deletion removes what was copied."""
     materialize = runtime.settings.materialize.model_copy(
         update={"async_copy_min_rows": 0, "async_delete_min_rows": 0}
     )
@@ -1097,9 +1115,21 @@ async def measure_branch_copy(
             )
         jobs.create.samples_ms.append((time.perf_counter() - started) * 1000)
         assert created.pending, "the source is above store.materialize.async_copy_min_rows"
+        read = [0]
+        before = len(jobs.copy_batches.samples_ms)
         jobs.copy.samples_ms.append(
-            await finish_copy(engine, runtime, name, batches=jobs.copy_batches)
+            await _run_steps(
+                engine,
+                runtime,
+                name,
+                "materialize",
+                jobs.copy_batches,
+                max_batches=None if max_batches is None else before + max_batches,
+                rows=read,
+            )
         )
+        jobs.copied_rows.append(read[0])
+        jobs.partial = max_batches is not None
         started = time.perf_counter()
         async with sessions() as session, session.begin():
             await scope_to_domain(session, DOMAIN)
@@ -1188,12 +1218,21 @@ class OverlayPair:
 
 
 async def overlay_pair(
-    engine: AsyncEngine, runtime: StoreRuntime, work: Workload, *, changes: int
+    engine: AsyncEngine,
+    runtime: StoreRuntime,
+    work: Workload,
+    *,
+    changes: int,
+    copy: bool = True,
 ) -> OverlayPair:
     """Fork an overlay and a copy from `main`; commit `changes` Part updates to both, then
-    `changes` other Part updates to `main` (copied into the overlay before they land)."""
+    `changes` other Part updates to `main` (copied into the overlay before they land).
+
+    Without `copy`, the overlay is compared with `main` itself (`OverlayPair.copy` is `main`,
+    its row count left at 0): a full copy at 10M Records takes hours on a laptop."""
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    for name, mode in ((OVERLAY_BRANCH, BranchMode.OVERLAY), (COPY_BRANCH, BranchMode.COPY)):
+    forks = ((OVERLAY_BRANCH, BranchMode.OVERLAY), (COPY_BRANCH, BranchMode.COPY))
+    for name, mode in forks if copy else forks[:1]:
         async with sessions() as session:
             created = await create_branch(
                 session, DOMAIN, name, created_by="usr_perf", mode=mode, runtime=runtime
@@ -1204,7 +1243,8 @@ async def overlay_pair(
     cost = next(a for a in part.attributes.values() if a.api_name == "unit_cost")
     rng = random.Random(17)
     keys = rng.sample(work.parts, 2 * changes)
-    plan = ((keys[:changes], (OVERLAY_BRANCH, COPY_BRANCH)), (keys[changes:], ("main",)))
+    forked = (OVERLAY_BRANCH, COPY_BRANCH) if copy else (OVERLAY_BRANCH,)
+    plan = ((keys[:changes], forked), (keys[changes:], ("main",)))
     for round_keys, branches in plan:
         async with sessions() as session, session.begin():
             await scope_to_domain(session, DOMAIN)
@@ -1236,15 +1276,17 @@ async def overlay_pair(
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
         overlay = await load_layout(session, DOMAIN, OVERLAY_BRANCH)
-        copy = await load_layout(session, DOMAIN, COPY_BRANCH)
+        other = await load_layout(session, DOMAIN, COPY_BRANCH if copy else "main")
         own = text(
             "SELECT (SELECT count(*) FROM mat_records WHERE domain_id = :d AND branch = :b) "
             "+ (SELECT count(*) FROM mat_links WHERE domain_id = :d AND branch = :b)"
         )
         overlay_rows = (await session.execute(own, {"d": DOMAIN, "b": OVERLAY_BRANCH})).scalar()
-        copy_rows = (await session.execute(own, {"d": DOMAIN, "b": COPY_BRANCH})).scalar()
+        copy_rows = (
+            (await session.execute(own, {"d": DOMAIN, "b": COPY_BRANCH})).scalar() if copy else 0
+        )
     assert overlay.overlay, "the overlay must not have been promoted"
-    return OverlayPair(overlay, copy, int(overlay_rows or 0), int(copy_rows or 0))
+    return OverlayPair(overlay, other, int(overlay_rows or 0), int(copy_rows or 0))
 
 
 async def measure_commits(

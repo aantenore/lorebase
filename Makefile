@@ -25,6 +25,8 @@ PERF_SCALE_1m := 5406
 PERF_SCALE_10m := 54060
 PERF_REPLICAS_1m := 1
 PERF_REPLICAS_10m := 10
+PERF_FLAGS_1m :=
+PERF_FLAGS_10m := --copy-batches 200 --no-pair-copy
 PERF_ITERATIONS ?= 1000
 PERF_WARMUP ?= 100
 PERF_OUT ?= build/perf
@@ -83,7 +85,8 @@ perf-run-%:
 	@mkdir -p $(PERF_OUT)
 	LOREBASE_TEST_DATABASE_URL=$(PERF_URL) $(UV) run python tests/perf/bench.py \
 		--scale $(PERF_SCALE_$*) --replicas $(PERF_REPLICAS_$*) --extra-links 4 --iterations $(PERF_ITERATIONS) --warmup $(PERF_WARMUP) \
-		--branch-iterations 1 --seed-database perf_seed_$* --in-place --out $(PERF_OUT)/perf-$*.md
+		--branch-iterations 1 $(PERF_FLAGS_$*) --seed-database perf_seed_$* --in-place \
+		--out $(PERF_OUT)/perf-$*.md
 
 perf-down: ## Stop the perf Postgres and delete its seeded datasets
 	$(PERF_COMPOSE) down -v
