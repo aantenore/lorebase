@@ -20,6 +20,15 @@ export const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
+/** `list` with the item at `from` moved to `to`; the same list when either is out of range. */
+export function moveItem<T>(list: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list;
+  const next = [...list];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item as T);
+  return next;
+}
+
 export const asText = (value: unknown): string => (typeof value === 'string' ? value : '');
 
 // ------------------------------------------------------------------ types

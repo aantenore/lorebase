@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   OPERATION_ACTIONS,
   STEP_FIELDS,
@@ -15,6 +15,7 @@ import {
   addOperation,
   changeStepAction,
   child,
+  moveStep,
   renameOperation,
   reviewPolicyOf,
   setOrDelete,
@@ -373,15 +374,45 @@ function Steps({
   const steps = asList(operation['steps']).filter(isRecord);
   const kinds = Object.keys(document.kinds ?? {});
   const relations = Object.keys(document.relations ?? {});
+  const list = useRef<HTMLOListElement>(null);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const refocus = useRef<{ index: number; direction: 'up' | 'down' } | null>(null);
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= steps.length || from === to) return;
+    change((target) => {
+      moveStep(target, from, to);
+    });
+    setAnnouncement(`Step ${from + 1} moved to position ${to + 1} of ${steps.length}.`);
+  };
+  // After a move by button, keep the focus on the same button of the step that moved.
+  useEffect(() => {
+    const pending = refocus.current;
+    if (pending === null) return;
+    refocus.current = null;
+    const other = pending.direction === 'up' ? 'down' : 'up';
+    const button = list.current?.querySelector<HTMLButtonElement>(
+      `[data-move="${pending.direction}-${pending.index}"]`,
+    );
+    const fallback = list.current?.querySelector<HTMLButtonElement>(
+      `[data-move="${other}-${pending.index}"]`,
+    );
+    (button?.disabled === false ? button : fallback)?.focus();
+  });
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted">
-        The effects of the Operation, in order. <code>$step[n]</code> is the Record step n wrote.
+        The effects of the Operation, in order. <code>$step[n]</code> is the Record step n wrote (n
+        counts from 0); moving a step renumbers the references to it.
+      </p>
+      <p role="status" aria-label="Step order" className="sr-only">
+        {announcement}
       </p>
       {errorAt(issues, `${path}/steps`) !== undefined && (
         <p className="text-xs text-danger">{errorAt(issues, `${path}/steps`)}</p>
       )}
-      <ol className="flex flex-col gap-3">
+      <ol ref={list} className="flex flex-col gap-3">
         {steps.map((step, index) => {
           const n = index + 1;
           const at = `${path}/steps/${index}`;
@@ -401,10 +432,43 @@ function Steps({
           return (
             <li
               key={index}
-              className="flex flex-col gap-3 rounded-md border border-line bg-surface p-3"
+              className={`flex flex-col gap-3 rounded-md border bg-surface p-3 ${
+                over === index && dragging !== null && dragging !== index
+                  ? 'border-accent'
+                  : 'border-line'
+              } ${dragging === index ? 'opacity-50' : ''}`}
               aria-label={`Step ${n}`}
+              onDragOver={(event) => {
+                if (dragging === null) return;
+                event.preventDefault();
+                setOver(index);
+              }}
+              onDrop={(event) => {
+                if (dragging === null) return;
+                event.preventDefault();
+                move(dragging, index);
+                setDragging(null);
+                setOver(null);
+              }}
             >
               <div className="flex flex-wrap items-end gap-2">
+                <span
+                  draggable
+                  aria-hidden="true"
+                  title="Drag to reorder"
+                  className="mb-1 cursor-grab px-1 text-muted select-none"
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', String(index));
+                    setDragging(index);
+                  }}
+                  onDragEnd={() => {
+                    setDragging(null);
+                    setOver(null);
+                  }}
+                >
+                  &#x2807;&#x2807;
+                </span>
                 <Select
                   label={`Step ${n} action`}
                   value={action ?? asText(step['step'])}
@@ -457,6 +521,32 @@ function Steps({
                     }}
                   />
                 )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-move={`up-${index}`}
+                  aria-label={`Move step ${n} up`}
+                  disabled={index === 0}
+                  onClick={() => {
+                    move(index, index - 1);
+                    refocus.current = { index: index - 1, direction: 'up' };
+                  }}
+                >
+                  Up
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-move={`down-${index}`}
+                  aria-label={`Move step ${n} down`}
+                  disabled={index === steps.length - 1}
+                  onClick={() => {
+                    move(index, index + 1);
+                    refocus.current = { index: index + 1, direction: 'down' };
+                  }}
+                >
+                  Down
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"

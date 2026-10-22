@@ -44,7 +44,9 @@ describe('Source editor', () => {
     const user = userEvent.setup();
     const { current } = renderForm(SourcesForm, document());
     const column = screen.getByRole('textbox', { name: 'Column for legal_name' });
-    expect(column).toHaveAccessibleDescription('Transforms (edited in YAML): trim.');
+    expect(screen.getByRole('combobox', { name: 'legal_name transform 1 name' })).toHaveValue(
+      'trim',
+    );
     await user.clear(column);
     await user.type(column, 'name');
     await user.selectOptions(
