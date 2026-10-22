@@ -273,6 +273,25 @@ async def test_merge_with_conflicts_end_to_end(
         assert main["head"] == revision
         detail = (await http.get(base, headers=viewer)).json()
         assert detail["merged_revision"] == revision
+
+        # lineage on main: the resolved value names the resolution and its Proposal; a value
+        # merged without a Conflict keeps its original provenance and names the Proposal
+        records = f"{DOMAIN}/kinds/Supplier/records"
+        resolved = await http.get(f"{records}/S-1001/lineage", headers=viewer)
+        assert resolved.status_code == 200, resolved.text
+        city = next(a for a in resolved.json()["attributes"] if a["name"] == "city")
+        assert city["value"] == "Warsaw"
+        assert city["provenance"]["origin_type"] == "merge_resolution"
+        assert city["provenance"]["origin"]["proposal_id"] == right["id"]
+        assert city["proposal"]["id"] == right["id"]
+        assert city["revision"] == revision
+        merged_in = await http.get(f"{records}/S-1002/lineage", headers=viewer)
+        city = next(a for a in merged_in.json()["attributes"] if a["name"] == "city")
+        assert city["provenance"]["origin_type"] == "import"
+        assert city["provenance"]["actor"] == LOADER.principal
+        assert city["proposal"]["id"] == right["id"]
+        history = await http.get(f"{records}/S-1002/history", headers=viewer)
+        assert history.json()["items"][0]["revision"] == revision
         closed = await http.post(f"{base}/close", headers=editor)
         assert closed.json()["code"] == "proposal-not-open"
 
