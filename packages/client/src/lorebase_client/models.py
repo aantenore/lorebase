@@ -572,6 +572,7 @@ class TraverseRequest(RequestModel):
     """Follow a path of Relations from one Record."""
 
     branch: str | None = None
+    at: str | None = None
     start: RecordAddress
     path: list[TraverseStep] = Field(min_length=1)
 
@@ -580,6 +581,7 @@ class NeighborhoodRequest(RequestModel):
     """Breadth-first expansion from seed Records."""
 
     branch: str | None = None
+    at: str | None = None
     seeds: list[RecordAddress] = Field(min_length=1)
     depth: int = Field(default=1, ge=1)
     relations: list[str] | None = None
@@ -606,6 +608,7 @@ class SearchRequest(RequestModel):
     """Lexical, semantic (caller-supplied vector) or hybrid search."""
 
     branch: str | None = None
+    at: str | None = None
     q: str | None = Field(default=None, min_length=1)
     kinds: list[str] | None = None
     where: dict[str, JsonValue] | None = None
@@ -1015,6 +1018,7 @@ class ContextRequest(RequestModel):
     """What an agent needs to reason about: seed Records and how much around them."""
 
     branch: str | None = None
+    at: str | None = None
     refs: list[str] | None = None
     query: dict[str, JsonValue] | None = None
     search: str | None = Field(default=None, min_length=1)
