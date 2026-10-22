@@ -435,8 +435,9 @@ inference:
     structured_output: json_schema        # json_schema | json_mode. json_schema sends the schema
                                  # as response_format and steps down (json_mode, then prompt
                                  # only) when the server rejects it; answers are always validated
+    json_schema_strict: null     # response_format.json_schema.strict; null leaves it out
     repair_attempts: 1           # repair calls after an invalid answer (0-3)
-    temperature: 0
+    temperature: 0               # null leaves it out, for models that refuse the parameter
     max_tokens: null             # completion cap; null leaves it to the server
     max_concurrency: 2
     timeout_s: 120
@@ -446,6 +447,8 @@ inference:
       backoff_base_s: 0.5        # wait before retry n: min(backoff_max_s, base * 2**n), jittered
       backoff_max_s: 30
     price_per_million_tokens: {input: 0, output: 0}   # zero for local models
+    headers: {}                  # extra HTTP headers; values accept secret references
+    extra_body: {}               # extra request fields, e.g. {reasoning_effort: none}
     tasks: {}                    # per-task overrides, see the commented example below
 
     # Hosted OpenAI-compatible endpoint (OpenAI, Azure OpenAI, Mistral, ...):
@@ -453,6 +456,16 @@ inference:
     #   model: <model name>
     #   api_key: secret://env/LLM_API_KEY
     #   price_per_million_tokens: {input: <price>, output: <price>}
+    #
+    # Anthropic through its OpenAI-compatible endpoint (docs/inference-providers.md):
+    #   base_url: https://api.anthropic.com/v1/
+    #   model: claude-haiku-5-5
+    #   api_key: secret://env/ANTHROPIC_API_KEY
+    #   headers: {anthropic-workspace-id: secret://env/ANTHROPIC_WORKSPACE_ID}  # org-level keys
+    #   temperature: null            # refused by current models
+    #   json_schema_strict: true     # required by the endpoint
+    #   extra_body: {thinking: {type: disabled}}
+    #   max_tokens: 4096
     #
     # LiteLLM proxy (compose profile `litellm`), reaching Anthropic, Google, Bedrock, ...:
     #   base_url: http://litellm:4000/v1

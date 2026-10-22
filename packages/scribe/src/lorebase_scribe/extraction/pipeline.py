@@ -15,7 +15,8 @@
 
 Nothing is written to the default branch: reviewers decide item by item and merge the
 Proposal. A tier 1 model that is not installed degrades to tier 0 with a warning in the job's
-stats; a tier 2 model that cannot be created fails the job.
+stats; a tier 2 model that cannot be created fails the job, and a chunk whose answer stays
+invalid after the repair attempts is skipped with a warning.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ import lorebase_inference
 from lorebase_core.model import Schema, new_ulid
 from lorebase_inference import (
     InferenceSettings,
+    InvalidOutputError,
     ProviderUnavailableError,
     UnknownProviderError,
 )
@@ -761,19 +763,28 @@ class ExtractionRun:
                 report.count("chunks_over_budget")
                 continue
             hints = [r for r in resolved if chunk.start <= r.mention.start < chunk.end]
-            result = await run_tier2(
-                models.chat,
-                ontology,
-                chunk,
-                hints,
-                resolver,
-                document_id=document.id,
-                schema_hash=schema_hash,
-                model_key=models.chat_model,
-                settings=self._settings,
-                cache=cache,
-                discover=discover,
-            )
+            try:
+                result = await run_tier2(
+                    models.chat,
+                    ontology,
+                    chunk,
+                    hints,
+                    resolver,
+                    document_id=document.id,
+                    schema_hash=schema_hash,
+                    model_key=models.chat_model,
+                    settings=self._settings,
+                    cache=cache,
+                    discover=discover,
+                )
+            except InvalidOutputError as error:
+                # One unusable answer costs that chunk's tier 2 facts, not the whole job.
+                report.count("model_calls")
+                report.count("model_invalid_answers")
+                report.usage["input_tokens"] += error.usage.input_tokens
+                report.usage["output_tokens"] += error.usage.output_tokens
+                report.warnings.append(f"{document.id}: chunk {chunk.seq}: {error}")
+                continue
             report.count("model_calls", 0 if result.cached else 1)
             report.count("cache_hits", 1 if result.cached else 0)
             report.usage["input_tokens"] += result.usage.input_tokens

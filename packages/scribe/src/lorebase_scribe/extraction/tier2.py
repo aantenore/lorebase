@@ -152,13 +152,21 @@ def locate(quote: str, text: str) -> tuple[int, int] | None:
     return None if match is None else (match.start(), match.end())
 
 
-def grounded(attribute: Attribute, value: Any, quote: str) -> bool:
-    """Whether `value` (canonical) is written in `quote`."""
+def grounded(attribute: Attribute, value: Any, quote: str, raw: Any = None) -> bool:
+    """Whether `value` (canonical) is written in `quote`.
+
+    A timestamp is grounded by its day: documents write "23 January 2024" for an approval
+    time. Its day is taken from the canonical value or, when given, from the `raw` answer,
+    whose offset may put the instant on another day in UTC.
+    """
     name = attribute.type.name
     if name is AttributeType.BOOLEAN:
         return True
     if name is AttributeType.DATE:
         return any(d.value == value for d in find_dates(quote, 0, len(quote)))
+    if name is AttributeType.TIMESTAMP:
+        days = {str(value)[:10], str(raw)[:10] if isinstance(raw, str) else ""}
+        return any(d.value in days for d in find_dates(quote, 0, len(quote)))
     if name in (AttributeType.INTEGER, AttributeType.DECIMAL, AttributeType.FLOAT):
         try:
             target = float(str(value))
@@ -168,7 +176,20 @@ def grounded(attribute: Attribute, value: Any, quote: str) -> bool:
     return str(value).casefold() in quote.casefold()
 
 
+_NAIVE_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?")
+
+
 def _encode(attribute: Attribute, raw: Any) -> Any:
+    if (
+        attribute.type.name is AttributeType.TIMESTAMP
+        and isinstance(raw, str)
+        and _NAIVE_TIMESTAMP.fullmatch(raw.strip())
+    ):
+        # Documents rarely state an offset; models then answer a bare date or a local time,
+        # which is read as UTC.
+        day, _, time = raw.strip().partition("T")
+        time = time or "00:00:00"
+        raw = f"{day}T{time}{':00' if time.count(':') == 1 else ''}Z"
     try:
         return encode_value(attribute.type, raw)
     except (EncodingError, TypeError, ValueError):
@@ -440,7 +461,7 @@ async def _records(
             if value is None:
                 result.discard("invalid_value")
                 continue
-            if not grounded(attribute, value, value_evidence.quote):
+            if not grounded(attribute, value, value_evidence.quote, item.get("value")):
                 result.discard("ungrounded_value")
                 continue
             result.values.append(

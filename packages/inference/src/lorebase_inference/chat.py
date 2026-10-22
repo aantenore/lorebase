@@ -2,8 +2,9 @@
 
 One client covers every server and proxy, local or hosted, that speaks the chat completions
 protocol (see docs/inference-providers.md for the tested list): `POST {base_url}/chat/completions`
-with `Authorization: Bearer <key>` when a key is configured. The model has no tools and
-nothing is streamed.
+with `Authorization: Bearer <key>` when a key is configured, plus the configured `headers`;
+`extra_body` fields are merged into every request. The model has no tools and nothing is
+streamed.
 
 Structured output is requested in decreasing order of strength and the answer is always
 validated against the schema locally:
@@ -89,6 +90,7 @@ class EndpointChatModel:
             retry=llm.retry,
             trust_env=llm.trust_env,
             max_concurrency=llm.max_concurrency,
+            headers=llm.headers,
             transport=transport,
             sleep=sleep,
         )
@@ -140,13 +142,21 @@ class EndpointChatModel:
                     Message("assistant", text[:_ECHO_LIMIT]),
                     Message("user", _REPAIR_INSTRUCTION.format(problems=_describe(problems))),
                 ]
-        reason = " (answer cut off by the token limit)" if truncated else ""
+        reason = ""
+        if truncated:
+            reason = (
+                " (answer cut off by the token limit)"
+                if text.strip()
+                else " (token limit reached before any answer: a reasoning model may have spent "
+                "it on reasoning; raise max_tokens or turn reasoning off through extra_body)"
+            )
         raise InvalidOutputError(
             f"model {self._llm.model!r} did not produce JSON satisfying the schema after "
             f"{attempt} attempt(s){reason}: "
             + "; ".join(f"{p.path or '/'} [{p.keyword}]" for p in problems[:_MAX_PROBLEMS]),
             problems=[f"{p.path or '/'}: {p.keyword}" for p in problems],
             attempts=attempt,
+            usage=usage,
         )
 
     async def aclose(self) -> None:
@@ -192,23 +202,24 @@ class EndpointChatModel:
     ) -> dict[str, Any]:
         messages = [{"role": m.role, "content": m.content} for m in conversation]
         payload: dict[str, Any] = {
+            **self._llm.extra_body,
             "model": self._llm.model,
             "messages": messages,
-            "temperature": self._llm.temperature
-            if options.temperature is None
-            else options.temperature,
             "stream": False,
         }
+        temperature = self._llm.temperature if options.temperature is None else options.temperature
+        if temperature is not None:
+            payload["temperature"] = temperature
         max_tokens = options.max_tokens or self._llm.max_tokens
         if max_tokens:
             payload["max_tokens"] = max_tokens
         if options.seed is not None:
             payload["seed"] = options.seed
         if mode == "json_schema":
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": "answer", "schema": dict(schema)},
-            }
+            json_schema: dict[str, Any] = {"name": "answer", "schema": dict(schema)}
+            if self._llm.json_schema_strict is not None:
+                json_schema["strict"] = self._llm.json_schema_strict
+            payload["response_format"] = {"type": "json_schema", "json_schema": json_schema}
         else:
             _add_instruction(messages, schema)
             if mode == "json_mode":
@@ -222,6 +233,9 @@ class EndpointChatModel:
         choice = choices[0] if isinstance(choices, list) and choices else None
         message = choice.get("message") if isinstance(choice, dict) else None
         content = message.get("content") if isinstance(message, dict) else None
+        truncated = isinstance(choice, dict) and choice.get("finish_reason") == "length"
+        if content is None and truncated:
+            content = ""
         if not isinstance(content, str):
             raise EndpointError("/chat/completions: response has no text content")
         reported = body.get("usage")
@@ -233,7 +247,6 @@ class EndpointChatModel:
             output_tokens=_count(raw_usage.get("completion_tokens"), len(content)),
         )
         model = body.get("model")
-        truncated = isinstance(choice, dict) and choice.get("finish_reason") == "length"
         return (
             content,
             usage,

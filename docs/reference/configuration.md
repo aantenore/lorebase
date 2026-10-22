@@ -537,8 +537,9 @@ Tier 2; env aliases LLM_BASE_URL, LLM_MODEL, LLM_API_KEY
 | `inference.llm.model` | `qwen2.5:7b-instruct` | any model name the endpoint serves |
 | `inference.llm.api_key` | `null` | hosted endpoints: secret://env/LLM_API_KEY |
 | `inference.llm.structured_output` | `json_schema` | json_schema \| json_mode. json_schema sends the schema as response_format and steps down (json_mode, then prompt only) when the server rejects it; answers are always validated |
+| `inference.llm.json_schema_strict` | `null` | response_format.json_schema.strict; null leaves it out |
 | `inference.llm.repair_attempts` | `1` | repair calls after an invalid answer (0-3) |
-| `inference.llm.temperature` | `0` |  |
+| `inference.llm.temperature` | `0` | null leaves it out, for models that refuse the parameter |
 | `inference.llm.max_tokens` | `null` | completion cap; null leaves it to the server |
 | `inference.llm.max_concurrency` | `2` |  |
 | `inference.llm.timeout_s` | `120` |  |
@@ -559,6 +560,8 @@ Tier 2; env aliases LLM_BASE_URL, LLM_MODEL, LLM_API_KEY
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `inference.llm.price_per_million_tokens` | `{input: 0, output: 0}` | zero for local models |
+| `inference.llm.headers` | `{}` | extra HTTP headers; values accept secret references |
+| `inference.llm.extra_body` | `{}` | extra request fields, e.g. {reasoning_effort: none} |
 | `inference.llm.tasks` | `{}` | per-task overrides, see the commented example below |
 
 Example:
@@ -569,6 +572,16 @@ Example:
 #   model: <model name>
 #   api_key: secret://env/LLM_API_KEY
 #   price_per_million_tokens: {input: <price>, output: <price>}
+#
+# Anthropic through its OpenAI-compatible endpoint (docs/inference-providers.md):
+#   base_url: https://api.anthropic.com/v1/
+#   model: claude-haiku-5-5
+#   api_key: secret://env/ANTHROPIC_API_KEY
+#   headers: {anthropic-workspace-id: secret://env/ANTHROPIC_WORKSPACE_ID}  # org-level keys
+#   temperature: null            # refused by current models
+#   json_schema_strict: true     # required by the endpoint
+#   extra_body: {thinking: {type: disabled}}
+#   max_tokens: 4096
 #
 # LiteLLM proxy (compose profile `litellm`), reaching Anthropic, Google, Bedrock, ...:
 #   base_url: http://litellm:4000/v1

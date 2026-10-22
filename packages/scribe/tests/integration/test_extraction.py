@@ -15,8 +15,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
-from lorebase_inference import InferenceSettings
-from lorebase_scribe.extraction.pipeline import ExtractionReport, ExtractionRun
+from lorebase_inference import ChatResult, InferenceSettings, InvalidOutputError, Usage
+from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionReport, ExtractionRun
 from lorebase_scribe.extraction.settings import ExtractionSettings
 from lorebase_store.commit import ValidationFailedError
 from lorebase_store.extraction import Decision, decide_items
@@ -358,6 +358,48 @@ async def test_tier2_fake_model_is_called_once_per_chunk_and_cached(
     assert second.stats.get("model_calls", 0) == 0
     assert second.stats["cache_hits"] == first.stats["chunks"]
     assert second.items == first.items
+
+
+class _UnusableChat:
+    """A chat model whose answers never satisfy the schema, as a small model's can."""
+
+    model = "unusable"
+
+    async def complete_json(self, *_args: Any, **_kwargs: Any) -> ChatResult:
+        raise InvalidOutputError(
+            "model 'unusable' did not produce JSON satisfying the schema",
+            usage=Usage(input_tokens=1100, output_tokens=4096),
+        )
+
+
+async def test_a_chunk_without_a_usable_tier2_answer_keeps_the_other_tiers(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    settings = ExtractionSettings(tiers=(0, 2), auto_accept_threshold=THRESHOLD)  # type: ignore[arg-type]
+    run = ExtractionRun(
+        sessions,
+        runtime,
+        settings,
+        InferenceSettings(),
+        principal="svc_scribe",
+        clock=clock,
+        models=lambda tiers: ExtractionModels(chat=_UnusableChat(), chat_model="test:unusable"),
+    )
+    report = await extract(run, sessions, CONTRACT)
+
+    assert report.stats["model_invalid_answers"] == report.stats["chunks"]
+    assert report.stats["model_calls"] == report.stats["chunks"]
+    assert report.usage == {
+        "input_tokens": 1100 * report.stats["chunks"],
+        "output_tokens": 4096 * report.stats["chunks"],
+    }
+    assert any("did not produce JSON" in w for w in report.warnings)
+    # Tier 0 still proposes the new Contract.
+    assert report.proposal_id is not None
+    assert report.items >= 1
 
 
 @pytest.mark.skipif(os.environ.get("LOREBASE_LIVE_LLM") != "1", reason="set LOREBASE_LIVE_LLM=1")
