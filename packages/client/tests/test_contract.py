@@ -337,6 +337,7 @@ def sample_calls() -> list[Any]:
         ep.branch_events(d, "agent/x"),
         ep.create_webhook(d, m.CreateWebhook(url="https://example.test/hook")),
         ep.list_webhooks(d),
+        ep.update_webhook(d, "w", m.UpdateWebhook(clearances=["pii"])),
         ep.delete_webhook(d, "w"),
         ep.sync_source(d, "erp.parts", m.SyncRequest()),
         ep.list_source_runs(d, "erp.parts"),

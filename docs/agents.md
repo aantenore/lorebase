@@ -508,7 +508,8 @@ tagged `pii`, `confidential` or `restricted` are `***` unless the webhook was cr
 `"clearances": ["pii", ...]` covering every tag of the value; vault values are read from the
 vault when the delivery is sent, so an erased one arrives as `[erased]`. Creating a webhook with
 a clearance needs that clearance permission (`pii.read`, ...) on the whole Domain; the
-clearances of a webhook are fixed when it is created, so delete and recreate it to change them.
+clearances of a webhook change with `PATCH /domains/{domain}/webhooks/{id}` and
+`{"clearances": [...]}` (the new full set); only the clearances it adds need their permission.
 
 ## 6. Check the health of the data
 

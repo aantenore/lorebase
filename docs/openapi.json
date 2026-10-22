@@ -5402,6 +5402,101 @@
       }
     },
     "/api/v1/domains/{domain_id}/webhooks/{webhook_id}": {
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Change the clearances of a webhook",
+        "description": "Replace the sensitivity clearances of a webhook; only added ones need their permission.",
+        "operationId": "update_webhook_api_v1_domains__domain_id__webhooks__webhook_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "webhook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Webhook Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhook"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks domain.settings, or a clearance it gives the webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or webhook not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "webhooks"
@@ -20640,6 +20735,29 @@
           "reasons"
         ],
         "title": "TypeGuessOut"
+      },
+      "UpdateWebhook": {
+        "properties": {
+          "clearances": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "pii",
+                "confidential",
+                "restricted"
+              ]
+            },
+            "type": "array",
+            "title": "Clearances",
+            "description": "The new clearances, replacing the current ones. Each one added needs the matching clearance permission on the Domain; removing needs only domain.settings."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "clearances"
+        ],
+        "title": "UpdateWebhook"
       },
       "ValidationProblem": {
         "properties": {
