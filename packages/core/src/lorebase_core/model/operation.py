@@ -20,6 +20,10 @@ from lorebase_core.types import TypeSpec
 #: A CEL expression, stored as source text.
 Expression = Annotated[str, Field(min_length=1)]
 
+SIDE_EFFECT_MAX_LENGTH = 64
+"""Longest side effect name (static validation); the outbox event type is
+`operation.<name>`."""
+
 
 class OperationParameter(Model):
     """A parameter. Record reference parameters use a ``ref`` type naming the Kind."""
@@ -111,6 +115,8 @@ class Operation(SchemaElement):
     review_policy: ReviewPolicy = Field(default_factory=ReviewPolicy)
     permissions: tuple[str, ...] = ()
     side_effects: tuple[str, ...] = ()
+    """Named events written to the outbox in the commit transaction (design 10.5); unique
+    snake_case names, checked by static validation so that stored schemas always load."""
     rate_limit: RateLimit | None = None
     status: ElementStatus = ElementStatus.ACTIVE
 
@@ -135,6 +141,7 @@ def builtin_link_operation_names(relation: Relation) -> list[str]:
 
 
 __all__ = [
+    "SIDE_EFFECT_MAX_LENGTH",
     "BuiltinOperation",
     "CreateLinkStep",
     "CreateRecordStep",

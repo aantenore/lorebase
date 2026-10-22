@@ -356,6 +356,13 @@ dashboard shows `delivered`, `retrying` and `dead` side by side. Dead letters ar
 refused (scheme, private address) is dead at once; others after `webhooks.max_attempts`. Fix or disable the
 webhook; the pass retries what is still pending.
 
+The outbox keeps a backlog per consumer (`outbox_pending`): `SELECT consumer, count(*) FROM
+outbox_pending GROUP BY 1`. Events leave the outbox once every consumer handed them off and they
+are older than `store.outbox.retention_s` (7 days), or after `store.outbox.max_age_s` (30 days)
+in any case; the latter are counted in `lorebase_outbox_pruned_total{reason="expired"}` and
+logged. To stop keeping events for a consumer that no longer runs, delete its row from
+`outbox_consumers` (its pending rows go with it).
+
 A receiver that stopped answering does not hold Scribe: each attempt is cut off after `webhooks.timeout_s`
 (`last_error` reads `timed out after 10s`, counted in `lorebase_webhooks_timeouts_total`), a pass starts no attempt
 after `webhooks.pass_timeout_s` and releases the rest to the next pass (`released` in the job result), and a pass

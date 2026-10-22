@@ -240,6 +240,30 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
         None,
     ),
     (
+        "side-effect-name-style",
+        lambda s: replace_element(
+            with_operation(s), "operations", FLAG_SUPPLIER_RISK, side_effects=("Risk.Raised",)
+        ),
+        {C.SCHEMA_API_NAME_INVALID},
+        EXPRESSIONS,
+    ),
+    (
+        "side-effect-name-length",
+        lambda s: replace_element(
+            with_operation(s), "operations", FLAG_SUPPLIER_RISK, side_effects=("a" * 65,)
+        ),
+        {C.SCHEMA_API_NAME_INVALID},
+        EXPRESSIONS,
+    ),
+    (
+        "side-effect-duplicate",
+        lambda s: replace_element(
+            with_operation(s), "operations", FLAG_SUPPLIER_RISK, side_effects=("x", "x")
+        ),
+        {C.SCHEMA_API_NAME_DUPLICATE},
+        EXPRESSIONS,
+    ),
+    (
         "kind-duplicate",
         lambda s: replace_kind(s, PLANT, api_name="Part"),
         {C.SCHEMA_API_NAME_DUPLICATE},

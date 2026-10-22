@@ -16,6 +16,7 @@ from lorebase_core.model import (
     Kind,
     Link,
     LinkDirection,
+    Operation,
     OperationOrigin,
     OriginType,
     PaginationType,
@@ -293,3 +294,10 @@ def test_http_options_refuse_reserved_and_literal_credential_headers() -> None:
         HttpPagination(type=PaginationType.CURSOR)
     with pytest.raises(ValidationError, match="page_size"):
         HttpPagination(size_param="limit")
+
+
+def test_stored_side_effects_load_whatever_their_names() -> None:
+    # Static validation checks the names (schema_rules); a stored schema always loads.
+    base = {"id": "opr_01KEZF7C00000000000000000A", "api_name": "flag"}
+    names = Operation.model_validate({**base, "side_effects": ["notify-crm"]}).side_effects
+    assert names == ("notify-crm",)

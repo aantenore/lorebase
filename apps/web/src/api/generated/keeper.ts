@@ -2344,7 +2344,7 @@ export interface components {
             url: string;
             /**
              * Events
-             * @description Event types delivered; default: every type.
+             * @description Event types delivered: revision.committed, operation.<side effect>, or operation.* for every Operation event; default: revision.committed and operation.*.
              */
             events?: string[] | null;
             /**
@@ -2354,6 +2354,11 @@ export interface components {
             branches?: string[] | null;
             /** Description */
             description?: string | null;
+            /**
+             * Clearances
+             * @description Sensitivity tags whose values the webhook receives in clear; others are masked. Each needs the matching clearance permission on the Domain.
+             */
+            clearances?: ("pii" | "confidential" | "restricted")[];
         };
         /** CreatedOut */
         CreatedOut: {
@@ -5093,6 +5098,8 @@ export interface components {
             events: string[];
             /** Branches */
             branches?: string[] | null;
+            /** Clearances */
+            clearances?: string[];
             /** Created By */
             created_by: string;
             /**
@@ -5123,6 +5130,8 @@ export interface components {
             events: string[];
             /** Branches */
             branches?: string[] | null;
+            /** Clearances */
+            clearances?: string[];
             /** Created By */
             created_by: string;
             /**
@@ -8070,7 +8079,7 @@ export interface operations {
                     "application/json": components["schemas"]["WebhookCreated"];
                 };
             };
-            /** @description The caller lacks domain.settings. */
+            /** @description The caller lacks domain.settings, or a clearance it gives the webhook. */
             403: {
                 headers: {
                     [name: string]: unknown;

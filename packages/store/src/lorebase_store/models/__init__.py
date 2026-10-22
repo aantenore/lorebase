@@ -41,7 +41,7 @@ from lorebase_store.models.proposals import (
     ProposalItem,
     ProposalReview,
 )
-from lorebase_store.models.queues import Job, OutboxEvent
+from lorebase_store.models.queues import Job, OutboxConsumer, OutboxEvent, OutboxPending
 from lorebase_store.models.versioning import (
     ChangesetEntry,
     Domain,
@@ -85,7 +85,9 @@ __all__ = [
     "MatSchema",
     "MergeAttempt",
     "OperationInvocation",
+    "OutboxConsumer",
     "OutboxEvent",
+    "OutboxPending",
     "Principal",
     "Proposal",
     "ProposalItem",

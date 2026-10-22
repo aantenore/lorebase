@@ -28,7 +28,7 @@ from lorebase_store.settings import WriteSettings
 
 CHANGESETS: Table = metadata.tables["changesets"]
 EVENT_TYPES: tuple[str, ...] = (COMMITTED_EVENT,)
-"""Event types the outbox carries (webhooks subscribe to these)."""
+"""Event types of the change feed (Revision events; see `outbox_events` for webhooks)."""
 
 
 @dataclass(frozen=True, slots=True)

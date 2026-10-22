@@ -414,8 +414,11 @@ Content-Type: application/json
 {"url": "https://agents.example.com/lorebase", "events": ["revision.committed"], "branches": ["main"]}
 ```
 
+`events` defaults to `revision.committed` and `operation.*` (every Operation event, see
+[Operation events](#operation-events)); `operation.<side effect>` names one.
 The answer holds `secret`, shown only this once. Each delivery is a POST of the event document
-above with the headers `Lorebase-Event`, `Lorebase-Delivery` (delivery id) and
+above with the headers `Lorebase-Event`, `Lorebase-Delivery` (delivery id),
+`Idempotency-Key` (`evt_<sequence>`, the same on every attempt of an event) and
 `Lorebase-Signature: t=<unix seconds>,v1=<hex>`, where the hex digest is HMAC-SHA256 over
 `"<t>." + body` keyed with SHA-256 of the secret (Lorebase stores only that digest):
 
@@ -433,7 +436,10 @@ def verified(secret: str, header: str, body: bytes, tolerance_s: int = 300) -> b
     return hmac.compare_digest(expected, parts["v1"])
 ```
 
-Answer 2xx to acknowledge. Other answers and timeouts are retried with exponential backoff
+Answer 2xx to acknowledge. Delivery is at least once: a worker that dies between sending and
+recording sends again, so drop repeats by `Idempotency-Key`. Deliveries are not ordered; order by
+`sequence` in the body when it matters.
+Other answers and timeouts are retried with exponential backoff
 (`webhooks.backoff_*`) up to `webhooks.max_attempts`, then the delivery is marked dead.
 Each attempt, host lookup included, is cut off after `webhooks.timeout_s` (10 s), and a
 connection to one address after `webhooks.connect_timeout_s` (5 s), so a receiver that is gone
@@ -460,6 +466,39 @@ nothing. To change the key, move the old value to `webhooks.previous_encryption_
 new one; the worker re-encrypts, and the old value can go once no webhook uses it. A key
 encrypted under a value that is no longer configured cannot sign: its deliveries fail with an
 error naming the setting until the value is configured again.
+
+### Operation events
+
+An Operation declares the events its committed executions emit:
+
+```yaml
+operations:
+  flag_supplier_risk:
+    side_effects: [risk_flag_raised]
+```
+
+Each committed execution writes one `operation.risk_flag_raised` event in its commit
+transaction; dry runs, refusals, executions that need review (a `task` write that opens a
+Proposal included: follow `revision.committed` on the target for the merge) and replays of an
+`idempotency_key` write none. A webhook subscribed to it (or to `operation.*`) receives:
+
+```json
+{"type": "operation.risk_flag_raised", "sequence": 812, "side_effect": "risk_flag_raised",
+ "domain": "supply", "branch": "main", "operation": "flag_supplier_risk",
+ "operation_id": "opr_...", "invocation_id": "inv_...", "principal": "agt_risk",
+ "revisions": ["..."], "head": "...", "parameters": {"supplier": "S-1001", "severity": "high"},
+ "edit_count": 2, "edits": [{"op": "upsert_record", "kind": "RiskFlag", "key": "...",
+ "values": {"severity": "high"}}, {"op": "upsert_link", "relation": "flags", "from": "...",
+ "to": "S-1001", "values": {}}], "edits_truncated": false}
+```
+
+`parameters` are as the invocation records them: values that may be sensitive are `***` for
+everyone. In `edits` (at most `keeper.operations.side_effect_max_edits`), values of Attributes
+tagged `pii`, `confidential` or `restricted` are `***` unless the webhook was created with
+`"clearances": ["pii", ...]` covering every tag of the value; vault values are read from the
+vault when the delivery is sent, so an erased one arrives as `[erased]`. Creating a webhook with
+a clearance needs that clearance permission (`pii.read`, ...) on the whole Domain; the
+clearances of a webhook are fixed when it is created, so delete and recreate it to change them.
 
 ## 6. Check the health of the data
 

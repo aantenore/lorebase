@@ -2,8 +2,10 @@
 
 A pass, safe to run concurrently in several workers (rows are claimed with `SKIP LOCKED`):
 
-1. fan out: the oldest undelivered outbox events become one delivery per matching webhook
-   (event type, branch, created before the event); the event is marked handed off;
+1. fan out: the oldest outbox events pending for the `webhooks` consumer become one delivery
+   per matching webhook (event type or `operation.*`, branch, created before the event), and
+   stop being pending for it, in one transaction (`repositories.events`: other consumers of the
+   outbox keep their own pending rows);
 2. claim the due deliveries, leasing them for `lease_s`;
 3. send each one as an HMAC-signed JSON POST (`webhooks.signing`) through the injected
    `Sender`, up to `concurrency` at a time. Each attempt, host lookup included, is cut off
@@ -15,8 +17,15 @@ A pass, safe to run concurrently in several workers (rows are claimed with `SKIP
    `max_attempts`, then marked dead. Targets outside `allowed_schemes`, or resolving to
    private addresses unless `allow_private_targets`, are marked dead at once. The host is
    resolved once per attempt and the `Sender` connects to those checked addresses only, so a
-   second lookup (DNS rebinding) cannot redirect the request to an internal service;
-4. prune finished deliveries and handed-off events older than `retention_s`.
+   second lookup (DNS rebinding) cannot redirect the request to an internal service. The body
+   is rendered for the webhook when it is claimed (`outbox_events.disclose`): sensitive values
+   are masked unless the webhook is cleared for their tags, vault values are opened then.
+   Every attempt of an event carries the same `idempotency_header` (`evt_<sequence>`):
+   delivery is at least once (a pass that dies after sending and before recording sends
+   again), so receivers drop repeats by it. Deliveries are not ordered: retries interleave
+   with newer events; payloads carry `sequence` (the outbox id) for receivers that need one;
+4. prune finished deliveries older than `retention_s`, and outbox events by `store.outbox`
+   (`OutboxRepository.prune`).
 
 Before these steps, with `encryption_key` set, up to `batch` signing keys stored usable (or
 under a previous encryption key) are sealed under it (`webhooks.keys`). A delivery whose key
@@ -49,9 +58,16 @@ from lorebase_core.model import Schema
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.changefeed import EventRef, branch_schema, describe
 from lorebase_store.commit.pipeline import COMMITTED_EVENT
+from lorebase_store.outbox_events import cleared_tokens, disclose, subscribed
 from lorebase_store.repositories.events import OutboxRepository, OutboxRow
-from lorebase_store.settings import WriteSettings
-from lorebase_store.telemetry import WEBHOOK_OUTCOMES, WEBHOOK_TIMEOUTS
+from lorebase_store.settings import OutboxSettings, WriteSettings
+from lorebase_store.telemetry import (
+    OUTBOX_HANDOFFS,
+    OUTBOX_PRUNED,
+    WEBHOOK_OUTCOMES,
+    WEBHOOK_TIMEOUTS,
+)
+from lorebase_store.vault import VaultKeys, VaultValue, open_values
 from lorebase_store.webhooks.keys import SigningKeys, StoredKey, seal_stored_keys
 from lorebase_store.webhooks.repository import WEBHOOK_DELIVERIES, WEBHOOKS, webhook_row
 from lorebase_store.webhooks.settings import WebhookSettings
@@ -59,6 +75,8 @@ from lorebase_store.webhooks.signing import signature
 
 logger = logging.getLogger("lorebase.store.webhooks")
 
+WEBHOOKS_CONSUMER = "webhooks"
+"""The outbox consumer of webhook delivery (registered by revision 0020)."""
 PENDING, DELIVERED, DEAD = "pending", "delivered", "dead"
 _OUTCOMES = {DELIVERED: "delivered", PENDING: "retrying", DEAD: "dead"}
 """Metric outcome of an attempt by the status it leaves the delivery in."""
@@ -200,7 +218,9 @@ class _Claimed:
     """The signing key; None when it is sealed under a key that is not configured."""
     event_type: str
     payload: dict[str, Any]
+    """The body as this webhook receives it (`disclose`d)."""
     attempts: int
+    event_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +240,7 @@ async def _payload(
     writes: WriteSettings,
 ) -> dict[str, Any]:
     if event.event_type != COMMITTED_EVENT:
-        return {"type": event.event_type, "sequence": event.id, **event.payload}
+        return {**event.payload, "type": event.event_type, "sequence": event.id}
     branch = str(event.payload.get("branch", ""))
     if (event.domain_id, branch) not in schemas:
         schemas[(event.domain_id, branch)] = await branch_schema(
@@ -235,7 +255,7 @@ async def _payload(
     )
     if documents:
         return documents[0]
-    return {"type": event.event_type, "sequence": event.id, **event.payload}
+    return {**event.payload, "type": event.event_type, "sequence": event.id}
 
 
 async def _fan_out(
@@ -247,7 +267,7 @@ async def _fan_out(
 ) -> None:
     async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
         outbox = OutboxRepository(session)
-        events = await outbox.claim_undelivered(settings.batch)
+        events = await outbox.claim(WEBHOOKS_CONSUMER, settings.batch)
         if not events:
             return
         result = await session.execute(
@@ -263,7 +283,7 @@ async def _fan_out(
             targets = [
                 hook
                 for hook in hooks.get(event.domain_id, [])
-                if event.event_type in hook.event_types
+                if subscribed(event.event_type, hook.event_types)
                 and (hook.branches is None or branch in hook.branches)
                 and hook.created_at <= event.created_at
             ]
@@ -283,9 +303,10 @@ async def _fan_out(
             )
         if rows:
             await session.execute(insert(WEBHOOK_DELIVERIES).values(rows).on_conflict_do_nothing())
-        await outbox.mark_delivered([e.id for e in events], now)
+        await outbox.acknowledge(WEBHOOKS_CONSUMER, [e.id for e in events])
         report.events += len(events)
         report.queued += len(rows)
+    OUTBOX_HANDOFFS.add(len(events), {"consumer": WEBHOOKS_CONSUMER})
 
 
 async def _claim(
@@ -293,6 +314,7 @@ async def _claim(
     settings: WebhookSettings,
     signing_keys: SigningKeys,
     now: datetime,
+    vault: VaultKeys | None = None,
 ) -> list[_Claimed]:
     d, w = WEBHOOK_DELIVERIES, WEBHOOKS
     async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
@@ -320,7 +342,9 @@ async def _claim(
                 w.c.url,
                 w.c.secret_hash,
                 w.c.sealed_key,
+                w.c.clearances,
                 d.c.event_type,
+                d.c.event_id,
                 d.c.payload,
                 d.c.attempts,
             )
@@ -328,9 +352,18 @@ async def _claim(
             .where(tuple_(d.c.domain_id, d.c.id).in_(keys))
             .order_by(d.c.id)
         )
+        rows = list(result)
+        values = await _vault_values(session, rows, vault)
         claimed = []
-        for row in result:
+        for row in rows:
             opened = signing_keys.open(StoredKey(row.secret_hash, row.sealed_key))
+            payload = disclose(
+                row.payload,
+                tuple(row.clearances or ()),
+                values.get(row.domain_id, {}),
+                masked=settings.masked_value,
+                erased=settings.erased_value,
+            )
             claimed.append(
                 _Claimed(
                     row.domain_id,
@@ -338,11 +371,26 @@ async def _claim(
                     row.url,
                     None if opened is None else opened.key,
                     row.event_type,
-                    row.payload,
+                    payload,
                     row.attempts,
+                    row.event_id,
                 )
             )
         return claimed
+
+
+async def _vault_values(
+    session: AsyncSession, rows: Sequence[Any], vault: VaultKeys | None
+) -> dict[str, dict[str, VaultValue]]:
+    """Per Domain, the vault values the claimed deliveries disclose to their webhooks."""
+    tokens: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        tokens[row.domain_id] |= cleared_tokens(row.payload, tuple(row.clearances or ()))
+    return {
+        domain_id: await open_values(session, domain_id, wanted, vault)
+        for domain_id, wanted in tokens.items()
+        if wanted
+    }
 
 
 async def _attempt(
@@ -366,6 +414,7 @@ async def _attempt(
         settings.signature_header: signature(claimed.key, int(clock().timestamp()), body),
         settings.event_header: claimed.event_type,
         settings.delivery_header: str(claimed.id),
+        settings.idempotency_header: f"evt_{claimed.event_id}",
     }
     try:
         # One deadline for the whole attempt: the lookup and every address the sender tries.
@@ -454,7 +503,10 @@ async def _release(
 
 
 async def _prune(
-    sessions: async_sessionmaker[AsyncSession], settings: WebhookSettings, now: datetime
+    sessions: async_sessionmaker[AsyncSession],
+    settings: WebhookSettings,
+    outbox: OutboxSettings,
+    now: datetime,
 ) -> int:
     before = now - timedelta(seconds=settings.retention_s)
     d = WEBHOOK_DELIVERIES
@@ -465,8 +517,20 @@ async def _prune(
             .returning(d.c.id)
         )
         pruned = len(result.all())
-        pruned += await OutboxRepository(session).prune_delivered(before)
-    return pruned
+        handed, expired = await OutboxRepository(session).prune(
+            before=now - timedelta(seconds=outbox.retention_s),
+            expire_before=now - timedelta(seconds=outbox.max_age_s),
+            limit=outbox.prune_batch,
+        )
+    if handed:
+        OUTBOX_PRUNED.add(handed, {"reason": "retention"})
+    if expired:
+        OUTBOX_PRUNED.add(expired, {"reason": "expired"})
+        logger.warning(
+            "outbox events expired before every consumer handed them off",
+            extra={"expired": expired, "max_age_s": outbox.max_age_s},
+        )
+    return pruned + handed + expired
 
 
 async def deliver_pending(
@@ -475,17 +539,21 @@ async def deliver_pending(
     send: Sender,
     *,
     writes: WriteSettings,
+    outbox: OutboxSettings | None = None,
+    vault: VaultKeys | None = None,
     clock: Clock = utc_now,
     resolve: Resolver = resolve_host,
 ) -> DeliveryReport:
-    """One delivery pass (see module doc); call it periodically."""
+    """One delivery pass (see module doc); call it periodically. `outbox` sets the retention
+    of outbox events (default: code defaults); `vault` opens the vault values that webhooks
+    cleared for them receive (without it they receive `masked_value`)."""
     report = DeliveryReport()
     keys = SigningKeys.from_settings(settings)
     if keys.sealing:
         async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
             report.sealed = await seal_stored_keys(session, keys, limit=settings.batch)
     await _fan_out(sessions, settings, writes, clock(), report)
-    claimed = await _claim(sessions, settings, keys, clock())
+    claimed = await _claim(sessions, settings, keys, clock(), vault)
     outcomes, left = await _attempt_all(claimed, settings, send, clock, resolve)
     if outcomes:
         await _record(sessions, outcomes, settings, clock())
@@ -515,5 +583,5 @@ async def deliver_pending(
                     "error": outcome.error,
                 },
             )
-    report.pruned = await _prune(sessions, settings, clock())
+    report.pruned = await _prune(sessions, settings, outbox or OutboxSettings(), clock())
     return report

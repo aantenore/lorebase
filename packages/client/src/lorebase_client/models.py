@@ -1186,6 +1186,9 @@ class CreateWebhook(RequestModel):
     events: list[str] | None = None
     branches: list[str] | None = None
     description: str | None = Field(default=None, max_length=500)
+    clearances: list[str] | None = None
+    """Sensitivity tags (`pii`, `confidential`, `restricted`) whose values the webhook receives
+    in clear; others are masked."""
 
 
 class Webhook(Model):
@@ -1194,6 +1197,7 @@ class Webhook(Model):
     description: str | None = None
     events: list[str]
     branches: list[str] | None = None
+    clearances: list[str] = Field(default_factory=list)
     created_by: str
     created_at: datetime
 

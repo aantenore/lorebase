@@ -93,6 +93,12 @@ class OperationSettings(SectionModel):
         default=1000, ge=1, description="Edits listed in a response; longer lists are cut."
     )
     max_issues: int = Field(default=200, ge=1, description="Violations listed in one response.")
+    side_effect_max_edits: int = Field(
+        default=100,
+        ge=0,
+        description="Edits listed in the payload of an Operation side effect event; longer "
+        "lists are cut (edits_truncated).",
+    )
     direct_commit_on_protected: bool = Field(
         default=False,
         description="Whether Operations whose review policy is `never` commit directly to "

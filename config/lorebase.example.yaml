@@ -319,6 +319,7 @@ keeper:
     import_batch_rows: 1000      # rows committed per Revision by bulk imports
     dry_run_max_edits: 1000      # edits listed in a response; longer lists are cut
     max_issues: 200              # violations listed in one response
+    side_effect_max_edits: 100   # edits listed in an Operation side effect event; longer lists are cut
     direct_commit_on_protected: false   # true: Operations with review policy `never` commit
                                         # directly to protected branches
     skip_expression_preconditions: false   # with expressions off: true skips CEL
@@ -551,6 +552,10 @@ store:
     max_attempts: 3              # runs of a job before it is marked failed
     retry_delay_seconds: 60      # delay before a failed job runs again
     stale_after_seconds: 3600    # running jobs locked longer than this are requeued
+  outbox:                        # outbox events, shared by every consumer (design 10.5)
+    retention_s: 604800.0        # events every consumer handed off are kept this long (7 days)
+    max_age_s: 2592000.0         # events are deleted after this even when still pending (30 days)
+    prune_batch: 10000           # events deleted per reason by one pruning pass
   bundle:                        # Domain export and import (docs/operations.md)
     batch_rows: 5000             # rows read, written or verified per batch
     compression: gzip            # gzip | none, applied to the .jsonl files
@@ -756,6 +761,9 @@ webhooks:
   signature_header: Lorebase-Signature   # t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">
   event_header: Lorebase-Event
   delivery_header: Lorebase-Delivery
+  idempotency_header: Idempotency-Key   # evt_<sequence>, the same on every attempt of an event
+  masked_value: "***"            # sensitive values a webhook is not cleared for
+  erased_value: "[erased]"       # vault values erased before a cleared webhook receives them
   timeout_s: 10.0                # time budget of one attempt as a whole (lookup, connects, status)
   connect_timeout_s: 5.0         # connecting to one address; then the next checked one (<= timeout_s)
   max_attempts: 8                # then the delivery is marked dead
@@ -768,7 +776,7 @@ webhooks:
   concurrency: 8                 # attempts of one pass in flight at the same time
   pass_timeout_s: 60.0           # no attempt starts after this; the rest go to the next pass
   changed_keys_max: 100          # changed Record keys listed per event payload
-  retention_s: 604800.0          # finished deliveries and handed-off events kept (7 days)
+  retention_s: 604800.0          # finished deliveries kept (7 days; events: store.outbox)
 
 # Personal data vault (design 13.5; docs/security.md): values of `pii` Attributes with
 # `vault: true` are stored encrypted here, Records hold tokens, and `lorebase admin erase`

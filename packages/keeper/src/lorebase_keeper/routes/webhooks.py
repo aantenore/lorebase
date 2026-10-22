@@ -5,25 +5,40 @@ returned once; only its digest is stored (`lorebase_store.webhooks.signing`), se
 `webhooks.encryption_key` when that is set (`lorebase_store.webhooks.keys`). Every change is
 written to the audit log (`webhook.create`, `webhook.delete`) without the secret or the full
 URL. Deliveries are made by `lorebase_store.webhooks.deliver_pending`, run by a worker.
+
+A webhook subscribes to `revision.committed`, to `operation.<side effect>` events or to every
+Operation event (`operation.*`). Sensitive values in Operation events reach it masked unless it
+holds `clearances` for their tags; granting one needs the matching clearance permission
+(`pii.read`, `confidential.read`, `restricted.read`) on the whole Domain, so an administrator
+cannot route values to a webhook that they could not read themselves.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from lorebase_core.model import Sensitivity
 from lorebase_keeper.auth.audit import annotate
-from lorebase_keeper.auth.deps import Access, require
+from lorebase_keeper.auth.deps import Access, AuthDep, require
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.context import StoreDep, require_domain
-from lorebase_keeper.errors import CONFLICT, NOT_FOUND, Problem, ProblemError, ValidationProblem
+from lorebase_keeper.errors import (
+    CONFLICT,
+    FORBIDDEN,
+    NOT_FOUND,
+    Problem,
+    ProblemError,
+    ValidationProblem,
+)
 from lorebase_keeper.reading.problems import invalid
+from lorebase_keeper.reading.sensitivity import CLEARANCES, clearance_of
 from lorebase_platform.settings import Settings
-from lorebase_store.changefeed import EVENT_TYPES
+from lorebase_store.outbox_events import EVENT_TYPES, event_type_problem
 from lorebase_store.webhooks import (
     WebhookRepository,
     WebhookRow,
@@ -43,6 +58,13 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"model": Problem, "description": "Domain or webhook not found."},
     422: {"model": ValidationProblem, "description": "Invalid request."},
 }
+_CREATE_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_ERRORS,
+    403: {
+        "model": Problem,
+        "description": "The caller lacks domain.settings, or a clearance it gives the webhook.",
+    },
+}
 
 Manage = Annotated[Access, Depends(require(Permission.DOMAIN_SETTINGS))]
 
@@ -59,12 +81,20 @@ class CreateWebhook(BaseModel):
 
     url: str = Field(min_length=1, max_length=2048, description="Target of the POST requests.")
     events: list[str] | None = Field(
-        default=None, min_length=1, description="Event types delivered; default: every type."
+        default=None,
+        min_length=1,
+        description="Event types delivered: revision.committed, operation.<side effect>, or "
+        "operation.* for every Operation event; default: revision.committed and operation.*.",
     )
     branches: list[str] | None = Field(
         default=None, min_length=1, description="Only events of these branches; default: all."
     )
     description: str | None = Field(default=None, max_length=500)
+    clearances: list[Literal["pii", "confidential", "restricted"]] = Field(
+        default_factory=list,
+        description="Sensitivity tags whose values the webhook receives in clear; others are "
+        "masked. Each needs the matching clearance permission on the Domain.",
+    )
 
 
 class WebhookOut(BaseModel):
@@ -73,6 +103,7 @@ class WebhookOut(BaseModel):
     description: str | None = None
     events: list[str]
     branches: list[str] | None = None
+    clearances: list[str] = Field(default_factory=list)
     created_by: str
     created_at: datetime
 
@@ -97,12 +128,13 @@ def _out(row: WebhookRow) -> dict[str, Any]:
         "description": row.description,
         "events": list(row.event_types),
         "branches": None if row.branches is None else list(row.branches),
+        "clearances": list(row.clearances),
         "created_by": row.created_by,
         "created_at": row.created_at,
     }
 
 
-@router.post(BASE, status_code=201, summary="Create a webhook", responses=_ERRORS)
+@router.post(BASE, status_code=201, summary="Create a webhook", responses=_CREATE_ERRORS)
 async def create_webhook(
     domain_id: str,
     body: CreateWebhook,
@@ -110,6 +142,7 @@ async def create_webhook(
     store: StoreDep,
     settings: WebhookSettingsDep,
     request: Request,
+    auth: AuthDep,
 ) -> WebhookCreated:
     """Register an endpoint for the Domain's events; the secret is returned once."""
     problem = scheme_problem(body.url, settings)
@@ -117,8 +150,23 @@ async def create_webhook(
         raise invalid("/body/url", problem, "invalid_target")
     events = body.events or list(EVENT_TYPES)
     for index, event in enumerate(events):
-        if event not in EVENT_TYPES:
-            raise invalid(f"/body/events/{index}", f"unknown event type {event!r}", "unknown")
+        unknown = event_type_problem(event)
+        if unknown is not None:
+            raise invalid(f"/body/events/{index}", unknown, "unknown")
+    if body.clearances:
+        held = await clearance_of(auth.authorizer, access.principal, domain_id, None)
+        missing = sorted(
+            CLEARANCES[Sensitivity(tag)].value
+            for tag in set(body.clearances)
+            if Sensitivity(tag) not in held.everywhere
+        )
+        if missing:
+            raise ProblemError(
+                FORBIDDEN,
+                f"Clearing a webhook for sensitive values needs {' and '.join(missing)} on the "
+                "Domain.",
+                extensions={"code": "clearance_required", "permission": missing[0]},
+            )
     secret = new_secret(settings.secret_bytes)
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
@@ -134,6 +182,7 @@ async def create_webhook(
             branches=None if body.branches is None else sorted(set(body.branches)),
             signing_key=SigningKeys.from_settings(settings).store(signing_key(secret)),
             created_by=access.principal.id,
+            clearances=body.clearances,
         )
     annotate(
         request,
@@ -142,6 +191,7 @@ async def create_webhook(
         host=urlsplit(row.url).hostname,
         events=list(row.event_types),
         branches=None if row.branches is None else list(row.branches),
+        clearances=list(row.clearances),
     )
     return WebhookCreated(**_out(row), secret=secret)
 

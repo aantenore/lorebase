@@ -404,6 +404,7 @@ Thresholds and naming rules; a request may override them
 | `keeper.operations.import_batch_rows` | `1000` | rows committed per Revision by bulk imports |
 | `keeper.operations.dry_run_max_edits` | `1000` | edits listed in a response; longer lists are cut |
 | `keeper.operations.max_issues` | `200` | violations listed in one response |
+| `keeper.operations.side_effect_max_edits` | `100` | edits listed in an Operation side effect event; longer lists are cut |
 | `keeper.operations.direct_commit_on_protected` | `false` | true: Operations with review policy `never` commit directly to protected branches |
 | `keeper.operations.skip_expression_preconditions` | `false` | with expressions off: true skips CEL preconditions (reported) instead of refusing |
 | `keeper.operations.expressions_enabled` | `true` | stored Operations evaluate CEL preconditions, review policies and steps (lorebase_core.expr: sandboxed, no I/O, deterministic, bounded below); false: refused. Whether schemas may hold CEL is schema.expressions_enabled |
@@ -707,6 +708,16 @@ Job queue workers
 | `store.jobs.max_attempts` | `3` | runs of a job before it is marked failed |
 | `store.jobs.retry_delay_seconds` | `60` | delay before a failed job runs again |
 | `store.jobs.stale_after_seconds` | `3600` | running jobs locked longer than this are requeued |
+
+### `store.outbox`
+
+Outbox events, shared by every consumer (design 10.5)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.outbox.retention_s` | `604800.0` | events every consumer handed off are kept this long (7 days) |
+| `store.outbox.max_age_s` | `2592000.0` | events are deleted after this even when still pending (30 days) |
+| `store.outbox.prune_batch` | `10000` | events deleted per reason by one pruning pass |
 
 ### `store.bundle`
 
@@ -1043,6 +1054,9 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 | `webhooks.signature_header` | `Lorebase-Signature` | t=&lt;unix&gt;,v1=&lt;hex HMAC-SHA256 of "&lt;t&gt;.&lt;body&gt;"&gt; |
 | `webhooks.event_header` | `Lorebase-Event` |  |
 | `webhooks.delivery_header` | `Lorebase-Delivery` |  |
+| `webhooks.idempotency_header` | `Idempotency-Key` | evt_&lt;sequence&gt;, the same on every attempt of an event |
+| `webhooks.masked_value` | `"***"` | sensitive values a webhook is not cleared for |
+| `webhooks.erased_value` | `"[erased]"` | vault values erased before a cleared webhook receives them |
 | `webhooks.timeout_s` | `10.0` | time budget of one attempt as a whole (lookup, connects, status) |
 | `webhooks.connect_timeout_s` | `5.0` | connecting to one address; then the next checked one (&lt;= timeout_s) |
 | `webhooks.max_attempts` | `8` | then the delivery is marked dead |
@@ -1054,7 +1068,7 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 | `webhooks.concurrency` | `8` | attempts of one pass in flight at the same time |
 | `webhooks.pass_timeout_s` | `60.0` | no attempt starts after this; the rest go to the next pass |
 | `webhooks.changed_keys_max` | `100` | changed Record keys listed per event payload |
-| `webhooks.retention_s` | `604800.0` | finished deliveries and handed-off events kept (7 days) |
+| `webhooks.retention_s` | `604800.0` | finished deliveries kept (7 days; events: store.outbox) |
 
 ## `vault`
 

@@ -1,0 +1,56 @@
+"""A webhook is cleared for sensitive values only by a caller holding those clearances on the
+whole Domain (design 10.5)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from .conftest import PEPPER
+
+pytestmark = pytest.mark.integration
+
+API = "/api/v1"
+HOOKS = f"{API}/domains/acme/webhooks"
+
+
+async def test_clearances_need_the_matching_permission(
+    keeper: Any, installation_admin: Any, role_key: Any
+) -> None:
+    auth = {
+        "mode": "api_key",
+        "api_keys": {"pepper": PEPPER},
+        "installation_admins": [installation_admin.id],
+        "authz": {
+            "grants_cache_ttl_s": 0,
+            "custom_roles": {
+                "hook-admin": ["schema.read", "data.read", "domain.settings"],
+                "hook-pii": ["schema.read", "data.read", "domain.settings", "pii.read"],
+            },
+        },
+    }
+    async with keeper(auth=auth) as http:
+        created = await http.post(
+            f"{API}/domains", json={"id": "acme"}, headers=installation_admin.headers
+        )
+        assert created.status_code == 201, created.text
+        plain = await role_key(http, "acme", "hook-admin")
+        cleared = await role_key(http, "acme", "hook-pii")
+        url = "https://hooks.example.com/in"
+
+        refused = await http.post(HOOKS, json={"url": url, "clearances": ["pii"]}, headers=plain)
+        assert refused.status_code == 403, refused.text
+        assert refused.json()["permission"] == "pii.read"
+        masked = await http.post(HOOKS, json={"url": url}, headers=plain)
+        assert masked.status_code == 201, masked.text
+        assert masked.json()["clearances"] == []
+
+        allowed = await http.post(HOOKS, json={"url": url, "clearances": ["pii"]}, headers=cleared)
+        assert allowed.status_code == 201, allowed.text
+        assert allowed.json()["clearances"] == ["pii"]
+        beyond = await http.post(
+            HOOKS, json={"url": url, "clearances": ["pii", "restricted"]}, headers=cleared
+        )
+        assert beyond.status_code == 403
+        assert beyond.json()["permission"] == "restricted.read"
