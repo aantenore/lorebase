@@ -396,3 +396,54 @@ def test_task_catalog_and_argument_checks() -> None:
     assert task_slug == "approve-contract-c-3025"
     with pytest.raises(SystemExit):
         resolve_task(parse_args(["--task", "what-if"]))
+
+
+async def test_temperature_can_be_left_out_and_extra_body_is_sent(chat_stub: Any) -> None:
+    """Current hosted models answer HTTP 400 to `temperature` (recorded live: "`temperature` is
+    deprecated for this model"); `--temperature none` leaves it out, `--extra-body` adds
+    server-specific options such as turning thinking off."""
+    args = parse_args(
+        [
+            "--task",
+            "single-source-risk",
+            "--temperature",
+            "none",
+            "--extra-body",
+            '{"thinking": {"type": "disabled"}}',
+        ]
+    )
+    assert args.temperature is None
+    assert args.extra_body == {"thinking": {"type": "disabled"}}
+    stub = chat_stub([final("a"), final("b")])
+    hosted = ChatClient(
+        stub.url,
+        "m",
+        {},
+        timeout=10,
+        vault=Secrets(),
+        temperature=args.temperature,
+        extra_body=args.extra_body,
+    )
+    local = chat_for(stub)
+    await hosted.complete([{"role": "user", "content": "q"}], [], 64)
+    await local.complete([{"role": "user", "content": "q"}], [], 64)
+    await hosted.aclose()
+    await local.aclose()
+
+    sent, default = stub.requests
+    assert "temperature" not in sent
+    assert sent["thinking"] == {"type": "disabled"}
+    assert sent["max_tokens"] == 64
+    assert default["temperature"] == 0  # the default is unchanged (local Ollama)
+    assert "thinking" not in default
+
+
+def test_extra_body_cannot_replace_what_the_agent_sets() -> None:
+    defaults = parse_args(["--task", "single-source-risk"])
+    assert defaults.temperature == 0
+    assert defaults.extra_body == {}
+    for bad in ('{"model": "x"}', '{"tools": []}', "[1]", "not json"):
+        with pytest.raises(SystemExit):
+            parse_args(["--task", "single-source-risk", "--extra-body", bad])
+    with pytest.raises(SystemExit):
+        parse_args(["--task", "single-source-risk", "--temperature", "-1"])

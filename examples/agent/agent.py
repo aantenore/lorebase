@@ -177,10 +177,14 @@ class ChatClient:
         *,
         timeout: float,
         vault: Secrets,
+        temperature: float | None = 0,
+        extra_body: dict[str, Any] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.model = model
         self._vault = vault
+        self._temperature = temperature
+        self._extra_body = dict(extra_body or {})
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/") + "/",
             headers=headers,
@@ -193,11 +197,13 @@ class ChatClient:
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], max_tokens: int
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
+            **self._extra_body,
             "model": self.model,
             "messages": messages,
-            "temperature": 0,
             "max_tokens": max_tokens,
         }
+        if self._temperature is not None:
+            body["temperature"] = self._temperature
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -578,6 +584,38 @@ async def run_agent(
 
 # --- Command line -------------------------------------------------------------------------------
 
+# Request fields the agent sets itself; --extra-body cannot replace them.
+RESERVED_BODY_FIELDS = frozenset(
+    {"model", "messages", "tools", "tool_choice", "max_tokens", "temperature", "stream"}
+)
+
+
+def parse_temperature(value: str) -> float | None:
+    """A sampling temperature, or None (`none`) to leave the field out of the request."""
+    if value.strip().lower() in {"none", "null", ""}:
+        return None
+    try:
+        temperature = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a number or `none`") from None
+    if temperature < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return temperature
+
+
+def parse_extra_body(value: str) -> dict[str, Any]:
+    """A JSON object merged into every chat request (server-specific options)."""
+    try:
+        body = json.loads(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("not valid JSON") from None
+    if not isinstance(body, dict):
+        raise argparse.ArgumentTypeError("must be a JSON object")
+    reserved = sorted(RESERVED_BODY_FIELDS & body.keys())
+    if reserved:
+        raise argparse.ArgumentTypeError(f"set by the agent itself: {', '.join(reserved)}")
+    return body
+
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     env = os.environ.get
@@ -649,6 +687,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         metavar="NAME=VAR",
         help="extra chat header whose value is read from an environment variable",
     )
+    c.add_argument(
+        "--temperature",
+        type=parse_temperature,
+        default=env("AGENT_TEMPERATURE", "0"),
+        help="sampling temperature, or `none` to leave it out for models that refuse it",
+    )
+    c.add_argument(
+        "--extra-body",
+        type=parse_extra_body,
+        default=env("AGENT_EXTRA_BODY", "{}"),
+        metavar="JSON",
+        help="JSON object merged into every chat request, for server-specific options",
+    )
     b = p.add_argument_group("bounds")
     b.add_argument("--max-steps", type=int, default=12)
     b.add_argument("--max-total-tokens", type=int, default=60000)
@@ -717,7 +768,13 @@ async def main_async(args: argparse.Namespace) -> int:
         args.max_result_chars,
     )
     chat = ChatClient(
-        args.base_url, args.model, chat_headers, timeout=min(args.timeout, 180.0), vault=vault
+        args.base_url,
+        args.model,
+        chat_headers,
+        timeout=min(args.timeout, 180.0),
+        vault=vault,
+        temperature=args.temperature,
+        extra_body=args.extra_body,
     )
     print(
         f"agent: domain={args.domain} model={args.model} chat={args.base_url} "

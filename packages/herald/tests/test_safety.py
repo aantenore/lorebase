@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import pytest
 from mcp.types import TextContent
 
 from lorebase_client import LorebaseConnectionError, RateLimitedError, ServerError
+from lorebase_herald import __main__ as herald_main
 from lorebase_herald.errors import tool_error
 from lorebase_herald.keeper import KeeperClients
 from lorebase_herald.server import Credentials
@@ -316,3 +318,24 @@ def test_example_file_matches_code_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     example = Path(__file__).resolve().parents[3] / "config" / "lorebase.example.yaml"
     monkeypatch.setenv(CONFIG_ENV_VAR, str(example))
     assert herald_settings(load_settings()) == defaults
+
+
+def test_request_urls_with_record_keys_stay_out_of_the_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx logs each request URL (Record keys included) at INFO; Herald raises it to WARNING."""
+    started: list[Any] = []
+
+    async def serve(configured: Any, clients: Any) -> None:
+        started.append(configured)
+
+    monkeypatch.setattr(herald_main, "serve", serve)
+    monkeypatch.setattr(herald_main, "configure_logging", lambda *a, **k: None)
+    for name in ("httpx", "httpcore"):
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
+
+    herald_main.main()
+
+    assert started
+    for name in ("httpx", "httpcore"):
+        assert logging.getLogger(name).level == logging.WARNING
