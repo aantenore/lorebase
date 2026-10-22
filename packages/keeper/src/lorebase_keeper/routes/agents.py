@@ -27,6 +27,7 @@ from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import REVISION_HEADER, open_revision, read_guard, resolve_point
 from lorebase_keeper.reading.records import require_kind
 from lorebase_keeper.reading.runtime import ReadRuntimeDep, ReadSessionDep
+from lorebase_keeper.reading.sensitivity import deferred_markdown
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_platform.settings import Settings
 
@@ -145,7 +146,7 @@ async def explain(
     async def produce() -> tuple[bytes, str]:
         document = await explain_record(session, runtime, point, found, key, settings.explain)
         if format == "markdown":
-            return explain_markdown(document).encode(), MARKDOWN
+            return deferred_markdown(document, explain_markdown), MARKDOWN
         return dumps(document).encode(), JSON
 
     return await respond_with(

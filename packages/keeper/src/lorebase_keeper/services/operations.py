@@ -32,6 +32,7 @@ the audit entry.
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -39,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any
 
 from pydantic import JsonValue
 from sqlalchemy.exc import IntegrityError
@@ -91,7 +92,7 @@ from lorebase_core.model import (
     new_ulid,
 )
 from lorebase_core.revision import Origin
-from lorebase_core.validate import DataChange, operation_sensitivity_issues
+from lorebase_core.validate import DataChange, RecordUpsert, operation_sensitivity_issues
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext
@@ -586,13 +587,11 @@ async def _execute(
         if not request.dry_run:
             raise _review_problem(resolved.name, branch, proposals_path, REVIEW_POLICY)
     outcome.edit_count = len(changes)
-    outcome.edits = [
-        edit_document(schema, c, masking) for c in changes[: settings.dry_run_max_edits]
-    ]
-    # An update carries the Record's current values: those of vault Attributes are references,
-    # shown to the caller as on every read (the value, `erased_value` or the mask).
-    await Disclosure(session, domain_id, (schema,), masking, store.runtime.vault).resolve(
-        cast(JsonValue, outcome.edits)
+    outcome.edits = await _edits(
+        Disclosure(session, domain_id, (schema,), masking, store.runtime.vault),
+        schema,
+        masking,
+        changes[: settings.dry_run_max_edits],
     )
     if findings:
         if request.dry_run:
@@ -687,6 +686,32 @@ async def _execute(
         return _replay(found, request, branch, digest, accepted)
     counted(events)
     return outcome
+
+
+async def _edits(
+    disclosure: Disclosure, schema: Schema, masking: Masking, changes: Sequence[DataChange]
+) -> list[dict[str, Any]]:
+    """The edits shown for `changes`. An update carries the Record's current values: those of
+    vault Attributes are references, shown as on every read (the value, `erased_value` or the
+    mask). Only the whole value of a vault Attribute is resolved, and only when its vault row
+    belongs to that Kind and Attribute; the edits are copies, so nothing resolved here reaches
+    the changes that are committed."""
+    edits = [copy.deepcopy(edit_document(schema, change, masking)) for change in changes]
+    slots: list[tuple[Any, Any, str, str]] = []
+    for change, document in zip(changes, edits, strict=True):
+        if not isinstance(change, RecordUpsert):
+            continue
+        kind = schema.kinds.get(change.record.kind)
+        values = document.get("values")
+        if kind is None or not isinstance(values, dict):
+            continue
+        slots.extend(
+            (values, attribute.api_name, kind.id, attribute.id)
+            for attribute in kind.attributes.values()
+            if attribute.in_vault and attribute.api_name in values
+        )
+    await disclosure.slots(slots)
+    return edits
 
 
 def _policy_demands_review(resolved: _Resolved) -> bool:

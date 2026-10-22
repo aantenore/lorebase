@@ -187,7 +187,7 @@ class AuditMiddleware:
             try:
                 await self.app(scope, receive, send_and_note)
             finally:
-                entry = self._entry(scope, draft, status)
+                entry = self._entry(scope, draft, status, notes)
                 if entry is not None:
                     # Shielded: a client disconnect must not cancel the write half way.
                     await asyncio.shield(self._writer.write(entry))
@@ -246,7 +246,9 @@ class AuditMiddleware:
             else path
         )
 
-    def _entry(self, scope: Scope, draft: AuditDraft, status: int) -> NewAuditEntry | None:
+    def _entry(
+        self, scope: Scope, draft: AuditDraft, status: int, notes: ReadNotes | None = None
+    ) -> NewAuditEntry | None:
         if draft.suppressed:
             return None
         method = scope["method"]
@@ -266,6 +268,9 @@ class AuditMiddleware:
         }
         if draft.permission:
             details["permission"] = draft.permission
+        if notes is not None and notes.sensitive:
+            # A write may answer with values too (Operation edits): what it showed or masked.
+            details["sensitive"] = sorted(notes.sensitive)
         if request_id := request_id_of(scope.get("state")):
             details["request_id"] = request_id
         return NewAuditEntry(

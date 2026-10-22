@@ -27,10 +27,13 @@ from lorebase_core.validate import Issue, IssueCode, validate_record
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.reading.sensitivity import (
+    _REFERENCE_MARK,
     Clearance,
     Disclosure,
     Masking,
     clearance_of,
+    collapse_issues,
+    deferred_markdown,
     generalize_issues,
     lowered_tags,
     mask_conflict,
@@ -340,8 +343,16 @@ async def test_disclosure_routes_json_variants_to_the_json_path() -> None:
     assert await disclosure.send(reference, "application/problem+json") == b'{"v":"***"}'
     lines = reference + b"\n" + reference + b"\n"
     assert await disclosure.send(lines, "application/x-ndjson") == b'{"v":"***"}\n{"v":"***"}\n'
-    markdown = b'| a | {"$vault": "vlt_' + b"a" * 32 + b'"} |'
-    assert await disclosure.send(markdown, "text/markdown") == b"| a | \\*\\*\\* |"
+    token = "vlt_" + "a" * 32
+    # A stored string shaped like a reference stays as it is; a real one is resolved.
+    forged = '{"$vault": "' + token + '"}'
+    envelope = deferred_markdown(
+        {"real": {"$vault": token}, "forged": forged},
+        lambda data: f"| {data['real']} | {data['forged']} |",
+    )
+    assert _REFERENCE_MARK not in envelope.split(b'"slots"')[0]
+    sent = await disclosure.send(envelope, "text/markdown; charset=utf-8")
+    assert sent == f"| \\*\\*\\* | {forged} |".encode()
 
 
 def _titled() -> Schema:
@@ -550,3 +561,49 @@ def test_the_redactor_fails_closed_on_expressions_it_cannot_parse() -> None:
     tight = _redactor(SCHEMA, uncleared, _touch(), ExprLimits(max_source_length=8))
     assert _expression_finding(name, tight).message == REDACTED_ERROR
     assert _expression_finding(name, redact).message == "bad 'Ada'"
+
+
+def test_revalidated_issues_on_unreadable_values_are_counted_not_located() -> None:
+    def issue(code: IssueCode, key: str, attribute: str) -> Issue:
+        return Issue(
+            code=code,
+            message="m",
+            path=("records", key, "values", attribute),
+            kind=KIND,
+            key=key,
+            attribute=attribute,
+        )
+
+    issues = [
+        issue(IssueCode.VALUE_PATTERN, "P-1", PHONE),
+        issue(IssueCode.VALUE_TYPE, "P-1", NAME),
+        issue(IssueCode.VALUE_REQUIRED, "P-2", PHONE),
+        issue(IssueCode.VALUE_UNIQUE, "P-3", PHONE),
+    ]
+    collapsed = collapse_issues(issues, (SCHEMA,), Masking(Clearance()))
+    assert collapsed[1] == issues[1]  # not sensitive: kept
+    assert len(collapsed) == 2
+    phone = collapsed[0]
+    assert (phone.code, phone.key, phone.path, phone.details) == (
+        IssueCode.VALUE_INVALID,
+        None,
+        (),
+        {"count": 3},
+    )
+    assert (phone.kind, phone.attribute) == (KIND, PHONE)
+    cleared = Masking(Clearance(everywhere=frozenset({Sensitivity.PII})))
+    assert collapse_issues(issues, (SCHEMA,), cleared) == issues
+
+
+def test_vault_failures_on_unreadable_values_are_generalized() -> None:
+    for code in (IssueCode.VALUE_VAULT_ERASED, IssueCode.VALUE_VAULT_UNAVAILABLE):
+        found = Issue(code=code, message="m", kind=KIND, key="P-1", attribute=EMAIL)
+        (shown,) = generalize_issues([found], (SCHEMA,), Masking(Clearance()))
+        assert shown.code is IssueCode.VALUE_INVALID
+
+
+def test_conflicts_in_partitions_that_cannot_be_read_are_masked() -> None:
+    payload = {"partition": "not a partition", "attribute": None, "ours": {"x": "secret"}}
+    masked = mask_conflict(payload, SCHEMA, Masking(Clearance()))
+    assert masked["ours"] == {"x": "***"}
+    assert mask_conflict(payload, SCHEMA, Masking(Clearance.full()))["ours"] == {"x": "secret"}

@@ -8,11 +8,13 @@ reaches every Revision and is audited.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
+import yaml
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -49,6 +51,23 @@ STALE = "stale"
 OLD_EMAIL, NEW_EMAIL = "old.person@example.com", "new.person@example.com"
 PHONE, NICKNAME = "555 0100", "Quixotica"
 SECRETS = (OLD_EMAIL, NEW_EMAIL, PHONE, NICKNAME)
+NOTES, REMARK = "att_01JB8ZSENS00000000000000J1", "att_01JB8ZSENS00000000000000R1"
+EMAIL = "att_01JB8ZSENS00000000000000E1"
+OTHER, CONFLICTING = "S-1003", "conflicting"
+BRANCH_EMAIL, MAIN_EMAIL = "branch.person@example.com", "main.person@example.com"
+
+
+async def _email_token(session: AsyncSession, kind_id: str, key: str) -> str:
+    """The vault token the head of `main` holds for the email of a Supplier."""
+    found = await session.execute(
+        text(
+            """SELECT "values" -> :a ->> '$vault' FROM mat_records """
+            "WHERE domain_id = :d AND branch = 'main' AND kind_id = :kind AND key = :k"
+        ),
+        {"d": DOMAIN, "k": key, "a": EMAIL, "kind": kind_id},
+    )
+    token: str = found.scalar_one()
+    return token
 
 
 async def _principal(store: SqlAuthStore, name: str, *grants: dict[str, Any]) -> str:
@@ -97,6 +116,12 @@ async def seed(
         "att_01JB8ZSENS00000000000000N1": _attribute(
             "att_01JB8ZSENS00000000000000N1", "nickname", searchable=True
         ),
+        # Plain Attributes: free notes, and a remark that will hold text shaped like a
+        # vault reference.
+        NOTES: _attribute(NOTES, "notes").model_copy(
+            update={"sensitivity": (), "type": TypeSpec.of("json")}
+        ),
+        REMARK: _attribute(REMARK, "remark").model_copy(update={"sensitivity": ()}),
     }
     supplier = supplier.model_copy(update={"attributes": {**supplier.attributes, **added}})
 
@@ -117,9 +142,9 @@ async def seed(
     await change_schema(supplier, "Sensitive Attributes")
     original = next(r for r in rows("supplier.csv") if r["supplier_code"] == KEY)
 
-    def change(email: str) -> RecordUpsert:
+    def change(email: str, **more: str) -> RecordUpsert:
         return record_change(
-            supplier, {**original, "email": email, "phone": PHONE, "nickname": NICKNAME}
+            supplier, {**original, "email": email, "phone": PHONE, "nickname": NICKNAME, **more}
         )
 
     first = await commit_changes(session, runtime, clock, [change(OLD_EMAIL)], message="Contact")
@@ -130,6 +155,27 @@ async def seed(
     supplier = supplier.model_copy(update={"attributes": {**supplier.attributes, phone: tagged}})
     await change_schema(supplier, "Phone numbers are personal data")
     second = await commit_changes(session, runtime, clock, [change(NEW_EMAIL)], message="Moved")
+    # A plain string that looks like the reference of the email: text, never a reference.
+    async with session.begin():
+        token = await _email_token(session, supplier.id, KEY)
+    forged = json.dumps({"$vault": token})
+    await commit_changes(
+        session, runtime, clock, [change(NEW_EMAIL, remark=forged)], message="Remark"
+    )
+    # Two branches give another Supplier different emails: a Conflict over vault values.
+    other = next(r for r in rows("supplier.csv") if r["supplier_code"] == OTHER)
+    await create_branch(
+        session, DOMAIN, CONFLICTING, created_by="usr_seed", runtime=runtime, clock=clock
+    )
+    for branch, email in ((CONFLICTING, BRANCH_EMAIL), ("main", MAIN_EMAIL)):
+        await commit_changes(
+            session,
+            runtime,
+            clock,
+            [record_change(supplier, {**other, "email": email})],
+            message="Other contact",
+            branch=branch,
+        )
     engine = create_engine(DatabaseSettings(), url=owner_url, pooled=False)
     try:
         store = SqlAuthStore(async_sessionmaker(engine, expire_on_commit=False))
@@ -143,6 +189,7 @@ async def seed(
         )
         admin = await _principal(store, "admin", {"role": "admin"})
         editor = await _principal(store, "editor", {"role": "editor"})
+        modeler = await _principal(store, "modeler", {"role": "modeler"})
     finally:
         await engine.dispose()
     seeded = Seeded(owner_url=owner_url, app_url=app_url, schema=schema)
@@ -153,6 +200,9 @@ async def seed(
         "kind": kind_cleared,
         "admin": admin,
         "editor": editor,
+        "modeler": modeler,
+        "token": token,
+        "forged": forged,
     }
     return seeded
 
@@ -286,6 +336,11 @@ async def _dry_update(http: httpx.AsyncClient, key: str, **values: Any) -> httpx
     return response
 
 
+def _unremarked(response: httpx.Response, facts: dict[str, Any]) -> str:
+    """The body without the remark, which holds text shaped like a reference on purpose."""
+    return response.text.replace(json.dumps(facts["forged"])[1:-1], "")
+
+
 def _email_of_edit(response: httpx.Response) -> Any:
     (edit,) = response.json()["edits"]
     return edit["values"]["email"]
@@ -299,7 +354,7 @@ async def test_streamed_diffs_and_operation_edits_show_values_not_references(
         cleared = await _diff_lines(http, facts["cleared"], seeded.revisions)
         assert NEW_EMAIL in cleared.text
         assert OLD_EMAIL in cleared.text
-        assert "vlt_" not in cleared.text
+        assert "vlt_" not in _unremarked(cleared, facts)
         viewer = await _diff_lines(http, facts["viewer"], seeded.revisions)
         assert "vlt_" not in viewer.text
         assert not any(secret in viewer.text for secret in SECRETS)
@@ -307,10 +362,10 @@ async def test_streamed_diffs_and_operation_edits_show_values_not_references(
         # an update's edit carries the Record's current values, the vault ones included
         shown = await _dry_update(http, facts["admin"], phone="555 0199")
         assert _email_of_edit(shown) == NEW_EMAIL
-        assert "vlt_" not in shown.text
+        assert "vlt_" not in _unremarked(shown, facts)
         masked = await _dry_update(http, facts["editor"], phone="555 0199")
         assert _email_of_edit(masked) == "***"
-        assert "vlt_" not in masked.text
+        assert "vlt_" not in _unremarked(masked, facts)
         assert NEW_EMAIL not in masked.text
 
 
@@ -332,6 +387,89 @@ async def test_violations_on_unreadable_values_do_not_tell_what_is_wrong(seeded:
         shown.get("key"),
         shown.get("attribute"),
     )
+
+
+async def test_a_reference_nested_in_an_edit_is_refused_not_opened(seeded: Seeded) -> None:
+    facts = seeded.facts
+    nested = {"copy": {"$vault": facts["token"]}}
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        dry = await _dry_update(http, facts["admin"], notes=nested)
+    assert [v["code"] for v in dry.json()["violations"]] == ["value.vault_reference"]
+    (edit,) = dry.json()["edits"]
+    assert edit["values"]["notes"] == nested  # shown as written, never opened
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        entries = (
+            await session.execute(
+                select(AuditEntry.details).where(AuditEntry.action == "operation.dry_run")
+            )
+        ).scalars()
+        noted = [entry.get("sensitive") for entry in entries]
+    # the dry run answered with values of the Record: the audit entry says so
+    assert ["masked", "shown"] in noted or ["shown"] in noted
+
+
+async def test_revalidating_unreadable_values_tells_only_how_many_fail(seeded: Seeded) -> None:
+    facts = seeded.facts
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        current = await _get(http, facts["modeler"], "/schema", format="yaml")
+        assert current.status_code == 200, current.text
+        document = yaml.safe_load(current.text)
+        phone = document["kinds"]["Supplier"]["attributes"]["phone"]
+        phone["constraints"] = {"pattern": "^[a-z]+$"}
+        body = {"yaml": yaml.safe_dump(document), "dry_run": True}
+        path = "/branches/main/schema/changes"
+        shown = await _post(http, facts["admin"], path, body)
+        hidden = await _post(http, facts["modeler"], path, body)
+    assert shown.status_code == hidden.status_code == 200, (shown.text, hidden.text)
+    phone = [i for i in shown.json()["issues"] if i.get("attribute") == "phone"]
+    assert [(i["code"], i["key"]) for i in phone] == [("value.pattern", KEY)]
+    (only,) = [i for i in hidden.json()["issues"] if i.get("attribute") == "phone"]
+    assert only["code"] == "value.invalid"
+    assert only["details"] == {"count": 1}
+    assert "key" not in only
+    assert only["path"] == []
+    assert KEY not in hidden.text
+
+
+async def test_text_shaped_like_a_reference_stays_text(seeded: Seeded) -> None:
+    facts = seeded.facts
+    token = facts["token"]
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        explained = await _get(http, facts["cleared"], f"{RECORD}/explain", format="markdown")
+        pack = await _post(
+            http,
+            facts["cleared"],
+            "/context",
+            {"refs": [f"Supplier/{KEY}"], "format": "markdown"},
+        )
+        record = _values(await _get(http, facts["cleared"], RECORD))
+    assert record["remark"] == facts["forged"]
+    for response in (explained, pack):
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/markdown")
+        assert token in response.text  # the remark, as stored
+        assert NEW_EMAIL in response.text  # the email itself, opened for this caller
+        assert "LBVAULT" not in response.text
+
+
+async def test_conflicts_over_vault_values_show_values_not_references(seeded: Seeded) -> None:
+    facts = seeded.facts
+    body = {"source_ref": CONFLICTING, "target_ref": "main", "title": "Other contact"}
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        created = await _post(http, facts["admin"], "/proposals", body)
+        assert created.status_code == 201, created.text
+        path = f"/proposals/{created.json()['id']}/conflicts"
+        cleared = await _get(http, facts["admin"], path)
+        viewer = await _get(http, facts["viewer"], path)
+    assert cleared.status_code == 200, cleared.text
+    (conflict,) = cleared.json()["conflicts"]
+    assert {conflict["ours"], conflict["theirs"]} == {BRANCH_EMAIL, MAIN_EMAIL}
+    assert "vlt_" not in cleared.text
+    assert viewer.status_code == 200, viewer.text
+    assert "vlt_" not in viewer.text
+    assert BRANCH_EMAIL not in viewer.text
+    assert MAIN_EMAIL not in viewer.text
 
 
 async def test_erasure_reaches_history_and_is_audited(seeded: Seeded) -> None:

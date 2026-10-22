@@ -41,7 +41,7 @@ from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.reading.runtime import ReadRuntime, ReadRuntimeDep
-from lorebase_keeper.reading.sensitivity import clearance_of, require_lowering
+from lorebase_keeper.reading.sensitivity import clearance_of, default_schema, require_lowering
 from lorebase_keeper.services import schema as service
 from lorebase_keeper.services.errors import (
     ProtectedBranchError,
@@ -54,6 +54,7 @@ from lorebase_keeper.services.operation_catalog import builtin_definition
 from lorebase_keeper.services.reads import ReadTarget, resolve_readable
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
+from lorebase_store.repositories.scope import scope_to_domain
 
 router = APIRouter(tags=["schema"])
 
@@ -472,7 +473,11 @@ async def apply_schema_changes(
         if body.expected_head is None
         else parse_revision_id(body.expected_head, "/body/expected_head")
     )
-    clearance = await clearance_of(auth.authorizer, access.principal, domain_id, None)
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        reference = await default_schema(session, domain_id, store.runtime)
+    # Kind-narrowed grants count for what issues show; removing tags needs Domain-wide ones.
+    clearance = await clearance_of(auth.authorizer, access.principal, domain_id, reference)
     try:
         outcome = await service.apply(
             store,

@@ -51,6 +51,7 @@ from lorebase_keeper.reading.records import plan_query, require_kind, run_query
 from lorebase_keeper.reading.requests import SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.search import search
+from lorebase_keeper.reading.sensitivity import deferred_markdown
 from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import RecordOut, link_values, record_out
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY, PartitionType, parse_partition
@@ -495,15 +496,20 @@ async def build_pack(
         capped=around.capped,
     )
     if markdown:
-        text = pack_markdown(
-            markdown_sections(result.draft, point.schema),
-            domain=point.domain.id,
-            branch=point.branch,
-            revision=point.revision_hex,
-            budget=budget,
-            since=context.since,
+        # References are resolved when the pack is sent, from the envelope (never by
+        # matching the text, where a stored string may look like one).
+        envelope = deferred_markdown(
+            result.draft,
+            lambda draft: pack_markdown(
+                markdown_sections(draft, point.schema),
+                domain=point.domain.id,
+                branch=point.branch,
+                revision=point.revision_hex,
+                budget=budget,
+                since=context.since,
+            ),
         )
-        return text.encode(), MARKDOWN
+        return envelope, MARKDOWN
     document: dict[str, Any] = {
         "domain": point.domain.id,
         "branch": point.branch,

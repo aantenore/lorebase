@@ -47,8 +47,8 @@ from lorebase_keeper.context import (
 from lorebase_keeper.reading.sensitivity import (
     Clearance,
     Masking,
+    collapse_issues,
     default_schema,
-    generalize_issues,
     reference_tags,
 )
 from lorebase_keeper.services.errors import Finding, ProtectedBranchError, findings_of
@@ -325,9 +325,10 @@ async def apply(
     `guard(current, target)` may refuse the change early (it raises), as for sensitivity tags
     removed without the clearance (`reading.sensitivity`); the commit pipeline refuses, under
     the branch lock, removing any tag outside `cleared` (the caller's Domain-wide clearance).
-    Data issues about values `clearance` does not cover (none, when it is not given) have a
-    generic code (`generalize_issues`): revalidating stored values with a new rule must not
-    tell a caller what values it may not read look like.
+    Data issues about values `clearance` does not cover (none, when it is not given) are
+    folded into one generic issue per Attribute, with a count and no Record key
+    (`collapse_issues`): revalidating stored values with a new rule must not tell a caller
+    what values it may not read look like, nor which Records hold them.
 
     Raises `ChangeSetInvalidError` (document, static or data issues), `RemovalBlockedError`,
     `ProtectedBranchError` for direct writes to a protected branch, and the other
@@ -495,7 +496,7 @@ async def _commit_target(
             clearance or Clearance(),
             reference=MappingProxyType(reference_tags(reference)),
         ).over(target)
-        issues = located(target, generalize_issues(error.issues, (target,), masking))
+        issues = located(target, collapse_issues(error.issues, (target,), masking))
         if not dry_run:
             raise ChangeSetInvalidError(issues) from error
         outcome.issues = issues

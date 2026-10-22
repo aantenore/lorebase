@@ -57,7 +57,8 @@ def _kind_details(kind: KindHealth) -> list[str]:
         lines += [f"### {kind.kind}: violations ({scope})"]
         for issue in violations.issues:
             where = f" on {issue.attribute}" if issue.attribute else ""
-            lines.append(f"- {issue.code}{where}: {issue.count} (e.g. {', '.join(issue.examples)})")
+            examples = f" (e.g. {', '.join(issue.examples)})" if issue.examples else ""
+            lines.append(f"- {issue.code}{where}: {issue.count}{examples}")
         if violations.issues_truncated:
             lines.append("- (more kinds of violation omitted)")
     duplicates = kind.duplicates

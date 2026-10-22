@@ -23,7 +23,10 @@ class IssueGroup(BaseModel):
     )
     attribute: str | None = Field(default=None, description="Attribute api name, when one.")
     count: int
-    examples: list[str] = Field(description="Keys of some of the Records.")
+    examples: list[str] = Field(
+        description="Keys of some of the Records; none for an Attribute whose values the "
+        "caller may not read."
+    )
 
 
 class ViolationReport(BaseModel):
