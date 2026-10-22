@@ -275,7 +275,7 @@ async def test_webhook_delivery_with_signature_and_retries(
         assert created.status_code == 201, created.text
         hook = created.json()
         secret = hook["secret"]
-        assert hook["events"] == ["revision.committed"]
+        assert hook["events"] == ["operation.*", "revision.committed"]
         failing = (await http.post(f"{BASE}/webhooks", json={"url": f"{receiver.url}/fail"})).json()
         listed = (await http.get(f"{BASE}/webhooks")).json()["items"]
         assert [item["id"] for item in listed] == [hook["id"], failing["id"]]

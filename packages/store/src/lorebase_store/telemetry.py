@@ -41,6 +41,22 @@ WEBHOOK_TIMEOUTS = meter.create_counter(
     unit="{attempt}",
     description="Webhook delivery attempts cut off by webhooks.timeout_s.",
 )
+OUTBOX_HANDOFFS = meter.create_counter(
+    "lorebase.outbox.handoffs",
+    unit="{event}",
+    description="Outbox events handed off by a consumer, by consumer.",
+)
+OUTBOX_PRUNED = meter.create_counter(
+    "lorebase.outbox.pruned",
+    unit="{event}",
+    description="Outbox events deleted, by reason (retention: handed off by every consumer; "
+    "expired: older than store.outbox.max_age_s while still pending).",
+)
+OPERATION_EVENTS = meter.create_counter(
+    "lorebase.operations.events",
+    unit="{event}",
+    description="Operation side effect events written to the outbox with a committed execution.",
+)
 GC_RUNS = meter.create_counter(
     "lorebase.gc.runs", unit="{run}", description="Completed garbage collections of a Domain."
 )

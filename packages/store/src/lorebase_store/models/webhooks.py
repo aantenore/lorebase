@@ -48,6 +48,9 @@ class Webhook(Base):
     """Event types delivered (a JSON array of strings)."""
     branches: Mapped[Any | None] = mapped_column(JSONB)
     """Branch names whose events are delivered (a JSON array); null for every branch."""
+    clearances: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    """Sensitivity tags whose values the webhook receives in clear (a JSON array); values of
+    other sensitive Attributes reach it masked."""
     secret_hash: Mapped[H32 | None]
     """The signing key, stored usable (no `webhooks.encryption_key` when it was stored)."""
     sealed_key: Mapped[bytes | None]

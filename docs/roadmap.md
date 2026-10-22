@@ -75,7 +75,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
 - [x] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP ([MCP server](mcp.md))
-- [ ] Custom Operations with CEL, review policies, outbox and webhooks (CEL and review policies work, see M1; the outbox and signed webhooks carry Revision events only, see [agents](agents.md); Operations cannot declare their own events)
+- [x] Custom Operations with CEL, review policies, outbox and webhooks: Operations declare side effects, written to the outbox in their commit transaction and delivered at least once to signed webhooks with masking of sensitive values ([agents](agents.md#operation-events), [design 10.5](design.md#105-side-effects))
 - [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (groups from the OIDC groups claim, Kind-scoped grants on reads and sensitivity masking with `pii.read`, `confidential.read` and `restricted.read` are done, see [design 13.5](design.md#135-personal-data-and-erasure))
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals

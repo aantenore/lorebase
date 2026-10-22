@@ -4691,7 +4691,7 @@
             }
           },
           "403": {
-            "description": "The caller lacks domain.settings.",
+            "description": "The caller lacks domain.settings, or a clearance it gives the webhook.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11623,7 +11623,7 @@
               }
             ],
             "title": "Events",
-            "description": "Event types delivered; default: every type."
+            "description": "Event types delivered: revision.committed, operation.<side effect>, or operation.* for every Operation event; default: revision.committed and operation.*."
           },
           "branches": {
             "anyOf": [
@@ -11652,6 +11652,19 @@
               }
             ],
             "title": "Description"
+          },
+          "clearances": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "pii",
+                "confidential",
+                "restricted"
+              ]
+            },
+            "type": "array",
+            "title": "Clearances",
+            "description": "Sensitivity tags whose values the webhook receives in clear; others are masked. Each needs the matching clearance permission on the Domain."
           }
         },
         "additionalProperties": false,
@@ -18712,6 +18725,13 @@
             ],
             "title": "Branches"
           },
+          "clearances": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Clearances"
+          },
           "created_by": {
             "type": "string",
             "title": "Created By"
@@ -18796,6 +18816,13 @@
               }
             ],
             "title": "Branches"
+          },
+          "clearances": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Clearances"
           },
           "created_by": {
             "type": "string",

@@ -170,6 +170,8 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                     context.webhooks,
                     sender,
                     writes=context.runtime.settings.writes,
+                    outbox=context.runtime.settings.outbox,
+                    vault=context.runtime.vault,
                 )
         except TimeoutError:
             if not budget.expired():

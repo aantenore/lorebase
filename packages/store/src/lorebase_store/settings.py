@@ -340,6 +340,36 @@ class JobSettings(SectionModel):
     )
 
 
+class OutboxSettings(SectionModel):
+    """Retention of outbox events (design 10.5), shared by every consumer of the outbox."""
+
+    retention_s: float = Field(
+        default=7 * 24 * 3600.0,
+        gt=0,
+        description="Events every consumer has handed off are deleted once older than this. "
+        "The change feed cannot resume from deleted events.",
+    )
+    max_age_s: float = Field(
+        default=30 * 24 * 3600.0,
+        gt=0,
+        description="Events older than this are deleted even when a consumer has not handed "
+        "them off yet (a consumer that stopped running); counted in lorebase.outbox.pruned "
+        "as expired.",
+    )
+    prune_batch: int = Field(
+        default=10000,
+        ge=1,
+        description="Events deleted per reason by one pruning pass (run by each webhook "
+        "delivery pass), so a large backlog goes over several passes.",
+    )
+
+    @model_validator(mode="after")
+    def _ordered(self) -> OutboxSettings:
+        if self.max_age_s < self.retention_s:
+            raise ValueError("outbox.max_age_s cannot be shorter than outbox.retention_s")
+        return self
+
+
 class BundleSettings(SectionModel):
     """Domain export and import bundles (see docs/operations.md)."""
 
@@ -576,6 +606,7 @@ class StoreSettings(SectionModel):
     materialize: MaterializeSettings = Field(default_factory=MaterializeSettings)
     gc: GcSettings = Field(default_factory=GcSettings)
     jobs: JobSettings = Field(default_factory=JobSettings)
+    outbox: OutboxSettings = Field(default_factory=OutboxSettings)
     bundle: BundleSettings = Field(default_factory=BundleSettings)
     profiling: ProfilingSettings = Field(default_factory=ProfilingSettings)
     indexes: IndexSettings = Field(default_factory=IndexSettings)

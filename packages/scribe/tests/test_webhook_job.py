@@ -33,7 +33,9 @@ async def test_a_pass_outlasting_the_lease_fails_the_job_attempt(
                 sessions=None,
                 webhooks=settings,
                 http=http,
-                runtime=SimpleNamespace(settings=SimpleNamespace(writes=None)),
+                runtime=SimpleNamespace(
+                    settings=SimpleNamespace(writes=None, outbox=None), vault=None
+                ),
             ),
         )
         handler = build_handlers(context, [WEBHOOK_DELIVERY_JOB])[WEBHOOK_DELIVERY_JOB]

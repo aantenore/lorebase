@@ -19,8 +19,9 @@
        and the Links `links()` follows)
     -> dry run: commit inside a transaction that is rolled back; report edits and violations
     -> commit (imports in batches of whole units, a Record with its Links, one Revision
-       each), then the invocation record and an
-       `operation.invoke` audit entry in the transaction of the last Revision.
+       each), then the invocation record, an `operation.invoke` audit entry and the outbox
+       events of the Operation's side effects (`services.operation_events`) in the
+       transaction of the last Revision.
 
 Every Revision has origin `operation` (or `import` for bulk imports) with the invocation id as
 reference; every changed Attribute is attributed to a provenance entry naming the invocation,
@@ -118,6 +119,11 @@ from lorebase_keeper.services.operation_catalog import (
     edit_document,
     import_rows,
     plan_edits,
+)
+from lorebase_keeper.services.operation_events import (
+    counted,
+    execution_fields,
+    write_side_effects,
 )
 from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.commit import (
@@ -599,10 +605,30 @@ async def _execute(
     if request.dry_run:
         outcome.revisions = []
         return outcome
+    events: list[int] = []
     try:
         await _record(
             session, domain_id, request, principal, outcome, resolved, store, started, head
         )
+        if resolved.custom is not None and not request.reviewed_by_proposal:
+            events = await write_side_effects(
+                session,
+                domain_id,
+                resolved.custom,
+                schema=schema,
+                masking=masking,
+                rows=rows,
+                changes=changes,
+                execution=execution_fields(
+                    branch=branch,
+                    invocation_id=invocation_id,
+                    principal=principal.id,
+                    revisions=outcome.revisions,
+                    head=head,
+                    parameters=outcome.parameters,
+                ),
+                max_edits=settings.side_effect_max_edits,
+            )
         await session.commit()
     except IntegrityError:
         # A concurrent request with the same idempotency key won: answer with its result.
@@ -616,6 +642,7 @@ async def _execute(
         if found is None:
             raise
         return _replay(found, request, branch, digest)
+    counted(events)
     return outcome
 
 

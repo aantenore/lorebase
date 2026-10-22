@@ -1253,6 +1253,7 @@ class Webhooks(_Resource):
         events: Sequence[str] | None = None,
         branches: Sequence[str] | None = None,
         description: str | None = None,
+        clearances: Sequence[str] | None = None,
     ) -> m.WebhookCreated:
         """Register a webhook; the signing secret is in `secret` and is not shown again."""
         body = m.CreateWebhook(
@@ -1260,6 +1261,7 @@ class Webhooks(_Resource):
             events=None if events is None else list(events),
             branches=None if branches is None else list(branches),
             description=description,
+            clearances=None if clearances is None else list(clearances),
         )
         return await self._c.send(ep.create_webhook(domain, body))
 

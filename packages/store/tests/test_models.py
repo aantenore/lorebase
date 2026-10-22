@@ -41,6 +41,8 @@ DESIGN_TABLES = {
     "operation_invocations",
     "audit_log",
     "outbox",
+    "outbox_consumers",
+    "outbox_pending",
     "jobs",
     "source_runs",
     "documents",
@@ -87,7 +89,8 @@ def test_named_indexes_and_constraints() -> None:
         "ix_revision_parents_domain_id_parent_id",
         "uq_operation_invocations_idempotency",
         "ix_jobs_claimable",
-        "ix_outbox_undelivered",
+        "ix_outbox_created_at",
+        "ix_outbox_pending_event_id",
     } <= indexes
     assert not any(str(name).startswith(DYNAMIC_INDEX_PREFIXES) for name in indexes)
 
@@ -100,4 +103,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_web_sessions_migration() -> None:
-    assert head_revisions() == ("0019",)
+    assert head_revisions() == ("0020",)

@@ -28,6 +28,8 @@ class WebhookRow:
     branches: tuple[str, ...] | None
     created_by: str
     created_at: datetime
+    clearances: tuple[str, ...] = ()
+    """Sensitivity tags whose values the webhook receives in clear."""
 
 
 _COLUMNS = (
@@ -39,6 +41,7 @@ _COLUMNS = (
     WEBHOOKS.c.branches,
     WEBHOOKS.c.created_by,
     WEBHOOKS.c.created_at,
+    WEBHOOKS.c.clearances,
 )
 
 
@@ -54,6 +57,7 @@ def webhook_row(row: object) -> WebhookRow:
         branches=None if branches is None else tuple(branches),
         created_by=values["created_by"],
         created_at=values["created_at"],
+        clearances=tuple(values.get("clearances") or ()),
     )
 
 
@@ -73,6 +77,7 @@ class WebhookRepository:
         branches: Sequence[str] | None,
         signing_key: StoredKey,
         created_by: str,
+        clearances: Sequence[str] = (),
     ) -> WebhookRow:
         result = await self._session.execute(
             insert(WEBHOOKS)
@@ -86,6 +91,7 @@ class WebhookRepository:
                 secret_hash=signing_key.secret_hash,
                 sealed_key=signing_key.sealed_key,
                 created_by=created_by,
+                clearances=sorted(set(clearances)),
             )
             .returning(*_COLUMNS)
         )

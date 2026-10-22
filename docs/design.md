@@ -264,7 +264,7 @@ An Operation is a named, typed, governed write. It is the only way to mutate Rec
 | steps | ordered list of edits: `create_record`, `update_record`, `delete_record`, `create_link`, `delete_link`, each with CEL expressions for values |
 | review_policy | `never`, `always`, or a CEL expression (true means the edits go to a Proposal instead of committing) |
 | permissions | roles or groups allowed to execute; evaluated with Domain RBAC |
-| side_effects | list of outbox events (webhook targets by name from configuration) emitted after commit |
+| side_effects | snake_case event names; a committed execution writes one `operation.<name>` outbox event per name in its commit transaction, which webhooks subscribe to (10.5) |
 | rate_limit | optional per-principal limit |
 | status | `draft`, `active`, `deprecated` |
 
@@ -941,9 +941,11 @@ create unique index on operation_invocations (domain_id, principal, idempotency_
   where idempotency_key is not null;
 create table audit_log (seq bigserial, domain_id, at, actor, action, target, details jsonb,
   prev_hash bytea, entry_hash bytea);
-create table outbox (id, domain_id, event_type, payload jsonb, created_at, delivered_at, attempts);
+create table outbox (id, domain_id, event_type, payload jsonb, created_at);
+create table outbox_consumers (name, created_at);       -- `webhooks`, plus any other reader
+create table outbox_pending (consumer, event_id, domain_id);  -- per-consumer delivery state
 create table webhooks (domain_id, id, url, description, event_types jsonb, branches jsonb,
-  secret_hash bytea, created_by, created_at);            -- secret_hash: SHA-256 of the secret
+  clearances jsonb, secret_hash bytea, created_by, created_at);            -- secret_hash: SHA-256 of the secret
 create table webhook_deliveries (domain_id, id, webhook_id, event_id, event_type, payload jsonb,
   status /* pending | delivered | dead */, attempts, next_attempt_at, last_status, last_error,
   delivered_at, created_at, updated_at);
@@ -1144,7 +1146,7 @@ Scribe computes embeddings for Records whose `object_hash` has no vector for the
 **Implementation notes (M4).**
 
 - **What is embedded.** A Kind opts in with `search.embedding_template`, a text with `{attribute}` placeholders (api names) plus `{_kind}` and `{_key}` (`lorebase_core.model.embedding`). Rendering is deterministic (absent values empty, lists joined with `, `, whitespace collapsed). Static validation (`schema.embedding_template_invalid`) refuses unknown Attributes, derived Attributes (their values are not part of the object hash that keys the vector) and sensitive Attributes unless `search.embedding_sensitive` is true.
-- **Trigger.** A scheduled sweep rather than the outbox: the scheduler leader queues an `embeddings` job per Domain every `scribe.scheduler.embeddings_interval_s` (an identical queued job is reused). The outbox has a single consumer state (`delivered_at`) owned by webhook delivery and is pruned after delivery, so a second consumer would need its own cursor and could still lose events to pruning; the sweep is self-healing instead: it finds whatever lacks a vector, whatever happened before. `lorebase-scribe embeddings DOMAIN [--branch B] [--reindex] [--prune]` runs a pass at once (backfill).
+- **Trigger.** A scheduled sweep rather than the outbox: the scheduler leader queues an `embeddings` job per Domain every `scribe.scheduler.embeddings_interval_s` (an identical queued job is reused). The outbox now keeps a delivery state per consumer (10.5), but the sweep stays: it is self-healing, finding whatever lacks a vector whatever happened before, including Records written before a consumer existed. `lorebase-scribe embeddings DOMAIN [--branch B] [--reindex] [--prune]` runs a pass at once (backfill).
 - **A pass** covers the materialized branches of the Domain. A branch with no template is skipped without creating the model; a branch whose head equals the head recorded in `embedding_cursors` for the model is skipped (a schema change moves the head). Otherwise the branch's own live rows are read in key order, page by page: rows whose object hash has no vector of the model, and every row of the Kinds whose template fingerprint changed since the last complete pass (all Kinds with `--reindex`). Each text is rendered and hashed (`text_hash`): equal to the stored vector's hash, it is unchanged; equal to another stored text, its vector is copied without a model call; otherwise it is embedded in batches. A complete pass records the head and the fingerprints.
 - **Overlays and shared rows.** Vectors are keyed by object hash and a branch reads only its own rows, so an overlay's inherited rows (covered by its base) and the unchanged rows of a copied branch cost nothing; a branch adds work only for the Records it changed. Two branches whose templates differ for the same content share one row per object hash; the last pass wins until the branches converge (`--reindex` on the branch to restore).
 - **Backpressure, rate limits, retries.** A job reads at most `scribe.embeddings.max_records_per_job` rows and queues its continuation (`resume` after the last row) instead of holding a worker slot; model calls are paced by `max_calls_per_second` and retried `retry.attempts` times inside the job after the provider's own retries; then the worker retries the job (`store.jobs`). One pass per Domain runs at a time (advisory lock). Dimension mismatches (the model against `store.embeddings.dims`, or the probe text's vector) fail the job without retries.
@@ -1262,6 +1264,14 @@ Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run
 ### 10.5 Side effects
 
 Operations declare named events. Events are written to the `outbox` in the commit transaction and delivered asynchronously by Scribe to configured webhook targets (HMAC-signed payloads, retries with backoff, dead-letter state). Lorebase does not call external systems synchronously during a commit.
+
+**Events.** A committed execution of an Operation with `side_effects: [risk_flag_raised]` writes an `operation.risk_flag_raised` event in the transaction of its last Revision, invocation record and audit entry: a failure anywhere rolls all of them back, and dry runs, refused executions, executions sent to review (agent writes on a task branch included: their Proposal is the review) and idempotent replays write none; a merged Proposal shows as `revision.committed` on its target. Side effect names are unique snake_case names of at most 64 characters, checked by static validation (`schema.api_name_invalid`, `schema.api_name_duplicate`). The payload names the execution (Operation, invocation, principal, branch, Revisions, head), carries the parameters as the invocation records them (values that may be sensitive are `***`) and up to `keeper.operations.side_effect_max_edits` edits. Every commit also writes `revision.committed`.
+
+**Consumers.** Each consumer of the outbox owns its delivery state: a trigger adds an `outbox_pending` row per registered consumer (`outbox_consumers`, `webhooks` by default) in the transaction writing the event, and the consumer deletes its row in the transaction that hands the event off. A position in the id sequence would skip an event whose transaction committed after later ones; pending rows cannot. An event is pruned when no consumer has it pending and it is older than `store.outbox.retention_s`, or when it is older than `store.outbox.max_age_s` whatever is pending (a consumer that stopped), at most `store.outbox.prune_batch` per pass. Deleting a consumer's row drops its backlog.
+
+**Delivery.** The webhook worker fans events out into `webhook_deliveries` (one per subscribed webhook: exact types or `operation.*`, branches) and sends them at least once: every attempt of an event carries `Idempotency-Key: evt_<sequence>`, failures are retried with backoff and become `dead` after `webhooks.max_attempts`. Deliveries are not ordered (retries interleave with newer events); payloads carry `sequence`, the outbox id, for receivers that need an order.
+
+**Masking.** Payloads never hold a sensitive value as such: the writer wraps each value of a tagged Attribute with its effective tags (`{"$sensitive": {"tags": [...], "value": ...}}`), a vault Attribute's value being its vault reference. The worker renders the body for each webhook when it sends it: values whose tags the webhook's `clearances` cover are shown (vault values opened then, `[erased]` once erased), others are `***`. Granting a webhook a clearance needs that clearance permission on the whole Domain; it is fixed when the webhook is created (delete and recreate the webhook to change it). A wrapper without tags is never cleared, and JSON written by a caller that holds `$sensitive` or `$vault` keys is wrapped with every tag, so it cannot pose as a wrapper or a reference. Vault values are never in stored payloads; values of sensitive Attributes outside the vault are kept as committed until pruned, like the Revision objects holding them (erasure reaches vault values only, 13.5).
 
 ---
 

@@ -22,6 +22,7 @@ from lorebase_core.model.derivation import (
 from lorebase_core.model.embedding import template_problems
 from lorebase_core.model.kind import Kind
 from lorebase_core.model.operation import (
+    SIDE_EFFECT_MAX_LENGTH,
     CreateLinkStep,
     CreateRecordStep,
     DeleteLinkStep,
@@ -243,6 +244,18 @@ class _Checker:
                 self.check_name(parameter.name, NameStyle.SNAKE, parameter_path)
                 parameter_names.append((parameter.name, parameter_path))
             self.check_unique(parameter_names, f"Operation {operation.api_name}")
+            side_effects = []
+            for index, name in enumerate(operation.side_effects):
+                effect_path = ("operations", operation.id, "side_effects", index)
+                self.check_name(name, NameStyle.SNAKE, effect_path)
+                if len(name) > SIDE_EFFECT_MAX_LENGTH:
+                    self.add(
+                        IssueCode.SCHEMA_API_NAME_INVALID,
+                        effect_path,
+                        f"side effect {name!r} is longer than {SIDE_EFFECT_MAX_LENGTH} characters",
+                    )
+                side_effects.append((name, effect_path))
+            self.check_unique(side_effects, f"the side effects of {operation.api_name}")
         builtin_names = {name for name, _ in builtin}
         for name, path in operation_names:
             if name in builtin_names:

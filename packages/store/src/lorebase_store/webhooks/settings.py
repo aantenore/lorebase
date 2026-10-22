@@ -42,6 +42,20 @@ class WebhookSettings(SectionModel):
     signature_header: str = Field(default="Lorebase-Signature", min_length=1)
     event_header: str = Field(default="Lorebase-Event", min_length=1)
     delivery_header: str = Field(default="Lorebase-Delivery", min_length=1)
+    idempotency_header: str = Field(
+        default="Idempotency-Key",
+        min_length=1,
+        description="Header carrying `evt_<sequence>`, the same on every attempt of an event: "
+        "deliveries are at least once, receivers drop the repeats by it.",
+    )
+    masked_value: str = Field(
+        default="***",
+        description="What a sensitive value is replaced by for a webhook not cleared for it.",
+    )
+    erased_value: str = Field(
+        default="[erased]",
+        description="What a cleared webhook receives for a vault value erased before sending.",
+    )
     timeout_s: float = Field(
         default=10.0,
         gt=0,
@@ -86,8 +100,8 @@ class WebhookSettings(SectionModel):
     retention_s: float = Field(
         default=7 * 24 * 3600.0,
         gt=0,
-        description="Finished deliveries and handed-off outbox events older than this are "
-        "deleted by the worker. The change feed cannot resume from deleted events.",
+        description="Finished deliveries older than this are deleted by the worker (outbox "
+        "events follow store.outbox.retention_s).",
     )
 
     @model_validator(mode="after")
