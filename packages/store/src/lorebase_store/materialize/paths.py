@@ -41,7 +41,6 @@ from lorebase_core.expr.sensitivity import with_tags
 from lorebase_core.model import PathRelation, Schema
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.bulk import chunks
-from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
 from lorebase_store.materialize.links import path_affected, path_pairs_from
 from lorebase_store.materialize.rows import search_weights
@@ -220,6 +219,10 @@ async def refresh_path_fanout(
     row = await repository.schema()
     if row is None:
         return False
+    # Imported here: `lorebase_store.commit` imports this package (the commit pipeline
+    # applies changesets), so a module-level import is circular when this package loads first.
+    from lorebase_store.commit.schema import load_compiled
+
     schema = load_compiled(row.compiled)
     batch = settings.materialize.read_batch_rows
     max_incremental = settings.materialize.derivation_max_incremental_records
