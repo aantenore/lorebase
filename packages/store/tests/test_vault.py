@@ -25,7 +25,7 @@ from lorebase_store.commit import (
     commit,
     create_domain,
 )
-from lorebase_store.materialize import verify
+from lorebase_store.materialize import BranchMode, create_branch, verify
 from lorebase_store.models import MatLexicon, MatRecord, StoredObject, VaultEntry
 from lorebase_store.reads import TypoTolerance, search_corrections
 from lorebase_store.runtime import StoreRuntime
@@ -131,13 +131,16 @@ async def sessions(engine: AsyncEngine, runtime: StoreRuntime) -> AsyncIterator[
 
 
 async def write(
-    sessions: Sessions, runtime: StoreRuntime, *changes: RecordUpsert | RecordDelete
+    sessions: Sessions,
+    runtime: StoreRuntime,
+    *changes: RecordUpsert | RecordDelete,
+    branch: str = "main",
 ) -> CommitResult:
     async with sessions() as session:
         return await commit(
             session,
             DOMAIN,
-            "main",
+            branch,
             list(changes),
             author=AUTHOR,
             message="Write",
@@ -146,14 +149,14 @@ async def write(
         )
 
 
-async def stored_email(sessions: Sessions, code: str) -> Any:
+async def stored_email(sessions: Sessions, code: str, branch: str = "main") -> Any:
     async with sessions() as session, session.begin():
         await session.execute(
             text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
         )
         row = await session.scalar(
             select(MatRecord.values).where(
-                MatRecord.domain_id == DOMAIN, MatRecord.branch == "main", MatRecord.key == code
+                MatRecord.domain_id == DOMAIN, MatRecord.branch == branch, MatRecord.key == code
             )
         )
         assert row is not None
@@ -656,3 +659,50 @@ async def test_an_erasure_gives_up_after_its_lock_timeout(
             with pytest.raises(VaultLockTimeoutError):
                 await erase_record(session, DOMAIN, SUPPLIER, "S-1", lock_timeout_ms=200)
             await session.rollback()
+
+
+async def _moved_to(sessions: Sessions, token: str) -> str | None:
+    async with sessions() as session, session.begin():
+        await _domain_scope(session)
+        found: str | None = await session.scalar(
+            select(VaultEntry.moved_to).where(
+                VaultEntry.domain_id == DOMAIN, VaultEntry.id == token
+            )
+        )
+        return found
+
+
+async def test_a_move_replays_on_another_branch_and_follows_chains(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(sessions, runtime, person("S-1", "ada@example.com"))
+    held = await stored_email(sessions, "S-1")
+    async with sessions() as session:
+        await create_branch(
+            session, DOMAIN, "work", created_by="usr_test", mode=BranchMode.COPY, runtime=runtime
+        )
+    move = (RecordDelete(kind=SUPPLIER, key="S-1"), person("S-2", held))
+    await write(sessions, runtime, *move)
+    # The same key change on a branch forked before it is the same move: allowed, same token.
+    await write(sessions, runtime, *move, branch="work")
+    moved = await stored_email(sessions, "S-2")
+    assert await stored_email(sessions, "S-2", branch="work") == moved
+    # A second rename moves the first token's pointer along.
+    await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-2"), person("S-3", moved))
+    first, second = vault_token(held), vault_token(moved)
+    assert first
+    assert second
+    assert await _moved_to(sessions, first) == "S-3"
+    assert await _moved_to(sessions, second) == "S-3"
+
+
+async def test_erased_references_move_freely(sessions: Sessions, runtime: StoreRuntime) -> None:
+    await write(sessions, runtime, person("S-5", "ada@example.com"))
+    held = await stored_email(sessions, "S-5")
+    assert await erase_key(sessions, "S-5") == 1
+    await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-5"), person("S-6", held))
+    await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-6"), person("S-7", held))
+    token = vault_token(held)
+    assert token
+    assert await _moved_to(sessions, token) is None
+    assert await state_of(sessions, runtime, "S-7") is VaultState.ERASED
