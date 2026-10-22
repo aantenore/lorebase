@@ -205,6 +205,30 @@ class DiscoverySettings(SectionModel):
     max_value_chars: int = Field(
         default=120, ge=8, description="Sample values are cut to this length."
     )
+    vault_match_max_words: int = Field(
+        default=12,
+        ge=1,
+        le=64,
+        description="Longest word sequence of a quote compared with the keyed fingerprints of "
+        "vaulted values of any Kind; a quote holding one is kept without its evidence and sample.",
+    )
+    vault_match_max_text_words: int = Field(
+        default=400,
+        ge=1,
+        description="A quote or sample with more words is not compared and is treated as "
+        "holding a vaulted value (its evidence is withheld).",
+    )
+    vault_match_max_text_chars: int = Field(
+        default=4000,
+        ge=1,
+        description="Same, by characters.",
+    )
+    vault_match_max_candidates: int = Field(
+        default=200_000,
+        ge=1,
+        description="Distinct word sequences compared per job; past it the remaining quotes "
+        "are treated as holding a vaulted value.",
+    )
     max_observations_per_job: int = Field(
         default=1000, ge=1, description="Observations beyond this many are dropped and counted."
     )

@@ -241,8 +241,15 @@ guide:
 A task on another `base_url` uses only its own `api_key` and `headers`: the main key and headers
 are never sent to an endpoint they were not configured for. The step schema has a free-form
 `args` object, which the strict mode of the endpoint may refuse; the client then steps down to
-prompt-only structured output once for the life of the process, and every answer is still
-validated locally. Embeddings stay on fastembed or another provider: Anthropic has none.
+prompt-only structured output and every answer is still validated locally. The mode an endpoint
+accepts is remembered per endpoint, model and output settings (a SHA-256 of them, never the
+address) in `guide.mode_memory_file` under `guide.data_dir`
+(`~/.local/state/lorebase/guide/structured_output_modes.json` by default), written atomically
+under an exclusive lock (a `.lock` file next to it), so a restarted Guide does not try the
+refused mode again. Entries carry a timestamp and expire after `inference.mode_memory_ttl_s`
+(7 days); `lorebase-guide modes clear` deletes the file's entries. Mount a volume there in containers to
+keep it; when the file cannot be read or written, Guide logs a warning and remembers the mode
+for the life of the process only. Embeddings stay on fastembed or another provider: Anthropic has none.
 
 ## Security model
 

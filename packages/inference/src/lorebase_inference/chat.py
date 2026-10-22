@@ -15,14 +15,18 @@ validated against the schema locally:
 
 The first mode is chosen by `structured_output`. When the server rejects a mode with HTTP
 400 or 422 and an error text that names the response format, the client steps down one mode
-and remembers it for the lifetime of the process, per endpoint, model and output settings, so
-later clients start at the mode that works. A parse or validation failure triggers up
+and remembers it per endpoint, model and output settings, in the process and, when a
+`ModeMemory` is installed (`use_mode_memory`), across restarts, so later clients start at the
+mode that works. A parse or validation failure triggers up
 to `repair_attempts` repair calls that show the model its mistakes; usage of all calls is
 summed in the result.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -31,7 +35,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from jsonschema import exceptions as schema_exceptions
@@ -77,6 +81,53 @@ def reset_known_modes() -> None:
         _known_modes.clear()
 
 
+class ModeMemory(Protocol):
+    """Durable memory of the modes learned from rejections, keyed by `mode_digest`.
+
+    `max_age_s` is how long an entry counts: an older one reads as absent and is replaced by
+    the next `remember`. Failures of the memory never fail a call: the client falls back to
+    the in-process cache.
+    """
+
+    async def recall(self, digest: bytes, max_age_s: float) -> int | None: ...
+
+    async def remember(self, digest: bytes, index: int, max_age_s: float) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _Installed:
+    memory: ModeMemory
+    secret: bytes | None
+    max_age_s: float
+
+
+_installed: _Installed | None = None
+_DIGEST_LABEL = b"lorebase/inference/structured-output-mode/v1"
+
+
+def use_mode_memory(
+    memory: ModeMemory | None, *, secret: str | None = None, max_age_s: float = 7 * 86400.0
+) -> None:
+    """Install (or, with None, remove) the durable memory shared by new and live clients.
+
+    `secret` keys the digests (`inference.mode_memory_key`); entries expire after `max_age_s`.
+    """
+    global _installed
+    _installed = (
+        None
+        if memory is None
+        else _Installed(memory, None if not secret else secret.encode(), max_age_s)
+    )
+
+
+def mode_digest(key: _ModeKey, secret: bytes | None = None) -> bytes:
+    """HMAC-SHA256 of the endpoint, model and output settings, keyed by a fixed label and the
+    optional secret: no address is stored in the clear and, with a secret, a stored digest
+    cannot be matched to a guessed address."""
+    hmac_key = _DIGEST_LABEL + b"\0" + secret if secret else _DIGEST_LABEL
+    return hmac.new(hmac_key, json.dumps(key).encode(), hashlib.sha256).digest()
+
+
 def _mode_key(llm: LlmSettings) -> _ModeKey:
     return (llm.base_url, llm.model, llm.structured_output, llm.json_schema_strict)
 
@@ -119,6 +170,8 @@ class EndpointChatModel:
         self._sleep = sleep
         self._mode_key = _mode_key(llm)
         self._mode_index = max(MODES.index(llm.structured_output), _known_mode(self._mode_key) or 0)
+        self._recalled = False
+        self._recall_lock = asyncio.Lock()
         self._client = EndpointClient(
             base_url=llm.base_url,
             api_key=llm.api_key,
@@ -212,6 +265,7 @@ class EndpointChatModel:
         self, conversation: list[Message], schema: JsonSchema, options: ChatOptions
     ) -> tuple[str, Usage, str, bool]:
         """One completion; steps down the structured output mode when the server rejects it."""
+        await self._recall()
         while True:
             payload = self._payload(conversation, schema, options, MODES[self._mode_index])
             try:
@@ -225,6 +279,7 @@ class EndpointChatModel:
                     previous = MODES[self._mode_index]
                     self._mode_index += 1
                     _remember_mode(self._mode_key, self._mode_index)
+                    await self._persist()
                     logger.info(
                         "endpoint rejected structured output mode %s; using %s",
                         previous,
@@ -233,6 +288,40 @@ class EndpointChatModel:
                     continue
                 raise
             return self._read(body, conversation)
+
+    async def _recall(self) -> None:
+        """Start at the mode a previous process learned, once per client."""
+        installed = _installed
+        if self._recalled or installed is None:
+            return
+        async with self._recall_lock:
+            if self._recalled:
+                return
+            try:
+                index = await installed.memory.recall(
+                    mode_digest(self._mode_key, installed.secret), installed.max_age_s
+                )
+            except Exception:
+                logger.warning("structured output mode memory unavailable", exc_info=True)
+                self._recalled = True
+                return
+            self._recalled = True
+            if index is not None and 0 <= index < len(MODES):
+                self._mode_index = max(self._mode_index, index)
+                _remember_mode(self._mode_key, self._mode_index)
+
+    async def _persist(self) -> None:
+        installed = _installed
+        if installed is None:
+            return
+        try:
+            await installed.memory.remember(
+                mode_digest(self._mode_key, installed.secret),
+                self._mode_index,
+                installed.max_age_s,
+            )
+        except Exception:
+            logger.warning("structured output mode memory unavailable", exc_info=True)
 
     def _payload(
         self, conversation: list[Message], schema: JsonSchema, options: ChatOptions, mode: str

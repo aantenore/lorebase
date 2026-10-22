@@ -87,7 +87,7 @@ from lorebase_scribe.extraction.text import (
 from lorebase_scribe.extraction.tier2 import run_tier2
 from lorebase_scribe.extraction.values import heading_title, sentence_values
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
-from lorebase_scribe.telemetry import EXTRACTION_ITEMS
+from lorebase_scribe.telemetry import EVIDENCE_WITHHELD, EXTRACTION_ITEMS
 from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, BlobStore, PostgresBlobStore
 from lorebase_store.commit import ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
@@ -120,6 +120,7 @@ from lorebase_store.repositories import (
     scope_to_domain,
 )
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.vault import QuoteLimits, has_vault_values, quoted_values
 
 log = logging.getLogger("lorebase.scribe.extraction")
 
@@ -931,13 +932,45 @@ class ExtractionRun:
                     links.add((relation_id, *pair))
         return CurrentState(records=records, links=frozenset(links))
 
+    async def _vaulted(self, discovery: Discovery, domain_id: str) -> set[str]:
+        """The evidence texts of `discovery` to withhold: those that hold a vault value of any
+        Kind of the Domain (compared by keyed fingerprint; nothing is decrypted) and those too
+        large to compare. Without vault keys nothing can be compared: a Domain that holds vault
+        values then loses the evidence of every observation."""
+        keys = self._runtime.vault
+        texts = discovery.evidence_texts()
+        if not texts:
+            return set()
+        settings = self._settings.discovery
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, domain_id)
+            if keys is None:
+                return set(texts) if await has_vault_values(session, domain_id) else set()
+            hits = await quoted_values(
+                session,
+                keys,
+                domain_id,
+                discovery.schema,
+                texts,
+                QuoteLimits(
+                    max_words=settings.vault_match_max_words,
+                    max_text_words=settings.vault_match_max_text_words,
+                    max_text_chars=settings.vault_match_max_text_chars,
+                    max_candidates=settings.vault_match_max_candidates,
+                ),
+            )
+        return {texts[index] for index in hits}
+
     async def _suggest(
         self, discovery: Discovery, current: CurrentState, report: ExtractionReport
     ) -> None:
         """Fold the job's observations into the Domain's schema suggestions."""
-        observations = discovery.finish(current.records)
+        vaulted = await self._vaulted(discovery, report.domain)
+        observations = discovery.finish(current.records, vaulted)
         for name, count in discovery.stats.items():
             report.count(name, count)
+        if discovery.evidence_withheld:
+            EVIDENCE_WITHHELD.add(discovery.evidence_withheld)
         if not observations:
             return
         async with self._sessions() as session, session.begin():

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_core.model import Record, Sensitivity, vault_reference, vault_token
+from lorebase_core.model import Record, Schema, Sensitivity, vault_reference, vault_token
 from lorebase_core.types import TypeSpec
 from lorebase_core.validate import IssueCode, RecordDelete, RecordUpsert
 from lorebase_store.commit import (
@@ -32,12 +32,15 @@ from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 from lorebase_store.vault import (
     ErasedValues,
+    QuoteLimits,
     VaultKeys,
     VaultSettings,
     VaultState,
     erase_matching,
     erase_record,
+    has_vault_values,
     open_values,
+    quoted_values,
     rotate,
     usage,
 )
@@ -706,3 +709,77 @@ async def test_erased_references_move_freely(sessions: Sessions, runtime: StoreR
     assert token
     assert await _moved_to(sessions, token) is None
     assert await state_of(sessions, runtime, "S-7") is VaultState.ERASED
+
+
+LIMITS = QuoteLimits(max_words=4, max_text_words=50, max_text_chars=500, max_candidates=1000)
+
+
+async def quoted(
+    sessions: Sessions, runtime: StoreRuntime, texts: list[str], limits: QuoteLimits = LIMITS
+) -> set[int]:
+    keys = runtime.vault
+    assert keys is not None
+    schema = Schema(domain=domain(), kinds={SUPPLIER: kind()})
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        return await quoted_values(session, keys, DOMAIN, schema, texts, limits)
+
+
+async def test_quoted_vault_values_are_found_by_fingerprint(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await write(
+        sessions,
+        runtime,
+        person("S-1", "ada@example.com"),
+        person("S-2", "gone@example.com"),
+        person("S-3", None, nickname="plain-nick"),
+    )
+    keys = runtime.vault
+    assert keys is not None
+    texts = [
+        "Contact Ada at ada@example.com, tomorrow.",
+        "Mail GONE@Example.com for details.",
+        "Nothing personal in this sentence.",
+        "plain-nick is not in the vault",
+        "(ada@example.com)",
+        "ada@example.com's desk",
+    ]
+
+    # Domain-wide, case-insensitive, and blind to punctuation and a possessive.
+    assert await quoted(sessions, runtime, texts) == {0, 1, 4, 5}
+
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        assert await has_vault_values(session, DOMAIN)
+        erasure = await erase_matching(session, DOMAIN, SUPPLIER, EMAIL, "gone@example.com", keys)
+        assert erasure.erased == 1
+    assert await quoted(sessions, runtime, texts) == {0, 4, 5}
+
+
+async def test_texts_beyond_the_limits_count_as_matches(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    texts = ["a short quote", "w " * 60, "x" * 600, "another short quote"]
+    assert await quoted(sessions, runtime, texts) == {1, 2}
+
+    tight = QuoteLimits(max_words=4, max_text_words=50, max_text_chars=500, max_candidates=5)
+    # The first text fits the candidate budget; the others fail closed.
+    assert await quoted(sessions, runtime, ["one two", "three four five six", "seven"], tight) == {
+        1,
+        2,
+    }
+
+
+async def test_a_domain_without_vault_values_has_none_to_find(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('lorebase.domain_ids', :d, true)"), {"d": DOMAIN}
+        )
+        assert not await has_vault_values(session, DOMAIN)

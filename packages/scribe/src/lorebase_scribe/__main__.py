@@ -7,6 +7,8 @@ lorebase-scribe sync DOMAIN SOURCE [--dry-run]
 lorebase-scribe embeddings DOMAIN [--branch B]... [--reindex] [--prune]
                                      compute missing embeddings now (backfill) and print
                                      the report
+lorebase-scribe modes clear          forget the structured output modes remembered per chat
+                                     endpoint
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import setup_telemetry
 from lorebase_scribe.service import open_scribe
 from lorebase_scribe.sources import SourceSync
+from lorebase_store.endpoint_modes import clear_modes
 
 SERVICE_NAME = "scribe"
 
@@ -58,7 +61,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="After a complete pass, delete the vectors of every other model.",
     )
+    modes = commands.add_parser("modes", help="Structured output modes of the chat endpoints.")
+    modes.add_argument("action", choices=["clear"], help="Forget every remembered mode.")
     return parser
+
+
+async def _modes_clear(settings: Settings) -> dict[str, object]:
+    async with open_scribe(settings) as scribe:
+        return {"cleared": await clear_modes(scribe.context.sessions)}
 
 
 async def _serve(settings: Settings) -> None:
@@ -130,6 +140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             sys.stdout.write(json.dumps(result, default=str) + "\n")
             return 0 if result["complete"] else 1
+        elif args.command == "modes":
+            sys.stdout.write(json.dumps(asyncio.run(_modes_clear(settings))) + "\n")
         elif args.command == "sync":
             report = asyncio.run(_sync(settings, args.domain, args.source, args.dry_run))
             sys.stdout.write(json.dumps(report, default=str) + "\n")

@@ -552,6 +552,9 @@ inference:
     cooccurrence: {max_pairs_per_sentence: 200}   # relation_provider: cooccurrence (no model)
     spacy: {enabled: false, pipeline: en_core_web_sm}
 
+  mode_memory_key: null          # secret keying the digests of remembered structured output
+                                 # modes, e.g. secret://env/LOREBASE_MODE_KEY (changing it forgets)
+  mode_memory_ttl_s: 604800      # seconds a remembered mode counts (7 days)
   # Deterministic provider for tests and offline runs: set `provider: fake` in llm,
   # embeddings and local_extractors. No network access is needed.
   fake:
@@ -996,6 +999,8 @@ guide:
   host: 127.0.0.1
   port: 8095
   readiness_timeout_s: 3         # /readyz probes Keeper's /healthz
+  data_dir: ~/.local/state/lorebase/guide    # Guide's own state files
+  mode_memory_file: structured_output_modes.json  # remembered structured output modes; null: off
   keeper:
     base_url: http://127.0.0.1:8080
     api_prefix: /api/v1
@@ -1173,6 +1178,10 @@ scribe:
       field_confidence: 0.6      # a field line or table column
       heading_confidence: 0.5    # a Kind named by a heading
       max_value_chars: 120       # sample values are cut to this length
+      vault_match_max_words: 12  # longest quote word sequence compared with vault fingerprints
+      vault_match_max_text_words: 400   # longer quotes are not compared: evidence withheld
+      vault_match_max_text_chars: 4000  # same, by characters
+      vault_match_max_candidates: 200000  # word sequences compared per job; past it, withheld
       max_observations_per_job: 1000
   embeddings:                    # embedding jobs (design 9.3); model: inference.embeddings
     page_rows: 500               # Record rows read and rendered per query

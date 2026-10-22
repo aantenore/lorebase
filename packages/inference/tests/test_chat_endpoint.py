@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -15,7 +16,13 @@ from lorebase_inference import (
     Message,
     create_chat_model,
 )
-from lorebase_inference.chat import EndpointChatModel, parse_json_text, reset_known_modes
+from lorebase_inference.chat import (
+    EndpointChatModel,
+    mode_digest,
+    parse_json_text,
+    reset_known_modes,
+    use_mode_memory,
+)
 from lorebase_inference.settings import LlmSettings, LlmTaskOverride, RetrySettings
 
 SCHEMA = {
@@ -105,6 +112,97 @@ async def test_stepped_down_mode_is_shared_by_later_clients(scripted) -> None:
     await later.complete_json(MESSAGES, SCHEMA)
     assert len(endpoint.requests) == 3
     assert endpoint.bodies()[2]["response_format"] == {"type": "json_object"}
+
+
+class MemoryOfModes:
+    """Durable memory in a dict: what a restarted process would read back."""
+
+    def __init__(self, *, broken: bool = False) -> None:
+        self.rows: dict[bytes, int] = {}
+        self.broken = broken
+        self.recalls = 0
+
+    async def recall(self, digest: bytes, max_age_s: float) -> int | None:
+        self.recalls += 1
+        if self.broken:
+            raise OSError("memory down")
+        return self.rows.get(digest)
+
+    async def remember(self, digest: bytes, index: int, max_age_s: float) -> None:
+        if self.broken:
+            raise OSError("memory down")
+        self.rows[digest] = max(index, self.rows.get(digest, 0))
+
+
+async def test_strict_fallback_survives_a_restart(scripted) -> None:
+    memory = MemoryOfModes()
+    use_mode_memory(memory)
+    first = scripted(
+        scripted.api_error(400, "response_format: strict schema not supported"),
+        scripted.completion(GOOD),
+    )
+    await make_model(first, json_schema_strict=True).complete_json(MESSAGES, SCHEMA)
+    assert len(first.requests) == 2
+    assert len(memory.rows) == 1
+
+    reset_known_modes()  # a new process: nothing in memory but the durable rows
+    second = scripted(scripted.completion(GOOD))
+    await make_model(second, json_schema_strict=True).complete_json(MESSAGES, SCHEMA)
+
+    assert len(second.requests) == 1, "the stronger mode is not retried"
+    assert second.bodies()[0]["response_format"] == {"type": "json_object"}
+
+    other = scripted(scripted.completion(GOOD))
+    await make_model(other).complete_json(MESSAGES, SCHEMA)  # not strict: another key
+    assert other.bodies()[0]["response_format"]["type"] == "json_schema"
+
+
+async def test_concurrent_calls_of_one_client_recall_once(scripted) -> None:
+    memory = MemoryOfModes()
+    use_mode_memory(memory)
+    endpoint = scripted(scripted.completion(GOOD))
+    model = make_model(endpoint)
+
+    await asyncio.gather(*(model.complete_json(MESSAGES, SCHEMA) for _ in range(4)))
+
+    assert memory.recalls == 1
+
+
+def test_mode_digests_are_keyed() -> None:
+    key = ("http://llm.test/v1", "small", "json_schema", True)
+    plain = mode_digest(key)
+    assert plain == mode_digest(key)
+    assert plain != mode_digest(key, b"secret")
+    assert mode_digest(key, b"secret") != mode_digest(key, b"other")
+    assert plain != mode_digest(("http://llm.test/v1", "small", "json_schema", False))
+    assert len(plain) == 32
+
+
+async def test_installed_secret_and_age_reach_the_memory(scripted) -> None:
+    seen: list[tuple[bytes, float]] = []
+
+    class Spy(MemoryOfModes):
+        async def recall(self, digest: bytes, max_age_s: float) -> int | None:
+            seen.append((digest, max_age_s))
+            return None
+
+    use_mode_memory(Spy(), secret="s3cret", max_age_s=42.0)
+    endpoint = scripted(scripted.completion(GOOD))
+    await make_model(endpoint).complete_json(MESSAGES, SCHEMA)
+
+    key = ("http://llm.test/v1", "small", "json_schema", None)
+    assert seen == [(mode_digest(key, b"s3cret"), 42.0)]
+
+
+async def test_unavailable_mode_memory_does_not_fail_calls(scripted) -> None:
+    use_mode_memory(MemoryOfModes(broken=True))
+    endpoint = scripted(
+        scripted.api_error(400, "unsupported response_format"), scripted.completion(GOOD)
+    )
+
+    result = await make_model(endpoint).complete_json(MESSAGES, SCHEMA)
+
+    assert result.data == {"city": "Rome", "founded": 753}
 
 
 async def test_known_mode_is_per_endpoint_model_and_strictness(scripted) -> None:

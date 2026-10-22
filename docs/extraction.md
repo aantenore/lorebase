@@ -205,8 +205,22 @@ safe to repeat.
 
 **Sensitivity.** An observation that matches a sensitive Attribute (`pii`, `confidential`,
 `restricted`, carried through Derivations) is never kept, and an observation whose quote or
-sample holds a stored value of a sensitive Attribute of a Record the job read is kept without
-its evidence and sample. Listings compare suggestions with the current schema again: one that
+sample holds a stored value of a sensitive Attribute of a Record the job read, or a vaulted
+value of any vault Attribute in the Domain, is kept without its evidence and sample. Vaulted
+values are found without decrypting them: word sequences of the quote (up to
+`discovery.vault_match_max_words`, as written and with edge punctuation stripped) are
+fingerprinted like stored values (the matching form: case, compatibility characters and
+white space ignored, plus the form without a possessive `'s`) and compared with the live vault
+rows under every configured token key; a value spelled differently from its canonical form (a
+date in words, a reordered name) is not found. The check fails closed: a quote or sample over
+`vault_match_max_text_words` or `vault_match_max_text_chars`, or past
+`vault_match_max_candidates` word sequences in the job, loses its evidence as if it held a
+value, and so does every quote of a Domain that has vaulted values when Scribe has no vault
+keys. Nothing tells the submitter: a suggestion without evidence looks like one that never had
+any, and the job report, the API and the logs carry no flag, count or reason; operators see only
+the counter `lorebase.extraction.evidence_withheld` (a reader of suggestions can still infer a
+match from the absence of evidence for a quote they chose, see the
+[threat model](threat-model.md)). Listings compare suggestions with the current schema again: one that
 matches a sensitive Attribute the caller may not read (the same clearances as reads, see
 [design 10.2](design.md#102-rbac)) is listed without examples and samples (`withheld`).
 

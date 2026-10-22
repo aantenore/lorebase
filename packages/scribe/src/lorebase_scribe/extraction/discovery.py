@@ -17,7 +17,10 @@ Every tier can see something outside the schema:
 normalization, synonyms, similarity), never keeps an observation that matches a sensitive
 Attribute (`pii`, `confidential`, `restricted`, carried through Derivations), and leaves out the
 evidence and sample of an observation whose quote holds a value of a sensitive Attribute of a
-Record the job read. The rest is aggregated per Domain by the store
+Record the job read, or a vaulted value of any Kind (found by its keyed fingerprint, see
+`evidence_texts`; a text too long to check counts as holding one). Nothing tells a submitter
+that evidence was withheld: the suggestion simply has none. The rest is aggregated per Domain
+by the store
 (`SchemaSuggestionRepository`) into suggestions that a reviewer turns into a schema change
 Proposal; nothing here changes a schema.
 """
@@ -25,7 +28,7 @@ Proposal; nothing here changes a schema.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
@@ -101,6 +104,10 @@ class Discovery:
     options: SuggestionOptions
     observations: list[Observation] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=dict)
+    evidence_withheld: int = 0
+    """Observations kept without evidence because it held a sensitive value. Only an aggregate
+    for operators (a metric): never part of the job report, a suggestion or a log, so a
+    submitter cannot learn which of their quotes held a stored value."""
 
     @property
     def schema(self) -> Schema:
@@ -445,10 +452,25 @@ class Discovery:
             name, fields_known, self.options, instances=len(instances), fields=len(fields)
         )
 
-    def finish(self, records: Mapping[tuple[str, str], Mapping[str, Any]]) -> list[Observation]:
+    def evidence_texts(self) -> list[str]:
+        """Distinct quotes and sample values of the observations, for the check against
+        vaulted values (`finish` takes the ones that hold one as `vaulted`)."""
+        texts: dict[str, None] = {}
+        for observation in self.observations:
+            for text in ((observation.evidence or {}).get("quote"), observation.value):
+                if text:
+                    texts[str(text)] = None
+        return list(texts)
+
+    def finish(
+        self,
+        records: Mapping[tuple[str, str], Mapping[str, Any]],
+        vaulted: Collection[str] = (),
+    ) -> list[Observation]:
         """The observations to aggregate: new to the schema, never about a sensitive
         Attribute, without evidence holding a sensitive value of the Records in `records`
-        (what the job read of the target branch)."""
+        (what the job read of the target branch) or one of the `vaulted` texts (those of
+        `evidence_texts` that hold a vault value)."""
         tags = self.ontology.tags
         secrets = _sensitive_values(records, tags)
         kept: list[Observation] = []
@@ -492,10 +514,14 @@ class Discovery:
             if observation.type is SuggestionType.ATTRIBUTE and observation.kind in lost_owners:
                 self.count("suggestions_orphaned")
                 continue
-            quote = str((observation.evidence or {}).get("quote") or "").casefold()
-            value = (observation.value or "").casefold()
-            if any(s in quote or s in value for s in secrets):
-                self.count("suggestion_evidence_withheld")
+            quote = str((observation.evidence or {}).get("quote") or "")
+            value = observation.value or ""
+            if (
+                quote in vaulted
+                or value in vaulted
+                or any(s in quote.casefold() or s in value.casefold() for s in secrets)
+            ):
+                self.evidence_withheld += 1
                 observation = Observation(
                     type=observation.type,
                     label=observation.label,
