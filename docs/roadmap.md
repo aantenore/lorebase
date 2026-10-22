@@ -7,7 +7,6 @@ Lorebase is pre-alpha. [v0.1.0](https://github.com/aantenore/lorebase/releases/t
 ## Next up
 
 1. The performance baseline on the 1M-Record fixture (M1, T28).
-2. OIDC login with BFF sessions for the web app (M2).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -63,7 +62,7 @@ Goal: days 1 and 2 of the [proof scenario](design.md#32-the-5-day-proof-scenario
 - [x] CSV, Parquet and Postgres Sources, snapshot and incremental sync, plus JSON and JSON Lines file Sources ([scribe](scribe.md#sources)); Parquet Sources need the `lorebase-scribe[parquet]` extra
 - [x] Schema inference from CSV, JSON, JSON Lines and Parquet files and Postgres tables, with a golden test on the example `supply` schema ([inference](inference.md)); any Source can be profiled through its connector, but syncs do not run inference
 - [x] Source branches, merge policies and Lineage for syncs
-- [ ] OIDC login with BFF sessions for the web app (bearer token validation in Keeper is done)
+- [x] OIDC login with BFF sessions for the web app: authorization code with PKCE, server-side sessions in Postgres (migration `0013`), CSRF checks, refresh and RP-initiated logout ([deployment](deployment.md#web-sign-in)); the web app signs in with `VITE_AUTH_MODE=session`
 - [x] Web app shell, Explorer, Canvas (graph and schema graph) and Review screens on the mock API
 - [x] Web app Modeler "Start from data" wizard over schema inference, a Sources screen (list, runs, YAML editor) and Admin basics (API keys, principals and grants, audit log) on the mock API; Source runs and Sync now use Keeper's Source routes in live mode
 - [x] Web app verified against a live Keeper (Playwright flows against Keeper in CI)

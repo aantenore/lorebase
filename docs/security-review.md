@@ -21,6 +21,7 @@ Boundaries examined:
 | Agent to human-reviewed write | Operation review policies, Proposal approvals and self-approval, merge permission on the target branch |
 | External data to model prompt | inference chat client, structured output validation, local span extraction |
 | Keeper to Postgres role | row-level security policies, revision `0005` security definer functions, maintenance jobs, role separation |
+| Browser to Keeper (added with web sign-in, below) | session cookie, sign-in state, CSRF, return paths, token storage, refresh and sign-out |
 
 Tools: `make security` (pip-audit on the lock file, `pnpm audit --audit-level=high`),
 `uvx bandit -r packages -q -ll`, `pnpm audit` in `apps/web`, and a grep of every logging call
@@ -230,6 +231,49 @@ chart has one DSN for the migration and the services (F6); bundle headers of pax
 names are bounded by the archive size only (F14); the `O_NOFOLLOW` walk of CSV and bundle files
 is POSIX only (F14, F18); schema inference sources are bound to Domains but not to schemas or
 tables (F15).
+
+## Web sign-in: a new boundary
+
+Web sign-in (`keeper.auth.sessions`, migration `0013`) adds a credential the browser sends by
+itself: the session cookie. Code: `packages/keeper/src/lorebase_keeper/auth/sessions.py`,
+`auth/provider.py`, `auth/keyring.py`, `routes/sessions.py`; storage in
+`packages/store/src/lorebase_store/auth/sessions.py`. Setup and the full list of checks are in
+[deployment.md](deployment.md#web-sign-in). Threats considered and what answers them:
+
+| Threat | Mitigation |
+|--------|------------|
+| Token theft by script in the page (XSS) | The browser gets no token: the session id is in an `HttpOnly` cookie; provider tokens stay in Keeper |
+| Session id theft from the database or backups | Only its SHA-256 is stored; refresh and ID tokens are AES-256-GCM encrypted under a key derived (HKDF) from `encryption_key`, which is a secret reference, never stored |
+| Cookie injection from a sibling host, or over http | `__Host-` prefix with `Secure`, `Path=/` and no `Domain` (unless `cookie_secure: false`, meant for loopback development) |
+| Cross-site request forgery | `SameSite=Lax`; unsafe methods also need the CSRF header (HMAC of the session id, compared in constant time), a trusted `Origin` when present and no cross-site `Sec-Fetch-Site`; requests with `Authorization` or an API key ignore the cookie and need no token |
+| Login CSRF, code injection, replayed ID token | `state` and `nonce` (256 bits each) and the PKCE verifier live in an encrypted, 10-minute, `HttpOnly` cookie bound to the browser that started; the callback checks the state before redeeming the code, the provider checks the verifier, Keeper checks the ID token's signature, issuer, audience, `azp`, expiry and nonce |
+| Session fixation | A new random id at every sign-in; the session the browser presented is deleted |
+| Open redirect | `return_to` must be a local path (no scheme, authority, backslash or control character, at most 2,048 characters) and is checked again when the state cookie is opened; redirects go to `app_url`'s origin only; provider error codes are mapped to a fixed list |
+| Long-lived or orphaned sessions | Idle and absolute timeouts checked on every request; refresh at the provider when the access token expires, and a refused refresh, a changed subject or an unreadable token blob ends the session; sign-out deletes the row and offers RP-initiated logout; rows go with their principal |
+| Redirect URI manipulation | The configured `redirect_uri` is sent verbatim to the authorization and token endpoints (exact match at the provider); it is never derived from request headers |
+| Provider metadata or endpoints over plain http | Same rule as F17: https unless loopback or `oidc.allow_insecure`; the metadata's issuer must equal `oidc.issuer`; providers that do not list S256 PKCE are refused |
+
+The `web_sessions` table is installation-wide like `api_keys`: it has no `domain_id`, hence no
+row-level security policy, and the application role reaches it through the owner's default
+privileges. A session resolves to the principal a bearer token of the same subject gets, so
+grants, Domain isolation and row-level security apply unchanged; `auth.mode: none` refuses a
+sessions configuration. Sign-in and sign-out routes are not authenticated by the limits
+dependency (a stale cookie must not block them); `POST /auth/logout` checks the CSRF token
+before any lookup, and a bad session cookie elsewhere counts as a failed authentication for
+`auth_failures`.
+
+Tests: `packages/keeper/tests/auth/test_sessions.py` (state, nonce, PKCE, audience, tampered
+and expired state cookie, CSRF cases, Origin and `Sec-Fetch-Site`, idle and absolute expiry,
+rotation, refresh, refused refresh, logout revocation, open redirects, cookie flags, settings),
+`packages/store/tests/auth/test_sessions_integration.py` and
+`packages/keeper/tests/integration/test_sessions_postgres.py` (as a role without
+`BYPASSRLS`), and the web app's `src/api/session.test.ts` and `src/api/fetcher.test.ts`.
+
+Remaining limits: the CSRF token is readable by any origin that `keeper.cors` allows with
+credentials, so list only the app's origins there; sessions survive a provider outage until the
+outage ends or a timeout applies; one sign-in at a time per browser (a second tab's sign-in
+replaces the first one's state cookie); the per-session refresh is serialized by a lease, not a
+lock, so a refresh that fails mid-way waits `refresh_lease_s` before the next attempt.
 
 ## Other observations
 

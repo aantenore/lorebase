@@ -174,12 +174,16 @@ the branch's 8,075 rows, and 271 in the overlay half. Warm calls of `lb_search` 
   `jobs`) are visible only with the bypass.
 - Superusers and roles with `BYPASSRLS` ignore policies; the application role must be neither.
 - Tables without `domain_id` (`domains`, `principals`, `groups`, `group_members`, `api_keys`,
-  `api_key_usage`, `extraction_cache`) are installation-wide and have no policy. `api_key_usage`
-  (revision `0006`) holds one row per API key and UTC day with the requests served and the
-  context-pack tokens delivered, the counters of the daily quotas (`docs/operations.md`); rows go
-  with their key.
+  `api_key_usage`, `web_sessions`, `extraction_cache`) are installation-wide and have no
+  policy. `api_key_usage` (revision `0006`) holds one row per API key and UTC day with the
+  requests served and the context-pack tokens delivered, the counters of the daily quotas
+  (`docs/operations.md`); rows go with their key.
 - `api_keys.allowed_networks` (revision `0009`, `cidr[]`) lists the client networks a key may be
   used from; null, the value of keys created before it, allows any address.
+- `web_sessions` (revision `0013`) holds the browser sessions of web sign-in: the SHA-256 of the
+  session id (primary key, never the id), the principal (rows go with it), the provider subject
+  and groups, the provider tokens encrypted by Keeper, and the activity, expiry and refresh
+  times, indexed for the purge of expired rows ([deployment](deployment.md#web-sign-in)).
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
 
