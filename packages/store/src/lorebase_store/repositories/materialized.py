@@ -47,6 +47,10 @@ MAT_LINKS: Table = metadata.tables["mat_links"]
 MAT_HISTORY: Table = metadata.tables["mat_history"]
 REVISIONS: Table = metadata.tables["revisions"]
 
+DERIVED_LINK_PREFIX = "drv_"
+"""`relation_id` prefix of the rows of materialized path Derivations in `mat_links` (the
+Derivation id): they are not tree objects, so tree comparisons leave them out."""
+
 SEARCH_WEIGHTS = ("A", "B", "C", "D")
 """Valid full-text weights (Postgres `setweight`)."""
 
@@ -655,12 +659,14 @@ class MaterializedRepository:
             yield rows
             last = (rows[-1].from_key, rows[-1].to_key)
 
-    async def link_counts(self) -> dict[str, int]:
-        """Number of Links per Relation id."""
+    async def link_counts(self, *, derived: bool = False) -> dict[str, int]:
+        """Number of Links per Relation id: stored Links of the Relations of the tree, or with
+        `derived` the Links of materialized path Derivations (keyed by Derivation id)."""
         links = await self._links()
+        is_derived = links.c.relation_id.startswith(DERIVED_LINK_PREFIX, autoescape=True)
         result = await self._session.execute(
             select(links.c.relation_id, func.count())
-            .where(self._scope(links))
+            .where(self._scope(links), is_derived if derived else ~is_derived)
             .group_by(links.c.relation_id)
         )
         return {relation_id: int(count) for relation_id, count in result}

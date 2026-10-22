@@ -2,7 +2,8 @@
 
 Runs inside the commit transaction (invariant I4). Rows are written in bulk: one statement
 batch per partition and operation, then the derived values the changeset can affect
-(`materialize.derived`; every derived value when the schema changed), then one set-based
+(`materialize.derived`; every derived value when the schema changed) and the Links of
+materialized path Derivations (`materialize.paths`), then one set-based
 search vector update per Kind.
 """
 
@@ -22,6 +23,7 @@ from lorebase_core.model import Schema
 from lorebase_core.revision import ChangesetEntry
 from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
 from lorebase_store.materialize.overlay import check_overlay, promote
+from lorebase_store.materialize.paths import PathLinks
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
@@ -134,8 +136,17 @@ async def apply_changeset(
             batch=settings.materialize.read_batch_rows,
             max_incremental=settings.materialize.derivation_max_incremental_records,
         )
+    paths = None
+    if settings.materialize.derivations_enabled:
+        paths = PathLinks(
+            repository,
+            schema,
+            fanout=settings.traverse.path_fanout,
+            batch=settings.materialize.read_batch_rows,
+            max_incremental=settings.materialize.derivation_max_incremental_records,
+        )
     applied = AppliedChanges()
-    keep_previous = derived is not None and bool(derived.steps)
+    keep_previous = (derived is not None and bool(derived.steps)) or bool(paths and paths.paths)
     written_kinds: list[str] = []
     for partition, group in sorted(by_partition.items()):
         parsed = parse_partition(partition)
@@ -161,6 +172,12 @@ async def apply_changeset(
             changed = await derived.recompute_all()
         elif derived.steps:
             changed = await derived.recompute(applied)
+    if paths is not None:
+        if schema_hash is not None:
+            await paths.prune()
+            await paths.recompute_all()
+        elif paths.paths:
+            await paths.recompute(applied)
     search_config = settings.materialize.text_search_config
     for kind_id in written_kinds:
         if kind_id not in refresh_kinds:

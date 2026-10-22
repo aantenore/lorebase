@@ -28,6 +28,7 @@ from lorebase_core.model.ids import (
 )
 from lorebase_core.model.kind import Kind
 from lorebase_core.model.operation import Operation
+from lorebase_core.model.paths import PathRelation, path_relations
 from lorebase_core.model.record import parse_ref
 from lorebase_core.model.relation import LinkDirection, Relation
 from lorebase_core.model.source import Source
@@ -41,6 +42,8 @@ _INDEXES = (
     "_operations_by_name",
     "_derivations_by_name",
     "_sources_by_name",
+    "_paths",
+    "_paths_by_name",
 )
 
 
@@ -117,6 +120,20 @@ class Schema(Model):
     def _sources_by_name(self) -> dict[str, Source]:
         return {source.api_name: source for source in self.sources.values()}
 
+    @cached_property
+    def _paths(self) -> dict[str, PathRelation]:
+        return path_relations(self.derivations.values(), self.relations)
+
+    @cached_property
+    def _paths_by_name(self) -> dict[str, tuple[PathRelation, LinkDirection]]:
+        index: dict[str, tuple[PathRelation, LinkDirection]] = {}
+        for path in self._paths.values():
+            inverse = path.relation.inverse_api_name
+            if inverse:
+                index[inverse] = (path, LinkDirection.INVERSE)
+            index[path.relation.api_name] = (path, LinkDirection.FORWARD)
+        return index
+
     def kind_by_api_name(self, api_name: str) -> Kind | None:
         return self._kinds_by_name.get(api_name)
 
@@ -126,6 +143,14 @@ class Schema(Model):
     def relation_by_api_name(self, api_name: str) -> tuple[Relation, LinkDirection] | None:
         """Resolve a forward or inverse Relation name to the Relation and the direction."""
         return self._relations_by_name.get(api_name)
+
+    def path_by_api_name(self, api_name: str) -> tuple[PathRelation, LinkDirection] | None:
+        """Resolve the forward or inverse name of a path Derivation (a virtual Relation)."""
+        return self._paths_by_name.get(api_name)
+
+    def path_relations(self) -> dict[str, PathRelation]:
+        """The valid path Derivations as virtual Relations, by Derivation id."""
+        return self._paths
 
     def operation_by_api_name(self, api_name: str) -> Operation | None:
         return self._operations_by_name.get(api_name)

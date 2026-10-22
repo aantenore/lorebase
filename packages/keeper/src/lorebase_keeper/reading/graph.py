@@ -76,7 +76,7 @@ async def traverse(
         hop = resolve_hop(point.schema, current, step.relation)
         if isinstance(hop, str):
             raise invalid(f"{pointer}/relation", hop, "unknown_relation")
-        point.scope.require(k.api_name for k in hop.far.kinds)
+        point.scope.require(hop.kinds_read)
         limit = step.limit or caps.max_nodes_per_hop
         if limit > caps.max_nodes_per_hop:
             raise invalid(

@@ -5,7 +5,8 @@ the schema partition hash, the set of `(key, object_hash)` of every Kind and Rel
 partition, and the per-partition counts. With `deep=True`, Record and Link values and Record
 titles are also recomputed from the stored objects. With `derived=True`, derived values are
 recomputed from the materialized Records and Links (`materialize.derived`, nothing written) and
-compared with the stored ones.
+compared with the stored ones, and so are the Links of materialized path Derivations
+(`materialize.paths`), which the tree comparison leaves out.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, link_key, relation_partition
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.derived import DerivedValues
+from lorebase_store.materialize.paths import PathLinks
 from lorebase_store.materialize.rebuild import load_schema
 from lorebase_store.materialize.rows import (
     PartitionType,
@@ -158,6 +160,7 @@ async def verify(
             await _compare_values(report, partition, expected, actual, objects, tagged, schema)
     if derived:
         await _compare_derived(report, repository, schema, runtime, head.created_at)
+        await _compare_paths(report, repository, schema, runtime)
     return report
 
 
@@ -194,6 +197,47 @@ async def _compare_derived(
                             actual=row.derived,
                         )
                     )
+
+
+async def _compare_paths(
+    report: VerifyReport, repository: MaterializedRepository, schema: Schema, runtime: StoreRuntime
+) -> None:
+    """Recompute the Links of every materialized path Derivation without writing and compare
+    them with the stored ones (and report Links of paths no longer materialized)."""
+    settings = runtime.settings
+    paths = PathLinks(
+        repository,
+        schema,
+        fanout=settings.traverse.path_fanout,
+        batch=settings.materialize.read_batch_rows,
+        max_incremental=settings.materialize.derivation_max_incremental_records,
+        write=False,
+    )
+    known = {path.id for path in paths.paths}
+    for path_id, count in sorted((await repository.link_counts(derived=True)).items()):
+        if path_id not in known:
+            report.add(
+                Divergence(
+                    DivergenceReason.DERIVED_MISMATCH,
+                    relation_partition(path_id),
+                    expected=0,
+                    actual=count,
+                )
+            )
+    for path in paths.paths:
+        await paths.compute_all(path)
+        want = paths.expected.get(path.id, set())
+        got = await paths.stored(path)
+        for from_key, to_key in sorted(want ^ got):
+            report.add(
+                Divergence(
+                    DivergenceReason.DERIVED_MISMATCH,
+                    relation_partition(path.id),
+                    link_key(from_key, to_key),
+                    expected=(from_key, to_key) in want,
+                    actual=(from_key, to_key) in got,
+                )
+            )
 
 
 async def _materialized(

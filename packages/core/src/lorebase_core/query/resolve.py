@@ -29,7 +29,15 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
-from lorebase_core.model import Attribute, Kind, LinkDirection, Relation, Schema, Trait
+from lorebase_core.model import (
+    Attribute,
+    Kind,
+    LinkDirection,
+    PathRelation,
+    Relation,
+    Schema,
+    Trait,
+)
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.query.dsl import (
     AllOf,
@@ -206,17 +214,30 @@ class Target:
 
 @dataclass(frozen=True, slots=True)
 class Hop:
-    """One step along a Relation from `near_kind` to `far`."""
+    """One step along a Relation from `near_kind` to `far`.
+
+    Along a path Derivation, `relation` is its virtual Relation and `path` the resolved path
+    (`lorebase_core.model.paths`): readers compose its steps, or read its stored Links when it
+    is materialized.
+    """
 
     name: str
     relation: Relation
     direction: LinkDirection
     near_kind: str
     far: Target
+    path: PathRelation | None = None
+    inner: tuple[Kind, ...] = ()
 
     @property
     def foreign_key(self) -> bool:
         return self.relation.backing is RelationBacking.FOREIGN_KEY
+
+    @property
+    def kinds_read(self) -> frozenset[str]:
+        """Api names of the Kinds the hop reads: the far Kinds and, along a path, the Kinds
+        of its intermediate Records (a path tells which Records connect through them)."""
+        return frozenset(kind.api_name for kind in (*self.far.kinds, *self.inner))
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +321,7 @@ def condition_kinds(condition: Condition | None) -> frozenset[str]:
     """Api names of the Kinds a condition reaches through Relation predicates."""
     match condition:
         case LinkExists(hop=hop, where=where) | LinkCount(hop=hop, where=where):
-            return frozenset(k.api_name for k in hop.far.kinds) | condition_kinds(where)
+            return hop.kinds_read | condition_kinds(where)
         case Conjunction(items=items) | Disjunction(items=items):
             return frozenset().union(*(condition_kinds(item) for item in items))
         case Negation(item=item):
@@ -312,7 +333,7 @@ def plan_kinds(plan: QueryPlan) -> frozenset[str]:
     """Api names of every Kind a query reads: its target, Relation predicates and includes."""
     kinds = {k.api_name for k in plan.target.kinds} | condition_kinds(plan.where)
     for include in plan.include:
-        kinds |= {k.api_name for k in include.hop.far.kinds} | condition_kinds(include.where)
+        kinds |= include.hop.kinds_read | condition_kinds(include.where)
     return frozenset(kinds)
 
 
@@ -378,10 +399,16 @@ def _trait_field(target: Target, name: str) -> FieldRef | None:
 
 
 def resolve_hop(schema: Schema, target: Target, name: str) -> Hop | str:
-    """Resolve a forward or inverse Relation name from the target; a message when invalid."""
+    """Resolve a forward or inverse Relation name (or path Derivation name) from the target;
+    a message when invalid."""
     found = schema.relation_by_api_name(name)
+    path: PathRelation | None = None
     if found is None:
-        return f"unknown Relation {name!r}"
+        along = schema.path_by_api_name(name)
+        if along is None:
+            return f"unknown Relation {name!r}"
+        path, direction = along
+        found = (path.relation, direction)
     relation, direction = found
     near = relation.endpoint(direction)
     if near not in target.kind_ids:
@@ -389,7 +416,13 @@ def resolve_hop(schema: Schema, target: Target, name: str) -> Hop | str:
     far_kind = schema.kinds.get(relation.far_endpoint(direction))
     if far_kind is None:
         return f"Relation {name!r} points to an unknown Kind"
-    return Hop(name, relation, direction, near, Target(far_kind.api_name, (far_kind,)))
+    inner: tuple[Kind, ...] = ()
+    if path is not None:
+        found_inner = [schema.kinds.get(kind_id) for kind_id in path.inner_kinds]
+        if any(kind is None for kind in found_inner):
+            return f"Relation {name!r} crosses an unknown Kind"
+        inner = tuple(kind for kind in found_inner if kind is not None)
+    return Hop(name, relation, direction, near, Target(far_kind.api_name, (far_kind,)), path, inner)
 
 
 @dataclass

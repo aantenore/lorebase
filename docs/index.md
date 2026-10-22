@@ -82,7 +82,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Area | Feature | Status | Milestone |
 |------|---------|--------|-----------|
 | Modeling | Typed ontology as YAML: Kinds, Attributes, Relations with cardinality, Traits, Operations, Derivations, Sources, with static validation | Done | M1 |
-| Modeling | Expressions (CEL) in Operations and Derivations: type checked when a schema is applied, Operations executed with preconditions, steps and review policies, `expression` and `aggregate` Derivations recomputed in the materialized head | Done (path Derivations are not computed) | M3, M4 |
+| Modeling | Expressions (CEL) in Operations and Derivations: type checked when a schema is applied, Operations executed with preconditions, steps and review policies, `expression` and `aggregate` Derivations recomputed in the materialized head, `path` Derivations as virtual Relations (composed at read time or materialized) | Done | M3, M4 |
 | Versioning | Content-addressed Revisions, branches, tags, diff, time travel reads | Done | M1 |
 | Versioning | Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies (`prefer`, cascade, defaults) | Done | M1 |
 | Versioning | Proposals, reviews, required approvals, merge and Conflict resolution over REST | Done | M1 |
