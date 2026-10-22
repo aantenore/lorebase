@@ -926,7 +926,11 @@ export interface paths {
         delete: operations["delete_webhook_api_v1_domains__domain_id__webhooks__webhook_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change the clearances of a webhook
+         * @description Replace the sensitivity clearances of a webhook; only added ones need their permission.
+         */
+        patch: operations["update_webhook_api_v1_domains__domain_id__webhooks__webhook_id__patch"];
         trace?: never;
     };
     "/api/v1/domains/{domain_id}/sources:preview": {
@@ -5886,6 +5890,14 @@ export interface components {
             /** Reasons */
             reasons: string[];
         };
+        /** UpdateWebhook */
+        UpdateWebhook: {
+            /**
+             * Clearances
+             * @description The new clearances, replacing the current ones. Each one added needs the matching clearance permission on the Domain; removing needs only domain.settings.
+             */
+            clearances: ("pii" | "confidential" | "restricted")[];
+        };
         /**
          * ValidationProblem
          * @description Problem details of a rejected request body, query or path.
@@ -9477,6 +9489,69 @@ export interface operations {
                 content?: never;
             };
             /** @description The caller lacks domain.settings. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or webhook not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_webhook_api_v1_domains__domain_id__webhooks__webhook_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                webhook_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWebhook"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookOut"];
+                };
+            };
+            /** @description The caller lacks domain.settings, or a clearance it gives the webhook. */
             403: {
                 headers: {
                     [name: string]: unknown;
