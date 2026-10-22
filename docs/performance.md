@@ -441,7 +441,7 @@ statements are otherwise the same.
 
 ## Record lineage in one statement (100k Records)
 
-Lineage at a branch head is one statement since migration `0030`: the materialized Record keeps
+Lineage at a branch head is one statement since migration `0032`: the materialized Record keeps
 the Revision behind each value (`mat_records.lineage_revisions`), and the Record, those
 Revisions, the provenance entries, the Proposals, the creating change and the count of changes
 come back in one row. Before, Keeper read the Record, then the newest
@@ -468,7 +468,7 @@ same database. Times include resolving the branch head (Domain, ref, head Revisi
   from about 3x to about 2.2x. The full harness in the same conditions gave the same order
   (lineage now below the history page, which was above it before).
 - Its cost no longer depends on the number of changes of the Record: the history range is read
-  only to count the changes (an index-only scan) and, for rows written before migration `0030`
+  only to count the changes (an index-only scan) and, for rows written before migration `0032`
   (null `lineage_revisions`), to find the Revisions they lack.
 - Lineage at another Revision (`at`) runs the same statement on a snapshot of the Revision
   (`reading.snapshots`); it was not measured here.

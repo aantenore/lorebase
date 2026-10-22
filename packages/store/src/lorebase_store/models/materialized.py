@@ -48,7 +48,7 @@ class MatRecord(Base):
     `revision_generation` is the generation of the Revision that last wrote the row and
     `deleted` marks a tombstone, which only overlay branches hold (store schema notes).
     `lineage_revisions` maps each Attribute of `lineage` to the Revision (hex) of that change,
-    and `$created` to the Revision that last created the Record (revision 0030); it is null
+    and `$created` to the Revision that last created the Record (revision 0032); it is null
     on rows written before that revision, whose readers fall back to the branch history.
     """
 

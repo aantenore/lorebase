@@ -340,7 +340,7 @@ Lineage answers "where did this value come from". It is attached to changes, not
 
 - A **provenance entry** describes one origin: `{id, origin_type, origin_ref, actor, at}`. Origin types: `operation` (invocation id, Operation id, principal), `source_sync` (Source id, run id, source row locator), `extraction` (job id, document id, span offsets, model id, prompt version), `merge_resolution` (Proposal id, Conflict id, resolver), `schema_migration` (cast applied by a schema change), `import` (CLI bulk import batch).
 - Each change in a Revision changeset carries a map `attribute_id -> provenance_id` for the Attributes it changed.
-- The materialized head keeps, per Record, the latest provenance per Attribute and the Revision of that change (`lineage_revisions`, revision `0030`, folded in the commit transaction like the provenance). Full per-value history is available from the branch history table.
+- The materialized head keeps, per Record, the latest provenance per Attribute and the Revision of that change (`lineage_revisions`, revision `0032`, folded in the commit transaction like the provenance). Full per-value history is available from the branch history table.
 - Provenance is **not** part of content hashes. Two Sources writing the same value produce no diff; Lineage records which change set it last. **[Architect call AC-08]**
 
 ### 5.12 Invariants
@@ -849,7 +849,7 @@ create table mat_records (
   lineage jsonb not null,              -- {attribute_id: provenance_id}
   updated_revision bytea not null,
   updated_at timestamptz not null,
-  lineage_revisions jsonb,             -- {attribute_id | '$created': revision hex} (0030)
+  lineage_revisions jsonb,             -- {attribute_id | '$created': revision hex} (0032)
   primary key (domain_id, branch, kind_id, key)
 ) partition by hash (domain_id);
 create index on mat_records using gin (search);
