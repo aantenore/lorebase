@@ -160,6 +160,17 @@ def schema_view(document: m.SchemaDocument, *, kinds: Sequence[str] | None, deta
         "relations": relation_views,
         "operations": operation_views,
         "generic_operations": list(GENERIC_OPERATIONS),
+        "search": {
+            "modes": list(document.search.modes),
+            "embedding": (
+                None
+                if document.search.embedding is None
+                else {
+                    "model": document.search.embedding.model,
+                    "dims": document.search.embedding.dims,
+                }
+            ),
+        },
     }
 
 
@@ -221,6 +232,13 @@ def schema_text(view: Mapping[str, Any], *, detail: str, output: OutputSettings)
         "built-in: per Kind ops above, link_/unlink_<relation> for explicit Relations, "
         + ", ".join(view["generic_operations"])
     )
+    search = view["search"]
+    lines.append(f"SEARCH modes {', '.join(search['modes'])}")
+    if search["embedding"]:
+        lines.append(
+            f"  semantic and hybrid need a query_vector of {search['embedding']['dims']} "
+            f"dimensions made by the embedding model {search['embedding']['model']}"
+        )
     return "\n".join(lines)
 
 

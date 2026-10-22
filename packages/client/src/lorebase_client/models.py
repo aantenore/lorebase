@@ -229,6 +229,20 @@ class SchemaValidateRequest(_ChangeSet):
     at: str | None = None
 
 
+class EmbeddingModel(Model):
+    """The model a `query_vector` must be made with."""
+
+    model: str
+    dims: int
+
+
+class SchemaSearch(Model):
+    """How the Domain can be searched; `embedding` is set when semantic search is available."""
+
+    modes: list[Literal["lexical", "semantic", "hybrid"]] = ["lexical"]
+    embedding: EmbeddingModel | None = None
+
+
 class SchemaDocument(Model):
     """The schema of a Revision: elements keyed by id, with api names."""
 
@@ -236,6 +250,7 @@ class SchemaDocument(Model):
     branch: str | None = None
     revision: str
     schema_: dict[str, Any] = Field(alias="schema")
+    search: SchemaSearch = Field(default_factory=SchemaSearch)
 
 
 class ElementChange(Model):

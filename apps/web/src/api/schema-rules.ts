@@ -4,6 +4,7 @@
  * path in the layout of the YAML document: `kinds/Supplier/attributes/tier/type`.
  */
 import type { Attribute, Derivation, JsonValue, Schema, Sensitivity, Source } from './types';
+import { templateProblems } from './embedding-template';
 import { parseAttributeType, validateValue } from './values';
 
 export type SchemaBody = Pick<
@@ -188,6 +189,13 @@ function checkKinds(out: Collector, schema: SchemaBody, kindNames: ReadonlySet<s
         `${path}/title_attribute`,
         'unknown_attribute',
         'The title Attribute must be one of the Kind Attributes.',
+      );
+    }
+    for (const problem of templateProblems(kind)) {
+      out.add(
+        `${path}/search/embedding_template`,
+        'embedding_template_invalid',
+        `Embedding template of Kind ${kind.api_name}: ${problem}.`,
       );
     }
     kind.traits.forEach((implementation, index) => {

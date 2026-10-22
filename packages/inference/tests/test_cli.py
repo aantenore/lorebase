@@ -145,6 +145,29 @@ async def test_embed_query_returns_the_vector_of_the_configured_model() -> None:
     }
 
 
+async def test_embed_query_applies_the_query_prefix_only_for_queries() -> None:
+    settings = fake_settings(query_prefix="query: ", document_prefix="passage: ")
+    plain = await cli_module.embed_query(settings, "late deliveries")
+    query = await cli_module.embed_query(settings, "late deliveries", query=True)
+    assert plain["vector"] == embed_text("late deliveries", 8)
+    assert query["vector"] == embed_text("query: late deliveries", 8)
+
+
+def test_main_embed_query_flag_prefixes_the_text(monkeypatch, capsys) -> None:
+    code, out = run_main(
+        monkeypatch,
+        capsys,
+        "embed",
+        "--query",
+        "late deliveries",
+        LOREBASE__INFERENCE__EMBEDDINGS__PROVIDER="fake",
+        LOREBASE__INFERENCE__EMBEDDINGS__DIMS="4",
+        LOREBASE__INFERENCE__EMBEDDINGS__QUERY_PREFIX="query: ",
+    )
+    assert code == 0
+    assert json.loads(out)["vector"] == embed_text("query: late deliveries", 4)
+
+
 def test_main_embed_prints_json(monkeypatch, capsys) -> None:
     code, out = run_main(
         monkeypatch,

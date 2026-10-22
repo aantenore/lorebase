@@ -34,6 +34,7 @@ from lorebase_keeper.auth.runtime import AuthRuntime
 from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
+from lorebase_keeper.reading.runtime import ReadRuntime, ReadRuntimeDep
 from lorebase_keeper.services import schema as service
 from lorebase_keeper.services.errors import (
     ProtectedBranchError,
@@ -140,6 +141,23 @@ class ElementChangeOut(BaseModel):
     api_name: str
 
 
+class EmbeddingOut(BaseModel):
+    """The embedding model of a Domain: what a caller embeds `query_vector` with."""
+
+    model: str = Field(description="Name the stored vectors are keyed by.")
+    dims: int = Field(description="Length of a query vector.")
+
+
+class SchemaSearchOut(BaseModel):
+    """How the Domain can be searched at this Revision."""
+
+    modes: list[Literal["lexical", "semantic", "hybrid"]]
+    embedding: EmbeddingOut | None = Field(
+        description="Set when some Kind has `search.embedding_template`: semantic and hybrid "
+        "search need a `query_vector` made by this model; null otherwise."
+    )
+
+
 class SchemaOut(BaseModel):
     """The schema of a Revision."""
 
@@ -147,6 +165,7 @@ class SchemaOut(BaseModel):
     branch: str | None
     revision: str
     schema_: dict[str, Any] = Field(alias="schema")
+    search: SchemaSearchOut
 
 
 class SchemaChangeOut(BaseModel):
@@ -251,6 +270,7 @@ async def get_schema(
     auth: AuthDep,
     store: StoreDep,
     keeper: KeeperSettingsDep,
+    runtime: ReadRuntimeDep,
     branch: Annotated[str | None, Query(description="Default: the default branch.")] = None,
     at: Annotated[str | None, Query(description="Revision id, tag or branch name.")] = None,
     format_: Annotated[Literal["json", "yaml"] | None, Query(alias="format")] = None,
@@ -267,10 +287,22 @@ async def get_schema(
         branch=target.ref,
         revision=revision,
         schema=schema.content(),
+        search=_search(schema, runtime),
     )
     return Response(
         body.model_dump_json(by_alias=True), media_type="application/json", headers=headers
     )
+
+
+def _search(schema: Schema, runtime: ReadRuntime) -> SchemaSearchOut:
+    """Search modes of the schema; the embedding model comes from the settings (vectors are
+    keyed by its name), never from the inference package."""
+    if not any(kind.search.embedding_template for kind in schema.kinds.values()):
+        return SchemaSearchOut(modes=["lexical"], embedding=None)
+    embedding = EmbeddingOut(
+        model=runtime.search.semantic.model, dims=runtime.store_settings.embeddings.dims
+    )
+    return SchemaSearchOut(modes=["lexical", "semantic", "hybrid"], embedding=embedding)
 
 
 def _element(schema: Schema, section: Section, name: str) -> dict[str, Any] | None:

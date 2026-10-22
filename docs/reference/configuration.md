@@ -528,6 +528,8 @@ Example:
 | `inference.embeddings.model` | `BAAI/bge-small-en-v1.5` |  |
 | `inference.embeddings.dims` | `384` | must match the model; the vector index uses it |
 | `inference.embeddings.batch_size` | `32` | texts per model call or request |
+| `inference.embeddings.query_prefix` | `""` | put before a search query (`lorebase-inference embed --query`); E5: "query: " |
+| `inference.embeddings.document_prefix` | `""` | put before every Record text Scribe embeds; E5: "passage: " |
 | `inference.embeddings.cache_dir` | `null` | fastembed: where model files are stored (library default) |
 | `inference.embeddings.threads` | `null` | fastembed: CPU threads (library default) |
 | `inference.embeddings.base_url` | `null` | required for openai_compatible, e.g. http://localhost:11434/v1 |

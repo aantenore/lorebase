@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import time
 from collections.abc import Awaitable, Callable, Collection, Sequence
@@ -98,6 +99,14 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _fingerprint(fingerprint: str, prefix: str) -> str:
+    """A template fingerprint that also changes with the document prefix; unchanged without
+    one, so installations that set no prefix keep their vectors."""
+    if not prefix:
+        return fingerprint
+    return hashlib.sha256(f"{fingerprint}\x00{prefix}".encode()).hexdigest()
+
+
 class EmbeddingModels:
     """The process's embedding model: created on first use, checked once, then shared."""
 
@@ -119,6 +128,11 @@ class EmbeddingModels:
     def label(self) -> str:
         """The model's name once created, else the configured model (for reports)."""
         return self._inference.embeddings.model if self._model is None else self._model.name
+
+    @property
+    def document_prefix(self) -> str:
+        """Text put before every embedded document (`inference.embeddings.document_prefix`)."""
+        return self._inference.embeddings.document_prefix
 
     def instance(self) -> EmbeddingModel:
         """The model, created (not yet called) on first use; its `name` keys the vectors."""
@@ -341,15 +355,17 @@ class EmbeddingPass:
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
             cursor = await read_cursor(session, domain_id, head.name, model_name)
+        prefix = self._models.document_prefix
+        fingerprints = {kind: _fingerprint(t.fingerprint, prefix) for kind, t in templates.items()}
         if (
             not reindex
             and cursor is not None
             and cursor.head == head.head
             and cursor.fingerprints.get(VERSION_KEY) == str(RENDERING_VERSION)
+            and all(cursor.fingerprints.get(kind) == f for kind, f in fingerprints.items())
         ):
             report.skipped = report.complete = True
             return None
-        fingerprints = {kind: t.fingerprint for kind, t in templates.items()}
         if reindex:
             rerender: set[str] = set(templates)
         else:
@@ -411,6 +427,7 @@ class EmbeddingPass:
             if not rendered:
                 counts["empty"] += 1
                 continue
+            rendered = self._models.document_prefix + rendered
             digest = text_hash(rendered)
             if row.embedded and row.text_hash == digest:
                 counts["unchanged"] += 1

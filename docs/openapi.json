@@ -12163,6 +12163,27 @@
         "title": "ElementRemoval",
         "description": "An element to remove."
       },
+      "EmbeddingOut": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "Name the stored vectors are keyed by."
+          },
+          "dims": {
+            "type": "integer",
+            "title": "Dims",
+            "description": "Length of a query vector."
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "dims"
+        ],
+        "title": "EmbeddingOut",
+        "description": "The embedding model of a Domain: what a caller embeds `query_vector` with."
+      },
       "ExecuteRequest": {
         "properties": {
           "parameters": {
@@ -16960,6 +16981,9 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Schema"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SchemaSearchOut"
           }
         },
         "type": "object",
@@ -16967,7 +16991,8 @@
           "domain",
           "branch",
           "revision",
-          "schema"
+          "schema",
+          "search"
         ],
         "title": "SchemaOut",
         "description": "The schema of a Revision."
@@ -17029,6 +17054,40 @@
           "cardinality"
         ],
         "title": "SchemaRelationOut"
+      },
+      "SchemaSearchOut": {
+        "properties": {
+          "modes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "lexical",
+                "semantic",
+                "hybrid"
+              ]
+            },
+            "type": "array",
+            "title": "Modes"
+          },
+          "embedding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddingOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when some Kind has `search.embedding_template`: semantic and hybrid search need a `query_vector` made by this model; null otherwise."
+          }
+        },
+        "type": "object",
+        "required": [
+          "modes",
+          "embedding"
+        ],
+        "title": "SchemaSearchOut",
+        "description": "How the Domain can be searched at this Revision."
       },
       "SchemaValidateRequest": {
         "properties": {

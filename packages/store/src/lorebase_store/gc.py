@@ -75,6 +75,7 @@ PHASE_MARKED = "marked"
 PHASE_REVISIONS_SWEPT = "revisions-swept"
 PHASE_NODES_SWEPT = "nodes-swept"
 PHASE_OBJECTS_SWEPT = "objects-swept"
+PHASE_VECTORS_SWEPT = "vectors-swept"
 
 
 class GcError(Exception):
@@ -110,6 +111,7 @@ _MARK_TABLES = (
     "lb_gc_objects",
     "lb_gc_dead",
     "lb_gc_prov",
+    "lb_gc_vectors",
 )
 
 _CREATE_MARK_TABLES = (
@@ -120,6 +122,7 @@ _CREATE_MARK_TABLES = (
     "CREATE TEMP TABLE IF NOT EXISTS lb_gc_dead (id bytea PRIMARY KEY, generation bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS lb_gc_dead_order ON lb_gc_dead (generation DESC, id DESC)",
     "CREATE TEMP TABLE IF NOT EXISTS lb_gc_prov (id text PRIMARY KEY)",
+    "CREATE TEMP TABLE IF NOT EXISTS lb_gc_vectors (hash bytea PRIMARY KEY)",
 )
 
 _ROOTS_REFS = text(
@@ -312,6 +315,7 @@ class GcReport:
     node_bytes: int = 0
     objects: int = 0
     object_bytes: int = 0
+    embeddings: int = 0
     mark_seconds: float = 0.0
     sweep_seconds: float = 0.0
 
@@ -433,6 +437,31 @@ def _delete_unmarked(content: _Content) -> Any:
     ).bindparams(_bytea_array("hs"))
 
 
+_VECTORS_LIVE = text(
+    "INSERT INTO lb_gc_vectors (hash) SELECT DISTINCT object_hash FROM mat_records "
+    "WHERE domain_id = :d ON CONFLICT DO NOTHING"
+)
+"""Object hashes of the Records at the heads of the materialized branches: the vectors a search
+can reach. An overlay's inherited rows belong to its base branch, which is listed too."""
+_VECTORS_PAGE = text(
+    "SELECT DISTINCT e.object_hash FROM embeddings e WHERE e.domain_id = :d "
+    "AND e.object_hash > :last "
+    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v WHERE v.hash = e.object_hash) "
+    "ORDER BY e.object_hash LIMIT :n"
+)
+_VECTORS_TOTAL = text(
+    "SELECT count(*) FROM embeddings e WHERE e.domain_id = :d "
+    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v WHERE v.hash = e.object_hash)"
+)
+_VECTORS_DELETE = text(
+    "DELETE FROM embeddings e WHERE e.domain_id = :d "
+    "AND e.object_hash = ANY(CAST(:hs AS bytea[])) "
+    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v WHERE v.hash = e.object_hash) "
+    "AND NOT EXISTS (SELECT 1 FROM mat_records m WHERE m.domain_id = :d "
+    "AND m.object_hash = e.object_hash)"
+).bindparams(_bytea_array("hs"))
+
+
 class _Steps:
     """Transactions of a collection on one connection; nested use joins the open one."""
 
@@ -511,6 +540,8 @@ class _Collector:
         await self._phase(PHASE_NODES_SWEPT)
         await self._sweep_content(_OBJECTS)
         await self._phase(PHASE_OBJECTS_SWEPT)
+        await self._sweep_vectors()
+        await self._phase(PHASE_VECTORS_SWEPT)
         report.sweep_seconds = time.monotonic() - swept
         return report
 
@@ -605,6 +636,46 @@ class _Collector:
                     await self._conn.execute(delete_query, {**domain, "hs": hashes})
                 ).one()
                 self._add(content, int(count), int(size))
+
+            await self._guarded(delete)
+
+    # Vectors ----------------------------------------------------------------------
+
+    async def _sweep_vectors(self) -> None:
+        """Delete the embeddings no branch head references (any model).
+
+        The set of referenced object hashes is read once; each batch is deleted inside the
+        guard (branch locks held, so no commit changes `mat_records`) after checking the
+        hashes against `mat_records` again, so a Record written since is never affected.
+        """
+        domain = {"d": self._domain}
+        async with self._step():
+            await self._conn.execute(_VECTORS_LIVE, domain)
+        if self._dry:
+            async with self._step():
+                self.report.embeddings = int(
+                    (await self._conn.execute(_VECTORS_TOTAL, domain)).scalar_one()
+                )
+            return
+        last = b""
+        while True:
+            async with self._step():
+                page = [
+                    bytes(h)
+                    for h in (
+                        await self._conn.execute(
+                            _VECTORS_PAGE,
+                            {**domain, "last": last, "n": self._cfg.sweep_batch_rows},
+                        )
+                    ).scalars()
+                ]
+            if not page:
+                break
+            last = page[-1]
+
+            async def delete(hashes: list[bytes] = page) -> None:
+                result = await self._conn.execute(_VECTORS_DELETE, {**domain, "hs": hashes})
+                self.report.embeddings += int(result.rowcount)
 
             await self._guarded(delete)
 

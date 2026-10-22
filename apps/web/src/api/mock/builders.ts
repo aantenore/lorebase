@@ -80,6 +80,7 @@ export function kind(apiName: string, attributes: Attribute[], options: KindOpti
         .filter((a) => a.searchable !== null)
         .map((a) => ({ attribute_id: a.id, weight: a.searchable ?? 'D' })),
       embedding_template: null,
+      embedding_sensitive: null,
     },
     icon: null,
     color: options.color,

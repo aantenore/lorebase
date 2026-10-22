@@ -64,7 +64,8 @@ export interface KindDocument {
   icon?: string;
   color?: string;
   status?: string;
-  embedding_template?: string;
+  /** Semantic search: `embedding_template` opts the Kind in (placeholders are Attribute names). */
+  search?: { embedding_template?: string; embedding_sensitive?: boolean };
   operations_builtin?: { create?: boolean; update?: boolean; delete?: boolean };
   attributes?: Record<string, AttributeDocument>;
   traits?: TraitImplementationDocument[];
@@ -329,9 +330,14 @@ export function schemaToDocument(
       if (kind.icon !== null) out['icon'] = kind.icon;
       if (kind.color !== null) out['color'] = kind.color;
       if (kind.status !== 'active') out['status'] = kind.status;
+      const search: Doc = {};
       if (kind.search.embedding_template !== null) {
-        out['embedding_template'] = kind.search.embedding_template;
+        search['embedding_template'] = kind.search.embedding_template;
       }
+      if (kind.search.embedding_sensitive !== null) {
+        search['embedding_sensitive'] = kind.search.embedding_sensitive;
+      }
+      if (Object.keys(search).length > 0) out['search'] = search;
       const builtin = kind.operations_builtin;
       if (!(builtin.create && builtin.update && builtin.delete)) {
         out['operations_builtin'] = { ...builtin };
@@ -470,6 +476,14 @@ class Reader {
     if (typeof value === 'boolean') return value;
     this.fail(`${path}/${key}`, 'Must be true or false.');
     return fallback;
+  }
+
+  optionalBool(doc: Doc, key: string, path: string): boolean | null {
+    const value = doc[key];
+    if (value === undefined || value === null) return null;
+    if (typeof value === 'boolean') return value;
+    this.fail(`${path}/${key}`, 'Must be true or false.');
+    return null;
   }
 
   strings(value: unknown, path: string): string[] {
@@ -702,6 +716,7 @@ function kindFromDocument(
   });
 
   const builtinDoc = reader.map(value['operations_builtin'], `${path}/operations_builtin`);
+  const searchDoc = reader.map(value['search'], `${path}/search`);
   return {
     id,
     api_name: name,
@@ -716,7 +731,8 @@ function kindFromDocument(
       text_attributes: Object.values(attributes)
         .filter((a) => a.searchable !== null)
         .map((a) => ({ attribute_id: a.id, weight: a.searchable ?? 'D' })),
-      embedding_template: reader.optionalString(value, 'embedding_template', path),
+      embedding_template: reader.optionalString(searchDoc, 'embedding_template', `${path}/search`),
+      embedding_sensitive: reader.optionalBool(searchDoc, 'embedding_sensitive', `${path}/search`),
     },
     icon: reader.optionalString(value, 'icon', path),
     color: reader.optionalString(value, 'color', path),

@@ -422,6 +422,7 @@ above with the headers `Lorebase-Event`, `Lorebase-Delivery` (delivery id) and
 ```python
 import hashlib, hmac, time
 
+
 def verified(secret: str, header: str, body: bytes, tolerance_s: int = 300) -> bool:
     parts = dict(item.split("=", 1) for item in header.split(","))
     timestamp = int(parts["t"])

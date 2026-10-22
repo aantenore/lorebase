@@ -195,6 +195,8 @@ export interface TraitImplementation {
 export interface KindSearchSettings {
   text_attributes: { attribute_id: ElementId; weight: SearchWeight }[];
   embedding_template: string | null;
+  /** Lets the template name sensitive Attributes; `null` leaves the Keeper default (refuse). */
+  embedding_sensitive: boolean | null;
 }
 
 export interface Kind {

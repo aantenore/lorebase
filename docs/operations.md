@@ -12,7 +12,9 @@ Revision reachable from a branch or tag, from an open Proposal's merge attempts,
 than `store.gc.grace_seconds` ago (default one hour), then the tree nodes and objects those
 Revisions reach. It sweeps the rest in batches: unreachable Revisions with their parents,
 changesets and history rows, provenance entries nothing refers to any more, tree nodes and
-objects. Branch deletion is the usual source of garbage; ref log entries stay and may name
+objects, and the embeddings (vectors of any model) whose Record content no branch head holds any
+more, in batches of `store.gc.sweep_batch_rows` after the guard of each batch has checked them
+against the materialized rows again. Branch deletion is the usual source of garbage; ref log entries stay and may name
 Revisions that were collected.
 
 ```
@@ -36,7 +38,8 @@ Scribe runs queued `gc` jobs and queues one per Domain at `scribe.scheduler.gc_s
 ([scribe](scribe.md)).
 
 The report is one JSON object per Domain (`revisions`, `changesets`, `history_rows`,
-`provenance`, `nodes`, `node_bytes`, `objects`, `object_bytes`, mark and sweep seconds). In
+`provenance`, `nodes`, `node_bytes`, `objects`, `object_bytes`, `embeddings`, mark and sweep
+seconds). With `--dry-run`, `embeddings` is the number of vectors that would be deleted. In
 code: `collect_garbage(engine, domain_id, dry_run=...)`, `run_gc_job` for the `gc` job type
 (`payload: {"dry_run": bool, "grace_seconds": int}`) and `enqueue_gc`. A failing job is retried
 up to `store.jobs.max_attempts`.

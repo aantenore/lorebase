@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_store.commit import CommitResult, commit, create_domain
 from lorebase_store.db import create_engine
+from lorebase_store.embeddings import NewVector, store_vectors
 from lorebase_store.gc import (
     PHASE_MARKED,
     GcBusyError,
@@ -475,3 +476,53 @@ def test_command_line_reports_and_rejects_unknown_domains(
     assert report["marked_revisions"] == 1
     assert gc_main(["--domain", "nope"]) == 1
     assert "nope" in capsys.readouterr().err
+
+
+async def vector_hashes(sessions: Sessions) -> set[bytes]:
+    async with sessions() as session:
+        rows = await session.execute(text("SELECT object_hash FROM embeddings"))
+        return {bytes(h) for h in rows.scalars()}
+
+
+async def test_unreferenced_vectors_are_counted_then_deleted(
+    engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    await seed_main(sessions, runtime)
+    await branch_with_work(sessions, runtime)
+    async with sessions() as session:
+        rows = await session.execute(
+            text("SELECT branch, object_hash FROM mat_records WHERE domain_id = :d"),
+            {"d": DOMAIN},
+        )
+        by_branch: dict[str, set[bytes]] = {}
+        for branch, object_hash in rows.all():
+            by_branch.setdefault(branch, set()).add(bytes(object_hash))
+    only_dev = by_branch["dev"] - by_branch["main"]
+    assert only_dev
+    stray = b"\x07" * 32
+    dims = runtime.settings.embeddings.dims
+    hashes = sorted(by_branch["main"] | only_dev | {stray})
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await store_vectors(
+            session,
+            DOMAIN,
+            model="m",
+            vectors=[NewVector(h, h, [0.5] * dims) for h in hashes],
+        )
+    assert await vector_hashes(sessions) == set(hashes)
+
+    # Every vector but the stray one is referenced by a branch head.
+    quiet = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
+    assert quiet.embeddings == 1
+
+    await delete_ref(sessions, "dev")
+    preview = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
+    assert preview.embeddings == 1 + len(only_dev)
+    assert await vector_hashes(sessions) == set(hashes)  # dry run changes nothing
+
+    report = await collect_garbage(engine, DOMAIN, runtime=runtime, now=LATER)
+    assert report.embeddings == preview.embeddings
+    assert await vector_hashes(sessions) == by_branch["main"]
+    again = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
+    assert again.embeddings == 0

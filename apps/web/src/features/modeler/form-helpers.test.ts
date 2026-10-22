@@ -41,6 +41,15 @@ const document = (): SchemaDocument => ({
 });
 
 describe('form helpers', () => {
+  it('renames an Attribute inside the embedding template', () => {
+    const draft = document();
+    const part = draft.kinds?.['Part'];
+    if (part === undefined) throw new Error('No Part');
+    part.search = { embedding_template: '{part_number} {{part_number}} {supplier}' };
+    renameAttribute(draft, 'Part', 'part_number', 'number');
+    expect(part.search.embedding_template).toBe('{number} {{part_number}} {supplier}');
+  });
+
   it('renames a Kind everywhere the document names it', () => {
     const draft = document();
     renameKind(draft, 'Supplier', 'Vendor');

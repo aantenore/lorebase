@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { SchemaIssue } from '@/api/schema-rules';
 import { Button } from '@/ui/button';
-import { Input, Select } from '@/ui/field';
+import { Input, Select, Textarea } from '@/ui/field';
 import { Section } from '@/ui/layout';
 import { AttributesEditor } from './attributes-editor';
 import type { KindDocument, SchemaDocument } from './document';
@@ -94,6 +94,64 @@ function KindName({
         setTyped(null);
       }}
     />
+  );
+}
+
+/** `search.embedding_template` and `search.embedding_sensitive`; empty values leave the keys out. */
+function SemanticSearch({
+  kind,
+  kindName,
+  issues,
+  edit,
+}: {
+  kind: KindDocument;
+  kindName: string;
+  issues: SchemaIssue[];
+  edit: Edit;
+}) {
+  const search = kind.search ?? {};
+  const update = (change: (target: NonNullable<KindDocument['search']>) => void) => {
+    edit((draft) => {
+      const target = draft.kinds?.[kindName];
+      if (target === undefined) return;
+      const next = { ...target.search };
+      change(next);
+      if (Object.keys(next).length === 0) delete target.search;
+      else target.search = next;
+    });
+  };
+  return (
+    <Section title="Semantic search">
+      <div className="flex flex-col gap-2">
+        <Textarea
+          label="Embedding template"
+          hint="Opts the Kind into semantic search. Placeholders: {attribute_name}, {_kind}, {_key}. Leave empty for none."
+          value={search.embedding_template ?? ''}
+          error={errorAt(issues, `kinds/${kindName}/search/embedding_template`)}
+          onChange={(event) => {
+            const value = event.target.value;
+            update((next) => {
+              if (value.trim() === '') delete next.embedding_template;
+              else next.embedding_template = value;
+            });
+          }}
+        />
+        <label className="flex items-center gap-1.5 text-sm">
+          <input
+            type="checkbox"
+            checked={search.embedding_sensitive === true}
+            onChange={(event) => {
+              const on = event.target.checked;
+              update((next) => {
+                if (on) next.embedding_sensitive = true;
+                else delete next.embedding_sensitive;
+              });
+            }}
+          />
+          Allow sensitive Attributes in the template
+        </label>
+      </div>
+    </Section>
   );
 }
 
@@ -336,6 +394,8 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
               }}
             />
           </Section>
+
+          <SemanticSearch kind={kind} kindName={name} issues={issues} edit={edit} />
 
           <TraitMapping
             kind={kind}

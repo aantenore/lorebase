@@ -92,6 +92,7 @@ async def test_schema_change_sets(keeper: Any, installation_admin: Any, role_key
         assert schema.headers["lorebase-revision"] == body["revision"]
         kinds = schema.json()["schema"]["kinds"]
         assert "knd_01KEZF7C007ZDX8SK1DZP7MXFF" in kinds
+        assert schema.json()["search"] == {"modes": ["lexical"], "embedding": None}
         as_yaml = await http.get(
             f"{DOMAIN}/schema", params={"branch": "model/v1", "format": "yaml"}, headers=modeler
         )

@@ -4,7 +4,7 @@ import { makeConflict } from '@/api/mock/conflicts';
 import { mapSchema } from '@/api/live/schema';
 import fixture from '@/api/live/fixtures/supply-schema.json';
 
-const schema = mapSchema(fixture);
+const schema = mapSchema(fixture as Parameters<typeof mapSchema>[0]);
 const supplier = schema.kinds.find((k) => k.api_name === 'Supplier');
 const risk = Object.values(supplier?.attributes ?? {}).find((a) => a.api_name === 'risk_score');
 if (supplier === undefined || risk === undefined) throw new Error('fixture lost Supplier');

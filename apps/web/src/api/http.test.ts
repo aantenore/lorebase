@@ -708,6 +708,7 @@ describe('live adapter: agents, inference and webhooks', () => {
         domain: 'supply',
         branch: 'main',
         revision: 'r1',
+        search: { modes: ['lexical'], embedding: null },
         schema: {
           sources: {
             src_a: { id: 'src_a', api_name: 'a' },

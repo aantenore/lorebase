@@ -140,6 +140,10 @@ async def test_schema_summarizes_kinds_relations_and_operations(
     assert "issued_to: PurchaseOrder -> Supplier (many_to_one; inverse purchase_orders)" in out
     assert "flag_supplier_risk(supplier: ref(Supplier)!) [review: expression]" in out
     assert "The supplier_code." not in out  # summary leaves attribute descriptions out
+    assert "SEARCH modes lexical, semantic, hybrid" in out
+    assert (
+        "query_vector of 384 dimensions made by the embedding model BAAI/bge-small-en-v1.5" in out
+    )
     request = fake.last()
     assert request.url.params["format"] == "json"
     assert request.headers["authorization"] == f"Bearer {AGENT_KEY}"
@@ -164,7 +168,17 @@ async def test_schema_full_json_filtered_to_kinds(connect: Connect, fake: FakeKe
     }
     assert [r["name"] for r in view["relations"]] == ["issued_to"]
     assert view["revision"] == REVISION
+    assert view["search"]["embedding"] == {"model": "BAAI/bge-small-en-v1.5", "dims": 384}
     assert fake.last().url.params["branch"] == "dev"
+
+
+async def test_schema_without_embedding_lists_only_lexical_search(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on("GET", f"{API}/schema", {**SCHEMA, "search": {"modes": ["lexical"], "embedding": None}})
+    async with connect() as client:
+        out = text(await client.call_tool("lorebase_schema", {}))
+    assert out.splitlines()[-1] == "SEARCH modes lexical"
 
 
 async def test_get_renders_values_and_link_counts(connect: Connect, fake: FakeKeeper) -> None:
