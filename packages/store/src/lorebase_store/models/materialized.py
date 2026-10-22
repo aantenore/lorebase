@@ -47,6 +47,9 @@ class MatRecord(Base):
 
     `revision_generation` is the generation of the Revision that last wrote the row and
     `deleted` marks a tombstone, which only overlay branches hold (store schema notes).
+    `lineage_revisions` maps each Attribute of `lineage` to the Revision (hex) of that change,
+    and `$created` to the Revision that last created the Record (revision 0030); it is null
+    on rows written before that revision, whose readers fall back to the branch history.
     """
 
     __tablename__ = "mat_records"
@@ -84,6 +87,7 @@ class MatRecord(Base):
     updated_at: Mapped[datetime]
     revision_generation: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     deleted: Mapped[bool] = mapped_column(server_default=text("false"))
+    lineage_revisions: Mapped[dict[str, Any] | None]
 
 
 class MatLink(Base):

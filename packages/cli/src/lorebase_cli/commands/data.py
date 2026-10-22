@@ -446,11 +446,14 @@ def record_lineage(
     key: Annotated[str, typer.Argument(help="Record key.", metavar="KEY")],
     domain: DomainOpt = None,
     branch: BranchOpt = None,
+    at: AtOpt = None,
     json_out: JsonOpt = False,
 ) -> None:
-    """Show where each current value of one Record came from."""
+    """Show where each value of one Record came from (at the branch head, or at `--at`)."""
     app = app_of(ctx, json_out)
-    found = app.client().records.lineage(app.domain(domain), kind, key, branch=app.branch(branch))
+    found = app.client().records.lineage(
+        app.domain(domain), kind, key, branch=app.branch(branch), at=at
+    )
 
     def human() -> None:
         pairs: list[tuple[str, Any]] = [

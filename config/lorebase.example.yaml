@@ -768,7 +768,6 @@ read:
   history:                       # per-Record history pages and lineage
     default_limit: 50
     max_limit: 500
-    lineage_max_changes: 10000   # newest changes of a Record read to attribute its values
   statement_timeout_ms: 2000     # statement_timeout of read transactions; 0 disables
   schema_cache_entries: 64       # compiled schemas kept in memory, by schema hash
   query:                         # limits of the query DSL

@@ -45,7 +45,8 @@ Sessions = async_sessionmaker[AsyncSession]
 SNAPSHOT_QUERIES = {
     "records": (
         "SELECT kind_id, key, values, derived, title, search::text, object_hash, lineage, "
-        "updated_revision, updated_at FROM mat_records WHERE branch = :b ORDER BY kind_id, key"
+        "lineage_revisions, updated_revision, updated_at FROM mat_records WHERE branch = :b "
+        "ORDER BY kind_id, key"
     ),
     "links": (
         "SELECT relation_id, from_key, to_key, values, object_hash, lineage "

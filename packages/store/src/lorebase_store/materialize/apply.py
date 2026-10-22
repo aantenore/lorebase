@@ -28,6 +28,7 @@ from lorebase_store.materialize.paths import PathLinks
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
+    next_lineage_revisions,
     parse_partition,
     record_title,
     search_weights,
@@ -312,6 +313,13 @@ async def _apply_records(
                 ),
                 updated_revision=revision_id,
                 updated_at=at,
+                lineage_revisions=next_lineage_revisions(
+                    None if before is None else before.lineage_revisions,
+                    change.entry.provenance,
+                    revision_id,
+                    values,
+                    created=change.entry.old_hash is None,
+                ),
             )
         )
     await repository.upsert_records(rows)

@@ -7,8 +7,7 @@ served from in `revision` and in the `Lorebase-Revision` header, and `served_fro
 (`materialized` or `tree`). GET reads carry an `ETag` bound to that Revision, answer
 `If-None-Match` with 304 and are cached per Revision (`reading.caching`); at a branch head
 the 304 is decided from the head Revision alone (`unchanged_head`), before the read point is
-resolved. POST reads carry an `ETag` too. The lineage of a Record (`reading.record_history`)
-is served at branch heads only.
+resolved. POST reads carry an `ETag` too.
 """
 
 from __future__ import annotations
@@ -343,12 +342,15 @@ async def get_record_lineage(
     session: ReadSessionDep,
     request: Request,
     branch: Branch = None,
+    at: At = None,
 ) -> Response:
-    """Where each current value of the Record came from: provenance, Revision, Source,
-    Operation, extraction evidence and Proposal. Served at the branch head."""
-    if unchanged := await unchanged_head(session, runtime, access, request, branch=branch):
+    """Where each value of the Record came from: provenance, Revision, Source, Operation,
+    extraction evidence and Proposal. At the branch head, or at `at` (from a snapshot)."""
+    if at is None and (
+        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    ):
         return unchanged
-    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
 
     async def produce() -> RecordLineageOut:
@@ -358,7 +360,6 @@ async def get_record_lineage(
             point,
             found,
             key,
-            max_changes=runtime.read.history.lineage_max_changes,
         )
 
     return await _answer(request, runtime, point, produce, session)

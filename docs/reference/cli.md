@@ -991,7 +991,7 @@ $ lorebase record [OPTIONS] COMMAND [ARGS]...
 
 * `get`: Show one Record with its values.
 * `history`: Show the changes of one Record, newest...
-* `lineage`: Show where each current value of one...
+* `lineage`: Show where each value of one Record came...
 * `list`: List the Records of a Kind.
 
 #### `lorebase record get`
@@ -1046,7 +1046,7 @@ $ lorebase record history [OPTIONS] {KIND} {KEY}
 
 #### `lorebase record lineage`
 
-Show where each current value of one Record came from.
+Show where each value of one Record came from (at the branch head, or at `--at`).
 
 **Usage**:
 
@@ -1063,6 +1063,7 @@ $ lorebase record lineage [OPTIONS] {KIND} {KEY}
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 

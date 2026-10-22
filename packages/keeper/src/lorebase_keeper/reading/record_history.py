@@ -12,28 +12,37 @@ the fork point (`BranchLayout.history`).
   Record, which Attributes it changed (the stored objects before and after are compared) with
   the provenance of each, and on request the values before and after.
 - Lineage: per Attribute holding a value, the provenance of its last change
-  (`mat_records.lineage`), the Revision that made it, and what the provenance names: the
-  Source, the Operation, the extraction evidence (document, span, model) and the Proposal that
-  brought the change to the branch (merged in that Revision, or whose conflict resolution set
-  the value).
+  (`mat_records.lineage`), the Revision that made it (`mat_records.lineage_revisions`), and
+  what the provenance names: the Source, the Operation, the extraction evidence (document,
+  span, model) and the Proposal that brought the change to the branch (merged in that
+  Revision, or whose conflict resolution set the value), read in one statement.
 
 Only Attributes of the Record's own Kind appear, so a caller whose grants are narrowed to Kinds
 learns nothing about other Kinds here; derived values are not stored content and have no
-history. History is served at branch heads and, through a snapshot of the Revision
-(`reading.snapshots`), at other Revisions: the changes along the first-parent chain up to that
-Revision. Lineage is served at branch heads only.
+history. History and lineage are served at branch heads and, through a snapshot of the
+Revision (`reading.snapshots`), at other Revisions: what the head answered when the Revision
+was the head (the changes along its first-parent chain).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue
-from sqlalchemy import LargeBinary, Table, and_, func, literal, or_, select, tuple_
+from sqlalchemy import (
+    LargeBinary,
+    Table,
+    TextClause,
+    and_,
+    literal,
+    select,
+    text,
+    tuple_,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind, OriginType
@@ -41,19 +50,17 @@ from lorebase_core.tree import kind_partition
 from lorebase_keeper.reading.cursors import invalid_cursor, issue, position_of
 from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import tree_unsupported
-from lorebase_keeper.reading.records import fetch_record
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import Masking
 from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import Served
-from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
+from lorebase_store.materialize.rows import CREATED_KEY, ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import metadata
 from lorebase_store.objectstore import PgObjectStore
 from lorebase_store.repositories import ProvenanceRepository
 from lorebase_store.repositories.provenance import ProvenanceRow
 
 REVISIONS: Table = metadata.tables["revisions"]
-PROPOSALS: Table = metadata.tables["proposals"]
 
 
 # Response shapes ------------------------------------------------------------------------------
@@ -404,50 +411,125 @@ async def record_history(
 
 # Lineage --------------------------------------------------------------------------------------
 
+# Per Attribute of the lineage, its provenance entry and the Revision of its last change, at the
+# branch head: from `mat_records.lineage_revisions`, or for rows written before it was kept,
+# the newest change of the branch history that recorded that entry for the Attribute.
+_HEAD = """
+rec AS MATERIALIZED (
+    SELECT m."values" AS vals, m.lineage, m.lineage_revisions AS revs
+    FROM {records}
+    WHERE m.domain_id = :domain AND m.branch = :branch AND m.kind_id = :kind AND m.key = :key
+),
+lin AS (
+    SELECT l.attribute, l.provenance_id,
+           COALESCE(decode(rec.revs ->> l.attribute, 'hex'), f.revision_id) AS revision_id
+    FROM rec
+    CROSS JOIN LATERAL jsonb_each_text(rec.lineage) AS l(attribute, provenance_id)
+    LEFT JOIN LATERAL (
+        SELECT h.revision_id
+        FROM {history_h}
+        JOIN revisions r ON r.domain_id = h.domain_id AND r.id = h.revision_id
+        WHERE (rec.revs ->> l.attribute) IS NULL
+          AND h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
+          AND h.element_key = :key AND h.provenance ->> l.attribute = l.provenance_id
+        ORDER BY r.generation DESC, h.revision_id DESC
+        LIMIT 1
+    ) AS f ON true
+),
+created AS (
+    SELECT h.revision_id, h.old_hash, h.new_hash, h.provenance
+    FROM rec
+    JOIN {history_h}
+      ON h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
+     AND h.element_key = :key AND h.revision_id = decode(rec.revs ->> '{created_key}', 'hex')
+    UNION ALL
+    SELECT c.revision_id, c.old_hash, c.new_hash, c.provenance
+    FROM rec
+    CROSS JOIN LATERAL (
+        SELECT h.revision_id, h.old_hash, h.new_hash, h.provenance
+        FROM {history_h}
+        JOIN revisions r ON r.domain_id = h.domain_id AND r.id = h.revision_id
+        WHERE (rec.revs ->> '{created_key}') IS NULL
+          AND h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
+          AND h.element_key = :key AND h.old_hash IS NULL
+        ORDER BY r.generation DESC, h.revision_id DESC
+        LIMIT 1
+    ) AS c
+),
+counted AS (
+    SELECT count(*) AS changes
+    FROM {history_h}
+    WHERE h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
+      AND h.element_key = :key
+)
+"""
 
-async def _proposals(
-    session: AsyncSession, domain_id: str, revisions: Iterable[bytes], ids: Iterable[str]
-) -> tuple[dict[bytes, LineageProposalOut], dict[str, LineageProposalOut]]:
-    """Proposals merged in `revisions`, and the Proposals named by `ids`."""
-    merged, named = list(dict.fromkeys(revisions)), list(dict.fromkeys(ids))
-    if not merged and not named:
-        return {}, {}
-    p = PROPOSALS
-    result = await session.execute(
-        select(p.c.id, p.c.title, p.c.status, p.c.merged_revision)
-        .where(
-            p.c.domain_id == domain_id,
-            or_(p.c.merged_revision.in_(merged), p.c.id.in_(named)),
-        )
-        .order_by(p.c.created_at, p.c.id)
+# What the lineage names, in one row: the Revisions, provenance entries and Proposals behind
+# the values, the change that created the Record (with the values it wrote) and the count of
+# changes.
+_TAIL = """
+SELECT
+    {found} AS found,
+    {values} AS vals,
+    (SELECT jsonb_agg(jsonb_build_object(
+        'attribute', attribute, 'provenance', provenance_id,
+        'revision', encode(revision_id, 'hex')))
+     FROM lin) AS lineage,
+    (SELECT jsonb_agg(jsonb_build_object(
+        'id', encode(r.id, 'hex'), 'generation', r.generation, 'at', r.created_at,
+        'author', r.author, 'on_behalf_of', r.on_behalf_of, 'message', r.message,
+        'origin', r.origin))
+     FROM revisions r
+     WHERE r.domain_id = :domain
+       AND r.id IN (SELECT revision_id FROM lin UNION SELECT revision_id FROM created)
+    ) AS revisions,
+    (SELECT jsonb_agg(jsonb_build_object(
+        'id', p.id, 'origin_type', p.origin_type, 'origin', p.origin_ref, 'actor', p.actor,
+        'at', p.at))
+     FROM provenance p
+     WHERE p.domain_id = :domain
+       AND p.id IN (
+         SELECT provenance_id FROM lin
+         UNION SELECT e.value FROM created, jsonb_each_text(created.provenance) AS e)
+    ) AS provenance,
+    (SELECT jsonb_agg(jsonb_build_object(
+        'id', q.id, 'title', q.title, 'status', q.status,
+        'merged_revision', encode(q.merged_revision, 'hex')) ORDER BY q.created_at, q.id)
+     FROM proposals q
+     WHERE q.domain_id = :domain
+       AND (q.merged_revision IN (SELECT revision_id FROM lin)
+            OR q.id IN (
+              SELECT p.origin_ref ->> 'proposal_id' FROM provenance p
+              WHERE p.domain_id = :domain AND p.origin_type = '{merge_resolution}'
+                AND p.id IN (SELECT provenance_id FROM lin)))
+    ) AS proposals,
+    (SELECT jsonb_build_object(
+        'revision', encode(c.revision_id, 'hex'), 'new_hash', encode(c.new_hash, 'hex'),
+        'provenance', c.provenance, 'values', o.body -> 'values')
+     FROM created c
+     LEFT JOIN objects o ON o.domain_id = :domain AND o.hash = c.new_hash
+     LIMIT 1) AS created,
+    (SELECT changes FROM counted) AS changes
+"""
+
+
+def _lineage_statement(point: ReadPoint) -> TextClause:
+    layout = point.layout
+    ctes = _HEAD.format(
+        records=layout.records_from("m"),
+        history_h=layout.history_from("h"),
+        created_key=CREATED_KEY,
     )
-    by_revision: dict[bytes, LineageProposalOut] = {}
-    by_id: dict[str, LineageProposalOut] = {}
-    for row in result:
-        merged_revision = None if row.merged_revision is None else bytes(row.merged_revision)
-        out = LineageProposalOut(
-            id=row.id,
-            title=row.title,
-            status=str(row.status),
-            merged_revision=None if merged_revision is None else merged_revision.hex(),
-        )
-        by_id[row.id] = out
-        if merged_revision is not None:
-            by_revision.setdefault(merged_revision, out)
-    return by_revision, by_id
-
-
-async def _count(session: AsyncSession, point: ReadPoint, kind: Kind, key: str) -> int:
-    h = point.layout.history()
-    count = await session.scalar(
-        select(func.count()).where(
-            h.c.domain_id == point.domain.id,
-            h.c.branch == point.layout.branch,
-            h.c.partition == kind_partition(kind.id),
-            h.c.element_key == key,
-        )
+    tail = _TAIL.format(
+        found="EXISTS (SELECT 1 FROM rec)",
+        values="(SELECT vals FROM rec)",
+        merge_resolution=OriginType.MERGE_RESOLUTION.value,
     )
-    return int(count or 0)
+    return text(f"WITH {ctes.strip()}{tail}")
+
+
+def _utc(value: str) -> datetime:
+    return datetime.fromisoformat(value).astimezone(UTC)
 
 
 async def record_lineage(
@@ -456,62 +538,56 @@ async def record_lineage(
     point: ReadPoint,
     kind: Kind,
     key: str,
-    *,
-    max_changes: int,
 ) -> RecordLineageOut:
-    """Where the current values of `kind/key` came from (see module doc).
-
-    The newest `max_changes` changes of the Record are read to find the Revision behind each
-    value; a value last changed before them keeps its provenance but names no Revision.
-    """
-    _require_materialized(point, "Record lineage")
-    row = (await fetch_record(session, runtime, point, kind, key)).row
-    changes = await _changes(session, point, kind, key, limit=max_changes)
-    lineage: Mapping[str, str] = row.get("lineage") or {}
-    domain = point.domain.id
-    created_change = next((c for c in changes if c.old_hash is None), None)
-    provenance = await _provenance(
-        session,
-        runtime,
-        domain,
-        [
-            *lineage.values(),
-            *((created_change.provenance.values()) if created_change is not None else ()),
-        ],
-    )
-    # The newest change that recorded each provenance entry on this Record.
-    change_of: dict[str, _Change] = {}
-    for change in changes:
-        for provenance_id in change.provenance.values():
-            change_of.setdefault(provenance_id, change)
-    resolved = [
-        str(entry.origin["proposal_id"])
-        for entry in provenance.values()
-        if entry.origin_type == OriginType.MERGE_RESOLUTION and entry.origin.get("proposal_id")
-    ]
-    by_revision, by_id = await _proposals(
-        session,
-        domain,
-        [change_of[p].revision for p in lineage.values() if p in change_of],
-        resolved,
-    )
+    """Where the values of `kind/key` at the read point came from (see module doc): one
+    statement over the head's rows, or a snapshot's at another Revision."""
+    point = await with_rows(session, runtime, point, "Record lineage")
+    params = {
+        "domain": point.domain.id,
+        "branch": point.layout.branch,
+        "kind": kind.id,
+        "partition": kind_partition(kind.id),
+        "key": key,
+    }
+    row = (await session.execute(_lineage_statement(point), params)).mappings().one()
+    if not row["found"]:
+        raise not_found(f"Record {kind.api_name}/{key}")
+    values: Mapping[str, Any] = row["vals"] or {}
+    lineage = {item["attribute"]: item for item in row["lineage"] or ()}
+    revisions = {item["id"]: item for item in row["revisions"] or ()}
+    provenance = {
+        item["id"]: ProvenanceOut(
+            id=item["id"],
+            origin_type=item["origin_type"],
+            origin=item["origin"],
+            actor=item["actor"],
+            at=_utc(item["at"]),
+        )
+        for item in row["provenance"] or ()
+    }
+    by_revision: dict[str, LineageProposalOut] = {}
+    by_id: dict[str, LineageProposalOut] = {}
+    for item in row["proposals"] or ():
+        out = LineageProposalOut.model_validate(item)
+        by_id[out.id] = out
+        if out.merged_revision is not None:
+            by_revision.setdefault(out.merged_revision, out)
     sources = {source.id: source.api_name for source in point.schema.sources.values()}
 
-    values: Mapping[str, Any] = row.get("values") or {}
     attributes: list[ValueLineageOut] = []
     for attribute_id, attribute in kind.attributes.items():
         if attribute.is_derived or (attribute_id not in values and attribute_id not in lineage):
             continue
         held = lineage.get(attribute_id)
-        entry = None if held is None else provenance.get(held)
-        setter = None if held is None else change_of.get(held)
+        entry = None if held is None else provenance.get(held["provenance"])
+        setter = None if held is None else revisions.get(held["revision"])
         origin: Mapping[str, Any] = {} if entry is None else entry.origin
         origin_type = None if entry is None else entry.origin_type
         proposal = None
         if origin_type == OriginType.MERGE_RESOLUTION:
             proposal = by_id.get(str(origin.get("proposal_id")))
         if proposal is None and setter is not None:
-            proposal = by_revision.get(setter.revision)
+            proposal = by_revision.get(setter["id"])
         source = operation = None
         extraction = None
         if origin_type == OriginType.SOURCE_SYNC:
@@ -525,10 +601,10 @@ async def record_lineage(
                 name=attribute.api_name,
                 value=point.masking.value(attribute, (kind.id,), values.get(attribute_id)),
                 provenance=entry,
-                revision=None if setter is None else setter.revision.hex(),
-                revision_at=None if setter is None else setter.at,
-                author=None if setter is None else setter.author,
-                message=None if setter is None else setter.message,
+                revision=None if setter is None else setter["id"],
+                revision_at=None if setter is None else _utc(setter["at"]),
+                author=None if setter is None else setter["author"],
+                message=None if setter is None else setter["message"],
                 source=source,
                 operation=operation,
                 extraction=extraction,
@@ -537,10 +613,6 @@ async def record_lineage(
         )
     order = _reading_order(kind)
     attributes.sort(key=lambda a: order(a.name))
-    created = None
-    if created_change is not None:
-        rendered = await _render(session, runtime, point, kind, [created_change], values=False)
-        created = rendered[0]
     proposals = {p.id: p for a in attributes if (p := a.proposal) is not None}
     return RecordLineageOut(
         revision=point.revision_hex,
@@ -548,11 +620,36 @@ async def record_lineage(
         branch=point.branch,
         kind=kind.api_name,
         key=key,
-        created=created,
-        changes=len(changes)
-        if len(changes) < max_changes
-        else await _count(session, point, kind, key),
+        created=_created(kind, point, row["created"], revisions, provenance),
+        changes=int(row["changes"] or 0),
         attributes=attributes,
         sources=sorted({a.source for a in attributes if a.source is not None}),
         proposals=list(proposals.values()),
     )
+
+
+def _created(
+    kind: Kind,
+    point: ReadPoint,
+    created: Mapping[str, Any] | None,
+    revisions: Mapping[str, Mapping[str, Any]],
+    provenance: Mapping[str, ProvenanceOut],
+) -> RecordChangeOut | None:
+    """The change that last created the Record, rendered like a history entry."""
+    if created is None or (revision := revisions.get(created["revision"])) is None:
+        return None
+    new_hash = bytes.fromhex(created["new_hash"])
+    change = _Change(
+        bytes.fromhex(created["revision"]),
+        int(revision["generation"]),
+        _utc(revision["at"]),
+        revision["author"],
+        revision["on_behalf_of"],
+        revision["message"],
+        revision["origin"],
+        None,
+        new_hash,
+        created["provenance"] or {},
+    )
+    bodies = {new_hash: created["values"] or {}}
+    return _change_out(kind, change, bodies, provenance, values=False, masking=point.masking)

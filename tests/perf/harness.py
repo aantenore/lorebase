@@ -649,7 +649,6 @@ def read_operations(
             await point(session),
             part,
             rng.choice(work.parts),
-            max_changes=reading.read.history.lineage_max_changes,
         )
 
     typos = typo_tolerance(reading)
