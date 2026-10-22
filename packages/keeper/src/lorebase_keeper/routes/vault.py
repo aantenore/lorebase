@@ -50,6 +50,7 @@ from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import VAULT_ROTATE_JOB, enqueue_job
 from lorebase_store.repositories import MaterializedRepository
 from lorebase_store.vault import erase_matching, erase_record, usage
+from lorebase_store.vault.store import LineageTooLongError
 
 router = APIRouter(tags=["vault"])
 
@@ -112,6 +113,11 @@ class EraseOut(BaseModel):
     kind: str
     mode: Literal["record", "value"]
     erased: int = Field(description="Vault values erased by this request.")
+    unopenable: int = Field(
+        default=0,
+        description="Rows looked at that are sealed under a key no longer configured: their "
+        "fingerprints could not be made again, so a case variant among them may be missed.",
+    )
 
 
 @router.post(
@@ -145,7 +151,18 @@ async def erase(
                     for index, name in enumerate(body.attributes)
                 ]
             )
-            erased = await erase_record(session, domain_id, kind.id, body.key, attribute_ids, at=at)
+            try:
+                erasure = await erase_record(
+                    session,
+                    domain_id,
+                    kind.id,
+                    body.key,
+                    attribute_ids,
+                    keys=store.runtime.vault,
+                    at=at,
+                )
+            except LineageTooLongError as error:
+                raise ProblemError(CONFLICT, str(error)) from None
             mode: Literal["record", "value"] = "record"
             digests = await store.runtime.digests.ready(session)
             key_digest = digests.digest(domain_id, KEY_DIGEST, f"{kind.id}/{body.key}".encode())
@@ -165,13 +182,15 @@ async def erase(
                 canonical = encode_value(kind.attributes[attribute_id].type, body.value)
             except EncodingError as error:
                 raise invalid("/body/value", str(error), "value_invalid") from None
-            erased = await erase_matching(
+            erasure = await erase_matching(
                 session, domain_id, kind.id, attribute_id, canonical, keys, at=at
             )
             mode = "value"
             target = f"{kind.api_name}.{body.attribute}"
             details = {"kind": kind.id, "attribute": attribute_id}
-        details["erased"] = erased
+        details["erased"] = erasure.erased
+        if erasure.unopenable:
+            details["unopenable"] = erasure.unopenable
         await AuditRepository(session).append(
             NewAuditEntry(
                 actor=access.principal.id,
@@ -184,7 +203,13 @@ async def erase(
         )
     # The entry above is the audit record of the erasure; the request's own entry would repeat it.
     suppress(request)
-    return EraseOut(domain=domain_id, kind=kind.api_name, mode=mode, erased=erased)
+    return EraseOut(
+        domain=domain_id,
+        kind=kind.api_name,
+        mode=mode,
+        erased=erasure.erased,
+        unopenable=erasure.unopenable,
+    )
 
 
 class VaultKeysOut(BaseModel):

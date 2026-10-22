@@ -268,13 +268,32 @@ def parameters_hash(
     """Stable digest of an invocation's inputs (idempotency, provenance, audit), keyed with the
     installation's digest key (`lorebase_store.digests`, ready), so a stored digest does not let
     anyone confirm guessed parameter values."""
-    payload = json.dumps(
+    return digests.digest(
+        domain_id, "parameters", _parameters_payload(operation, branch, parameters)
+    )
+
+
+def parameters_hashes(
+    operation: str,
+    branch: str,
+    parameters: Mapping[str, JsonValue],
+    *,
+    domain_id: str,
+    digests: DigestKeys,
+) -> frozenset[str]:
+    """Every digest an earlier invocation of the same inputs may have stored: under the current
+    key and the earlier token keys (`DigestKeys.all_digests`)."""
+    payload = _parameters_payload(operation, branch, parameters)
+    return digests.all_digests(domain_id, "parameters", payload)
+
+
+def _parameters_payload(operation: str, branch: str, parameters: Mapping[str, JsonValue]) -> bytes:
+    return json.dumps(
         {"operation": operation, "branch": branch, "parameters": parameters},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    return digests.digest(domain_id, "parameters", payload)
 
 
 def resolve(schema: Schema, name: str) -> _Resolved:
@@ -368,10 +387,14 @@ def _permission(resolved: _Resolved, branch: str) -> tuple[Permission, AccessCon
 
 
 def _replay(
-    found: InvocationRow, request: ExecutionRequest, branch: str, digest: str
+    found: InvocationRow,
+    request: ExecutionRequest,
+    branch: str,
+    digest: str,
+    accepted: frozenset[str] = frozenset(),
 ) -> ExecutionOutcome:
     params = found.params
-    if params.get("parameters_hash") != digest:
+    if params.get("parameters_hash") not in {digest, *accepted}:
         raise ProblemError(
             IDEMPOTENCY_CONFLICT,
             "This Idempotency-Key was used with another Operation, branch or parameters.",
@@ -483,18 +506,18 @@ async def _execute(
     if resolved.custom is not None:
         _check_operation_permissions(resolved.custom, principal)
         warnings = expressions_gate(resolved.custom, settings)
+    digests = await store.runtime.digests.ready(session)
     digest = parameters_hash(
-        resolved.name,
-        branch,
-        request.parameters,
-        domain_id=domain_id,
-        digests=await store.runtime.digests.ready(session),
+        resolved.name, branch, request.parameters, domain_id=domain_id, digests=digests
+    )
+    accepted = parameters_hashes(
+        resolved.name, branch, request.parameters, domain_id=domain_id, digests=digests
     )
     invocations = InvocationRepository(session, domain_id)
     if request.idempotency_key is not None and not request.dry_run:
         found = await invocations.by_key(principal.id, request.idempotency_key)
         if found is not None:
-            return _replay(found, request, branch, digest)
+            return _replay(found, request, branch, digest, accepted)
     needs_review = (
         review_required(resolved, protected=ref.protected, settings=settings)
         and not request.reviewed_by_proposal
@@ -654,7 +677,7 @@ async def _execute(
             )
         if found is None:
             raise
-        return _replay(found, request, branch, digest)
+        return _replay(found, request, branch, digest, accepted)
     counted(events)
     return outcome
 

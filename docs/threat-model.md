@@ -210,7 +210,9 @@ Remaining:
    value and tombstones need a deterministic fingerprint; keep the keys in a secret store and
    rotate them (`lorebase admin vault rotate`). Tombstones cannot be made again under a new
    token key (they hold no value), so they stay matchable only while the old key stays in
-   `previous_token_keys`.
+   `previous_token_keys`. A Source sync, extraction or import whose data the operator controls
+   can still learn whether a value was erased (it is stored erased or refused); writes of other
+   origins are not checked against tombstones for that reason (`vault.tombstone_origins`).
 4. **Installation digest secret in the database.** The installation digest secret of
    revision `0027` (used when neither `vault.digest_key` nor vault keys are set) is readable by whoever reads the database (TB6).
 

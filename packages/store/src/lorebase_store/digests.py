@@ -12,7 +12,9 @@ installation, chosen in this order:
    the digests unconfirmable for whoever reads the API or the audit log, not for whoever reads
    that table. Configure one of the keys above for that.
 
-The key of case 3 is read from the database once per process (`ready`).
+The key of case 3 is read from the database once per process (`ready`). In case 2 the
+earlier token keys (`vault.previous_token_keys`) still recognize the digests made under them
+(`all_digests`), so a token key rotation does not break idempotent replays.
 """
 
 from __future__ import annotations
@@ -36,9 +38,16 @@ class DigestKeysNotReadyError(RuntimeError):
 class DigestKeys:
     """Makes the keyed digests of the installation (module doc)."""
 
-    def __init__(self, keyring: Keyring | None = None, *, source: str = "installation") -> None:
+    def __init__(
+        self,
+        keyring: Keyring | None = None,
+        *,
+        source: str = "installation",
+        earlier: tuple[Keyring, ...] = (),
+    ) -> None:
         self._keyring = keyring
         self._source = source
+        self._earlier = earlier
 
     @classmethod
     def from_settings(cls, settings: VaultSettings, vault: VaultKeys | None) -> DigestKeys:
@@ -48,7 +57,11 @@ class DigestKeys:
                 source="vault.digest_key",
             )
         if vault is not None:
-            return cls(vault.digest_keyring(), source="vault.token_key")
+            return cls(
+                vault.digest_keyring(),
+                source="vault.token_key",
+                earlier=vault.earlier_digest_keyrings(),
+            )
         return cls()
 
     @property
@@ -77,3 +90,10 @@ class DigestKeys:
         if self._keyring is None:
             raise DigestKeysNotReadyError("call DigestKeys.ready first")
         return self._keyring.mac("digest/" + purpose, framed(domain_id, payload)).hex()
+
+    def all_digests(self, domain_id: str, purpose: str, payload: bytes) -> frozenset[str]:
+        """The digest under the current key and under the earlier token keys."""
+        found = {self.digest(domain_id, purpose, payload)}
+        for keyring in self._earlier:
+            found.add(keyring.mac("digest/" + purpose, framed(domain_id, payload)).hex())
+        return frozenset(found)

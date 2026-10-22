@@ -127,6 +127,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    # Row-level security is forced on the owner too: count the rows of every Domain.
+    bind.execute(sa.text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+    for table in (TOMBSTONES, LINEAGE):
+        stored = bind.execute(sa.text(f"SELECT count(*) FROM {table}")).scalar_one()
+        if stored:
+            raise RuntimeError(
+                f"{stored} row(s) in {table}: without them erased values could be stored again "
+                "and erasure would miss earlier keys; keep this revision"
+            )
     op.drop_table(SECRETS)
     op.drop_index(op.f("ix_vault_lineage_domain_id_kind_id_previous_key"), table_name=LINEAGE)
     op.drop_table(LINEAGE)
