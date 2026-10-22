@@ -28,6 +28,12 @@ JOB_DURATION = meter.create_histogram(
 SCHEDULED = meter.create_counter(
     "lorebase.scribe.scheduled", unit="{job}", description="Jobs queued by the scheduler."
 )
+GC_SCHEDULED = meter.create_counter(
+    "lorebase.gc.scheduled",
+    unit="{job}",
+    description="gc jobs queued by the scheduler at gc_schedule, by dry_run. Starts at 0 when "
+    "the schedule is set, so a schedule that queues nothing still reports its mode.",
+)
 SOURCE_ROWS = meter.create_counter(
     "lorebase.scribe.source.rows", unit="{row}", description="Source rows read."
 )
@@ -96,5 +102,6 @@ meter.create_observable_gauge(
     "lorebase.jobs.queue_depth",
     callbacks=[QUEUE_DEPTH.observe],
     unit="{job}",
-    description="Jobs waiting or running, by type and status (scheduler leader only).",
+    description="Jobs waiting or running, by type and status: queued (claimable), retrying "
+    "(waiting for run_after) or running (scheduler leader only).",
 )

@@ -146,9 +146,8 @@ groups:
           description: "{{ $value | humanizePercentage }} of the {{ $labels.type }} jobs finished in the last 30 minutes ended failed (all attempts used)."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobfailureratio"
 
-      # Rows wait in the queue (reported by the scheduler leader) and no worker claims any.
-      # Jobs waiting for a retry delay count as queued; the 15 minute window outlasts the
-      # default delay (store.jobs.retry_delay_seconds, 60 s).
+      # Claimable rows wait in the queue (reported by the scheduler leader) and no worker claims
+      # any. Jobs waiting for a retry delay are reported as status="retrying" and do not count.
       - alert: LorebaseJobQueueStalled
         expr: |
           sum(lorebase_jobs_queue_depth{status="queued"}) > 0
@@ -159,7 +158,7 @@ groups:
           component: scribe
         annotations:
           summary: "Jobs are queued but no worker claims any"
-          description: "{{ $value | humanize }} jobs are queued and no worker claimed one in the last 15 minutes: workers are down, stuck or cannot reach the database."
+          description: "{{ $value | humanize }} claimable jobs are queued and no worker claimed one in the last 15 minutes: workers are down, stuck or cannot reach the database."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobqueuestalled"
 
       # Dead deliveries: attempts used up, or a target refused (scheme, private address).
@@ -174,18 +173,19 @@ groups:
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasewebhookdeliveryfailing"
 
       # N is 3 days: the default schedule collects every day at 03:00 UTC (scribe.scheduler.gc_schedule).
-      # Dry runs do not count.
+      # Only real collections count, and only a schedule that queues real ones (gc_dry_run false)
+      # can raise it: a dry-run schedule or a null one does not page.
       - alert: LorebaseGcNotRun
         expr: |
           (sum(increase(lorebase_gc_runs_total{dry_run="false"}[3d])) or vector(0)) == 0
-          and sum(increase(lorebase_scribe_scheduled_total[3d])) > 0
+          and sum(increase(lorebase_gc_scheduled_total{dry_run="false"}[3d])) > 0
         for: 1h
         labels:
           severity: warning
           component: scribe
         annotations:
           summary: "No garbage collection has completed in 3 days"
-          description: "Scribe is scheduling work but no garbage collection completed in the last 3 days. Unreferenced objects, tree nodes and Revisions pile up."
+          description: "The scheduler queued garbage collections but none completed in the last 3 days (dry runs excluded). Unreferenced objects, tree nodes and Revisions pile up."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasegcnotrun"
 
       # A scheduled audit_verify job found an entry that does not verify. The window spans the

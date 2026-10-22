@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from lorebase_scribe import scheduler as scheduler_module
 from lorebase_scribe.jobs import (
     AUDIT_VERIFY_JOB,
     EXTRACTION_JOB,
@@ -417,13 +418,26 @@ class Stepper:
         return self.now
 
 
+@dataclass
+class Recorder:
+    """Stands in for a counter: keeps every `add`."""
+
+    calls: list[tuple[int, dict[str, str]]] = field(default_factory=list)
+
+    def add(self, amount: int, attributes: dict[str, str]) -> None:
+        self.calls.append((amount, attributes))
+
+
 async def test_scheduler_leader_election_and_schedules(
     engine: AsyncEngine,
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await load_domain(sessions, runtime, clock, example_schema())
+    gc_scheduled = Recorder()
+    monkeypatch.setattr(scheduler_module, "GC_SCHEDULED", gc_scheduled)
     time = Stepper(datetime(2026, 10, 21, 1, 0, tzinfo=UTC))
     settings = SchedulerSettings(
         webhook_interval_s=10, embeddings_interval_s=0, audit_verify_interval_s=86400
@@ -450,6 +464,8 @@ async def test_scheduler_leader_election_and_schedules(
         types = await fetch(sessions, "SELECT type FROM jobs ORDER BY id")
         assert [t for (t,) in types] == [WEBHOOK_DELIVERY_JOB, AUDIT_VERIFY_JOB]
         assert len(queued) == 2
+        # The gc counter starts at 0 with the schedule's mode before any firing.
+        assert gc_scheduled.calls == [(0, {"dry_run": "false"})]
 
         time.now += timedelta(hours=2, minutes=30)  # 03:30: after gc (03:00) and erp (02:00)
         await first.tick()
@@ -465,6 +481,7 @@ async def test_scheduler_leader_election_and_schedules(
             ("gc", DOMAIN, None, datetime(2026, 10, 21, 3, 0, tzinfo=UTC)),
             ("source_sync", DOMAIN, erp.id, datetime(2026, 10, 21, 2, 0, tzinfo=UTC)),
         ]
+        assert gc_scheduled.calls[-1] == (1, {"dry_run": "false"})
         await first.tick()  # nothing new is due
         assert await scalar(sessions, "SELECT count(*) FROM jobs WHERE domain_id IS NOT NULL") == 2
 
