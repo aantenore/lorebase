@@ -33,12 +33,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lorebase_core.model import Attribute, Kind, Record, Relation, Schema
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.tree import kind_partition
-from lorebase_core.validate import validate_record
+from lorebase_core.validate import Issue, validate_record
 from lorebase_keeper.kindhealth.config import HealthSettings
 from lorebase_keeper.kindhealth.models import (
     DerivedReport,
     DuplicateGroup,
     DuplicateReport,
+    HiddenDuplicates,
     IssueGroup,
     LastChange,
     LinkRef,
@@ -62,7 +63,8 @@ _DUPLICATES = r"""
     )
     SELECT norm, count(*) AS members,
            (array_agg(key ORDER BY key))[1:CAST(:keys AS int)] AS member_keys,
-           count(*) OVER () AS total_groups
+           count(*) OVER () AS total_groups,
+           sum(count(*)) OVER () AS total_members
     FROM normalized
     WHERE norm <> ''
     GROUP BY norm
@@ -169,8 +171,11 @@ async def validate_records(
     kind: Kind,
     total: int,
     settings: HealthSettings,
+    generalize: Callable[[list[Issue]], list[Issue]] | None = None,
 ) -> ViolationReport:
-    """Re-validate the Records of a Kind with `validate_record` against the branch's schema."""
+    """Re-validate the Records of a Kind with `validate_record` against the branch's schema.
+    `generalize` rewrites the issues of each Record before they are grouped (issues about
+    values the caller may not read lose their specific code)."""
     r = where.records
     step = max(1, math.ceil(total / settings.max_records_validated))
     checked = invalid = 0
@@ -195,6 +200,8 @@ async def validate_records(
             issues = validate_record(
                 schema, Record.model_construct(kind=kind.id, key=key, values=values)
             )
+            if generalize is not None:
+                issues = generalize(issues)
             if issues:
                 invalid += 1
             seen: set[tuple[str, str | None]] = set()
@@ -240,8 +247,13 @@ async def find_duplicates(
     total: int,
     settings: HealthSettings,
     sensitive: Callable[[Attribute], bool] = lambda a: a.is_sensitive,
+    hidden: Callable[[Attribute], bool] = lambda a: False,
 ) -> DuplicateReport:
-    """Records of a Kind sharing a unique or title value, ignoring case and spacing."""
+    """Records of a Kind sharing a unique or title value, ignoring case and spacing.
+
+    Groups of a `hidden` Attribute (one whose values the caller may not read) are not listed:
+    which Records share a value would tell that their values are equal. Only how many groups
+    and Records there are is reported for it."""
     ids = duplicate_attributes(kind)
     names = [kind.attributes[i].api_name for i in ids]
     if settings.duplicates_max_records == 0:
@@ -251,6 +263,7 @@ async def find_duplicates(
             attributes=names, groups=[], total_groups=0, skipped="too_many_records"
         )
     found: list[DuplicateGroup] = []
+    withheld: list[HiddenDuplicates] = []
     groups = 0
     for attribute_id in ids:
         attribute = kind.attributes[attribute_id]
@@ -269,6 +282,17 @@ async def find_duplicates(
         ).all()
         if rows:
             groups += int(rows[0].total_groups)
+        if hidden(attribute):
+            if rows:
+                withheld.append(
+                    HiddenDuplicates(
+                        attribute=attribute.api_name,
+                        unique=attribute.unique,
+                        groups=int(rows[0].total_groups),
+                        records=int(rows[0].total_members),
+                    )
+                )
+            continue
         found.extend(
             DuplicateGroup(
                 attribute=attribute.api_name,
@@ -279,7 +303,7 @@ async def find_duplicates(
             )
             for row in rows
         )
-    return DuplicateReport(attributes=names, groups=found, total_groups=groups)
+    return DuplicateReport(attributes=names, groups=found, total_groups=groups, hidden=withheld)
 
 
 # Derived values -----------------------------------------------------------------------------

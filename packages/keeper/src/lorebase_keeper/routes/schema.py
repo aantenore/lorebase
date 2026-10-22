@@ -425,6 +425,7 @@ async def apply_schema_changes(
         if body.expected_head is None
         else parse_revision_id(body.expected_head, "/body/expected_head")
     )
+    clearance = await clearance_of(auth.authorizer, access.principal, domain_id, None)
     try:
         outcome = await service.apply(
             store,
@@ -439,9 +440,8 @@ async def apply_schema_changes(
             guard=lambda old, new: require_lowering(
                 auth.authorizer, access.principal, domain_id, old, new
             ),
-            cleared=(
-                await clearance_of(auth.authorizer, access.principal, domain_id, None)
-            ).everywhere,
+            cleared=clearance.everywhere,
+            clearance=clearance,
         )
     except (service.ChangeSetInvalidError, service.RemovalBlockedError) as invalid:
         raise violations_problem(invalid.issues, limit=limits.max_issues) from None

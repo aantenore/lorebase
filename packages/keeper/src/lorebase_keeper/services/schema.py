@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,13 @@ from lorebase_keeper.context import (
     require_branch,
     require_domain,
     require_revision,
+)
+from lorebase_keeper.reading.sensitivity import (
+    Clearance,
+    Masking,
+    default_schema,
+    generalize_issues,
+    reference_tags,
 )
 from lorebase_keeper.services.errors import Finding, ProtectedBranchError, findings_of
 from lorebase_keeper.services.reads import ReadTarget
@@ -284,12 +292,16 @@ async def apply(
     cascade: bool,
     guard: SchemaGuard | None = None,
     cleared: frozenset[Sensitivity] = frozenset(),
+    clearance: Clearance | None = None,
 ) -> ChangeSetOutcome:
     """Apply a change set to a branch as one Revision, or run it without committing.
 
     `guard(current, target)` may refuse the change early (it raises), as for sensitivity tags
     removed without the clearance (`reading.sensitivity`); the commit pipeline refuses, under
     the branch lock, removing any tag outside `cleared` (the caller's Domain-wide clearance).
+    Data issues about values `clearance` does not cover (none, when it is not given) have a
+    generic code (`generalize_issues`): revalidating stored values with a new rule must not
+    tell a caller what values it may not read look like.
 
     Raises `ChangeSetInvalidError` (document, static or data issues), `RemovalBlockedError`,
     `ProtectedBranchError` for direct writes to a protected branch, and the other
@@ -335,9 +347,15 @@ async def apply(
                     allowed_lowering=cleared,
                 )
             except ValidationFailedError as error:
+                reference = await default_schema(session, domain_id, store.runtime)
+                masking = Masking(
+                    clearance or Clearance(),
+                    reference=MappingProxyType(reference_tags(reference)),
+                ).over(target)
+                issues = located(target, generalize_issues(error.issues, (target,), masking))
                 if not dry_run:
-                    raise ChangeSetInvalidError(located(target, error.issues)) from error
-                outcome.issues = located(target, error.issues)
+                    raise ChangeSetInvalidError(issues) from error
+                outcome.issues = issues
                 return outcome
             _fill(outcome, result)
             if dry_run:

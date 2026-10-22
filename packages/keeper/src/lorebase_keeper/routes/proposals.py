@@ -31,7 +31,7 @@ count.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -55,6 +55,7 @@ from lorebase_keeper.reading.sensitivity import (
     Masking,
     conflict_hidden,
     default_schema,
+    generalize_issues,
     mask_conflict,
     masking_for,
     require_lowering,
@@ -62,7 +63,7 @@ from lorebase_keeper.reading.sensitivity import (
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import proposals as service
-from lorebase_keeper.services.errors import commit_problem
+from lorebase_keeper.services.errors import commit_problem, findings_of
 from lorebase_keeper.services.proposal_reads import (
     ConflictScope,
     conflict_scope,
@@ -72,7 +73,7 @@ from lorebase_keeper.services.proposal_reads import (
 )
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_keeper.settings import KeeperSettings
-from lorebase_store.commit import CommitError
+from lorebase_store.commit import CommitError, ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.repositories import (
@@ -554,8 +555,21 @@ async def _readable(
     return await conflict_scope(guard, proposal)
 
 
-def _store_problem(error: CommitError, retry_after_s: int) -> ProblemError:
-    return commit_problem(error, max_issues=1, retry_after_s=retry_after_s)
+async def _store_problem(
+    error: CommitError, retry_after_s: int, seen: Callable[[], Awaitable[_Visibility]]
+) -> ProblemError:
+    """The problem answering a store failure; validation issues about values the caller may
+    not read (`seen`) have a generic code."""
+    if not isinstance(error, ValidationFailedError):
+        return commit_problem(error, max_issues=1, retry_after_s=retry_after_s)
+    visible = await seen()
+    schemas = () if visible.schema is None else (visible.schema,)
+    return commit_problem(
+        error,
+        max_issues=1,
+        retry_after_s=retry_after_s,
+        locate=lambda issues: findings_of(generalize_issues(issues, schemas, visible.masking)),
+    )
 
 
 # Routes -----------------------------------------------------------------------------------
@@ -818,7 +832,11 @@ async def merge_proposal(
             ),
         )
     except CommitError as error:
-        raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
+        raise await _store_problem(
+            error,
+            keeper.branches.lock_retry_after_s,
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+        ) from None
     attempt = _conflicts(
         outcome.view,
         await _visibility(store, guard, domain_id, proposal.target_ref, keeper),
@@ -891,7 +909,11 @@ async def list_conflicts(
             ),
         )
     except CommitError as error:
-        raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
+        raise await _store_problem(
+            error,
+            keeper.branches.lock_retry_after_s,
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+        ) from None
     return _conflicts(view, await _visibility(store, guard, domain_id, proposal.target_ref, keeper))
 
 
@@ -938,7 +960,11 @@ async def resolve_conflict(
             scope=scope,
         )
     except CommitError as error:
-        raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
+        raise await _store_problem(
+            error,
+            keeper.branches.lock_retry_after_s,
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+        ) from None
     annotate(request, action="proposal.resolve", target=proposal_id, conflicts=[conflict_id])
     return _resolution(rows[0], frozenset())
 
@@ -990,7 +1016,11 @@ async def resolve_conflicts(
             scope=scope,
         )
     except CommitError as error:
-        raise _store_problem(error, keeper.branches.lock_retry_after_s) from None
+        raise await _store_problem(
+            error,
+            keeper.branches.lock_retry_after_s,
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+        ) from None
     assert view is not None
     annotate(
         request,
