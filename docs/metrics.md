@@ -72,6 +72,7 @@ syncs, extraction), job claims, garbage collection and webhook deliveries. Both 
 | `lorebase.webhooks.deliveries` | `lorebase_webhooks_deliveries_total` | counter | `{delivery}` | `outcome` | Webhook delivery attempts by outcome: `delivered`, `retrying` (failed, another attempt is scheduled) or `dead` (attempts used up, or the target was refused). | `lorebase_store.webhooks.delivery.deliver_pending` |
 | `lorebase.outbox.handoffs` | `lorebase_outbox_handoffs_total` | counter | `{event}` | `consumer` | Outbox events a consumer handed off (for webhooks: fanned out into deliveries) and no longer has pending. | `lorebase_store.webhooks.delivery.deliver_pending` |
 | `lorebase.outbox.pruned` | `lorebase_outbox_pruned_total` | counter | `{event}` | `reason` | Outbox events deleted. `reason` is `retention` (handed off by every consumer and older than `store.outbox.retention_s`) or `expired` (older than `store.outbox.max_age_s` while a consumer still had them pending: that consumer lost them). | `lorebase_store.webhooks.delivery.deliver_pending` |
+| `lorebase.outbox.prune.backlog` | `lorebase_outbox_prune_backlog` | gauge | `{event}` | | Outbox events still eligible for pruning (see `lorebase.outbox.pruned`) after the latest pruning pass of the process, counted up to 100000 (`PRUNE_BACKLOG_CAP`), so a larger backlog reads 100000. Absent until the first pass. | `lorebase_store.webhooks.delivery.deliver_pending` |
 | `lorebase.operations.events` | `lorebase_operations_events_total` | counter | `{event}` | | Operation side effect events written to the outbox by committed executions. | `lorebase_keeper.services.operations.execute` |
 | `lorebase.webhooks.timeouts` | `lorebase_webhooks_timeouts_total` | counter | `{attempt}` | | Webhook delivery attempts cut off by `webhooks.timeout_s` (receiver gone, silent, dropping packets or slow); each is also counted in `lorebase.webhooks.deliveries` as `retrying` or `dead`. | `lorebase_store.webhooks.delivery.deliver_pending` |
 | `lorebase.store.branch_jobs.rows` | `lorebase_store_branch_jobs_rows_total` | counter | `{row}` | `job` | Rows read by the background branch jobs ([operations](operations.md#large-branches)). `job` is `materialize` (base rows a copy went through) or `delete` (rows of a deleted branch removed). | `lorebase_store.materialize.background` |
@@ -103,6 +104,20 @@ Job counts per type answer most questions about the work: runs of `source_sync` 
 runs, `extraction` is extraction throughput, `webhook_delivery` is the delivery pass, `gc` is
 garbage collection, `embeddings` the embedding passes (a pass larger than
 `scribe.embeddings.max_records_per_job` runs as several jobs). A retry is a `queued` run.
+
+## Guide
+
+Meter `lorebase.guide` (`lorebase_guide.telemetry`), exported by the optional Guide service.
+
+| OpenTelemetry name | Prometheus series | Type | Unit | Labels | Meaning | Emitted by |
+|--------------------|-------------------|------|------|--------|---------|------------|
+| `lorebase.guide.requests` | `lorebase_guide_requests_total` | counter | `{request}` | `route`, `status` | HTTP requests answered by Guide. | `lorebase_guide.app` |
+| `lorebase.guide.request.duration` | `lorebase_guide_request_duration_seconds` (`_bucket`, `_sum`, `_count`) | histogram | s | `route` | Duration of one HTTP request; for `/explore`, until the stream ends. | `lorebase_guide.app` |
+| `lorebase.guide.explorations` | `lorebase_guide_explorations_total` | counter | `{exploration}` | `outcome` | Explorations by outcome (`answered`, `not_found`, `budget`, `timeout`, `model`, ...). | `lorebase_guide.app` |
+| `lorebase.guide.steps` | `lorebase_guide_steps_total` | counter | `{call}` | `tool`, `ok` | Keeper reads the model asked for. | `lorebase_guide.agent.Explorer` |
+| `lorebase.guide.tokens` | `lorebase_guide_tokens_total` | counter | `{token}` | `direction` | Model tokens, `input` or `output`. | `lorebase_guide.agent.Explorer` |
+| `lorebase.guide.embeddings` | `lorebase_guide_embeddings_total` | counter | `{text}` | `mode` | Texts embedded for the web app's semantic search. | `lorebase_guide.app` |
+| `lorebase.guide.refused` | `lorebase_guide_refused_total` | counter | `{request}` | `reason` | Requests refused before any work (`auth`, `origin`, `rate`, `busy`, ...). | `lorebase_guide.app` |
 
 ## Spans
 

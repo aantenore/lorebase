@@ -28,6 +28,7 @@ from lorebase_store.repositories.events import (
 )
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import OutboxSettings, StoreSettings
+from lorebase_store.telemetry import OUTBOX_PRUNE_BACKLOG
 from lorebase_store.vault import VaultSettings, erase_record
 from lorebase_store.webhooks import (
     SigningKeys,
@@ -261,6 +262,54 @@ async def test_pruning_waits_for_every_consumer_until_events_expire(sessions: Se
     assert await prune(datetime.now(UTC)) == (0, 0)  # within retention
     assert await prune(later) == (1, 0)
     assert second not in await outbox_ids(sessions)
+
+
+def backlog() -> int:
+    (observation,) = OUTBOX_PRUNE_BACKLOG.observe()
+    return int(observation.value)
+
+
+async def test_a_pruning_pass_repeats_batches_until_nothing_is_left(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    for _ in range(7):
+        await emit(sessions)
+    await claim(sessions, WEBHOOKS_CONSUMER)
+    total = len(await outbox_ids(sessions))
+    assert total >= 7
+    later = datetime.now(UTC) + timedelta(days=1)
+    outbox = OutboxSettings(retention_s=60, max_age_s=7 * 86400, prune_batch=3)
+    report = await deliver(sessions, Sender(), runtime, outbox=outbox, clock=lambda: later)
+    assert report.pruned == total
+    assert await outbox_ids(sessions) == []
+    assert backlog() == 0
+
+
+async def test_the_pruning_budget_stops_the_batches_and_the_backlog_is_reported(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    for _ in range(7):
+        await emit(sessions)
+    await claim(sessions, WEBHOOKS_CONSUMER)
+    total = len(await outbox_ids(sessions))
+    later = datetime.now(UTC) + timedelta(days=1)
+    outbox = OutboxSettings(retention_s=60, max_age_s=7 * 86400, prune_batch=3, prune_budget_s=5)
+    ticks = iter(range(0, 1000, 10))  # every reading is 10 s after the previous one
+    report = await deliver(
+        sessions,
+        Sender(),
+        runtime,
+        outbox=outbox,
+        clock=lambda: later,
+        monotonic=lambda: float(next(ticks)),
+    )
+    assert report.pruned == 3  # one batch: the budget was spent by then
+    assert len(await outbox_ids(sessions)) == total - 3
+    assert backlog() == total - 3
+    # The next pass, with time to spare, finishes the job.
+    await deliver(sessions, Sender(), runtime, outbox=outbox, clock=lambda: later)
+    assert await outbox_ids(sessions) == []
+    assert backlog() == 0
 
 
 async def test_deliveries_are_retried_with_one_idempotency_key_then_dead(

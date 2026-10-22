@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, delete, exists, func, insert, select
+from sqlalchemy import Table, and_, delete, exists, func, insert, or_, select
 from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,6 +167,27 @@ class OutboxRepository:
             delete(OUTBOX).where(OUTBOX.c.id.in_(handed_ids)).returning(OUTBOX.c.id)
         )
         return len(handed.all()), len(expired.all())
+
+    async def prunable(self, *, before: datetime, expire_before: datetime, cap: int) -> int:
+        """Events `prune` would delete now, counted up to `cap`. Pending events between the
+        two cutoffs are scanned to find them, so callers count only after a pruning pass that
+        ran out of time with work left."""
+        eligible = (
+            select(OUTBOX.c.id)
+            .where(
+                or_(
+                    OUTBOX.c.created_at < expire_before,
+                    and_(
+                        OUTBOX.c.created_at < before,
+                        ~exists().where(OUTBOX_PENDING.c.event_id == OUTBOX.c.id),
+                    ),
+                )
+            )
+            .limit(cap)
+            .subquery()
+        )
+        result = await self._session.execute(select(func.count()).select_from(eligible))
+        return int(result.scalar_one())
 
 
 async def register_consumer(session: AsyncSession, name: str) -> None:

@@ -4,7 +4,11 @@ process running the store code (Keeper or Scribe) exports them under its own ser
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from threading import Lock
+
 from opentelemetry import metrics
+from opentelemetry.metrics import CallbackOptions, Observation
 
 from lorebase_platform.telemetry import LATENCY_BUCKETS_S
 
@@ -51,6 +55,34 @@ OUTBOX_PRUNED = meter.create_counter(
     unit="{event}",
     description="Outbox events deleted, by reason (retention: handed off by every consumer; "
     "expired: older than store.outbox.max_age_s while still pending).",
+)
+
+
+class PruneBacklog:
+    """Outbox events still eligible for pruning after the latest pruning pass of this process
+    (capped, see `OutboxRepository.prunable`); nothing is reported before the first pass."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._value: int | None = None
+
+    def set(self, value: int) -> None:
+        with self._lock:
+            self._value = value
+
+    def observe(self, _options: CallbackOptions | None = None) -> Iterable[Observation]:
+        with self._lock:
+            value = self._value
+        return [] if value is None else [Observation(value)]
+
+
+OUTBOX_PRUNE_BACKLOG = PruneBacklog()
+meter.create_observable_gauge(
+    "lorebase.outbox.prune.backlog",
+    callbacks=[OUTBOX_PRUNE_BACKLOG.observe],
+    unit="{event}",
+    description="Outbox events eligible for pruning left after the latest pruning pass "
+    "(counted up to a cap).",
 )
 OPERATION_EVENTS = meter.create_counter(
     "lorebase.operations.events",
