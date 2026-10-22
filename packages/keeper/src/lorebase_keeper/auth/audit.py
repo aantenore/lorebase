@@ -12,7 +12,11 @@ bodies, headers and credentials are never recorded.
 
 With a `ReadAuditor` (`audit.reads.enabled`), successful reads (GET and HEAD, and the POST
 routes that only read: `keeper.limits.rate.routes`) of an authenticated caller are handed to
-it, with the sensitive values the request showed or masked (`read_audit.collecting`).
+it, with the sensitive values the request showed or masked (`read_audit.collecting`). When the
+auditor rejects (`on_overflow: reject`), the place of the record is taken when the status line
+of such a read passes, before any of the body; without one the response is replaced by a 503
+problem with `Retry-After`, the rest of the application's response is discarded and its
+`receive` reports a disconnect, so a streamed body stops.
 """
 
 from __future__ import annotations
@@ -31,8 +35,14 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lorebase_keeper.auth.config import AuditSettings
 from lorebase_keeper.auth.ports import AuthStore
-from lorebase_keeper.auth.read_audit import READ_ACTION, ReadAuditor, ReadNotes, collecting
-from lorebase_keeper.errors import request_id_of
+from lorebase_keeper.auth.read_audit import (
+    READ_ACTION,
+    ReadAuditor,
+    ReadNotes,
+    ReadSlot,
+    collecting,
+)
+from lorebase_keeper.errors import ProblemRenderer, ProblemType, request_id_of
 from lorebase_store.auth import NewAuditEntry
 
 logger = logging.getLogger("lorebase.keeper.audit")
@@ -41,6 +51,9 @@ STATE_KEY = "audit"
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 DENIED_STATUSES = frozenset({401, 403})
 ANONYMOUS_ACTOR = "anonymous"
+READ_AUDIT_UNAVAILABLE = ProblemType(
+    "read-audit-unavailable", 503, "Read cannot be audited right now"
+)
 
 
 @dataclass
@@ -158,12 +171,15 @@ class AuditMiddleware:
         writer: AuditWriter,
         settings: AuditSettings,
         api_prefix: str = "",
+        renderer: ProblemRenderer,
         reads: ReadAuditor | None = None,
         is_read: ReadClassifier | None = None,
     ) -> None:
         self.app = app
         self._writer = writer
         self._record_denied = settings.record_denied
+        self._retry_after_s = settings.reads.retry_after_s
+        self._renderer = renderer
         self._api_prefix = api_prefix
         self._reads = reads
         self._is_read = is_read
@@ -176,33 +192,80 @@ class AuditMiddleware:
         draft = AuditDraft()
         scope.setdefault("state", {})[STATE_KEY] = draft
         status = 500
+        reads = self._reads if self._reads is not None and self._reads.rejects else None
+        slot: ReadSlot | None = None
+        refused = False
 
         async def send_and_note(message: Message) -> None:
-            nonlocal status
+            nonlocal status, slot, refused
+            if refused:
+                return  # the 503 is out: the rest of the response is discarded
             if message["type"] == "http.response.start":
                 status = message["status"]
+                if reads is not None and self._read_candidate(scope, draft, status):
+                    slot = reads.reserve(bool(notes.sensitive))
+                    if slot is None:
+                        refused = True
+                        await self._refuse(scope, send)
+                        return
             await send(message)
+
+        async def receive_until_refused() -> Message:
+            if refused:
+                return {"type": "http.disconnect"}
+            return await receive()
 
         with collecting() as notes:
             try:
-                await self.app(scope, receive, send_and_note)
+                await self.app(scope, receive_until_refused, send_and_note)
             finally:
-                entry = self._entry(scope, draft, status, notes)
-                if entry is not None:
-                    # Shielded: a client disconnect must not cancel the write half way.
-                    await asyncio.shield(self._writer.write(entry))
-                elif self._reads is not None:
-                    self._offer_read(scope, draft, status, notes)
+                try:
+                    entry = None if refused else self._entry(scope, draft, status, notes)
+                    if entry is not None:
+                        # Shielded: a client disconnect must not cancel the write half way.
+                        await asyncio.shield(self._writer.write(entry))
+                    elif self._reads is not None and not refused:
+                        self._offer_read(scope, draft, status, notes, slot)
+                finally:
+                    if slot is not None:
+                        slot.release()  # no-op once filled
 
-    def _offer_read(self, scope: Scope, draft: AuditDraft, status: int, notes: ReadNotes) -> None:
-        """Hand a successful read of an authenticated caller to the read auditor."""
-        reads = self._reads
-        if reads is None or draft.suppressed or draft.actor is None or not 200 <= status < 300:
-            return
+    async def _refuse(self, scope: Scope, send: Send) -> None:
+        """Answer 503 in place of a read whose record found no place in the queue."""
+        response = self._renderer.response(
+            READ_AUDIT_UNAVAILABLE,
+            detail="The read could not be recorded in the audit log; retry later.",
+            instance=str(scope["path"]),
+            request_id=request_id_of(scope.get("state")),
+            headers={"Retry-After": str(self._retry_after_s)},
+        )
+        await response(scope, _no_receive, send)
+
+    def _read_candidate(self, scope: Scope, draft: AuditDraft, status: int) -> bool:
+        """Whether the response is a successful read of an authenticated caller that the read
+        auditor may record (before the filters and the sampling)."""
+        if draft.suppressed or draft.actor is None or not 200 <= status < 300:
+            return False
+        if self._entry(scope, draft, status) is not None:
+            return False  # recorded in the audit log of actions
         route = self._route_template(scope)
         relative = route[len(self._api_prefix) :] if route.startswith(self._api_prefix) else route
-        if self._is_read is None or not self._is_read(scope["method"], relative or "/"):
-            return
+        return self._is_read is not None and self._is_read(scope["method"], relative or "/")
+
+    def _offer_read(
+        self,
+        scope: Scope,
+        draft: AuditDraft,
+        status: int,
+        notes: ReadNotes,
+        slot: ReadSlot | None = None,
+    ) -> None:
+        """Hand a successful read of an authenticated caller to the read auditor, in the place
+        held for it when there is one."""
+        reads = self._reads
+        if reads is None or not self._read_candidate(scope, draft, status):
+            return  # a held place is given back by the caller
+        route = self._route_template(scope)
         kind = _path_param(scope, "kind")
         sensitive = sorted(notes.sensitive)
         if not reads.wants(draft.principal_type, kind, bool(sensitive)):
@@ -223,16 +286,18 @@ class AuditMiddleware:
             details["permission"] = draft.permission
         if request_id := request_id_of(scope.get("state")):
             details["request_id"] = request_id
-        reads.offer(
-            NewAuditEntry(
-                actor=draft.actor,
-                action=READ_ACTION,
-                domain_id=draft.domain_id or _path_param(scope, "domain_id"),
-                target=draft.target or kind,
-                details=details,
-                at=datetime.now(UTC),
-            )
+        entry = NewAuditEntry(
+            actor=draft.actor or ANONYMOUS_ACTOR,
+            action=READ_ACTION,
+            domain_id=draft.domain_id or _path_param(scope, "domain_id"),
+            target=draft.target or kind,
+            details=details,
+            at=datetime.now(UTC),
         )
+        if slot is not None:
+            slot.fill(entry)
+        else:
+            reads.offer(entry)
 
     def _route_template(self, scope: Scope) -> str:
         """Route path with its parameters unexpanded, including the API prefix."""
@@ -280,6 +345,10 @@ class AuditMiddleware:
             target=draft.target,
             details=details,
         )
+
+
+async def _no_receive() -> Message:
+    return {"type": "http.disconnect"}
 
 
 def _path_param(scope: Mapping[str, Any], name: str) -> str | None:

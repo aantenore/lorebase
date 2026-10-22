@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any
 
 import httpx
 import pytest
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.responses import StreamingResponse
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
@@ -17,10 +18,12 @@ from lorebase_keeper.auth.config import ReadAuditSettings
 from lorebase_keeper.auth.deps import Access, require
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.read_audit import (
+    ReadAuditCheck,
     ReadAuditor,
     collecting,
     note_sensitive,
 )
+from lorebase_keeper.readiness import CheckStatus
 from lorebase_platform.settings import ConfigError
 from lorebase_store.auth import NewAuditEntry
 from lorebase_store.models.enums import PrincipalType
@@ -190,3 +193,158 @@ async def test_notes_belong_to_their_request() -> None:
             return notes.sensitive
 
     assert await asyncio.gather(request("shown"), request(None)) == [{"shown"}, set()]
+
+
+class BlockedSink(Sink):
+    """Holds every write until `release` is set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def __call__(self, entries: Sequence[NewAuditEntry]) -> None:
+        await self.release.wait()
+        await super().__call__(entries)
+
+
+def dropped_points(reader: InMemoryMetricReader) -> dict[tuple[Any, Any], Any]:
+    data = reader.get_metrics_data()
+    if data is None:
+        return {}
+    return {
+        (point.attributes["reason"], point.attributes["sensitive"]): point.value
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        if metric.name == "lorebase.audit.reads.dropped"
+        for point in metric.data.data_points
+    }
+
+
+STREAM = "/api/v1/domains/{domain_id}/kinds/{kind}/stream"
+
+
+def with_stream(app: FastAPI, seen: list[int]) -> FastAPI:
+    """A streamed read route; `seen` gets the auditor's pending records as the body starts."""
+    router = APIRouter()
+
+    @router.get(STREAM)
+    async def stream(
+        domain_id: str, kind: str, access: Annotated[Access, Depends(require(Permission.DATA_READ))]
+    ) -> StreamingResponse:
+        async def body() -> AsyncIterator[bytes]:
+            seen.append(app.state.read_audit.pending)
+            for part in (b"one\n", b"two\n"):
+                yield part
+
+        return StreamingResponse(body(), media_type="application/x-ndjson")
+
+    app.include_router(router)
+    return app
+
+
+@pytest.mark.parametrize("on_overflow", ["drop", "reject"])
+async def test_reject_refuses_reads_whose_record_has_no_place(
+    on_overflow: str, auth_app: Callable[..., FastAPI], client_for: ClientFor, headers: Any
+) -> None:
+    sink = BlockedSink()
+    settings = {
+        "enabled": True,
+        "on_overflow": on_overflow,
+        "queue_size": 2,
+        "batch_size": 1,
+        "retry_after_s": 7,
+    }
+    app = with_stream(auth_app(auth(settings), read_audit_sink=sink), [])
+    admin = headers("svc_admin")
+    async with client_for(app) as http:
+        responses = [await http.get(KEYS, headers=admin) for _ in range(5)]
+        streamed = await http.get(STREAM.format(domain_id="acme", kind="order"), headers=admin)
+        sink.release.set()
+        served = sum(r.status_code == 200 for r in responses)
+        entries = await read_entries(app, sink)
+    if on_overflow == "drop":
+        assert served == 5
+        assert len(entries) < served  # served reads went unrecorded
+        assert streamed.text == "one\ntwo\n"
+        return
+    refused = [r for r in responses if r.status_code == 503]
+    assert refused
+    assert served
+    assert len(entries) == served  # every served read has its record
+    assert refused[0].headers["retry-after"] == "7"
+    assert refused[0].headers["content-type"] == "application/problem+json"
+    assert refused[0].json()["code"] == "read-audit-unavailable"
+    # the 503 replaced the streamed body before any of it left
+    assert streamed.status_code == 503
+    assert streamed.json()["code"] == "read-audit-unavailable"
+
+
+async def test_reject_holds_the_place_of_the_record_before_the_body(
+    auth_app: Callable[..., FastAPI], client_for: ClientFor, sink: Sink, headers: Any
+) -> None:
+    seen: list[int] = []
+    settings = {"enabled": True, "on_overflow": "reject"}
+    app = with_stream(auth_app(auth(settings), read_audit_sink=sink), seen)
+    assert any(isinstance(check, ReadAuditCheck) for check in app.state.readiness_checks)
+    admin = headers("svc_admin")
+    async with client_for(app) as http:
+        response = await http.get(STREAM.format(domain_id="acme", kind="order"), headers=admin)
+        assert response.text == "one\ntwo\n"
+    assert seen == [1]  # held while the body was produced
+    [entry] = await read_entries(app, sink)
+    assert entry.details["kind"] == "order"
+    assert app.state.read_audit.pending == 0
+
+
+async def test_reject_keeps_failing_batches_and_turns_readiness_failed() -> None:
+    class CountingSink(Sink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.retried = asyncio.Event()
+
+        async def __call__(self, entries: Sequence[NewAuditEntry]) -> None:
+            if self.attempts >= 3:
+                self.retried.set()
+            await super().__call__(entries)
+
+    reader = InMemoryMetricReader()
+    sink = CountingSink()
+    settings = ReadAuditSettings(
+        enabled=True, on_overflow="reject", flush_interval_s=0.01, unready_after_failures=2
+    )
+    reads = ReadAuditor(settings, sink, meter_provider=MeterProvider(metric_readers=[reader]))
+    check = ReadAuditCheck(reads)
+    assert (await check()).status is CheckStatus.OK
+    sink.fail = True
+    slot = reads.reserve(sensitive=False)
+    assert slot is not None
+    slot.fill(NewAuditEntry(actor="usr_1", action="read"))
+    async with asyncio.timeout(5):
+        await sink.retried.wait()
+    assert (await check()).status is CheckStatus.FAILED
+    sink.fail = False
+    async with asyncio.timeout(5):
+        await reads.flush()
+    assert (await check()).status is CheckStatus.OK
+    assert [e.actor for e in sink.entries] == ["usr_1"]
+    await reads.aclose()
+    assert dropped_points(reader) == {}
+
+
+async def test_held_places_count_and_are_given_back() -> None:
+    settings = ReadAuditSettings(enabled=True, on_overflow="reject", queue_size=3)
+    reads = ReadAuditor(settings, BlockedSink())
+    plain = NewAuditEntry(actor="usr_1", action="read")
+    first, second = reads.reserve(False), reads.reserve(False)
+    assert first is not None
+    assert second is not None
+    assert reads.reserve(False) is None  # the last place is kept for sensitive reads
+    assert not reads.offer(plain)
+    assert reads.reserve(True) is not None
+    assert reads.reserve(True) is None  # full
+    first.release()
+    first.fill(plain)  # no effect once released
+    assert reads.pending == 2
+    assert reads.reserve(True) is not None
+    await reads.aclose()

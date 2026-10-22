@@ -216,8 +216,14 @@ keeper:
         queue_size: 10000        # past it records are dropped (lorebase.audit.reads.dropped)
         batch_size: 500          # records per transaction
         flush_interval_s: 1.0    # longest wait before queued records are written
-        write_timeout_s: 5.0     # a failed batch is dropped and counted
-    sessions:                  # sign-in of the web app: Keeper as backend-for-frontend
+        write_timeout_s: 5.0     # a failed batch is dropped and counted (on_overflow: drop)
+        on_overflow: drop        # drop: serve the read, drop and count the record; reject:
+                                 # 503 when the record finds no place in the queue, failed
+                                 # batches kept and retried (the read stream as proof)
+        retry_after_s: 1         # Retry-After of reads refused by on_overflow: reject
+        unready_after_failures: 3  # failed attempts in a row of a batch before readiness
+                                 # fails (on_overflow: reject)
+    sessions:                 # sign-in of the web app: Keeper as backend-for-frontend
                                  # (authorization code + PKCE, server-side sessions). Needs an
                                  # oidc mode and the `database` section
       enabled: false

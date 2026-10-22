@@ -275,7 +275,10 @@ Bearer tokens of any OpenID Connect provider
 | `keeper.auth.audit.reads.queue_size` | `10000` | past it records are dropped (lorebase.audit.reads.dropped) |
 | `keeper.auth.audit.reads.batch_size` | `500` | records per transaction |
 | `keeper.auth.audit.reads.flush_interval_s` | `1.0` | longest wait before queued records are written |
-| `keeper.auth.audit.reads.write_timeout_s` | `5.0` | a failed batch is dropped and counted |
+| `keeper.auth.audit.reads.write_timeout_s` | `5.0` | a failed batch is dropped and counted (on_overflow: drop) |
+| `keeper.auth.audit.reads.on_overflow` | `drop` | drop: serve the read, drop and count the record; reject: 503 when the record finds no place in the queue, failed batches kept and retried (the read stream as proof) |
+| `keeper.auth.audit.reads.retry_after_s` | `1` | Retry-After of reads refused by on_overflow: reject |
+| `keeper.auth.audit.reads.unready_after_failures` | `3` | failed attempts in a row of a batch before readiness fails (on_overflow: reject) |
 
 #### `keeper.auth.sessions`
 
