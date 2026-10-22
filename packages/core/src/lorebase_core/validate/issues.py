@@ -74,6 +74,7 @@ class IssueCode(StrEnum):
     VALUE_REFERENCE_MISSING = "value.reference_missing"
     VALUE_VAULT_REFERENCE = "value.vault_reference"
     VALUE_VAULT_UNAVAILABLE = "value.vault_unavailable"
+    VALUE_VAULT_ERASED = "value.vault_erased"
     # Data: Records
     RECORD_KIND_UNKNOWN = "record.kind_unknown"
     RECORD_KEY_INVALID = "record.key_invalid"

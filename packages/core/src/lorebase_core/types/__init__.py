@@ -21,6 +21,7 @@ from lorebase_core.types.encoding import (
     to_text,
 )
 from lorebase_core.types.errors import CastError, EncodingError, EncodingReason, TypeSystemError
+from lorebase_core.types.matching import fold_text, matching_form
 from lorebase_core.types.types import (
     INT64_MAX,
     INT64_MIN,
@@ -58,10 +59,12 @@ __all__ = [
     "constraint_problems",
     "decode_value",
     "encode_value",
+    "fold_text",
     "format_date",
     "format_duration",
     "format_timestamp",
     "is_canonical",
+    "matching_form",
     "normalize_key",
     "normalize_text",
     "to_text",

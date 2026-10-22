@@ -60,6 +60,7 @@ from lorebase_keeper.services.operations import (
 )
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import StaleHeadError
+from lorebase_store.digests import DigestKeys
 from lorebase_store.materialize import BranchMode
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, RefKind
 from lorebase_store.repositories import (
@@ -71,7 +72,6 @@ from lorebase_store.repositories import (
     RefRepository,
     RefRow,
 )
-from lorebase_store.vault import VaultKeys
 
 logger = logging.getLogger("lorebase.keeper.agent_writes")
 
@@ -567,7 +567,7 @@ def _check_replay(
     name: str,
     *,
     domain_id: str,
-    keys: VaultKeys | None,
+    digests: DigestKeys,
 ) -> InvocationRow | None:
     """The earlier execution under the idempotency key when it is this one; conflict when the
     key was used for something else."""
@@ -575,7 +575,7 @@ def _check_replay(
     if found is None:
         return None
     digest = operations_service.parameters_hash(
-        request.operation, name, request.parameters, domain_id=domain_id, keys=keys
+        request.operation, name, request.parameters, domain_id=domain_id, digests=digests
     )
     if found.params.get("parameters_hash") != digest:
         raise ProblemError(
@@ -706,7 +706,9 @@ async def run(
 
     _check_ownership(prepared, settings, principal, name)
     exists = name in prepared.branches
-    replay = _check_replay(prepared, request, name, domain_id=domain_id, keys=store.runtime.vault)
+    async with store.sessions() as session:
+        digests = await store.runtime.digests.ready(session)
+    replay = _check_replay(prepared, request, name, domain_id=domain_id, digests=digests)
     await check(Permission.DATA_READ, AccessContext(branch=target))
     await check(Permission.PROPOSAL_CREATE, context)
     if not exists:

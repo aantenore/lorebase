@@ -47,6 +47,9 @@ MATERIALIZE_JOB = "store.materialize"
 BRANCH_DELETE_JOB = "store.branch_delete"
 """Job type of the batched deletion of a hidden branch's rows; payload `{"branch": name}`
 (see `lorebase_store.materialize.background`)."""
+VAULT_ROTATE_JOB = "vault.rotate"
+"""Job type of a vault key rotation pass over every Domain; payload `{"after": [domain, token]}`
+or empty (see `lorebase_store.vault.rotation`)."""
 EMBEDDINGS_JOB = "embeddings"
 """Job type of an embedding pass over a Domain's branches run by Scribe; payload from
 `embeddings_payload`."""

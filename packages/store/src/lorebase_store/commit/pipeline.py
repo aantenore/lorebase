@@ -3,8 +3,9 @@
 1. take the branch advisory lock; read head `H` and the ref version;
 2. validate the changes against the materialized head of `H` (bulk-prefetched `IndexView`);
    schema changes add their data migrations; values of vault Attributes are validated, then
-   replaced by vault references (`lorebase_store.vault`) before the core rules run;
-3. canonicalize and hash new objects; insert them, and new vault rows, with
+   replaced by vault references (`lorebase_store.vault`, under the Domain's vault lock held
+   shared to the end of the transaction) before the core rules run;
+3. canonicalize and hash new objects; insert them, new vault rows and vault lineage, with
    `ON CONFLICT DO NOTHING`;
 4. apply the changes to the tree by path copying; insert new nodes;
 5. insert the Revision with parent `H`, its changeset and provenance entries;
@@ -121,7 +122,7 @@ from lorebase_store.repositories.revisions import RevisionRepository, RevisionRo
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import COMMIT_DURATION
-from lorebase_store.vault.store import VaultRow, insert_rows, tokenize
+from lorebase_store.vault.store import Lineage, VaultRow, insert_lineage, insert_rows, tokenize
 
 COMMIT_ACTION = "revision.commit"
 COMMITTED_EVENT = "revision.committed"
@@ -150,6 +151,7 @@ class _Prepared:
     provenance: list[ProvenanceEntry] = field(default_factory=list)
     derived: list[DataChange] = field(default_factory=list)
     vault_rows: list[VaultRow] = field(default_factory=list)
+    vault_lineage: list[Lineage] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,7 +426,15 @@ def _prepare(
     validated = [*plan.changes, *request.changes]
     data = [c.change for c in validated]
     view.prefetch_for(schema, data)
-    vaulted = tokenize(sync, request.domain_id, schema, data, request.runtime.vault, view)
+    vaulted = tokenize(
+        sync,
+        request.domain_id,
+        schema,
+        data,
+        request.runtime.vault,
+        view,
+        erased_values=request.runtime.vault_settings.erased_values,
+    )
     issues.extend(vaulted.issues)
     if issues:
         raise ValidationFailedError(issues)
@@ -470,6 +480,7 @@ def _prepare(
         provenance=plan.provenance,
         derived=list(report.derived_changes),
         vault_rows=vaulted.rows,
+        vault_lineage=vaulted.lineage,
     )
 
 
@@ -552,6 +563,7 @@ async def _store_revision(
         session, domain_id, writes=settings.writes, batch=settings.nodes.prefetch_batch
     ).put_many(prepared.objects)
     await insert_rows(session, domain_id, prepared.vault_rows, at=revision.created_at)
+    await insert_lineage(session, domain_id, prepared.vault_lineage, at=revision.created_at)
     await NodeRepository(
         session,
         domain_id,

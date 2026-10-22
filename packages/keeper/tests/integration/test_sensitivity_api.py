@@ -284,13 +284,37 @@ async def test_erasure_reaches_history_and_is_audited(seeded: Seeded) -> None:
         await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
         entries = (
             await session.execute(
-                select(AuditEntry.action, AuditEntry.details).where(
+                select(AuditEntry.action, AuditEntry.target, AuditEntry.details).where(
                     AuditEntry.action == "vault.erase"
                 )
             )
         ).all()
     assert [e.details["erased"] for e in entries if "mode" in e.details] == [2, 0]
     assert not any(secret in str(entries) for secret in SECRETS)
+    # The erased Record's key is kept as a keyed digest only.
+    assert KEY not in str(entries)
+    digests = {e.details["key_digest"] for e in entries if "mode" in e.details}
+    assert len(digests) == 1
+    assert len(next(iter(digests))) == 64
+
+
+async def test_vault_keys_need_an_installation_administrator(seeded: Seeded) -> None:
+    facts = seeded.facts
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        headers = {"Authorization": f"Bearer {facts['admin']}"}
+        assert (await http.get("/api/v1/vault/keys", headers=headers)).status_code == 403
+        assert (await http.post("/api/v1/vault/rotate", headers=headers)).status_code == 403
+    async with keeper(seeded.app_url, vault=VAULT) as http:  # authentication off: allowed
+        keys = await http.get("/api/v1/vault/keys")
+        assert keys.status_code == 200, keys.text
+        found = keys.json()
+        assert (found["key_id"], found["fingerprint_key"]) == ("k1", "1/2")
+        assert set(found["encryption_keys"]) <= {"k1"}
+        assert (found["outdated"], found["digests"]) == (0, "vault.token_key")
+        queued = await http.post("/api/v1/vault/rotate")
+        assert queued.status_code == 202, queued.text
+        again = await http.post("/api/v1/vault/rotate")
+        assert again.json()["job_id"] == queued.json()["job_id"]
 
 
 async def test_early_not_modified_depends_on_the_default_branch_tags(seeded: Seeded) -> None:

@@ -1127,15 +1127,26 @@ def test_apikey_commands(http: respx.MockRouter) -> None:
     assert json.loads(run("apikey", "list", "-d", "supply", "--json").stdout)[0]["id"] == "key_1"
 
 
-def test_admin_erase_by_record_and_by_value(http: respx.MockRouter) -> None:
+def test_admin_erase_by_record_and_by_value(http: respx.MockRouter, tmp_path: Path) -> None:
     erase = http.post("/domains/supply/vault/erase").respond(
         200, json={"domain": "supply", "kind": "Person", "mode": "record", "erased": 2}
     )
     by_key = run("admin", "erase", "Person", "--key", "P-1", "--yes", "-d", "supply")
     assert by_key.exit_code == 0
     assert "erased 2" in by_key.stderr + by_key.stdout
+    value_file = tmp_path / "value.txt"
+    value_file.write_text("a@b.c\n", encoding="utf-8")
     by_value = run(
-        "admin", "erase", "Person", "--attribute", "email", "--value", "a@b.c", "-y", "-d", "supply"
+        "admin",
+        "erase",
+        "Person",
+        "--attribute",
+        "email",
+        "--value",
+        f"@{value_file}",
+        "-y",
+        "-d",
+        "supply",
     )
     assert by_value.exit_code == 0
     from_stdin = run(
@@ -1160,7 +1171,39 @@ def test_admin_erase_by_record_and_by_value(http: respx.MockRouter) -> None:
     # Irreversible: without --yes and a terminal, nothing is sent.
     assert run("admin", "erase", "Person", "--key", "P-2", "-d", "supply").exit_code != 0
     assert run("admin", "erase", "Person", "--value", "x", "-y", "-d", "supply").exit_code != 0
+    # A value on the command line would stay in the shell history: refused, nothing sent.
+    inline = run(
+        "admin", "erase", "Person", "--attribute", "email", "--value", "a@b.c", "-y", "-d", "supply"
+    )
+    assert inline.exit_code != 0
+    assert "shell history" in inline.stderr + inline.stdout
     assert erase.call_count == 3
+
+
+def test_admin_vault_status_and_rotate(http: respx.MockRouter) -> None:
+    http.get("/vault/keys").respond(
+        200,
+        json={
+            "key_id": "k2",
+            "token_key_id": "t2",
+            "fingerprint_key": "t2/2",
+            "encryption_keys": {"k1": 3, "k2": 5},
+            "fingerprint_keys": {"t2/2": 8},
+            "tombstone_keys": {},
+            "outdated": 3,
+            "removable_keys": [],
+            "removable_token_keys": ["t1"],
+            "digests": "vault.token_key",
+        },
+    )
+    rotate = http.post("/vault/rotate").respond(202, json={"job_id": 42})
+    status = run("admin", "vault", "status", "--json")
+    assert status.exit_code == 0
+    assert json.loads(status.stdout)["removable_token_keys"] == ["t1"]
+    queued = run("admin", "vault", "rotate")
+    assert queued.exit_code == 0
+    assert "42" in queued.stderr + queued.stdout
+    assert rotate.called
 
 
 def test_audit_verify_reports_an_intact_chain(http: respx.MockRouter) -> None:

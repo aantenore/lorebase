@@ -1101,6 +1101,7 @@ $ lorebase admin [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `erase`: Erase personal data from the vault, on...
+* `vault`: Rotate the vault keys (installation...
 
 #### `lorebase admin erase`
 
@@ -1124,10 +1125,60 @@ $ lorebase admin erase [OPTIONS] {KIND}
 
 * `--key <str>`: Erase the values of the Record with this key.
 * `--attribute <str>`: Vault Attribute (api name). With --key: limit to it (repeatable); with --value: the Attribute whose value is erased in every Record.
-* `--value <str>`: Value to erase (JSON, or plain text when it is not valid JSON); - reads it from standard input, which keeps it out of the shell history.
+* `--value - | @FILE`: Where the value to erase is read from (JSON, or plain text when it is not valid JSON): - for standard input (asked without echo on a terminal), @FILE for a file. A value given on the command line is refused: it would stay in the shell history and the process list.
 * `--branch <str>`: Branch whose schema names the Kind.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-y, --yes`: Do not ask for confirmation.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase admin vault`
+
+Rotate the vault keys (installation administrators).
+
+**Usage**:
+
+```console
+$ lorebase admin vault [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `status`: Show which keys the vault rows use and...
+* `rotate`: Queue the job that seals and fingerprints...
+
+##### `lorebase admin vault status`
+
+Show which keys the vault rows use and which earlier keys can be removed.
+
+**Usage**:
+
+```console
+$ lorebase admin vault status [OPTIONS]
+```
+
+**Options**:
+
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+##### `lorebase admin vault rotate`
+
+Queue the job that seals and fingerprints the vault rows of every Domain again under the
+current keys, in batches. Follow it with `admin vault status`.
+
+**Usage**:
+
+```console
+$ lorebase admin vault rotate [OPTIONS]
+```
+
+**Options**:
+
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 

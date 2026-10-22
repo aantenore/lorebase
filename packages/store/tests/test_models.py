@@ -55,6 +55,9 @@ DESIGN_TABLES = {
     "extraction_cache",
     "schema_suggestions",
     "vault",
+    "vault_tombstones",
+    "vault_lineage",
+    "installation_secrets",
     # 10.5 webhooks
     "webhooks",
     "webhook_deliveries",
@@ -106,5 +109,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_covering_reverse_links_migration() -> None:
-    assert head_revisions() == ("0026",)
+def test_head_revision_is_the_vault_rotation_migration() -> None:
+    assert head_revisions() == ("0027",)

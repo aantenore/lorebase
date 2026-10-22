@@ -926,7 +926,16 @@ class Revisions(_Resource):
 
 
 class Vault(_Resource):
-    """Erasure of personal data held in the vault (`pii.erase`)."""
+    """Erasure of personal data held in the vault (`pii.erase`) and key rotation
+    (`vault.manage`, installation administrators)."""
+
+    def keys(self) -> m.VaultKeys:
+        """Rows by encryption key and fingerprint key, and the earlier keys no row uses."""
+        return self._c.send(ep.vault_keys())
+
+    def rotate(self) -> m.VaultRotation:
+        """Queue the job that makes rows stored under earlier keys again."""
+        return self._c.send(ep.rotate_vault())
 
     def erase_record(
         self,

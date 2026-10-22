@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +54,8 @@ from lorebase_keeper.services.operations import (
     resolve,
     review_required,
 )
+from lorebase_store.digests import DigestKeys, DigestKeysNotReadyError
+from lorebase_store.keyring import Keyring
 from lorebase_store.models.enums import PrincipalType
 
 SUPPLY_SCHEMA = Path(__file__).resolve().parents[3] / "examples" / "supply" / "schema.yaml"
@@ -326,10 +330,27 @@ def test_review_policy(schema: Schema) -> None:
         resolve(schema, "no_such_operation")
 
 
-def test_parameters_hash_is_stable() -> None:
-    first = parameters_hash("create_supplier", "work", {"a": 1, "b": [1, 2]})
-    assert first == parameters_hash("create_supplier", "work", {"b": [1, 2], "a": 1})
-    assert first != parameters_hash("create_supplier", "main", {"a": 1, "b": [1, 2]})
+def test_parameters_hash_is_stable_and_always_keyed() -> None:
+    digests = DigestKeys(Keyring("d" * 32, namespace="vault"))
+
+    def digest(branch: str, parameters: dict[str, Any], keys: DigestKeys = digests) -> str:
+        return parameters_hash("create_supplier", branch, parameters, domain_id="d", digests=keys)
+
+    first = digest("work", {"a": 1, "b": [1, 2]})
+    assert first == digest("work", {"b": [1, 2], "a": 1})
+    assert first != digest("main", {"a": 1, "b": [1, 2]})
+    # Keyed: another installation key gives another digest, and no plain SHA-256 matches it.
+    assert first != digest(
+        "work", {"a": 1, "b": [1, 2]}, DigestKeys(Keyring("x" * 32, namespace="vault"))
+    )
+    plain = json.dumps(
+        {"operation": "create_supplier", "branch": "work", "parameters": {"a": 1, "b": [1, 2]}},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    assert first != hashlib.sha256(plain).hexdigest()
+    with pytest.raises(DigestKeysNotReadyError):
+        digest("work", {}, DigestKeys())
 
 
 # Stored Operations with expressions (keeper.operations.expressions_enabled) --------------------
