@@ -1,4 +1,5 @@
-"""Principals, groups, grants, API keys, Operation invocations and audit (design 7.4, 10, 13)."""
+"""Principals, groups, grants, API keys, web sessions, Operation invocations and audit
+(design 7.4, 10, 13)."""
 
 from __future__ import annotations
 
@@ -128,6 +129,29 @@ class ApiKeyUsage(Base):
     requests: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     context_tokens: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class WebSession(Base):
+    """Signed-in browser session of a user (Keeper as backend-for-frontend, design 13.2).
+
+    Only the SHA-256 digest of the session id is stored; `tokens` holds the
+    provider's refresh and ID tokens encrypted by Keeper. Installation-wide like `api_keys`.
+    """
+
+    __tablename__ = "web_sessions"
+    __table_args__ = (h32_check("id_hash"),)
+
+    id_hash: Mapped[H32] = mapped_column(primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.id", ondelete="CASCADE"), index=True
+    )
+    subject: Mapped[str]
+    external_groups: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    tokens: Mapped[bytes | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    last_seen_at: Mapped[datetime] = mapped_column(index=True)
+    expires_at: Mapped[datetime] = mapped_column(index=True)
+    refresh_at: Mapped[datetime | None]
 
 
 class OperationInvocation(Base):
