@@ -2,9 +2,10 @@
 
 Every read names a branch (default: the Domain's default branch) and may name `at`, a Revision
 id or a tag. Without `at`, or when `at` is the branch head, the read hits the materialized
-head of the branch. Otherwise it is served from the Revision tree (design 6.12): key reads and
-Kind listings only, slower, and marked `served_from: tree` in responses. Every step is
-authorized against what it reads (`services.reads`).
+head of the branch. Otherwise it is served from the Revision tree (design 6.12), marked
+`served_from: tree` in responses: key reads and listings ordered by key read the tree, and
+reads that need materialized rows read a snapshot of the Revision (`reading.snapshots`).
+Every step is authorized against what it reads (`services.reads`).
 """
 
 from __future__ import annotations
@@ -84,7 +85,9 @@ class ReadPoint:
     """A resolved read: the Domain, the branch, the Revision served, its schema, the Kinds
     the caller may read there and how sensitive values are masked for it (`masking`).
     `layout` says where the branch's materialized rows live (its own, or an overlay over a
-    base branch); materialized reads take their rows from it."""
+    base branch); materialized reads take their rows from it. At another Revision, a read
+    that needs materialized rows gets a point whose `layout` names a snapshot of the Revision
+    (`snapshot`, `reading.snapshots`) and reads it like a head read."""
 
     domain: DomainRow
     branch: str
@@ -94,6 +97,7 @@ class ReadPoint:
     scope: KindScope
     layout: BranchLayout
     masking: Masking = UNCLEARED
+    snapshot: bool = False
 
     @property
     def variant(self) -> str:
@@ -107,7 +111,8 @@ class ReadPoint:
 
     @property
     def materialized(self) -> bool:
-        return self.served_from is ServedFrom.MATERIALIZED
+        """Whether materialized rows serve the read: the branch head's, or a snapshot's."""
+        return self.served_from is ServedFrom.MATERIALIZED or self.snapshot
 
     @property
     def revision_hex(self) -> str:
@@ -173,7 +178,7 @@ async def find_revision(
         if found is not None:
             return found, None
     named = await RefRepository(session, domain_id).get(token)
-    if named is None:
+    if named is None or named.kind is RefKind.SNAPSHOT:
         return None
     return await revisions.require(named.head), named
 

@@ -19,7 +19,9 @@ the fork point (`BranchLayout.history`).
 
 Only Attributes of the Record's own Kind appear, so a caller whose grants are narrowed to Kinds
 learns nothing about other Kinds here; derived values are not stored content and have no
-history. Both are served at branch heads only.
+history. History is served at branch heads and, through a snapshot of the Revision
+(`reading.snapshots`), at other Revisions: the changes along the first-parent chain up to that
+Revision. Lineage is served at branch heads only.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ from lorebase_keeper.reading.problems import tree_unsupported
 from lorebase_keeper.reading.records import fetch_record
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import Masking
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import Served
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import metadata
@@ -209,7 +212,7 @@ async def _changes(
         .join(r, and_(r.c.domain_id == h.c.domain_id, r.c.id == h.c.revision_id))
         .where(
             h.c.domain_id == point.domain.id,
-            h.c.branch == point.branch,
+            h.c.branch == point.layout.branch,
             h.c.partition == kind_partition(kind.id),
             h.c.element_key == key,
         )
@@ -370,7 +373,7 @@ async def record_history(
     shape: str,
 ) -> RecordHistoryOut:
     """A page of the changes of `kind/key` on the branch, newest first (see module doc)."""
-    _require_materialized(point, "Record history")
+    point = await with_rows(session, runtime, point, "Record history")
     position = position_of(cursor, shape, "/cursor")
     before = None
     if position is not None:
@@ -439,7 +442,7 @@ async def _count(session: AsyncSession, point: ReadPoint, kind: Kind, key: str) 
     count = await session.scalar(
         select(func.count()).where(
             h.c.domain_id == point.domain.id,
-            h.c.branch == point.branch,
+            h.c.branch == point.layout.branch,
             h.c.partition == kind_partition(kind.id),
             h.c.element_key == key,
         )

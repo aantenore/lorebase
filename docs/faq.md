@@ -66,7 +66,7 @@ Merging a source branch into a target uses a three-way merge against the common 
 
 ### Can I see what the knowledge base said last month?
 
-Yes. Every change is an immutable Revision. Reads accept `at` with a Revision id, tag or branch, and the diff endpoint compares any two Revisions. Time travel at a past Revision is served from the stored tree, so it supports key reads, Kind and Trait listings and Links but not filters or search; those work at branch heads.
+Yes. Every change is an immutable Revision. Reads accept `at` with a Revision id, tag or branch, and the diff endpoint compares any two Revisions. Time travel at a past Revision is served from the stored tree; filters, search, traversal, history and health read a snapshot of that Revision materialized on first use, up to `read.time_travel.snapshot_max_entries` Records and Links.
 
 ### Can I erase personal data from an immutable history?
 

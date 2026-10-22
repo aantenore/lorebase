@@ -1,7 +1,8 @@
 """Health reports (design 14): how sound the data of a Domain, or of one Kind, is.
 
-Computed on request from the materialized head of a branch and kept in the response cache under
-the Revision they describe, so asking again costs nothing until the branch moves. Callers with
+Computed on request from the materialized head of a branch, or with `at` from a snapshot of an
+earlier Revision (`reading.snapshots`), and kept in the response cache under the Revision they
+describe, so asking again costs nothing until the branch moves. Callers with
 Kind-narrowed grants get a report limited to those Kinds. `format=markdown` renders the report
 for pasting into a prompt.
 """
@@ -13,13 +14,14 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from lorebase_keeper.agents.context import JSON, MARKDOWN
-from lorebase_keeper.errors import CONFLICT, Problem, ProblemError, ValidationProblem
+from lorebase_keeper.errors import Problem, ValidationProblem
 from lorebase_keeper.kindhealth import markdown, report
 from lorebase_keeper.kindhealth.models import DomainHealthOut, KindHealthOut
 from lorebase_keeper.reading.caching import cache_key, respond_with
-from lorebase_keeper.reading.points import REVISION_HEADER, ReadPoint, read_guard, resolve_point
+from lorebase_keeper.reading.points import REVISION_HEADER, read_guard, resolve_point
 from lorebase_keeper.reading.records import require_kind
 from lorebase_keeper.reading.runtime import ReadRuntimeDep, ReadSessionDep
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import served
 from lorebase_keeper.services.reads import ReadGuard
 
@@ -29,7 +31,6 @@ BASE = "/domains/{domain_id}"
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks data.read for the branch."},
     404: {"model": Problem, "description": "Domain, branch or Kind not found."},
-    409: {"model": Problem, "description": "The branch has no materialized head."},
     422: {"model": ValidationProblem, "description": "Invalid request."},
     503: {"model": Problem, "description": "The scan exceeded its statement timeout."},
 }
@@ -38,14 +39,13 @@ DataRead = Annotated[ReadGuard, Depends(read_guard())]
 Branch = Annotated[
     str | None, Query(description="Branch to examine; default: the Domain's default branch.")
 ]
+At = Annotated[
+    str | None,
+    Query(description="Revision id or tag to examine (time travel, served from a snapshot)."),
+]
 Format = Annotated[
     Literal["json", "markdown"], Query(description="`markdown` renders the report as text.")
 ]
-
-
-def _materialized(point: ReadPoint) -> None:
-    if not point.materialized:
-        raise ProblemError(CONFLICT, "Health reports need the materialized head of the branch.")
 
 
 @router.get(
@@ -68,18 +68,19 @@ async def domain_health(
     session: ReadSessionDep,
     request: Request,
     branch: Branch = None,
+    at: At = None,
     format: Format = "json",
 ) -> Response:
     """Per Kind: Records, Links by Relation, constraint violations against the current schema,
     required-relation gaps, orphan Links, duplicates on unique and title Attributes, stale
     derived values and the last change; for the Kinds the caller may read."""
-    point = await resolve_point(session, runtime, access, branch=branch, at=None)
-    _materialized(point)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
 
     async def produce() -> tuple[bytes, str]:
+        rows = await with_rows(session, runtime, point, "Health reports")
         found = await report.scan_branch(
             session,
-            point,
+            rows,
             runtime.read.health,
             report.visible_kinds(point),
             report.visible_relations(point),
@@ -101,6 +102,7 @@ async def domain_health(
         runtime.cache,
         cache_key(request, point.domain.id, point.revision_hex, point.variant),
         produce,
+        time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
     )
 
@@ -126,17 +128,18 @@ async def kind_health(
     session: ReadSessionDep,
     request: Request,
     branch: Branch = None,
+    at: At = None,
     format: Format = "json",
 ) -> Response:
     """The checks of the Domain report for one Kind, with the Relations it takes part in."""
-    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found_kind = require_kind(point, kind)
-    _materialized(point)
 
     async def produce() -> tuple[bytes, str]:
+        rows = await with_rows(session, runtime, point, "Health reports")
         found = await report.scan_branch(
             session,
-            point,
+            rows,
             runtime.read.health,
             [found_kind],
             report.visible_relations(point, found_kind),
@@ -158,5 +161,6 @@ async def kind_health(
         runtime.cache,
         cache_key(request, point.domain.id, point.revision_hex, point.variant),
         produce,
+        time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
     )

@@ -45,6 +45,18 @@ def tree_unsupported(what: str) -> ProblemError:
     )
 
 
+def snapshot_refused(what: str, entries: int, limit: int) -> ProblemError:
+    """422 for a read at a Revision too large to snapshot (design 6.12)."""
+    return ProblemError(
+        VALIDATION_FAILED,
+        f"{what} at a Revision other than the branch head reads a snapshot of that Revision; "
+        f"this one holds {entries} Records and Links, more than the limit of {limit} "
+        "(read.time_travel.snapshot_max_entries). Key lookups and listings ordered by key "
+        "remain available.",
+        extensions={"errors": [{"pointer": "/query/at", "message": what, "code": "time_travel"}]},
+    )
+
+
 def request_problem(error: ValidationError, prefix: str) -> ProblemError:
     """422 for a request part validated outside FastAPI (for example a JSON query parameter)."""
     return ProblemError(

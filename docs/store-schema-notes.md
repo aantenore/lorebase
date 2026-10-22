@@ -36,6 +36,8 @@ difference).
   `proposal_status`, `review_verdict`, `item_decision`, `merge_attempt_status`,
   `principal_type`, `grant_scope`, `invocation_status`, `job_status`, `run_status`. A new value
   needs a migration with `ALTER TYPE ... ADD VALUE`. Roles stay `text` because custom roles exist.
+  `ref_kind` `snapshot` (revision `0025`) marks the refs that hold the materialized rows of a
+  past Revision for reads at it (`materialize.snapshot`, design 8.6); they have no ref log entry.
 - 32-byte checks (`octet_length = 32`) on `objects.hash`, `tree_nodes.hash`, `revisions.id`,
   `revisions.root`, `api_keys.hash`, `audit_log.entry_hash`, `documents.sha256`,
   `extraction_cache.cache_key`.

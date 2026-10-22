@@ -902,7 +902,8 @@ async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:
 _SCHEMAS = text(
     "SELECT r.name, s.compiled, r.materialization = 'overlay' FROM refs r "
     "JOIN mat_schema s ON s.domain_id = r.domain_id AND s.branch = r.name "
-    "WHERE r.domain_id = :domain AND r.deleted_at IS NULL ORDER BY r.name"
+    "WHERE r.domain_id = :domain AND r.deleted_at IS NULL AND r.kind <> 'snapshot' "
+    "ORDER BY r.name"
 )
 
 

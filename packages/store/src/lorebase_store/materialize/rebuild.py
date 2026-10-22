@@ -123,8 +123,10 @@ async def materialize_revision(
     head: RevisionRow,
     *,
     runtime: StoreRuntime,
+    indexes: bool = True,
 ) -> RebuildReport:
-    """Write the materialized head of an empty branch from the tree of `head`."""
+    """Write the materialized head of an empty branch from the tree of `head`; without
+    `indexes` the branch gets no per-Attribute indexes (snapshots, `materialize.snapshot`)."""
     settings = runtime.settings
     batch = settings.materialize.read_batch_rows
     repository = MaterializedRepository(
@@ -137,10 +139,11 @@ async def materialize_revision(
     tree = await nodes.load_tree(head.root)
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
     tagged = with_tags(schema, await reference_tags(session, domain_id, branch, runtime=runtime))
-    indexes = BranchIndexes(
+    branch_indexes = BranchIndexes(
         session, domain_id, branch, settings=settings.indexes, maintenance=runtime.index_maintenance
     )
-    await indexes.retire(schema)
+    if indexes:
+        await branch_indexes.retire(schema)
     await repository.set_schema(SchemaRow(schema_hash, compile_schema(schema)))
     await repository.rebuild_history(head.id)
     records = links = 0
@@ -212,7 +215,8 @@ async def materialize_revision(
                     search_weights(tagged.kinds.get(kind_id)),
                     config=settings.materialize.text_search_config,
                 )
-    await indexes.ensure(schema)
+    if indexes:
+        await branch_indexes.ensure(schema)
     return RebuildReport(branch=branch, head=head.id, records=records, links=links)
 
 

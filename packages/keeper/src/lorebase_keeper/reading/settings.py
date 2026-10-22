@@ -69,6 +69,19 @@ class TimeTravelSettings(SectionModel):
         description="Largest Kind or Relation partition a list read at a Revision scans; "
         "larger ones are refused (read the materialized branch instead).",
     )
+    snapshot_max_entries: int = Field(
+        default=100_000,
+        ge=0,
+        description="Most Records and Links a Revision may hold for reads at it that need "
+        "materialized rows (filters, ordering, includes, aggregates, Link summaries, "
+        "traversal, search, history, health, context packs); they are served from a snapshot "
+        "of the Revision, and refused above this size. 0 refuses them all.",
+    )
+    snapshot_max_per_domain: int = Field(
+        default=4,
+        ge=1,
+        description="Snapshots kept per Domain; building another drops the oldest unused.",
+    )
 
 
 class DiffSettings(SectionModel):

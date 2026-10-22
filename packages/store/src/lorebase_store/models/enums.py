@@ -8,10 +8,12 @@ from lorebase_store.models.base import pg_enum
 
 
 class RefKind(StrEnum):
-    """`branch` moves; `tag` is an immutable pointer (design 6.5)."""
+    """`branch` moves; `tag` is an immutable pointer (design 6.5); `snapshot` holds the
+    materialized rows of a past Revision for reads at it (`materialize.snapshot`)."""
 
     BRANCH = "branch"
     TAG = "tag"
+    SNAPSHOT = "snapshot"
 
 
 class Materialization(StrEnum):

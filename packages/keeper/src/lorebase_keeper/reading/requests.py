@@ -8,6 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lorebase_core.query import Predicate, Query
 
+AT = (
+    "Revision id or tag to read at (time travel): key-ordered listings read the tree, other "
+    "reads a snapshot of the Revision."
+)
+
 
 class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -17,9 +22,7 @@ class QueryRequest(Query):
     """A DSL query (design 8.2) and where to read it."""
 
     branch: str | None = Field(default=None, description="Default: the Domain's default branch.")
-    at: str | None = Field(
-        default=None, description="Revision id or tag; key-ordered Kind listings only."
-    )
+    at: str | None = Field(default=None, description=AT)
 
 
 class RecordAddress(_Body):
@@ -37,6 +40,7 @@ class TraverseRequest(_Body):
     """Follow a path of Relations from one Record (design 8.3)."""
 
     branch: str | None = None
+    at: str | None = Field(default=None, description=AT)
     start: RecordAddress
     path: list[TraverseStep] = Field(min_length=1)
 
@@ -45,6 +49,7 @@ class NeighborhoodRequest(_Body):
     """Breadth-first expansion from seed Records, bounded by depth and caps (design 8.3)."""
 
     branch: str | None = None
+    at: str | None = Field(default=None, description=AT)
     seeds: list[RecordAddress] = Field(min_length=1)
     depth: int = Field(default=1, ge=1)
     relations: list[str] | None = Field(
@@ -77,6 +82,7 @@ class SearchRequest(_Body):
     """Full-text, vector or hybrid search (design 8.4). Vectors come from the caller."""
 
     branch: str | None = None
+    at: str | None = Field(default=None, description=AT)
     q: str | None = Field(default=None, min_length=1, description="Text query (web search syntax).")
     kinds: list[str] | None = Field(default=None, description="Kind api names; default: all.")
     where: Predicate | None = Field(

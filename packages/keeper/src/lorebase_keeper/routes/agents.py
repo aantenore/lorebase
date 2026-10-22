@@ -73,7 +73,7 @@ async def context_pack(
 ) -> Response:
     """Seed Records, their neighborhood, schema, recent changes and lineage within a budget."""
     await check_context_quota(request, access.principal)
-    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     since: str | None = None
     floor: int | None = None
     if body.since is not None and body.include_recent_changes:
@@ -97,6 +97,7 @@ async def context_pack(
         runtime.cache,
         key,
         produce,
+        time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
         disclose=point.disclosure(session, runtime).send,
     )
@@ -131,10 +132,14 @@ async def explain(
     branch: Annotated[
         str | None, Query(description="Branch to read; default: the Domain's default branch.")
     ] = None,
+    at: Annotated[
+        str | None,
+        Query(description="Revision id or tag to read at (time travel, served from a snapshot)."),
+    ] = None,
     format: Annotated[Literal["json", "markdown"], Query()] = "json",
 ) -> Response:
     """Creation, per-Attribute lineage, Links with their origin and Proposals of a Record."""
-    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = require_kind(point, kind)
 
     async def produce() -> tuple[bytes, str]:
@@ -148,6 +153,7 @@ async def explain(
         runtime.cache,
         cache_key(request, point.domain.id, point.revision_hex, point.variant),
         produce,
+        time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
         disclose=point.disclosure(session, runtime).send,
     )

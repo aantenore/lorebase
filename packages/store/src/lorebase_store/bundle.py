@@ -304,7 +304,8 @@ _REFS = text(
            materialization, r.version, r.created_at, r.created_by,
            EXISTS (SELECT 1 FROM mat_schema s WHERE s.domain_id = r.domain_id
                    AND s.branch = r.name) AS materialized
-    FROM refs r WHERE r.domain_id = :d AND r.deleted_at IS NULL ORDER BY r.name
+    FROM refs r WHERE r.domain_id = :d AND r.deleted_at IS NULL AND r.kind <> 'snapshot'
+    ORDER BY r.name
     """
 )
 

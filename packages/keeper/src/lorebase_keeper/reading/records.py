@@ -1,8 +1,9 @@
 """Record and Link reads: get, list and query, Links of a Record or a Relation.
 
 Reads at the branch head use the materialized rows and the query compiler; reads at another
-Revision go through `TreeReader` and support key lookups, listings of a Kind or a Trait ordered
-by key, and Links (path Derivations composed from the Links of their steps there).
+Revision go through `TreeReader` for key lookups, listings of a Kind or a Trait ordered by key,
+and Links (path Derivations composed from the Links of their steps there), and through a
+snapshot of the Revision (`reading.snapshots`) for everything else.
 """
 
 from __future__ import annotations
@@ -43,9 +44,10 @@ from lorebase_keeper.reading.compiler import (
 )
 from lorebase_keeper.reading.cursors import invalid_cursor, issue, position_of
 from lorebase_keeper.reading.points import ReadPoint, not_found
-from lorebase_keeper.reading.problems import query_problem, tree_unsupported
+from lorebase_keeper.reading.problems import query_problem
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import require_comparable_plan
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.tree import TreeReader
 from lorebase_keeper.reading.views import (
     AggregateCount,
@@ -91,7 +93,7 @@ class LinkPageResult:
 def compiler_for(point: ReadPoint, runtime: ReadRuntime) -> Compiler:
     return Compiler(
         point.domain.id,
-        point.branch,
+        point.layout.branch,
         text_search_config=runtime.store_settings.materialize.text_search_config,
         indexes=plan_indexes(point.schema).by_attribute(),
         layout=point.layout,
@@ -122,7 +124,7 @@ async def fetch_record(
                 await session.execute(
                     select(*record_columns(r)).where(
                         r.c.domain_id == point.domain.id,
-                        r.c.branch == point.branch,
+                        r.c.branch == point.layout.branch,
                         r.c.kind_id == kind.id,
                         r.c.key == key,
                     )
@@ -163,8 +165,8 @@ async def get_record(
     lineage: bool,
 ) -> tuple[RecordOut, FetchedRecord]:
     """A Record with, on request, its Link counts and the lineage of its values."""
-    if not point.materialized and (links or lineage):
-        raise tree_unsupported("The links and lineage summaries")
+    if links or lineage:
+        point = await with_rows(session, runtime, point, "The links and lineage summaries")
     fetched = await fetch_record(session, runtime, point, kind, key)
     record = record_out(point.schema, fetched.row, masking=point.masking)
     if links:
@@ -206,7 +208,7 @@ async def link_counts(
             select(links.c.relation_id, func.count())
             .where(
                 links.c.domain_id == point.domain.id,
-                links.c.branch == point.branch,
+                links.c.branch == point.layout.branch,
                 links.c.relation_id.in_([r.id for r in relations]),
                 near == key,
             )
@@ -237,7 +239,7 @@ async def _foreign_key_count(
     count = await session.scalar(
         select(func.count()).where(
             r.c.domain_id == point.domain.id,
-            r.c.branch == point.branch,
+            r.c.branch == point.layout.branch,
             r.c.kind_id == relation.from_kind,
             json_text(r.c["values"], attribute) == row["key"],
         )
@@ -306,9 +308,10 @@ async def run_query(
 ) -> QueryPage:
     """A page of the Records matching a resolved query (plus includes and aggregate)."""
     if not point.materialized:
-        if plan.where is not None or plan.include or plan.aggregate or not _key_ordered(plan):
-            raise tree_unsupported("Filtering, ordering, includes and aggregates")
-        return await _tree_list(session, runtime, point, plan, shape, cursor_pointer)
+        if plan.where is None and not plan.include and not plan.aggregate and _key_ordered(plan):
+            return await _tree_list(session, runtime, point, plan, shape, cursor_pointer)
+        what = "Filtering, ordering, includes and aggregates"
+        point = await with_rows(session, runtime, point, what)
     compiler = compiler_for(point, runtime)
     r = compiler.records("r")
     target = plan.target
@@ -524,7 +527,7 @@ async def record_links(
             far,
             and_(
                 far.c.domain_id == literal(point.domain.id),
-                far.c.branch == literal(point.branch),
+                far.c.branch == literal(point.layout.branch),
                 far.c.kind_id == literal(hop.far.kind_ids[0]),
                 far.c.key == source.far,
             ),
