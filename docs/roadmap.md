@@ -107,7 +107,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] Documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built with `mkdocs build --strict` (`make docs`) and published by the Docs workflow
 - [ ] API stability guarantees for `/api/v1` (the policy is written, [API stability](api-stability.md): what is stable, compatible and breaking changes, deprecation, client compatibility, MCP tools and the schema format; it binds from 1.0, and Keeper does not emit `Deprecation` or `Sunset` headers yet since nothing is deprecated)
 - [x] Threat model published and the security review checklist completed ([threat model](threat-model.md): STRIDE per trust boundary with mitigations and residual risks; [security review](security-review.md): 23 findings, all fixed, none open)
-- [ ] Full proof scenario (days 1 to 5) as an automated end-to-end test (`make demo` runs the scenario against a real stack, [demo](demo.md); it is not part of CI)
+- [x] Full proof scenario (days 1 to 5) as an automated end-to-end test: the five-day demo asserts every day against a real stack with the fake inference provider (a document extracted with the deterministic tiers, the agent over MCP writing through a Proposal), and the End-to-end workflow runs it on pushes to `main`, nightly and on relevant pull requests ([demo](demo.md#assertions-and-ci))
 
 ## Not on the roadmap
 

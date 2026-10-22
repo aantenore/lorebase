@@ -1,6 +1,7 @@
 # Settings of the five-day demo stack (examples/five_day_demo). Everything not listed here keeps
 # the default of config/lorebase.example.yaml. Not for production: it admits webhook targets on
-# private addresses and keeps the demo pace (short polling intervals).
+# private addresses, keeps the demo pace (short polling intervals) and runs every model task on
+# the deterministic fake provider, so the demo needs no model server and no network.
 
 keeper:
   auth:
@@ -27,3 +28,10 @@ scribe:
     tick_s: 2.0
     webhook_interval_s: 2.0
     gc_schedule: null                  # the demo runs the collection by hand
+  extraction:
+    tiers: [0, 1]                      # rules and the fake span extractor; never tier 2
+
+inference:
+  llm: {provider: fake}
+  embeddings: {provider: fake}
+  local_extractors: {provider: fake}   # tier 1 of extraction; tier 0 (rules) does the work

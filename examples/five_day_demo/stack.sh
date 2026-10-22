@@ -16,6 +16,8 @@
 #   DEMO_POSTGRES_PORT  host port of Postgres               (15432)
 #   DEMO_STATE_DIR      generated files, secrets, CSV copy  (<repo>/build/demo)
 #   DEMO_UP_TIMEOUT     seconds to wait for Keeper          (240)
+#   DEMO_NO_BUILD       1: do not build the image, use the one tagged lorebase-demo:local
+#                       (the CI workflow builds it first, with a layer cache)  (unset)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,6 +27,8 @@ KEEPER_PORT="${DEMO_KEEPER_PORT:-18080}"
 POSTGRES_PORT="${DEMO_POSTGRES_PORT:-15432}"
 STATE="${DEMO_STATE_DIR:-$ROOT/build/demo}"
 TIMEOUT="${DEMO_UP_TIMEOUT:-240}"
+BUILD="--build"
+if [ -n "${DEMO_NO_BUILD:-}" ] && [ "$DEMO_NO_BUILD" != "0" ]; then BUILD="--no-build"; fi
 
 say() { printf '[stack] %s\n' "$*" >&2; }
 
@@ -77,7 +81,7 @@ up() {
   mkdir -p "$STATE"
   write_env
   say "starting project $PROJECT (Keeper on 127.0.0.1:$KEEPER_PORT)"
-  compose up -d --build postgres db-roles migrate keeper scribe >&2
+  compose up -d "$BUILD" postgres db-roles migrate keeper scribe >&2
   local waited=0
   until keeper_ready; do
     waited=$((waited + 2))

@@ -8,13 +8,14 @@ make demo KEEP=1         # leave the stack running; run it again with examples/f
 make demo-down           # remove a kept stack and its data
 ```
 
-It needs Docker with compose, [uv](https://docs.astral.sh/uv/) and `uv sync --all-packages` run once. The stack is the compose project `lorebase-demo`, with Keeper on `127.0.0.1:18080` and Postgres on `127.0.0.1:15432` (`DEMO_KEEPER_PORT`, `DEMO_POSTGRES_PORT`, `DEMO_PROJECT`), so it does not collide with a stack you run for development. Timings of the run below, on a laptop: building the image and starting the stack 374 s (the first build, dominated by pulling base images), the five days 31 s. With the image cached, only Postgres, the migrations and Keeper have to start.
+It needs Docker with compose, [uv](https://docs.astral.sh/uv/) and `uv sync --all-packages` run once. The stack is the compose project `lorebase-demo`, with Keeper on `127.0.0.1:18080` and Postgres on `127.0.0.1:15432` (`DEMO_KEEPER_PORT`, `DEMO_POSTGRES_PORT`, `DEMO_PROJECT`), so it does not collide with a stack you run for development. Timings of the run below, on a laptop: building the image and starting the stack 374 s (the first build, dominated by pulling base images), the five days 45 s, document and checks included. With the image cached, only Postgres, the migrations and Keeper have to start.
 
 | File | What it is |
 |------|------------|
 | `examples/five_day_demo/stack.sh` | `up`, `down`, `demo`: the compose stack under its own project name; writes its passwords and the API key pepper to `build/demo` (git-ignored); creates the first administrator key with `python -m lorebase_keeper bootstrap` (in `api_key` mode nobody can issue the first key over the API) and the service principal `agent-risk` with `principal create` |
 | `examples/five_day_demo/run.sh` | The five days, in bash with strict mode; idempotent |
-| `examples/five_day_demo/demo.py` | The parts that are awkward in shell: schema inference, rebasing the curated schema, conflict tables, the webhook receiver, the MCP client, rate-limit probes |
+| `examples/five_day_demo/demo.py` | The parts that are awkward in shell: schema inference, rebasing the curated schema, conflict tables, the webhook receiver, the MCP client, rate-limit probes, and the assertions (`assert-*`) and the timing table |
+| `examples/five_day_demo/documents/` | The contract (Markdown) that day 2 extracts |
 | `examples/five_day_demo/lorebase.demo.yaml` | The stack's settings: `api_key` authentication, self-approval, a small context bucket, private webhook targets, short polling intervals |
 
 `run.sh` works against any Keeper. Its parameters, all environment variables:
@@ -27,16 +28,31 @@ It needs Docker with compose, [uv](https://docs.astral.sh/uv/) and `uv sync --al
 | `DEMO_RESET` | `1` deletes the Domain left by an earlier run, but only one named "Lorebase five-day demo" | `1` |
 | `DEMO_SOURCES_DIR` | Directory Scribe reads CSV Sources from; without it day 4's Source step is skipped | unset |
 | `DEMO_STORE_EXEC`, `DEMO_POSTGRES_EXEC` | Command prefixes that run a command in the backend and Postgres containers (`docker compose ... exec -T keeper`); without them the backup and garbage collection steps are skipped | unset |
+| `DEMO_NO_BUILD` (`stack.sh`) | `1` starts the stack from the image `lorebase-demo:local` without building it; the CI workflow builds that image first, with a layer cache | unset |
 | `DEMO_RECEIVER_PORT`, `DEMO_RECEIVER_BIND`, `DEMO_WEBHOOK_HOST` | The webhook receiver of day 4 and how Scribe reaches it | `19090`, `127.0.0.1`, `host.docker.internal` |
+
+## Assertions and CI
+
+Every day ends with assertions, printed as `check ok: ...` lines, so the transcript doubles as a test. A failed one prints `assertion failed: ...` and stops the script with exit code 1; a command of the `lorebase` command line that fails stops it too. The run ends with a table of the seconds each day took, also when it fails (then it names the day).
+
+| Day | What is asserted |
+|-----|------------------|
+| 1 | `main` holds the curated schema (Kinds, Relations, Traits, Operations, Derivations and Sources by name), reached it through the merged Proposal of `model/initial`, and is protected |
+| 2 | every CSV row is a Record or a Link on `main` (counts per Kind and Relation); the derived value `single_sourced` answers a query; search finds Parts; the extraction Proposal has exactly the Contract and its Link, from tier 0, pending; after the decision the Contract, its Link and their `extraction` Lineage are on `main` |
+| 3 | the Proposal merged, its Conflicts were raised and none is open; the value decided by hand and the non-conflicting changes of both teams are on `main`; the suppliers added on branches exist; time travel shows day 2 |
+| 4 | the Source ran twice and succeeded; the second run found two changed rows and its Proposal merged by policy; the two cells changed on `main`; the change feed lists them; the webhook delivered with a valid signature |
+| 5 | Herald lists its tools; the query returns rows with their suppliers; the context pack describes the Record; the dry run reports the head and no violation; the commit lands on the work branch; a critical flag is refused with `review-required`, and with a task opens a Proposal; the rate limit serves the burst and then answers 429 with `Retry-After`; both flags reach `main` through merged Proposals, no Proposal is left open, the audit log has the writes, and a direct write by the agent to `main` is refused; the restored database has the head and the Record count of the live one |
+
+The End-to-end workflow (`.github/workflows/e2e.yaml`) runs it in CI: on pushes to `main`, nightly, on demand and on pull requests that change `examples/`, `packages/`, `deploy/compose/` or `deploy/docker/`. It builds the backend image from the checkout (Docker layers cached in the GitHub Actions cache), starts the stack with `stack.sh up` (`DEMO_NO_BUILD=1`), runs `run.sh`, writes the timing table into the job summary, and on failure uploads the compose logs, the run transcript and the work files (without keys and secrets) as the artifact `five-day-demo-logs` before `stack.sh down` removes the stack. The stack uses the deterministic fake provider for every model task (`inference.llm`, `embeddings` and `local_extractors` are `fake` in `lorebase.demo.yaml`), so CI downloads no model and uses no secret. The job is limited to 20 minutes.
 
 ## How the days map to the design
 
-The demo follows what is built. Document extraction (design day 3) is not part of the demo yet, so the days are: model, load and explore, version and merge, sync a Source, agents.
+The demo follows what is built. Document extraction (design day 3) is shown at the end of day 2, with the deterministic tiers, so the days are: model, load and explore (with a first document), version and merge, sync a Source, agents.
 
 | Demo | Design 3.2 | Shown |
 |------|-----------|-------|
 | Day 1 | Day 1 | schema inferred from CSV files, curated, reviewed in a Proposal |
-| Day 2 | Day 2 (files) | batch import, derived values, query, search, context pack, explain, health |
+| Day 2 | Day 2 (files), Day 3 | batch import, derived values, query, search, context pack, explain, health; a contract document extracted into a Proposal of items that a reviewer accepts |
 | Day 3 | Day 4 | two teams, schema and data Conflicts, resolution, time travel |
 | Day 4 | Day 2 (Sources) | CSV Source synced twice, a Proposal that merges itself, change feed and webhook |
 | Day 5 | Day 5 | agent key, Herald over MCP, a governed write, rate limits and quotas, audit log, backup, garbage collection |
@@ -153,6 +169,21 @@ orphan links                     0
 duplicate groups                 11
 ```
 
+Procurement also sends a framework agreement as a document (`examples/five_day_demo/documents/contract-c-3099-wexrix-filtration.md`, a contract that is not in the CSV files). Scribe reads it with the deterministic tiers: rules and the fake span extractor of the demo's configuration, no model. It opens a Proposal of two items, a new Contract found by the pattern of its key and a `with_supplier` Link to S-1013, each with its evidence and a confidence below the auto-accept threshold, so both wait for a reviewer. A new Contract needs its Link to pass validation, so Dana accepts both; the Proposal then merges like any other and the values carry `extraction` Lineage.
+
+```text
+$ lorebase documents upload examples/five_day_demo/documents/contract-c-3099-wexrix-filtration.md --tiers 0,1
+$ demo.py extraction-proposal contract-c-3099-wexrix-filtration.md
+$ lorebase proposal items prp_01M5H6Q6F2845N7BGP67R8JB3X
+record  pending  0.425  Contract       C-3099
+link    pending  0.6    with_supplier
+$ lorebase proposal decide prp_01M5H6Q6F2845N7BGP67R8JB3X --where-status pending --decision accepted
+items decided  2
+$ lorebase proposal review / merge  (extract/exj_... -> main)
+$ lorebase explain Contract C-3099
+incoterm            DAP         svc_demo_admin  extraction  0ba7af213adb
+```
+
 ## Day 3: versioning and conflicts
 
 Two teams branch from `main` and change the same suppliers without knowing about each other.
@@ -267,13 +298,14 @@ delivery 3 revision.committed signature=ok branch=main revision=79d120c60008 aut
 
 ## Day 5: agents
 
-Alex gets a key for his agent: role `agent-reader` on the Domain plus a grant of role `operator` on one Operation. The Operation `flag_supplier_risk` is restricted to the subject `agent-risk`, so the key is issued on that service principal (`stack.sh` created it with `python -m lorebase_keeper principal create agent-risk`: the API creates service principals only with generated ids, and groups not at all). The key authenticates as the agent and has its own quota.
+Alex gets a key for his agent: role `agent-reader` on the Domain, a grant of role `operator` on one Operation and the role `editor` on the branches `agent/*` (its work branches and the Proposals it opens; `main` stays out of reach). The Operation `flag_supplier_risk` is restricted to the subject `agent-risk`, so the key is issued on that service principal (`stack.sh` created it with `python -m lorebase_keeper principal create agent-risk`: the API creates service principals only with generated ids, and groups not at all). The key authenticates as the agent and has its own quota.
 
 ```text
 $ lorebase branch create agent/flags
 $ demo.py agent-setup agent-alex build/demo/work/agent.key
 service principal agent-risk, key lff4qmdxzf... (7 days)
-grants: agent-reader on the Domain, operator on Operation flag_supplier_risk
+grants: agent-reader on the Domain, operator on Operation flag_supplier_risk,
+        editor on branches agent/*
 the secret is in build/demo/work/agent.key and is not printed
 $ LOREBASE_API_KEY=<the agent key> lorebase whoami
 id                    agent-risk
@@ -286,7 +318,7 @@ The agent is a scripted MCP client (the `mcp` SDK) that starts Herald over stdio
 
 ```text
 $ demo.py agent build/demo/work/agent.key
-Herald over stdio exposes 11 tools: lorebase_branches, lorebase_changes, lorebase_context, lorebase_diff, lorebase_execute, ...
+Herald over stdio exposes 13 tools: lorebase_branches, lorebase_changes, lorebase_context, lorebase_diff, lorebase_execute, ...
 
 Question: which active contracts end by 2026-04-15, and who is the supplier?
 > lorebase_query {"query":{"kind":"Contract","where":{"and":[{"attr":"end_date","op":"lte","value":"2026-04-15"},{"attr":"status","op":"eq","value":"active"}]},"include":{"with_supplier":{}},"limit":3}}
@@ -317,7 +349,7 @@ Governed write on a work branch, dry run first (the default of lorebase_execute)
   [error, 9 ms through Herald and Keeper]
 ```
 
-A high flag commits on the agent's work branch. The Operation's review policy refuses a critical one on any branch. The call names no `task`, so it is not turned into a Proposal: the refusal lists the next steps, and with a `task` Keeper would open a task branch and a Proposal that needs a person's approval.
+A high flag commits on the agent's work branch. The Operation's review policy refuses a critical one on any branch. The call names no `task`, so it is not turned into a Proposal: the refusal lists the next steps. The agent then repeats it with a `task` and an `intent`, and Keeper runs it on the task branch `agent/agent-risk/critical-flag-s-1001` and opens a Proposal that needs a person's approval; the agent cannot merge it.
 
 Rate limits are per principal and request class. The demo's configuration gives the Domain a small bucket for context packs, so the limit is visible in a few calls; the quota counts per UTC day.
 
@@ -338,7 +370,7 @@ whoami for the agent key: agent that flags supplier risk (service, api_key)
   context_tokens today: 3765 of 2000000
 ```
 
-Sofia takes the agent's flag through a Proposal like any other change, and Priya shows the audit log (the refused requests are in it too):
+Sofia takes the agent's flag through a Proposal like any other change and approves the Proposal the agent opened for the critical flag. Priya shows the audit log (the refused requests are in it too). Last, the checks of the day: both flags are on `main` only through merged Proposals, and a direct write by the agent to `main` is refused:
 
 ```text
 $ lorebase proposal create / review / merge  (agent/flags -> main, "Risk flags raised by the agent")
