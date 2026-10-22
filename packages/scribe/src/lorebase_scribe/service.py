@@ -22,7 +22,7 @@ from lorebase_scribe.worker import Worker
 from lorebase_store.db import create_engine
 from lorebase_store.embeddings import SchemaCache
 from lorebase_store.jobs import MATERIALIZE_JOB, default_worker_id
-from lorebase_store.materialize import refresh_stale_paths
+from lorebase_store.materialize import run_path_fanout_sweep
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import database_settings
 from lorebase_store.webhooks import webhook_settings
@@ -41,16 +41,19 @@ class Scribe:
     settings: ScribeSettings
 
     async def serve(self, stop: asyncio.Event) -> None:
-        """Work and schedule until `stop` is set. A worker running materialization jobs
-        first rewrites materialized path Derivations computed with another
-        `store.traverse.path_fanout`."""
-        if MATERIALIZE_JOB in self.worker.types:
-            rewritten = await refresh_stale_paths(
-                self.context.sessions, runtime=self.context.runtime
-            )
-            if rewritten:
-                log.info("materialized paths rewritten", extra={"branches": len(rewritten)})
+        """Work and schedule until `stop` is set. A worker running materialization jobs also
+        rewrites, in the background, materialized path Derivations computed with another
+        `store.traverse.path_fanout` (`run_path_fanout_sweep`)."""
         tasks = [asyncio.create_task(self.worker.run(stop), name="scribe-worker")]
+        if MATERIALIZE_JOB in self.worker.types:
+            tasks.append(
+                asyncio.create_task(
+                    run_path_fanout_sweep(
+                        self.context.sessions, runtime=self.context.runtime, stop=stop
+                    ),
+                    name="scribe-path-fanout",
+                )
+            )
         if self.settings.scheduler.enabled:
             tasks.append(asyncio.create_task(self.scheduler.run(stop), name="scribe-scheduler"))
         await asyncio.gather(*tasks)

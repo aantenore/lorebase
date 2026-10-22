@@ -145,7 +145,7 @@ from lorebase_store.commit import (
 )
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.digests import DigestKeys
-from lorebase_store.materialize.links import path_links_of
+from lorebase_store.materialize.links import PathCapExceededError, path_links_of
 from lorebase_store.models.enums import InvocationStatus
 from lorebase_store.reads import Direction, head_schema, links_of_record
 from lorebase_store.repositories import (
@@ -778,9 +778,12 @@ def _link_reader(
     async def read(relation_id: str, direction: LinkDirection, key: str) -> list[LinkedRecord]:
         path = schema.path_relations().get(relation_id)
         if path is not None:
-            found_far = await path_links_of(
-                rows, path, direction, [key], settings.traverse.path_fanout
-            )
+            try:
+                found_far = await path_links_of(
+                    rows, path, direction, [key], settings.traverse.path_fanout, cap=cap
+                )
+            except PathCapExceededError:
+                raise too_many() from None
             pairs = found_far.get(key, [])
             if len(pairs) >= cap:
                 raise too_many()

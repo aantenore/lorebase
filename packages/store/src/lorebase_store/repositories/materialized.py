@@ -524,16 +524,18 @@ class MaterializedRepository:
         )
 
     async def linked_keys(
-        self, relation_id: str, *, near: str, keys: Sequence[str]
+        self, relation_id: str, *, near: str, keys: Sequence[str], limit: int | None = None
     ) -> list[tuple[str, str, dict[str, Any]]]:
         """Stored Links of a Relation whose `near` end (`from_key` or `to_key`) is in `keys`:
-        `(near key, far key, link values)`."""
+        `(near key, far key, link values)`; at most `limit` of them when set."""
         links = await self._links()
         near_column = links.c[near]
         far_column = links.c["to_key" if near == "from_key" else "from_key"]
         found: list[tuple[str, str, dict[str, Any]]] = []
         for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
-            result = await self._session.execute(
+            if limit is not None and len(found) >= limit:
+                break
+            query = (
                 select(near_column, far_column, links.c["values"])
                 .where(
                     self._scope(links),
@@ -542,21 +544,32 @@ class MaterializedRepository:
                 )
                 .order_by(near_column, far_column)
             )
+            if limit is not None:
+                query = query.limit(limit - len(found))
+            result = await self._session.execute(query)
             found.extend((a, b, dict(v or {})) for a, b, v in result)
         return found
 
     async def foreign_key_links(
-        self, kind_id: str, attribute_id: str, *, keys: Sequence[str], by_target: bool
+        self,
+        kind_id: str,
+        attribute_id: str,
+        *,
+        keys: Sequence[str],
+        by_target: bool,
+        limit: int | None = None,
     ) -> list[tuple[str, str]]:
         """`(from key, to key)` of a foreign-key Relation: Records of `kind_id` (the `from`
         Kind) whose key is in `keys`, or whose `attribute_id` value is in `keys` when
-        `by_target`."""
+        `by_target`; at most `limit` of them when set."""
         rows = await self._records()
         target = rows.c["values"].op("->>")(literal(attribute_id))
         found: list[tuple[str, str]] = []
         for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
+            if limit is not None and len(found) >= limit:
+                break
             condition = target.in_(chunk) if by_target else rows.c.key.in_(chunk)
-            result = await self._session.execute(
+            query = (
                 select(rows.c.key, target)
                 .where(
                     self._scope(rows),
@@ -566,6 +579,9 @@ class MaterializedRepository:
                 )
                 .order_by(rows.c.key)
             )
+            if limit is not None:
+                query = query.limit(limit - len(found))
+            result = await self._session.execute(query)
             found.extend((key, value) for key, value in result)
         return found
 

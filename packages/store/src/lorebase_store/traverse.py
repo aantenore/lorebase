@@ -531,15 +531,21 @@ async def _hop_by_hop(
                 keys = sorted(
                     {key for kind, key in frontier if kind == path.relation.endpoint(along)}
                 )
-                if not keys or steps >= max_steps:
+                if not keys:
+                    continue
+                if steps >= max_steps or len(depths.keys() | reached) > max_nodes:
+                    saturated = True  # Links left unwalked
                     continue
                 far_kind = path.relation.far_endpoint(along)
                 found = await path_links_of(
                     repository, path, along, keys, settings.traverse.path_fanout
                 )
                 for near, items in sorted(found.items()):
-                    saturated = saturated or len(items) >= fanout
-                    for far, _ in items[: min(fanout, max(max_steps - steps, 0))]:
+                    # The walk's fan-out and step budget, not the path's own bound
+                    # (`store.traverse.path_fanout`), which is part of what the path is.
+                    room = min(fanout, max(max_steps - steps, 0))
+                    saturated = saturated or len(items) > room
+                    for far, _ in items[:room]:
                         pair = (near, far) if along is LinkDirection.FORWARD else (far, near)
                         links.setdefault((path_id, *pair), LinkRef(path_id, *pair, {}, None))
                         reached.append((far_kind, far))
