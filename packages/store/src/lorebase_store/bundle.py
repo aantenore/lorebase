@@ -45,17 +45,24 @@ their hashes. Such an export needs the vault keys and holds personal data in pla
 and tarball are created readable by their owner only). It appends `bundle.export_plain_started`
 to the audit log before reading any value and `bundle.export_plain` (Domain, heads and counts,
 never values) when done; when either cannot be written the output is removed. Its snapshot is
-taken while the Domain's vault lock is held shared, so no erasure is in flight or starts until
-it ends. The audit actor is what the caller gives: the command runs with the owner's database
-credentials and vault keys, and is as trustworthy as whoever holds them.
+taken while the Domain's vault lock is held shared, so no erasure is in flight when it is taken;
+the lock is let go once the snapshot exists, before any file is written, and an erasure starting
+meanwhile waits at most `vault.erase_lock_timeout_ms`. Entries carry the row's `moved_to`.
+Tombstones recorded before they kept their `fingerprint_key` are exported as made under the
+current token key with the first scheme, and the manifest says how many (`vault_notes`). The
+audit actor is what the caller gives: the command runs with the owner's database credentials and
+vault keys, and is as trustworthy as whoever holds them.
 
 Import needs the vault keys and the token key every tombstone was made under (by id). It stores
-the key changes and tombstones, then each entry again, sealed under the target's keys, after
-checking that every Record object holding its token holds it in that Attribute under the bound
-key or one linked to it by the key changes, and that the value is valid for a definition of the
-Attribute in the bundle's schemas. A value a tombstone holds is handled as `vault.erased_values`
-says; erased entries stay erased. A target Domain that already has vault rows, tombstones or key
-changes is not empty.
+the key changes (each between two Records of its Kind the bundle holds) and tombstones, then
+each entry again, sealed under the target's keys, after checking that every Record object
+holding its token holds it in that Attribute under the bound key or one linked to it by the key
+changes, that its `moved_to` follows a key change from its key, and that the value is valid for
+a definition of the Attribute in the bundle's schemas. A value a tombstone holds is handled as
+`vault.erased_values` says; erased entries stay erased. A `bundle.import_vault` audit entry
+records the counts (values, erased, tombstones, key changes, groups of more than
+`MAX_LINKED_KEYS` linked keys) in the same transaction. A target Domain that already has vault
+rows, tombstones or key changes is not empty.
 """
 
 from __future__ import annotations
@@ -76,7 +83,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -117,7 +124,9 @@ from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.settings import BundleSettings
 from lorebase_store.vault import VaultKeys
+from lorebase_store.vault.store import MAX_LINKED_KEYS
 from lorebase_store.vault.transfer import (
+    LEGACY_SCHEME,
     Holder,
     KeyLinks,
     LineageEntry,
@@ -130,6 +139,7 @@ from lorebase_store.vault.transfer import (
     parse_lineage,
     parse_tombstone,
     read_entries,
+    resolved_legacy,
     restore_entries,
     restore_lineage,
     restore_tombstones,
@@ -153,6 +163,8 @@ EXPORT_PLAIN_STARTED_ACTION = "bundle.export_plain_started"
 """Audit action written before an export holding vault values reads any value."""
 EXPORT_PLAIN_ACTION = "bundle.export_plain"
 """Audit action of a finished export holding vault values."""
+IMPORT_VAULT_ACTION = "bundle.import_vault"
+"""Audit action of an import of vault values (counts, never values)."""
 _VAULT_LOCK_SHARED = text(
     "SELECT pg_advisory_xact_lock_shared(hashtextextended('lorebase.vault/' || :domain, 0))"
 )
@@ -200,6 +212,8 @@ class BundleReport:
     vault_values: int = 0
     vault_erased: int = 0
     vault_lineage: int = 0
+    vault_legacy_tombstones: int = 0
+    vault_oversized_links: int = 0
     vault_tombstones: int = 0
     rebuilt_branches: list[str] = field(default_factory=list)
     seconds: float = 0.0
@@ -516,15 +530,20 @@ async def _export(
     report = BundleReport(domain_id, label)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with AsyncExitStack() as stack:
+        guard = None
         if keys is not None:
-            # The vault lock is held shared from another connection, taken before the snapshot
-            # below: an erasure in flight ends first, and none starts until the export ends.
+            # The vault lock is held shared from another connection while the snapshot below is
+            # taken: an erasure in flight ends first, and one starting meanwhile waits (at most
+            # vault.erase_lock_timeout_ms). The snapshot fixes what is read; the lock is let go
+            # as soon as it exists, before any file is written.
             guard = await stack.enter_async_context(engine.connect())
             await guard.execute(_VAULT_LOCK_SHARED, {"domain": domain_id})
         session = await stack.enter_async_context(sessions())
         await stack.enter_async_context(session.begin())
         await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
-        await scope_to_domain(session, domain_id)
+        await scope_to_domain(session, domain_id)  # the first query: it takes the snapshot
+        if guard is not None:
+            await guard.close()
         domain = await DomainRepository(session).get(domain_id)
         if domain is None:
             raise DomainNotFoundError(domain_id)
@@ -583,6 +602,13 @@ async def _export(
         "counts": counts,
         "files": out.files,
     }
+    if report.vault_legacy_tombstones:
+        manifest["vault_notes"] = {
+            "legacy_tombstones": report.vault_legacy_tombstones,
+            "legacy_fingerprint_key": f"{keys.token_key_id}/{LEGACY_SCHEME}" if keys else None,
+            "note": "tombstones recorded without a fingerprint_key, exported as made under the "
+            "current token key with the first fingerprint scheme",
+        }
     (root / MANIFEST).write_bytes(json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n")
     return report, heads
 
@@ -810,7 +836,9 @@ async def _export_vault(
     with out.jsonl(VAULT_TOMBSTONES, private=True) as lines:
         async for found in tombstones_of(session, domain, batch):
             for tombstone in found:
-                lines.write(tombstone.as_json())
+                if tombstone.fingerprint_key is None:
+                    report.vault_legacy_tombstones += 1
+                lines.write(resolved_legacy(tombstone, keys.token_key_id).as_json())
             report.vault_tombstones += len(found)
     tokens = sorted(holders)
     with out.jsonl(VAULT, private=True) as lines:
@@ -1098,6 +1126,7 @@ class _Import:
     runtime: StoreRuntime
     batch: int
     report: BundleReport
+    actor: str = BUNDLE_ACTOR
 
     def lines(self, base: str) -> Iterator[dict[str, Any]]:
         name = _jsonl_name(base, self.manifest["compression"])
@@ -1119,9 +1148,12 @@ async def import_bundle(
     domain_id: str | None = None,
     runtime: StoreRuntime | None = None,
     verify_heads: bool | None = None,
+    actor: str = BUNDLE_ACTOR,
 ) -> BundleReport:
     """Import a bundle (directory or `.tar`) into `domain_id`, which must not exist yet or be
     empty (no Revisions, no refs). It defaults to, and must equal, the bundle's Domain id.
+    A bundle carrying vault values appends a `bundle.import_vault` audit entry for `actor` in
+    the same transaction.
 
     Every file hash, Revision id, node hash and object hash is verified, materialized heads are
     rebuilt for the refs that had one, and with `verify_heads` (default
@@ -1151,12 +1183,12 @@ async def import_bundle(
         async with sessions() as session, session.begin():
             await scope_to_domain(session, target)
             context = _Import(
-                session, root, manifest, target, runtime, settings.bundle.batch_rows, report
+                session, root, manifest, target, runtime, settings.bundle.batch_rows, report, actor
             )
             await _prepare_domain(context)
-            bindings = await _import_objects(context)
-            if bindings is not None:
-                await _import_vault(context, bindings)
+            scanned = await _import_objects(context)
+            if scanned is not None:
+                await _import_vault(context, scanned)
             await _import_nodes(context)
             await _import_revisions(context)
             await _import_changesets(context)
@@ -1272,12 +1304,21 @@ def _vault_definitions(c: _Import) -> dict[tuple[str, str], list[Attribute]]:
     return {key: list(definitions.values()) for key, definitions in found.items()}
 
 
-async def _import_objects(c: _Import) -> dict[str, set[Holder]] | None:
-    """Store the objects; when the bundle carries vault values, the Records holding each token
-    its Record objects hold."""
+@dataclass(slots=True)
+class _VaultScan:
+    """What the Record objects of a bundle carrying vault values show: the Records holding
+    each token, and every (Kind id, key) of a Record in any Revision."""
+
+    holders: dict[str, set[Holder]] = field(default_factory=dict)
+    records: set[tuple[str, str]] = field(default_factory=set)
+
+
+async def _import_objects(c: _Import) -> _VaultScan | None:
+    """Store the objects; when the bundle carries vault values, what its Record objects show
+    (`_VaultScan`)."""
     store = PgObjectStore(c.session, c.domain_id, writes=c.runtime.settings.writes, batch=c.batch)
     vaulted = _vault_attributes(c)
-    holders: dict[str, set[Holder]] | None = {} if _carries_vault(c) else None
+    scan = _VaultScan() if _carries_vault(c) else None
     total = 0
     for batch in _batches(c.lines("objects"), c.batch):
         encoded = []
@@ -1285,8 +1326,10 @@ async def _import_objects(c: _Import) -> dict[str, set[Holder]] | None:
             if line.get("type") == ObjectType.RECORD.value:
                 if vaulted:
                     _check_vault_values(line, vaulted)
-                if holders is not None:
-                    _collect_holders(line, holders)
+                if scan is not None:
+                    _collect_holders(line, scan.holders)
+                    body = line.get("body") or {}
+                    scan.records.add((str(body.get("kind")), str(body.get("key"))))
             try:
                 item = encode_object(ObjectType(line["type"]), line["body"])
             except (ValueError, KeyError, TypeError) as error:
@@ -1298,17 +1341,22 @@ async def _import_objects(c: _Import) -> dict[str, set[Holder]] | None:
         total += len(batch)
     c.report.objects = total
     c.expect("objects", total)
-    return holders
+    return scan
 
 
-async def _import_vault(c: _Import, holders: Mapping[str, set[Holder]]) -> None:
-    """Store the key changes, the tombstones and the vault entries (module doc).
+async def _import_vault(c: _Import, scan: _VaultScan) -> None:
+    """Store the key changes, the tombstones and the vault entries (module doc), and append
+    the `bundle.import_vault` audit entry (counts, never values).
 
-    Each entry must be well formed, appear once, hold a value valid for a definition of its
-    Attribute in the bundle's schemas, and every Record holding its token must hold it in that
-    Attribute under its key or a key linked to it by the key changes. Values are checked
-    against the tombstones (the bundle's) as `vault.erased_values` says.
+    A key change must link two Records of its Kind that the bundle holds. Each entry must be
+    well formed, appear once, hold a value valid for a definition of its Attribute in the
+    bundle's schemas, and every Record holding its token must hold it in that Attribute under
+    its key or a key linked to it by the key changes; its `moved_to` must follow a key change
+    from its key. Values are checked against the tombstones (the bundle's) as
+    `vault.erased_values` says. Groups of more than `MAX_LINKED_KEYS` linked keys are counted
+    for an administrator to look at, as erasure flags them.
     """
+    holders = scan.holders
     keys = c.runtime.vault
     if keys is None:
         raise VaultNotConfiguredError(
@@ -1316,7 +1364,8 @@ async def _import_vault(c: _Import, holders: Mapping[str, set[Holder]]) -> None:
             "vault.encryption_key"
         )
     at = datetime.now(UTC)
-    links = await _import_lineage(c, at)
+    links, edges = await _import_lineage(c, scan.records, at)
+    c.report.vault_oversized_links = links.oversized(MAX_LINKED_KEYS)
     await _import_tombstones(c, keys, at)
     definitions = _vault_definitions(c)
     seen: set[str] = set()
@@ -1335,6 +1384,13 @@ async def _import_vault(c: _Import, holders: Mapping[str, set[Holder]]) -> None:
                 holders.get(entry.token, ()),
                 links,
             )
+            if problem is None and entry.moved_to is not None:
+                edge = LineageEntry(entry.kind_id, entry.moved_to, entry.record_key)
+                if edge not in edges:
+                    problem = (
+                        f"{entry.token} moved to {entry.moved_to!r}, but no key change of the "
+                        f"bundle leads there from {entry.record_key!r}"
+                    )
             if problem is None and not entry.erased:
                 problem = value_problem(
                     entry, definitions.get((entry.kind_id, entry.attribute_id), [])
@@ -1363,9 +1419,29 @@ async def _import_vault(c: _Import, holders: Mapping[str, set[Holder]]) -> None:
         c.report.vault_values -= tombstoned
         c.report.vault_erased += tombstoned
     c.expect(VAULT, len(seen))
+    report = c.report
+    await AuditRepository(c.session).append(
+        NewAuditEntry(
+            actor=c.actor,
+            action=IMPORT_VAULT_ACTION,
+            domain_id=c.domain_id,
+            target=c.domain_id,
+            details={
+                "values": report.vault_values,
+                "erased": report.vault_erased,
+                "tombstones": report.vault_tombstones,
+                "lineage_edges": report.vault_lineage,
+                "oversized_lineage_groups": report.vault_oversized_links,
+            },
+            at=at,
+        )
+    )
 
 
-async def _import_lineage(c: _Import, at: datetime) -> KeyLinks:
+async def _import_lineage(
+    c: _Import, records: Collection[tuple[str, str]], at: datetime
+) -> tuple[KeyLinks, set[LineageEntry]]:
+    """The key changes, each between two Records of its Kind that the bundle holds."""
     links = KeyLinks()
     seen: set[LineageEntry] = set()
     for batch in _batches(enumerate(c.lines(VAULT_LINEAGE), start=1), c.batch):
@@ -1377,13 +1453,23 @@ async def _import_lineage(c: _Import, at: datetime) -> KeyLinks:
                 raise BundleError(f"vault_lineage line {number}: {error}") from error
             if entry in seen:
                 raise BundleError(f"vault_lineage line {number}: the key change appears twice")
+            missing = [
+                key
+                for key in (entry.previous_key, entry.record_key)
+                if (entry.kind_id, key) not in records
+            ]
+            if missing:
+                raise BundleError(
+                    f"vault_lineage line {number}: no Record {missing[0]!r} of Kind "
+                    f"{entry.kind_id} in the bundle"
+                )
             seen.add(entry)
             links.link(entry)
             entries.append(entry)
         await restore_lineage(c.session, c.domain_id, entries, at=at)
     c.report.vault_lineage = len(seen)
     c.expect(VAULT_LINEAGE, len(seen))
-    return links
+    return links, seen
 
 
 async def _import_tombstones(c: _Import, keys: VaultKeys, at: datetime) -> None:
@@ -1690,6 +1776,11 @@ def _parser() -> argparse.ArgumentParser:
     load.add_argument(
         "--no-verify", action="store_true", help="Skip verifying rebuilt branches against trees."
     )
+    load.add_argument(
+        "--actor",
+        default=BUNDLE_ACTOR,
+        help="Who imports, recorded in the audit entry of a bundle with vault values.",
+    )
     return parser
 
 
@@ -1720,6 +1811,7 @@ async def _main(args: argparse.Namespace) -> int:
                 domain_id=args.domain,
                 runtime=runtime,
                 verify_heads=False if args.no_verify else None,
+                actor=args.actor,
             )
     except (BundleError, DomainNotFoundError) as error:
         sys.stderr.write(f"{error}\n")

@@ -166,13 +166,29 @@ python -m lorebase_store.bundle import --in /backups/supply.tar [--domain supply
   `bundle.export_plain_started` before reading any value and `bundle.export_plain` (Domain,
   heads and counts, never values) when done; if an entry cannot be written the output is
   removed. `--actor` is recorded as given: the command runs with the database credentials and
-  vault keys of the installation, so restrict who can run it. Import needs the target's vault
-  keys and the token key id every tombstone was made under (`vault.token_key_id` or
-  `previous_token_keys`); it seals the values under the target's keys, checks that every
-  Record holding a token holds it in the bound Attribute under the bound key or one linked by
-  a key change, validates each value against the bundle's schema, and stores a value a
-  tombstone holds as `vault.erased_values` says. A target Domain with vault rows, tombstones or
-  key changes is not empty. Treat such a bundle as personal data and delete it once restored.
+  vault keys of the installation, so restrict who can run it.
+- The export holds the vault lock shared only until its snapshot exists, not while it reads
+  and writes the files. An erasure asked for in that moment waits up to
+  `vault.erase_lock_timeout_ms`, then answers 503 with `Retry-After` and can be repeated; one
+  asked for later goes ahead, and the bundle shows the Domain as it was at the snapshot.
+- Tombstones recorded before they kept their token key (`fingerprint_key` empty) are exported as
+  made under the exporter's current `vault.token_key_id` with the first fingerprint scheme
+  (`<id>/1`); `manifest.json` counts them under `vault_notes`. Vault entries carry `moved_to`,
+  the key a key change took the token over to.
+- Import needs the target's vault keys and the token key id every tombstone was made under
+  (`vault.token_key_id` or `previous_token_keys`); a tombstone without one is refused, never
+  dropped. Import seals the values under the target's keys and checks that:
+  - every key change links two Records of its Kind that the bundle holds;
+  - every Record holding a token holds it in the bound Attribute, under the bound key or one
+    linked by a key change;
+  - every `moved_to` follows a key change of the bundle;
+  - every value is valid for the bundle's schema.
+
+  It stores a value a tombstone holds as `vault.erased_values` says, and records a
+  `bundle.import_vault` audit entry (`import --actor`) with the counts: values, erased values,
+  tombstones, key changes, and groups of more than 1000 linked keys, which an administrator
+  should look at. A target Domain with vault rows, tombstones or key changes is not empty.
+  Treat such a bundle as personal data and delete it once restored.
 
 Not in a bundle: the audit log, principals, groups, grants and API keys (installation-wide, not
 Domain content), and per-Domain operational tables: Proposals and reviews, merge attempts,
