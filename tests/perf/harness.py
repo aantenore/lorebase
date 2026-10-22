@@ -983,7 +983,12 @@ async def measure_alternating(
     measurements = [Measurement(name) for _ in operations]
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         for index in range(warmup + iterations):
-            for operation, rng, measurement in zip(operations, rngs, measurements, strict=True):
+            turns = list(zip(operations, rngs, measurements, strict=True))
+            # Each branch goes first in turn: the second read of the same keys finds their
+            # pages cached.
+            for operation, rng, measurement in (
+                turns[index % len(turns) :] + turns[: index % len(turns)]
+            ):
                 started = time.perf_counter()
                 async with session.begin():
                     if role is not None:
