@@ -12,6 +12,7 @@ from lorebase_store.auth.api_keys import ApiKeyRepository
 from lorebase_store.auth.audit import AuditRepository
 from lorebase_store.auth.grants import GrantRepository
 from lorebase_store.auth.principals import GroupRepository, PrincipalRepository
+from lorebase_store.auth.sessions import SessionRepository
 from lorebase_store.auth.usage import UsageRepository
 
 
@@ -25,6 +26,7 @@ class AuthUnit:
     grants: GrantRepository
     audit: AuditRepository
     usage: UsageRepository
+    sessions: SessionRepository
 
 
 class SqlAuthStore:
@@ -44,4 +46,5 @@ class SqlAuthStore:
                 grants=GrantRepository(session),
                 audit=AuditRepository(session),
                 usage=UsageRepository(session),
+                sessions=SessionRepository(session),
             )

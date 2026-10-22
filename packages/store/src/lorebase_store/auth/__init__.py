@@ -1,4 +1,4 @@
-"""Repositories of principals, groups, API keys, grants and the audit log."""
+"""Repositories of principals, groups, API keys, grants, web sessions and the audit log."""
 
 from lorebase_store.auth.api_keys import ApiKeyRecord, ApiKeyRepository, PrefixTakenError
 from lorebase_store.auth.audit import (
@@ -16,6 +16,7 @@ from lorebase_store.auth.principals import (
     PrincipalRepository,
 )
 from lorebase_store.auth.scope import new_id, rls_scope
+from lorebase_store.auth.sessions import SessionRecord, SessionRepository
 from lorebase_store.auth.unit import AuthUnit, SqlAuthStore
 from lorebase_store.auth.usage import UsageRecord, UsageRepository
 
@@ -33,6 +34,8 @@ __all__ = [
     "PrefixTakenError",
     "PrincipalRecord",
     "PrincipalRepository",
+    "SessionRecord",
+    "SessionRepository",
     "SqlAuthStore",
     "UsageRecord",
     "UsageRepository",

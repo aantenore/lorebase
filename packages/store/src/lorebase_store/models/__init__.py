@@ -12,6 +12,7 @@ from lorebase_store.models.governance import (
     GroupMember,
     OperationInvocation,
     Principal,
+    WebSession,
 )
 from lorebase_store.models.ingestion import (
     Document,
@@ -86,6 +87,7 @@ __all__ = [
     "StoredObject",
     "TreeNode",
     "VaultEntry",
+    "WebSession",
     "Webhook",
     "WebhookDelivery",
     "metadata",

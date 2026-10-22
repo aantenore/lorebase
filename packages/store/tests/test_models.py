@@ -34,6 +34,7 @@ DESIGN_TABLES = {
     "grants",
     "api_keys",
     "api_key_usage",
+    "web_sessions",
     "operation_invocations",
     "audit_log",
     "outbox",
@@ -95,5 +96,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_overlay_neighborhood_lookups_migration() -> None:
-    assert head_revisions() == ("0012",)
+def test_head_revision_is_the_web_sessions_migration() -> None:
+    assert head_revisions() == ("0013",)
