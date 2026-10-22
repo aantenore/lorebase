@@ -4,6 +4,7 @@ import { defaultHighlightStyle, indentOnInput, syntaxHighlighting } from '@codem
 import { Annotation, EditorState } from '@codemirror/state';
 import { EditorView, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
+import { editorTheme } from './codemirror-theme';
 
 export interface Jump {
   line: number;
@@ -25,27 +26,6 @@ export interface YamlEditorProps {
 
 /** Marks edits that come from the `value` prop, so they are not reported back as changes. */
 const External = Annotation.define<boolean>();
-
-const theme = EditorView.theme({
-  '&': {
-    backgroundColor: 'var(--lb-surface)',
-    color: 'var(--lb-text)',
-    border: '1px solid var(--lb-line)',
-    borderRadius: '0.375rem',
-    fontSize: '0.8125rem',
-    height: '100%',
-  },
-  '&.cm-focused': { outline: '2px solid var(--lb-ring)' },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', overflow: 'auto' },
-  '.cm-gutters': {
-    backgroundColor: 'var(--lb-surface-2)',
-    color: 'var(--lb-muted)',
-    border: 'none',
-  },
-  '.cm-activeLine': { backgroundColor: 'var(--lb-surface-2)' },
-  '.cm-activeLineGutter': { backgroundColor: 'var(--lb-surface-2)' },
-  '.cm-cursor': { borderLeftColor: 'var(--lb-text)' },
-});
 
 /**
  * YAML editor on CodeMirror 6: YAML language, history, line numbers. `value` is the source
@@ -81,7 +61,7 @@ export default function YamlEditor({
           yaml(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           keymap.of([...defaultKeymap, ...historyKeymap]),
-          theme,
+          editorTheme,
           EditorState.readOnly.of(readOnly),
           EditorView.editable.of(!readOnly),
           EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true' }),

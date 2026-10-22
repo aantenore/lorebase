@@ -48,13 +48,13 @@ The schema of the Branch as a graph: Kinds as nodes, Relations as edges, with th
 
 ![Modeler, list view](images/modeler-list.png)
 
-The schema of the current Branch as lists: Kinds, Attributes, Relations, Traits, Operations, Derivations and Sources, with counts. On a protected Branch such as `main` the banner says that schema changes go through another Branch and a Proposal. Operation, Derivation and Source mapping editors are marked "Planned".
+The schema of the current Branch as lists: Kinds, Attributes, Relations, Traits, Operations, Derivations and Sources, with counts. On a protected Branch such as `main` the banner says that schema changes go through another Branch and a Proposal.
 
 ### Edit schema
 
 ![Modeler, schema editor](images/modeler-edit.png)
 
-The schema as one document in two synchronized views: a form for Kinds, Relations and Traits and a YAML editor (CodeMirror) for everything, including Operations, Derivations and Sources. Validation issues point at the field and the YAML line, and include Keeper's own: the editor asks Keeper to dry-run the edited document, so an Attribute without a description or an unknown reference is refused there and shown next to the local findings. The change set summary shows the commands and the data migrations the dry run reports. On a protected Branch "Open Proposal" creates a Branch, commits the document on it and opens the Proposal against `main`; on any other Branch "Save change set" commits a schema Revision. An untouched schema produces an empty change set.
+The schema as one document in two synchronized views: a form with a tab per element type and a YAML editor (CodeMirror). The Operation tab edits parameters, preconditions, steps and the review policy, with CEL expressions in their own editor, and dry-runs the Operation as saved on the Branch. The Derivation tab edits the `expression`, `aggregate` and `path` variants and picks the computed Attribute from the schema. The Source tab shows the fields of each Source type, accepts only `secret://` references for the connection and for credential headers, and edits the mapping to the target Kind, HTTP pagination, sync mode and merge policy. A form edit changes only the keys it is about; anything else in the YAML stays. Validation issues point at the field and the YAML line, and include Keeper's own: the editor asks Keeper to dry-run the edited document, so an Attribute without a description, an unknown reference or an expression that does not type check (with `schema.expressions_enabled`) is refused there and shown next to the field. The change set summary shows the commands and the data migrations the dry run reports. On a protected Branch "Open Proposal" creates a Branch, commits the document on it and opens the Proposal against `main`; on any other Branch "Save change set" commits a schema Revision. An untouched schema produces an empty change set.
 
 ### Start from data
 

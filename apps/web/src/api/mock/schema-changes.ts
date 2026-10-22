@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { castValue, validateValue } from '../values';
 import { builtinOperations } from './builders';
+import { expressionViolations } from './expressions';
 import { refOf, splitRef, type BranchData, type StoredLink, type StoredRecord } from './state';
 
 export interface Evaluation {
@@ -284,6 +285,8 @@ export function evaluateSchemaChanges(data: BranchData, changes: SchemaChange[])
     message: issue.message,
     path: issue.path,
   }));
+  const reported = new Set(violations.map((v) => v.path));
+  violations.push(...expressionViolations(schema).filter((v) => !reported.has(v.path)));
   const moved = migrateRecords(data.schema, schema, data.records);
   const linked = migrateLinks(data.schema, schema, data.links, moved.dropped, moved.renames);
   const castFailed = new Set<string>();

@@ -72,6 +72,67 @@ describe('schema rules', () => {
       ]),
     );
   });
+
+  it('check Sources the way Keeper does: type fields, sync, key, credential headers', async () => {
+    const schema = await sampleSchema('main');
+    const source = schema.sources[0];
+    if (source === undefined) throw new Error('No Source');
+    source.records_path = 'data.items';
+    source.sync_mode = 'incremental';
+    source.key_mapping = ['a', 'b'];
+    const http = structuredClone(source);
+    http.api_name = 'erp.api';
+    http.type = 'http_json';
+    delete http.records_path;
+    http.http = {
+      headers: { Authorization: 'Bearer abc', Host: 'x', 'X-Trace': 'on' },
+      pagination: { type: 'cursor', size_param: 'limit' },
+    };
+    schema.sources.push(http);
+    const issues = validateSchema(schema).map((i) => `${i.code} ${i.path}`);
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        'field_not_applicable sources/erp.vendors/records_path',
+        'missing_watermark sources/erp.vendors/watermark_column',
+        'key_mapping_length sources/erp.vendors/key_mapping',
+        'literal_secret sources/erp.api/http/headers/Authorization',
+        'reserved_header sources/erp.api/http/headers/Host',
+        'missing_cursor_path sources/erp.api/http/pagination/cursor_path',
+        'missing_page_size sources/erp.api/http/pagination/page_size',
+      ]),
+    );
+    expect(issues.some((i) => i.includes('X-Trace'))).toBe(false);
+  });
+
+  it('check Derivations per variant', async () => {
+    const schema = await sampleSchema('main');
+    const derivation = schema.derivations[0];
+    if (derivation === undefined) throw new Error('No Derivation');
+    schema.derivations.push(
+      {
+        ...derivation,
+        id: 'drv_agg',
+        api_name: 'max_risk',
+        variant: 'aggregate',
+        definition: { relation: 'supplied_by', function: 'max' },
+      },
+      {
+        ...derivation,
+        id: 'drv_path',
+        api_name: 'plants',
+        variant: 'path',
+        target: { type: 'relation', kind_id: '', api_name: 'plants' },
+        definition: { steps: [{ relation: 'nope' }] },
+      },
+    );
+    const issues = validateSchema(schema).map((i) => `${i.code} ${i.path}`);
+    expect(issues).toEqual([
+      'derivation_not_declared derivations/max_risk/definition/attribute',
+      'missing_source_attribute derivations/max_risk/definition/source_attribute',
+      'too_few_steps derivations/plants/definition/steps',
+      'unknown_reference derivations/plants/definition/steps/0/relation',
+    ]);
+  });
 });
 
 describe('schema change commands', () => {

@@ -42,6 +42,8 @@ export interface SchemaEditor {
   text: string;
   /** The last document that parsed; the form edits this one. */
   document: SchemaDocument;
+  /** The document of the Branch schema, before any edit. */
+  baseDocument: SchemaDocument;
   /** Syntax errors of the current text; empty when it parses. */
   syntaxIssues: SyntaxIssue[];
   /** The schema the document describes. */
@@ -107,6 +109,7 @@ export function useSchemaEditor(base: Schema): SchemaEditor {
   return {
     text,
     document,
+    baseDocument: initial,
     syntaxIssues,
     schema: converted.schema,
     issues,

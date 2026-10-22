@@ -374,6 +374,9 @@ export function ModelerPage({ tab, view }: { tab: ModelerTab; view: ModelerView 
             'Kind editor',
             'Relation editor',
             'Trait editor',
+            'Operation editor',
+            'Derivation editor',
+            'Source mapping editor',
             'Change set summary',
           ]}
         />

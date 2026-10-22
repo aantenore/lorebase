@@ -96,7 +96,10 @@ export interface TraitDocument {
   >;
 }
 
-/** Operations, Derivations and Sources are edited as YAML only; their layout stays loose. */
+/**
+ * Operations, Derivations and Sources stay loose mappings: their forms edit the keys they
+ * know in place (`element-edits.ts`), so any other key survives a form edit.
+ */
 export type ElementDocument = Record<string, unknown>;
 
 export interface SchemaDocument {

@@ -3,7 +3,7 @@
  * person edits and by the mock adapter before it accepts a change set. Issues carry a
  * path in the layout of the YAML document: `kinds/Supplier/attributes/tier/type`.
  */
-import type { Attribute, JsonValue, Schema, Sensitivity } from './types';
+import type { Attribute, Derivation, JsonValue, Schema, Sensitivity, Source } from './types';
 import { parseAttributeType, validateValue } from './values';
 
 export type SchemaBody = Pick<
@@ -32,6 +32,49 @@ export const OPERATION_ACTIONS = [
   'create_link',
   'delete_link',
 ] as const;
+export type OperationAction = (typeof OPERATION_ACTIONS)[number];
+/** Step fields each action takes; expressions are `target`, `from`, `to` and `values`. */
+export const STEP_FIELDS: Record<OperationAction, readonly string[]> = {
+  create_record: ['kind', 'values'],
+  update_record: ['kind', 'target', 'values'],
+  delete_record: ['kind', 'target'],
+  create_link: ['relation', 'from', 'to', 'values'],
+  delete_link: ['relation', 'from', 'to'],
+};
+/** Names Operation expressions define themselves; parameters cannot take them. */
+export const RESERVED_PARAMETER_NAMES = ['params', 'principal', '$step'] as const;
+export const AGGREGATE_FUNCTIONS = ['count', 'sum', 'min', 'max', 'avg'] as const;
+export const LINK_DIRECTIONS = ['forward', 'inverse'] as const;
+export const PAGINATION_TYPES = ['none', 'cursor', 'page', 'offset', 'link'] as const;
+/** Fields of a Source that apply to some types only (Keeper refuses them on the others). */
+export const SOURCE_TYPE_FIELDS: Record<string, readonly string[]> = {
+  records_path: ['json', 'http_json'],
+  flatten_separator: ['json', 'jsonl', 'parquet', 'http_json'],
+  http: ['http_json'],
+};
+/** Request headers an `http_json` Source may not set. */
+export const RESERVED_HEADERS = [
+  'host',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'te',
+  'upgrade',
+];
+/** Header names containing one of these carry credentials: values are secret references. */
+export const CREDENTIAL_HEADER_HINTS = [
+  'auth',
+  'token',
+  'secret',
+  'key',
+  'password',
+  'cookie',
+  'session',
+  'signature',
+];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 class Collector {
   readonly issues: SchemaIssue[] = [];
@@ -278,6 +321,15 @@ function checkOperations(out: Collector, schema: SchemaBody, kindNames: Readonly
       'Parameter',
     );
     operation.parameters.forEach((parameter, index) => {
+      if (parameter.name.trim() === '') {
+        out.add(`${path}/parameters/${index}/name`, 'missing_name', 'A parameter needs a name.');
+      } else if (RESERVED_PARAMETER_NAMES.some((n) => n === parameter.name)) {
+        out.add(
+          `${path}/parameters/${index}/name`,
+          'reserved_name',
+          `${parameter.name} is reserved in expressions.`,
+        );
+      }
       const known = parameter.type === 'ref' || parseAttributeType(parameter.type) !== null;
       if (!known)
         out.add(
@@ -297,8 +349,20 @@ function checkOperations(out: Collector, schema: SchemaBody, kindNames: Readonly
       out.add(`${path}/steps`, 'no_steps', 'An Operation needs at least one step.');
     operation.steps.forEach((step, index) => {
       const stepPath = `${path}/steps/${index}`;
-      if (!OPERATION_ACTIONS.some((action) => action === step.action)) {
+      const action = OPERATION_ACTIONS.find((a) => a === step.action);
+      if (action === undefined) {
         out.add(stepPath, 'unknown_step', `Unknown step ${step.action}.`);
+      } else {
+        for (const field of STEP_FIELDS[action]) {
+          if (field === 'values' || field === 'kind' || field === 'relation') continue;
+          if (blank(step.with[field])) {
+            out.add(
+              `${stepPath}/${field}`,
+              'empty_expression',
+              `The ${field} expression is empty.`,
+            );
+          }
+        }
       }
       const kind = step.with['kind'];
       if (typeof kind === 'string' && !kindNames.has(kind)) {
@@ -313,6 +377,15 @@ function checkOperations(out: Collector, schema: SchemaBody, kindNames: Readonly
         );
       }
     });
+    operation.preconditions.forEach((precondition, index) => {
+      if (precondition.expression.trim() === '') {
+        out.add(
+          `${path}/preconditions/${index}/expression`,
+          'empty_expression',
+          'The precondition expression is empty.',
+        );
+      }
+    });
     if (operation.review_policy.trim() === '') {
       out.add(
         `${path}/review_policy`,
@@ -323,40 +396,196 @@ function checkOperations(out: Collector, schema: SchemaBody, kindNames: Readonly
   }
 }
 
-function checkDerivationsAndSources(out: Collector, schema: SchemaBody) {
-  for (const derivation of schema.derivations) {
-    const path = `derivations/${derivation.api_name}`;
-    if (!SNAKE_NAME.test(derivation.api_name)) {
-      out.add(path, 'invalid_name', `Derivation name ${derivation.api_name} must be snake_case.`);
-    }
-    if (!schema.kinds.some((k) => k.id === derivation.target.kind_id)) {
-      out.add(
-        `${path}/target`,
-        'unknown_reference',
-        `Kind ${derivation.target.kind_id} does not exist.`,
-      );
-    }
+const blank = (value: unknown) => typeof value !== 'string' || value.trim() === '';
+const textOf = (value: unknown) => (typeof value === 'string' ? value : '');
+
+function checkDerivation(out: Collector, schema: SchemaBody, derivation: Derivation) {
+  const path = `derivations/${derivation.api_name}`;
+  const at = `${path}/definition`;
+  if (!SNAKE_NAME.test(derivation.api_name)) {
+    out.add(path, 'invalid_name', `Derivation name ${derivation.api_name} must be snake_case.`);
   }
-  for (const source of schema.sources) {
-    const path = `sources/${source.api_name}`;
-    if (!SOURCE_NAME.test(source.api_name)) {
-      out.add(path, 'invalid_name', `Source name ${source.api_name} must be dotted snake_case.`);
+  const definition = derivation.definition;
+  if (derivation.variant === 'path') {
+    const steps = Array.isArray(definition['steps']) ? (definition['steps'] as unknown[]) : [];
+    if (steps.length < 2) {
+      out.add(`${at}/steps`, 'too_few_steps', 'A path Derivation needs at least two steps.');
     }
-    if (!schema.kinds.some((k) => k.id === source.target_kind)) {
-      out.add(
-        `${path}/target_kind`,
-        'unknown_reference',
-        `Kind ${source.target_kind} does not exist.`,
-      );
+    steps.forEach((step, index) => {
+      const relation = isRecord(step) ? step['relation'] : undefined;
+      if (!schema.relations.some((r) => r.api_name === relation)) {
+        out.add(
+          `${at}/steps/${index}/relation`,
+          'unknown_reference',
+          `Relation ${textOf(relation)} does not exist.`,
+        );
+      }
+    });
+    return;
+  }
+  const kind = schema.kinds.find((k) => k.id === derivation.target.kind_id);
+  if (kind === undefined) {
+    out.add(`${at}/kind`, 'unknown_reference', `Kind ${derivation.target.kind_id} does not exist.`);
+    return;
+  }
+  const target = Object.values(kind.attributes).find(
+    (a) => a.api_name === derivation.target.api_name,
+  );
+  if (target === undefined) {
+    out.add(
+      `${at}/attribute`,
+      'unknown_attribute',
+      `Attribute ${derivation.target.api_name} does not exist.`,
+    );
+  } else if (target.derivation_id !== derivation.id) {
+    out.add(
+      `${at}/attribute`,
+      'derivation_not_declared',
+      `Attribute ${target.api_name} does not declare this Derivation.`,
+    );
+  }
+  if (derivation.variant === 'expression') {
+    if (blank(definition['expression'])) {
+      out.add(`${at}/expression`, 'empty_expression', 'The expression is empty.');
     }
-    if (!SECRET_REFERENCE.test(source.connection)) {
+    return;
+  }
+  const relation = schema.relations.find((r) => r.api_name === definition['relation']);
+  if (relation === undefined) {
+    out.add(
+      `${at}/relation`,
+      'unknown_reference',
+      `Relation ${textOf(definition['relation'])} does not exist.`,
+    );
+  }
+  const fn = definition['function'];
+  if (!AGGREGATE_FUNCTIONS.some((f) => f === fn)) {
+    out.add(
+      `${at}/function`,
+      'unknown_function',
+      `The function is one of ${AGGREGATE_FUNCTIONS.join(', ')}.`,
+    );
+  } else if (fn !== 'count' && blank(definition['source_attribute'])) {
+    out.add(
+      `${at}/source_attribute`,
+      'missing_source_attribute',
+      `${textOf(fn)} needs a source Attribute.`,
+    );
+  }
+}
+
+/** Whether the value of request header `name` must be a secret reference (as Keeper rules). */
+export function credentialHeader(name: string): boolean {
+  const lowered = name.toLowerCase();
+  return CREDENTIAL_HEADER_HINTS.some((hint) => lowered.includes(hint));
+}
+
+export function isSecretReference(value: unknown): boolean {
+  return typeof value === 'string' && SECRET_REFERENCE.test(value);
+}
+
+function checkHttp(out: Collector, path: string, http: Record<string, unknown>) {
+  const headers = isRecord(http['headers']) ? http['headers'] : {};
+  for (const [name, value] of Object.entries(headers)) {
+    const at = `${path}/headers/${name}`;
+    if (name.trim() === '' || RESERVED_HEADERS.includes(name.toLowerCase())) {
+      out.add(at, 'reserved_header', `Header ${name} cannot be set by a Source.`);
+    } else if (credentialHeader(name) && !isSecretReference(value)) {
       out.add(
-        `${path}/connection`,
+        at,
         'literal_secret',
-        'A connection is a secret:// reference, never a literal.',
+        `Header ${name} carries credentials: its value is a secret:// reference, never a literal.`,
       );
     }
   }
+  const pagination = isRecord(http['pagination']) ? http['pagination'] : {};
+  const type = pagination['type'] ?? 'none';
+  const at = `${path}/pagination`;
+  if (!PAGINATION_TYPES.some((t) => t === type)) {
+    out.add(
+      `${at}/type`,
+      'unknown_pagination',
+      `Pagination is one of ${PAGINATION_TYPES.join(', ')}.`,
+    );
+  }
+  if (type === 'cursor' && blank(pagination['cursor_path'])) {
+    out.add(`${at}/cursor_path`, 'missing_cursor_path', 'Cursor pagination needs a cursor path.');
+  }
+  const pageSize = pagination['page_size'];
+  if (type === 'offset' && pageSize == null) {
+    out.add(`${at}/page_size`, 'missing_page_size', 'Offset pagination needs a page size.');
+  }
+  if (pagination['size_param'] != null && pageSize == null) {
+    out.add(`${at}/page_size`, 'missing_page_size', 'A size parameter needs a page size.');
+  }
+}
+
+function checkSource(out: Collector, schema: SchemaBody, source: Source) {
+  const path = `sources/${source.api_name}`;
+  if (!SOURCE_NAME.test(source.api_name)) {
+    out.add(path, 'invalid_name', `Source name ${source.api_name} must be dotted snake_case.`);
+  }
+  if (!SECRET_REFERENCE.test(source.connection)) {
+    out.add(
+      `${path}/connection`,
+      'literal_secret',
+      'A connection is a secret:// reference, never a literal.',
+    );
+  }
+  if (source.type === 'postgres_query' && blank(source.query)) {
+    out.add(`${path}/query`, 'missing_query', 'A postgres_query Source needs a query.');
+  }
+  for (const [field, types] of Object.entries(SOURCE_TYPE_FIELDS)) {
+    const value = (source as unknown as Record<string, unknown>)[field];
+    if (value != null && !types.includes(source.type)) {
+      out.add(
+        `${path}/${field}`,
+        'field_not_applicable',
+        `${field} applies to ${types.join(', ')} Sources only.`,
+      );
+    }
+  }
+  if (source.http != null && source.type === 'http_json')
+    checkHttp(out, `${path}/http`, source.http);
+  if (source.sync_mode === 'incremental' && blank(source.watermark_column)) {
+    out.add(
+      `${path}/watermark_column`,
+      'missing_watermark',
+      'An incremental Source needs a watermark column.',
+    );
+  }
+  const kind = schema.kinds.find((k) => k.id === source.target_kind);
+  if (kind === undefined) {
+    out.add(
+      `${path}/target_kind`,
+      'unknown_reference',
+      `Kind ${source.target_kind} does not exist.`,
+    );
+    return;
+  }
+  if (kind.primary_key.length > 0 && source.key_mapping.length !== kind.primary_key.length) {
+    out.add(
+      `${path}/key_mapping`,
+      'key_mapping_length',
+      `The key mapping has ${source.key_mapping.length} columns, the primary key of ${kind.api_name} has ${kind.primary_key.length}.`,
+    );
+  }
+  for (const [id, mapping] of Object.entries(source.attribute_mapping)) {
+    const attribute = kind.attributes[id];
+    if (attribute === undefined) continue;
+    const at = `${path}/attribute_mapping/${attribute.api_name}`;
+    if (attribute.derivation_id !== null) {
+      out.add(at, 'derived_mapped', `Derived Attribute ${attribute.api_name} cannot be mapped.`);
+    }
+    if (blank(mapping.column) === blank(mapping.expression)) {
+      out.add(at, 'mapping_input', 'Map either a column or an expression.');
+    }
+  }
+}
+
+function checkDerivationsAndSources(out: Collector, schema: SchemaBody) {
+  for (const derivation of schema.derivations) checkDerivation(out, schema, derivation);
+  for (const source of schema.sources) checkSource(out, schema, source);
 }
 
 /** Every rule violation of `schema`, in a stable order. */
