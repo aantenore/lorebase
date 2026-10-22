@@ -143,7 +143,7 @@ async def test_tools_over_mcp_against_keeper(
     async with client:
         call = client.call_tool
         listed = await client.list_tools()
-        assert len(listed.tools) == 11
+        assert len(listed.tools) == 13
 
         schema = _text(await call("lorebase_schema", {}))
         assert schema.startswith("schema supply@main rev ")
@@ -195,6 +195,11 @@ async def test_tools_over_mcp_against_keeper(
         lineage = _text(await call("lorebase_explain", {"ref": "Supplier/S-1001"}))
         assert "legal_name = Kavsen Alloys Sp. z o.o. <- import by usr_loader" in lineage
         assert "LINKS:" in lineage
+
+        history = _text(await call("lorebase_history", {"ref": "Supplier/S-1001"}))
+        assert revs["data"][:12] in history
+        values = _text(await call("lorebase_lineage", {"ref": "Supplier/S-1001"}))
+        assert "legal_name" in values
 
         changes = _text(await call("lorebase_changes", {"since": revs["schema"]}))
         assert f"{revs['data']} " in changes
