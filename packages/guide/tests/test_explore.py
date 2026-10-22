@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
-from lorebase_guide import agent
+from lorebase_guide import agent, prompts
 from lorebase_guide.prompts import FINAL_CALL, NOT_FOUND
-from lorebase_inference import ChatOptions, ChatResult, JsonSchema, Message
+from lorebase_inference import (
+    ChatOptions,
+    ChatResult,
+    InvalidOutputError,
+    JsonSchema,
+    Message,
+    Usage,
+)
 
 from . import support
 from .support import (
@@ -261,11 +269,97 @@ async def test_completion_cap_never_exceeds_the_remaining_budget(keeper: FakeKee
     chat = ScriptedChat([tool("search", q="acme"), answer("Acme.", "Supplier/S-1")])
     await explore(keeper, chat, agent={"max_tokens_per_call": 4000, "max_total_tokens": 1500})
     caps = [o.max_tokens for o in chat.options if o is not None]
+    # a 4000-token answer cannot fit in 1500, so the only call is the final one, capped below
+    # what is left after its input
+    assert len(caps) == 1
+    assert chat.calls[0][-1].content == FINAL_CALL
     assert caps[0] is not None
     assert caps[0] < 1500
-    assert all(c is not None and c <= 1500 for c in caps)
-    assert caps[1] is not None
-    assert caps[1] < caps[0]
+
+
+async def test_a_budget_too_small_for_another_step_still_gets_an_answer(
+    keeper: FakeKeeper,
+) -> None:
+    """Live runs ended with `Not found in the graph.` after six or seven useful reads: the
+    token budget ran out before the step budget and no answer turn was left. Now the turn
+    whose step would leave no room for an answer is the final one."""
+    chat = ScriptedChat([answer("Not enough read.", found=False)])
+    stream = await explore(keeper, chat, agent={"max_total_tokens": 3000})
+
+    assert len(chat.calls) == 1
+    assert chat.calls[0][-1].content == FINAL_CALL
+    assert named(stream, "error") == []
+    assert named(stream, "done")[0]["outcome"] == "not_found"
+
+
+def test_another_step_needs_room_for_its_result_and_the_answer() -> None:
+    settings = support.guide_settings(
+        agent={"max_result_chars": 4000, "max_tokens_per_call": 500}
+    ).agent
+    explorer = agent.Explorer(ScriptedChat([]), settings, None)
+    messages = [Message("system", "x" * 4000)]  # with the turn schema: about 1,100 tokens
+    base = -(-agent._chars(messages) // 4)
+    state = agent.Exploration()
+    state.usage.input_tokens, state.usage.output_tokens = 10_000, 400
+    # this call (input + 100 output on average) + the next call (input + 100 + 1000 for the
+    # result) + 500 for the answer
+    needed = (base + 100) + (base + 100 + 1000) + 500
+    fits = agent.Budget(
+        max_steps=8, max_total_tokens=10_400 + needed, max_tokens_per_call=500, timeout_s=60
+    )
+    short = agent.Budget(
+        max_steps=8, max_total_tokens=10_400 + needed - 1, max_tokens_per_call=500, timeout_s=60
+    )
+    assert explorer._fits_another_step(messages, fits, state, calls=4)
+    assert not explorer._fits_another_step(messages, short, state, calls=4)
+
+
+class DenseChat(ScriptedChat):
+    """An endpoint whose tokenizer counts one token per two characters, as JSON-heavy prompts
+    came close to on a hosted model (the estimate assumes four)."""
+
+    async def complete_json(
+        self, messages: Sequence[Message], schema: JsonSchema, options: ChatOptions | None = None
+    ) -> ChatResult:
+        result = await super().complete_json(messages, schema, options)
+        chars = agent._chars(list(messages))
+        return dataclasses.replace(
+            result, usage=dataclasses.replace(result.usage, input_tokens=chars // 2)
+        )
+
+
+async def test_the_estimate_follows_the_tokens_the_endpoint_counts(keeper: FakeKeeper) -> None:
+    """A hosted model counted more input tokens than four characters each: the calls passed
+    the estimate, then the reported total went over the budget mid-step and the exploration
+    stopped with nothing. The ratio is now taken from the endpoint's count of each call."""
+    chat = DenseChat([tool("search", q="acme") for _ in range(8)])
+    stream = await explore(keeper, chat, agent={"max_total_tokens": 9000})
+
+    done = named(stream, "done")[0]
+    assert named(stream, "error") == []
+    assert done["outcome"] == "not_found"  # the final turn came, the script had no answer
+    assert chat.calls[-1][-1].content == FINAL_CALL
+    assert done["tokens"]["input"] + done["tokens"]["output"] <= 9000
+
+
+async def test_a_final_answer_over_the_estimate_is_kept(keeper: FakeKeeper) -> None:
+    """Live: the final call fit the estimate, the endpoint counted about twice as many input
+    tokens, and the answer was dropped for `Not found in the graph.`. The first call has no
+    measured ratio yet, so only keeping the final answer helps here."""
+    first = [
+        Message("system", prompts.system_prompt("0" * 24)),
+        Message("user", prompts.question_prompt(QUESTION["domain"], None, QUESTION["question"])),
+        Message("user", FINAL_CALL),
+    ]
+    chars = agent._chars(first)
+    budget = chars * 3 // 8  # above the estimate (chars / 4), below the count (chars / 2)
+    chat = DenseChat([answer("Nothing read yet.", found=False)])
+    stream = await explore(keeper, chat, agent={"max_total_tokens": budget})
+
+    assert len(chat.calls) == 1
+    assert named(stream, "error") == []
+    assert named(stream, "done")[0]["outcome"] == "not_found"
+    assert named(stream, "done")[0]["tokens"]["input"] > budget
 
 
 async def test_call_that_would_exceed_the_budget_is_not_made(keeper: FakeKeeper) -> None:
@@ -285,9 +379,42 @@ async def test_estimated_input_of_later_calls_is_capped(keeper: FakeKeeper) -> N
     stream = await explore(keeper, chat, agent={"max_total_tokens": 1500})
 
     done = named(stream, "done")[0]
-    assert done["outcome"] == "budget"
+    assert done["outcome"] == "not_found"
+    assert chat.calls[-1][-1].content == FINAL_CALL
     assert len(chat.calls) < 6
     assert done["tokens"]["input"] + done["tokens"]["output"] <= 1500
+
+
+class CutOffChat(ScriptedChat):
+    """The first turn is scripted; the second answer is cut off by the token limit, as a hosted
+    model's long answer was in the live runs."""
+
+    async def complete_json(
+        self, messages: Sequence[Message], schema: JsonSchema, options: ChatOptions | None = None
+    ) -> ChatResult:
+        if self.calls:
+            self.calls.append(list(messages))
+            raise InvalidOutputError(
+                "answer cut off by the token limit",
+                problems=["/: json"],
+                usage=Usage(input_tokens=3000, output_tokens=2048),
+            )
+        return await super().complete_json(messages, schema, options)
+
+
+async def test_tokens_of_an_unusable_answer_are_counted(
+    keeper: FakeKeeper, caplog: pytest.LogCaptureFixture
+) -> None:
+    chat = CutOffChat([tool("search", q="acme")])
+    stream = await explore(keeper, chat)
+
+    done = named(stream, "done")[0]
+    assert done["outcome"] == "model"
+    assert done["tokens"]["input"] > 3000
+    assert done["tokens"]["output"] > 2048
+    failed = [r for r in caplog.records if r.getMessage() == "model call failed"]
+    assert failed
+    assert failed[0].problems == ["/: json"]
 
 
 class SlowChat:

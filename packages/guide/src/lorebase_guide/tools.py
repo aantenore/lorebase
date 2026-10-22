@@ -28,6 +28,21 @@ _MAX_ATTRIBUTES = 40
 _MAX_PATH = 4
 _MAX_SEEDS = 5
 
+# The query DSL as Keeper reads it (lorebase_core.query.dsl), told to the model in the `query`
+# and `traverse` descriptions; tests check the example against the DSL models.
+PREDICATE_FORMS = (
+    '{"attr": name, "op": eq|ne|lt|lte|gt|gte|in|between|contains|prefix|exists, "value": v}, '
+    '{"derived": name, "op": op, "value": v} for a derived Attribute, '
+    '{"via": relation, "where"?: predicate} (a Link exists), '
+    '{"count": relation, "op": op, "value": n}, {"match": "text"}, '
+    '{"and": [predicate, ...]}, {"or": [predicate, ...]}, {"not": predicate}'
+)
+QUERY_EXAMPLE = (
+    '{"kind": "Part", "where": {"and": [{"attr": "category", "op": "eq", "value": "bearing"}, '
+    '{"via": "supplied_by", "where": {"attr": "country", "op": "in", "value": ["IT", "DE"]}}]}, '
+    '"order_by": [{"attr": "key", "dir": "desc"}], "limit": 20}'
+)
+
 
 class ToolArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -316,17 +331,22 @@ async def _neighborhood(ctx: ToolContext, args: NeighborhoodArgs) -> ToolResult:
     )
     found = await ctx.client.records.neighborhood(ctx.domain, request)
     nodes = [ctx.record(item) for item in found.nodes[: ctx.settings.max_items]]
-    edges = [
-        {
-            "relation": e.relation,
-            "from": ctx.ref_of(e.source.kind, e.source.key),
-            "to": ctx.ref_of(e.to.kind, e.to.key),
-        }
-        for e in found.edges[: ctx.settings.max_items * 2]
-    ]
+    edges = [_edge(ctx, e) for e in found.edges[: ctx.settings.max_items * 2]]
     data = {"nodes": nodes, "edges": edges, "truncated": found.truncated}
     summary = f"{len(found.nodes)} nodes, {len(found.edges)} edges"
     return ToolResult(True, summary, data, [n["ref"] for n in nodes])
+
+
+def _edge(ctx: ToolContext, edge: m.Edge) -> JsonDict:
+    """A Link between two shown Records, with its Link Attributes when it has any."""
+    out: JsonDict = {
+        "relation": edge.relation,
+        "from": ctx.ref_of(edge.source.kind, edge.source.key),
+        "to": ctx.ref_of(edge.to.kind, edge.to.key),
+    }
+    if edge.values:
+        out["values"] = ctx.clip(dict(edge.values))
+    return out
 
 
 async def _traverse(ctx: ToolContext, args: TraverseArgs) -> ToolResult:
@@ -350,7 +370,13 @@ async def _traverse(ctx: ToolContext, args: TraverseArgs) -> ToolResult:
     for hop in found.hops:
         records = [ctx.record(r) for r in hop.records[: ctx.settings.max_items]]
         refs.extend(str(r["ref"]) for r in records)
-        hops.append({"relation": hop.relation, "records": records, "truncated": hop.truncated})
+        entry: JsonDict = {"relation": hop.relation, "records": records}
+        # Link Attributes (a stocked quantity, a lead time) live on the edges only
+        valued = [_edge(ctx, e) for e in hop.edges[: ctx.settings.max_items] if e.values]
+        if valued:
+            entry["links"] = valued
+        entry["truncated"] = hop.truncated
+        hops.append(entry)
     summary = f"{len(hops)} hops, {len(refs) - 1} Records"
     return ToolResult(True, summary, {"start": start, "hops": hops}, refs)
 
@@ -442,9 +468,12 @@ TOOLS: dict[str, Tool] = {
         ),
         Tool(
             "query",
-            "Filter Records of one Kind with the query DSL. args: {kind, where?: {attr: value | "
-            "{op: value}}, select?: [attr], order_by?: [{attr: asc|desc}], aggregate?: {...}, "
-            "limit?: 1-50}",
+            "Filter Records of one Kind with the query DSL. args: {kind, where?: predicate, "
+            "select?: [attr], order_by?: [{attr, dir?: asc|desc}], aggregate?: {group_by?: "
+            "attr}, limit?: 1-50}. A predicate is one of: "
+            + PREDICATE_FORMS
+            + ". Example: "
+            + QUERY_EXAMPLE,
             QueryArgs,
             _query,
         ),
@@ -457,19 +486,24 @@ TOOLS: dict[str, Tool] = {
         ),
         Tool(
             "neighborhood",
-            "Records around seed Records. args: {refs: [Kind/key], depth?: 1-2, relations?, "
-            "max_nodes?}",
+            f"Records around seed Records. args: {{refs: [Kind/key] (1-{_MAX_SEEDS}), depth?: "
+            "1-2, relations?: [relation], max_nodes?}",
             NeighborhoodArgs,
             _neighborhood,
         ),
         Tool(
             "traverse",
-            "Follow Relations from a Record. args: {start: Kind/key, path: [{relation, where?, "
-            "limit?}]}",
+            "Follow Relations from a Record. args: {start: Kind/key, path: [{relation, where?: "
+            f"predicate as in query, limit?}}] (1-{_MAX_PATH} hops)}}",
             TraverseArgs,
             _traverse,
         ),
-        Tool("history", "Recent changes of a Record. args: {ref, limit?}", HistoryArgs, _history),
+        Tool(
+            "history",
+            "Recent changes of a Record. args: {ref, limit?: 1-20}",
+            HistoryArgs,
+            _history,
+        ),
         Tool("lineage", "Where a Record's values came from. args: {ref}", RefArgs, _lineage),
         Tool(
             "context",
