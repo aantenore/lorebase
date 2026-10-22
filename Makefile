@@ -17,6 +17,8 @@ PERF_PG_PASSWORD ?= perf
 PERF_URL ?= postgresql://perf:$(PERF_PG_PASSWORD)@127.0.0.1:$(PERF_PG_PORT)/postgres
 PERF_SCALE_1m := 5406
 PERF_SCALE_10m := 54060
+PERF_REPLICAS_1m := 1
+PERF_REPLICAS_10m := 10
 PERF_ITERATIONS ?= 1000
 PERF_WARMUP ?= 100
 PERF_OUT ?= build/perf
@@ -74,7 +76,7 @@ perf-run-%:
 	$(PERF_COMPOSE) up -d --wait
 	@mkdir -p $(PERF_OUT)
 	LOREBASE_TEST_DATABASE_URL=$(PERF_URL) $(UV) run python tests/perf/bench.py \
-		--scale $(PERF_SCALE_$*) --extra-links 4 --iterations $(PERF_ITERATIONS) --warmup $(PERF_WARMUP) \
+		--scale $(PERF_SCALE_$*) --replicas $(PERF_REPLICAS_$*) --extra-links 4 --iterations $(PERF_ITERATIONS) --warmup $(PERF_WARMUP) \
 		--branch-iterations 1 --seed-database perf_seed_$* --in-place --out $(PERF_OUT)/perf-$*.md
 
 perf-down: ## Stop the perf Postgres and delete its seeded datasets
