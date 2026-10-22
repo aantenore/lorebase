@@ -127,6 +127,18 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
     needsWebGL: true,
   },
   {
+    // The scripted exploration of the mock: a preset question, its steps and the cited Records.
+    name: 'explore',
+    path: `/${domain}/explore`,
+    ready: '[aria-label="Preset questions"]',
+    steps: [
+      { click: '[aria-label="Preset questions"] >> text=Single-source risk' },
+      { waitFor: '[aria-label="Answer"] >> text=View trace' },
+      { click: 'text=Show cited Records on the Canvas' },
+      { waitFor: '[role=img][aria-label^="Cited Records"]' },
+    ],
+  },
+  {
     name: 'modeler-list',
     path: `/${domain}/modeler`,
     ready: 'text=Supplier',

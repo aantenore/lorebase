@@ -119,6 +119,43 @@ Header names, the notes path and the note length are in `guide.trace`; `guide.tr
 sends neither headers nor notes. The `session` event gives the web app the id to link to the
 session's timeline.
 
+## The Explore panel in the web app
+
+The web app asks Guide from **Explore**, a screen next to the Retrieval lab in the navigation
+(`/<domain>/explore`), and from the same panel at the bottom of the Retrieval lab. It appears
+when the runtime configuration has `guideUrl`; against the mock API it plays scripted
+explorations instead, so it can be tried without Guide.
+
+![Explore](images/explore.png)
+
+- **Request.** `POST {guideUrl}/explore` with the Domain, the Branch on screen (`null` for the
+  default one), the question and the panel's max steps (`VITE_EXPLORE_MAX_STEPS`, 6; Guide only
+  ever lowers its own budget). `guideUrl` is an absolute origin (`https://guide.example.com`) or
+  a path on the app's origin (`/guide` behind the web proxy); session mode needs the second.
+- **Credentials.** In token mode the same `Authorization: Bearer` header Keeper gets; in session
+  mode the session cookie (`credentials: include`) and the CSRF header of the session. The
+  client holds no credential or setting of Guide's.
+- **Streaming.** The response is read with `fetch` and a stream reader, since `EventSource`
+  cannot POST. Each event is shown as it arrives: reasoning notes, tool calls with their
+  arguments on one line, results with their summary and the number of Records, an `error`
+  event, then the answer and the totals of `done` (steps, seconds, tokens). The model name is
+  shown when an event carries `model`.
+- **Stop and limits.** Stop aborts the request, which closes the stream; Guide stops working
+  on the exploration. The panel stops a stream that runs longer than `VITE_EXPLORE_TIMEOUT_MS`
+  (150 s, above `guide.agent.timeout_s`). A 429 shows its reason and disables asking until
+  `Retry-After` has passed; other refusals show what the `code` means.
+- **Untrusted text.** Notes, summaries, arguments and answers are rendered as plain text: no
+  HTML, no Markdown, no links or images, whatever they contain. Only `citations` become links,
+  to the Record pages of the app, when the Kind is a valid name of the Domain's schema and the
+  key holds no control character; others are shown as text. "Show cited Records on the Canvas"
+  draws them with their neighbors.
+- **Trace.** "View trace" opens the session of the `session` event in Agent activity
+  (`/<domain>/agent-activity?session=<id>`).
+- **Presets.** On the `supply` Domain the panel offers the questions of the example agent:
+  single-source risk, tier-1 suppliers at high risk with open orders, what if S-1007 stops,
+  the history of C-3013 and a misspelled search ("bering"). They live in
+  `apps/web/src/features/explore/presets.ts`.
+
 ## Budgets and limits
 
 | Setting | Default | Bounds |

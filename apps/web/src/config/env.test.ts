@@ -97,6 +97,25 @@ describe('loadConfig', () => {
     );
   });
 
+  it('reads the Explore panel settings', () => {
+    expect(loadConfig({ VITE_API_MODE: 'mock' }).explore).toEqual({
+      maxSteps: 6,
+      timeoutMs: 150_000,
+      mockStepMs: 350,
+    });
+    expect(
+      loadConfig({
+        VITE_API_MODE: 'mock',
+        VITE_EXPLORE_MAX_STEPS: '3',
+        VITE_EXPLORE_TIMEOUT_MS: '9000',
+        VITE_EXPLORE_MOCK_STEP_MS: '0',
+      }).explore,
+    ).toEqual({ maxSteps: 3, timeoutMs: 9000, mockStepMs: 0 });
+    expect(() => loadConfig({ VITE_API_MODE: 'mock', VITE_EXPLORE_MAX_STEPS: '0' })).toThrow(
+      ConfigError,
+    );
+  });
+
   it('reads the document caps, tiers and switches', () => {
     const defaults = loadConfig({ VITE_API_MODE: 'mock' });
     expect(defaults.documents).toEqual({

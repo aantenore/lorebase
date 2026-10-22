@@ -15,14 +15,14 @@ afterEach(() => {
 });
 
 describe('Retrieval lab', () => {
-  it('asks for a question first and has no Explore slot without a guide service', async () => {
+  it('asks for a question first and shows the scripted Explore panel of the mock', async () => {
     renderApp('/supply/retrieval-lab');
     expect(
       await screen.findByRole('heading', { name: 'Retrieval lab', level: 1 }),
     ).toBeInTheDocument();
     expect(screen.getByText(/No guide service is configured/)).toBeInTheDocument();
     expect(screen.getByLabelText('Query vector (JSON array)')).toBeInTheDocument();
-    expect(screen.queryByText('Explore (coming soon)')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Question for the guide')).toBeInTheDocument();
     expect(await screen.findByText('Ask a question to see its pack.')).toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe('Retrieval lab', () => {
     expect(container.querySelector('li b')).toBeNull();
   });
 
-  it('asks the guide service to embed the question and shows its slot', async () => {
+  it('asks the guide service to embed the question and shows the Explore panel', async () => {
     const calls: { url: string; body: unknown }[] = [];
     vi.stubGlobal(
       'fetch',
@@ -108,7 +108,7 @@ describe('Retrieval lab', () => {
     expect(calls).toEqual([
       { url: 'http://guide.test/embed', body: { text: 'bearing', mode: 'query' } },
     ]);
-    expect(screen.getByText('Explore (coming soon)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Question for the guide')).toBeInTheDocument();
     expect(screen.queryByLabelText('Query vector (JSON array)')).not.toBeInTheDocument();
   });
 
