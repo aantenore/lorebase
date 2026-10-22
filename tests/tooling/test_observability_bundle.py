@@ -344,7 +344,9 @@ def render(chart: Path, *sets: str) -> list[dict[str, Any]]:
     args = [HELM, "template", "obs", str(chart), "-n", "lorebase"]
     args += [
         "--set",
-        "secrets.values.dbDsn=postgresql+asyncpg://lorebase:x@db.internal:5432/lorebase",
+        "secrets.values.dbDsn=postgresql+asyncpg://lorebase_app:x@db.internal:5432/lorebase",
+        "--set",
+        "secrets.values.dbMaintenanceDsn=postgresql+asyncpg://lorebase:x@db.internal:5432/lorebase",
     ]
     args += ["--set", "secrets.values.apiKeyPepper=" + "p" * 32]
     for value in sets:

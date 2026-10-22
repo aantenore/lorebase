@@ -4,8 +4,10 @@
 {{- $scope := dict "ctx" . "component" "migrate" }}
 {{- $events := include "lorebase.hookEvents" . }}
 {{- $name := printf "%s-migrate" (include "lorebase.fullname" .) }}
+{{- $roles := and (include "lorebase.splitRoles" .) .Values.database.setup.enabled }}
 {{- /* The hook Job runs before the regular resources exist on a first install, so it brings its own
-       ConfigMap (the settings the migration reads) and, for a chart-managed DSN, its own Secret. */}}
+       ConfigMap (the settings the migration reads, the role setup script) and, for chart-managed
+       DSNs, its own Secret. */}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,6 +21,10 @@ metadata:
 data:
   lorebase.yaml: |
     {{- include "lorebase.migrateConfig" . | nindent 4 }}
+  {{- if $roles }}
+  db-roles.py: |
+    {{- .Files.Get "files/db-roles.py" | nindent 4 }}
+  {{- end }}
 {{- if and (not .Values.secrets.existingSecret) (not .Values.postgresql.enabled) }}
 ---
 apiVersion: v1
@@ -34,6 +40,9 @@ metadata:
 type: Opaque
 stringData:
   {{ required "secrets.keys.dbDsn must not be empty" .Values.secrets.keys.dbDsn }}: {{ required "secrets.values.dbDsn is required" (get .Values.secrets.values "dbDsn") | quote }}
+  {{- if include "lorebase.splitRoles" . }}
+  {{ required "secrets.keys.dbMaintenanceDsn must not be empty" .Values.secrets.keys.dbMaintenanceDsn }}: {{ required "secrets.values.dbMaintenanceDsn is required" (get .Values.secrets.values "dbMaintenanceDsn") | quote }}
+  {{- end }}
 {{- end }}
 ---
 apiVersion: batch/v1
@@ -69,8 +78,10 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if $m.waitForDatabase.enabled }}
+      {{- if or $m.waitForDatabase.enabled $roles }}
       initContainers:
+      {{- end }}
+      {{- if $m.waitForDatabase.enabled }}
         - name: wait-for-database
           image: {{ include "lorebase.backendImage" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -94,7 +105,7 @@ spec:
             - name: LOREBASE_DB_DSN
               valueFrom:
                 secretKeyRef:
-                  {{- include "lorebase.dsnRef" (dict "ctx" . "hook" true) | nindent 18 }}
+                  {{- include "lorebase.maintenanceDsnRef" (dict "ctx" . "hook" true) | nindent 18 }}
             - name: WAIT_TIMEOUT_S
               value: {{ $m.waitForDatabase.timeoutSeconds | quote }}
             - name: WAIT_INTERVAL_S
@@ -108,6 +119,39 @@ spec:
             limits:
               memory: 64Mi
       {{- end }}
+      {{- if $roles }}
+        # The application role of Keeper and Scribe, before the migration grants it the read
+        # functions (deploy/compose/postgres/app-role.sh on compose).
+        - name: db-roles
+          image: {{ include "lorebase.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "/etc/lorebase/db-roles.py"]
+          env:
+            - name: LOREBASE_CONFIG
+              value: /etc/lorebase/lorebase.yaml
+            - name: LOREBASE__LOGGING__LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- include "lorebase.migrateDbEnv" . | nindent 12 }}
+            {{- include "lorebase.appDsnEnv" (dict "ctx" . "hook" true "name" "APP_DSN") | nindent 12 }}
+            - name: APP_ROLE
+              value: {{ .Values.database.appRole.name | quote }}
+            - name: CREATE_ROLE
+              value: {{ and .Values.database.appRole.create (not .Values.postgresql.enabled) | quote }}
+            - name: ROLE_WAIT_S
+              value: {{ .Values.database.setup.waitSeconds | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- with $m.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: config
+              mountPath: /etc/lorebase
+              readOnly: true
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "lorebase.backendImage" . | quote }}
@@ -120,7 +164,7 @@ spec:
               value: /etc/lorebase/lorebase.yaml
             - name: LOREBASE__LOGGING__LEVEL
               value: {{ .Values.logLevel | quote }}
-            {{- include "lorebase.dbEnv" (dict "ctx" . "hook" true) | nindent 12 }}
+            {{- include "lorebase.migrateDbEnv" . | nindent 12 }}
             {{- with $m.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

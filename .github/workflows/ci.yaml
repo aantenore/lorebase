@@ -210,6 +210,22 @@ jobs:
             echo "the chart rendered web sign-in without an OIDC mode, client or secrets" >&2
             exit 1
           fi
+          # Keeper and Scribe never connect as the maintenance role (docs/kubernetes.md#database-roles).
+          owner=postgresql+asyncpg://lorebase:x@postgres.example.internal:5432/lorebase
+          if helm template ci "$CHART" -f "$CHART/ci/minimal-values.yaml" --set secrets.values.dbMaintenanceDsn=null > /dev/null 2>&1; then
+            echo "the chart rendered without a maintenance role" >&2
+            exit 1
+          fi
+          if helm template ci "$CHART" -f "$CHART/ci/minimal-values.yaml" --set secrets.values.dbDsn="$owner" --set secrets.values.dbMaintenanceDsn="$owner" > /dev/null 2>&1; then
+            echo "the chart rendered one role for the services and the migrations" >&2
+            exit 1
+          fi
+          if helm template ci "$CHART" -f "$CHART/ci/local-models-values.yaml" --set database.appRole.name=lorebase > /dev/null 2>&1; then
+            echo "the chart rendered the in-cluster database owner as the application role" >&2
+            exit 1
+          fi
+          helm template ci "$CHART" -f "$CHART/ci/minimal-values.yaml" --set secrets.values.dbDsn="$owner" \
+            --set secrets.values.dbMaintenanceDsn=null --set database.allowSharedRole=true > /dev/null
       - name: kubeconform, strict, against the Kubernetes schemas
         run: |
           docker run --rm -v "$PWD/build/helm:/manifests:ro" "$KUBECONFORM_IMAGE" \

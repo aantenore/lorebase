@@ -7,6 +7,7 @@ secrets:
   existingSecret: lorebase-secrets
   keys:
     dbDsn: db-dsn
+    dbMaintenanceDsn: db-maintenance-dsn
     dbReadDsn: ""
     apiKeyPepper: api-key-pepper
     llmApiKey: ""

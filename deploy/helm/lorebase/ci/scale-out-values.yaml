@@ -5,6 +5,7 @@ secrets:
   existingSecret: lorebase-secrets
   keys:
     dbDsn: db-dsn
+    dbMaintenanceDsn: db-maintenance-dsn
     dbReadDsn: db-read-dsn
     apiKeyPepper: api-key-pepper
     llmApiKey: llm-api-key

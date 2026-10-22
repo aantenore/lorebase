@@ -134,8 +134,14 @@ secrets:
   existingSecret: ""
   # Key names inside the Secret (chart-managed or existing). An empty name disables the entry.
   keys:
-    # Primary connection string, for example postgresql+asyncpg://user:pass@host:5432/lorebase (LOREBASE_DB_DSN).
+    # Connection string of the application role Keeper and Scribe connect as, for example
+    # postgresql+asyncpg://lorebase_app:pass@host:5432/lorebase (LOREBASE_DB_DSN). Its user must be
+    # `database.appRole.name`; it is neither superuser nor owner of the tables (docs/deployment.md#database-roles).
     dbDsn: db-dsn
+    # Connection string of the maintenance role, the owner of the tables (LOREBASE_DB_MAINTENANCE_DSN): the
+    # migration Job and its role setup, per-Attribute index DDL run by Scribe, the installation commands.
+    # Must name another user than dbDsn. Not used with `postgresql.enabled` (the operator's owner Secret).
+    dbMaintenanceDsn: db-maintenance-dsn
     # Read replica connection strings, comma separated (LOREBASE_DB_READ_DSN). Empty: all reads on the primary.
     dbReadDsn: db-read-dsn
     # Pepper of the API key hashes, at least 32 characters (secret://env/LOREBASE_API_KEY_PEPPER). Changing it invalidates every key.
@@ -151,8 +157,14 @@ secrets:
   # Values for the chart-managed Secret. Ignored when `existingSecret` is set. Prefer
   # `--set-file` or a values file kept out of git; never commit real values.
   values:
-    # Primary DSN. Ignored when `postgresql.enabled` (the in-cluster cluster supplies it).
+    # Application role DSN. Ignored when `postgresql.enabled` (built from `dbAppPassword`).
     dbDsn: ""
+    # Maintenance (owner) role DSN. Ignored when `postgresql.enabled` (the cluster's owner Secret).
+    dbMaintenanceDsn: ""
+    # With `postgresql.enabled`: password of the application role, URL-safe characters only, 16 or more
+    # (for example `openssl rand -hex 24`). The chart stores it in the kubernetes.io/basic-auth Secret
+    # `database.appRole.passwordSecret`, which the operator reads (`postgresql.cluster.roles`).
+    dbAppPassword: ""
     # Read replica DSNs: a string, or a list that the chart joins with commas.
     dbReadDsn: ""
     # Pepper for API key hashes, 32 characters or more.
@@ -171,6 +183,42 @@ secrets:
   extraNames: []
 
 # -- Database ---------------------------------------------------------------------------------
+
+# Database roles (docs/deployment.md#database-roles), as on compose: the maintenance role owns the
+# tables and runs the migrations and the index DDL; Keeper and Scribe connect as the application
+# role, without SUPERUSER, BYPASSRLS or ownership, so row-level security and the append-only audit
+# log apply to them. The migration Job sets the application role up first (init container
+# `db-roles`, files/db-roles.py): creates it if asked, then grants row rights, revokes CREATE on
+# `public` and UPDATE/DELETE on audit_log. Idempotent; it runs before every migration.
+database:
+  appRole:
+    # Name of the application role; the user of `secrets.keys.dbDsn`. Lower case letters, digits, `_`.
+    name: lorebase_app
+    # External database: create the role when missing and set its password from the application DSN
+    # (the maintenance role needs CREATEROLE). false: the role exists (created by an administrator);
+    # the Job waits for it and grants. Ignored with `postgresql.enabled` (the operator creates it).
+    create: true
+    # With `postgresql.enabled`: the kubernetes.io/basic-auth Secret (keys username, password) of the
+    # role. Must match `passwordSecret.name` of the role in `postgresql.cluster.roles`. Created by the
+    # chart from `secrets.values.dbAppPassword`, or by you with `secrets.existingSecret`.
+    passwordSecret: lorebase-db-app
+  setup:
+    # Run the `db-roles` init container of the migration Job (needs `migrate.enabled`). false: you keep
+    # the role and its grants yourself (deploy/compose/postgres/app-role.sh lists them).
+    enabled: true
+    # How long the Job waits for a role it does not create (operator or administrator), in seconds.
+    waitSeconds: 300
+  # Keeper gets the maintenance DSN too, as on compose: with it, schema commits queue their
+  # per-Attribute index changes for Scribe, and the installation commands (`bootstrap`, `principal
+  # create`) run in the pod. Keeper never connects with it while serving. false keeps the owner
+  # credentials out of Keeper; schema commits then skip index management with a warning
+  # (`python -m lorebase_store.indexes plan`). Scribe always gets it (it runs the index DDL).
+  maintenanceDsnInKeeper: true
+  # Development only. true: every component, Keeper and Scribe included, connects with the one DSN of
+  # `secrets.keys.dbDsn` (or the operator's owner Secret), no role setup runs, and the services own the
+  # tables (row-level security relies on FORCE alone, the audit log stays writable, DDL is possible).
+  # false (default): the chart refuses one role for both and wires the two DSNs above.
+  allowSharedRole: false
 
 # Postgres 16 with the pgvector extension is required. Production: an external managed or
 # operator-run Postgres, passed as a DSN through `secrets`. Optional in-cluster Postgres: the
@@ -203,6 +251,22 @@ postgresql:
       # Run as superuser in the new database, once.
       postInitApplicationSQL:
         - CREATE EXTENSION IF NOT EXISTS vector
+    # Roles the operator manages: the application role of Keeper and Scribe (`database.appRole`). Its
+    # password comes from the basic-auth Secret `database.appRole.passwordSecret`; grants are applied
+    # by the migration Job. Keep name and passwordSecret in line with `database.appRole`.
+    roles:
+      - name: lorebase_app
+        ensure: present
+        comment: Lorebase application role (Keeper, Scribe), subject to row-level security
+        login: true
+        superuser: false
+        bypassrls: false
+        createdb: false
+        createrole: false
+        replication: false
+        inherit: true
+        passwordSecret:
+          name: lorebase-db-app
     postgresql:
       # postgresql.conf parameters (string values). Size max_connections above
       # Keepers x (pool_size + max_overflow), plus Scribe, migrations and admin.

@@ -128,9 +128,8 @@ one-shot service was chosen over a `docker-entrypoint-initdb.d` script because i
 only on an empty volume. Roles are documented in [deployment.md](deployment.md#database-roles).
 Test: `tests/tooling/test_compose_stack.py`; the web e2e suite passed on the stack (11 tests),
 where `pg_stat_activity` showed Keeper as `lorebase_app` with `rolsuper` and `rolbypassrls`
-false, and Scribe ran its index and webhook jobs under the role. The Helm chart still runs the
-migration and the services with one DSN; deployment.md says to give that role neither
-`SUPERUSER` nor `BYPASSRLS`.
+false, and Scribe ran its index and webhook jobs under the role. The Helm chart has the same
+split since the [hardening from the threat model](#hardening-from-the-threat-model).
 
 **F7. No placeholder secrets for the LiteLLM and Grafana profiles**
 (`deploy/compose/docker-compose.yaml`, `deploy/compose/require-secrets.sh`, `.env.example`).
@@ -230,8 +229,7 @@ grant changed through another Keeper is seen within the interval plus
 `packages/keeper/tests/integration/test_read_authorization.py`.
 
 Remaining limits: the per-prefix bucket of F20 can be used to throttle a known key
-(`per_key_prefix_enabled: false` removes it); the Helm
-chart has one DSN for the migration and the services (F6); bundle headers of pax and GNU long
+(`per_key_prefix_enabled: false` removes it); bundle headers of pax and GNU long
 names are bounded by the archive size only (F14); the `O_NOFOLLOW` walk of CSV and bundle files
 is POSIX only (F14, F18); schema inference sources are bound to Domains but not to schemas or
 tables (F15).
@@ -295,6 +293,7 @@ lock, so a refresh that fails mid-way waits `refresh_lease_s` before the next at
 
 The [threat model](threat-model.md) listed residual risks by priority. Each fix below has its own
 commit and tests.
+
 
 **Audit log append-only for the application role**
 (`packages/store/migrations/versions/0015_append_only_audit_log.py`,
@@ -371,6 +370,21 @@ empty: both audits found nothing. Dependabot version updates stay off. Test:
 default of the form `tag@sha256:<index digest>`, the multi-arch index so amd64 and arm64 builds
 get the same content; [release](release.md#base-images) describes the bump. Test:
 `tests/tooling/test_dockerfile_pins.py` fails on an external `FROM` without a 64-hex digest.
+
+**Helm chart: the services no longer connect as the table owner**
+(`deploy/helm/lorebase/templates/_helpers.tpl`, `templates/migrate.yaml`,
+`deploy/helm/lorebase/files/db-roles.py`). The chart ran the migration Job, Keeper and Scribe with
+one DSN, so the services connected as the owner of the tables: row-level security held only
+through `FORCE`, the revoke of revision `0015` did not apply to them and they could run DDL. As on
+compose, the chart now takes two DSNs, `db-maintenance-dsn` (the owner: the migration and
+`database.maintenance_dsn` of Scribe and Keeper) and `db-dsn` (the application role: `database.dsn`
+of Keeper and Scribe). A `db-roles` init container of the migration Job, running as the owner,
+creates the application role (or waits for the one CloudNativePG manages from
+`postgresql.cluster.roles`), refuses it with `SUPERUSER` or `BYPASSRLS` or when it is the owner,
+and applies the grants of `app-role.sh`, `audit_log` revoke included; the migration runs with
+`database.application_role` set. The chart refuses to render with one user for both DSNs, a missing
+maintenance DSN or an unsafe managed role unless `database.allowSharedRole: true` (development).
+Test: `tests/tooling/test_helm_db_roles.py`, the CI negative cases of the `helm` job.
 
 ## Other observations
 

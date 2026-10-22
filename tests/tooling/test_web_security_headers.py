@@ -18,7 +18,9 @@ HELM = shutil.which("helm")
 CSP_PREFIX = "Content-Security-Policy "
 REQUIRED = [
     "--set",
-    "secrets.values.dbDsn=postgresql+asyncpg://lorebase:x@postgres.internal:5432/lorebase",
+    "secrets.values.dbDsn=postgresql+asyncpg://lorebase_app:x@postgres.internal:5432/lorebase",
+    "--set",
+    "secrets.values.dbMaintenanceDsn=postgresql+asyncpg://lorebase:x@postgres.internal:5432/lorebase",
     "--set",
     "secrets.values.apiKeyPepper=" + "p" * 32,
     "--set",

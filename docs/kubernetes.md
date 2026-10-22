@@ -14,7 +14,7 @@ application's own `lorebase.yaml`, and the same environment variables.
 | Part | Default | Notes |
 |------|---------|-------|
 | Keeper (Deployment, Service, PDB, optional HPA) | on | Probes `/healthz` and `/readyz`, non-root, read-only root file system, topology spread |
-| Migration (Helm hook Job) | on | `alembic upgrade head` before Keeper rolls out |
+| Migration (Helm hook Job) | on | Sets up the application role (`db-roles` init container), then `alembic upgrade head` as the maintenance role, before Keeper rolls out ([database roles](#database-roles)) |
 | ConfigMap | on | The `config` values block, mounted as `/etc/lorebase/lorebase.yaml` |
 | Secret | on, unless `secrets.existingSecret` | DSNs, API key pepper, LLM key, web sign-in client secret and session key; never in the ConfigMap |
 | ServiceAccount | on | No API token mounted |
@@ -27,7 +27,7 @@ application's own `lorebase.yaml`, and the same environment variables.
 | CloudNativePG Cluster | off | Optional in-cluster Postgres, subchart `postgresql` |
 
 Postgres 16 with pgvector is required. Production uses an external Postgres (managed or
-operator-run) passed as a DSN.
+operator-run) passed as two DSNs: the maintenance role and the application role.
 
 ## Requirements
 
@@ -51,10 +51,13 @@ docker pull ghcr.io/aantenore/lorebase:0.1.0      # optional: check that the ima
 # 2. The chart declares one optional dependency (CloudNativePG); fetch it once, even if unused.
 helm dependency build deploy/helm/lorebase
 
-# 3. Secrets. Keep them out of values files that are committed.
+# 3. Secrets. Keep them out of values files that are committed. Two database roles: the
+#    application role Keeper and Scribe connect as (db-dsn) and the maintenance role that owns
+#    the tables and runs the migrations (db-maintenance-dsn); see "Database roles" below.
 kubectl create namespace lorebase
 kubectl -n lorebase create secret generic lorebase-secrets \
-  --from-literal=db-dsn='postgresql+asyncpg://lorebase:<password>@postgres.example.internal:5432/lorebase' \
+  --from-literal=db-dsn='postgresql+asyncpg://lorebase_app:<app password>@postgres.example.internal:5432/lorebase' \
+  --from-literal=db-maintenance-dsn='postgresql+asyncpg://lorebase:<password>@postgres.example.internal:5432/lorebase' \
   --from-literal=api-key-pepper="$(openssl rand -hex 32)"
 
 # 4. Install with a profile (below) and your overrides.
@@ -87,8 +90,9 @@ Three layers, like compose:
    example hosted embedding credentials.
 
 The chart refuses to render when `keeper.auth.mode` needs an API key pepper and none is given, when no
-database is configured, when `ollama` is on without `scribe`, and when the in-cluster Postgres has no
-pgvector image. Pods roll when the ConfigMap or the chart-managed Secret changes (checksum annotations).
+database is configured, when the application and maintenance roles are missing or the same
+([database roles](#database-roles)), when `ollama` is on without `scribe`, and when the in-cluster
+Postgres has no pgvector image. Pods roll when the ConfigMap or the chart-managed Secret changes (checksum annotations).
 
 ## Profiles
 
@@ -106,7 +110,8 @@ keeper:
     enabled: false
 secrets:
   values:                      # replace; or use secrets.existingSecret as above
-    dbDsn: postgresql+asyncpg://lorebase:<password>@postgres.example.internal:5432/lorebase
+    dbDsn: postgresql+asyncpg://lorebase_app:<app password>@postgres.example.internal:5432/lorebase
+    dbMaintenanceDsn: postgresql+asyncpg://lorebase:<password>@postgres.example.internal:5432/lorebase
     apiKeyPepper: <32 characters or more>
 ```
 
@@ -178,10 +183,73 @@ Scribe receives `LLM_BASE_URL` and `LLM_MODEL` for it. GPU nodes: add `nvidia.co
 
 The in-cluster Postgres is the CloudNativePG `cluster` chart under the alias `postgresql`. It needs
 the CloudNativePG operator and an image with pgvector (`postgresql.cluster.imageName`, required: the
-default CloudNativePG image does not include it). The chart reads the connection string from the
-operator's `<release>-postgresql-app` Secret. Set `postgresql.cluster.instances` above 1 for standbys;
+default CloudNativePG image does not include it). The migration runs as the database owner, from the
+operator's `<release>-postgresql-app` Secret; Keeper and Scribe connect as the managed role
+`lorebase_app`, whose password is `secrets.values.dbAppPassword` ([database roles](#database-roles)). Set `postgresql.cluster.instances` above 1 for standbys;
 point `secrets.values.dbReadDsn` at the `-ro` Service for reads. Not recommended for production data
 unless you operate CloudNativePG, backups included.
+
+## Database roles
+
+As on compose ([deployment](deployment.md#database-roles)), two roles:
+
+| Role | Secret | Used by |
+|------|--------|---------|
+| Maintenance, the owner of the tables | `secrets.keys.dbMaintenanceDsn` (`db-maintenance-dsn`); in-cluster: the operator's `<cluster>-app` Secret, key `uri` | The migration Job and its `db-roles` init container; `database.maintenance_dsn` of Scribe (per-Attribute index DDL) and of Keeper (see below) |
+| Application, `database.appRole.name` (`lorebase_app`) | `secrets.keys.dbDsn` (`db-dsn`); in-cluster: built from the basic-auth Secret `database.appRole.passwordSecret` (`lorebase-db-app`) | `database.dsn` of Keeper and Scribe |
+
+The application role has neither `SUPERUSER` nor `BYPASSRLS` and owns nothing, so row-level security
+applies to every statement of the services, `audit_log` stays append-only for them (revision `0015`)
+and they cannot change the schema. Before every migration the `db-roles` init container of the Job
+(`deploy/helm/lorebase/files/db-roles.py`, the counterpart of `deploy/compose/postgres/app-role.sh`)
+connects as the maintenance role and:
+
+- with an external database and `database.appRole.create: true` (default), creates the role when
+  missing and sets `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION` and the
+  password of `db-dsn`; the maintenance role then needs `CREATEROLE`. With `create: false` the role
+  must exist (created by an administrator): the Job waits for it up to `database.setup.waitSeconds`;
+- with the in-cluster database, waits for the role the operator creates from
+  `postgresql.cluster.roles` (the chart declares it, with `passwordSecret` set to
+  `database.appRole.passwordSecret`);
+- refuses a role with `SUPERUSER` or `BYPASSRLS`, or the same role as the maintenance DSN;
+- revokes `CREATE` on `public` from `PUBLIC`, grants `SELECT, INSERT, UPDATE, DELETE` on the tables,
+  `USAGE, SELECT` on the sequences (present ones, and later ones through default privileges of the
+  maintenance role), `CONNECT, TEMPORARY` on the database and `EXECUTE` on the read functions an
+  earlier migration created, and takes `UPDATE`, `DELETE`, `TRUNCATE` back on `audit_log`.
+
+The migration then runs with `database.application_role` set to the role, so the revisions grant it
+the read functions they create. The setup is idempotent and runs on every install and upgrade.
+`database.setup.enabled: false` (or `migrate.enabled: false`) leaves the grants to you.
+
+Scribe gets the maintenance DSN as `database.maintenance_dsn`: it runs the queued index jobs with it.
+Keeper gets it too (`database.maintenanceDsnInKeeper: true`, as on compose): with it, schema commits
+queue their index changes for Scribe and the installation commands (`python -m lorebase_keeper
+bootstrap`, `principal create`) run in the pod; Keeper never connects with it while serving. Set it
+to false to keep the owner credentials out of Keeper; schema commits then skip index management with
+a warning, and an administrator applies `python -m lorebase_store.indexes plan`.
+
+The chart refuses to render without a maintenance DSN, with two DSNs that connect as the same user,
+with an application DSN whose user is not `database.appRole.name`, with an in-cluster role that is
+the database owner, missing from `postgresql.cluster.roles` or with `superuser`/`bypassrls`, and
+without the in-cluster role's password (`secrets.values.dbAppPassword`, URL-safe, 16 characters or
+more, or `secrets.existingSecret` and a basic-auth Secret you create). DSNs in an existing Secret
+are checked by the `db-roles` container when the Job runs.
+
+```bash
+# In-cluster database with an existing Secret: the role's password, read by the operator.
+kubectl -n lorebase create secret generic lorebase-db-app --type=kubernetes.io/basic-auth \
+  --from-literal=username=lorebase_app --from-literal=password="$(openssl rand -hex 24)"
+kubectl -n lorebase label secret lorebase-db-app cnpg.io/reload=true
+```
+
+`database.allowSharedRole: true` restores one DSN for everything (`secrets.keys.dbDsn`, or the
+operator's owner Secret): no role setup, and the services own the tables. Development only.
+
+**Upgrading a release that used one DSN.** External database: add `db-maintenance-dsn` with the old
+DSN (the owner) and point `db-dsn` at the new application role; the next `helm upgrade` creates the
+role and grants it before the pods restart with it. In-cluster database: the role appears only when
+the upgraded Cluster is applied, after the `pre-upgrade` migration Job, so upgrade twice: first with
+`--set database.allowSharedRole=true` (the operator creates the role), then without it.
 
 ## Upgrade and migrations
 
@@ -236,7 +304,7 @@ ServiceMonitor scrapes the collector, not the release, so it needs no rule here.
 | Herald | DNS, Keeper, `egress.extra.herald` |
 | Web app | `egress.extra.web` only (nginx serves static files; the browser calls Keeper) |
 | Ollama | DNS, `egress.extra.ollama` |
-| Migration Job | DNS, Postgres, `egress.extra.migrate` |
+| Migration Job (and its `db-roles` init container) | DNS, Postgres, `egress.extra.migrate` |
 | `helm test` pod | DNS, Keeper |
 
 No rule allows every address. Peers are lists of NetworkPolicyPeer (`ipBlock`, `namespaceSelector`,
@@ -360,8 +428,11 @@ backup job for an external database; with the CloudNativePG subchart, configure 
 ## Validation status
 
 The chart is checked by `helm lint --strict`, `helm template` of every profile and `kubeconform --strict` in the
-`helm` job of CI; `tests/tooling/test_helm_network_policy.py` renders the profiles and checks the policies
-(skipped without a `helm` binary). It has not been installed on a live cluster in this change: the pieces that depend on a running
+`helm` job of CI; `tests/tooling/test_helm_network_policy.py` renders the profiles and checks the policies, and
+`tests/tooling/test_helm_db_roles.py` the database roles (both skipped without a `helm` binary). The database roles were
+installed on a kind cluster with an external Postgres (install, upgrade, `helm test`): Keeper and Scribe
+connected as `lorebase_app` (`rolsuper` and `rolbypassrls` false, no `CREATE` on `public`, no `UPDATE` or
+`DELETE` on `audit_log`), the tables stayed owned by the maintenance role; the CloudNativePG mode was not. Otherwise the chart has not been installed on a live cluster: the pieces that depend on a running
 cluster (the hook ordering, the Ollama sidecar, the CloudNativePG integration, NetworkPolicy behavior) follow the
 documented Kubernetes and Helm semantics but are untested end to end. The web image and a metrics endpoint
 on the services do not exist yet; the chart's switches for them are off. Scribe is off by default.

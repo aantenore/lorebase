@@ -3,7 +3,7 @@
 {{- $scope := dict "ctx" . "component" "scribe" -}}
 {{- $env := printf "%s\n%s" (include "lorebase.appEnv" $scope) (include "lorebase.scribeEnv" .) -}}
 {{- $checksums := dict "checksum/config" (include "lorebase.appConfig" . | sha256sum) -}}
-{{- if include "lorebase.managedSecret" . }}
+{{- if or (include "lorebase.managedSecret" .) (include "lorebase.appRoleSecret" .) }}
 {{- $_ := set $checksums "checksum/secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) }}
 {{- end }}
 {{ include "lorebase.deployment" (dict
