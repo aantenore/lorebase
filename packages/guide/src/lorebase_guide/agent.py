@@ -34,11 +34,18 @@ from lorebase_guide.settings import AgentSettings
 from lorebase_guide.telemetry import STEPS, TOKENS, tracer
 from lorebase_guide.tools import TOOLS, ToolContext, ToolResult, run_tool
 from lorebase_guide.trace import TraceSession
-from lorebase_inference import ChatModel, ChatOptions, InferenceError, Message
+from lorebase_inference import (
+    ChatModel,
+    ChatOptions,
+    InferenceError,
+    InvalidOutputError,
+    Message,
+)
 
 logger = logging.getLogger("lorebase.guide.agent")
 
 _CHARS_PER_TOKEN = 4  # input estimate before a call; same ratio as the inference package
+_MIN_CHARS_PER_TOKEN = 1.0  # floor of the ratio measured on a call
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,9 @@ class Exploration:
     steps: int = 0
     outcome: str = "running"
     usage: _Usage = field(default_factory=_Usage)
+    # Characters per input token: 4 until the endpoint reports its own count of a call, then
+    # what that call measured (JSON tool results ran at about 2.2 on Claude models).
+    chars_per_token: float = _CHARS_PER_TOKEN
 
 
 class _StopError(Exception):
@@ -138,12 +148,16 @@ class Explorer:
             },
         )
         final: dict[str, Any] | None = None
+        calls = 0
         try:
             while final is None:
-                last_turn = state.steps >= budget.max_steps
+                last_turn = state.steps >= budget.max_steps or not self._fits_another_step(
+                    messages, budget, state, calls
+                )
                 if last_turn:
                     messages.append(Message("user", prompts.FINAL_CALL))
-                turn = await self._turn(messages, budget, state, deadline)
+                turn = await self._turn(messages, budget, state, deadline, final=last_turn)
+                calls += 1
                 thought = str(turn.get("thought") or "").strip()
                 if thought:
                     yield Event("thought", {"step": state.steps, "text": thought})
@@ -201,13 +215,40 @@ class Explorer:
             },
         )
 
+    def _fits_another_step(
+        self, messages: list[Message], budget: Budget, state: Exploration, calls: int
+    ) -> bool:
+        """Whether the token budget still covers a tool step and the answer after it.
+
+        A tool step costs this call (estimated input, plus the output of an average call so
+        far) and leaves a larger context for the next one: this input plus at most
+        `max_result_chars` of tool result. The answer after it may use up to
+        `max_tokens_per_call`. When that does not fit, this turn is the last one, so the
+        exploration answers from what it read instead of stopping on the budget with nothing.
+        """
+        estimate = math.ceil(_chars(messages) / state.chars_per_token)
+        output = (
+            math.ceil(state.usage.output_tokens / calls)
+            if calls
+            else budget.max_tokens_per_call // 4
+        )
+        result = math.ceil(self._settings.max_result_chars / state.chars_per_token)
+        needed = (estimate + output) + (estimate + output + result) + budget.max_tokens_per_call
+        return state.usage.total + needed <= budget.max_total_tokens
+
     async def _turn(
-        self, messages: list[Message], budget: Budget, state: Exploration, deadline: float
+        self,
+        messages: list[Message],
+        budget: Budget,
+        state: Exploration,
+        deadline: float,
+        *,
+        final: bool,
     ) -> dict[str, Any]:
         schema = prompts.turn_schema()
-        chars = len(json.dumps(schema)) + sum(len(m.content) for m in messages)
+        chars = _chars(messages)
         remaining = (
-            budget.max_total_tokens - state.usage.total - math.ceil(chars / _CHARS_PER_TOKEN)
+            budget.max_total_tokens - state.usage.total - math.ceil(chars / state.chars_per_token)
         )
         if remaining <= 0:
             raise _StopError("budget", "the token budget of this exploration is used up")
@@ -222,13 +263,26 @@ class Explorer:
                     self._chat.complete_json(messages, schema, options), deadline
                 )
         except InferenceError as exc:
-            logger.warning("model call failed", extra={"error": type(exc).__name__})
+            # The calls of an unusable answer were made and billed: count them. The problems
+            # are schema paths and keywords (for example `/: json`), never answer text.
+            detail: dict[str, Any] = {"error": type(exc).__name__}
+            if isinstance(exc, InvalidOutputError):
+                state.usage.input_tokens += exc.usage.input_tokens
+                state.usage.output_tokens += exc.usage.output_tokens
+                detail.update(attempts=exc.attempts, problems=list(exc.problems[:5]))
+            logger.warning("model call failed", extra=detail)
             raise _StopError("model", "the model could not produce a valid step") from None
         state.usage.input_tokens += result.usage.input_tokens
         state.usage.output_tokens += result.usage.output_tokens
+        if result.usage.input_tokens > 0:
+            state.chars_per_token = min(
+                max(chars / result.usage.input_tokens, _MIN_CHARS_PER_TOKEN), _CHARS_PER_TOKEN
+            )
         TOKENS.add(result.usage.input_tokens, {"direction": "input"})
         TOKENS.add(result.usage.output_tokens, {"direction": "output"})
-        if state.usage.total > budget.max_total_tokens:
+        # The answer of the final turn is kept even when the endpoint counted more input than
+        # estimated: its tokens are spent either way, and no further call follows.
+        if state.usage.total > budget.max_total_tokens and not final:
             raise _StopError("budget", "the token budget of this exploration is used up")
         data = result.data
         return data if isinstance(data, dict) else {}
@@ -268,6 +322,11 @@ class Explorer:
         if not found:
             return {"text": prompts.NOT_FOUND, "citations": [], "found": False}
         return {"text": text, "citations": citations, "found": True}
+
+
+def _chars(messages: list[Message]) -> int:
+    """Characters of a model call with these messages and the turn schema."""
+    return len(json.dumps(prompts.turn_schema())) + sum(len(m.content) for m in messages)
 
 
 async def _bounded[T](awaitable: Awaitable[T], deadline: float) -> T:

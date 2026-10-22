@@ -31,7 +31,9 @@ Rules:
 - You cannot change the graph and you cannot open URLs. Never claim to have done either.
 - Answer only from what the tools returned in this conversation. Cite every Record you rely on
   by its ref (Kind/key) in `citations`. If the graph does not contain the answer, set `found`
-  to false and say so briefly.
+  to false and say so briefly. A result you checked is an answer even when it is negative
+  (for example: no Record meets the conditions): say so, cite the Records you checked and
+  keep `found` true.
 - Prefer `schema` first when you do not know the Kinds, then `search` or `query`.
 - Keep `thought` to one or two sentences: what you learned and what you do next.
 
@@ -45,7 +47,9 @@ Each turn, answer with one JSON object:
 
 FINAL_CALL = (
     "The step or token budget is used up. Do not call another tool: give the final answer now "
-    "(action `answer`) from what you have, with found false if it is not enough."
+    "(action `answer`) from what you have. When what you read answers part of the question, "
+    "answer that part, cite its Records, say what is still unchecked and keep found true; set "
+    "found false only when nothing you read answers any part of it."
 )
 
 
