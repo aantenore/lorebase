@@ -110,7 +110,7 @@ annotations:
 {{- define "lorebase.managedSecret" -}}
 {{- $s := .Values.secrets -}}
 {{- if not $s.existingSecret -}}
-{{- if or (and (not .Values.postgresql.enabled) (get $s.values "dbDsn")) (get $s.values "dbReadDsn") (get $s.values "apiKeyPepper") (get $s.values "llmApiKey") (get $s.values "oidcClientSecret") (get $s.values "sessionEncryptionKey") $s.extra -}}true{{- end -}}
+{{- if or (and (not .Values.postgresql.enabled) (or (get $s.values "dbDsn") (get $s.values "dbMaintenanceDsn"))) (get $s.values "dbReadDsn") (get $s.values "apiKeyPepper") (get $s.values "llmApiKey") (get $s.values "oidcClientSecret") (get $s.values "sessionEncryptionKey") $s.extra -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -125,32 +125,106 @@ annotations:
 {{- end -}}
 {{- end -}}
 
+{{/* "true" when the chart creates the basic-auth Secret of the application role (in-cluster Postgres; also with a shared role, so the operator can create the role before the switch). */}}
+{{- define "lorebase.appRoleSecret" -}}
+{{- if and .Values.postgresql.enabled (not .Values.secrets.existingSecret) (get .Values.secrets.values "dbAppPassword") -}}true{{- end -}}
+{{- end -}}
+
 {{/*
-Secret reference of the primary DSN: the CloudNativePG application Secret (key `uri`) when the
-in-cluster database is on, else the chart-managed or existing Secret. `hook` selects the
-hook-scoped copy that exists before the first install.
+"true" when Keeper and Scribe connect as the application role and the migration as the maintenance
+role (the default). Empty with `database.allowSharedRole`, where every component uses one DSN.
 */}}
-{{- define "lorebase.dsnRef" -}}
-{{- if .ctx.Values.postgresql.enabled -}}
-name: {{ printf "%s-app" (include "lorebase.pgClusterName" .ctx) }}
-key: uri
-{{- else if .ctx.Values.secrets.existingSecret -}}
-name: {{ .ctx.Values.secrets.existingSecret }}
-key: {{ required "secrets.keys.dbDsn must name the DSN key of secrets.existingSecret" .ctx.Values.secrets.keys.dbDsn }}
+{{- define "lorebase.splitRoles" -}}
+{{- if not .Values.database.allowSharedRole -}}true{{- end -}}
+{{- end -}}
+
+{{/* Secret holding the DSNs of an external database; `hook` selects the hook-scoped copy that exists before the first install. */}}
+{{- define "lorebase.dbSecretName" -}}
+{{- if .ctx.Values.secrets.existingSecret -}}
+{{- .ctx.Values.secrets.existingSecret -}}
+{{- else if .hook -}}
+{{- printf "%s-migrate" (include "lorebase.fullname" .ctx) -}}
 {{- else -}}
-name: {{ if .hook }}{{ printf "%s-migrate" (include "lorebase.fullname" .ctx) }}{{ else }}{{ include "lorebase.secretName" .ctx }}{{ end }}
-key: {{ required "secrets.keys.dbDsn must not be empty" .ctx.Values.secrets.keys.dbDsn }}
+{{- include "lorebase.secretName" .ctx -}}
 {{- end -}}
 {{- end -}}
 
-{{/* Database environment shared by every service that talks to Postgres. */}}
+{{/*
+Secret reference of the maintenance DSN (the owner of the tables): the CloudNativePG application
+Secret (key `uri`, the database owner) with the in-cluster database, else `secrets.keys.dbMaintenanceDsn`
+(`secrets.keys.dbDsn` with a shared role).
+*/}}
+{{- define "lorebase.maintenanceDsnRef" -}}
+{{- if .ctx.Values.postgresql.enabled -}}
+name: {{ printf "%s-app" (include "lorebase.pgClusterName" .ctx) }}
+key: uri
+{{- else -}}
+name: {{ include "lorebase.dbSecretName" . }}
+{{- if include "lorebase.splitRoles" .ctx }}
+key: {{ required "secrets.keys.dbMaintenanceDsn must not be empty" .ctx.Values.secrets.keys.dbMaintenanceDsn }}
+{{- else }}
+key: {{ required "secrets.keys.dbDsn must not be empty" .ctx.Values.secrets.keys.dbDsn }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Environment variable `name` holding the DSN of the application role. In-cluster: built from the role
+name, the password of its basic-auth Secret and the `-rw` Service (the owner Secret with a shared
+role). External: `secrets.keys.dbDsn`.
+*/}}
+{{- define "lorebase.appDsnEnv" -}}
+{{- $ctx := .ctx -}}
+{{- $pg := $ctx.Values.postgresql -}}
+{{- if and $pg.enabled (include "lorebase.splitRoles" $ctx) -}}
+- name: LOREBASE_DB_APP_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "database.appRole.passwordSecret must not be empty" $ctx.Values.database.appRole.passwordSecret }}
+      key: password
+- name: {{ .name }}
+  value: {{ printf "postgresql+asyncpg://%s:$(LOREBASE_DB_APP_PASSWORD)@%s-rw:5432/%s" $ctx.Values.database.appRole.name (include "lorebase.pgClusterName" $ctx) $pg.cluster.initdb.database | quote }}
+{{- else -}}
+- name: {{ .name }}
+  valueFrom:
+    secretKeyRef:
+      {{- if $pg.enabled }}
+      name: {{ printf "%s-app" (include "lorebase.pgClusterName" $ctx) }}
+      key: uri
+      {{- else }}
+      name: {{ include "lorebase.dbSecretName" . }}
+      key: {{ required "secrets.keys.dbDsn must not be empty" $ctx.Values.secrets.keys.dbDsn }}
+      {{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/* Database environment of Keeper and Scribe: the application role, and the maintenance role for index DDL when `maintenance`. */}}
 {{- define "lorebase.dbEnv" -}}
+- name: LOREBASE__DATABASE__DSN
+  value: secret://env/LOREBASE_DB_DSN
+{{ include "lorebase.appDsnEnv" (dict "ctx" .ctx "hook" false "name" "LOREBASE_DB_DSN") }}
+{{- if and .maintenance (include "lorebase.splitRoles" .ctx) }}
+- name: LOREBASE__DATABASE__MAINTENANCE_DSN
+  value: secret://env/LOREBASE_DB_MAINTENANCE_DSN
+- name: LOREBASE_DB_MAINTENANCE_DSN
+  valueFrom:
+    secretKeyRef:
+      {{- include "lorebase.maintenanceDsnRef" (dict "ctx" .ctx "hook" false) | nindent 6 }}
+{{- end }}
+{{- end -}}
+
+{{/* Database environment of the migration Job: the maintenance role, and the application role it grants to. */}}
+{{- define "lorebase.migrateDbEnv" -}}
 - name: LOREBASE__DATABASE__DSN
   value: secret://env/LOREBASE_DB_DSN
 - name: LOREBASE_DB_DSN
   valueFrom:
     secretKeyRef:
-      {{- include "lorebase.dsnRef" . | nindent 6 }}
+      {{- include "lorebase.maintenanceDsnRef" (dict "ctx" . "hook" true) | nindent 6 }}
+{{- if include "lorebase.splitRoles" . }}
+- name: LOREBASE__DATABASE__APPLICATION_ROLE
+  value: {{ .Values.database.appRole.name | quote }}
+{{- end }}
 {{- end -}}
 
 {{/* Environment shared by Keeper and Scribe. */}}
@@ -168,7 +242,7 @@ key: {{ required "secrets.keys.dbDsn must not be empty" .ctx.Values.secrets.keys
 - name: LOREBASE__TELEMETRY__SAMPLE_RATIO
   value: {{ $ctx.Values.telemetry.sampleRatio | quote }}
 {{- end }}
-{{ include "lorebase.dbEnv" (dict "ctx" $ctx "hook" false) }}
+{{ include "lorebase.dbEnv" (dict "ctx" $ctx "maintenance" (or (eq .component "scribe") $ctx.Values.database.maintenanceDsnInKeeper)) }}
 {{- if include "lorebase.secretHas" (dict "ctx" $ctx "name" "dbReadDsn") }}
 - name: LOREBASE_DB_READ_DSN
   valueFrom:
@@ -244,6 +318,7 @@ key: {{ required "secrets.keys.dbDsn must not be empty" .ctx.Values.secrets.keys
 {{- if and (not .Values.postgresql.enabled) (not (include "lorebase.secretHas" (dict "ctx" . "name" "dbDsn"))) -}}
 {{- fail "no database: set secrets.values.dbDsn, or secrets.existingSecret with secrets.keys.dbDsn, or postgresql.enabled=true" -}}
 {{- end -}}
+{{- include "lorebase.validateRoles" . -}}
 {{- if include "lorebase.sessionsEnabled" . -}}
 {{- $sessions := dig "keeper" "auth" "sessions" dict .Values.config -}}
 {{- if not (contains "oidc" $mode) -}}
@@ -272,5 +347,57 @@ key: {{ required "secrets.keys.dbDsn must not be empty" .ctx.Values.secrets.keys
 {{- end -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.serviceMonitor.selector.matchLabels) -}}
 {{- fail "serviceMonitor.selector.matchLabels must select the Service of the OpenTelemetry Collector" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Database roles: two roles unless `database.allowSharedRole`, the application role safe to put in a URL. */}}
+{{- define "lorebase.validateRoles" -}}
+{{- $role := .Values.database.appRole -}}
+{{- if not (regexMatch "^[a-z_][a-z0-9_]{0,62}$" (toString $role.name)) -}}
+{{- fail (printf "database.appRole.name %q: lower case letters, digits and _ only" (toString $role.name)) -}}
+{{- end -}}
+{{- if include "lorebase.splitRoles" . -}}
+{{- $shared := "the application role (Keeper, Scribe) and the maintenance role (migrations, owner of the tables) must differ; set database.allowSharedRole=true only for development" -}}
+{{- if .Values.postgresql.enabled -}}
+{{- $cluster := .Values.postgresql.cluster -}}
+{{- if eq $role.name (dig "initdb" "owner" "" $cluster) -}}
+{{- fail (printf "database.appRole.name is the database owner %q: %s" $role.name $shared) -}}
+{{- end -}}
+{{- $managed := dict -}}
+{{- range (default list $cluster.roles) -}}
+{{- if eq (toString .name) $role.name -}}{{- $managed = . -}}{{- end -}}
+{{- end -}}
+{{- if not $managed -}}
+{{- fail (printf "postgresql.cluster.roles must declare the application role %q (database.appRole.name)" $role.name) -}}
+{{- end -}}
+{{- if or $managed.superuser $managed.bypassrls (ne (dig "passwordSecret" "name" "" $managed) $role.passwordSecret) -}}
+{{- fail (printf "postgresql.cluster.roles entry %q: superuser and bypassrls must be false and passwordSecret.name must be database.appRole.passwordSecret (%q)" $role.name $role.passwordSecret) -}}
+{{- end -}}
+{{- $password := get .Values.secrets.values "dbAppPassword" -}}
+{{- if and (not .Values.secrets.existingSecret) (not $password) -}}
+{{- fail (printf "the in-cluster database needs the application role password: set secrets.values.dbAppPassword, or secrets.existingSecret and create the basic-auth Secret %q (username, password)" $role.passwordSecret) -}}
+{{- end -}}
+{{- if and $password (not (regexMatch "^[A-Za-z0-9._~-]{16,}$" $password)) -}}
+{{- fail "secrets.values.dbAppPassword: 16 or more URL-safe characters (letters, digits, . _ ~ -)" -}}
+{{- end -}}
+{{- else -}}
+{{- if not (include "lorebase.secretHas" (dict "ctx" . "name" "dbMaintenanceDsn")) -}}
+{{- fail "no maintenance role: set secrets.values.dbMaintenanceDsn (owner of the tables, runs the migrations), or secrets.existingSecret with secrets.keys.dbMaintenanceDsn; or database.allowSharedRole=true for development" -}}
+{{- end -}}
+{{- if not .Values.secrets.existingSecret -}}
+{{- $app := get .Values.secrets.values "dbDsn" -}}
+{{- $owner := get .Values.secrets.values "dbMaintenanceDsn" -}}
+{{- if and $app $owner -}}
+{{- $appUser := (urlParse $app).userinfo | splitList ":" | first -}}
+{{- $ownerUser := (urlParse $owner).userinfo | splitList ":" | first -}}
+{{- if or (eq $app $owner) (eq $appUser $ownerUser) -}}
+{{- fail (printf "secrets.values.dbDsn and dbMaintenanceDsn both connect as %q: %s" $appUser $shared) -}}
+{{- end -}}
+{{- if ne $appUser $role.name -}}
+{{- fail (printf "secrets.values.dbDsn connects as %q, database.appRole.name is %q" $appUser $role.name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

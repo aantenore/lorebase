@@ -1,4 +1,4 @@
-# Minimal profile: one Keeper, an external Postgres, API keys. For a trial on a small cluster.
+# Minimal profile: one Keeper, an external Postgres with two roles, API keys. For a trial on a small cluster.
 # The secret values below are placeholders that make the chart render; replace them with
 # --set-file or an existing Secret (docs/kubernetes.md).
 keeper:
@@ -7,5 +7,8 @@ keeper:
     enabled: false
 secrets:
   values:
-    dbDsn: postgresql+asyncpg://lorebase:change-me@postgres.example.internal:5432/lorebase
+    # Application role (Keeper): no superuser, not the owner; the migration Job creates it.
+    dbDsn: postgresql+asyncpg://lorebase_app:change-me-app@postgres.example.internal:5432/lorebase
+    # Maintenance role: owner of the tables, runs the migrations (needs CREATEROLE to create the role above).
+    dbMaintenanceDsn: postgresql+asyncpg://lorebase:change-me@postgres.example.internal:5432/lorebase
     apiKeyPepper: change-me-change-me-change-me-change-me

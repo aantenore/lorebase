@@ -92,8 +92,8 @@ connect as the role that owns the tables.
 
 | Role | Used by | Rights |
 |------|---------|--------|
-| Owner (compose: `POSTGRES_USER`, a superuser of the stack's own Postgres) | `migrate` (`alembic upgrade head`), `database.maintenance_dsn` (index jobs run by Scribe, `python -m lorebase_keeper bootstrap` and `principal create`) | Owns the schema, tables and the security definer read functions |
-| Application (compose: `LOREBASE_APP_USER`, default `lorebase_app`) | Keeper and Scribe (`database.dsn`), read replicas (`database.read_dsn`) | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`; `SELECT, INSERT, UPDATE, DELETE` on the tables except `audit_log`, which is append-only (`SELECT, INSERT`, revision `0015`), `USAGE, SELECT` on the sequences, `CONNECT, TEMPORARY` on the database, `EXECUTE` on the read functions; no `CREATE` anywhere |
+| Owner (compose: `POSTGRES_USER`, a superuser of the stack's own Postgres; Helm: `db-maintenance-dsn`) | `migrate` (`alembic upgrade head`), `database.maintenance_dsn` (index jobs run by Scribe, `python -m lorebase_keeper bootstrap` and `principal create`) | Owns the schema, tables and the security definer read functions |
+| Application (compose: `LOREBASE_APP_USER`, default `lorebase_app`; Helm: `db-dsn`, `database.appRole.name`) | Keeper and Scribe (`database.dsn`), read replicas (`database.read_dsn`) | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`; `SELECT, INSERT, UPDATE, DELETE` on the tables except `audit_log`, which is append-only (`SELECT, INSERT`, revision `0015`), `USAGE, SELECT` on the sequences, `CONNECT, TEMPORARY` on the database, `EXECUTE` on the read functions; no `CREATE` anywhere |
 
 On compose, the one-shot `db-roles` (`deploy/compose/postgres/app-role.sh`) runs before the
 migrations on every `up`: it creates or updates the application role with the password of
@@ -108,9 +108,11 @@ so revisions `0005` and `0008` grant it `EXECUTE` on the read functions. Index D
 Elsewhere, create the same two roles before the first migration: an owner (not necessarily a
 superuser; it needs `CREATE` on the schema and the extensions `vector` and `pg_trgm`, see
 [store schema notes](store-schema-notes.md)) and an application role with the grants above,
-then set `database.application_role` for the migration. The Helm chart runs the migration Job
-and the services with the one DSN of its secret ([kubernetes.md](kubernetes.md)): give that role
-neither `SUPERUSER` nor `BYPASSRLS` (the tables force row-level security on their owner too).
+then set `database.application_role` for the migration. The Helm chart does the same with two
+DSNs: the migration Job runs as the owner (`db-maintenance-dsn`) after an init container that
+creates or checks the application role and applies the grants above, and Keeper and Scribe connect
+as the application role (`db-dsn`); it refuses one role for both unless `database.allowSharedRole`
+is set for development ([kubernetes.md](kubernetes.md#database-roles)).
 Check the role a service uses with
 `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`: both must be false.
 

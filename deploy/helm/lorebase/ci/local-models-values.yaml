@@ -3,6 +3,8 @@
 secrets:
   values:
     apiKeyPepper: change-me-change-me-change-me-change-me
+    # Password of the application role the operator creates (postgresql.cluster.roles).
+    dbAppPassword: change-me-change-me-app
 postgresql:
   enabled: true
   cluster:

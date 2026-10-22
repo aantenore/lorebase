@@ -137,15 +137,16 @@ Code: `packages/herald/src/lorebase_herald/server.py`, `settings.py`, `keeper.py
 ## TB6: Postgres roles, row-level security and definer functions
 
 Code: `packages/store/migrations/versions/0001_initial_schema.py` (policies), `0005`, `0008`, `0010` (definer
-functions), `packages/store/src/lorebase_store/auth/scope.py`, `deploy/compose/postgres/app-role.sh`;
+functions), `packages/store/src/lorebase_store/auth/scope.py`, `deploy/compose/postgres/app-role.sh`,
+`deploy/helm/lorebase/files/db-roles.py`;
 roles in [deployment](deployment.md#database-roles), policies in
 [store schema notes](store-schema-notes.md#row-level-security).
 
 | | Threat | Mitigation | Residual risk |
 |-|--------|------------|---------------|
-| E | A query bug crossing Domains | `ENABLE` and `FORCE ROW LEVEL SECURITY` with `domain_isolation` on every table with `domain_id`; Keeper and Scribe connect as a role with neither `SUPERUSER` nor `BYPASSRLS` (F6) | RLS reads `lorebase.domain_ids`, a setting any role can change in its own transaction: it stops query bugs, not a compromised application role |
-| E | Definer functions widening access | Fixed statement text, the Domain pinned as a literal in every predicate, counts bounded by `store.reads.definer_ceilings`, Domain required and in the transaction scope, `search_path` checked; migrations refuse to run while the application role can create objects in the schema (F12, F13) | The Helm chart runs migrations and services with one DSN; give that role neither `SUPERUSER` nor `BYPASSRLS` |
-| T | Editing or deleting audit entries | Hash chain per Domain (`packages/store/src/lorebase_store/auth/audit.py`); `python -m lorebase_keeper audit verify`, `GET .../audit/verify` and the daily `audit_verify` job report the first broken entry, and `LorebaseAuditChainBroken` alerts ([operations](operations.md#audit-chain-verification)); the log is append-only for every role but its owner: `UPDATE`, `DELETE` and `TRUNCATE` revoked from `PUBLIC`, the application role and any other holder (`packages/store/migrations/versions/0015_append_only_audit_log.py`, `deploy/compose/postgres/app-role.sh`) | The owner can still delete the newest entries of a chain, which is not detectable from the chain, or recompute a whole chain; where the services run as the owner (the Helm chart's single DSN) the revoke does not apply. Keep a recent `entry_hash` outside the database |
+| E | A query bug crossing Domains | `ENABLE` and `FORCE ROW LEVEL SECURITY` with `domain_isolation` on every table with `domain_id`; Keeper and Scribe connect as a role with neither `SUPERUSER` nor `BYPASSRLS` nor ownership of the tables, on compose and in the Helm chart, which refuses one role for both unless `database.allowSharedRole` (F6) | RLS reads `lorebase.domain_ids`, a setting any role can change in its own transaction: it stops query bugs, not a compromised application role |
+| E | Definer functions widening access | Fixed statement text, the Domain pinned as a literal in every predicate, counts bounded by `store.reads.definer_ceilings`, Domain required and in the transaction scope, `search_path` checked; migrations refuse to run while the application role can create objects in the schema (F12, F13); the services never connect as the owner of the functions (compose `db-roles`, the chart's migration Job) | `database.allowSharedRole` in the Helm chart (development only) runs the services as the owner |
+| T | Editing or deleting audit entries | Hash chain per Domain (`packages/store/src/lorebase_store/auth/audit.py`); `python -m lorebase_keeper audit verify`, `GET .../audit/verify` and the daily `audit_verify` job report the first broken entry, and `LorebaseAuditChainBroken` alerts ([operations](operations.md#audit-chain-verification)); the log is append-only for every role but its owner: `UPDATE`, `DELETE` and `TRUNCATE` revoked from `PUBLIC`, the application role and any other holder (`packages/store/migrations/versions/0015_append_only_audit_log.py`, `deploy/compose/postgres/app-role.sh`, `deploy/helm/lorebase/files/db-roles.py`) | The owner can still delete the newest entries of a chain, which is not detectable from the chain, or recompute a whole chain; Scribe (index DDL) and, by default, Keeper (`database.maintenanceDsnInKeeper`) hold the owner's DSN for maintenance, so a compromised pod can use it. Keep a recent `entry_hash` outside the database |
 | T | Tampering with history | Revisions, tree nodes and objects are content addressed: changing one changes its id; bundle import recomputes every id and hash | A database owner can rewrite content and refs consistently |
 | I | Database or backup theft | Only hashes of API keys and session ids; provider tokens encrypted; Source and model secrets are references, never stored; webhook signing keys (`sha256(secret)`, the HMAC key) encrypted with AES-256-GCM under `webhooks.encryption_key`, keys stored before encrypted by the delivery worker (`packages/store/src/lorebase_store/webhooks/keys.py`, revision `0016`) | Without `webhooks.encryption_key` (unset by default) signing keys are stored usable, and a database reader can sign deliveries. Documents and Domain content are stored in clear |
 | D | Long statements, lock contention | `statement_timeout_ms` per connection, advisory locks per branch and per audit chain | Garbage collection and index builds run on the maintenance role with their own timeouts |
@@ -230,6 +231,10 @@ see the [security review](security-review.md#hardening-from-the-threat-model)):
   HSTS for the web app comes from the TLS proxy or `LOREBASE_WEB_HSTS` (TB1).
 - **Base images by tag.** Pinned by digest (`deploy/docker/*.Dockerfile`), bumped by hand
   ([release](release.md#base-images)) (TB9).
+- **Helm chart ran the services as the table owner.** Keeper and Scribe connect as the
+  application role, the migration Job as the owner after its `db-roles` init container keeps the
+  role and its grants; one role for both is refused unless `database.allowSharedRole`
+  (`deploy/helm/lorebase/templates/_helpers.tpl`, `files/db-roles.py`) (TB6).
 
 ## Keeping this page current
 
