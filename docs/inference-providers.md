@@ -73,13 +73,18 @@ inference:
     dims: 768                    # must match; a mismatch fails fast
 ```
 
-**With Docker Compose**, `docker compose --profile local-models up` starts Ollama and pulls
-`OLLAMA_MODEL` from the environment file. Services reach it at `http://ollama:11434/v1`
-(`LLM_BASE_URL` in `.env.example`). Probe it with:
+**With Docker Compose**, the `local-models` profile starts Ollama and pulls `OLLAMA_MODEL` from
+the environment file. Services reach it at `http://ollama:11434/v1` (`LLM_BASE_URL` in
+`.env.example`). Probe it from the repository root with:
 
 ```bash
-docker compose --profile local-models run --rm inference-check
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  --profile local-models run --rm inference-check
 ```
+
+An Ollama already running on the host is reached at `http://host.docker.internal:11434/v1`; add
+`--no-deps` so that the Ollama container is not started. A hosted key kept in a file goes through
+the overlay `deploy/compose/hosted-model.yaml` ([quickstart](quickstart.md#4-use-a-real-model)).
 
 The stock image has no local models. To run fastembed and the extractors in containers, build
 with `UV_SYNC_ARGS="--extra fastembed --extra local-extractors"` (set it in

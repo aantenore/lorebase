@@ -1,0 +1,26 @@
+# Overlay for a hosted OpenAI-compatible model endpoint whose API key is kept in a file.
+# Add it after the main file, from the repository root:
+#
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+#     -f deploy/compose/hosted-model.yaml run --rm --no-deps inference-check
+#
+# In the environment file set LLM_BASE_URL (for example https://api.example-provider.com/v1) and
+# LLM_MODEL, and leave LLM_API_KEY empty: the key file named by LLM_API_KEY_FILE (default
+# secrets/llm_api_key at the repository root; `secrets/` is ignored by git) is mounted as a
+# compose secret, and the services read it through the reference secret://file//run/secrets/llm_api_key.
+# The key is never written to the environment file and never appears in `docker inspect`.
+
+x-hosted-model: &hosted-model
+  environment:
+    LLM_API_KEY: secret://file//run/secrets/llm_api_key
+  secrets:
+    - llm_api_key
+
+services:
+  scribe: *hosted-model
+  inference-check: *hosted-model
+
+secrets:
+  llm_api_key:
+    # Relative paths are resolved from deploy/compose.
+    file: ${LLM_API_KEY_FILE:-../../secrets/llm_api_key}

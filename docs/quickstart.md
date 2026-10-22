@@ -1,28 +1,51 @@
 # Quickstart
 
-Lorebase is pre-alpha. This page walks through what works on `main` today and says where it
-stops. What you can do is run the versioning and merge engine, bring up the Keeper REST API on
-Postgres, load the sample Domain through it with curl or with the `lorebase` command line, read it
-back (Records, queries, search, history, diff), and browse the web app against a mock backend.
-The MCP server (Herald) has its own page: [mcp.md](mcp.md).
+Lorebase is pre-alpha. This page takes you from a fresh clone to a running Lorebase with the
+sample `supply` Domain loaded, the web app open, a first query answered, an agent connected over
+MCP and a model answering, then shows how to stop and clean up. Every command runs from the
+repository root unless the step says otherwise.
 
-| Step | What you get | State |
-|------|--------------|-------|
-| 3 | Core engine demo: branches, three-way merge, Conflicts, resolutions, diff | works, no services needed |
-| 4 | Unit tests | works |
-| 5 | Postgres, migrations and Keeper | works |
-| 6, 7 | Create a Domain, apply a schema, import data and read it back, with curl and with the CLI | works, with the limits noted below |
-| 8 | Web app in mock mode | works, mock data only |
-| later | Lineage and history API, expressions in schemas, Source syncs | [coming next](#coming-next) |
+| Step | What you get | Time measured on a fresh clone |
+|------|--------------|--------------------------------|
+| [2](#2-five-minute-path) | Postgres, Keeper, the sample Domain, a first query, the web app | 1.5 minutes measured; a few minutes more on a machine that has never pulled the base images |
+| [3](#3-connect-an-agent-over-mcp) | An agent reading the Domain through the MCP server (Herald) | under a minute |
+| [4](#4-use-a-real-model) | A chat model for document extraction: Ollama, or a hosted endpoint | seconds with Ollama already on the machine or a hosted endpoint; about 11 minutes the first time for Ollama in Docker |
+| [5](#5-stop-and-clean-up) | Stop the stack, keep or delete its data | seconds |
+| [6](#6-troubleshooting) | What to do when a step fails | |
+| [7 to 12](#7-run-the-core-demo) | The same path step by step: the core engine without services, tests, compose by hand, the REST API with curl and the CLI, the web app in mock mode | |
+
+The measured times of each command are in [Timings](#timings) and in the
+[fresh-clone check](validation.md#fresh-clone-quickstart-check).
 
 ## 1. Prerequisites
 
-- Python 3.12 and [uv](https://docs.astral.sh/uv/)
-- Docker with compose (steps 5 to 7)
-- Node.js 24 and pnpm (step 8)
-- `curl`
+| Tool | Version | Check | Needed for |
+|------|---------|-------|------------|
+| git | any recent | `git --version` | the clone |
+| [uv](https://docs.astral.sh/uv/) | a recent release; it installs Python 3.12 by itself | `uv --version` | the CLI, Herald, the tests |
+| Docker with the compose plugin | compose v2 with `up --wait` and `--profile "*"` (checked with Docker 29 and compose 5.1) | `docker compose version` | Postgres, Keeper, Scribe, Ollama |
+| Node.js and pnpm | Node 24 or later; pnpm 11 (`corepack enable` installs the version of `apps/web/package.json`) | `node --version`, `pnpm --version` | the web app |
+| curl, openssl, make | any | | the helper commands |
 
-## 2. Clone and install
+Resources: give Docker at least 4 GB of memory (8 GB with the Ollama container), and keep
+about 3 GB of disk free for the images (10 GB more for the Ollama image and a model). The
+stack publishes these ports on `127.0.0.1` only:
+
+| Port | Service | Variable in `.env` |
+|------|---------|--------------------|
+| 8080 | Keeper (REST API) | `KEEPER_HOST_PORT` |
+| 5432 | Postgres | `POSTGRES_HOST_PORT` |
+| 11434 | Ollama (profile `local-models`) | `OLLAMA_HOST_PORT` |
+| 5173 | web app dev server (`pnpm dev`) | picks the next free port by itself |
+
+`lsof -nP -iTCP:8080 -sTCP:LISTEN` (and the same for 5432) shows whether a port is taken; if it
+is, change the variable in `.env` after step 2.2. The compose project name comes from
+`COMPOSE_PROJECT_NAME` in `.env` (default `lorebase`): give a second checkout on the same
+machine another name, so that the two stacks never share containers or volumes.
+
+## 2. Five-minute path
+
+### 2.1 Clone and install
 
 ```bash
 git clone https://github.com/aantenore/lorebase.git
@@ -30,9 +53,328 @@ cd lorebase
 uv sync --all-packages
 ```
 
-All later commands run from the repository root.
+`uv sync` installs Python 3.12 if needed and every workspace package, among them the `lorebase`
+command line and Herald.
 
-## 3. Run the core demo
+### 2.2 Create the environment file
+
+```bash
+make env
+```
+
+It copies `.env.example` to `.env` and fills `POSTGRES_PASSWORD` and `LOREBASE_APP_PASSWORD`
+with random values (`openssl rand -hex 24`); an existing `.env` keeps its values. Without make:
+`cp .env.example .env`, then set both passwords yourself (URL-safe characters only: they are
+embedded in connection strings). The other values have working defaults; this is where you
+change ports and `COMPOSE_PROJECT_NAME`.
+
+### 2.3 Start Postgres and Keeper
+
+```bash
+make up
+```
+
+This runs `docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d --build
+--wait postgres migrate keeper`. The first run builds the backend image (a few minutes; later
+runs reuse the layers). Compose starts Postgres 16, creates the application role Keeper connects
+as (`db-roles`), runs the migrations once (`migrate` exits when done) and returns when Keeper is
+healthy. Check it:
+
+```bash
+curl http://localhost:8080/readyz
+```
+
+```json
+{"status":"ready","checks":{"database":{"status":"ok","detail":null}}}
+```
+
+`http://localhost:8080/api/v1/docs` serves the interactive OpenAPI docs.
+
+**Credentials.** There are none to type. The example configuration
+(`config/lorebase.example.yaml`) sets `keeper.auth.mode: none`: Keeper answers every request as
+an anonymous installation administrator, and the web app needs no sign-in. That is for a laptop
+only: compose publishes the port on `127.0.0.1` and Keeper refuses that mode on any other
+address. The database passwords are the ones in `.env`; you never need them for the steps on
+this page. Turning authentication on is in
+[The first administrator key](#the-first-administrator-key).
+
+### 2.4 Load the example data
+
+```bash
+make example-data
+```
+
+```text
+[quickstart] creating Domain supply (required_approvals 0)
+[quickstart] applying the supply schema to branch work
+[quickstart] importing the sample data
+batch 1/1: rows 1-426 committed, 426 edits
+[quickstart] merging Proposal prp_... into main
+[quickstart] loaded the supply sample into Domain supply (branches main and work)
+```
+
+It uses the `lorebase` CLI against the Keeper of `.env`: creates the Domain `supply`, applies
+[`examples/supply/schema.yaml`](https://github.com/aantenore/lorebase/blob/main/examples/supply/schema.yaml)
+to a branch `work`, imports the CSV files of `examples/supply/data` (185 Records with their
+Links), opens a Proposal from `work` to `main` and merges it. `main` is protected, so changes
+reach it only through a Proposal; the quickstart Domain is created with `required_approvals: 0`
+so that you, the only principal of a stack without authentication, can merge your own
+Proposal. Real Domains keep the default of one approval from someone else. Running it again
+does nothing once the sample is on `main`.
+
+### 2.5 First query
+
+```bash
+export LOREBASE_URL=http://localhost:8080 LOREBASE_DOMAIN=supply
+uv run lorebase record list Part -n 5 \
+  --where '{"attr": "category", "op": "eq", "value": "bearing"}' --select category --select unit_cost
+uv run lorebase search bearing --kind Part
+```
+
+```text
+key      title                        category  unit_cost
+P-10001  Tapered roller bearing 6305  bearing   10.79
+P-10010  Needle roller bearing 6305   bearing   40.48
+P-10013  Needle roller bearing NK25   bearing   25.62
+P-10023  Needle roller bearing NK25   bearing   37.59
+P-10029  Needle roller bearing 6001   bearing   45.94
+```
+
+The same over REST, with no CLI:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/domains/supply/query \
+  -H 'Content-Type: application/json' \
+  -d '{"kind": "Part", "aggregate": {"group_by": "category"}}'
+```
+
+The answer lists the Parts and ends with `"aggregate":{"counts":[{"kind":"Part","value":"bearing","count":6}, ...]}`.
+
+Reads never call a model; every answer names the Revision it was served from in the
+`Lorebase-Revision` header. Sections [10](#10-create-a-domain-and-apply-the-supply-schema) and
+[11](#11-import-the-sample-data-and-read-it-back) go through the API one call at a time.
+
+### 2.6 Open the web app
+
+In a second terminal:
+
+```bash
+cd apps/web
+pnpm install
+printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
+LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
+```
+
+Open the URL it prints (`http://localhost:5173`, or the next free port). The dev server
+forwards `/api` to Keeper, so no CORS setting is needed. The app opens on the `supply` Domain
+and its `main` branch: Explorer lists the six Kinds, Canvas draws the graph around a Record,
+Review lists Proposals (the one that loaded the sample is under the Merged filter). There is no sign-in with authentication off; with an API key,
+paste it in Settings. Use `KEEPER_HOST_PORT` in the proxy URL if you changed it.
+
+Without Node.js, the web image of `deploy/docker/web.Dockerfile` serves the same app
+([apps/web/README.md](https://github.com/aantenore/lorebase/blob/main/apps/web/README.md#live-mode)
+lists its variables); a mock mode with built-in sample data and no Keeper is in
+[section 12](#12-web-app).
+
+## 3. Connect an agent over MCP
+
+Herald, the MCP server, turns the Domain into tools an MCP host can call (`lorebase_search`,
+`lorebase_get`, `lorebase_query`, `lorebase_context` and more, listed in [mcp.md](mcp.md#tools)).
+It runs from the checkout; the host starts it over stdio. Add this entry to the MCP
+configuration of your host (most hosts read an `mcpServers` map; [mcp.md](mcp.md#mcp-host-configuration)
+has the file for each host), with the absolute path of your clone:
+
+```json
+{
+  "mcpServers": {
+    "lorebase": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/lorebase", "run", "lorebase-herald"],
+      "env": {
+        "LOREBASE_URL": "http://127.0.0.1:8080",
+        "LOREBASE_DOMAIN": "supply"
+      }
+    }
+  }
+}
+```
+
+Restart the host and ask it, for example, "which parts depend on a single supplier?". With
+authentication off no key is needed. Once authentication is on, give the agent its own key with
+only the grants it needs, and keep it out of the file with
+`"LOREBASE_API_KEY": "secret://file//absolute/path/to/agent.key"`
+([mcp.md](mcp.md#run-it)).
+
+To check Herald without a host, list its tools and run one search from Python (the `mcp`
+package is installed by `uv sync`):
+
+```bash
+LOREBASE_URL=http://127.0.0.1:8080 LOREBASE_DOMAIN=supply uv run python - <<'EOF'
+import asyncio, os
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def main():
+    server = StdioServerParameters(command="uv", args=["run", "lorebase-herald"], env=dict(os.environ))
+    async with stdio_client(server) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        print([tool.name for tool in (await session.list_tools()).tools])
+        result = await session.call_tool("lorebase_search", {"query": "bearing", "limit": 2})
+        print(result.content[0].text)
+
+asyncio.run(main())
+EOF
+```
+
+Herald logs its requests to Keeper on standard error; standard output shows:
+
+```text
+['lorebase_schema', 'lorebase_get', 'lorebase_query', 'lorebase_search', ...]
+rev bb30d34bebf7... (lexical): 2 hits
+1. Part/P-10001 "Tapered roller bearing 6305" (2.4) - Tapered roller <b>bearing</b> 6305 ...
+```
+
+For agent frameworks that speak Streamable HTTP, run one shared Herald with
+`LOREBASE__HERALD__TRANSPORT=streamable_http` ([mcp.md](mcp.md#run-it)).
+
+## 4. Use a real model
+
+Reads never call a model. Models are used by Scribe, the worker, to extract documents into
+Proposals ([extraction.md](extraction.md)). Lorebase talks to any OpenAI-compatible endpoint,
+selected by three variables of `.env`: `LLM_BASE_URL`, `LLM_MODEL` (default: `OLLAMA_MODEL`) and
+`LLM_API_KEY`. `inference-check` sends one short prompt and prints the model, the latency and
+the token counts. Pick one of the three options.
+
+**Ollama in Docker (the default).** The `local-models` profile starts Ollama and pulls
+`OLLAMA_MODEL`. The image is about 7 GB and the default model `qwen2.5:7b-instruct` 4.7 GB; it
+runs on the CPU inside Docker. A small model is enough to try it:
+
+```bash
+# in .env: OLLAMA_MODEL=qwen2.5:1.5b-instruct  (and OLLAMA_HOST_PORT=11435 if Ollama already runs on the host)
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  --profile local-models run --rm inference-check
+```
+
+```text
+chat       ok     provider=openai_compatible model=qwen2.5:1.5b-instruct latency_ms=36015 tokens=30/9 structured_output=json_schema
+```
+
+The model download prints nothing while it runs; follow it with
+`docker compose --env-file .env -f deploy/compose/docker-compose.yaml logs -f ollama-pull`.
+
+**Ollama already on your machine** (faster on a Mac, where Docker has no GPU). Point the stack at
+it and skip the Ollama container with `--no-deps`:
+
+```bash
+ollama pull qwen2.5:7b-instruct
+# in .env: LLM_BASE_URL=http://host.docker.internal:11434/v1 and LLM_MODEL=qwen2.5:7b-instruct
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml run --rm --no-deps inference-check
+```
+
+Any instruct model works. Prefer one that answers without a long reasoning phase: a reasoning
+model such as `qwen3:4b` passes the check but can run past the 120-second request timeout on a
+whole document.
+
+On Linux, Ollama must listen beyond loopback for containers to reach it (`OLLAMA_HOST=0.0.0.0`).
+
+**A hosted provider.** Any OpenAI-compatible endpoint works. Keep the key in a file, never in
+`.env` or on the command line: `secrets/` is ignored by git, and the overlay
+`deploy/compose/hosted-model.yaml` mounts the file as a compose secret that the services read
+through `secret://file//run/secrets/llm_api_key`.
+
+```bash
+mkdir -p secrets && (umask 077 && cat > secrets/llm_api_key)   # paste the key, then Ctrl+D
+# in .env: LLM_BASE_URL=https://api.example-provider.com/v1, LLM_MODEL=<model name>, LLM_API_KEY empty
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  -f deploy/compose/hosted-model.yaml run --rm --no-deps inference-check
+```
+
+Providers that do not speak the OpenAI protocol go through the LiteLLM proxy (profile `litellm`);
+per-task routing, prices and embeddings are in [inference-providers.md](inference-providers.md).
+
+**Extract a document.** Start Scribe with the same files (add `-f deploy/compose/hosted-model.yaml`
+for a hosted key) and upload a contract that the sample does not hold yet; tier 0 uses rules
+only, tier 2 adds the chat model:
+
+```bash
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d --no-deps scribe
+uv run lorebase documents upload examples/five_day_demo/documents/contract-c-3099-wexrix-filtration.md --tiers 0,2
+uv run lorebase documents list                 # then: uv run lorebase documents get <id>
+uv run lorebase proposal list --status open
+```
+
+When the job has succeeded, the extraction is an open Proposal from branch `extract/<job>` to
+`main`, with one item per Record, value and Link and the evidence of each (here the Contract
+C-3099 and its `with_supplier` Link). Review it under Review in the web app, or with
+`uv run lorebase proposal items <id>` and `uv run lorebase proposal decide`. The documents of
+`examples/supply/documents` describe Records that `make example-data` already loaded, so their
+jobs succeed with no items and open no Proposal. With `lfm2.5:8b` on the host the job took 91
+seconds; a small model on the CPU inside Docker takes several minutes.
+
+## 5. Stop and clean up
+
+```bash
+make down          # stop the containers, keep the data
+make clean-stack   # stop them and delete the volumes: database, pulled models
+```
+
+`make clean-stack` runs `docker compose ... --profile "*" down -v --remove-orphans`, so the
+Ollama and observability containers go too. Stop `pnpm dev` with Ctrl+C. To remove the built
+image as well: `docker image rm lorebase:dev` (the `LOREBASE_IMAGE` and `LOREBASE_TAG` of
+`.env`). Delete the clone and nothing else is left on the machine.
+
+## 6. Troubleshooting
+
+| Symptom | Cause and fix |
+|---------|---------------|
+| `Bind for 127.0.0.1:5432 failed: port is already allocated` (or 8080, 11434) | Another Postgres, service or Ollama holds the port. Set `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT` or `OLLAMA_HOST_PORT` in `.env`, run `make up` again, and use the new Keeper port in `LOREBASE_URL` and `LOREBASE_KEEPER_PROXY`. |
+| `required variable POSTGRES_PASSWORD is missing a value` or `set LOREBASE_APP_PASSWORD in the environment file` | `.env` is missing or a password is empty: `make env` fills them. |
+| Keeper unhealthy, `make up` fails with `dependency failed to start` | `docker compose --env-file .env -f deploy/compose/docker-compose.yaml logs migrate keeper` names the error. A password changed after the first start does not change the database: run `make clean-stack` (deletes the data) and `make up`. |
+| `curl: (52) Empty reply from server` right after `up -d` without `--wait` | Keeper is still starting; `make up` waits for its health check. |
+| The stack runs code older than the checkout | The image tag `lorebase:dev` is shared by every checkout on the machine. `make up` always passes `--build`; with plain compose add `--build`, or set `LOREBASE_TAG` per checkout. |
+| Containers or volumes of another Lorebase stack are reused or replaced | Both use the project name `lorebase`. Set `COMPOSE_PROJECT_NAME` in `.env`. |
+| `docker compose` hangs on pull or build with a credential helper error | The Docker credential helper is stuck. Run the command with an empty Docker config: `DOCKER_CONFIG=$(mktemp -d) make up` (public images need no login). |
+| `no configuration file provided: not found` | The command left out `-f deploy/compose/docker-compose.yaml`, or did not run from the repository root. |
+| `make example-data`: `Domain supply exists ... but main does not hold the sample` | An earlier load stopped half way, or the Domain was created by hand (sections 10 and 11). `uv run lorebase domain delete supply -y`, then `make example-data`. |
+| `make example-data`: `no Keeper at http://127.0.0.1:8080` | The stack is not running, or Keeper runs on another port: `make up`, or `LOREBASE_URL=http://127.0.0.1:PORT make example-data`. |
+| The web app shows "This Branch has no Kinds yet" | It is on a branch without the sample: pick `main` or `work` in the top bar, or run `make example-data`. |
+| The web app cannot reach Keeper (network error) | `LOREBASE_KEEPER_PROXY` must be set when `pnpm dev` starts and must name Keeper's port; `.env.local` must hold `VITE_API_MODE=live` and `VITE_KEEPER_BASE_URL=/`. Restart `pnpm dev` after a change. |
+| The MCP host shows no Lorebase tools | The host could not start `uv`: give its absolute path (`which uv`) in `command`, and the absolute path of the clone after `--directory`. Check Herald with the script of [section 3](#3-connect-an-agent-over-mcp). |
+| Herald answers `[not-found]` | `LOREBASE_DOMAIN` names a Domain that does not exist, or `LOREBASE_BRANCH` a branch without the Record. |
+| `inference-check`: connection refused or timeout | Ollama is not reachable from the containers: in Docker the address is `http://ollama:11434/v1` (profile `local-models`), on the host `http://host.docker.internal:11434/v1` with `--no-deps`. |
+| An extraction job fails with `EndpointError: /chat/completions: request failed (ReadTimeout)` | The model needs more than `inference.llm.timeout_s` (120 s) per call: use a smaller or non-reasoning instruct model, or raise the timeout in a copy of `config/lorebase.example.yaml` named by `LOREBASE_CONFIG_FILE` in `.env`. |
+| `inference-check`: `model ... not found` | The model is not pulled: `ollama pull NAME` on the host, or wait for `ollama-pull` (`docker compose ... logs -f ollama-pull`). |
+| `inference-check` with the hosted overlay: `bind source path does not exist: .../secrets/llm_api_key` | Create `secrets/llm_api_key`, or point `LLM_API_KEY_FILE` at the key file (relative paths start from `deploy/compose`). |
+| A step is slow the first time | The backend image build, the Ollama image (about 7 GB) and model downloads happen once; [Timings](#timings) shows what to expect. |
+
+## Timings
+
+Measured on 2026-10-22 on an Apple silicon laptop (Docker Desktop with Docker 29.5 and compose
+5.1, 15 CPUs and 7.7 GB of memory for Docker), from a fresh copy of the repository, following
+this page. The Docker build cache and the pgvector and Python base images were already on the
+machine; a machine that has never pulled them spends a few more minutes in `make up`.
+
+| Step | Command | Time |
+|------|---------|------|
+| 2.1 | `git clone` | 6 s |
+| 2.1 | `uv sync --all-packages`, empty uv cache | 29 s (1 s with a warm cache) |
+| 2.2 | `make env` | under 1 s |
+| 2.3 | `make up` (image build, Postgres, migrations, Keeper healthy) | 27 s; the image alone with `--no-cache`: 27 s |
+| 2.4 | `make example-data` | 4 s |
+| 2.5 | first query, CLI and curl | 1 s |
+| 2.6 | `pnpm install`, empty store; `pnpm dev` until ready | 11 s; 2 s |
+| 3 | Herald check script (start, list tools, one search) | 3 s |
+| 4 | `inference-check`, Ollama in Docker, first time (7 GB image, `qwen2.5:1.5b-instruct`, CPU) | 645 s; 209 s with the image already pulled |
+| 4 | `inference-check`, Ollama on the host (`lfm2.5:8b`) | 9 s |
+| 4 | `inference-check` with the hosted overlay and a key file | 5 s |
+| 4 | extraction of contract C-3099, tiers 0 and 2, `lfm2.5:8b` on the host | 91 s; tier 0 alone under 1 s |
+| 5 | `make down`; `make clean-stack` | 1 s; under 1 s |
+
+The five-minute path (2.1 to 2.6) took about 80 seconds end to end.
+
+## 7. Run the core demo
+
+This needs only step 2.1.
 
 ```bash
 uv run python examples/merge_demo.py
@@ -61,7 +403,7 @@ XS4 MISSING_VALUE (1)
 More examples are indexed in [examples/README.md](../examples/README.md); editing a schema as
 code is in [examples/schema_as_code.md](../examples/schema_as_code.md).
 
-## 4. Run the tests
+## 8. Run the tests
 
 ```bash
 make test-unit
@@ -77,7 +419,9 @@ uv run pytest tests/tooling/test_merge_demo.py
 `make lint type` runs the linters and the type checker. Integration tests (`make test-int`)
 need Docker.
 
-## 5. Start Postgres and Keeper
+## 9. Start Postgres and Keeper by hand
+
+What `make env` and `make up` do, with compose directly:
 
 ```bash
 cp .env.example .env
@@ -88,10 +432,12 @@ only, for example `openssl rand -hex 24`; they are embedded in the connection st
 other values have working defaults. Then:
 
 ```bash
-docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postgres migrate keeper
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d --build --wait postgres migrate keeper
 ```
 
-The first run builds the backend image, which takes a few minutes. Compose starts Postgres 16,
+The first run builds the backend image, which takes a few minutes; `--build` rebuilds it when the
+checkout changed (the tag `lorebase:dev` is shared by every checkout on the machine) and `--wait`
+returns once Keeper is healthy. Compose starts Postgres 16,
 creates the application role Keeper connects as (`db-roles`), runs the Alembic migrations once
 (`migrate` exits when done) and starts Keeper on
 `127.0.0.1:8080`. Check it:
@@ -138,7 +484,11 @@ with `database.dsn`.
 holds `admin` in it; `python -m lorebase_keeper principal create ID` adds a service principal with a
 chosen id, for a schema that names it in Operation `permissions`.
 
-## 6. Create a Domain and apply the supply schema
+## 10. Create a Domain and apply the supply schema
+
+This section and the next build by hand what `make example-data` loads. On a stack where it
+already ran, delete the Domain first (`uv run lorebase domain delete supply -y`), or start from
+a clean stack (`make clean-stack && make up`).
 
 Each step is shown twice: with curl against the REST API, and with the `lorebase` command line
 (installed by `uv sync --all-packages`, run as `uv run lorebase`). Both call the same
@@ -228,7 +578,7 @@ curl -s 'http://localhost:8080/api/v1/domains/supply/schema?branch=work&format=y
 uv run lorebase schema get -b work
 ```
 
-## 7. Import the sample data and read it back
+## 11. Import the sample data and read it back
 
 Every write goes through an Operation. The built-in `import_records`, `import_links` and
 `import_batch` Operations take rows keyed by Attribute api name; booleans must be JSON booleans
@@ -401,7 +751,8 @@ uv run lorebase proposal merge <id>
 
 The development config answers every request as the same anonymous administrator, and
 `keeper.proposals.allow_self_approval` is `false`, so the approval has to come from another
-principal; for a local trial set `allow_self_approval: true`. Open Conflicts or missing approvals
+principal; for a local trial set `allow_self_approval: true`, or create the Domain with
+`"settings": {"required_approvals": 0}` as `make example-data` does. Open Conflicts or missing approvals
 refuse the merge with exit code 2. `uv run lorebase context --ref Supplier/S-1001 -b work` and
 `uv run lorebase explain Supplier S-1001 -b work` print what an agent gets from the context pack
 and Record explanation endpoints ([agents.md](agents.md)).
@@ -438,7 +789,7 @@ curl -s -X POST http://localhost:8080/api/v1/domains/supply/operations/approve_c
   -d '{"branch": "work", "parameters": {"contract": "C-3015"}}'
 ```
 
-## 8. Web app
+## 12. Web app
 
 The web app talks to a `KeeperApi` interface with two adapters. In `mock` mode it serves
 its own sample Domains from memory and needs no backend; the `supply` Domain you created above
@@ -467,24 +818,10 @@ a schema change there goes through a Branch and a Proposal, and merging it needs
 [apps/web/README.md](../apps/web/README.md#live-mode) for the variables, the API token and the
 limits against Keeper, and for the end-to-end suite (`pnpm e2e`).
 
-## 9. Stop and clean up
-
-```bash
-docker compose --env-file .env -f deploy/compose/docker-compose.yaml down      # keep the data
-docker compose --env-file .env -f deploy/compose/docker-compose.yaml down -v   # delete the data
-```
-
-Stop `pnpm dev` with Ctrl+C.
-
 ## Next steps
 
 - Plug in an agent: [examples/agent](../examples/agent/README.md) reads the `supply` Domain through Herald and proposes changes as Proposals, with Ollama or a hosted model.
 
 ## Coming next
 
-These do not exist yet; the order follows the [M1 plan](plan/m1.md).
-
-- **Lineage and history API** (T23; the per-Record lineage summary is already on Record reads).
-- Source syncs from CSV or Postgres (`approved.suppliers`, `erp.purchase_orders` in the sample
-  schema are declared but nothing runs them), document extraction and semantic search: M2 and
-  M4.
+The [roadmap](roadmap.md) tracks what is planned, milestone by milestone.

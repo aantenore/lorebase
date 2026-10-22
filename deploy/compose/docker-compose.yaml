@@ -69,6 +69,8 @@ x-require-secrets: &require-secrets
 # defaults to the Ollama service of the `local-models` profile, reached by its compose service
 # name; set LLM_BASE_URL, LLM_MODEL and LLM_API_KEY in the environment file to use a hosted
 # endpoint or the LiteLLM proxy instead (design 9.4). An empty LLM_API_KEY means no key.
+# Those services also resolve host.docker.internal (extra_hosts), so a model server running on
+# the host is reachable at http://host.docker.internal:11434/v1 on Linux as on Docker Desktop.
 x-inference: &inference
   LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
   LLM_MODEL: ${LLM_MODEL:-${OLLAMA_MODEL:-qwen2.5:7b-instruct}}
@@ -192,6 +194,8 @@ services:
     tmpfs:
       - /tmp
     stop_grace_period: ${SCRIBE_STOP_GRACE:-45s}
+    extra_hosts:
+      - host.docker.internal:host-gateway
     environment:
       <<: [*database, *inference]
       LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
@@ -286,8 +290,10 @@ services:
         condition: service_healthy
 
   # One-shot probe: sends a tiny prompt through lorebase_inference to LLM_BASE_URL and prints
-  # model, latency and token counts. Run it with
-  #   docker compose --profile local-models run --rm inference-check
+  # model, latency and token counts. Run it from the repository root with
+  #   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  #     --profile local-models run --rm inference-check
+  # and add --no-deps when LLM_BASE_URL points at a model server outside this stack.
   # Embeddings are skipped: the default fastembed provider is an optional extra that the stock
   # image does not contain (see docs/inference-providers.md).
   inference-check:
@@ -295,6 +301,8 @@ services:
     profiles: [local-models]
     restart: "no"
     command: ["python", "-m", "lorebase_inference", "check", "--no-embeddings"]
+    extra_hosts:
+      - host.docker.internal:host-gateway
     read_only: true
     tmpfs:
       - /tmp
