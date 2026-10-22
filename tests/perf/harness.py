@@ -704,8 +704,8 @@ async def _run_steps(
     batches: Measurement | None,
 ) -> float:
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    run = background._Run(job, name)
     settings = runtime.settings.materialize
+    run = background._Run(job, name, background._Pace.of(settings))
     total = time.perf_counter()
     while True:
         started = time.perf_counter()
@@ -718,8 +718,12 @@ async def _run_steps(
                 step = await background._delete_step(
                     session, DOMAIN, name, run, settings, lambda: datetime.now(UTC)
                 )
+        elapsed = time.perf_counter() - started
         if batches is not None:
-            batches.samples_ms.append((time.perf_counter() - started) * 1000)
+            batches.samples_ms.append(elapsed * 1000)
+        if step.rows:
+            # Sized like the job does (`background._batches`).
+            run.pace.next(max(elapsed - step.waited_s, 0.0), contended=step.contended)
         if step.finished is not None:
             assert step.finished["status"] == "done", step.finished
             return (time.perf_counter() - total) * 1000

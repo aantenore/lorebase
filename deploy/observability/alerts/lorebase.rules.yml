@@ -200,6 +200,29 @@ groups:
           description: "The scheduler queued garbage collections but none completed in the last 3 days (dry runs excluded). Unreferenced objects, tree nodes and Revisions pile up."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasegcnotrun"
 
+      # A background branch copy failed store.materialize.copy_max_failures times: the overlay
+      # was detached from its base and is rebuilt from its tree. Its base no longer waits on it.
+      - alert: LorebaseBranchCopyFallback
+        expr: sum(increase(lorebase_store_branch_jobs_runs_total{job="materialize",outcome="fallback"}[6h])) > 0
+        labels:
+          severity: warning
+          component: store
+        annotations:
+          summary: "A background branch copy kept failing and fell back to a tree build"
+          description: "{{ $value | humanize }} overlay copies failed for good in the last 6 hours and were detached to be rebuilt from their trees. Commits into those branches wait until the build is done; check branch_materializations.error."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasebranchcopyfallback"
+
+      # A tree build failed as often: the branch stays building and refuses commits.
+      - alert: LorebaseBranchBuildFailed
+        expr: sum(increase(lorebase_store_branch_jobs_runs_total{job="materialize",outcome="given_up"}[1h])) > 0
+        labels:
+          severity: critical
+          component: store
+        annotations:
+          summary: "A branch build from its tree failed for good"
+          description: "A store.materialize build used every retry; the branch stays building and refuses commits until the cause is fixed and the job is queued again."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasebranchbuildfailed"
+
       # A scheduled audit_verify job found an entry that does not verify. The window spans the
       # default interval (scribe.scheduler.audit_verify_interval_s, one day), so the alert keeps
       # firing while the chain stays broken.

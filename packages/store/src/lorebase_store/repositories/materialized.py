@@ -781,9 +781,10 @@ class MaterializedRepository:
         )
 
     async def stream_history_steps(
-        self, partition: str, *, batch: int
+        self, partition: str, *, batch: int, keys: Sequence[str] | None = None
     ) -> AsyncIterator[list[HistoryStep]]:
-        """History of a partition ordered by element key, then oldest change first."""
+        """History of a partition (of its elements in `keys`, when given) ordered by element
+        key, then oldest change first."""
         history = (await self.layout()).history()
         query = (
             select(
@@ -803,6 +804,8 @@ class MaterializedRepository:
             .where(self._scope(history), history.c.partition == partition)
             .order_by(history.c.element_key, REVISIONS.c.generation)
         )
+        if keys is not None:
+            query = query.where(history.c.element_key.in_(list(keys)))
         result = await self._session.stream(query)
         async for part in result.partitions(batch):
             yield [HistoryStep(*row) for row in part]

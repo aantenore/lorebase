@@ -32,7 +32,7 @@ from lorebase_keeper.services.reads import ReadGuard, ReadTarget, StoreReadSourc
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.layout import BranchLayout
 from lorebase_store.materialize.rebuild import load_schema
-from lorebase_store.models.enums import RefKind
+from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.reads import head_revision
 from lorebase_store.repositories import (
@@ -270,7 +270,9 @@ async def resolve_point(
     masking = await masking_for(
         guard.authorizer, guard.principal, domain.id, reference, runtime.sensitivity
     )
-    if revision.id == ref.head:
+    # A branch still being built from its tree (`building`) has no complete rows yet: its
+    # head is read like a past Revision.
+    if revision.id == ref.head and ref.materialization is not Materialization.BUILDING:
         schema = await branch_schema(session, runtime, domain.id, ref.name)
         if schema is not None:
             return ReadPoint(

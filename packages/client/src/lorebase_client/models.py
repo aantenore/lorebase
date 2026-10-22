@@ -21,7 +21,20 @@ SchemaSection = Literal["kinds", "relations", "traits", "operations", "derivatio
 SearchMode = Literal["lexical", "semantic", "hybrid"]
 BranchMode = Literal["copy", "overlay"]
 MaterializationStatus = Literal["pending", "running", "done", "failed"]
-MaterializationPhase = Literal["records", "links", "history", "switch", "done"]
+MaterializationPhase = Literal[
+    "records",
+    "links",
+    "history",
+    "clear",
+    "tree_history",
+    "tree_rows",
+    "switch",
+    "prune",
+    "derived",
+    "paths",
+    "search",
+    "done",
+]
 ServedFrom = Literal["materialized", "tree"]
 ChangeKind = Literal["created", "updated", "deleted"]
 LinkDirection = Literal["forward", "inverse"]

@@ -177,8 +177,11 @@ machine, with `tests/perf/bench.py --scale 540 --extra-links 4 --branch-iteratio
   the size of the branch; a history batch probes `revisions` by primary key per row
   (`OFFSET 0`), where a semi-join scanned every Revision of the Domain per row and made the
   history phase four times slower at this size.
-- Records batches are the slowest (up to 0.5 s: the GIN indexes on search vectors, values and
-  titles). A batch holds the branch lock, so a commit on the copy waits for at most that long.
+- Records batches were the slowest (up to 0.5 s at 5,000 rows: the GIN indexes on search
+  vectors, values and titles), and a batch holds the branch lock, so a commit on the copy
+  could wait that long. Since revision `0031` batches are sized by their hold time (store
+  schema notes, "Batch size"): they aim at `job_batch_target_ms` (200 ms), and at
+  `job_batch_contended_ms` (50 ms) once a commit waited for the lock.
 - Deleting is a 8 ms request; the job removes the rows in 8.6 to 12.3 s, batches under 0.2 s.
 - At 1M Records (not measured in this run: the `--seed-database` fixture of [1M Records](#1m-records)
   was not available, and loading it takes about 33 minutes), the batches stay the same size and

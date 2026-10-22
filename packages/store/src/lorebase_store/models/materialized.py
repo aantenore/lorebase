@@ -202,20 +202,27 @@ class EmbeddingCursor(Base):
 
 
 class BranchMaterialization(Base):
-    """Progress of turning an overlay into a full copy in batches (revision 0018).
+    """Progress of turning a branch into a full copy in batches (revisions 0017, 0031).
 
-    One row per branch whose rows a `store.materialize` job copies: a copy branch created
-    as an overlay, or an overlay promoted in the background. `phase` and `cursor` say where
-    the next batch starts (the last key copied of `mat_records`, `mat_links` or
-    `mat_history`); `base_branch` and `base_generation` are the fork point the copy reads.
-    Rows go with their branch.
+    One row per branch whose rows a `store.materialize` job writes: a copy branch created
+    as an overlay, an overlay promoted in the background (`strategy` `base`: copies the base
+    rows), or a branch built from the tree of its head (`tree`). `phase` and `cursor` say
+    where the next batch starts; `base_branch` and `base_generation` are the fork point a
+    `base` copy reads (for `tree`, the source and the head's generation). `failures` counts
+    failed jobs; `reconcile` holds schema changes made during the copy. Rows go with their
+    branch.
     """
 
     __tablename__ = "branch_materializations"
     __table_args__ = (
         _branch_fk(),
         CheckConstraint("status IN ('pending', 'running', 'done', 'failed')", name="status"),
-        CheckConstraint("phase IN ('records', 'links', 'history', 'switch', 'done')", name="phase"),
+        CheckConstraint("strategy IN ('base', 'tree')", name="strategy"),
+        CheckConstraint(
+            "phase IN ('records', 'links', 'history', 'clear', 'tree_history', 'tree_rows', "
+            "'switch', 'prune', 'derived', 'paths', 'search', 'done')",
+            name="phase",
+        ),
     )
 
     domain_id: Mapped[DomainKey]
@@ -228,6 +235,9 @@ class BranchMaterialization(Base):
     rows_done: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     rows_total: Mapped[int | None] = mapped_column(BigInteger)
     error: Mapped[str | None]
+    strategy: Mapped[str] = mapped_column(server_default=text("'base'"))
+    failures: Mapped[int] = mapped_column(server_default=text("0"))
+    reconcile: Mapped[dict[str, Any] | None]
     created_at: Mapped[datetime]
     updated_at: Mapped[datetime]
     finished_at: Mapped[datetime | None]

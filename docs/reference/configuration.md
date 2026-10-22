@@ -756,11 +756,16 @@ Storage engine. `layout` and `embeddings` are read once by the initial migration
 | `store.materialize.overlay_max_rows` | `50000` | an overlay holding more rows is promoted to a full copy |
 | `store.materialize.overlay_max_base_lag_revisions` | `1000` | generations the base may move past the fork point before the overlay is promoted |
 | `store.materialize.overlay_max_per_branch` | `32` | open overlays per base branch; further branches are copies |
-| `store.materialize.async_copy_min_rows` | `10000` | larger copies start as overlays, a job copies the rows |
+| `store.materialize.async_copy_min_rows` | `10000` | larger copies run as jobs: from an overlay, or built from the tree (overlay sources, older Revisions) |
 | `store.materialize.async_delete_min_rows` | `10000` | larger branches are hidden at once, a job deletes the rows |
-| `store.materialize.job_batch_rows` | `5000` | rows per transaction of a branch copy or deletion job |
+| `store.materialize.job_batch_rows` | `5000` | most rows per transaction of a branch copy or deletion job |
+| `store.materialize.job_batch_min_rows` | `100` | fewest rows per batch; batches start at this size |
+| `store.materialize.job_batch_target_ms` | `200` | branch lock hold a batch aims at while no commit waits |
+| `store.materialize.job_batch_contended_ms` | `50` | hold a batch aims at once a commit waited for the lock |
 | `store.materialize.job_concurrency` | `2` | branch copy and deletion jobs running at once (all workers) |
 | `store.materialize.job_retry_seconds` | `10` | delay before a branch job that had to wait runs again |
+| `store.materialize.copy_max_failures` | `3` | failed copy jobs before an overlay is rebuilt from its tree |
+| `store.materialize.copy_retry_max_seconds` | `3600` | longest delay before a failed copy is retried |
 
 ### `store.gc`
 

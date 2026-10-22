@@ -274,6 +274,12 @@ class DerivedValues:
             await self.repository.prune_derived(kind_id, attributes)
         await self.repository.clear_derived(sorted(keep))
 
+    async def recompute_step(self, step: DerivationStep, keys: Iterable[str]) -> set[str]:
+        """Recompute one Derivation for the Records `keys` of its Kind; returns the keys
+        whose value changed. Running every step in order over every key of its Kind is
+        `recompute_all`, in pieces a background job can commit one by one."""
+        return await self._run(step, keys)
+
     async def recompute(self, applied: AppliedChanges) -> dict[str, set[str]]:
         """Recompute the derived values a changeset can affect; returns changed keys by Kind."""
         changed: dict[str, set[str]] = defaultdict(set)
