@@ -17,6 +17,7 @@ from lorebase_store.auth import (
     GrantRecord,
     NewAuditEntry,
     PrincipalRecord,
+    SessionRecord,
     UsageRecord,
 )
 from lorebase_store.models.enums import GrantScope, PrincipalType
@@ -141,6 +142,42 @@ class UsagePort(Protocol):
     ) -> UsageRecord: ...
 
 
+class SessionsPort(Protocol):
+    """Browser sessions of the web app."""
+
+    async def add(
+        self,
+        *,
+        id_hash: bytes,
+        principal_id: str,
+        subject: str,
+        external_groups: Sequence[str],
+        tokens: bytes | None,
+        created_at: datetime,
+        expires_at: datetime,
+        refresh_at: datetime | None,
+    ) -> SessionRecord: ...
+
+    async def get(self, id_hash: bytes) -> SessionRecord | None: ...
+
+    async def touch(self, id_hash: bytes, at: datetime, *, min_interval: timedelta) -> bool: ...
+
+    async def claim_refresh(self, id_hash: bytes, now: datetime, until: datetime) -> bool: ...
+
+    async def update_tokens(
+        self,
+        id_hash: bytes,
+        *,
+        tokens: bytes | None,
+        external_groups: Sequence[str],
+        refresh_at: datetime | None,
+    ) -> bool: ...
+
+    async def delete(self, id_hash: bytes) -> bool: ...
+
+    async def purge_expired(self, now: datetime, idle_before: datetime, *, limit: int) -> int: ...
+
+
 class AuthUnitPort(Protocol):
     """Repositories sharing one transaction."""
 
@@ -161,6 +198,9 @@ class AuthUnitPort(Protocol):
 
     @property
     def usage(self) -> UsagePort: ...
+
+    @property
+    def sessions(self) -> SessionsPort: ...
 
 
 class AuthStore(Protocol):

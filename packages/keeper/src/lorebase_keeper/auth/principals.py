@@ -1,8 +1,10 @@
 """Who is calling: resolving a request's credentials to a principal (design 13.2).
 
 A principal is a user (an OIDC subject, provisioned on first sign-in when settings allow) or a
-service principal (owner of API keys, created by an administrator). Resolution is stateless:
-every request carries its credential.
+service principal (owner of API keys, created by an administrator). Every request carries its
+credential: an API key, a bearer token or, from the web app, a session cookie
+(`auth/sessions.py`). Headers win over the cookie, so API key and bearer requests behave the
+same whether sessions are enabled or not.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -20,8 +22,14 @@ from opentelemetry.metrics import MeterProvider
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
 from lorebase_keeper.auth.cache import TtlCache
 from lorebase_keeper.auth.config import AuthSettings
-from lorebase_keeper.auth.oidc import InvalidTokenError, OidcVerifier, ProviderUnavailableError
+from lorebase_keeper.auth.oidc import (
+    InvalidTokenError,
+    OidcClaims,
+    OidcVerifier,
+    ProviderUnavailableError,
+)
 from lorebase_keeper.auth.ports import AuthStore
+from lorebase_keeper.auth.sessions import SessionManager, cookie_value
 from lorebase_keeper.client_address import IPAddress, in_networks
 from lorebase_keeper.errors import FORBIDDEN, UNAUTHORIZED, UNAVAILABLE, ProblemError
 from lorebase_store.auth import ApiKeyRecord
@@ -29,7 +37,7 @@ from lorebase_store.models.enums import PrincipalType
 
 logger = logging.getLogger("lorebase.keeper.auth")
 
-AuthMethod = Literal["none", "api_key", "oidc"]
+AuthMethod = Literal["none", "api_key", "oidc", "session"]
 
 ANONYMOUS_ID = "anonymous"
 _MISSING_HASH = bytes(32)
@@ -60,6 +68,8 @@ class Principal:
     key_scopes: tuple[str, ...] = ()
     key_id: str | None = None
     installation_admin: bool = False
+    session_expires_at: datetime | None = None
+    """End of the absolute lifetime of the browser session (method `session`)."""
 
 
 def anonymous_principal() -> Principal:
@@ -92,6 +102,7 @@ class Authenticator:
         store: AuthStore | None,
         codec: ApiKeyCodec | None = None,
         oidc: OidcVerifier | None = None,
+        sessions: SessionManager | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
         meter_provider: MeterProvider | None = None,
@@ -102,8 +113,14 @@ class Authenticator:
         self._store = store
         self._codec = codec
         self._oidc = oidc
+        self._sessions = sessions
         self._clock = clock
         self._oidc_cache: TtlCache[tuple[str, tuple[str, ...]], Principal] = TtlCache(
+            settings.oidc.principal_cache_ttl_s,
+            settings.oidc.principal_cache_max_entries,
+            monotonic,
+        )
+        self._session_cache: TtlCache[tuple[str, tuple[str, ...]], Principal] = TtlCache(
             settings.oidc.principal_cache_ttl_s,
             settings.oidc.principal_cache_max_entries,
             monotonic,
@@ -125,10 +142,11 @@ class Authenticator:
         return error
 
     async def authenticate(
-        self, headers: Mapping[str, str], client: IPAddress | None = None
+        self, headers: Mapping[str, str], client: IPAddress | None = None, method: str = "GET"
     ) -> Principal:
         """The principal behind the request headers (lower-case names), sent from `client`
-        (the client address; None when unknown)."""
+        (the client address; None when unknown) with HTTP `method` (for the CSRF check of
+        session requests)."""
         if self._settings.mode == "none":
             return anonymous_principal()
         try:
@@ -137,6 +155,9 @@ class Authenticator:
             raise self._failed("malformed", error) from None
         token = api_key or bearer
         if token is None:
+            session_id = self.session_id(headers)
+            if session_id is not None:
+                return await self._with_session(session_id, headers, method)
             raise self._failed(
                 "missing", _unauthorized("Authentication required.", presented=False)
             )
@@ -159,8 +180,17 @@ class Authenticator:
         if self._settings.mode == "none":
             return False
         return bool(
-            headers.get("authorization") or headers.get(self._settings.api_keys.header.lower())
+            headers.get("authorization")
+            or headers.get(self._settings.api_keys.header.lower())
+            or self.session_id(headers)
         )
+
+    def session_id(self, headers: Mapping[str, str]) -> str | None:
+        """The session cookie of the request (lower-case header names), when sessions are
+        enabled."""
+        if self._sessions is None:
+            return None
+        return cookie_value(headers, self._sessions.settings.secure_cookie_name)
 
     def key_prefix(self, headers: Mapping[str, str]) -> str | None:
         """The public prefix of the API key the request presents, when it is shaped like one.
@@ -261,6 +291,12 @@ class Authenticator:
             raise ProblemError(
                 UNAVAILABLE, "The identity provider's keys are unavailable."
             ) from None
+        return await self.user_principal(claims)
+
+    async def user_principal(self, claims: OidcClaims) -> Principal:
+        """The user principal of verified provider claims (method `oidc`), provisioned on first
+        sign-in when `oidc.auto_provision` allows; 403 when no account exists for them."""
+        assert self._store is not None
         cache_key = (claims.subject, claims.groups)
         cached = self._oidc_cache.get(cache_key)
         if cached is not None:
@@ -290,6 +326,43 @@ class Authenticator:
         )
         self._oidc_cache.set(cache_key, principal)
         return principal
+
+    async def _with_session(
+        self, session_id: str, headers: Mapping[str, str], method: str
+    ) -> Principal:
+        """The user of a browser session: the same principal, groups and grants as the user's
+        bearer tokens; unsafe methods must pass the session's CSRF check (403)."""
+        assert self._sessions is not None
+        assert self._store is not None
+        record = await self._sessions.resolve(session_id)
+        if record is None:
+            raise self._failed(
+                "invalid_session", _unauthorized("Session expired or unknown.", presented=True)
+            )
+        self._sessions.check_request(session_id, method, headers)
+        cache_key = (record.principal_id, record.external_groups)
+        principal = self._session_cache.get(cache_key)
+        if principal is None:
+            async with self._store.unit() as unit:
+                user = await unit.principals.get(record.principal_id)
+                if user is None:
+                    await unit.sessions.delete(record.id_hash)
+                    raise self._failed(
+                        "principal_missing",
+                        _unauthorized("Session expired or unknown.", presented=True),
+                    )
+                groups = await unit.groups.group_ids_for(user.id, record.external_groups)
+            subjects = (user.id, *groups)
+            principal = Principal(
+                id=user.id,
+                type=user.type,
+                display_name=user.display_name,
+                method="session",
+                subjects=subjects,
+                installation_admin=self._is_installation_admin((*subjects, record.subject)),
+            )
+            self._session_cache.set(cache_key, principal)
+        return replace(principal, session_expires_at=record.expires_at)
 
     def _is_installation_admin(self, identities: tuple[str, ...]) -> bool:
         return not self._admins.isdisjoint(identities)

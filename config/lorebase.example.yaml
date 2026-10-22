@@ -172,6 +172,43 @@ keeper:
                                  # `database` section
       record_denied: true        # also record requests rejected with 401 or 403
       write_timeout_s: 2         # a failed or slow write is logged and counted, never surfaced
+    sessions:                    # sign-in of the web app: Keeper as backend-for-frontend
+                                 # (authorization code + PKCE, server-side sessions). Needs an
+                                 # oidc mode and the `database` section
+      enabled: false
+      discovery_url: null        # null: <oidc.issuer>/.well-known/openid-configuration
+      client_id: null            # REQUIRED when enabled
+      client_secret: null        # e.g. secret://env/LOREBASE_OIDC_CLIENT_SECRET; not needed with
+                                 # token_endpoint_auth_method: none (public client, PKCE only)
+      token_endpoint_auth_method: client_secret_basic   # | client_secret_post | none
+      scopes: [openid, profile, email]   # add offline_access if the provider needs it for
+                                         # refresh tokens
+      redirect_uri: null         # REQUIRED: public URL of <api_prefix>/auth/callback, registered
+                                 # at the provider and sent unchanged (exact match)
+      app_url: null              # REQUIRED: public URL of the web app; sign-in returns to a path
+                                 # on its origin
+      post_logout_redirect_uri: null   # after sign-out at the provider; null: app_url
+      error_path: /login         # app path receiving failed sign-ins as ?error=<code>
+      encryption_key: null       # REQUIRED: >= 32 characters, e.g.
+                                 # secret://env/LOREBASE_SESSION_KEY;
+                                 # encrypts the sign-in state cookie and stored provider tokens
+      cookie_name: lorebase_session      # sent as __Host-<name> with cookie_secure
+      login_cookie_name: lorebase_login  # short-lived sign-in state cookie
+      cookie_secure: true        # Secure + __Host- prefix; false only for http on loopback
+      same_site: lax             # lax | strict (session cookie)
+      login_timeout_s: 600       # time allowed to finish a sign-in
+      idle_timeout_s: 3600       # a session unused this long ends
+      absolute_timeout_s: 43200  # a session ends this long after sign-in
+      touch_interval_s: 60       # last activity written at most this often
+      refresh_tokens: true       # refresh at the provider when the access token expires; a
+                                 # refusal ends the session, new group claims apply
+      refresh_default_interval_s: 300   # when the token response has no expires_in
+      refresh_min_interval_s: 60
+      refresh_lease_s: 30        # one refresh per session at a time; retry delay after errors
+      metadata_cache_ttl_s: 3600
+      csrf_header: X-CSRF-Token  # CSRF token header on POST, PUT, PATCH, DELETE
+      allowed_origins: []        # Origin values accepted besides app_url's and redirect_uri's
+      purge_batch: 100           # expired sessions deleted at each sign-in
   openapi:
     title: Lorebase Keeper
     docs_enabled: true           # serve <prefix>/docs and <prefix>/openapi.json

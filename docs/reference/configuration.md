@@ -224,6 +224,40 @@ Bearer tokens of any OpenID Connect provider
 | `keeper.auth.audit.record_denied` | `true` | also record requests rejected with 401 or 403 |
 | `keeper.auth.audit.write_timeout_s` | `2` | a failed or slow write is logged and counted, never surfaced |
 
+#### `keeper.auth.sessions`
+
+Sign-in of the web app: Keeper as backend-for-frontend (authorization code + PKCE, server-side sessions). Needs an oidc mode and the `database` section
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.auth.sessions.enabled` | `false` |  |
+| `keeper.auth.sessions.discovery_url` | `null` | null: &lt;oidc.issuer&gt;/.well-known/openid-configuration |
+| `keeper.auth.sessions.client_id` | `null` | REQUIRED when enabled |
+| `keeper.auth.sessions.client_secret` | `null` | e.g. secret://env/LOREBASE_OIDC_CLIENT_SECRET; not needed with token_endpoint_auth_method: none (public client, PKCE only) |
+| `keeper.auth.sessions.token_endpoint_auth_method` | `client_secret_basic` | \| client_secret_post \| none |
+| `keeper.auth.sessions.scopes` | `[openid, profile, email]` | add offline_access if the provider needs it for refresh tokens |
+| `keeper.auth.sessions.redirect_uri` | `null` | REQUIRED: public URL of &lt;api_prefix&gt;/auth/callback, registered at the provider and sent unchanged (exact match) |
+| `keeper.auth.sessions.app_url` | `null` | REQUIRED: public URL of the web app; sign-in returns to a path on its origin |
+| `keeper.auth.sessions.post_logout_redirect_uri` | `null` | after sign-out at the provider; null: app_url |
+| `keeper.auth.sessions.error_path` | `/login` | app path receiving failed sign-ins as ?error=&lt;code&gt; |
+| `keeper.auth.sessions.encryption_key` | `null` | REQUIRED: &gt;= 32 characters, e.g. secret://env/LOREBASE_SESSION_KEY; encrypts the sign-in state cookie and stored provider tokens |
+| `keeper.auth.sessions.cookie_name` | `lorebase_session` | sent as __Host-&lt;name&gt; with cookie_secure |
+| `keeper.auth.sessions.login_cookie_name` | `lorebase_login` | short-lived sign-in state cookie |
+| `keeper.auth.sessions.cookie_secure` | `true` | Secure + __Host- prefix; false only for http on loopback |
+| `keeper.auth.sessions.same_site` | `lax` | lax \| strict (session cookie) |
+| `keeper.auth.sessions.login_timeout_s` | `600` | time allowed to finish a sign-in |
+| `keeper.auth.sessions.idle_timeout_s` | `3600` | a session unused this long ends |
+| `keeper.auth.sessions.absolute_timeout_s` | `43200` | a session ends this long after sign-in |
+| `keeper.auth.sessions.touch_interval_s` | `60` | last activity written at most this often |
+| `keeper.auth.sessions.refresh_tokens` | `true` | refresh at the provider when the access token expires; a refusal ends the session, new group claims apply |
+| `keeper.auth.sessions.refresh_default_interval_s` | `300` | when the token response has no expires_in |
+| `keeper.auth.sessions.refresh_min_interval_s` | `60` |  |
+| `keeper.auth.sessions.refresh_lease_s` | `30` | one refresh per session at a time; retry delay after errors |
+| `keeper.auth.sessions.metadata_cache_ttl_s` | `3600` |  |
+| `keeper.auth.sessions.csrf_header` | `X-CSRF-Token` | CSRF token header on POST, PUT, PATCH, DELETE |
+| `keeper.auth.sessions.allowed_origins` | `[]` | Origin values accepted besides app_url's and redirect_uri's |
+| `keeper.auth.sessions.purge_batch` | `100` | expired sessions deleted at each sign-in |
+
 ### `keeper.openapi`
 
 | Setting | Default | Description |

@@ -54,6 +54,24 @@ def insecure_url_problem(url: str, allow_insecure: bool) -> str | None:
     return None
 
 
+MAX_LOCAL_PATH_LENGTH = 2048
+
+
+def is_local_path(value: str) -> bool:
+    """Whether `value` is a path on the current origin, safe to redirect to.
+
+    It must start with a single `/` and hold no backslash, control character, scheme or
+    authority: `//evil.example`, `/\\evil.example` and `https://...` are refused, since browsers
+    read them as other origins.
+    """
+    if not value.startswith("/") or value.startswith("//") or len(value) > MAX_LOCAL_PATH_LENGTH:
+        return False
+    if "\\" in value or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return False
+    parts = urlsplit(value)
+    return not parts.scheme and not parts.netloc
+
+
 class ApiKeySettings(SectionModel):
     """API keys for agents and automation (design 13.2)."""
 
@@ -197,6 +215,227 @@ class OidcSettings(SectionModel):
         return self
 
 
+TokenEndpointAuth = Literal["client_secret_basic", "client_secret_post", "none"]
+MIN_SESSION_KEY_LENGTH = 32
+_COOKIE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def url_origin(url: str) -> str:
+    """`scheme://host[:port]` of an absolute URL, lower-cased as browsers send it."""
+    parts = urlsplit(url)
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}"
+
+
+class SessionSettings(SectionModel):
+    """Sign-in of the web app: Keeper as backend-for-frontend (design 13.2).
+
+    Keeper runs the OpenID Connect authorization code flow with PKCE against the provider of
+    `keeper.auth.oidc`, keeps the provider tokens server-side and gives the browser an opaque
+    session cookie. Needs an `oidc` auth mode and a database.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Offer browser sign-in (<api_prefix>/auth/login) and accept session cookies.",
+    )
+    discovery_url: str | None = Field(
+        default=None,
+        description="Provider metadata. Null: <oidc.issuer>/.well-known/openid-configuration. "
+        "The document's issuer must equal oidc.issuer.",
+    )
+    client_id: str | None = Field(
+        default=None, description="Client id registered at the provider; REQUIRED when enabled."
+    )
+    client_secret: SecretValue | None = Field(
+        default=None,
+        description="Client secret, e.g. secret://env/LOREBASE_OIDC_CLIENT_SECRET; required "
+        "unless token_endpoint_auth_method is none (a public client relying on PKCE alone).",
+    )
+    token_endpoint_auth_method: TokenEndpointAuth = Field(
+        default="client_secret_basic",
+        description="How Keeper authenticates at the token endpoint: client_secret_basic | "
+        "client_secret_post | none.",
+    )
+    scopes: tuple[str, ...] = Field(
+        default=("openid", "profile", "email"),
+        min_length=1,
+        description="Requested scopes; must include openid. Add offline_access when the "
+        "provider issues refresh tokens only with it.",
+    )
+    redirect_uri: str | None = Field(
+        default=None,
+        description="Callback registered at the provider, sent unchanged (exact match): the "
+        "public URL of <api_prefix>/auth/callback, e.g. "
+        "https://lorebase.example.com/api/v1/auth/callback. REQUIRED when enabled.",
+    )
+    app_url: str | None = Field(
+        default=None,
+        description="Public URL of the web app, e.g. https://lorebase.example.com/. Sign-in "
+        "returns to a path on its origin; REQUIRED when enabled.",
+    )
+    post_logout_redirect_uri: str | None = Field(
+        default=None,
+        description="Where the provider sends the browser after sign-out (registered at the "
+        "provider). Null: app_url.",
+    )
+    error_path: str = Field(
+        default="/login",
+        description="Path on the app's origin that receives failed sign-ins as ?error=<code>.",
+    )
+    encryption_key: SecretValue | None = Field(
+        default=None,
+        description="Key (at least 32 characters) that encrypts the sign-in state cookie and the "
+        "provider tokens stored with a session, e.g. secret://env/LOREBASE_SESSION_KEY. "
+        "REQUIRED when enabled. Changing it voids sign-ins in progress and ends each session "
+        "at its next token refresh.",
+    )
+    cookie_name: str = Field(
+        default="lorebase_session",
+        description="Session cookie name; with cookie_secure the browser gets __Host-<name>.",
+    )
+    login_cookie_name: str = Field(
+        default="lorebase_login",
+        description="Short-lived cookie holding the encrypted state, nonce and PKCE verifier "
+        "of a sign-in in progress; __Host- prefixed with cookie_secure.",
+    )
+    cookie_secure: bool = Field(
+        default=True,
+        description="Mark cookies Secure and use the __Host- prefix. false only for plain http "
+        "development on loopback.",
+    )
+    same_site: Literal["lax", "strict"] = Field(
+        default="lax", description="SameSite attribute of the session cookie."
+    )
+    login_timeout_s: int = Field(
+        default=600, ge=30, le=3600, description="Time allowed to finish a sign-in."
+    )
+    idle_timeout_s: int = Field(default=3600, ge=60, description="A session unused this long ends.")
+    absolute_timeout_s: int = Field(
+        default=43200, ge=60, description="A session ends this long after sign-in, used or not."
+    )
+    touch_interval_s: float = Field(
+        default=60,
+        ge=0,
+        description="A session's last activity is written at most this often; the idle timeout "
+        "is exact to within this interval.",
+    )
+    refresh_tokens: bool = Field(
+        default=True,
+        description="Keep the provider's refresh token and use it when the access token expires: "
+        "a refused refresh (account disabled, consent revoked) ends the session and updated "
+        "group claims apply. false: the session lives by its timeouts only.",
+    )
+    refresh_default_interval_s: int = Field(
+        default=300,
+        ge=1,
+        description="Time to the next refresh when the token response gives no expires_in.",
+    )
+    refresh_min_interval_s: int = Field(
+        default=60, ge=1, description="Shortest time between two refreshes of a session."
+    )
+    refresh_lease_s: int = Field(
+        default=30,
+        ge=1,
+        description="One request refreshes a session at a time; after a failure the next attempt "
+        "waits this long. Other requests proceed with the session meanwhile.",
+    )
+    metadata_cache_ttl_s: float = Field(
+        default=3600, gt=0, description="How long the provider metadata document is reused."
+    )
+    csrf_header: str = Field(
+        default="X-CSRF-Token",
+        description="Header carrying the session's CSRF token on POST, PUT, PATCH and DELETE.",
+    )
+    allowed_origins: tuple[str, ...] = Field(
+        default=(),
+        description="Origins accepted in the Origin header of unsafe requests besides those of "
+        "app_url and redirect_uri.",
+    )
+    purge_batch: int = Field(
+        default=100,
+        ge=0,
+        description="Expired sessions deleted at each sign-in; 0 leaves them in the table.",
+    )
+
+    @field_validator("cookie_name", "login_cookie_name")
+    @classmethod
+    def _cookie_name_shape(cls, value: str) -> str:
+        if not _COOKIE_NAME.match(value) or value.startswith(("__Host-", "__Secure-")):
+            raise ValueError("must be 1 to 64 letters, digits, '_' or '-', without a prefix")
+        return value
+
+    @field_validator("csrf_header")
+    @classmethod
+    def _header_shape(cls, value: str) -> str:
+        if not _HEADER_NAME.match(value):
+            raise ValueError("must be a header name of letters, digits and '-'")
+        return value
+
+    @field_validator("error_path")
+    @classmethod
+    def _path_shape(cls, value: str) -> str:
+        if not is_local_path(value):
+            raise ValueError("must be a path starting with a single '/'")
+        return value
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _origins_shape(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for origin in value:
+            parts = urlsplit(origin)
+            if parts.scheme not in ("http", "https") or not parts.netloc or parts.path:
+                raise ValueError(f"{origin!r} is not an origin (scheme://host[:port])")
+        return tuple(url_origin(origin) for origin in value)
+
+    @property
+    def secure_cookie_name(self) -> str:
+        """Name of the session cookie as sent to the browser."""
+        return f"__Host-{self.cookie_name}" if self.cookie_secure else self.cookie_name
+
+    @property
+    def secure_login_cookie_name(self) -> str:
+        """Name of the sign-in state cookie as sent to the browser."""
+        return f"__Host-{self.login_cookie_name}" if self.cookie_secure else self.login_cookie_name
+
+    def trusted_origins(self) -> frozenset[str]:
+        """Origins accepted in the Origin header of unsafe cookie-authenticated requests."""
+        origins = set(self.allowed_origins)
+        for url in (self.app_url, self.redirect_uri):
+            if url:
+                origins.add(url_origin(url))
+        return frozenset(origins)
+
+    def problems(self, allow_insecure: bool) -> list[str]:
+        """What keeps an enabled configuration from working (empty when it is usable)."""
+        problems = [
+            f"sessions.{name} is required when sessions are enabled"
+            for name in ("client_id", "redirect_uri", "app_url")
+            if not getattr(self, name)
+        ]
+        key = self.encryption_key
+        if key is None or len(key.get_secret_value()) < MIN_SESSION_KEY_LENGTH:
+            problems.append(
+                "sessions.encryption_key is required when sessions are enabled "
+                f"(at least {MIN_SESSION_KEY_LENGTH} characters)"
+            )
+        if self.token_endpoint_auth_method != "none" and self.client_secret is None:
+            problems.append(
+                "sessions.client_secret is required with token_endpoint_auth_method "
+                f"{self.token_endpoint_auth_method!r}"
+            )
+        if "openid" not in self.scopes:
+            problems.append("sessions.scopes must include openid")
+        if self.idle_timeout_s > self.absolute_timeout_s:
+            problems.append("sessions.idle_timeout_s cannot exceed absolute_timeout_s")
+        for name in ("discovery_url", "redirect_uri", "app_url", "post_logout_redirect_uri"):
+            url = getattr(self, name)
+            problem = None if url is None else insecure_url_problem(url, allow_insecure)
+            if problem:
+                problems.append(f"sessions.{name} {url!r} {problem}")
+        return problems
+
+
 class AuthzSettings(SectionModel):
     """Authorization: grant caching and extra roles."""
 
@@ -270,6 +509,7 @@ class AuthSettings(SectionModel):
     oidc: OidcSettings = Field(default_factory=OidcSettings)
     authz: AuthzSettings = Field(default_factory=AuthzSettings)
     audit: AuditSettings = Field(default_factory=AuditSettings)
+    sessions: SessionSettings = Field(default_factory=SessionSettings)
 
     @property
     def uses_api_keys(self) -> bool:
@@ -292,4 +532,10 @@ class AuthSettings(SectionModel):
                 )
         if self.uses_oidc and not (self.oidc.issuer and self.oidc.audience):
             raise ValueError(f"oidc.issuer and oidc.audience are required with mode {self.mode!r}")
+        if self.sessions.enabled:
+            if not self.uses_oidc:
+                raise ValueError(f"sessions need mode oidc or api_key+oidc, not {self.mode!r}")
+            problems = self.sessions.problems(self.oidc.allow_insecure)
+            if problems:
+                raise ValueError("; ".join(problems))
         return self

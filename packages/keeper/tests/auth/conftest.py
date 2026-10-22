@@ -28,6 +28,7 @@ from lorebase_store.auth import (
     NewAuditEntry,
     PrefixTakenError,
     PrincipalRecord,
+    SessionRecord,
     UsageRecord,
 )
 from lorebase_store.models.enums import GrantScope, PrincipalType
@@ -266,6 +267,83 @@ class MemUsage:
         return row
 
 
+class MemSessions:
+    def __init__(self, store: MemoryStore) -> None:
+        self.s = store
+
+    async def add(
+        self,
+        *,
+        id_hash: bytes,
+        principal_id: str,
+        subject: str,
+        external_groups: Sequence[str],
+        tokens: bytes | None,
+        created_at: datetime,
+        expires_at: datetime,
+        refresh_at: datetime | None,
+    ) -> SessionRecord:
+        record = SessionRecord(
+            id_hash=id_hash,
+            principal_id=principal_id,
+            subject=subject,
+            external_groups=tuple(external_groups),
+            tokens=tokens,
+            created_at=created_at,
+            last_seen_at=created_at,
+            expires_at=expires_at,
+            refresh_at=refresh_at,
+        )
+        self.s.session_rows[id_hash] = record
+        return record
+
+    async def get(self, id_hash: bytes) -> SessionRecord | None:
+        return self.s.session_rows.get(id_hash)
+
+    async def touch(self, id_hash: bytes, at: datetime, *, min_interval: timedelta) -> bool:
+        row = self.s.session_rows.get(id_hash)
+        if row is None or row.last_seen_at > at - min_interval:
+            return False
+        self.s.session_rows[id_hash] = replace(row, last_seen_at=at)
+        return True
+
+    async def claim_refresh(self, id_hash: bytes, now: datetime, until: datetime) -> bool:
+        row = self.s.session_rows.get(id_hash)
+        if row is None or row.refresh_at is None or row.refresh_at > now:
+            return False
+        self.s.session_rows[id_hash] = replace(row, refresh_at=until)
+        return True
+
+    async def update_tokens(
+        self,
+        id_hash: bytes,
+        *,
+        tokens: bytes | None,
+        external_groups: Sequence[str],
+        refresh_at: datetime | None,
+    ) -> bool:
+        row = self.s.session_rows.get(id_hash)
+        if row is None:
+            return False
+        self.s.session_rows[id_hash] = replace(
+            row, tokens=tokens, external_groups=tuple(external_groups), refresh_at=refresh_at
+        )
+        return True
+
+    async def delete(self, id_hash: bytes) -> bool:
+        return self.s.session_rows.pop(id_hash, None) is not None
+
+    async def purge_expired(self, now: datetime, idle_before: datetime, *, limit: int) -> int:
+        stale = [
+            key
+            for key, row in self.s.session_rows.items()
+            if row.expires_at <= now or row.last_seen_at <= idle_before
+        ][:limit]
+        for key in stale:
+            del self.s.session_rows[key]
+        return len(stale)
+
+
 class MemoryUnit:
     """Auth repositories over a `MemoryStore`; there are no transactions."""
 
@@ -276,6 +354,7 @@ class MemoryUnit:
         self.grants = MemGrants(store)
         self.audit = MemAudit(store)
         self.usage = MemUsage(store)
+        self.sessions = MemSessions(store)
 
 
 class MemoryStore:
@@ -292,6 +371,7 @@ class MemoryStore:
         self.audit_delay = 0.0
         self.touch_failure: Exception | None = None
         self.usage_rows: dict[tuple[str, date], UsageRecord] = {}
+        self.session_rows: dict[bytes, SessionRecord] = {}
         self.usage_failure: Exception | None = None
         self.usage_reads = 0
         self.usage_writes = 0

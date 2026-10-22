@@ -12,9 +12,10 @@ natively. No provider SDK is involved: discovery and key download are plain HTTP
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -161,6 +162,31 @@ class OidcVerifier:
 
     async def verify(self, token: str) -> OidcClaims:
         """Claims of a valid token; `InvalidTokenError` or `ProviderUnavailableError` otherwise."""
+        claims = await self._decode(token, self._settings.audience, ("exp", "iss", "aud"))
+        return self._claims(claims)
+
+    async def verify_id_token(
+        self, token: str, *, client_id: str, nonce: str | None = None
+    ) -> OidcClaims:
+        """Claims of a valid ID token issued to `client_id` (OpenID Connect Core 3.1.3.7).
+
+        The audience must contain the client id and, with several audiences, `azp` must name it.
+        `nonce`, when given, must equal the token's (sign-in); refreshed ID tokens carry none
+        to compare.
+        """
+        claims = await self._decode(token, (client_id,), ("exp", "iat", "iss", "aud"))
+        audience = claims.get("aud")
+        if isinstance(audience, list) and len(audience) > 1 and claims.get("azp") != client_id:
+            raise InvalidTokenError("azp does not name this client")
+        if nonce is not None:
+            received = claims.get("nonce")
+            if not isinstance(received, str) or not hmac.compare_digest(received, nonce):
+                raise InvalidTokenError("nonce mismatch")
+        return self._claims(claims)
+
+    async def _decode(
+        self, token: str, audience: Sequence[str], required: Sequence[str]
+    ) -> dict[str, Any]:
         settings = self._settings
         try:
             header = jwt.get_unverified_header(token)
@@ -168,17 +194,21 @@ class OidcVerifier:
             if algorithm not in settings.algorithms:
                 raise InvalidTokenError(f"algorithm {algorithm!r} is not accepted")
             key = await self._jwks.key_for(header.get("kid"))
-            claims = jwt.decode(
+            claims: dict[str, Any] = jwt.decode(
                 token,
                 key.key,
                 algorithms=[algorithm],
-                audience=list(settings.audience),
+                audience=list(audience),
                 issuer=settings.issuer,
                 leeway=settings.clock_skew_s,
-                options={"require": ["exp", "iss", "aud", settings.subject_claim]},
+                options={"require": [*required, settings.subject_claim]},
             )
         except jwt.PyJWTError as exc:
             raise InvalidTokenError(f"{type(exc).__name__}: {exc}") from None
+        return claims
+
+    def _claims(self, claims: Mapping[str, Any]) -> OidcClaims:
+        settings = self._settings
         subject = claims.get(settings.subject_claim)
         if not isinstance(subject, str) or not subject:
             raise InvalidTokenError("subject claim is not a non-empty string")

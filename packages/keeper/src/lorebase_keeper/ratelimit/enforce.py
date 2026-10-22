@@ -26,6 +26,7 @@ from lorebase_keeper.auth.audit import suppress
 from lorebase_keeper.auth.deps import current_principal, get_auth
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.runtime import AuthRuntime
+from lorebase_keeper.auth.sessions import PUBLIC_PATHS
 from lorebase_keeper.client_address import client_address
 from lorebase_keeper.errors import RATE_LIMITED, UNAUTHORIZED, ProblemError, ProblemType
 from lorebase_keeper.ratelimit.bucket import Decision, InMemoryRateStore
@@ -114,7 +115,7 @@ async def enforce_limits(request: Request) -> None:
         return
     route = request.scope.get("route")
     path = str(getattr(route, "path", request.url.path))
-    if runtime.exempt(path):
+    if runtime.exempt(path) or path in PUBLIC_PATHS:
         return
     principal = await _authenticate(request, runtime)
     if runtime.limiter is not None:
