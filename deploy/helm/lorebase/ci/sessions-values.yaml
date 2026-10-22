@@ -1,0 +1,26 @@
+# Web sign-in overlay for the production profile: Keeper signs people in through the OpenID Connect
+# provider and the web app uses cookie sessions. The client secret and the encryption key are keys
+# of the Secret you manage (secrets.existingSecret), never values of this file.
+secrets:
+  existingSecret: lorebase-secrets
+  keys:
+    oidcClientSecret: oidc-client-secret
+    sessionEncryptionKey: session-encryption-key
+config:
+  keeper:
+    auth:
+      mode: oidc
+      oidc:
+        issuer: https://login.example.com/realms/lorebase
+        audience: [lorebase-api]
+      sessions:
+        enabled: true
+        client_id: lorebase-web
+        redirect_uri: https://lorebase.example.com/api/v1/auth/callback
+        app_url: https://lorebase.example.com/
+        idle_timeout_s: 3600
+        absolute_timeout_s: 43200
+web:
+  enabled: true
+  config:
+    authMode: session

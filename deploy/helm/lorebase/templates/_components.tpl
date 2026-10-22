@@ -7,6 +7,24 @@
   value: {{ .Values.keeper.port | quote }}
 - name: LOREBASE__KEEPER__READS__PREFER_REPLICA
   value: {{ .Values.keeper.preferReplica | quote }}
+{{- if include "lorebase.sessionsEnabled" . }}
+{{- if include "lorebase.secretHas" (dict "ctx" . "name" "oidcClientSecret") }}
+- name: LOREBASE__KEEPER__AUTH__SESSIONS__CLIENT_SECRET
+  value: secret://env/LOREBASE_OIDC_CLIENT_SECRET
+- name: LOREBASE_OIDC_CLIENT_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "lorebase.secretName" . }}
+      key: {{ .Values.secrets.keys.oidcClientSecret }}
+{{- end }}
+- name: LOREBASE__KEEPER__AUTH__SESSIONS__ENCRYPTION_KEY
+  value: secret://env/LOREBASE_SESSION_KEY
+- name: LOREBASE_SESSION_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "lorebase.secretName" . }}
+      key: {{ .Values.secrets.keys.sessionEncryptionKey }}
+{{- end }}
 {{- end -}}
 
 {{- define "lorebase.scribeEnv" -}}

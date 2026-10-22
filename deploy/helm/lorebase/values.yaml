@@ -88,6 +88,23 @@ config:
       #   issuer: https://login.example.com/realms/lorebase
       #   audience: [lorebase]
       # installation_admins: [<principal id or identity provider subject>]
+      #
+      # Sign-in of the web app through Keeper (docs/deployment.md#web-sign-in). Needs an oidc mode,
+      # the database and a client registered at the provider. The client secret and the encryption
+      # key come from the Secret (`secrets.keys.oidcClientSecret`, `secrets.keys.sessionEncryptionKey`),
+      # never from here; the chart wires them as secret://env references. Also set
+      # `web.config.authMode: session`. Any other `sessions` setting of Keeper is accepted
+      # (cookie_name, same_site, idle_timeout_s, absolute_timeout_s, login_timeout_s, scopes, ...).
+      # sessions:
+      #   enabled: true
+      #   discovery_url: ""              # empty: <oidc.issuer>/.well-known/openid-configuration
+      #   client_id: lorebase-web
+      #   redirect_uri: https://lorebase.example.com/api/v1/auth/callback
+      #   app_url: https://lorebase.example.com/
+      #   cookie_secure: true
+      #   idle_timeout_s: 3600
+      #   absolute_timeout_s: 43200
+      #   token_endpoint_auth_method: client_secret_basic   # none: public client, no client secret
   # Secret references a Source `connection` may name (docs/scribe.md). Empty, the default: Scribe
   # synchronizes no Source. Expose the referenced variables through `secrets.extra` or `extraNames`.
   # scribe:
@@ -125,6 +142,12 @@ secrets:
     apiKeyPepper: api-key-pepper
     # API key of the LLM endpoint used by Scribe (LLM_API_KEY). Not needed for Ollama.
     llmApiKey: llm-api-key
+    # OIDC client secret of the web sign-in (secret://env/LOREBASE_OIDC_CLIENT_SECRET). Wired only when
+    # `config.keeper.auth.sessions.enabled`; empty name for a public client (token_endpoint_auth_method: none).
+    oidcClientSecret: oidc-client-secret
+    # Key (32 characters or more, for example `openssl rand -base64 48`) that encrypts the sign-in cookie and the
+    # provider tokens held with a session. Wired only when sessions are enabled.
+    sessionEncryptionKey: session-encryption-key
   # Values for the chart-managed Secret. Ignored when `existingSecret` is set. Prefer
   # `--set-file` or a values file kept out of git; never commit real values.
   values:
@@ -136,6 +159,10 @@ secrets:
     apiKeyPepper: ""
     # LLM API key for hosted endpoints.
     llmApiKey: ""
+    # Client secret registered at the identity provider for the web sign-in.
+    oidcClientSecret: ""
+    # Session encryption key, 32 characters or more.
+    sessionEncryptionKey: ""
   # Any further secret as ENV_NAME: value in the chart-managed Secret. Reference it from `config`
   # as secret://env/ENV_NAME (for example OIDC or hosted-embedding credentials). Exposed to Keeper and Scribe.
   extra: {}
@@ -489,6 +516,10 @@ web:
   config:
     # `live` talks to Keeper over REST; `mock` serves sample Domains from memory.
     apiMode: live
+    # `token`: bearer token in the browser (VITE_API_TOKEN through `extra`). `session`: sign in through
+    # Keeper with a cookie session (VITE_AUTH_MODE); needs `config.keeper.auth.sessions.enabled` and the
+    # app and Keeper on one origin (Ingress paths).
+    authMode: token
     # Origin of Keeper as the browser sees it, without /api/v1. Empty with an enabled Ingress:
     # https:// plus the first host of `ingress.hosts` (http:// without `ingress.tls`).
     keeperBaseUrl: ""

@@ -1,5 +1,5 @@
 {{- if .Values.web.enabled }}
-{{- $browser := merge (dict "VITE_API_MODE" .Values.web.config.apiMode) (deepCopy .Values.web.config.extra) }}
+{{- $browser := merge (dict "VITE_API_MODE" .Values.web.config.apiMode "VITE_AUTH_MODE" .Values.web.config.authMode) (deepCopy .Values.web.config.extra) }}
 {{- if eq .Values.web.config.apiMode "live" }}
 {{- $_ := set $browser "VITE_KEEPER_BASE_URL" (include "lorebase.webKeeperUrl" .) }}
 {{- end }}

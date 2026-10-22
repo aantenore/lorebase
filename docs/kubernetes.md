@@ -16,7 +16,7 @@ application's own `lorebase.yaml`, and the same environment variables.
 | Keeper (Deployment, Service, PDB, optional HPA) | on | Probes `/healthz` and `/readyz`, non-root, read-only root file system, topology spread |
 | Migration (Helm hook Job) | on | `alembic upgrade head` before Keeper rolls out |
 | ConfigMap | on | The `config` values block, mounted as `/etc/lorebase/lorebase.yaml` |
-| Secret | on, unless `secrets.existingSecret` | DSNs, API key pepper, LLM key; never in the ConfigMap |
+| Secret | on, unless `secrets.existingSecret` | DSNs, API key pepper, LLM key, web sign-in client secret and session key; never in the ConfigMap |
 | ServiceAccount | on | No API token mounted |
 | Scribe (Deployment, optional HPA, PDB) | off | `lorebase-scribe`, the job worker and scheduler ([scribe.md](scribe.md)) |
 | Herald, MCP over streamable HTTP (Deployment, Service, PDB, optional HPA) | off | |
@@ -275,6 +275,51 @@ against any Keeper; `keeperBaseUrl` defaults to the first Ingress host.
 `/config.js` when it starts and lays it over the values it was built with, so the published image (built in mock mode)
 talks to the Keeper named there ([web app configuration](../apps/web/README.md)). The live mode has not been verified
 end to end against a cluster. Everything else works without the web app.
+
+### Web sign-in
+
+Keeper can sign people in to the web app with OpenID Connect and cookie sessions
+([deployment](deployment.md#web-sign-in)). It is off by default. To turn it on, in values:
+
+```yaml
+secrets:
+  existingSecret: lorebase-secrets          # also holds oidc-client-secret and session-encryption-key
+config:
+  keeper:
+    auth:
+      mode: oidc                            # or api_key+oidc
+      oidc: {issuer: https://login.example.com/realms/lorebase, audience: [lorebase-api]}
+      sessions:
+        enabled: true
+        client_id: lorebase-web
+        redirect_uri: https://lorebase.example.com/api/v1/auth/callback
+        app_url: https://lorebase.example.com/
+web:
+  enabled: true
+  config: {authMode: session}
+```
+
+`ci/sessions-values.yaml` is this overlay for the production profile. The settings of
+`keeper.auth.sessions` (`discovery_url`, `cookie_secure`, `same_site`, `idle_timeout_s`,
+`absolute_timeout_s`, `login_timeout_s`, `scopes`, `token_endpoint_auth_method`, ...) are the ones of Keeper and go
+in `config` as written there. The two secrets are not: create them in the Secret and the chart wires them as
+`secret://env/LOREBASE_OIDC_CLIENT_SECRET` and `secret://env/LOREBASE_SESSION_KEY` references.
+
+```bash
+kubectl -n lorebase create secret generic lorebase-secrets \
+  --from-literal=db-dsn='...' --from-literal=api-key-pepper='...' \
+  --from-literal=oidc-client-secret='<client secret>' \
+  --from-literal=session-encryption-key="$(openssl rand -base64 48)"
+```
+
+Key names are `secrets.keys.oidcClientSecret` and `secrets.keys.sessionEncryptionKey`; without `existingSecret`, set
+`secrets.values.oidcClientSecret` and `sessionEncryptionKey` instead. For a public client
+(`token_endpoint_auth_method: none`) there is no client secret. The chart refuses to render when sessions are enabled
+without an `oidc` mode, `client_id`, `redirect_uri`, `app_url`, the session key or (for a confidential client) the
+client secret, and when `web.config.authMode` is `session` without sessions. Serve the web app and Keeper on one
+origin (the Ingress paths of the production profile do), register `redirect_uri` at the provider, and allow Keeper
+egress to the provider (`networkPolicy.egress.extra.keeper`). The sessions live in Postgres, so Keeper replicas need no
+affinity.
 
 ## Observability
 
