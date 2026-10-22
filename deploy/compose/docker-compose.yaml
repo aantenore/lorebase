@@ -3,6 +3,9 @@
 #   cp .env.example .env              # then edit the values marked "change me"
 #   docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d
 #
+# The default services are Postgres, the migrations, Keeper and the web app (http://127.0.0.1:8090,
+# LOREBASE_WEB_PORT), which proxies /api/ to Keeper on the compose network.
+#
 # Optional profiles (add --profile NAME, repeatable):
 #   local-models   Ollama with the model named by OLLAMA_MODEL pulled at start, and a one-shot
 #                  `inference-check` that probes it through the application's own client
@@ -184,6 +187,49 @@ services:
     ports:
       - "${KEEPER_BIND:-127.0.0.1}:${KEEPER_HOST_PORT:-8080}:${KEEPER_PORT:-8080}"
 
+  # The web app (apps/web), built from deploy/docker/web.Dockerfile. nginx serves the app and
+  # forwards /api/ to Keeper (and /guide/ to Guide, profile assistant; web/proxy.conf.template),
+  # so the browser talks to one origin and Keeper needs no CORS setting. The app runs in live mode
+  # against that origin; there is no sign-in while Keeper runs with auth mode none. Session mode
+  # (WEB_AUTH_MODE=session) needs auth.sessions on Keeper, see docs/deployment.md.
+  web:
+    image: ${LOREBASE_WEB_IMAGE:-lorebase-web}:${LOREBASE_TAG:-dev}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web.Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      VITE_API_MODE: live
+      VITE_KEEPER_BASE_URL: /
+      # /guide with the assistant profile; empty leaves the assistant out of the app.
+      VITE_GUIDE_URL: ${WEB_GUIDE_URL:-}
+      VITE_AUTH_MODE: ${WEB_AUTH_MODE:-token}
+      NGINX_ENVSUBST_FILTER: ^LOREBASE_WEB_PROXY_
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx/conf.d/lorebase.d
+      LOREBASE_WEB_PROXY_KEEPER_PORT: ${KEEPER_PORT:-8080}
+      LOREBASE_WEB_PROXY_GUIDE_PORT: ${GUIDE_PORT:-8095}
+      LOREBASE_WEB_PROXY_MAX_BODY: ${WEB_PROXY_MAX_BODY:-25m}
+      LOREBASE_WEB_PROXY_CONNECT_TIMEOUT: ${WEB_PROXY_CONNECT_TIMEOUT:-3s}
+      LOREBASE_WEB_PROXY_READ_TIMEOUT: ${WEB_PROXY_READ_TIMEOUT:-300s}
+      LOREBASE_WEB_HSTS: ${WEB_HSTS:-}
+    volumes:
+      - ./web/proxy.conf.template:/etc/nginx/templates/proxy.conf.template:ro
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${LOREBASE_WEB_PORT:-8090}:8080"
+    depends_on:
+      keeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
   # Scribe (docs/scribe.md): job worker and scheduler. Replicas are safe: jobs are claimed with
   # SKIP LOCKED and one process at a time schedules. CSV Sources read files under
   # /data/sources; the supply example data is mounted there read-only for development.
@@ -237,7 +283,7 @@ services:
       LOREBASE__GUIDE__HOST: 0.0.0.0
       LOREBASE__GUIDE__PORT: ${GUIDE_PORT:-8095}
       LOREBASE__GUIDE__KEEPER__BASE_URL: http://keeper:${KEEPER_PORT:-8080}
-      LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS: ${GUIDE_ALLOWED_ORIGINS:-[]}
+      LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS: ${GUIDE_ALLOWED_ORIGINS:-["http://127.0.0.1:${LOREBASE_WEB_PORT:-8090}","http://localhost:${LOREBASE_WEB_PORT:-8090}"]}
       LOREBASE__GUIDE__HTTP__ALLOW_ANONYMOUS: ${GUIDE_ALLOW_ANONYMOUS:-false}
       LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
       LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}

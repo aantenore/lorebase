@@ -188,6 +188,12 @@ http://localhost:5173/`; http is accepted for loopback hosts. Start the app with
 that app and API share the origin: `LOREBASE_KEEPER_PROXY=http://127.0.0.1:8080
 VITE_API_MODE=live VITE_KEEPER_BASE_URL=/ VITE_AUTH_MODE=session pnpm dev` in `apps/web`.
 
+The compose `web` service is the same arrangement without Node.js: it serves the app on
+`http://127.0.0.1:8090` (`LOREBASE_WEB_PORT`) and forwards `/api/` to Keeper, the sign-in routes
+(`/api/v1/auth/login`, `/callback`, `/logout`, `/session`) included, so cookies stay on one origin.
+Set `WEB_AUTH_MODE=session` in `.env`, and register `http://127.0.0.1:8090/api/v1/auth/callback`
+with `app_url: http://127.0.0.1:8090/`.
+
 ## Security headers
 
 Keeper adds `X-Content-Type-Options`, `X-Frame-Options`, a `frame-ancestors` Content-Security-Policy and

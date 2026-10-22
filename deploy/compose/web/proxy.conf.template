@@ -1,0 +1,47 @@
+# Same-origin proxy of the web service (compose): the browser calls /api/ (and /guide/ with the
+# assistant profile) on the origin that served the app, so Keeper and Guide need no CORS setting.
+#
+# Rendered by the nginx image at start into /etc/nginx/conf.d/lorebase.d, which default.conf of the
+# web image includes inside its server block. Only variables named LOREBASE_WEB_PROXY_* are
+# replaced (NGINX_ENVSUBST_FILTER); every other $name is nginx's own.
+#
+# The upstream names are resolved at request time (Docker's resolver), so the web service starts
+# without Guide, and follows a Keeper or Guide container that restarts under another address.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+client_max_body_size ${LOREBASE_WEB_PROXY_MAX_BODY};
+
+# Keeper REST API, including the sign-in routes of the session mode (/api/v1/auth/...) and the
+# Server-Sent Events of /api/v1/domains/{domain}/branches/{branch}/events. Responses are not
+# buffered, so events reach the browser as they are written.
+location /api/ {
+  set $lorebase_keeper http://keeper:${LOREBASE_WEB_PROXY_KEEPER_PORT};
+  proxy_pass $lorebase_keeper;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host $http_host;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Request-ID $request_id;
+  proxy_buffering off;
+  proxy_cache off;
+  proxy_connect_timeout ${LOREBASE_WEB_PROXY_CONNECT_TIMEOUT};
+  proxy_read_timeout ${LOREBASE_WEB_PROXY_READ_TIMEOUT};
+}
+
+# Guide (profile assistant): the prefix is removed, Guide serves /explore and /embed at its root.
+location /guide/ {
+  set $lorebase_guide http://guide:${LOREBASE_WEB_PROXY_GUIDE_PORT};
+  rewrite ^/guide/(.*)$ /$1 break;
+  proxy_pass $lorebase_guide;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host $http_host;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Request-ID $request_id;
+  proxy_buffering off;
+  proxy_cache off;
+  proxy_connect_timeout ${LOREBASE_WEB_PROXY_CONNECT_TIMEOUT};
+  proxy_read_timeout ${LOREBASE_WEB_PROXY_READ_TIMEOUT};
+}

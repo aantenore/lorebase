@@ -72,5 +72,8 @@ COPY deploy/docker/web/default.conf /etc/nginx/conf.d/default.conf
 COPY --chmod=755 deploy/docker/web/40-lorebase-config.sh /docker-entrypoint.d/40-lorebase-config.sh
 # The headers file default.conf includes; the script writes it again at every start.
 RUN /docker-entrypoint.d/40-lorebase-config.sh
+# Where default.conf includes further locations from. Empty here; the compose stack renders its
+# reverse proxy into it (deploy/compose/web).
+RUN mkdir /etc/nginx/conf.d/lorebase.d
 
 EXPOSE 8080

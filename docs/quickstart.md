@@ -7,7 +7,7 @@ repository root unless the step says otherwise.
 
 | Step | What you get | Time measured on a fresh clone |
 |------|--------------|--------------------------------|
-| [2](#2-five-minute-path) | Postgres, Keeper, the sample Domain, a first query, the web app | 1.5 minutes measured; a few minutes more on a machine that has never pulled the base images |
+| [2](#2-five-minute-path) | Postgres, Keeper, the web app, the sample Domain, a first query | 1.5 minutes measured; a few minutes more on a machine that has never pulled the base images |
 | [3](#3-connect-an-agent-over-mcp) | An agent reading the Domain through the MCP server (Herald) | under a minute |
 | [4](#4-use-a-real-model) | A chat model for document extraction: Ollama, or a hosted endpoint | seconds with Ollama already on the machine or a hosted endpoint; about 11 minutes the first time for Ollama in Docker |
 | [5](#5-stop-and-clean-up) | Stop the stack, keep or delete its data | seconds |
@@ -24,7 +24,7 @@ The measured times of each command are in [Timings](#timings) and in the
 | git | any recent | `git --version` | the clone |
 | [uv](https://docs.astral.sh/uv/) | a recent release; it installs Python 3.12 by itself | `uv --version` | the CLI, Herald, the tests |
 | Docker with the compose plugin | compose v2 with `up --wait` and `--profile "*"` (checked with Docker 29 and compose 5.1) | `docker compose version` | Postgres, Keeper, Scribe, Ollama |
-| Node.js and pnpm | Node 24 or later; pnpm 11 (`corepack enable` installs the version of `apps/web/package.json`) | `node --version`, `pnpm --version` | the web app |
+| Node.js and pnpm | Node 24 or later; pnpm 11 (`corepack enable` installs the version of `apps/web/package.json`) | `node --version`, `pnpm --version` | only the web app dev server (`pnpm dev`, contributors); `make up` serves the web app from a container |
 | curl, openssl, make | any | | the helper commands |
 
 Resources: give Docker at least 4 GB of memory (8 GB with the Ollama container), and keep
@@ -36,9 +36,10 @@ stack publishes these ports on `127.0.0.1` only:
 | 8080 | Keeper (REST API) | `KEEPER_HOST_PORT` |
 | 5432 | Postgres | `POSTGRES_HOST_PORT` |
 | 11434 | Ollama (profile `local-models`) | `OLLAMA_HOST_PORT` |
-| 5173 | web app dev server (`pnpm dev`) | picks the next free port by itself |
+| 8090 | web app (container started by `make up`) | `LOREBASE_WEB_PORT` |
+| 5173 | web app dev server (`pnpm dev`, contributors) | picks the next free port by itself |
 
-`lsof -nP -iTCP:8080 -sTCP:LISTEN` (and the same for 5432) shows whether a port is taken; if it
+`lsof -nP -iTCP:8080 -sTCP:LISTEN` (and the same for 8090 and 5432) shows whether a port is taken; if it
 is, change the variable in `.env` after step 2.2. The compose project name comes from
 `COMPOSE_PROJECT_NAME` in `.env` (default `lorebase`): give a second checkout on the same
 machine another name, so that the two stacks never share containers or volumes.
@@ -68,17 +69,18 @@ with random values (`openssl rand -hex 24`); an existing `.env` keeps its values
 embedded in connection strings). The other values have working defaults; this is where you
 change ports and `COMPOSE_PROJECT_NAME`.
 
-### 2.3 Start Postgres and Keeper
+### 2.3 Start Postgres, Keeper and the web app
 
 ```bash
 make up
 ```
 
 This runs `docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d --build
---wait postgres migrate keeper`. The first run builds the backend image (a few minutes; later
-runs reuse the layers). Compose starts Postgres 16, creates the application role Keeper connects
-as (`db-roles`), runs the migrations once (`migrate` exits when done) and returns when Keeper is
-healthy. Check it:
+--wait postgres migrate keeper web`. The first run builds the backend and web images (a few
+minutes; later runs reuse the layers). Compose starts Postgres 16, creates the application role Keeper connects
+as (`db-roles`), runs the migrations once (`migrate` exits when done), starts the web app and returns when Keeper
+and the web app are healthy. It ends by printing the web app URL (`http://127.0.0.1:8090`). Check
+Keeper:
 
 ```bash
 curl http://localhost:8080/readyz
@@ -88,7 +90,8 @@ curl http://localhost:8080/readyz
 {"status":"ready","checks":{"database":{"status":"ok","detail":null}}}
 ```
 
-`http://localhost:8080/api/v1/docs` serves the interactive OpenAPI docs.
+`http://localhost:8080/api/v1/docs` serves the interactive OpenAPI docs. The web app answers on
+`http://127.0.0.1:8090`, and `http://127.0.0.1:8090/api/v1/auth/whoami` reaches Keeper through it.
 
 **Credentials.** There are none to type. The example configuration
 (`config/lorebase.example.yaml`) sets `keeper.auth.mode: none`: Keeper answers every request as
@@ -156,7 +159,24 @@ Reads never call a model; every answer names the Revision it was served from in 
 
 ### 2.6 Open the web app
 
-In a second terminal:
+`make up` already started it. Open `http://127.0.0.1:8090` (`LOREBASE_WEB_PORT` in `.env`). The
+app opens on the `supply` Domain and its `main` branch: Explorer lists the six Kinds, Canvas
+draws the graph around a Record, Review lists Proposals (the one that loaded the sample is under
+the Merged filter). There is no sign-in with authentication off; with an API key, paste it in
+Settings.
+
+The page and the API share one origin: the `web` service of the compose file
+(`deploy/docker/web.Dockerfile`, nginx) serves the built app and forwards `/api/` to Keeper on
+the compose network, event streams included, so Keeper needs no CORS setting. The Content
+Security Policy allows connections to that origin only. With the `assistant` profile, set
+`WEB_GUIDE_URL=/guide` in `.env`: `/guide/` is forwarded to Guide the same way. The web
+settings are in [`.env.example`](https://github.com/aantenore/lorebase/blob/main/.env.example);
+[apps/web/README.md](https://github.com/aantenore/lorebase/blob/main/apps/web/README.md#live-mode)
+lists the variables of the app itself, and a mock mode with built-in sample data and no Keeper is
+in [section 12](#12-web-app).
+
+**Contributors** who change the app run the dev server instead (Node.js 24 and pnpm), with hot
+reload, on the Keeper of the stack:
 
 ```bash
 cd apps/web
@@ -165,16 +185,9 @@ printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
 LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
 ```
 
-Open the URL it prints (`http://localhost:5173`, or the next free port). The dev server
-forwards `/api` to Keeper, so no CORS setting is needed. The app opens on the `supply` Domain
-and its `main` branch: Explorer lists the six Kinds, Canvas draws the graph around a Record,
-Review lists Proposals (the one that loaded the sample is under the Merged filter). There is no sign-in with authentication off; with an API key,
-paste it in Settings. Use `KEEPER_HOST_PORT` in the proxy URL if you changed it.
-
-Without Node.js, the web image of `deploy/docker/web.Dockerfile` serves the same app
-([apps/web/README.md](https://github.com/aantenore/lorebase/blob/main/apps/web/README.md#live-mode)
-lists its variables); a mock mode with built-in sample data and no Keeper is in
-[section 12](#12-web-app).
+Open the URL it prints (`http://localhost:5173`, or the next free port). The dev server forwards
+`/api` to Keeper, so no CORS setting is needed here either. Use `KEEPER_HOST_PORT` in the proxy
+URL if you changed it.
 
 ## 3. Connect an agent over MCP
 
@@ -319,15 +332,15 @@ make clean-stack   # stop them and delete the volumes: database, pulled models
 ```
 
 `make clean-stack` runs `docker compose ... --profile "*" down -v --remove-orphans`, so the
-Ollama and observability containers go too. Stop `pnpm dev` with Ctrl+C. To remove the built
-image as well: `docker image rm lorebase:dev` (the `LOREBASE_IMAGE` and `LOREBASE_TAG` of
-`.env`). Delete the clone and nothing else is left on the machine.
+Ollama and observability containers go too. (If you started the contributor dev server, stop it with Ctrl+C.) To remove the built images as
+well: `docker image rm lorebase:dev lorebase-web:dev` (the `LOREBASE_IMAGE`, `LOREBASE_WEB_IMAGE`
+and `LOREBASE_TAG` of `.env`). Delete the clone and nothing else is left on the machine.
 
 ## 6. Troubleshooting
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| `Bind for 127.0.0.1:5432 failed: port is already allocated` (or 8080, 11434) | Another Postgres, service or Ollama holds the port. Set `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT` or `OLLAMA_HOST_PORT` in `.env`, run `make up` again, and use the new Keeper port in `LOREBASE_URL` and `LOREBASE_KEEPER_PROXY`. |
+| `Bind for 127.0.0.1:5432 failed: port is already allocated` (or 8080, 8090, 11434) | Another Postgres, service or Ollama holds the port. Set `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT` or `OLLAMA_HOST_PORT` in `.env`, run `make up` again, and use the new Keeper port in `LOREBASE_URL` (and `LOREBASE_KEEPER_PROXY` of the dev server). |
 | `required variable POSTGRES_PASSWORD is missing a value` or `set LOREBASE_APP_PASSWORD in the environment file` | `.env` is missing or a password is empty: `make env` fills them. |
 | Keeper unhealthy, `make up` fails with `dependency failed to start` | `docker compose --env-file .env -f deploy/compose/docker-compose.yaml logs migrate keeper` names the error. A password changed after the first start does not change the database: run `make clean-stack` (deletes the data) and `make up`. |
 | `curl: (52) Empty reply from server` right after `up -d` without `--wait` | Keeper is still starting; `make up` waits for its health check. |
@@ -338,7 +351,10 @@ image as well: `docker image rm lorebase:dev` (the `LOREBASE_IMAGE` and `LOREBAS
 | `make example-data`: `Domain supply exists ... but main does not hold the sample` | An earlier load stopped half way, or the Domain was created by hand (sections 10 and 11). `uv run lorebase domain delete supply -y`, then `make example-data`. |
 | `make example-data`: `no Keeper at http://127.0.0.1:8080` | The stack is not running, or Keeper runs on another port: `make up`, or `LOREBASE_URL=http://127.0.0.1:PORT make example-data`. |
 | The web app shows "This Branch has no Kinds yet" | It is on a branch without the sample: pick `main` or `work` in the top bar, or run `make example-data`. |
-| The web app cannot reach Keeper (network error) | `LOREBASE_KEEPER_PROXY` must be set when `pnpm dev` starts and must name Keeper's port; `.env.local` must hold `VITE_API_MODE=live` and `VITE_KEEPER_BASE_URL=/`. Restart `pnpm dev` after a change. |
+| The web app at `http://127.0.0.1:8090` shows a network error or `502 Bad Gateway` on `/api/` | Keeper is not up (or restarting): `docker compose --env-file .env -f deploy/compose/docker-compose.yaml ps keeper web` and `logs keeper web`. The web service reaches Keeper at `keeper:KEEPER_PORT`, so `KEEPER_PORT` must be the port Keeper listens on. |
+| The web app does not load, or the browser blocks requests (CSP) | Open it at the address `make up` printed (`LOREBASE_WEB_PORT`), not through another host name or a tunnel: the policy allows connections to the origin that served the page. Add other origins with `LOREBASE_WEB_CSP_CONNECT_SRC` on the `web` service. |
+| The assistant (Guide) does not answer from the web app | Start the `assistant` profile and set `WEB_GUIDE_URL=/guide` in `.env`, then `make up` again. A `502` on `/guide/` means Guide is not running. |
+| The contributor dev server (`pnpm dev`) cannot reach Keeper | `LOREBASE_KEEPER_PROXY` must be set when `pnpm dev` starts and must name Keeper's port; `.env.local` must hold `VITE_API_MODE=live` and `VITE_KEEPER_BASE_URL=/`. Restart `pnpm dev` after a change. |
 | The MCP host shows no Lorebase tools | The host could not start `uv`: give its absolute path (`which uv`) in `command`, and the absolute path of the clone after `--directory`. Check Herald with the script of [section 3](#3-connect-an-agent-over-mcp). |
 | Herald answers `[not-found]` | `LOREBASE_DOMAIN` names a Domain that does not exist, or `LOREBASE_BRANCH` a branch without the Record. |
 | `inference-check`: connection refused or timeout | Ollama is not reachable from the containers: in Docker the address is `http://ollama:11434/v1` (profile `local-models`), on the host `http://host.docker.internal:11434/v1` with `--no-deps`. |
@@ -359,10 +375,10 @@ machine; a machine that has never pulled them spends a few more minutes in `make
 | 2.1 | `git clone` | 6 s |
 | 2.1 | `uv sync --all-packages`, empty uv cache | 29 s (1 s with a warm cache) |
 | 2.2 | `make env` | under 1 s |
-| 2.3 | `make up` (image build, Postgres, migrations, Keeper healthy) | 27 s; the image alone with `--no-cache`: 27 s |
+| 2.3 | `make up` (backend and web images, Postgres, migrations, Keeper and web healthy) | TBD |
 | 2.4 | `make example-data` | 4 s |
 | 2.5 | first query, CLI and curl | 1 s |
-| 2.6 | `pnpm install`, empty store; `pnpm dev` until ready | 11 s; 2 s |
+| 2.6 | open the web app (already running); contributor path: `pnpm install`, empty store; `pnpm dev` until ready | 0 s; 11 s; 2 s |
 | 3 | Herald check script (start, list tools, one search) | 3 s |
 | 4 | `inference-check`, Ollama in Docker, first time (7 GB image, `qwen2.5:1.5b-instruct`, CPU) | 645 s; 209 s with the image already pulled |
 | 4 | `inference-check`, Ollama on the host (`lfm2.5:8b`) | 9 s |
