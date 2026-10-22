@@ -80,8 +80,9 @@ class DatabaseSettings(SectionModel):
         description="Database role the services connect as (subject to row-level security). "
         "Read by migrations only: revisions 0005 and 0008 grant it EXECUTE on the security "
         "definer read functions, which are revoked from PUBLIC, and 0008 refuses to run while "
-        "it may create objects in the schema of the tables or of pg_trgm. Empty grants nothing "
-        "(the owner role can still call them).",
+        "it may create objects in the schema of the tables or of pg_trgm; 0015 revokes UPDATE, "
+        "DELETE and TRUNCATE on audit_log from it. Empty grants nothing (the owner role can "
+        "still call them).",
     )
     read_dsn: tuple[SecretValue, ...] = Field(
         default=(),

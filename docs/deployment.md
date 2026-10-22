@@ -93,13 +93,13 @@ connect as the role that owns the tables.
 | Role | Used by | Rights |
 |------|---------|--------|
 | Owner (compose: `POSTGRES_USER`, a superuser of the stack's own Postgres) | `migrate` (`alembic upgrade head`), `database.maintenance_dsn` (index jobs run by Scribe, `python -m lorebase_keeper bootstrap` and `principal create`) | Owns the schema, tables and the security definer read functions |
-| Application (compose: `LOREBASE_APP_USER`, default `lorebase_app`) | Keeper and Scribe (`database.dsn`), read replicas (`database.read_dsn`) | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`; `SELECT, INSERT, UPDATE, DELETE` on the tables, `USAGE, SELECT` on the sequences, `CONNECT, TEMPORARY` on the database, `EXECUTE` on the read functions; no `CREATE` anywhere |
+| Application (compose: `LOREBASE_APP_USER`, default `lorebase_app`) | Keeper and Scribe (`database.dsn`), read replicas (`database.read_dsn`) | `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`; `SELECT, INSERT, UPDATE, DELETE` on the tables except `audit_log`, which is append-only (`SELECT, INSERT`, revision `0015`), `USAGE, SELECT` on the sequences, `CONNECT, TEMPORARY` on the database, `EXECUTE` on the read functions; no `CREATE` anywhere |
 
 On compose, the one-shot `db-roles` (`deploy/compose/postgres/app-role.sh`) runs before the
 migrations on every `up`: it creates or updates the application role with the password of
 `LOREBASE_APP_PASSWORD`, revokes `CREATE` on `public` from `PUBLIC`, grants the rights above
 on the existing tables and, through default privileges of the owner, on every table later
-migrations create, and grants the read functions when an earlier migration already created
+migrations create, takes `UPDATE` and `DELETE` on `audit_log` back, and grants the read functions when an earlier migration already created
 them. It is idempotent, so a volume created before the role existed is converted on the next
 `up`. `migrate` runs as the owner with `database.application_role` set to the application role,
 so revisions `0005` and `0008` grant it `EXECUTE` on the read functions. Index DDL needs the owner, so

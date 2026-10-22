@@ -6,8 +6,9 @@
 # instead, a role without SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE or REPLICATION, so the
 # `domain_isolation` policies apply to every statement they run. The role may read and write
 # the rows of the tables in the public schema (present and future ones, through default
-# privileges of the owner) and nothing else; revision 0005 grants it EXECUTE on the read
-# functions when the migration runs with database.application_role set to it.
+# privileges of the owner) and nothing else, except UPDATE and DELETE on audit_log, which is
+# append-only (revision 0015); revision 0005 grants it EXECUTE on the read functions when the
+# migration runs with database.application_role set to it.
 #
 # The script is idempotent and runs before the migrations on every `up`, so it also works on a
 # volume created before this role existed and picks up a changed APP_PASSWORD.
@@ -40,6 +41,12 @@ SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'role') \gexec
 SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I',
               :'role') \gexec
 SELECT format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %I', :'role') \gexec
+-- The audit log is append-only for the services (revision 0015): the grant above gave the
+-- role UPDATE and DELETE on it again, so take them back.
+SELECT format('REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.audit_log '
+              'FROM %I', :'role')
+WHERE to_regclass('public.audit_log') IS NOT NULL
+\gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public '
               'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', current_user, :'role')
 \gexec

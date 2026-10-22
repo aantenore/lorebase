@@ -291,6 +291,22 @@ outage ends or a timeout applies; one sign-in at a time per browser (a second ta
 replaces the first one's state cookie); the per-session refresh is serialized by a lease, not a
 lock, so a refresh that fails mid-way waits `refresh_lease_s` before the next attempt.
 
+## Hardening from the threat model
+
+The [threat model](threat-model.md) listed residual risks by priority. Each fix below has its own
+commit and tests.
+
+**Audit log append-only for the application role**
+(`packages/store/migrations/versions/0015_append_only_audit_log.py`,
+`deploy/compose/postgres/app-role.sh`). Revision `0015` revokes `UPDATE`, `DELETE`, `TRUNCATE`,
+`REFERENCES` and `TRIGGER` on `audit_log` from `PUBLIC`, from `database.application_role` and from
+every other role holding them except the owner; the compose `db-roles` script, which re-grants row
+rights on every start, takes them back on `audit_log`. No code path updates, deletes or prunes
+audit entries, so no maintenance-role or definer function was needed. Test:
+`packages/store/tests/auth/test_audit_append_only_integration.py` (the application role appends
+and reads, and gets SQLSTATE 42501 on `UPDATE`, `DELETE` and `TRUNCATE`; the downgrade gives the
+rights back).
+
 ## Other observations
 
 - **Prompt injection.** The extraction model gets no tools, its output is validated against a

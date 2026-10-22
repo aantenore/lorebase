@@ -438,6 +438,10 @@ Revision `0002` adds what the merge API needs (design 6.10, 11.1):
   entries per query, and checks each entry against the previous entry of its own chain. With `after_seq`, the first entry of each chain in the range is trusted as
   the anchor. Truncating the tail of a chain is not detectable from the chain alone.
 - Appends and verification run with the RLS bypass; listing a Domain's entries is scoped to it.
+- The log is append-only below the owner: revision `0015` revokes `UPDATE`, `DELETE`, `TRUNCATE`,
+  `REFERENCES` and `TRIGGER` on `audit_log` from `PUBLIC`, from `database.application_role` and
+  from every other role holding them, so the services can only `SELECT` and `INSERT`. No code
+  prunes entries; retention or erasure, if ever needed, is done as the owner.
 
 ## Tests
 

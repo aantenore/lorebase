@@ -91,6 +91,10 @@ def test_the_application_password_is_required() -> None:
 def test_the_application_role_is_created_without_privileges_that_skip_rls() -> None:
     script = ROLE_SCRIPT.read_text()
     assert "NOSUPERUSER NOBYPASSRLS" in script
+    # Re-granting row rights on every start must not undo revision 0015.
+    grant = script.index("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES")
+    assert script.index("REVOKE UPDATE, DELETE, TRUNCATE") > grant
+    assert "public.audit_log" in script
     roles = services(BASE_ENV)["db-roles"]
     assert roles["environment"]["APP_USER"] == "app"
     assert roles["environment"]["POSTGRES_USER"] == "owner"
