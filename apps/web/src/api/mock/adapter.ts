@@ -32,6 +32,7 @@ import { assertShape, attemptOf, runMerge } from './merge';
 import { createSourcesMock } from './sources';
 import { evaluateSchemaChanges } from './schema-changes';
 import { buildHrDomain } from './sample/hr';
+import { generatePerfGraph } from './perf-graph';
 import { buildSupplyDomain } from './sample/supply';
 import {
   headOf,
@@ -47,6 +48,8 @@ export interface MockOptions {
   pageSize: number;
   searchLimit: number;
   maxNodes: number;
+  /** Serve a generated graph of this size from every neighborhood query (performance runs). */
+  perfGraph?: { nodes: number; edges: number } | null;
   /** Seed data; defaults to the sample Domains. */
   seed?: MockSeed;
 }
@@ -451,6 +454,13 @@ export function createMockApi(options: MockOptions): KeeperApi {
       traverse: () => Promise.reject(notSupported('Traversal')),
       neighborhood: (scope, request) => {
         const { data, revision } = scoped(scope);
+        const perf = options.perfGraph;
+        if (perf !== undefined && perf !== null) {
+          const kinds = data.schema.kinds.map((k) => k.api_name);
+          const size = Math.min(perf.nodes, request.max_nodes ?? options.maxNodes);
+          const graph = generatePerfGraph(size, perf.edges, kinds);
+          return Promise.resolve({ revision, ...graph, truncated: size < perf.nodes });
+        }
         return Promise.resolve({ revision, ...neighborhood(data, request, options.maxNodes) });
       },
     },

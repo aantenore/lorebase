@@ -25,7 +25,9 @@ export interface AppConfig {
   apiToken: string | null;
   pageSize: number;
   searchLimit: number;
-  canvas: { depth: number; maxNodes: number; layoutIterations: number };
+  canvas: CanvasConfig;
+  /** Mock API only: serve a generated graph of this size from every neighborhood query. */
+  mockPerfGraph: { nodes: number; edges: number } | null;
   queryStaleMs: number;
   toastMs: number;
   mockLatencyMs: number;
@@ -37,6 +39,41 @@ export interface AppConfig {
   documents: DocumentsConfig;
   /** Extraction item review in Review. */
   extraction: ExtractionConfig;
+}
+
+export interface CanvasConfig {
+  depth: number;
+  maxNodes: number;
+  /** ForceAtlas2 iterations run on the main thread before the first draw (small graphs only). */
+  layoutIterations: number;
+  /** Largest graph that is pre-laid out on the main thread; bigger ones start unsettled. */
+  prelayoutMaxNodes: number;
+  /** Web worker layout: how long it may run and when it counts as settled. */
+  layout: {
+    /** Hard stop for a layout run, in milliseconds. */
+    timeBudgetMs: number;
+    /** Interval between two convergence samples, in milliseconds. */
+    sampleMs: number;
+    /** Mean node move per sample, as a fraction of the graph extent, under which it is settled. */
+    convergence: number;
+    /** Consecutive settled samples needed before the layout stops. */
+    stableSamples: number;
+    /** From this many nodes ForceAtlas2 uses the Barnes-Hut approximation. */
+    barnesHutMinNodes: number;
+  };
+  /** Thinning of what is drawn as the graph grows. */
+  detail: {
+    /** Above this many nodes only the larger nodes get a label. */
+    labelsMaxNodes: number;
+    /** Node size (pixels) a node needs to get a label in a dense graph. */
+    denseLabelMinSize: number;
+    /** Above this many edges edge labels are not drawn. */
+    edgeLabelsMaxEdges: number;
+    /** From this many edges they are hidden while the view moves. */
+    hideEdgesOnMoveMinEdges: number;
+    /** Edges listed in the textual list view; the rest is summarized. */
+    listMaxEdges: number;
+  };
 }
 
 export interface DocumentsConfig {
@@ -93,6 +130,17 @@ const NON_FUNCTIONAL_DEFAULTS = {
   canvasDepth: 2,
   canvasMaxNodes: 200,
   canvasLayoutIterations: 100,
+  canvasPrelayoutMaxNodes: 500,
+  canvasLayoutTimeBudgetMs: 20_000,
+  canvasLayoutSampleMs: 500,
+  canvasConvergence: 0.01,
+  canvasStableSamples: 3,
+  canvasBarnesHutMinNodes: 1000,
+  canvasLabelsMaxNodes: 300,
+  canvasDenseLabelMinSize: 14,
+  canvasEdgeLabelsMaxEdges: 300,
+  canvasHideEdgesOnMoveMinEdges: 2000,
+  canvasListMaxEdges: 500,
   queryStaleMs: 30_000,
   toastMs: 5000,
   mockLatencyMs: 0,
@@ -162,6 +210,16 @@ function tiers(raw: RawEnv, key: string, fallback: readonly number[]): number[] 
     throw new ConfigError(`${key} must list tiers among 0, 1 and 2, got "${values.join(',')}".`);
   }
   return [...new Set(parsed)].sort((a, b) => a - b);
+}
+
+/** `VITE_MOCK_PERF_NODES` and `VITE_MOCK_PERF_EDGES` together switch on the generated graph. */
+function mockPerfGraph(raw: RawEnv): AppConfig['mockPerfGraph'] {
+  const nodes = text(raw, 'VITE_MOCK_PERF_NODES');
+  if (nodes === undefined) return null;
+  return {
+    nodes: positiveInt(raw, 'VITE_MOCK_PERF_NODES', 0, 2),
+    edges: positiveInt(raw, 'VITE_MOCK_PERF_EDGES', Number(nodes) * 2, 0),
+  };
 }
 
 function parseBaseUrl(value: string): string {
@@ -244,7 +302,71 @@ export function loadConfig(raw: RawEnv): AppConfig {
         'VITE_CANVAS_LAYOUT_ITERATIONS',
         NON_FUNCTIONAL_DEFAULTS.canvasLayoutIterations,
       ),
+      prelayoutMaxNodes: positiveInt(
+        raw,
+        'VITE_CANVAS_PRELAYOUT_MAX_NODES',
+        NON_FUNCTIONAL_DEFAULTS.canvasPrelayoutMaxNodes,
+        0,
+      ),
+      layout: {
+        timeBudgetMs: positiveInt(
+          raw,
+          'VITE_CANVAS_LAYOUT_TIME_BUDGET_MS',
+          NON_FUNCTIONAL_DEFAULTS.canvasLayoutTimeBudgetMs,
+        ),
+        sampleMs: positiveInt(
+          raw,
+          'VITE_CANVAS_LAYOUT_SAMPLE_MS',
+          NON_FUNCTIONAL_DEFAULTS.canvasLayoutSampleMs,
+        ),
+        convergence: fraction(
+          raw,
+          'VITE_CANVAS_LAYOUT_CONVERGENCE',
+          NON_FUNCTIONAL_DEFAULTS.canvasConvergence,
+        ),
+        stableSamples: positiveInt(
+          raw,
+          'VITE_CANVAS_LAYOUT_STABLE_SAMPLES',
+          NON_FUNCTIONAL_DEFAULTS.canvasStableSamples,
+        ),
+        barnesHutMinNodes: positiveInt(
+          raw,
+          'VITE_CANVAS_BARNES_HUT_MIN_NODES',
+          NON_FUNCTIONAL_DEFAULTS.canvasBarnesHutMinNodes,
+        ),
+      },
+      detail: {
+        labelsMaxNodes: positiveInt(
+          raw,
+          'VITE_CANVAS_LABELS_MAX_NODES',
+          NON_FUNCTIONAL_DEFAULTS.canvasLabelsMaxNodes,
+          0,
+        ),
+        denseLabelMinSize: positiveInt(
+          raw,
+          'VITE_CANVAS_DENSE_LABEL_MIN_SIZE',
+          NON_FUNCTIONAL_DEFAULTS.canvasDenseLabelMinSize,
+        ),
+        edgeLabelsMaxEdges: positiveInt(
+          raw,
+          'VITE_CANVAS_EDGE_LABELS_MAX_EDGES',
+          NON_FUNCTIONAL_DEFAULTS.canvasEdgeLabelsMaxEdges,
+          0,
+        ),
+        hideEdgesOnMoveMinEdges: positiveInt(
+          raw,
+          'VITE_CANVAS_HIDE_EDGES_ON_MOVE_MIN_EDGES',
+          NON_FUNCTIONAL_DEFAULTS.canvasHideEdgesOnMoveMinEdges,
+        ),
+        listMaxEdges: positiveInt(
+          raw,
+          'VITE_CANVAS_LIST_MAX_EDGES',
+          NON_FUNCTIONAL_DEFAULTS.canvasListMaxEdges,
+          0,
+        ),
+      },
     },
+    mockPerfGraph: mockPerfGraph(raw),
     queryStaleMs: positiveInt(raw, 'VITE_QUERY_STALE_MS', NON_FUNCTIONAL_DEFAULTS.queryStaleMs, 0),
     toastMs: positiveInt(raw, 'VITE_TOAST_MS', NON_FUNCTIONAL_DEFAULTS.toastMs),
     mockLatencyMs: positiveInt(

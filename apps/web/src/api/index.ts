@@ -46,6 +46,7 @@ export function createKeeperApi(config: AppConfig, credentials: Credentials): Ke
       pageSize: config.pageSize,
       searchLimit: config.searchLimit,
       maxNodes: config.canvas.maxNodes,
+      perfGraph: config.mockPerfGraph,
     }),
     config.mockLatencyMs,
   );

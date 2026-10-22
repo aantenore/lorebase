@@ -1,11 +1,23 @@
 import type Sigma from 'sigma';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfig } from '@/config/context';
+import { Button } from '@/ui/button';
 import { useTheme } from '@/ui/theme';
-import { buildGraph, type GraphData } from './graph-model';
+import { buildGraph, layoutSettings, type GraphData } from './graph-model';
+import { LayoutController, type LayoutStatus } from './layout-controller';
+import { createForceAtlasRunner, workerLayoutSupported } from './layout-worker';
+import { renderDetail } from './render-detail';
 
 /** Free space around the graph, in pixels, so labels at the edge stay visible. */
 const STAGE_PADDING = 60;
+
+const LAYOUT_LABELS: Record<LayoutStatus, string> = {
+  idle: 'Layout ready',
+  running: 'Laying out...',
+  settled: 'Layout settled',
+  timeout: 'Layout paused at its time limit',
+  stopped: 'Layout paused',
+};
 
 function cssVar(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -30,10 +42,54 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
   // Sigma 4 renders with WebGL 2; without it the canvas is replaced by a message.
   const [failed, setFailed] = useState(() => typeof WebGL2RenderingContext === 'undefined');
 
+  const { canvas } = config;
+  // The layout controller of the current graph; null where there is no layout to control.
+  const controller = useRef<LayoutController | null>(null);
+  // Null until a worker layout exists for the graph (no worker: positions stay as built).
+  const [layout, setLayout] = useState<LayoutStatus | null>(null);
+  // The click handler is read through a ref so a new callback never rebuilds the renderer.
+  const selectNode = useRef(onSelectNode);
+  useEffect(() => {
+    selectNode.current = onSelectNode;
+  }, [onSelectNode]);
+
+  // Small graphs are laid out here, before the first draw; larger ones are laid out in a worker
+  // after it, so the first draw does not wait for the layout.
   const graph = useMemo(
-    () => buildGraph(data, config.canvas.layoutIterations),
-    [data, config.canvas.layoutIterations],
+    () =>
+      buildGraph(data, data.nodes.length <= canvas.prelayoutMaxNodes ? canvas.layoutIterations : 0),
+    [data, canvas.prelayoutMaxNodes, canvas.layoutIterations],
   );
+
+  // The layout belongs to the graph: it starts once per graph and is not touched by renders,
+  // theme changes or a new selection handler.
+  useEffect(() => {
+    if (failed || graph.order < 2 || !workerLayoutSupported()) return;
+    let cancelled = false;
+    let created: LayoutController | null = null;
+    let unsubscribe: (() => void) | null = null;
+    void createForceAtlasRunner(graph, layoutSettings(graph, canvas.layout.barnesHutMinNodes))
+      .then((runner) => {
+        if (cancelled) {
+          runner.kill();
+          return;
+        }
+        created = new LayoutController(graph, runner, canvas.layout);
+        controller.current = created;
+        unsubscribe = created.subscribe(setLayout);
+        created.start();
+        setLayout(created.status);
+      })
+      .catch((error: unknown) => {
+        console.error('The graph layout could not start.', error);
+      });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      created?.dispose();
+      controller.current = null;
+    };
+  }, [graph, failed, canvas.layout]);
 
   useEffect(() => {
     const element = container.current;
@@ -49,6 +105,7 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
             itemSizesReference: 'screen',
             autoRescaleContent: 'positions',
             stagePadding: STAGE_PADDING,
+            ...renderDetail(graph.order, graph.size, canvas.detail),
           },
           styles: {
             nodes: {
@@ -65,10 +122,10 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
           },
         });
         renderer.on('clickNode', ({ node }) => {
-          onSelectNode?.(node);
+          selectNode.current?.(node);
         });
         renderer.on('clickStage', () => {
-          onSelectNode?.(null);
+          selectNode.current?.(null);
         });
       })
       .catch((error: unknown) => {
@@ -81,15 +138,31 @@ export function GraphCanvas({ data, label, onSelectNode }: GraphCanvasProps) {
       renderer?.kill();
     };
     // The theme choice is a dependency so colors are re-read when it changes.
-  }, [graph, onSelectNode, theme, failed]);
+  }, [graph, theme, failed, canvas.detail]);
 
   return (
     <div
       role="img"
       aria-label={`${label}: ${data.nodes.length} nodes, ${data.edges.length} edges`}
+      data-layout={layout ?? undefined}
       className="relative h-[28rem] rounded-md border border-line bg-surface"
     >
       <div ref={container} className="size-full" />
+      {layout !== null && !failed && (
+        <div className="absolute top-2 left-2 flex items-center gap-2 rounded-md border border-line bg-surface/90 px-2 py-1 text-xs text-muted">
+          <span role="status">{LAYOUT_LABELS[layout]}</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              if (layout === 'running') controller.current?.stop();
+              else controller.current?.start();
+            }}
+          >
+            {layout === 'running' ? 'Pause' : 'Resume'}
+          </Button>
+        </div>
+      )}
       {failed && (
         <p
           role="status"
