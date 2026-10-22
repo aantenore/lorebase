@@ -11,8 +11,19 @@ from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Table, column, select, table, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    Text,
+    bindparam,
+    column,
+    func,
+    select,
+    table,
+    text,
+    tuple_,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +47,22 @@ def chunks[T](items: Sequence[T], size: int) -> Iterator[Sequence[T]]:
         raise ValueError("chunk size must be positive")
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+def pairs_in(
+    first: ColumnElement[Any], second: ColumnElement[Any], pairs: Sequence[tuple[str, str]]
+) -> ColumnElement[bool]:
+    """`(first, second) IN pairs` as a semi-join on two unnested text arrays.
+
+    Postgres plans a row-value `IN` list as one bitmap index scan per pair, and its planning
+    time grows with the list (about half a millisecond per pair); the semi-join plans once
+    and probes the index once per pair.
+    """
+    keys = func.unnest(
+        bindparam(None, [a for a, _ in pairs], type_=ARRAY(Text)),
+        bindparam(None, [b for _, b in pairs], type_=ARRAY(Text)),
+    ).table_valued("first", "second").render_derived()
+    return tuple_(first, second).in_(select(keys.c.first, keys.c.second))
 
 
 def uses_copy(rows: int, writes: WriteSettings) -> bool:

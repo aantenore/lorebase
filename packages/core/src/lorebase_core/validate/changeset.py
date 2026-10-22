@@ -12,7 +12,7 @@ a deleted Record always restrict the deletion.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -395,19 +395,18 @@ class _Batch:
     def final_link_count(
         self,
         relation: Relation,
-        added: list[LinkIdentity],
-        removed: list[LinkIdentity],
+        added: Counter[str],
+        removed: Counter[str],
         *,
         from_key: str | None = None,
         to_key: str | None = None,
     ) -> int:
-        def matches(identity: LinkIdentity) -> bool:
-            return (from_key is None or identity.from_key == from_key) and (
-                to_key is None or identity.to_key == to_key
-            )
-
+        """Links of `relation` from `from_key` (or to `to_key`) once the batch applies; `added`
+        and `removed` count the batch's new and removed Links per key of that side."""
+        key = from_key if from_key is not None else to_key
+        assert key is not None
         existing = self.index.count_links(relation.id, from_key=from_key, to_key=to_key)
-        return existing - sum(map(matches, removed)) + sum(map(matches, added))
+        return existing - removed[key] + added[key]
 
     def check_cardinality(self) -> None:
         for relation in self.schema.relations.values():
@@ -427,11 +426,15 @@ class _Batch:
                     groups[identity.from_key if side == "from" else identity.to_key].append(
                         identity
                     )
+                removed_by = Counter(
+                    identity.from_key if side == "from" else identity.to_key for identity in removed
+                )
+                added_by = Counter({key: len(competing) for key, competing in groups.items()})
                 for key, competing in sorted(groups.items()):
                     count = self.final_link_count(
                         relation,
-                        added,
-                        removed,
+                        added_by,
+                        removed_by,
                         from_key=key if side == "from" else None,
                         to_key=key if side == "to" else None,
                     )
@@ -475,8 +478,10 @@ class _Batch:
                 for identity in removed
                 if self.record_exists(relation.from_kind, identity.from_key)
             )
+            added_by = Counter(identity.from_key for identity in added)
+            removed_by = Counter(identity.from_key for identity in removed)
             for key in sorted(candidates):
-                if self.final_link_count(relation, added, removed, from_key=key) > 0:
+                if self.final_link_count(relation, added_by, removed_by, from_key=key) > 0:
                     continue
                 identity = RecordIdentity(relation.from_kind, key)
                 path = self.record_paths.get(identity) or next(

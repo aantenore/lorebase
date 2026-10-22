@@ -8,6 +8,7 @@ This module implements the plain RFC 8785 rules. The Lorebase value rules
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
@@ -28,6 +29,8 @@ _ESCAPES = {
     0x5C: "\\\\",
 }
 _FIRST_PRINTABLE = 0x20
+#: Characters `_write_string` escapes; a string without any is written as it is.
+_NEEDS_ESCAPE = re.compile(r'[\x00-\x1f"\\]')
 
 
 class CanonicalError(ValueError):
@@ -143,6 +146,9 @@ def _utf16_sort_key(key: str) -> bytes:
 
 
 def _write_string(value: str, out: list[str]) -> None:
+    if _NEEDS_ESCAPE.search(value) is None:
+        out.append(f'"{value}"')
+        return
     out.append('"')
     for char in value:
         code = ord(char)

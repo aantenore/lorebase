@@ -35,7 +35,7 @@ from sqlalchemy.dialects.postgresql import JSONB, REGCONFIG
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_store.bulk import OnConflict, bulk_write, chunks
+from lorebase_store.bulk import OnConflict, bulk_write, chunks, pairs_in
 from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.models import metadata
 from lorebase_store.repositories.refs import RefRepository
@@ -649,7 +649,7 @@ class MaterializedRepository:
                 _link_select(rows).where(
                     self._scope(rows),
                     rows.c.relation_id == relation_id,
-                    tuple_(rows.c.from_key, rows.c.to_key).in_(chunk),
+                    pairs_in(rows.c.from_key, rows.c.to_key, chunk),
                 )
             )
             for row in result.mappings():
@@ -680,7 +680,7 @@ class MaterializedRepository:
             where = (
                 self._scope(MAT_LINKS),
                 MAT_LINKS.c.relation_id == relation_id,
-                tuple_(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key).in_(chunk),
+                pairs_in(MAT_LINKS.c.from_key, MAT_LINKS.c.to_key, chunk),
             )
             if overlay:
                 await self._session.execute(
@@ -1028,7 +1028,7 @@ def _link_keys(relation_id: str, pairs: Sequence[tuple[str, str]]) -> Where:
     def where(rows: FromClause) -> list[ColumnElement[bool]]:
         return [
             rows.c.relation_id == relation_id,
-            tuple_(rows.c.from_key, rows.c.to_key).in_(pairs),
+            pairs_in(rows.c.from_key, rows.c.to_key, pairs),
         ]
 
     return where
