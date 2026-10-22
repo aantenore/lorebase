@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import sys
 
 from lorebase_herald.keeper import KeeperClients
@@ -27,6 +28,10 @@ def main() -> None:
     except ConfigError as exc:
         sys.exit(str(exc))
     configure_logging(settings.logging, service=SERVICE_NAME, stream=sys.stderr)
+    # httpx logs every Keeper request URL at INFO; keep it quiet so record keys stay out of the
+    # logs (on stdio they would land in the agent's stderr).
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(serve(herald, KeeperClients(herald.keeper)))
 

@@ -66,9 +66,11 @@ line, in the output or in logs):
 
 ```bash
 python examples/agent/agent.py --task flag-critical \
-  --base-url https://api.anthropic.com/v1/ --model <model-id> \
+  --base-url https://api.anthropic.com/v1/ --model claude-sonnet-5-5 \
   --api-key-file ~/.config/lorebase/anthropic.key \
   --header-file anthropic-workspace-id=~/.config/lorebase/anthropic.workspace \
+  --temperature none --extra-body '{"thinking": {"type": "between_tools"}}' \
+  --max-total-tokens 150000 \
   --mcp-key-file ~/.config/lorebase/agent.key
 ```
 
@@ -76,6 +78,24 @@ Secrets come from `--api-key-file PATH` or `--api-key-env NAME` (sent as
 `Authorization: Bearer`), and extra headers from `--header NAME=VALUE` (not secret),
 `--header-file NAME=PATH` or `--header-env NAME=VAR`. The Lorebase key comes from
 `--mcp-key-file` or the `LOREBASE_API_KEY` variable.
+
+`--temperature` (env `AGENT_TEMPERATURE`, default `0`) takes a number or `none`, which leaves
+the field out: current Claude models answer HTTP 400 to any `temperature`. `--extra-body`
+(env `AGENT_EXTRA_BODY`) is a JSON object merged into every chat request for server-specific
+options; it cannot replace `model`, `messages`, `tools`, `tool_choice`, `max_tokens`,
+`temperature` or `stream`. Thinking settings per Claude model, as checked on 2026-10-22
+([validation](../../docs/validation.md#live-model-runs)):
+
+| Model | `--extra-body` |
+|-------|----------------|
+| `claude-haiku-5-5` | `{"thinking": {"type": "disabled"}}` |
+| `claude-sonnet-5-5` | `{"thinking": {"type": "between_tools"}}` (`disabled` is refused) |
+| `claude-opus-5-5` | `{"reasoning_effort": "low"}` (thinking cannot be turned off) |
+
+Every step resends the conversation with Herald's tool catalogue, so a hosted run of a
+ready-made task used 45,000 to 90,000 tokens in five or six steps: with the default
+`--max-total-tokens` (60000) most runs ended on the token bound and answered from what they
+had read. Use 150000 for hosted models.
 
 ## Expected output
 
