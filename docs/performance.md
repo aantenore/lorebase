@@ -2,7 +2,7 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
-The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)).
+The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a shared laptop; the neighborhood, full-text search, history and lineage are over it.
 
 ## Dataset
 
@@ -474,6 +474,226 @@ same database. Times include resolving the branch head (Domain, ref, head Revisi
   newest `read.history.lineage_scan_changes` changes, read once per request.
 - Lineage at another Revision (`at`) runs the same statement on a snapshot of the Revision
   (`reading.snapshots`); it was not measured here.
+
+## 10M Records
+
+The M5 target: the harness at 10,001,100 Records and 30,327,660 Links on `main`, run on
+2026-10-22. Every read stays index-driven (plans as at 1M), but on this machine only the reads
+that touch one or two pages per call meet their budget; the neighborhood, full-text search and
+the history reads do not ([Reading the results](#10m-records-reading-the-results)). The
+machine was shared with other test workloads during the whole run (load average 14 to 209 on
+15 cores, median 116), so read every figure as an upper bound.
+
+### Method
+
+```sh
+make perf-10m        # Postgres of tests/perf/compose.yaml, then the command below
+make perf-down       # deletes the Postgres volume and the seeded databases
+```
+
+which runs, against the Postgres of `tests/perf/compose.yaml` (its own compose project
+`lorebase-perf`, port 55410, volume `data`):
+
+```sh
+LOREBASE_TEST_DATABASE_URL=postgresql://perf:perf@127.0.0.1:55410/postgres \
+uv run python tests/perf/bench.py --scale 54060 --replicas 10 --extra-links 4 \
+  --iterations 1000 --warmup 100 --branch-iterations 1 --copy-batches 200 --no-pair-copy \
+  --seed-database perf_seed_10m --in-place --out build/perf/perf-10m.md
+```
+
+- **Fixture.** `--replicas 10` loads a tenth of the dataset (scale 5,406: 1,000,110 Records,
+  3,032,766 Links, the 1M fixture) through the commit pipeline, then copies its materialized
+  rows (`mat_records`, `mat_links`, `mat_history`) nine times with renumbered keys in set-based
+  SQL (`harness.replicate`): Supplier `S-1001` becomes `S-163181` in the first copy, foreign-key
+  values and Link ends follow, unique values (VAT numbers) get the copy's number, Risk flag
+  ULIDs a first character of their own. The word lexicon is counted again from the search
+  vectors, the per-Attribute indexes of `main` and the GIN indexes are built once at the end.
+  Only the materialized head is copied, which is what every read reads; the Revisions, trees
+  and objects stay those of the first tenth, so the copies' rows point to its Revisions.
+- **Why.** Through the commit pipeline the 10M load ran at 10 to 20 s per commit of 10,000
+  changes on this machine once the first million Records were in, about ten hours in all:
+  every commit inserts 10,000 objects and tree nodes under random content hashes, so each one
+  is a random index read and write once those indexes outgrow memory, at about 0.26 ms per page
+  read in this VM. The pipeline itself was made faster on the way (see
+  [Fixes](#10m-records-fixes-found-on-the-way)); the replicated fixture takes about an hour after
+  the 1M load.
+- `--seed-database perf_seed_10m` keeps the fixture; `--in-place` measures it directly (a
+  template copy would need another 63 GB) and removes the branches a run creates, so it can be
+  measured again without loading (the run's commits stay on `main`). An interrupted load
+  resumes where it stopped. The fixture is kept on the perf Postgres; `make perf-down` deletes
+  it.
+- 1,000 timed calls per read and role after 100 warm-up calls, random keys; `owner` (not
+  subject to row-level security) first, then `rls` (subject to `domain_isolation`).
+- `--copy-batches 200` measures the background copy of `main` for 200 batches (request,
+  batches, throughput) and deletes what was copied: a full copy of 80 million rows would take
+  hours here. `--no-pair-copy` compares the overlay with `main` itself instead of with a full
+  copy. Paired measurements alternate which branch reads first since this run; in this run
+  `main` always read first, so the overlay read pages `main` had just loaded.
+- Agent trace overhead: the Keeper application in process (`tests/perf/trace_overhead.py`),
+  each request with and without `X-Lorebase-Trace: on`, response cache and rate limits off.
+
+### Environment
+
+Apple M5 Pro, 15 cores, 24 GiB, Darwin 25.6.0 arm64, Python 3.12.13. Postgres 16.15 with
+pgvector (`pgvector/pgvector:pg16`) in Docker Desktop, VM of 8 GiB; `shared_buffers` 2GB,
+`effective_cache_size` 6GB, `work_mem` 4MB, `maintenance_work_mem` 512MB, `max_wal_size` 16GB
+(`tests/perf/compose.yaml`). The database is 64 GB: `mat_history` 23 GB, `mat_records` 20 GB, `mat_links` 13 GB with their indexes.
+
+### Reads (milliseconds)
+
+| Operation | Target p95 | owner p50 | owner p95 | owner p99 | rls p50 | rls p95 | rls p99 |
+|-----------|-----------:|----------:|----------:|----------:|--------:|--------:|--------:|
+| get by key | 5.00 | 4.03 | **6.08** | 7.49 | 5.02 | **7.15** | 9.42 |
+| list page of 50 | 20.00 | 7.39 | 9.59 | 11.17 | 10.34 | 15.85 | 19.41 |
+| links of a record | 10.00 | 6.87 | 9.15 | 10.58 | 10.70 | **15.97** | 20.46 |
+| 2-hop neighborhood | 30.00 (50.00 in 6.14) | 63.32 | **95.64** | 109.83 | 114.25 | **152.84** | 186.98 |
+| query by indexed attribute | 25.00 | 2.84 | 5.10 | 6.85 | 6.62 | 11.99 | 17.68 |
+| full-text search | 50.00 | 36.36 | **58.72** | 97.23 | 66.35 | **110.92** | 170.85 |
+| typo-tolerant full-text search | 50.00 | 52.64 | **97.44** | 156.33 | 63.78 | **127.35** | 177.40 |
+| partial-match full-text search | 50.00 | 160.03 | **262.83** | 329.46 | 168.80 | **272.95** | 332.85 |
+| record history page | 10.00\* | 11.75 | **17.36** | 24.20 | 12.61 | **27.75** | 43.69 |
+| record lineage | 10.00\* | 11.24 | **16.70** | 22.05 | 13.54 | **23.66** | 51.97 |
+
+\* No budget in design 8.7, held to the budget of Links of a Record. Bold: over budget.
+
+### Agent trace overhead (milliseconds)
+
+| Request | off p50 | on p50 | off p95 | on p95 |
+|---------|--------:|-------:|--------:|-------:|
+| get by key | 17.15 | 16.25 | 40.86 | 33.09 |
+| full-text search | 98.57 | 94.72 | 174.33 | 162.49 |
+| 2-hop neighborhood | 132.49 | 42.06 | 190.10 | 86.22 |
+
+200 timed calls each; all 660 traced calls were written as steps. No overhead shows: the step
+is captured and queued on the request and written off the request path, and the differences are
+noise or, for the neighborhood, the second call of each pair reading the pages the first one
+loaded (the trace-on call went second in this run). Through Keeper a read costs 10 to 60 ms
+more than the store primitive here (the application in process, under this machine's load).
+
+### Writes (milliseconds)
+
+| Operation | Runs | p50 | p95 | max |
+|-----------|-----:|----:|----:|----:|
+| branch creation (copy), request | 1 | 146.90 | 146.90 | 146.90 |
+| branch copy, 200 batches | 1 | 34,633 | 34,633 | 34,633 |
+| branch copy, one batch | 200 | 89.78 | 293.65 | 5,708 |
+| branch deletion, request | 1 | 74.46 | 74.46 | 74.46 |
+| branch deletion, background job | 1 | 6,262 | 6,262 | 6,262 |
+| branch deletion, one batch | 43 | 153.26 | 218.55 | 343.92 |
+| branch creation (overlay) | 20 | 42.18 | 69.17 | 76.60 |
+| commit of 1000 changes | 5 | 3,295 | 4,047 | 4,047 |
+
+- Branch creation answers in 42 ms (overlay) and 147 ms (copy, which starts as an overlay)
+  at 10M Records, as at 100k: neither depends on the size of the Domain.
+- The background copy read 168,132 rows in 200 batches, 4,855 rows per second, each batch
+  within the statement timeout (p95 0.29 s, slowest 5.7 s while other workloads held the
+  machine). At that rate the 80 million rows of `main` take about 4.6 hours here; the copy is
+  readable and writable from the request on.
+- A commit of 1,000 Part updates takes 3.3 s at p50 (0.65 to 2.4 s at 1M, 0.4 s at 100k):
+  validation and materialization read the 1,000 Records and their neighbors, now mostly from
+  disk. Design 6.14 asks for 10,000 Record changes in under 5 s; the seed commits of 10,000
+  changes averaged 9.8 s at 1M Records while the 10M load ran beside them, and were not
+  measured alone at 10M.
+
+### Overlay against `main` (milliseconds)
+
+The overlay `agent/perf` got 1,000 Part updates and `main` 1,000 others since the fork (2,000
+rows of the overlay's own). `main` read first in each pair, so the overlay read warm pages; the
+table compares the cost of the overlay statements on warm pages, not the branches.
+
+| Operation | Role | main p50 | overlay p50 | main p95 | overlay p95 |
+|-----------|------|---------:|------------:|---------:|------------:|
+| get by key | rls | 4.21 | 4.13 | 12.22 | 10.12 |
+| links of a record | rls | 9.98 | 6.60 | 20.97 | 16.23 |
+| 2-hop neighborhood | owner | 110.16 | 15.52 | 180.52 | 29.56 |
+| 2-hop neighborhood | rls | 108.97 | 19.56 | 175.60 | 52.40 |
+| query by indexed attribute | rls | 6.27 | 6.85 | 20.95 | 20.66 |
+| full-text search | rls | 72.09 | 82.79 | 121.45 | 151.53 |
+| record lineage | rls | 11.08 | 9.99 | 29.18 | 28.33 |
+
+Search on the overlay costs 15 to 25% more than on `main` (it merges the overlay's matches with
+the base's), the other reads the same or less on warm pages. The full table is in the run's
+report (`build/perf/perf-10m.md`).
+
+### 10M Records: reading the results
+
+- **One-page reads meet their budget.** Get by key, a page of 50, Links of a Record and the
+  attribute query read one index range and one or a few heap pages: 5 to 16 ms at p95, at or
+  within budget for `owner` and within 1 to 6 ms of it for `rls`. Get by key takes 4 to 5 ms at
+  p50 where it took 1.1 at 100k: the same plan, a heap page missing from memory and this
+  machine's load (a 1,110-Record database measured 4 ms at p50 for the same read during the
+  run).
+- **The neighborhood is bound by pages read from disk.** A call reads about 400 pages that
+  are not in shared buffers (130 Records and 130 Links at random keys), 0.26 ms each here:
+  100 to 150 ms at p95. The same keys read a second time take 15.5 ms at p50 and 29.6 at p95
+  (the overlay rows above). See [2-hop neighborhood on branches](#2-hop-neighborhood-on-branches).
+- **Full-text search grows with the matches of the term.** The GIN index returns every match
+  of a term before `store.reads.search_candidates` bounds the ranking: `bearing` matches
+  240,890 Records here and the bitmap alone takes 129 ms. The generator writes titles from 695
+  distinct words (median 6,200 Records per word, 90th percentile 175,000), so the workload's
+  words are frequent; real titles are far more varied. `gin_fuzzy_search_limit` was tried and
+  returns nothing on the composite `(domain_id, branch, search)` index. Partial matching runs
+  the full match, an OR query and the term count, so it pays this three times.
+- **History and lineage** read the history range of a Record and the Revisions, provenance and
+  Proposals it names: five to eight index lookups, each a page from disk at this size (17 to
+  28 ms at p95, against 8 to 10 at 1M).
+- With the reference hardware of design 6.14 (8 vCPU, 32 GB, NVMe) the hot indexes and a
+  larger share of the heap fit in memory and a page read costs a fraction of this VM's; this
+  run does not show whether the neighborhood and search budgets hold there.
+
+### 10M Records: fixes found on the way
+
+Pushed during this work, each measured and covered by the store and core tests:
+
+| Cause | Fix | Effect |
+|---|---|---|
+| Existing Links looked up by `(from, to)` row-value `IN` lists: Postgres planned one bitmap index scan per pair (0.35 s of planning for 1,000 pairs) | One semi-join on two unnested arrays (`bulk.pairs_in`) | 485 ms to 13 ms per chunk of 1,000 pairs |
+| Cardinality and required-Link checks summed the batch's Links once per key (quadratic in the batch) | Counts per key, once | 15 s of a 140 s profiled load gone |
+| Search vectors of a commit's Records refreshed by filtering every Record of the Kind on the commit's Revision | Refreshed by key | 7 s to milliseconds per statement for a Kind of 200,000 Records |
+| Unique values checked with `values -> attr IN (...)`, which the unique index on `values ->> attr` does not match | The index's expression and predicate | A minute to milliseconds per 1,000 values at 160,000 Suppliers |
+| The background copy counted the base's 85 million rows for its progress report, past the statement timeout: copies failed at 10M | The planner's estimate, replaced by the rows read at the switch | Copies start at 10M |
+| Canonical JSON wrote strings character by character | Strings without characters to escape in one step | 18 s to 1.4 s of a profiled load |
+
+Harness changes: the dataset is generated in shards of at most scale 6,000 (bounded memory),
+`replicate`, the GIN indexes built after the load, materialized rows sent through `COPY` from
+500 rows on during the load, resuming an interrupted load, `--in-place`, `--seed-only`,
+`--copy-batches`, `--no-pair-copy`, the agent trace measurement and paired measurements that
+alternate which side reads first.
+
+### 2-hop neighborhood on branches
+
+At 1M Records the neighborhood was over budget on the copy and the overlay (29 to 42 ms at
+p95) and within it on `main`. Measured again for this run, the cause is the same at both sizes
+and on every branch: pages missing from memory, not the plan. One call reads about 130
+Records and 130 Links with index scans only, about 950 buffers; what changes is how many of
+them are already in shared buffers or the VM's page cache.
+
+- Buffers per call (`EXPLAIN (ANALYZE, BUFFERS)` of the statement, 30 calls with fresh random
+  keys, plain SQL as `owner`, copy branch of the 1M fixture): the hydration of the returned
+  Records read 248 pages from outside shared buffers (one index scan per node, about one heap
+  page each) and the inbound Links of the walk 152 (one heap page per Link found through the
+  reverse index), of 427 read in all.
+- Time per page read at 10M on this machine: 0.26 ms (`track_io_timing`, 209 reads in 54 ms).
+  About 400 reads per call is 100 ms, which is what the cold calls measure.
+- The same keys read a second time: in the overlay comparison of this run each call read the
+  keys `main` had just read, and took 15.5 ms at p50 and 29.6 at p95 against 110 and 181 for
+  `main` (the harness now alternates which branch reads first).
+
+Options evaluated:
+
+| Option | Measured | Result |
+|---|---|---|
+| Header-only hydration through a covering index `(domain_id, branch, kind_id, key) INCLUDE (title)`, values on request | 1M copy branch, 30 calls: hydration reads 86 pages instead of 248 (index-only scan; the index is 215 MB against 3.3 GB of heap); the walk's inbound Links still read 139 | A third fewer page reads per call, not enough cold (about 70 ms), and it changes the response of `POST /neighborhood` (nodes without values) and needs a second index on every branch of every partition, maintained on each commit |
+| Physical locality (`CLUSTER`, ordered copies) | `mat_records` and `mat_links` are already written in primary-key order by the load and by the copy job; the neighbors of a Record are other Records with unrelated keys | Nothing to gain: each neighbor is a different page whatever the order |
+| Lighter payloads for Links too (walk without Link values) | The inbound walk would need `from_key` in the reverse index to run index-only; the covering reverse index with values was withdrawn because of the 2.7 KB entry limit | Same API change as above, plus a wider reverse index |
+
+None of them brings a cold neighborhood within 30 ms on this machine, and each changes the
+API or adds an index to every branch, so none was adopted. The budget holds when the pages a
+neighborhood touches are in memory, which the reference hardware of design 6.14 (32 GB) gives
+for 1M Records and this 8 GiB VM does not; at 10M Records (58 GB of tables and indexes) only
+the hot part of the graph fits on either. Recommendation, left open: an opt-in
+`values: false` on `POST /neighborhood` for agents that only need the structure, with the
+covering index, measured on the reference hardware first.
 
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
