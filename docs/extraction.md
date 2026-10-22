@@ -32,7 +32,10 @@ flowchart LR
    (default backend: Postgres `document_blobs`); uploading the same bytes again returns the
    stored document. An `extraction` job is queued unless `extract` is false.
 2. **Parse and chunk** (Scribe). Markdown and text natively; PDF with `pypdf` and DOCX with
-   `python-docx` (the `documents` extra of `lorebase-scribe`). Chunks follow the structure
+   `python-docx` (the `documents` extra of `lorebase-scribe`), each in a child process without
+   network access and with a wall-clock limit, CPU and address-space limits and a size limit
+   (`scribe.extraction.parser`); a document that breaks one fails its job with a message
+   naming the setting, and the job is not retried. Chunks follow the structure
    (headings, paragraphs, list items, table rows) with overlap; chunk offsets index the parsed
    text and are stored in `document_chunks`. The parsed text itself goes to the blob store;
    `GET /api/v1/domains/{d}/documents/{id}/text` (permission `document.read`) serves it, 404

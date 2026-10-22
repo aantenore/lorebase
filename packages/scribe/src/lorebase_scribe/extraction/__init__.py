@@ -2,6 +2,8 @@
 
 - `parsing`: bytes to text (Markdown and plain text natively, PDF and DOCX with the
   `documents` extra);
+- `sandbox`: PDF and DOCX parsed in a child process with time, CPU, memory and size limits and
+  no network;
 - `text`: structure-aware chunks and sentences with stable offsets;
 - `ontology`: what the schema tells the extractors (labels, key patterns, cues, the tier 2
   JSON schema and prompt);

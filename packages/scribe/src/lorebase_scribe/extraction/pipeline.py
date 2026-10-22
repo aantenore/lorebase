@@ -18,7 +18,6 @@ stats; a tier 2 model that cannot be created fails the job.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import time
@@ -61,8 +60,9 @@ from lorebase_scribe.extraction.matching import (
     tier0_mentions,
 )
 from lorebase_scribe.extraction.ontology import Ontology, build_ontology
-from lorebase_scribe.extraction.parsing import ParseError, parse_document
+from lorebase_scribe.extraction.parsing import ParseError
 from lorebase_scribe.extraction.relations import cooccurrence_links, heading_links, model_links
+from lorebase_scribe.extraction.sandbox import parse_isolated
 from lorebase_scribe.extraction.settings import ExtractionSettings
 from lorebase_scribe.extraction.text import (
     Chunk,
@@ -519,7 +519,12 @@ class ExtractionRun:
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
             data = await self._blobs.get(session, domain_id, document.blob_ref)
-        parsed = await asyncio.to_thread(parse_document, data, document.media_type)
+        parsed = await parse_isolated(
+            data,
+            document.media_type,
+            self._settings.parser,
+            max_chars=self._settings.max_document_chars,
+        )
         text = parsed.text
         report.warnings.extend(f"{document.id}: {w}" for w in parsed.warnings)
         if len(text) > self._settings.max_document_chars:
