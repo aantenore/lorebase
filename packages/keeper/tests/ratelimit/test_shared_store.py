@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lorebase_keeper.ratelimit.bucket import BucketSpec, InMemoryRateStore
 from lorebase_keeper.ratelimit.config import PostgresRateSettings
 from lorebase_keeper.ratelimit.shared import PostgresRateStore
+from lorebase_store import ratelimit as buckets
 
 SPEC = BucketSpec(capacity=2, refill_per_s=0.001)
 
@@ -64,7 +65,45 @@ async def test_allow_and_deny(mode: str, allowed: bool) -> None:
 
 async def test_failed_authentication_buckets_fail_closed_when_the_database_is_slow() -> None:
     sessions = Unreachable(slow=True)
-    failures = store(sessions, fail_closed=True, timeout_s=0.01, on_error="allow")
+    failures = store(sessions, fail_closed=True, auth_failures_timeout_s=0.01, on_error="allow")
     assert not (await failures.peek("auth_failures|addr:192.0.2.1", SPEC)).allowed
     assert not (await failures.take("auth_failures|addr:192.0.2.1", SPEC)).allowed
     assert sessions.opened == 2
+
+
+class Flaky:
+    """Sessions that work until `down` is set."""
+
+    def __init__(self) -> None:
+        self.down = False
+
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[Any]:
+        if self.down:
+            raise ConnectionError("database unreachable")
+
+        class Session:
+            @asynccontextmanager
+            async def begin(self) -> AsyncIterator[None]:
+                yield
+
+        yield Session()
+
+    def __call__(self) -> Any:
+        return self._session()
+
+
+async def test_a_recent_reading_keeps_known_clients_in_during_an_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def read(session: Any, key: str) -> buckets.BucketReading:
+        return buckets.BucketReading(None, 100.0, 100.0)  # never failed: full
+
+    monkeypatch.setattr(buckets, "read", read)
+    sessions = Flaky()
+    failures = store(cast("Unreachable", sessions), fail_closed=True, check_cache_s=0)
+    known, unknown = "auth_failures|addr:192.0.2.1", "auth_failures|addr:192.0.2.2"
+    assert (await failures.peek(known, SPEC)).allowed
+    sessions.down = True
+    assert (await failures.peek(known, SPEC)).allowed
+    assert not (await failures.peek(unknown, SPEC)).allowed

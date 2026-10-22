@@ -198,3 +198,45 @@ def test_audit_verify_compares_the_log_with_signed_checkpoints(
     [invalid] = report["checkpoints"]["invalid"]
     assert "forged.json" in invalid
     assert audit.calls == [{"after_seq": 0, "domain_id": "acme"}]
+
+
+@pytest.mark.parametrize(
+    ("stamp", "extra", "problem"),
+    [
+        (None, [], "no valid checkpoint"),
+        (datetime(2020, 1, 1, tzinfo=UTC), ["--max-age", "3600"], "--max-age 3600"),
+    ],
+)
+def test_audit_verify_needs_recent_checkpoints(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    stamp: datetime | None,
+    extra: list[str],
+    problem: str,
+) -> None:
+    key = Ed25519PrivateKey.generate()
+    public = tmp_path / "checkpoint.pub"
+    public.write_bytes(
+        key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    )
+    folder = tmp_path / "checkpoints"
+    folder.mkdir()
+    if stamp is not None:
+        head = ChainHead("acme", 3, b"\x01" * 32)
+        old = Checkpoint(AuditStream.ACTIONS, stamp, "main", (head,))
+        (folder / "old.json").write_bytes(signed_document(old, key))
+    _fake_store(monkeypatch, ChainVerification(5, chains=1, last_seq=8))
+    argv = [
+        "audit",
+        "verify",
+        "acme",
+        "--checkpoints",
+        str(folder),
+        "--checkpoint-key",
+        str(public),
+    ]
+    with pytest.raises(SystemExit) as caught:
+        entrypoint.main([*argv, *extra])
+    assert caught.value.code == 1
+    assert problem in capsys.readouterr().out

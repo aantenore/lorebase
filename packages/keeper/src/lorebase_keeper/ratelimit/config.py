@@ -154,11 +154,24 @@ class PostgresRateSettings(SectionModel):
         "read (`deny`, and failed-authentication buckets).",
     )
     check_cache_s: float = Field(
-        default=1.0,
+        default=0.5,
         ge=0,
         description="How long a reading of a failed-authentication bucket serves the checks "
         "made before each authentication (which take nothing). Failures themselves are always "
-        "written at once.",
+        "written at once; with N Keepers a client may get up to (N-1) x this much of the "
+        "failure rate beyond the limit.",
+    )
+    auth_failures_timeout_s: float = Field(
+        default=1.0,
+        gt=0,
+        description="Time budget of a query of a failed-authentication bucket, waiting for a "
+        "pooled connection included. Past it the bucket fails closed.",
+    )
+    stale_reading_s: float = Field(
+        default=30.0,
+        ge=0,
+        description="While failed-authentication buckets cannot be read, a reading of the same "
+        "bucket at most this old still decides; only clients without one are refused (429).",
     )
     prune_interval_s: float = Field(
         default=60.0,

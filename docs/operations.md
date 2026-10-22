@@ -212,8 +212,11 @@ python -m lorebase_keeper audit verify --all --checkpoints ./checkpoints --check
 `--checkpoints` takes files or directories (searched for `*.json`) and is repeatable; only the
 checkpoints of the stream verified are compared (`--reads` for the read stream). The run exits 1
 when a checkpointed entry is `missing` (the tail of a chain was cut) or `changed` (a chain was
-recomputed), or when a file is not a checkpoint signed by that key; `--json` lists them under
-`checkpoints`. Entries newer than the latest checkpoint are not covered.
+recomputed), when a file is not a checkpoint signed by that key, when no checkpoint of the
+stream is found, or, with `--max-age SECONDS`, when the newest one is older (publication
+stopped: someone holding the database could have removed the jobs). `--json` lists them under
+`checkpoints`. Entries newer than the latest checkpoint are not covered: run it with
+`--max-age` a little above `interval_s`.
 
 ### Read auditing
 
@@ -230,7 +233,9 @@ included. Query strings, bodies and values are never recorded.
 - Records are queued (`queue_size`) and written in batches (`batch_size`, at least every
   `flush_interval_s`), one transaction each, never on the request path. A full queue or a batch
   that fails within `write_timeout_s` drops records: `lorebase.audit.reads.dropped{reason}`
-  (`queue_full`, `write_failed`, `shutdown`); written ones count in `lorebase.audit.reads.recorded`.
+  (`queue_full`, `write_failed`, `shutdown`) and `sensitive`; written ones count in
+  `lorebase.audit.reads.recorded`. The last tenth of the queue takes only sensitive reads, and a
+  batch holding one is tried twice; alert on drops with `sensitive="true"`.
 - The read stream has hash chains of its own, so it never slows down or breaks those of
   actions. Verify it with `audit verify --reads`; the daily `audit_verify` job checks both
   streams (`lorebase_audit_verifications_total{stream}`), and checkpoints cover both.
@@ -277,9 +282,11 @@ use a bucket of their own.
   serves requests from them until they run out or `lease_ttl_s` passes, so most requests cost no
   query and the Keepers together never exceed a limit (unused leased tokens are lost: limits are
   slightly stricter, never looser). Failed-authentication buckets take one token per `401` and are
-  checked from a reading at most `check_cache_s` old. When a query does not answer within
-  `timeout_s`, failed-authentication checks answer `429` (fail closed) and the other buckets
-  follow `on_error`: `local` (default, the in-process buckets meanwhile), `allow` or `deny`;
+  checked from a reading at most `check_cache_s` old. When their query does not answer within
+  `auth_failures_timeout_s`, failed-authentication checks answer `429` (fail closed) unless a
+  reading of the same bucket at most `stale_reading_s` old allows the request, so an outage
+  refuses unknown clients rather than every client. When a query of another bucket does not
+  answer within `timeout_s`, it follows `on_error`: `local` (default, the in-process buckets meanwhile), `allow` or `deny`;
   `lorebase.ratelimit.shared.queries{store,outcome}` counts the queries. Rows of full buckets are
   pruned every `prune_interval_s`. A crash of the database server empties the table (buckets
   start full). Compose: set `KEEPER_RATE_LIMIT_BACKEND=postgres` with the `scale-out` profile;

@@ -10,10 +10,11 @@ are lost, which only makes it stricter.
 
 Failed-authentication buckets lease one token per failure and are checked before every
 authentication from a reading cached for `postgres.check_cache_s`. They fail closed: when the
-database cannot be read in `postgres.timeout_s`, a request presenting a credential is answered
-429. Other buckets follow `postgres.on_error`: `local` (the default) enforces the limits in
-this process until the database answers again, `allow` lets requests through, `deny` refuses
-them.
+database cannot be read in `postgres.auth_failures_timeout_s`, a request presenting a
+credential is answered 429, unless a reading of its bucket at most `postgres.stale_reading_s`
+old still allows it (so an outage refuses unknown clients, not every client). Other buckets
+follow `postgres.on_error`: `local` (the default) enforces the limits in this process until
+the database answers again, `allow` lets requests through, `deny` refuses them.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ logger = logging.getLogger("lorebase.keeper.limits")
 
 LEASE_SHARE = 4
 """A lease is at most 1/LEASE_SHARE of its bucket, so several Keepers can hold one at once."""
+PRUNE_ROUNDS = 10
+"""Batches one prune deletes at most."""
 
 
 @dataclass(slots=True)
@@ -97,6 +100,7 @@ class PostgresRateStore:
         self._max = max_buckets
         self._fallback = fallback
         self._fail_closed = fail_closed
+        self._timeout = settings.auth_failures_timeout_s if fail_closed else settings.timeout_s
         self._lease_tokens = lease_tokens or settings.lease_tokens
         self._prune = prune
         self._label = label
@@ -138,7 +142,7 @@ class PostgresRateStore:
                 return _decision(spec, entry.leased + entry.shared, True, cost)
             self._maybe_prune()
             try:
-                async with asyncio.timeout(self._settings.timeout_s):
+                async with asyncio.timeout(self._timeout):
                     async with self._sessions() as session, session.begin():
                         lease = await buckets.lease(
                             session,
@@ -166,17 +170,25 @@ class PostgresRateStore:
         now = self._clock()
         if entry.reading is None or now - entry.read_at > self._settings.check_cache_s:
             try:
-                async with asyncio.timeout(self._settings.timeout_s):
+                async with asyncio.timeout(self._timeout):
                     async with self._sessions() as session, session.begin():
                         reading = await buckets.read(session, key)
             except Exception as error:
-                return await self._failed(error, "peek", key, spec, cost)
-            self._queries.add(1, {"store": self._label, "outcome": "ok"})
-            entry.reading, entry.read_at = reading, self._clock()
-        reading = entry.reading
-        assert reading is not None
-        state = None if reading.tokens is None else BucketState(reading.tokens, reading.updated)
-        _, decision = take(state, spec, reading.now + (self._clock() - entry.read_at), cost)
+                stale = entry.reading is not None and (
+                    now - entry.read_at <= self._settings.stale_reading_s
+                )
+                if not stale:
+                    return await self._failed(error, "peek", key, spec, cost)
+                # A recent reading of this bucket still decides: only clients the database
+                # never saw recently are refused while it does not answer.
+                self._queries.add(1, {"store": self._label, "outcome": "stale"})
+            else:
+                self._queries.add(1, {"store": self._label, "outcome": "ok"})
+                entry.reading, entry.read_at = reading, self._clock()
+        known = entry.reading
+        assert known is not None
+        state = None if known.tokens is None else BucketState(known.tokens, known.updated)
+        _, decision = take(state, spec, known.now + (self._clock() - entry.read_at), cost)
         return decision
 
     async def _failed(
@@ -210,9 +222,12 @@ class PostgresRateStore:
 
     async def _prune_once(self) -> None:
         try:
-            async with asyncio.timeout(max(self._settings.timeout_s, 5.0)):
-                async with self._sessions() as session, session.begin():
-                    await buckets.prune(session, limit=self._settings.prune_batch)
+            batch = self._settings.prune_batch
+            async with asyncio.timeout(max(self._settings.timeout_s, 5.0) * PRUNE_ROUNDS):
+                for _ in range(PRUNE_ROUNDS):  # until a batch comes back short
+                    async with self._sessions() as session, session.begin():
+                        if await buckets.prune(session, limit=batch) < batch:
+                            break
         except Exception:
             logger.warning("cannot prune the shared rate limit buckets", exc_info=True)
         finally:

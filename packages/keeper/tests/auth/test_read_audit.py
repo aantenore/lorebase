@@ -36,8 +36,10 @@ class Sink:
     def __init__(self) -> None:
         self.batches: list[list[NewAuditEntry]] = []
         self.fail = False
+        self.attempts = 0
 
     async def __call__(self, entries: Sequence[NewAuditEntry]) -> None:
+        self.attempts += 1
         if self.fail:
             raise RuntimeError("database down")
         self.batches.append(list(entries))
@@ -148,21 +150,33 @@ async def test_writes_are_batched_and_drops_are_counted() -> None:
     sink = Sink()
     settings = ReadAuditSettings(enabled=True, queue_size=3, batch_size=2, flush_interval_s=0.01)
     reads = ReadAuditor(settings, sink, meter_provider=MeterProvider(metric_readers=[reader]))
-    offered = [reads.offer(NewAuditEntry(actor="usr_1", action="read")) for _ in range(5)]
-    assert offered == [True, True, True, False, False]  # nothing written yet: the queue is full
+    plain = NewAuditEntry(actor="usr_1", action="read")
+    sensitive = NewAuditEntry(actor="usr_1", action="read", details={"sensitive": ["shown"]})
+    offered = [reads.offer(plain) for _ in range(3)]
+    # nothing written yet; the last place is kept for sensitive reads
+    assert offered == [True, True, False]
+    assert reads.offer(sensitive)
+    assert not reads.offer(sensitive)  # the queue is full
     await reads.flush()
     assert [len(b) for b in sink.batches] == [2, 1]
     sink.fail = True
-    assert reads.offer(NewAuditEntry(actor="usr_1", action="read"))
+    assert reads.offer(plain)
+    assert reads.offer(sensitive)
     await reads.flush()
     await reads.aclose()
     dropped = {
-        point.attributes["reason"]: point.value
+        (point.attributes["reason"], point.attributes["sensitive"]): point.value
         for metric in reader.get_metrics_data().resource_metrics[0].scope_metrics[0].metrics
         if metric.name == "lorebase.audit.reads.dropped"
         for point in metric.data.data_points
     }
-    assert dropped == {"queue_full": 2, "write_failed": 1}
+    assert dropped == {
+        ("queue_full", False): 1,
+        ("queue_full", True): 1,
+        ("write_failed", False): 1,
+        ("write_failed", True): 1,  # after its retry
+    }
+    assert sink.attempts == 4  # two batches, then one batch tried twice
 
 
 async def test_notes_belong_to_their_request() -> None:
