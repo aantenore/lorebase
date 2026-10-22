@@ -297,6 +297,11 @@ def create_app(
     )
     app.state.runtime = runtime
     http = settings.http
+    if http.origins_fell_back:
+        logger.warning(
+            "guide.http.allowed_origins is an empty list; using guide.http.default_origins",
+            extra={"origins": list(http.origins)},
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _invalid(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -436,7 +441,7 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=list(http.allowed_origins),
+        allow_origins=list(http.origins),
         allow_methods=["GET", "POST"],
         allow_headers=[http.credential_header, http.csrf_header, "Content-Type"],
         allow_credentials=bool(http.session_cookie),

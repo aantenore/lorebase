@@ -1,0 +1,47 @@
+# Overlay for trying the web app's session sign-in (WEB_AUTH_MODE=session) against a mock
+# OpenID Connect provider (navikt/mock-oauth2-server), on a local stack only. Add it after the
+# main file, from the repository root:
+#
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+#     -f deploy/compose/oidc-mock.yaml up -d --wait keeper web oidc-mock
+#
+# The provider signs in anyone who asks: never publish this stack. It runs in Keeper's network
+# namespace and is published on 127.0.0.1:OIDC_MOCK_PORT, so the browser and Keeper reach it at
+# the same loopback issuer URL (http is accepted for loopback). In the environment file set
+# LOREBASE_SESSION_KEY (openssl rand -base64 48); LOREBASE_WEB_PORT must be the port the browser
+# uses, since the callback is registered on it.
+
+services:
+  keeper:
+    environment:
+      LOREBASE__KEEPER__AUTH__MODE: oidc
+      LOREBASE__KEEPER__AUTH__OIDC__ISSUER: http://localhost:${OIDC_MOCK_PORT:-8096}/lorebase
+      LOREBASE__KEEPER__AUTH__OIDC__AUDIENCE: lorebase-web
+      LOREBASE__KEEPER__AUTH__SESSIONS__ENABLED: "true"
+      LOREBASE__KEEPER__AUTH__SESSIONS__CLIENT_ID: lorebase-web
+      LOREBASE__KEEPER__AUTH__SESSIONS__TOKEN_ENDPOINT_AUTH_METHOD: none
+      LOREBASE__KEEPER__AUTH__SESSIONS__REDIRECT_URI: http://127.0.0.1:${LOREBASE_WEB_PORT:-8090}/api/v1/auth/callback
+      LOREBASE__KEEPER__AUTH__SESSIONS__APP_URL: http://127.0.0.1:${LOREBASE_WEB_PORT:-8090}/
+      LOREBASE__KEEPER__AUTH__SESSIONS__COOKIE_SECURE: "false"
+      LOREBASE__KEEPER__AUTH__SESSIONS__ENCRYPTION_KEY: secret://env/LOREBASE_SESSION_KEY
+      LOREBASE_SESSION_KEY: ${LOREBASE_SESSION_KEY:?set LOREBASE_SESSION_KEY in the environment file}
+    ports:
+      - "127.0.0.1:${OIDC_MOCK_PORT:-8096}:${OIDC_MOCK_PORT:-8096}"
+
+  web:
+    environment:
+      VITE_AUTH_MODE: session
+
+  oidc-mock:
+    image: ${OIDC_MOCK_IMAGE:-ghcr.io/navikt/mock-oauth2-server:2.1.10}
+    restart: unless-stopped
+    network_mode: service:keeper
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      SERVER_PORT: ${OIDC_MOCK_PORT:-8096}
+    depends_on:
+      keeper:
+        condition: service_started

@@ -1312,6 +1312,7 @@ Guide, the optional exploration assistant (docs/guide.md): POST /embed and POST 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `guide.http.allowed_origins` | `[]` | browser origins allowed (CORS and Origin check), e.g. [https://lorebase.example.com] |
+| `guide.http.default_origins` | `[]` | used while allowed_origins is empty (an explicit [] logs a warning); compose sets the web service's origins |
 | `guide.http.credential_header` | `Authorization` |  |
 | `guide.http.session_cookie` | `""` | Keeper's session cookie name (e.g. __Host-lorebase_session) when Guide is served under the web app's origin; empty: off |
 | `guide.http.csrf_header` | `X-CSRF-Token` | must hold the session's token; checked against Keeper |

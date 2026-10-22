@@ -55,7 +55,13 @@ class HttpSettings(SectionModel):
     allowed_origins: tuple[str, ...] = Field(
         default=(),
         description="Browser origins allowed to call Guide (CORS), e.g. the web app's origin. "
-        "A request whose Origin header is not listed is refused.",
+        "A request whose Origin header is not listed is refused. Empty: `default_origins`.",
+    )
+    default_origins: tuple[str, ...] = Field(
+        default=(),
+        description="Origins used while `allowed_origins` is empty, e.g. the deployment's own "
+        "web app origins (the compose file sets them). An explicit empty `allowed_origins` "
+        "falls back to them with a warning instead of refusing every browser.",
     )
     credential_header: str = Field(
         default="Authorization",
@@ -94,13 +100,27 @@ class HttpSettings(SectionModel):
             raise ValueError("must be a cookie name")
         return value
 
-    @field_validator("allowed_origins")
+    @field_validator("allowed_origins", "default_origins")
     @classmethod
     def _origins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         for origin in value:
             if origin == "*" or not origin.startswith(("http://", "https://")):
                 raise ValueError("origins are explicit http(s)://host[:port] values")
         return tuple(origin.rstrip("/").lower() for origin in value)
+
+    @property
+    def origins(self) -> tuple[str, ...]:
+        """The browser origins accepted: `allowed_origins`, or `default_origins` when empty."""
+        return self.allowed_origins or self.default_origins
+
+    @property
+    def origins_fell_back(self) -> bool:
+        """Whether `allowed_origins` was set to an empty list and `default_origins` apply."""
+        return (
+            "allowed_origins" in self.model_fields_set
+            and not self.allowed_origins
+            and bool(self.default_origins)
+        )
 
 
 class TraceSettings(SectionModel):

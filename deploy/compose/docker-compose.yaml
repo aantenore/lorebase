@@ -191,7 +191,8 @@ services:
   # forwards /api/ to Keeper (and /guide/ to Guide, profile assistant; web/proxy.conf.template),
   # so the browser talks to one origin and Keeper needs no CORS setting. The app runs in live mode
   # against that origin; there is no sign-in while Keeper runs with auth mode none. Session mode
-  # (WEB_AUTH_MODE=session) needs auth.sessions on Keeper, see docs/deployment.md.
+  # (WEB_AUTH_MODE=session) needs auth.sessions on Keeper, see docs/deployment.md; the overlay
+  # oidc-mock.yaml sets it up against a mock provider for a local try.
   web:
     image: ${LOREBASE_WEB_IMAGE:-lorebase-web}:${LOREBASE_TAG:-dev}
     build:
@@ -284,6 +285,8 @@ services:
       LOREBASE__GUIDE__PORT: ${GUIDE_PORT:-8095}
       LOREBASE__GUIDE__KEEPER__BASE_URL: http://keeper:${KEEPER_PORT:-8080}
       LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS: ${GUIDE_ALLOWED_ORIGINS:-["http://127.0.0.1:${LOREBASE_WEB_PORT:-8090}","http://localhost:${LOREBASE_WEB_PORT:-8090}"]}
+      # The web service's origins, used when GUIDE_ALLOWED_ORIGINS is an empty list ([]).
+      LOREBASE__GUIDE__HTTP__DEFAULT_ORIGINS: '["http://127.0.0.1:${LOREBASE_WEB_PORT:-8090}","http://localhost:${LOREBASE_WEB_PORT:-8090}"]'
       LOREBASE__GUIDE__HTTP__ALLOW_ANONYMOUS: ${GUIDE_ALLOW_ANONYMOUS:-false}
       LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
       LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}

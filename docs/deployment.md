@@ -192,7 +192,8 @@ The compose `web` service is the same arrangement without Node.js: it serves the
 `http://127.0.0.1:8090` (`LOREBASE_WEB_PORT`) and forwards `/api/` to Keeper, the sign-in routes
 (`/api/v1/auth/login`, `/callback`, `/logout`, `/session`) included, so cookies stay on one origin.
 Set `WEB_AUTH_MODE=session` in `.env`, and register `http://127.0.0.1:8090/api/v1/auth/callback`
-with `app_url: http://127.0.0.1:8090/`.
+with `app_url: http://127.0.0.1:8090/`. The overlay `deploy/compose/oidc-mock.yaml` does all of
+this against a mock provider for a local try ([quickstart](quickstart.md#26-open-the-web-app)).
 
 ## Security headers
 

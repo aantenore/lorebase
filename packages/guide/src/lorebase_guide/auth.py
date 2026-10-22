@@ -14,7 +14,8 @@ in one of three ways:
 
 Before any model call, `verify` asks Keeper who the caller is: an unknown or expired
 credential is refused before it costs tokens. A request carrying an `Origin` that is not in
-`guide.http.allowed_origins`, or marked cross-site by the browser, is refused.
+`guide.http.allowed_origins` (or `default_origins` while that is empty), or marked cross-site by
+the browser, is refused.
 """
 
 from __future__ import annotations
@@ -110,7 +111,7 @@ def _cookie(headers: Mapping[str, str], name: str) -> str | None:
 def check_origin(headers: Mapping[str, str], http: HttpSettings) -> None:
     """Refuse browser requests from origins that are not configured, and cross-site ones."""
     origin = headers.get("origin")
-    if origin is not None and origin.rstrip("/").lower() not in http.allowed_origins:
+    if origin is not None and origin.rstrip("/").lower() not in http.origins:
         raise AuthRefusedError(
             403, "origin_not_allowed", "requests from this origin are not allowed"
         )

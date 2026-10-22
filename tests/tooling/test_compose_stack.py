@@ -22,6 +22,7 @@ from lorebase_store.definer import READ_FUNCTIONS
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = ROOT / "deploy" / "compose" / "docker-compose.yaml"
 ROLE_SCRIPT = ROOT / "deploy" / "compose" / "postgres" / "app-role.sh"
+OIDC_MOCK = ROOT / "deploy" / "compose" / "oidc-mock.yaml"
 BASE_ENV = {
     "POSTGRES_USER": "owner",
     "POSTGRES_PASSWORD": "owner-secret",
@@ -32,11 +33,15 @@ BASE_ENV = {
 APP_SERVICES = ("keeper", "keeper-2", "scribe")
 
 
-def render(env: dict[str, str], *profiles: str) -> subprocess.CompletedProcess[str]:
+def render(
+    env: dict[str, str], *profiles: str, overlays: tuple[Path, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("docker CLI not installed")
     args = [docker, "compose", "--env-file", os.devnull, "-f", str(COMPOSE_FILE)]
+    for overlay in overlays:
+        args += ["-f", str(overlay)]
     args += ["--project-name", "lorebase-test"]
     for profile in profiles:
         args += ["--profile", profile]
@@ -54,8 +59,10 @@ def render(env: dict[str, str], *profiles: str) -> subprocess.CompletedProcess[s
     )
 
 
-def services(env: dict[str, str], *profiles: str) -> dict[str, Any]:
-    result = render(env, *profiles)
+def services(
+    env: dict[str, str], *profiles: str, overlays: tuple[Path, ...] = ()
+) -> dict[str, Any]:
+    result = render(env, *profiles, overlays=overlays)
     if result.returncode != 0 and "docker compose" in result.stderr and "unknown" in result.stderr:
         pytest.skip("docker compose plugin not installed")
     assert result.returncode == 0, result.stderr
@@ -210,6 +217,9 @@ def test_guide_accepts_the_origin_of_the_web_service() -> None:
     guide = services(BASE_ENV, "assistant")["guide"]
     origins = json.loads(guide["environment"]["LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS"])
     assert origins == ["http://127.0.0.1:8090", "http://localhost:8090"]
+    # An empty GUIDE_ALLOWED_ORIGINS list falls back to these in Guide.
+    defaults = json.loads(guide["environment"]["LOREBASE__GUIDE__HTTP__DEFAULT_ORIGINS"])
+    assert defaults == origins
 
 
 def test_web_proxy_template_forwards_api_and_guide_without_buffering() -> None:
@@ -231,3 +241,19 @@ def test_web_image_includes_the_directory_the_proxy_is_rendered_into() -> None:
     env = services(BASE_ENV)["web"]["environment"]
     assert env["NGINX_ENVSUBST_OUTPUT_DIR"] == "/etc/nginx/conf.d/lorebase.d"
     assert env["NGINX_ENVSUBST_FILTER"] == "^LOREBASE_WEB_PROXY_"
+
+
+def test_oidc_mock_overlay_signs_in_through_the_web_service() -> None:
+    env = {**BASE_ENV, "LOREBASE_SESSION_KEY": "k" * 48, "LOREBASE_WEB_PORT": "18090"}
+    found = services(env, overlays=(OIDC_MOCK,))
+    keeper = found["keeper"]["environment"]
+    assert keeper["LOREBASE__KEEPER__AUTH__MODE"] == "oidc"
+    assert keeper["LOREBASE__KEEPER__AUTH__SESSIONS__ENABLED"] == "true"
+    # One loopback issuer for the browser and for Keeper: the provider shares Keeper's network.
+    assert keeper["LOREBASE__KEEPER__AUTH__OIDC__ISSUER"] == "http://localhost:8096/lorebase"
+    assert found["oidc-mock"]["network_mode"] == "service:keeper"
+    published = {(port["published"], port["target"]) for port in found["keeper"]["ports"]}
+    assert ("8096", 8096) in published
+    callback = keeper["LOREBASE__KEEPER__AUTH__SESSIONS__REDIRECT_URI"]
+    assert callback == "http://127.0.0.1:18090/api/v1/auth/callback"
+    assert found["web"]["environment"]["VITE_AUTH_MODE"] == "session"

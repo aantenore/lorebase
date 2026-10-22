@@ -579,6 +579,26 @@ The first build of the web image adds a `pnpm install` and a Vite build to `make
 port and bind variables, the proxy template, Guide's allowed origins). Containers, volumes, the
 two images and the clone were removed afterwards.
 
+**Session sign-in through the web service** (2026-10-22). The overlay
+`deploy/compose/oidc-mock.yaml` (Keeper in `auth.mode: oidc` with `auth.sessions`, the web app in
+session mode, `ghcr.io/navikt/mock-oauth2-server:2.1.10` in Keeper's network namespace) was
+started with its own project name and ports (`up -d --build --wait postgres migrate keeper web
+oidc-mock`), then one sign-in was driven with `curl` and a cookie jar against the web port:
+
+| Step | Result |
+|------|--------|
+| `GET /config.js` | `VITE_AUTH_MODE=session` |
+| `GET /api/v1/auth/session` before sign-in | 401 |
+| `GET /api/v1/auth/login?return_to=/supply/explorer` | 302 to the provider's `authorize` (code flow, PKCE S256, the registered callback) |
+| `POST` of the provider's sign-in form (user name and `name`, `email` claims), redirects followed | callback through the proxy, then 302 to `/supply/explorer` on the app origin, 200 |
+| `GET /api/v1/auth/session` | 200: a new `usr_` principal (provisioned), display name from the `name` claim, CSRF token |
+| `GET /api/v1/auth/whoami`, `/api/v1/domains` with the cookie | 200, `method: session` |
+| `POST /api/v1/auth/logout` without the CSRF header, then with it | 403, then 200 |
+| `GET /api/v1/auth/session` after sign-out | 401 |
+
+No code change was needed. `tests/tooling/test_compose_stack.py` renders the overlay. Containers,
+volumes, network and the three images (backend, web, provider) were removed afterwards.
+
 ### Open
 
 - A first machine downloads the base images during `make up`; that time was not measured, the

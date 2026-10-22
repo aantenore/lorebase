@@ -969,6 +969,8 @@ guide:
   http:
     allowed_origins: []          # browser origins allowed (CORS and Origin check), e.g.
                                  # [https://lorebase.example.com]
+    default_origins: []          # used while allowed_origins is empty (an explicit [] logs a
+                                 # warning); compose sets the web service's origins
     credential_header: Authorization
     session_cookie: ""           # Keeper's session cookie name (e.g. __Host-lorebase_session)
                                  # when Guide is served under the web app's origin; empty: off
