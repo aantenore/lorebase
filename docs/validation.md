@@ -403,8 +403,11 @@ with the rules' observation into one suggestion with support 3. Weak points:
 - Near duplicates are not merged when the model names the same fact differently in two
   documents: `renewal_notice_days` and `renewal_proposal_notice_days` (same sample, same
   sentence shape), `termination_notice_days` and `termination_for_cause_notice_days`.
+  **Fixed** (see [after the runs](#fixed-after-the-runs)): both pairs now fold into one
+  suggestion each.
 - A Kind `Proposal` came from the sentence "open a Proposal to flag the supplier as high
-  risk", and a Kind `Buyer` duplicates the Attribute `buyer`.
+  risk", and a Kind `Buyer` duplicates the Attribute `buyer`. **Fixed**: neither is
+  suggested any more.
 
 LFM's unlisted facts all failed evidence verification, so it added no suggestion.
 
@@ -424,9 +427,24 @@ process:
 | filter 10 micron | 3 hits, Oil filter first | hybrid: Oil filter 10 micron, Air filter cartridge 10 micron (x2), then 25 micron filters |
 
 The ranking is sound: every semantic top result is the right product family. Lexical search
-needs every query word, so descriptive queries find nothing and hybrid search then equals
+needed every query word, so descriptive queries found nothing and hybrid search then equalled
 the semantic ranking; on keyword queries hybrid keeps the exact matches first and fills up
 with semantic neighbours. Search answered in 30 to 110 ms after the first query (415 ms).
+
+**Fixed** (see [after the runs](#fixed-after-the-runs)): with ranked partial matching the
+same queries find, lexically, top 3 for Kind Part, every hit `match: partial`:
+
+| Query | Lexical before | Lexical after |
+|---|---|---|
+| electric drive motor | none | Gear motor 11 kW, Servo motor 11 kW, Induction motor 0.75 kW |
+| ring that stops oil leaking | none | O-ring 40x62x8, O-ring FKM 90 18x2.5, O-ring NBR 70 30x3 |
+| keeps dust out of compressed air | none | Air filter cartridge 10 micron, Air filter cartridge F-120, Air filter cartridge H-360 |
+| measure heat | none | none (no word in common with the Parts) |
+| screw fastener | none | none (no word in common with the Parts) |
+| filter 10 micron | 3 hits, Oil filter first | unchanged, `match: all` |
+
+Hybrid search now fuses these lexical lists with the semantic ones instead of returning the
+semantic ranking alone; queries whose words the Parts do not hold still rank by the vector.
 
 ### Tokens and cost
 
@@ -450,10 +468,24 @@ Each fix has regression tests with recorded answers (`packages/inference/tests/t
 `packages/scribe/tests/test_extraction_rules.py`,
 `packages/scribe/tests/integration/test_extraction.py`).
 
-Not fixed, for later: near-duplicate suggestions with different names, links proposed by tier
-2 without required link Attributes (`stocked_at` without `quantity`, left pending with a
-warning), and the step-down that repeats once per extraction job instead of once per
-process.
+### Fixed after the runs
+
+The three problems the runs left open, fixed on 2026-10-22. The model runs were not repeated
+(they cost tokens and need the keys); each fix is checked by tests built on the names,
+samples and answers recorded in the runs, and the lexical search table above was measured
+again on the same `supply` data (Postgres 16, default `simple` text search configuration,
+`search.partial` defaults).
+
+| Problem | Before | After | Tests |
+|---|---|---|---|
+| Lexical search needs every query word | descriptive queries: no hit; hybrid equal to semantic | ranked partial matches after every full match (`search.partial`), `match: all\|partial` per hit, corrections per term, phrases and negations kept; 3 of 5 descriptive queries find the right family, keyword queries unchanged | `packages/store/tests/test_reads.py`, `test_overlay.py`, `packages/keeper/tests/integration/test_read_api.py` |
+| Near-duplicate Attribute suggestions | `renewal_notice_days` + `renewal_proposal_notice_days`, `termination_notice_days` + `termination_for_cause_notice_days`: 4 suggestions | 2 suggestions, the variants kept as labels (`schema.suggestions.merge_similarity` 0.6; `start_date`/`end_date` stay apart) | `packages/core/tests/infer/test_suggestions.py`, `packages/store/tests/test_suggestion_fold.py` |
+| Noise Kind suggestions | Kinds `Proposal` and `Buyer` listed | not suggested (`kind_stoplist`, a Kind named like an Attribute); a new Kind needs `kind_min_attributes` (2) Attribute suggestions or observations to be listed | the same, and `packages/scribe/tests/test_extraction_discovery.py` |
+| Tier 2 links without required link Attributes | `stocked_at` proposed without `quantity`; the answer schema had no place for link values | the answer schema carries each Relation's link Attributes (required ones required) and the prompt asks for them; values are grounded like record values; a Link still missing one stays pending with `match.missing` | `packages/scribe/tests/test_extraction_link_values.py` |
+| Structured output step-down per job | a strict-only endpoint refused `json_schema` again at the start of every job (two wasted requests each) | the working mode is remembered per `base_url`, model and output settings for the process | `packages/inference/tests/test_chat_endpoint.py` |
+
+Search cost at 100k Records, before and after, is in
+[performance](performance.md#partial-matching-100k-records).
 
 ## Fresh-clone quickstart check
 

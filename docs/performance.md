@@ -211,6 +211,44 @@ with a cached plan and plans only large ones (more than 64 rows). Without the tr
 same commit measured 262 to 297 ms against 320 to 388 ms with them (scale 60, five commits
 each). A copy branch also counts the words of every copied row.
 
+## Partial matching (100k Records)
+
+Lexical search matches every term of `q` first; when that finds fewer than
+`search.partial.min_results` Records, the ranked partial matches follow (design 8.4). The
+read `partial-match full-text search` of `tests/perf/harness.py` is Keeper's lexical search on
+three random title words, which rarely share a Record: the corrections, the full match, the
+stop-word check of the terms, the OR query through `lb_search_corrected` and one primary-key
+read that counts the terms each candidate holds. Same 100k dataset, 2026-10-22, p50 / p95 in
+milliseconds.
+
+The laptop ran other work during these runs (load average 10 to 17 on 15 cores), so every
+read measured slower than the baseline above, `full-text search` included, whose code path
+did not change. The comparison that matters was therefore measured call by call, alternating
+the code before (`search.partial.min_results: 0`, the full match alone) and after on the same
+queries:
+
+| Descriptive query, 3 title words | before | after |
+|---|---|---|
+| owner | 3.73 / 5.36 | 7.94 / 11.18 |
+| rls | 4.29 / 7.08 | 8.71 / 13.63 |
+| hits per query (limit 20) | 0 in 660 of 660 calls | 20, all `partial` |
+
+Bench run with the partial read, same load (`full-text search` and typo-tolerant search for
+reference; their baseline is in [Reads](#reads-milliseconds)):
+
+| Operation | Target p95 | owner p50 | owner p95 | rls p50 | rls p95 |
+|-----------|-----------:|----------:|----------:|--------:|--------:|
+| full-text search | 50.00 | 3.69 | 8.07 | 3.73 | 5.59 |
+| typo-tolerant full-text search | 50.00 | 6.98 | 27.75 | 5.57 | 8.68 |
+| partial-match full-text search | 50.00 | 9.71 | 15.31 | 8.66 | 11.14 |
+
+On an overlay branch the partial read costs +20% (owner) and +19% (rls) at p50 over a copy,
+p95 12.05 and 17.21 ms. Partial matching costs about twice the full match alone and stays
+far within the 50 ms budget of search; a query whose full match finds enough Records pays
+nothing more. Plans: the OR query reads the same GIN index as the full match, and the term
+count reads `mat_records` by primary key (`Index Scan mat_records_p3_pkey`) for at most
+`search.partial.candidates` (100) Records, under row-level security too.
+
 ## 1M Records
 
 The M1 fixture: the same harness at ten times the size, run on 2026-10-22.

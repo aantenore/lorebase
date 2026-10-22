@@ -36,7 +36,7 @@ from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
 from lorebase_keeper.reading.points import KindScope, ReadPoint, ServedFrom
 from lorebase_keeper.reading.record_history import record_history, record_lineage
 from lorebase_keeper.reading.runtime import ReadRuntime
-from lorebase_keeper.reading.search import typo_tolerance
+from lorebase_keeper.reading.search import partial_matching, typo_tolerance
 from lorebase_keeper.reading.settings import ReadSettings, SearchSettings
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
@@ -100,6 +100,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 #: Keeper's lexical search with its typo tolerance defaults (`search.trigram_threshold`,
 #: `search.typo_*`), on a misspelled title word (`misspelled`): corrections, then search.
 TYPO_SEARCH = "typo-tolerant full-text search"
+#: Keeper's lexical search on a descriptive query: three title words that rarely share a
+#: Record, so the full match finds too few and the ranked partial matches follow
+#: (`search.partial`), corrections included.
+PARTIAL_SEARCH = "partial-match full-text search"
 
 TARGETS_MS = {
     "get by key": 5.0,
@@ -109,6 +113,7 @@ TARGETS_MS = {
     "query by indexed attribute": 25.0,
     "full-text search": 50.0,
     TYPO_SEARCH: 50.0,
+    PARTIAL_SEARCH: 50.0,
     "record history page": 10.0,
     "record lineage": 10.0,
 }
@@ -565,6 +570,23 @@ def read_operations(
             runtime=runtime,
         )
 
+    partial = partial_matching(reading)
+
+    async def search_partial(session: AsyncSession, rng: random.Random) -> Any:
+        query = " ".join(rng.sample(work.words, 3))
+        fixes = await search_corrections(session, DOMAIN, branch, query, typos, runtime=runtime)
+        return await search_records(
+            session,
+            DOMAIN,
+            branch,
+            query,
+            limit=20,
+            corrections=fixes,
+            correction_weight=typos.weight,
+            partial=partial,
+            runtime=runtime,
+        )
+
     return {
         "get by key": get,
         "list page of 50": page,
@@ -573,6 +595,7 @@ def read_operations(
         "query by indexed attribute": by_attribute,
         "full-text search": search,
         TYPO_SEARCH: search_typos,
+        PARTIAL_SEARCH: search_partial,
         "record history page": history,
         "record lineage": lineage,
     }

@@ -4801,6 +4801,11 @@ export interface components {
             snippet?: string | null;
             /** Score */
             score: number;
+            /**
+             * Match
+             * @description How the hit matched q: every term (`all`), or only some of them (`partial`, ranked after every `all` hit); absent for hits found by vector only.
+             */
+            match?: ("all" | "partial") | null;
         };
         /**
          * SearchRequest

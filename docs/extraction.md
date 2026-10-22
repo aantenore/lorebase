@@ -86,7 +86,14 @@ of them when none is), the Relations between them, their extractable Attributes,
 candidate Records by key and title; the model answers with `ref` (a candidate key) for known
 Records. Every fact must quote its evidence verbatim from the chunk (whitespace-insensitive),
 and a value must appear in its quote (dates and numbers compared by value). Facts that fail are
-discarded and counted in the job's stats. The model has no tools; document text can only
+discarded and counted in the job's stats.
+
+A Relation with link Attributes (`stocked_at` carries `quantity`) has its own branch in the
+answer schema: the link's `values`, each with a verbatim `evidence`, the required ones listed as
+required, and the prompt asks the model to propose such a link only when the text states its
+required Attributes. Link values are verified and grounded like record values and become the
+Link item's values. A Link item still missing a required link Attribute stays pending whatever
+its confidence, with the names in `match.missing`. The model has no tools; document text can only
 influence proposed values, which reviewers see with their evidence.
 
 Attributes that are derived or sensitive (`pii`, `confidential`, `restricted`) are never
@@ -172,6 +179,19 @@ groups (`supplier`/`vendor`, `contract`/`agreement`, ...) and by similarity
 links) counts as known. Extracting a document again replaces its share of every suggestion, so
 support counts documents' observations once.
 
+**Variants and noise.** Models name one fact differently from one document to the next. Two
+Attribute suggestions of the same Kind are folded into one when their names share at least
+`schema.suggestions.merge_similarity` of their words (Jaccard index of the singular snake_case
+words; 0.6 by default) and their samples have a value type in common (number, date, boolean or
+text): `renewal_notice_days` and `renewal_proposal_notice_days` (sample 90), or
+`termination_notice_days` and `termination_for_cause_notice_days` (sample 30), become one
+suggestion under the better supported name, the other kept among its labels. `start_date` and
+`end_date` (one word of three in common) stay apart. A Kind named by a generic word of documents or
+workflows (`schema.suggestions.kind_stoplist`: section, clause, annex, page, table, proposal,
+...) or by an Attribute (a Kind `Buyer` beside the Attribute `buyer`) is not suggested, and a
+proposed Kind is listed only once it has `kind_min_attributes` Attribute suggestions (2 by
+default) or as many observations.
+
 **Sensitivity.** An observation that matches a sensitive Attribute (`pii`, `confidential`,
 `restricted`, carried through Derivations) is never kept, and an observation whose quote or
 sample holds a stored value of a sensitive Attribute of a Record the job read is kept without
@@ -217,7 +237,7 @@ until another document supports it.
 
 `scribe.extraction` (tiers, auto-accept threshold, chunking, matching thresholds, confidence
 per technique, budgets, prompt version, cache, `discovery`), `schema.suggestions` (support,
-listing, examples, name matching), `keeper.schema_suggestions` (review branch prefix) and
+listing, examples, name matching, variants and noise), `keeper.schema_suggestions` (review branch prefix) and
 `keeper.documents` (size limit, accepted
 suffixes, URL allowlist, extraction on upload, longest text served) are documented with their defaults in
 [config/lorebase.example.yaml](../config/lorebase.example.yaml). Models are configured in the

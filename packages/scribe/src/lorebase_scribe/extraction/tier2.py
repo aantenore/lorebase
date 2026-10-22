@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from lorebase_core.infer.suggestions import Observation, SuggestionType
-from lorebase_core.model import Attribute
+from lorebase_core.model import Attribute, Relation
 from lorebase_core.types import AttributeType, EncodingError, encode_value
 from lorebase_inference.interfaces import ChatModel, ChatOptions, Message, Usage
 from lorebase_scribe.extraction.candidates import (
@@ -42,6 +42,7 @@ from lorebase_scribe.extraction.ontology import (
     Ontology,
     fragment_description,
     fragment_schema,
+    link_attributes,
 )
 from lorebase_scribe.extraction.settings import ExtractionSettings
 from lorebase_scribe.extraction.text import Chunk
@@ -53,8 +54,10 @@ SYSTEM_PROMPT = (
     "never guess. For every record, value and link, copy the supporting words of the text "
     "verbatim into `evidence`. When a record is one of the candidate records, set `ref` to its "
     "key; otherwise set `ref` to an empty string and give its key Attribute among the values. "
-    "Write dates as YYYY-MM-DD and numbers without thousands separators. Return an empty list "
-    "when the text states nothing that fits."
+    "Write dates as YYYY-MM-DD and numbers without thousands separators. A link whose "
+    "Relation lists link attributes carries them in `values`, each with its own verbatim "
+    "`evidence`; always give the required ones, and propose the link only when the text "
+    "states them. Return an empty list when the text states nothing that fits."
 )
 DISCOVERY_PROMPT = (
     " Facts the schema has no place for (another kind of thing, a field or a relationship it "
@@ -530,5 +533,34 @@ async def _links(
                 confidence=settings.confidence.tier2,
                 tier=2,
                 model=model,
+                values=_link_values(entry.get("values"), relation, chunk, document_id, result),
             )
         )
+
+
+def _link_values(
+    raw: Any, relation: Relation, chunk: Chunk, document_id: str, result: Tier2Result
+) -> dict[str, Any]:
+    """Encoded link Attribute values by Attribute id; unverified or ungrounded ones are dropped."""
+    if not isinstance(raw, dict):
+        return {}
+    attributes = {a.api_name: a for a in link_attributes(relation)}
+    found: dict[str, Any] = {}
+    for name, item in raw.items():
+        attribute = attributes.get(name)
+        if attribute is None or not isinstance(item, dict):
+            result.discard("unknown_attribute")
+            continue
+        evidence = _evidence(chunk, document_id, item.get("evidence"))
+        if evidence is None:
+            result.discard("unverified_evidence")
+            continue
+        value = _encode(attribute, item.get("value"))
+        if value is None:
+            result.discard("invalid_value")
+            continue
+        if not grounded(attribute, value, evidence.quote, item.get("value")):
+            result.discard("ungrounded_value")
+            continue
+        found[attribute.id] = value
+    return found

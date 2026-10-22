@@ -273,7 +273,17 @@ def assemble_items(
                 return True
             return (side.kind_id, str(side.key)) in auto_records
 
-        confident = link.confidence >= threshold and ready(link.source) and ready(link.target)
+        missing_attributes = sorted(
+            a.api_name
+            for a in schema.relations[relation_id].attributes.values()
+            if a.required and not a.is_derived and a.id not in link.values
+        )
+        confident = (
+            link.confidence >= threshold
+            and ready(link.source)
+            and ready(link.target)
+            and not missing_attributes
+        )
         decision, by, at = decide(confident)
         partition, element_key = link_element(relation_id, from_key, to_key)
         drafts.append(
@@ -283,7 +293,12 @@ def assemble_items(
                     item_id=f"{ITEM_PREFIX}_{new_ulid()}",
                     item_type=LINK_ITEM,
                     seq=0,
-                    subject={"relation": relation_id, "from": from_key, "to": to_key, "values": {}},
+                    subject={
+                        "relation": relation_id,
+                        "from": from_key,
+                        "to": to_key,
+                        "values": dict(link.values),
+                    },
                     partition=partition,
                     element_key=element_key,
                     evidence=link.evidence.as_dict(),
@@ -295,6 +310,7 @@ def assemble_items(
                     match={
                         "from": link.source.resolution.as_dict(),
                         "to": link.target.resolution.as_dict(),
+                        "missing": missing_attributes,
                     },
                     tier=link.tier,
                     model=link.model,

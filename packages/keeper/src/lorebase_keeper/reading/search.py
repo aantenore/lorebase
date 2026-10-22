@@ -5,7 +5,11 @@
   lexicon (`lorebase_store.reads.search_corrections`, `search.trigram_threshold` and
   `search.typo_*`) and searched as `(word | correction | ...)`. Hits of `q` as written come
   first; the others follow at `search.trigram_weight` times their rank. The response lists
-  the corrections;
+  the corrections. When q as written finds fewer than `search.partial.min_results` Records,
+  Records holding only some of its terms follow (`lorebase_store.reads.PartialMatching`:
+  the terms joined by OR, negations and phrases kept, scored by `ts_rank_cd` plus
+  `search.partial.term_bonus` per term held, corrections applied per term); each hit
+  reports `match: all|partial`;
 - semantic: cosine distance between the caller's `query_vector` and the stored embedding of
   each Record's object hash for the configured model (Keeper never computes vectors);
 - hybrid: reciprocal rank fusion of both candidate lists, computed in SQL:
@@ -23,7 +27,7 @@ compiled here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
@@ -47,6 +51,7 @@ from sqlalchemy import (
     select,
     true,
     tuple_,
+    union_all,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,7 +73,15 @@ from lorebase_keeper.reading.views import (
     served,
 )
 from lorebase_store.models import metadata
-from lorebase_store.reads import Correction, TypoTolerance, search_corrections, search_records
+from lorebase_store.reads import (
+    Correction,
+    PartialMatching,
+    PartialQuery,
+    TypoTolerance,
+    partial_terms,
+    search_corrections,
+    search_records,
+)
 
 EMBEDDINGS: Table = metadata.tables["embeddings"]
 
@@ -166,22 +179,26 @@ async def search(
             kind_ids=list(target.kind_ids),
             runtime=runtime.store,
         )
+    partial = partial_matching(runtime)
     if mode == "lexical" and where is None:
         assert request.q is not None
         return await _lexical_page(
-            session, runtime, compiler, point, target, request.q, limit, corrections
+            session, runtime, compiler, point, target, request.q, limit, corrections, partial
         )
     r = compiler.records("r")
     base = [compiler.record_scope(r, target)]
     if where is not None:
         base.append(compiler.condition(r, where, target))
 
+    alternatives = None
+    if request.q is not None and partial is not None and mode in ("lexical", "hybrid"):
+        alternatives = await partial_terms(session, request.q, partial.stop_words)
     lists: list[tuple[Select[Any], float]] = []
     if mode in ("lexical", "hybrid"):
         assert request.q is not None
         lists.append(
             (
-                _lexical(compiler, r, base, request.q, corrections, runtime),
+                _lexical(compiler, r, base, request.q, corrections, runtime, alternatives),
                 settings.hybrid.lexical_weight,
             )
         )
@@ -207,14 +224,23 @@ async def search(
                 _snippet_title(final, target, point.masking),
                 *_searchable_text(final, target, point.masking),
             ),
-            _corrected(compiler, request.q, corrections),
+            _corrected(
+                compiler, request.q if alternatives is None else alternatives.text, corrections
+            ),
             literal(settings.headline_options),
         )
-    # A lexical list puts the hits of q as written first; fusion ranks by position already.
-    exact_first = [ranked.c.exact.desc()] if "exact" in ranked.c else []
+    # A lexical list puts full matches first, then the hits of q as written; fusion ranks by
+    # position already.
+    exact_first = [ranked.c[c].desc() for c in ("full", "exact") if c in ranked.c]
+    full = ranked.c.full if "full" in ranked.c else literal(None, Boolean)
     query = (
         select(
-            ranked.c.kind_id, ranked.c.key, ranked.c.score, final.c.title, snippet.label("snippet")
+            ranked.c.kind_id,
+            ranked.c.key,
+            ranked.c.score,
+            full.label("full"),
+            final.c.title,
+            snippet.label("snippet"),
         )
         .select_from(ranked)
         .join(
@@ -237,6 +263,7 @@ async def search(
             title=point.masking.title(point.schema, row["kind_id"], row["title"]),
             snippet=row["snippet"],
             score=float(row["score"]),
+            match=_match(row["full"]),
         )
         for row in rows
     ]
@@ -256,6 +283,26 @@ def typo_tolerance(runtime: ReadRuntime) -> TypoTolerance:
     )
 
 
+def partial_matching(runtime: ReadRuntime) -> PartialMatching | None:
+    """Partial matching of lexical search from `search.partial`; `None` when it is off."""
+    settings = runtime.search.partial
+    if settings.min_results < 1:
+        return None
+    return PartialMatching(
+        min_results=settings.min_results,
+        weight=settings.weight,
+        term_bonus=settings.term_bonus,
+        candidates=settings.candidates,
+        stop_words=settings.stop_words,
+    )
+
+
+def _match(full: bool | None) -> Literal["all", "partial"] | None:
+    if full is None:
+        return None
+    return "all" if full else "partial"
+
+
 def _applied(corrections: list[Correction]) -> list[SearchCorrection]:
     return [
         SearchCorrection(word=c.word, replacements=list(c.replacements))
@@ -267,7 +314,10 @@ def _applied(corrections: list[Correction]) -> list[SearchCorrection]:
 def _corrected(compiler: Compiler, q: str, corrections: list[Correction]) -> ColumnElement[Any]:
     """The tsquery of q with each corrected word widened to `(word | replacement | ...)`, as
     the store's search does (`lb_lexeme_query`, revision 0018)."""
-    query = compiler.tsquery(q)
+    return _rewritten(compiler.tsquery(q), corrections)
+
+
+def _rewritten(query: ColumnElement[Any], corrections: list[Correction]) -> ColumnElement[Any]:
     for correction in corrections:
         if not correction.replacements:
             continue
@@ -288,6 +338,7 @@ async def _lexical_page(
     q: str,
     limit: int,
     corrections: list[Correction],
+    partial: PartialMatching | None,
 ) -> SearchResponse:
     """Lexical search without filters: the store primitive ranks a bounded candidate set
     (index plans under row-level security too), then snippets for the page by key."""
@@ -301,9 +352,13 @@ async def _lexical_page(
         kind_ids=list(target.kind_ids),
         corrections=corrections,
         correction_weight=settings.trigram_weight,
+        partial=partial,
         runtime=runtime.store,
     )
     snippets: dict[tuple[str, str], str | None] = {}
+    alternatives = None
+    if partial is not None and any(h.partial for h in hits):
+        alternatives = await partial_terms(session, q, partial.stop_words)
     if hits:
         hit = point.layout.records("hit")
         headline = func.ts_headline(
@@ -313,7 +368,7 @@ async def _lexical_page(
                 _snippet_title(hit, target, point.masking),
                 *_searchable_text(hit, target, point.masking),
             ),
-            _corrected(compiler, q, corrections),
+            _corrected(compiler, q if alternatives is None else alternatives.text, corrections),
             literal(settings.headline_options),
         )
         query = select(hit.c.kind_id, hit.c.key, headline.label("snippet")).where(
@@ -330,6 +385,7 @@ async def _lexical_page(
             title=point.masking.title(point.schema, h.kind_id, h.title),
             snippet=snippets.get((h.kind_id, h.key)),
             score=h.score,
+            match="partial" if h.partial else "all",
         )
         for h in hits
     ]
@@ -345,15 +401,19 @@ def _lexical(
     q: str,
     corrections: list[Correction],
     runtime: ReadRuntime,
+    alternatives: PartialQuery | None = None,
 ) -> Select[Any]:
-    """Lexical candidates with an `exact` column: matches of q as written first, then those
-    found only through a correction at `trigram_weight` times their rank."""
+    """Lexical candidates with `full` and `exact` columns: matches of q as written first, then
+    those found only through a correction at `trigram_weight` times their rank. With
+    `alternatives` (`search.partial`), fewer than `min_results` of them are followed by
+    Records holding only some terms (`full` false)."""
     settings = runtime.search
     tsquery = compiler.tsquery(q)
     exact: ColumnElement[bool] = r.c.search.op("@@", return_type=Boolean)(tsquery)
     score: ColumnElement[Any] = func.ts_rank_cd(r.c.search, tsquery)
     match: ColumnElement[bool] = exact
-    if any(c.replacements for c in corrections):
+    fixes = [c for c in corrections if c.replacements]
+    if fixes:
         fixed = _corrected(compiler, q, corrections)
         match = or_(exact, r.c.search.op("@@", return_type=Boolean)(fixed))
         score = case(
@@ -363,11 +423,78 @@ def _lexical(
     else:
         exact = true()
     flag = func.coalesce(exact, False)
-    return (
-        select(r.c.kind_id, r.c.key, cast(score, Float).label("score"), flag.label("exact"))
+    strict = (
+        select(
+            r.c.kind_id,
+            r.c.key,
+            cast(score, Float).label("score"),
+            flag.label("exact"),
+            true().label("full"),
+        )
         .where(*base, match)
         .order_by(not_(flag), score.desc(), r.c.kind_id, r.c.key)
         .limit(settings.candidates)
+    )
+    if alternatives is None:
+        return strict
+    full = strict.cte("full_matches")
+    enough = select(func.count()).select_from(full).scalar_subquery()
+    partial = _partial(compiler, r, base, alternatives, fixes, runtime).where(
+        not_(func.coalesce(match, False)),
+        enough < literal(settings.partial.min_results),
+    )
+    lexical = union_all(select(*full.c), partial).subquery("lexical")
+    return select(*lexical.c)
+
+
+def _partial(
+    compiler: Compiler,
+    r: Any,
+    base: list[ColumnElement[bool]],
+    alternatives: PartialQuery,
+    fixes: list[Correction],
+    runtime: ReadRuntime,
+) -> Select[Any]:
+    """Records holding any term of q, scored `weight * (rank + term_bonus * terms held)`, as
+    the store's `search_records` does with `PartialMatching`."""
+    settings = runtime.search
+    partial = settings.partial
+    written = compiler.tsquery(alternatives.text)
+    any_term = r.c.search.op("@@", return_type=Boolean)(written)
+    rank: ColumnElement[Any] = func.ts_rank_cd(r.c.search, written)
+    if fixes:
+        fixed = _corrected(compiler, alternatives.text, fixes)
+        rank = case(
+            (any_term, rank),
+            else_=literal(settings.trigram_weight, Float) * func.ts_rank_cd(r.c.search, fixed),
+        )
+        any_term = r.c.search.op("@@", return_type=Boolean)(fixed)
+    terms = (
+        func.unnest(literal(list(alternatives.terms), ARRAY(Text)))
+        .table_valued("term")
+        .render_derived(name="terms")
+    )
+    term_query = _rewritten(func.websearch_to_tsquery(compiler.regconfig(), terms.c.term), fixes)
+    held = (
+        select(func.count())
+        .select_from(terms)
+        .where(r.c.search.op("@@", return_type=Boolean)(term_query))
+        .scalar_subquery()
+    )
+    score = literal(partial.weight, Float) * (
+        rank + literal(partial.term_bonus, Float) * cast(held, Float)
+    )
+    return (
+        select(
+            r.c.kind_id,
+            r.c.key,
+            cast(score, Float).label("score"),
+            true().label("exact"),
+            false().label("full"),
+        )
+        .where(*base, any_term)
+        .order_by(score.desc(), r.c.kind_id, r.c.key)
+        .limit(min(partial.candidates, settings.candidates))
     )
 
 
@@ -440,18 +567,22 @@ def _fused(lists: list[tuple[Select[Any], float]], runtime: ReadRuntime) -> Any:
     ranked = []
     for index, (candidates, weight) in enumerate(lists):
         inner = candidates.subquery(f"c{index}")
-        exact_first = [inner.c.exact.desc()] if "exact" in inner.c else []
+        exact_first = [inner.c[c].desc() for c in ("full", "exact") if c in inner.c]
         position = over(
             func.row_number(),
             order_by=(*exact_first, inner.c.score.desc(), inner.c.kind_id, inner.c.key),
         )
+        carried = [inner.c.full] if "full" in inner.c else []
         ranked.append(
             (
-                select(inner.c.kind_id, inner.c.key, position.label("rank")).subquery(f"l{index}"),
+                select(inner.c.kind_id, inner.c.key, position.label("rank"), *carried).subquery(
+                    f"l{index}"
+                ),
                 weight,
             )
         )
     (first, w_first), (second, w_second) = ranked
+    full = [ranks.c.full for ranks, _ in ranked if "full" in ranks.c]
     score = func.coalesce(literal(w_first, Float) / (literal(k) + first.c["rank"]), 0.0) + (
         func.coalesce(literal(w_second, Float) / (literal(k) + second.c["rank"]), 0.0)
     )
@@ -460,6 +591,7 @@ def _fused(lists: list[tuple[Select[Any], float]], runtime: ReadRuntime) -> Any:
             func.coalesce(first.c.kind_id, second.c.kind_id).label("kind_id"),
             func.coalesce(first.c.key, second.c.key).label("key"),
             cast(score, Float).label("score"),
+            *([func.coalesce(*full).label("full")] if full else []),
         )
         .select_from(
             first.join(

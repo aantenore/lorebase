@@ -41,6 +41,7 @@ from lorebase_store.models.enums import Materialization
 from lorebase_store.reads import (
     Comparison,
     Direction,
+    PartialMatching,
     TypoTolerance,
     get_record,
     head_schema,
@@ -290,6 +291,23 @@ async def snapshot(
         )
         found[f"search typo {words}"] = [
             (h.kind_id, h.key, h.title, round(h.score, 6), h.exact) for h in typo
+        ]
+    partial = PartialMatching(min_results=1, weight=0.5, term_bonus=1.0, candidates=50)
+    for words in ("roller bearing seal", "Bearngs Delta -Alpha"):
+        fixes = await search_corrections(session, DOMAIN, branch, words, TYPOS, runtime=runtime)
+        some = await search_records(
+            session,
+            DOMAIN,
+            branch,
+            words,
+            limit=20,
+            corrections=fixes,
+            partial=partial,
+            runtime=runtime,
+        )
+        assert some, words
+        found[f"search partial {words}"] = [
+            (h.kind_id, h.key, h.title, round(h.score, 6), h.exact, h.partial) for h in some
         ]
     for kind_id, key in ((PART, "P-1"), (SUPPLIER, "S-1")):
         hood = await neighborhood(

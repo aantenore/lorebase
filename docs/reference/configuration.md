@@ -897,6 +897,9 @@ Schema suggestions from extraction (docs/extraction.md)
 | `schema.suggestions.max_tracked` | `2000` | suggestions kept per Domain; new ones beyond are dropped |
 | `schema.suggestions.name_similarity` | `0.85` | least similarity of a name to an existing element's |
 | `schema.suggestions.synonyms` | `[[supplier, vendor], [contract, agreement], [part, component, item], [plant, site, facility], [purchase_order, order], [customer, client], [quantity, qty]]` | names meaning the same element (snake_case, singular) |
+| `schema.suggestions.merge_similarity` | `0.6` | least word overlap (Jaccard) for two Attribute suggestions of one Kind with samples of one value type to count as one |
+| `schema.suggestions.kind_stoplist` | `[section, clause, article, paragraph, chapter, annex, appendix, schedule, exhibit, attachment, page, table, figure, document, proposal]` |  |
+| `schema.suggestions.kind_min_attributes` | `2` | generic words never suggested as a Kind Attribute suggestions (or observations) a new Kind needs before it is listed; 0 lists every Kind |
 
 Example:
 
@@ -1028,6 +1031,17 @@ Search (design 8.4). Keeper never computes embeddings: semantic and hybrid searc
 | `search.typo_candidates` | `3` | corrections tried per unknown word; 0 turns typo tolerance off |
 | `search.typo_min_length` | `4` | shortest query word (characters) that is corrected |
 | `search.headline_options` | `"MaxWords=30, MinWords=10, MaxFragments=2"` | ts_headline of snippets |
+
+### `search.partial`
+
+Partial matching: when q as written (every term) finds fewer than min_results Records, Records holding some of its terms follow, after every full match (`match: partial`).
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `search.partial.min_results` | `1` | full matches below which partial ones are added; 0 turns it off |
+| `search.partial.weight` | `0.5` | score: weight \* (ts_rank_cd of the terms OR-ed |
+| `search.partial.term_bonus` | `1.0` | + term_bonus \* terms the Record holds) |
+| `search.partial.candidates` | `100` | partial matches ranked per search |
 
 ### `search.semantic`
 

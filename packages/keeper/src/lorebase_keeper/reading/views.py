@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -135,6 +135,11 @@ class SearchHit(BaseModel):
     title: str | None = None
     snippet: str | None = None
     score: float
+    match: Literal["all", "partial"] | None = Field(
+        default=None,
+        description="How the hit matched q: every term (`all`), or only some of them "
+        "(`partial`, ranked after every `all` hit); absent for hits found by vector only.",
+    )
 
 
 class SearchCorrection(BaseModel):

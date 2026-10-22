@@ -204,9 +204,9 @@ def test_tier2_schema_covers_only_the_fragment(supply_schema: Schema, ontology: 
     assert supplier_values["risk_score"]["properties"]["value"]["type"] == "integer"
     assert "vat_number" not in supplier_values  # confidential
     assert "supplier_count" not in variants[1]["properties"]["values"]["properties"]  # derived
-    assert schema["properties"]["links"]["items"]["properties"]["relation"]["enum"] == [
-        "supplied_by"
-    ]
+    (supplied_by,) = schema["properties"]["links"]["items"]["anyOf"]
+    assert supplied_by["properties"]["relation"] == {"const": "supplied_by"}
+    assert "values" in supplied_by["required"]
     lone = fragment_schema(ontology, [supplier])
     assert "links" not in lone["properties"]
     assert lone["required"] == ["records"]

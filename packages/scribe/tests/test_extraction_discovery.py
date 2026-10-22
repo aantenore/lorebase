@@ -94,6 +94,16 @@ def read(name: str) -> str:
     return Path(DOCUMENTS / name).read_text()
 
 
+def test_generic_words_are_not_kinds(ontology: Ontology) -> None:
+    discovery = Discovery(ontology, DiscoverySettings(), OPTIONS)
+    for label in ("Proposal", "Quality notice"):
+        discovery.add(Observation(SuggestionType.KIND, label, "doc_1", 0.8, "tier2"))
+    found = by_name(discovery.finish({}))
+    assert ("kind", "Proposal") not in found
+    assert ("kind", "QualityNotice") in found
+    assert discovery.stats["suggestions_noise"] == 1
+
+
 async def test_a_heading_code_proposes_a_kind_that_owns_its_fields(
     ontology: Ontology, supply_schema: Schema
 ) -> None:

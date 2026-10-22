@@ -15,7 +15,7 @@ from lorebase_inference import (
     Message,
     create_chat_model,
 )
-from lorebase_inference.chat import EndpointChatModel, parse_json_text
+from lorebase_inference.chat import EndpointChatModel, parse_json_text, reset_known_modes
 from lorebase_inference.settings import LlmSettings, LlmTaskOverride, RetrySettings
 
 SCHEMA = {
@@ -90,6 +90,43 @@ async def test_server_without_json_schema_steps_down_to_json_mode(scripted) -> N
 
     await model.complete_json(MESSAGES, SCHEMA)
     assert len(endpoint.requests) == 3, "the stepped-down mode is remembered"
+
+
+async def test_stepped_down_mode_is_shared_by_later_clients(scripted) -> None:
+    endpoint = scripted(
+        scripted.api_error(400, "unsupported response_format json_schema"),
+        scripted.completion(GOOD),
+    )
+    await make_model(endpoint).complete_json(MESSAGES, SCHEMA)
+    assert len(endpoint.requests) == 2
+
+    later = make_model(endpoint)
+    assert later.output_mode == "json_mode"
+    await later.complete_json(MESSAGES, SCHEMA)
+    assert len(endpoint.requests) == 3
+    assert endpoint.bodies()[2]["response_format"] == {"type": "json_object"}
+
+
+async def test_known_mode_is_per_endpoint_model_and_strictness(scripted) -> None:
+    endpoint = scripted(
+        scripted.api_error(400, "unsupported response_format"), scripted.completion(GOOD)
+    )
+    await make_model(endpoint).complete_json(MESSAGES, SCHEMA)
+
+    other = LlmSettings(base_url="http://llm.test/v1", model="other")
+    assert EndpointChatModel(other).output_mode == "json_schema"
+    elsewhere = LlmSettings(base_url="http://other.test/v1", model="small")
+    assert EndpointChatModel(elsewhere).output_mode == "json_schema"
+    assert make_model(endpoint, json_schema_strict=False).output_mode == "json_schema"
+
+
+async def test_reset_forgets_the_known_mode(scripted) -> None:
+    endpoint = scripted(
+        scripted.api_error(400, "unsupported response_format"), scripted.completion(GOOD)
+    )
+    await make_model(endpoint).complete_json(MESSAGES, SCHEMA)
+    reset_known_modes()
+    assert make_model(endpoint).output_mode == "json_schema"
 
 
 async def test_server_without_any_response_format_falls_back_to_prompt_only(scripted) -> None:
