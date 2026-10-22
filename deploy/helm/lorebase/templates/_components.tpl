@@ -114,3 +114,37 @@
 {{- fail "web.config.keeperBaseUrl is required when web.enabled and the Ingress is off" -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Content-Security-Policy of the web app: web.security.csp when set, otherwise the default one
+     with the Keeper origin (live mode) and web.security.connectSrc allowed for connections. Same
+     policy as deploy/docker/web/40-lorebase-config.sh. */}}
+{{- define "lorebase.webCsp" -}}
+{{- if .Values.web.security.csp -}}
+{{- .Values.web.security.csp -}}
+{{- else -}}
+{{- $connect := list "'self'" -}}
+{{- if eq .Values.web.config.apiMode "live" -}}
+{{- $keeper := urlParse (include "lorebase.webKeeperUrl" .) -}}
+{{- if and $keeper.scheme $keeper.host -}}
+{{- $connect = append $connect (printf "%s://%s" $keeper.scheme $keeper.host) -}}
+{{- end -}}
+{{- end -}}
+{{- $connect = concat $connect .Values.web.security.connectSrc -}}
+{{- printf "default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src %s; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" (join " " $connect) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The security headers of one nginx location (indented by the caller). */}}
+{{- define "lorebase.webSecurityHeaders" -}}
+{{- $csp := include "lorebase.webCsp" . -}}
+{{- if regexMatch "[\"$\\\\{}\n]" (print $csp .Values.web.security.hsts) -}}
+{{- fail "web.security: csp, connectSrc and hsts cannot contain a double quote, $, backslash, brace or newline" -}}
+{{- end -}}
+add_header Content-Security-Policy {{ $csp | quote }} always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "no-referrer" always;
+{{- with .Values.web.security.hsts }}
+add_header Strict-Transport-Security {{ . | quote }} always;
+{{- end }}
+{{- end -}}
