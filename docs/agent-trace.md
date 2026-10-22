@@ -40,8 +40,8 @@ the credential Herald forwards).
 
 Herald sends the session header, the tool header (the MCP tool name) and a `traceparent` on
 every Keeper call. Each tool call is a span and each Keeper request a child span of it with its
-own span id, in the caller's trace (or, when an OpenTelemetry span is active in Herald, that
-span's context). The session id is the one the MCP client sends in `X-Lorebase-Session`, else
+own span id, in the caller's trace; when an OpenTelemetry span is active in Herald, each
+request is a child of that span instead. With tracing off nothing is sent. The session id is the one the MCP client sends in `X-Lorebase-Session`, else
 `herald.trace.session_id`, else the MCP session (`mcp-session-id`, stateful Streamable HTTP).
 When none applies (stateless HTTP, stdio without `session_id`) Herald sends no session id and
 Keeper infers the session. Herald forwards an incoming `X-Lorebase-Trace` header, and sends
