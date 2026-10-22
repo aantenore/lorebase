@@ -459,6 +459,9 @@ LANGUAGE sql IMMUTABLE AS $$
     ELSE to_jsonb(pg_temp.lb_rk(e.value #>> '{}', s, n))
   END), '{}'::jsonb)
   FROM jsonb_each(v) AS e $$;
+CREATE FUNCTION pg_temp.lb_base(k text, ends jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT k LIKE '0%' OR (k ~ '^[A-Z]+-[0-9]+$'
+    AND split_part(k, '-', 2)::bigint < (ends ->> split_part(k, '-', 1))::bigint) $$;
 """
 _REPLICA_RECORDS = """
 INSERT INTO mat_records (domain_id, branch, kind_id, key, "values", derived, title, search,
@@ -469,7 +472,8 @@ SELECT domain_id, branch, kind_id, pg_temp.lb_rk(key, :s, CAST(:n AS jsonb)),
     CASE WHEN title = key THEN pg_temp.lb_rk(title, :s, CAST(:n AS jsonb)) ELSE title END,
     search, object_hash, lineage, updated_revision, updated_at, revision_generation, deleted,
     lineage_revisions
-FROM mat_records WHERE domain_id = :d AND branch = 'main' AND key = ANY(CAST(:keys AS text[]))
+FROM mat_records
+WHERE domain_id = :d AND branch = 'main' AND pg_temp.lb_base(key, CAST(:ends AS jsonb))
 """
 _REPLICA_LINKS = """
 INSERT INTO mat_links (domain_id, branch, relation_id, from_key, to_key, "values",
@@ -477,7 +481,8 @@ INSERT INTO mat_links (domain_id, branch, relation_id, from_key, to_key, "values
 SELECT domain_id, branch, relation_id, pg_temp.lb_rk(from_key, :s, CAST(:n AS jsonb)),
     pg_temp.lb_rk(to_key, :s, CAST(:n AS jsonb)), "values", object_hash, lineage,
     revision_generation, deleted
-FROM mat_links WHERE domain_id = :d AND branch = 'main' AND from_key = ANY(CAST(:keys AS text[]))
+FROM mat_links
+WHERE domain_id = :d AND branch = 'main' AND pg_temp.lb_base(from_key, CAST(:ends AS jsonb))
 """
 _REPLICA_HISTORY = """
 INSERT INTO mat_history (domain_id, branch, partition, element_key, revision_id, at, old_hash,
@@ -489,7 +494,7 @@ SELECT domain_id, branch, partition,
     revision_id, at, old_hash, new_hash, provenance
 FROM mat_history
 WHERE domain_id = :d AND branch = 'main' AND (partition LIKE 'k:%' OR partition LIKE 'r:%')
-  AND split_part(element_key, chr(31), 1) = ANY(CAST(:keys AS text[]))
+  AND pg_temp.lb_base(split_part(element_key, chr(31), 1), CAST(:ends AS jsonb))
 """
 #: Generator key kinds and their `BASE_COUNTS` entries.
 REPLICA_KINDS = {
@@ -499,8 +504,7 @@ REPLICA_KINDS = {
     "order": "orders",
     "contract": "contracts",
 }
-#: Keys per replication statement, and replicas written at once.
-REPLICA_BATCH_KEYS = 20000
+#: Replicas written at once.
 REPLICA_PARALLEL = 4
 
 
@@ -524,23 +528,10 @@ async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: 
         prefixes[kind]: module.BASE_COUNTS[stem] * factor for kind, stem in REPLICA_KINDS.items()
     }
     ends = {prefixes[kind]: module.KEY_START[kind] + counts[prefixes[kind]] for kind in prefixes}
-    async with engine.connect() as connection:
-        # The loaded copy: numbered keys before their first replica, ULIDs as generated.
-        keys = list(
-            (
-                await connection.execute(
-                    text(
-                        "SELECT key FROM mat_records WHERE domain_id = :d AND branch = 'main' "
-                        "AND (key LIKE '0%' OR (key ~ '^[A-Z]+-[0-9]+$' AND "
-                        "split_part(key, '-', 2)::bigint < "
-                        "(CAST(:ends AS jsonb) ->> split_part(key, '-', 1))::bigint)) "
-                        "ORDER BY key"
-                    ),
-                    {"d": DOMAIN, "ends": json.dumps(ends)},
-                )
-            ).scalars()
-        )
     numbers = json.dumps(counts)
+    found = schema.kind_by_api_name("Supplier")
+    assert found is not None
+    supplier_kind = found.id
     attribute_indexes = await _drop_attribute_indexes(engine)
     gate = asyncio.Semaphore(REPLICA_PARALLEL)
 
@@ -552,24 +543,22 @@ async def replicate(engine: AsyncEngine, schema: Schema, factor: int, replicas: 
             present = await connection.execute(
                 text(
                     "SELECT 1 FROM mat_records WHERE domain_id = :d AND branch = 'main' "
-                    "AND key = :k"
+                    "AND kind_id = :kind AND key = :k"
                 ),
-                {"d": DOMAIN, "k": moved},
+                {"d": DOMAIN, "kind": supplier_kind, "k": moved},
             )
             if present.first() is not None:
                 _progress(f"replica {replica}: present")
                 return
             for statement in filter(str.strip, _RENUMBER.split(";\n")):
                 await connection.exec_driver_sql(statement)
-            for start in range(0, len(keys), REPLICA_BATCH_KEYS):
-                chunk = keys[start : start + REPLICA_BATCH_KEYS]
-                params = {"d": DOMAIN, "s": replica, "n": numbers, "keys": chunk}
-                await connection.execute(text(_REPLICA_RECORDS), {**params, "uniq": unique})
-                await connection.execute(text(_REPLICA_LINKS), params)
-                await connection.execute(text(_REPLICA_HISTORY), params)
+            params = {"d": DOMAIN, "s": replica, "n": numbers, "ends": json.dumps(ends)}
+            await connection.execute(text(_REPLICA_RECORDS), {**params, "uniq": unique})
+            await connection.execute(text(_REPLICA_LINKS), params)
+            await connection.execute(text(_REPLICA_HISTORY), params)
             _progress(f"replica {replica}: written")
 
-    _progress(f"replicating {len(keys):,} Records {replicas - 1} times")
+    _progress(f"replicating the loaded Records {replicas - 1} times")
     await _lexicon_triggers(engine, enabled=False)
     try:
         await asyncio.gather(*(one(replica) for replica in range(1, replicas)))
