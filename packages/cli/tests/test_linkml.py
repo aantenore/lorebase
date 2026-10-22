@@ -746,3 +746,71 @@ def test_schema_import_prune_needs_apply_or_dry_run(http: respx.MockRouter) -> N
     assert result.exit_code == 1
     assert "--prune needs --apply or --dry-run" in result.output
     assert not http.calls
+
+
+def without_path_slot(document: dict[str, Any]) -> dict[str, Any]:
+    schema = to_linkml(document)
+    del schema["classes"]["Part"]["attributes"]["orders_for_part"]
+    return schema
+
+
+def test_merge_keeps_a_path_the_linkml_schema_leaves_out_and_says_so() -> None:
+    result = merge_into_current(with_path(), from_linkml(without_path_slot(with_path())))
+
+    assert result.document["derivations"]["orders_for_part"] == PATH_DERIVATION
+    assert "derivations/orders_for_part: kept: not in the LinkML schema (--prune removes it)" in [
+        str(w) for w in result.warnings
+    ]
+
+
+def test_merge_with_prune_removes_a_path_the_linkml_schema_leaves_out() -> None:
+    result = merge_into_current(
+        with_path(), from_linkml(without_path_slot(with_path())), prune=True
+    )
+
+    assert "orders_for_part" not in result.document["derivations"]
+    assert "derivations/orders_for_part: removed: not in the LinkML schema (--prune)" in [
+        str(w) for w in result.warnings
+    ]
+
+
+def test_merge_renames_the_steps_of_a_kept_path_with_the_relation() -> None:
+    schema = without_path_slot(with_path())
+    part = schema["classes"]["Part"]["attributes"]
+    part["sourced_from"] = part.pop("supplied_by")
+    schema["classes"]["Supplier"]["attributes"]["supplies"]["inverse"] = "sourced_from"
+    result = merge_into_current(with_path(), from_linkml(schema))
+
+    assert "sourced_from" in result.document["relations"]
+    steps = result.document["derivations"]["orders_for_part"]["definition"]["steps"]
+    assert steps[0] == {"relation": "sourced_from"}
+
+
+def test_merge_does_not_overwrite_another_kind_of_derivation_by_name() -> None:
+    schema = to_linkml(with_path())
+    part = schema["classes"]["Part"]["attributes"]
+    slot = part.pop("orders_for_part")
+    del slot["annotations"]["lorebase.id"]
+    part["supplier_count"] = slot
+    result = merge_into_current(supply(), from_linkml(schema))
+
+    assert result.document["derivations"]["supplier_count"]["definition"]["variant"] == "aggregate"
+    assert any(str(w).startswith("derivations/supplier_count: skipped") for w in result.warnings)
+
+
+def test_export_refuses_a_path_whose_name_is_taken_on_its_start_class() -> None:
+    document = with_path()
+    document["derivations"]["supplies"] = document["derivations"].pop("orders_for_part")
+    document["kinds"]["Part"]["attributes"]["supplies"] = {"description": "x", "type": "string"}
+
+    with pytest.raises(LinkmlError, match=r"derivations/supplies: .*already has"):
+        to_linkml(document)
+
+
+def test_export_keeps_a_path_with_fields_a_slot_cannot_carry_in_the_annotation() -> None:
+    document = with_path()
+    document["derivations"]["orders_for_part"]["definition"]["extra"] = 1
+
+    schema = to_linkml(document)
+    assert "orders_for_part" not in schema["classes"]["Part"]["attributes"]
+    assert "orders_for_part" in json.loads(schema["annotations"]["lorebase.derivations"])
