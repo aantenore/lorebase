@@ -5,23 +5,29 @@ includes, aggregates, Link summaries, traversal, search, history and health need
 rows. A snapshot provides them: a ref of kind `snapshot` named after the Revision
 (`snapshot_name`), whose rows `materialize_revision` writes like for a branch rebuilt at that
 Revision (content, history of its first-parent chain, lineage, derived values, path Links and
-search vectors), without per-Attribute indexes and without a ref log entry. Branch listings,
-bundles, embeddings and index plans ignore snapshot refs.
+search vectors) with the sensitivity tags of the Revision's own schema, without per-Attribute
+indexes and without a ref log entry. Branch listings, bundles, embeddings, index plans and the
+garbage collector's branch guard ignore snapshot refs; the collector keeps their Revisions.
 
-Snapshots are shared by every read of the Revision in the Domain. Readers take a shared
-transaction-scoped advisory lock on a snapshot before using it (`hold_snapshot`); building
-one (`build_snapshot`, serialized per Revision by the ref lock) first drops the oldest
-snapshots beyond `keep` that no reader holds, through `delete_branch` (large ones are deleted
-by the background job).
+Snapshots are shared by every read of the Revision in the Domain:
+
+- Readers take a shared transaction-scoped advisory lock on a snapshot before using it
+  (`hold_snapshot`, also before it exists), so it is not dropped while they read it.
+- `drop_unused` (its own short transaction) deletes the oldest snapshots beyond `keep` that no
+  reader holds and that are older than a grace period, through `delete_branch` (large ones are
+  deleted by the background job).
+- `build_snapshot` creates one under the Domain's snapshot lock, which serializes the builds
+  of a Domain and their count against the cap: refs being deleted count too, and a full Domain
+  raises `SnapshotBusyError` instead of exceeding it.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.tree import Tree
@@ -30,20 +36,26 @@ from lorebase_store.materialize.rebuild import materialize_revision
 from lorebase_store.materialize.rows import PartitionType, parse_partition
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories.refs import REFS, RefRepository
-from lorebase_store.repositories.revisions import RevisionRow
+from lorebase_store.repositories.revisions import RevisionRepository, RevisionRow
 from lorebase_store.runtime import StoreRuntime
 
 SNAPSHOT_PREFIX = "~snapshot/"
-"""Prefix of snapshot ref names; `~` is not allowed in branch or tag names."""
+"""Prefix of snapshot ref names; branch and tag names may not start with it."""
 
 SNAPSHOT_CREATOR = "lorebase:time-travel"
 """`created_by` of snapshot refs."""
 
+_DOMAIN_LOCK = "~snapshot"
+"""Ref lock name serializing the snapshot builds and drops of a Domain."""
+
 _USE_KEY_SCOPE = b"lb1\x00snapshot-use\x00"
+
+Clock = Callable[[], datetime]
 
 
 class SnapshotBusyError(Exception):
-    """The snapshot of the Revision is being deleted; it can be built again once it is gone."""
+    """No snapshot can be built now: the Domain holds its maximum (in use, recent or being
+    deleted), or the snapshot of the Revision is still being deleted."""
 
 
 def snapshot_name(revision: bytes) -> str:
@@ -67,10 +79,14 @@ def _use_key(domain_id: str, name: str) -> int:
     return int.from_bytes(digest[:8], "big", signed=True)
 
 
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
 async def hold_snapshot(session: AsyncSession, domain_id: str, revision: bytes) -> bool:
     """Take the shared lock of the snapshot of `revision` for the session's transaction (it
-    is not dropped while held) and say whether the snapshot exists. Works in read-only
-    transactions."""
+    is not dropped while held, even when it is built later) and say whether the snapshot
+    exists. Works in read-only transactions."""
     name = snapshot_name(revision)
     await session.execute(
         text("SELECT pg_advisory_xact_lock_shared(:key)"), {"key": _use_key(domain_id, name)}
@@ -86,28 +102,73 @@ async def hold_snapshot(session: AsyncSession, domain_id: str, revision: bytes) 
     return found is not None
 
 
+async def drop_unused(
+    session: AsyncSession,
+    domain_id: str,
+    *,
+    keep: int,
+    min_age_s: float,
+    runtime: StoreRuntime,
+    lock_timeout_ms: int,
+    clock: Clock | None = None,
+) -> int:
+    """Delete the snapshots of the Domain beyond the `keep` newest that no reader holds and
+    that were built at least `min_age_s` ago, in the caller's (short) transaction; returns how
+    many were deleted or scheduled for deletion."""
+    now = (clock or _now)()
+    await RefRepository(session, domain_id).lock(_DOMAIN_LOCK, timeout_ms=lock_timeout_ms)
+    names = (
+        await session.scalars(
+            select(REFS.c.name)
+            .where(
+                REFS.c.domain_id == domain_id,
+                REFS.c.kind == RefKind.SNAPSHOT,
+                REFS.c.deleted_at.is_(None),
+                REFS.c.created_at <= now - timedelta(seconds=min_age_s),
+            )
+            .order_by(REFS.c.created_at.desc(), REFS.c.name)
+        )
+    ).all()
+    young = await _count(session, domain_id, live=True) - len(names)
+    dropped = 0
+    for name in names[max(keep - young, 0) :]:
+        free = await session.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": _use_key(domain_id, name)}
+        )
+        if free:
+            await delete_branch(session, domain_id, name, runtime=runtime, clock=lambda: now)
+            dropped += 1
+    return dropped
+
+
 async def build_snapshot(
     session: AsyncSession,
     domain_id: str,
     revision: RevisionRow,
     *,
-    keep: int,
+    max_snapshots: int,
     runtime: StoreRuntime,
-    clock: Callable[[], datetime] | None = None,
+    lock_timeout_ms: int,
+    clock: Clock | None = None,
 ) -> bool:
     """Create the snapshot of `revision` in the caller's transaction (scoped to the Domain);
-    `False` when it already exists. Snapshots beyond `keep` (this one included) are dropped
-    first, oldest first, unless a reader holds them. Raises `SnapshotBusyError` while an
-    earlier snapshot of the Revision is still being deleted."""
-    now = (clock or (lambda: datetime.now(UTC)))()
+    `False` when it already exists. Raises `SnapshotBusyError` when the Domain already holds
+    `max_snapshots` snapshots (being deleted included) or this one is being deleted, and
+    `LockTimeoutError` when another build of the Domain holds the lock longer than
+    `lock_timeout_ms`."""
+    now = (clock or _now)()
     name = snapshot_name(revision.id)
     refs = RefRepository(session, domain_id)
-    await refs.lock(name, timeout_ms=runtime.settings.commit.lock_timeout_ms)
+    await refs.lock(_DOMAIN_LOCK, timeout_ms=lock_timeout_ms)
     if await refs.get(name) is not None:
         return False
     if await refs.get_deleting(name) is not None:
         raise SnapshotBusyError(f"the snapshot {name!r} of Domain {domain_id!r} is being deleted")
-    await _drop_oldest(session, domain_id, keep - 1, runtime=runtime, now=now)
+    held = await _count(session, domain_id, live=False)
+    if held >= max_snapshots:
+        raise SnapshotBusyError(
+            f"Domain {domain_id!r} holds {held} snapshots, the most allowed ({max_snapshots})"
+        )
     await refs.create(
         name,
         revision.id,
@@ -118,28 +179,27 @@ async def build_snapshot(
         reason="snapshot",
         log=False,
     )
-    await materialize_revision(session, domain_id, name, revision, runtime=runtime, indexes=False)
+    # The ref now roots the Revision for the garbage collector; one that removed the Revision
+    # before (it was unreachable) leaves nothing to build.
+    if await RevisionRepository(session, domain_id).get(revision.id) is None:
+        raise LookupError(f"Revision {revision.id.hex()} of Domain {domain_id!r} is gone")
+    await materialize_revision(
+        session,
+        domain_id,
+        name,
+        revision,
+        runtime=runtime,
+        indexes=False,
+        default_branch_tags=False,
+    )
     return True
 
 
-async def _drop_oldest(
-    session: AsyncSession, domain_id: str, keep: int, *, runtime: StoreRuntime, now: datetime
-) -> None:
-    """Delete the snapshots of the Domain beyond the `keep` newest that no reader holds."""
-    names = (
-        await session.scalars(
-            select(REFS.c.name)
-            .where(
-                REFS.c.domain_id == domain_id,
-                REFS.c.kind == RefKind.SNAPSHOT,
-                REFS.c.deleted_at.is_(None),
-            )
-            .order_by(REFS.c.created_at.desc(), REFS.c.name)
-        )
-    ).all()
-    for name in names[max(keep, 0) :]:
-        free = await session.scalar(
-            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": _use_key(domain_id, name)}
-        )
-        if free:
-            await delete_branch(session, domain_id, name, runtime=runtime, clock=lambda: now)
+async def _count(session: AsyncSession, domain_id: str, *, live: bool) -> int:
+    """Snapshot refs of the Domain: live ones only, or those being deleted too."""
+    query = select(func.count()).where(
+        REFS.c.domain_id == domain_id, REFS.c.kind == RefKind.SNAPSHOT
+    )
+    if live:
+        query = query.where(REFS.c.deleted_at.is_(None))
+    return int(await session.scalar(query) or 0)

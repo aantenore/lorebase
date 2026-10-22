@@ -403,7 +403,9 @@ _DRY_HISTORY = text(
     "SELECT count(*) FROM mat_history h JOIN lb_gc_dead d ON d.id = h.revision_id "
     "WHERE h.domain_id = :d"
 )
-_REF_NAMES = text("SELECT name FROM refs WHERE domain_id = :d ORDER BY name")
+_REF_NAMES = text("SELECT name FROM refs WHERE domain_id = :d AND kind <> 'snapshot' ORDER BY name")
+"""Refs whose commits the guard holds off; snapshot refs take no commits (their Revisions are
+roots like every ref head)."""
 _TRY_LOCKS = text(
     "SELECT coalesce(bool_and(l), true) FROM (SELECT pg_try_advisory_xact_lock(k) AS l "
     "FROM unnest(CAST(:ks AS bigint[])) AS t(k) ORDER BY k) s"

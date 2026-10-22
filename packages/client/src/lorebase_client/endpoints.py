@@ -489,6 +489,7 @@ def record_history(
     key: str,
     *,
     branch: str | None = None,
+    at: str | None = None,
     values: bool = False,
     limit: int | None = None,
     cursor: str | None = None,
@@ -497,7 +498,13 @@ def record_history(
         "GET",
         f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/history",
         parse_model(m.RecordHistory),
-        params={"branch": branch, "values": values or None, "limit": limit, "cursor": cursor},
+        params={
+            "branch": branch,
+            "at": at,
+            "values": values or None,
+            "limit": limit,
+            "cursor": cursor,
+        },
         safe=True,
         cacheable=True,
     )
@@ -998,72 +1005,80 @@ def context_pack_markdown(domain: str, body: m.ContextRequest) -> Call[str]:
 
 
 def explain_record(
-    domain: str, kind: str, key: str, *, branch: str | None = None
+    domain: str, kind: str, key: str, *, branch: str | None = None, at: str | None = None
 ) -> Call[m.Explain]:
     return Call(
         "GET",
         f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/explain",
         parse_model(m.Explain),
-        params={"branch": branch, "format": "json"},
+        params={"branch": branch, "at": at, "format": "json"},
         safe=True,
         cacheable=True,
     )
 
 
 def explain_record_markdown(
-    domain: str, kind: str, key: str, *, branch: str | None = None
+    domain: str, kind: str, key: str, *, branch: str | None = None, at: str | None = None
 ) -> Call[str]:
     return Call(
         "GET",
         f"{_domain(domain)}/kinds/{_seg(kind)}/records/{_seg(key)}/explain",
         parse_text,
-        params={"branch": branch, "format": "markdown"},
+        params={"branch": branch, "at": at, "format": "markdown"},
         accept="text/markdown",
         safe=True,
         cacheable=True,
     )
 
 
-def domain_health(domain: str, *, branch: str | None = None) -> Call[m.DomainHealth]:
+def domain_health(
+    domain: str, *, branch: str | None = None, at: str | None = None
+) -> Call[m.DomainHealth]:
     return Call(
         "GET",
         f"{_domain(domain)}/health",
         parse_model(m.DomainHealth),
-        params={"branch": branch, "format": "json"},
+        params={"branch": branch, "at": at, "format": "json"},
         safe=True,
         cacheable=True,
     )
 
 
-def domain_health_markdown(domain: str, *, branch: str | None = None) -> Call[str]:
+def domain_health_markdown(
+    domain: str, *, branch: str | None = None, at: str | None = None
+) -> Call[str]:
     return Call(
         "GET",
         f"{_domain(domain)}/health",
         parse_text,
-        params={"branch": branch, "format": "markdown"},
+        params={"branch": branch, "at": at, "format": "markdown"},
         accept="text/markdown",
         safe=True,
         cacheable=True,
     )
 
 
-def kind_health(domain: str, kind: str, *, branch: str | None = None) -> Call[m.KindHealthReport]:
+def kind_health(
+    domain: str, kind: str, *, branch: str | None = None, at: str | None = None
+) -> Call[m.KindHealthReport]:
     return Call(
         "GET",
         f"{_domain(domain)}/kinds/{_seg(kind)}/health",
         parse_model(m.KindHealthReport),
-        params={"branch": branch, "format": "json"},
+        params={"branch": branch, "at": at, "format": "json"},
         safe=True,
         cacheable=True,
     )
 
 
-def kind_health_markdown(domain: str, kind: str, *, branch: str | None = None) -> Call[str]:
+def kind_health_markdown(
+    domain: str, kind: str, *, branch: str | None = None, at: str | None = None
+) -> Call[str]:
     return Call(
         "GET",
         f"{_domain(domain)}/kinds/{_seg(kind)}/health",
         parse_text,
-        params={"branch": branch, "format": "markdown"},
+        params={"branch": branch, "at": at, "format": "markdown"},
         accept="text/markdown",
         safe=True,
         cacheable=True,

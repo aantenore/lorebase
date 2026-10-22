@@ -77,10 +77,45 @@ class TimeTravelSettings(SectionModel):
         "traversal, search, history, health, context packs); they are served from a snapshot "
         "of the Revision, and refused above this size. 0 refuses them all.",
     )
+    snapshot_max_history_revisions: int = Field(
+        default=100_000,
+        ge=1,
+        description="Most Revisions in the history of a Revision (its generation + 1, a bound "
+        "on its first-parent chain, whose changes a snapshot copies); deeper ones are refused.",
+    )
     snapshot_max_per_domain: int = Field(
         default=4,
         ge=1,
-        description="Snapshots kept per Domain; building another drops the oldest unused.",
+        description="Snapshots a Domain holds, those being deleted included. Building another "
+        "first drops the oldest that no read holds and that are older than "
+        "`snapshot_min_age_s`; when none can go, the read answers 503 with Retry-After.",
+    )
+    snapshot_min_age_s: int = Field(
+        default=60,
+        ge=0,
+        description="Grace period of a new snapshot: younger ones are not dropped for others.",
+    )
+    snapshot_max_concurrent_builds: int = Field(
+        default=2,
+        ge=1,
+        description="Snapshot builds running at once in this process. Each holds a second "
+        "database connection besides its read's, so keep it well below the pool size; builds "
+        "of one Domain also run one at a time.",
+    )
+    snapshot_build_wait_ms: int = Field(
+        default=5000,
+        ge=0,
+        description="How long a read waits for a build slot or for the Domain's running build "
+        "before answering 503 with Retry-After.",
+    )
+    snapshot_builds_per_minute: float = Field(
+        default=6,
+        gt=0,
+        description="Snapshot builds one principal may start per minute in this process "
+        "(token bucket); beyond it reads that need a new snapshot answer 429.",
+    )
+    snapshot_build_burst: int = Field(
+        default=3, ge=1, description="Snapshot builds one principal may start at once."
     )
 
 

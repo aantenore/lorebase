@@ -181,6 +181,7 @@ class LorebaseTools:
         limit: int | None,
         domain: str | None,
         branch: str | None,
+        at: str | None,
         fmt: str | None,
     ) -> str:
         if not query and not query_vector:
@@ -198,6 +199,7 @@ class LorebaseTools:
             where=dict(where) if where else None,
             limit=limit or None,
             branch=self.branch(branch),
+            at=at,
         )
         name = self.domain(domain)
         async with self.session(credential) as client:
@@ -217,6 +219,7 @@ class LorebaseTools:
         values: bool,
         domain: str | None,
         branch: str | None,
+        at: str | None,
         fmt: str | None,
     ) -> str:
         request = self.request(
@@ -227,6 +230,7 @@ class LorebaseTools:
             relations=list(relations) if relations else None,
             max_edges=max_edges or None,
             branch=self.branch(branch),
+            at=at,
         )
         name = self.domain(domain)
         async with self.session(credential) as client:
@@ -246,6 +250,7 @@ class LorebaseTools:
         token_budget: int | None,
         domain: str | None,
         branch: str | None,
+        at: str | None,
         fmt: str | None,
     ) -> str:
         settings = self.settings.context
@@ -269,6 +274,7 @@ class LorebaseTools:
                         mode="lexical",
                         limit=settings.search_seeds,
                         branch=branch,
+                        at=at,
                     ),
                 )
                 seeds = [RecordRef(hit.kind, hit.key) for hit in hits.items]
@@ -287,6 +293,7 @@ class LorebaseTools:
                 budget_tokens=min(token_budget or settings.token_budget, settings.max_token_budget),
                 relations=list(relations) if relations else None,
                 branch=branch,
+                at=at,
             )
             if as_json_pack:
                 pack = await client.agents.context(name, request)
@@ -307,13 +314,14 @@ class LorebaseTools:
         attributes: Sequence[str] | None,
         domain: str | None,
         branch: str | None,
+        at: str | None,
         fmt: str | None,
     ) -> str:
         target = RecordRef.parse(record)
         name = self.domain(domain)
         async with self.session(credential) as client:
             explained = await client.agents.explain(
-                name, target.kind, target.key, branch=self.branch(branch)
+                name, target.kind, target.key, branch=self.branch(branch), at=at
             )
         view = views.explain_view(explained, attributes, self.output)
         text = views.explain_text(view, self.output)
@@ -329,6 +337,7 @@ class LorebaseTools:
         cursor: str | None,
         domain: str | None,
         branch: str | None,
+        at: str | None,
         fmt: str | None,
     ) -> str:
         target = RecordRef.parse(record)
@@ -339,6 +348,7 @@ class LorebaseTools:
                 target.kind,
                 target.key,
                 branch=self.branch(branch),
+                at=at,
                 values=values,
                 limit=limit,
                 cursor=cursor,

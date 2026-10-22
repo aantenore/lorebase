@@ -39,7 +39,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
-from lorebase_store.materialize.sensitivity import branch_tagged_schema
+from lorebase_store.materialize.sensitivity import branch_tagged_schema, tagged_schema
 from lorebase_store.models.enums import Materialization
 from lorebase_store.nodestore import NodeRepository
 from lorebase_store.objectstore import PgObjectStore, StoredBody
@@ -126,9 +126,12 @@ async def materialize_revision(
     *,
     runtime: StoreRuntime,
     indexes: bool = True,
+    default_branch_tags: bool = True,
 ) -> RebuildReport:
     """Write the materialized head of an empty branch from the tree of `head`; without
-    `indexes` the branch gets no per-Attribute indexes (snapshots, `materialize.snapshot`)."""
+    `indexes` the branch gets no per-Attribute indexes, without `default_branch_tags` titles
+    and search vectors follow the sensitivity tags of `head`'s schema alone (snapshots,
+    `materialize.snapshot`)."""
     settings = runtime.settings
     batch = settings.materialize.read_batch_rows
     repository = MaterializedRepository(
@@ -140,7 +143,11 @@ async def materialize_revision(
     objects = PgObjectStore(session, domain_id, writes=settings.writes, batch=batch)
     tree = await nodes.load_tree(head.root)
     schema, schema_hash = await load_schema(session, domain_id, tree, runtime=runtime)
-    tagged = await branch_tagged_schema(session, domain_id, branch, schema, runtime=runtime)
+    tagged = (
+        await branch_tagged_schema(session, domain_id, branch, schema, runtime=runtime)
+        if default_branch_tags
+        else tagged_schema(schema, {}, runtime.schema.expression_limits)
+    )
     branch_indexes = BranchIndexes(
         session, domain_id, branch, settings=settings.indexes, maintenance=runtime.index_maintenance
     )

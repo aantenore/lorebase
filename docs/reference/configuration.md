@@ -1051,7 +1051,13 @@ POST /traverse and POST /neighborhood; a neighborhood is also bounded by store.t
 |---------|---------|-------------|
 | `read.time_travel.max_scan_entries` | `100000` | largest Kind or Relation partition listed at a Revision |
 | `read.time_travel.snapshot_max_entries` | `100000` | largest Revision (Records + Links) materialized for filters, search, traversal, history and health at it; larger refused |
-| `read.time_travel.snapshot_max_per_domain` | `4` | snapshots kept per Domain, oldest unused dropped first |
+| `read.time_travel.snapshot_max_history_revisions` | `100000` | deeper histories (generation + 1) are refused |
+| `read.time_travel.snapshot_max_per_domain` | `4` | snapshots per Domain (being deleted included); oldest unused dropped first, 503 when none can go |
+| `read.time_travel.snapshot_min_age_s` | `60` | grace period before a snapshot may be dropped |
+| `read.time_travel.snapshot_max_concurrent_builds` | `2` | per process; each uses a second DB connection |
+| `read.time_travel.snapshot_build_wait_ms` | `5000` | wait for a build slot before answering 503 |
+| `read.time_travel.snapshot_builds_per_minute` | `6` | per principal and process (429 beyond) |
+| `read.time_travel.snapshot_build_burst` | `3` |  |
 
 ### `read.diff`
 

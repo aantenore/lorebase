@@ -31,6 +31,7 @@ from lorebase_store.materialize import (
     create_branch,
     delete_branch,
 )
+from lorebase_store.materialize.snapshot import SNAPSHOT_PREFIX
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories import (
     BranchMaterializationRepository,
@@ -78,8 +79,13 @@ class RefPage:
 
 
 def check_ref_name(name: str, settings: BranchSettings, pointer: str = "/body/name") -> None:
-    """422 unless `name` is a valid branch or tag name."""
-    if len(name) > settings.max_name_length or not re.fullmatch(settings.name_pattern, name):
+    """422 unless `name` is a valid branch or tag name (never a snapshot ref's name, whatever
+    the configured pattern)."""
+    if (
+        len(name) > settings.max_name_length
+        or not re.fullmatch(settings.name_pattern, name)
+        or name.startswith(SNAPSHOT_PREFIX)
+    ):
         raise ProblemError(
             VALIDATION_FAILED,
             "One or more request members are invalid.",
@@ -176,7 +182,8 @@ async def create(
                 state = await BranchMaterializationRepository(session, domain_id).get(name)
                 return replace(replayed, materialization=state)
             source_name = source or domain.default_branch
-            if await refs.get(source_name) is None:
+            found_source = await refs.get(source_name)
+            if found_source is None or found_source.kind is RefKind.SNAPSHOT:
                 raise ProblemError(NOT_FOUND, f"Branch or tag {source_name!r} not found.")
             if revision is not None:
                 await require_revision(session, domain_id, revision)
@@ -314,7 +321,7 @@ async def _create_tag(
             return _replay(existing, principal, idempotency_key, RefKind.TAG)
         if revision is None:
             source_ref = await refs.get(source or domain.default_branch)
-            if source_ref is None:
+            if source_ref is None or source_ref.kind is RefKind.SNAPSHOT:
                 raise ProblemError(NOT_FOUND, f"Branch or tag {source!r} not found.")
             revision = source_ref.head
         await require_revision(session, domain_id, revision)

@@ -5,7 +5,9 @@ for reads at it (`lorebase_store.materialize.snapshot`). The value is added outs
 migration transaction, as Postgres requires before it can be used.
 
 Downgrade deletes the snapshot refs (their rows go with them) and keeps the enum value:
-Postgres cannot drop a value from an enum type, and no other ref uses it.
+Postgres cannot drop a value from an enum type, and no other ref uses it. The deletion is one
+statement: snapshots are bounded (`read.time_travel.snapshot_max_per_domain` per Domain, each
+at most `snapshot_max_entries` Records and Links plus its history), so it is not batched.
 
 Revision ID: 0025
 Revises: 0024
