@@ -17,7 +17,7 @@ keywords: versioned knowledge graph, open-source ontology platform, knowledge ba
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, documents are extracted into Proposals that people review item by item, and agent writes that need review become Proposals. Semantic search ranks stored vectors against a vector the caller supplies; nothing computes embeddings yet. [Status and roadmap](#status-and-roadmap) says exactly what is done.
+> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, documents are extracted into Proposals that people review item by item, and agent writes that need review become Proposals. Scribe embeds the Records of Kinds with an embedding template, and semantic search ranks those vectors against a vector the caller supplies. [Status and roadmap](#status-and-roadmap) says exactly what is done.
 
 ## What it is
 
@@ -88,7 +88,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Versioning | Proposals, reviews, required approvals, merge and Conflict resolution over REST | Done | M1 |
 | Reads | Records, Links, query DSL, traversal, neighborhood, lexical search, log and diff over REST, with ETags | Done | M1 |
 | Reads | Per-Attribute indexes, one-statement read primitives, performance harness and a 100k-Record baseline ([performance.md](performance.md)) | Done; the 1M-Record baseline is not | M1 |
-| Reads | Semantic and hybrid search with caller-supplied vectors | Done; no job computes embeddings yet | M4 |
+| Reads | Semantic and hybrid search with caller-supplied vectors, embeddings computed by Scribe jobs ([scribe](scribe.md#embeddings)) | Done | M4 |
 | Governance | Built-in Operations (create, update, delete, link, unlink, bulk import) with dry run and idempotency | Done | M1 |
 | Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
 | Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies; events declared by Operations and sensitivity masking are planned (signed webhooks on Revision events exist) | M3 |

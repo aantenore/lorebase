@@ -33,6 +33,7 @@ class IssueCode(StrEnum):
     SCHEMA_DEFAULT_CONFLICT = "schema.default_conflict"
     SCHEMA_ATTRIBUTE_FLAG_INVALID = "schema.attribute_flag_invalid"
     SCHEMA_AUTHORITY_UNKNOWN = "schema.authority_unknown"
+    SCHEMA_EMBEDDING_TEMPLATE_INVALID = "schema.embedding_template_invalid"
     # Schema: Relations
     SCHEMA_RELATION_ENDPOINT_UNKNOWN = "schema.relation_endpoint_unknown"
     SCHEMA_FOREIGN_KEY_INVALID = "schema.foreign_key_invalid"

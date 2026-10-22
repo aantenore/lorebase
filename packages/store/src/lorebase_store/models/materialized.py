@@ -131,13 +131,16 @@ class Embedding(Base):
     """Vector of an object for one model; shared by all branches.
 
     The column is dimensionless so models of different sizes coexist; `dims` must match the
-    vector and selects the per-dimension HNSW index.
+    vector and selects the per-dimension HNSW index. `text_hash` is the SHA-256 of the text
+    that was embedded (revision 0014): an object whose text did not change keeps its vector,
+    and a new object with the text of another reuses that one's vector.
     """
 
     __tablename__ = "embeddings"
     __table_args__ = (
         CheckConstraint("vector_dims(embedding) = dims", name="dims_match"),
         domain_fk(),
+        Index("ix_embeddings_domain_id_model_text_hash", "domain_id", "model", "text_hash"),
     )
 
     domain_id: Mapped[DomainKey]
@@ -145,3 +148,23 @@ class Embedding(Base):
     model: Mapped[str] = mapped_column(primary_key=True)
     dims: Mapped[int] = mapped_column(Integer)
     embedding: Mapped[list[float]] = mapped_column(VECTOR())
+    text_hash: Mapped[H32 | None]
+
+
+class EmbeddingCursor(Base):
+    """How far the embedding job got on a branch for one model (revision 0014).
+
+    `head` is the branch head the last complete pass read and `fingerprints` the embedding
+    template fingerprint of each embedded Kind at that head; a pass is skipped while both are
+    unchanged, and Kinds whose fingerprint changed have every text rendered again.
+    """
+
+    __tablename__ = "embedding_cursors"
+    __table_args__ = (_branch_fk(),)
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    model: Mapped[str] = mapped_column(primary_key=True)
+    head: Mapped[H32]
+    fingerprints: Mapped[dict[str, Any]]
+    updated_at: Mapped[datetime]

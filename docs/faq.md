@@ -26,7 +26,7 @@ A graph database stores nodes and edges and gives you a powerful query language,
 
 ### How is it different from a vector database?
 
-A vector database retrieves the chunks nearest to a query embedding. Lorebase stores typed Records and Links that people have reviewed, and answers questions such as "which parts depend on a single supplier" by query, not by similarity. Vectors are optional in Lorebase and used for search over Records; today nothing computes embeddings (planned for M4), and Lorebase never embeds your query itself: semantic search takes a vector from the caller.
+A vector database retrieves the chunks nearest to a query embedding. Lorebase stores typed Records and Links that people have reviewed, and answers questions such as "which parts depend on a single supplier" by query, not by similarity. Vectors are optional in Lorebase and used for search over Records: Scribe embeds the Records of Kinds that declare an embedding template, offline, and Lorebase never embeds your query itself: semantic search takes a vector from the caller (`lorebase-inference embed` computes one with the same model).
 
 ### How is it different from a RAG framework or GraphRAG?
 

@@ -1,8 +1,16 @@
-"""`python -m lorebase_inference check`: probe the configured chat and embedding providers.
+"""`lorebase-inference check` and `lorebase-inference embed`.
 
-The only code path of the package meant to reach the network on demand. It sends one tiny
-prompt to the chat model and one short text to the embedding model, and prints the model,
-latency and vector size. Exit status 0 means every probed provider answered correctly.
+`check` probes the configured chat and embedding providers: it sends one tiny prompt to the
+chat model and one short text to the embedding model, and prints the model, latency and vector
+size. Exit status 0 means every probed provider answered correctly.
+
+`embed TEXT` prints the vector of `TEXT` from the configured embedding model as JSON
+(`{"model", "dims", "vector"}`): the query vector of semantic and hybrid search, computed on
+the caller's side because Keeper and Herald never call a model (for example
+`lorebase-inference embed "late deliveries" | lorebase search "late deliveries" --mode hybrid
+--vector-file -`).
+
+These are the only code paths of the package meant to reach the network on demand.
 """
 
 from __future__ import annotations
@@ -133,6 +141,23 @@ async def run_checks(
     return results
 
 
+async def embed_query(settings: InferenceSettings, text: str) -> dict[str, Any]:
+    """`{"model", "dims", "vector"}` of `text`; `dims` is checked against `embeddings.dims`."""
+    model = create_embedding_model(settings)
+    try:
+        vectors = await model.embed([text])
+    finally:
+        close = getattr(model, "aclose", None)
+        if close is not None:
+            await close()
+    vector = vectors[0] if vectors else []
+    if len(vector) != settings.embeddings.dims:
+        raise InferenceError(
+            f"returned {len(vector)} dimensions, embeddings.dims is {settings.embeddings.dims}"
+        )
+    return {"model": model.name, "dims": len(vector), "vector": vector}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lorebase-inference", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -143,6 +168,10 @@ def _parser() -> argparse.ArgumentParser:
     check.add_argument("--no-chat", action="store_true", help="skip the chat probe")
     check.add_argument("--no-embeddings", action="store_true", help="skip the embeddings probe")
     check.add_argument("--json", action="store_true", help="print the results as JSON")
+    embed = commands.add_parser(
+        "embed", help="print the query vector of a text from the configured embedding model"
+    )
+    embed.add_argument("text", help="text to embed")
     return parser
 
 
@@ -156,6 +185,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(str(exc))
     configure_logging(settings.logging, service=SERVICE_NAME)
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per request is noise here
+    if args.command == "embed":
+        try:
+            print(json.dumps(asyncio.run(embed_query(inference, args.text))))
+        except (InferenceError, ValueError) as exc:
+            sys.exit(f"{type(exc).__name__}: {exc}")
+        sys.exit(0)
     results = asyncio.run(
         run_checks(
             inference, task=args.task, chat=not args.no_chat, embeddings=not args.no_embeddings

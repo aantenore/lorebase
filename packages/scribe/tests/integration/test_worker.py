@@ -311,7 +311,7 @@ async def test_scheduler_leader_election_and_schedules(
 ) -> None:
     await load_domain(sessions, runtime, clock, example_schema())
     time = Stepper(datetime(2026, 10, 21, 1, 0, tzinfo=UTC))
-    settings = SchedulerSettings(webhook_interval_s=10)
+    settings = SchedulerSettings(webhook_interval_s=10, embeddings_interval_s=0)
 
     def scheduler() -> Scheduler:
         return Scheduler(

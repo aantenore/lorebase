@@ -210,7 +210,7 @@ A Domain is the unit of isolation for data, permissions, storage scoping (object
 | attributes | map `attribute_id -> Attribute` |
 | traits | list of `{trait_id, attribute_map: {trait_attribute_id: attribute_id}}` |
 | status | `draft`, `active`, `deprecated` |
-| search | `{text_attributes: [...weights], embedding_template: string or null}` |
+| search | `{text_attributes: [...weights], embedding_template: string or null, embedding_sensitive: bool or null}`; a Kind with a template is embedded (9.3) |
 | icon, color | presentation hints for Explorer and Canvas |
 | operations_builtin | which built-in Operations are enabled (`create`, `update`, `delete`) |
 
@@ -867,10 +867,19 @@ create table embeddings (              -- content-addressed, shared by all branc
   domain_id text not null, object_hash bytea not null,
   model text not null, dims int not null,
   embedding vector not null,
+  text_hash bytea,                     -- sha256 of the embedded text (revision 0014)
   primary key (domain_id, object_hash, model)
 );
--- per configured model: create index ... using hnsw ((embedding::vector(1024)) vector_cosine_ops)
---   where model = '<model>';
+create index on embeddings (domain_id, model, text_hash);
+-- per configured dimension: create index ... using hnsw ((embedding::vector(384)) vector_cosine_ops)
+--   where dims = 384;
+
+create table embedding_cursors (       -- last complete embedding pass per branch and model
+  domain_id text, branch text, model text,
+  head bytea, fingerprints jsonb,      -- {kind_id: template fingerprint}
+  updated_at timestamptz,
+  primary key (domain_id, branch, model)
+);
 ```
 
 ### 7.3 Proposals and merges
@@ -978,6 +987,7 @@ Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (ar
 - **Lexical.** `tsvector` per Record built from title (weight A) and searchable Attributes (configured weights) using the Domain's text search configuration. Ranking by `ts_rank_cd`, plus trigram similarity on titles for typo tolerance (`pg_trgm`).
 - **Semantic (optional).** Embeddings are computed offline by Scribe (9.3; default fastembed, in-process on CPU) from a per-Kind template over the Record content, keyed by `object_hash` so all branches and Revisions sharing the same content share the vector. Vectors live in pgvector with HNSW indexes per configured model; the index dimension comes from configuration.
 - **Query vectors.** Semantic and hybrid search take a `query_vector` supplied by the caller. Keeper and Herald never call a model, not even an embedding model. `describe_domain` and `GET /schema` advertise the embedding model name and dimension so agents compute compatible vectors themselves (for example with the same fastembed model, locally and for free). Without a vector, search runs in lexical mode. **[Architect call AC-17]**
+- **Where query vectors come from (implemented).** The caller embeds its query with the model Scribe uses, on its own side. `lorebase_inference` is the only package that calls models, and the import contracts allow it in Scribe only among the services: Keeper and Herald must not import it, and the CLI and the Python client depend on nothing internal. So the query side is: `lorebase-inference embed TEXT` prints `{model, dims, vector}` from the configured `inference.embeddings` (the same settings as Scribe's, so the same model and dimension), and `lorebase search TEXT --vector-file FILE` (or `-` for standard input) sends it as `query_vector`; Python callers use `create_embedding_model(settings).embed([text])` and pass the vector to `records.search`. Herald takes `query_vector` as given and never embeds text: a Herald that turned text into vectors through an embedding sidecar would put a model call (and its latency, cost and failure modes) back in the agent read path, which AC-17 rules out. Agents that need semantic search over MCP embed on their side, as above. A Keeper with `search.semantic.model` naming a model with no stored vectors returns no semantic hits; a vector of another dimension than `store.embeddings.dims` is refused with `dimension_mismatch`. The advertisement of the model in `GET /schema` and `describe_domain` is not implemented yet.
 - **Hybrid.** Reciprocal rank fusion of lexical and vector candidate lists, computed in SQL, with filters applied before fusion.
 - Search results return `{kind, key, title, snippet, score, revision}`; snippets come from `ts_headline` on searchable Attributes.
 
@@ -1108,6 +1118,16 @@ Scribe computes embeddings for Records whose `object_hash` has no vector for the
 - **Alternatives:** Ollama embeddings, or any OpenAI-compatible embeddings endpoint (local or hosted).
 - **Model name and dimension come from configuration.** The pgvector index for a model is created with the configured dimension; at startup Scribe embeds a probe string and fails fast if the returned dimension differs.
 - **Switching model** creates new vectors keyed by the new model name next to the old ones; search uses the active model; old vectors are removed by GC once the backfill completes.
+
+**Implementation notes (M4).**
+
+- **What is embedded.** A Kind opts in with `search.embedding_template`, a text with `{attribute}` placeholders (api names) plus `{_kind}` and `{_key}` (`lorebase_core.model.embedding`). Rendering is deterministic (absent values empty, lists joined with `, `, whitespace collapsed). Static validation (`schema.embedding_template_invalid`) refuses unknown Attributes, derived Attributes (their values are not part of the object hash that keys the vector) and sensitive Attributes unless `search.embedding_sensitive` is true.
+- **Trigger.** A scheduled sweep rather than the outbox: the scheduler leader queues an `embeddings` job per Domain every `scribe.scheduler.embeddings_interval_s` (an identical queued job is reused). The outbox has a single consumer state (`delivered_at`) owned by webhook delivery and is pruned after delivery, so a second consumer would need its own cursor and could still lose events to pruning; the sweep is self-healing instead: it finds whatever lacks a vector, whatever happened before. `lorebase-scribe embeddings DOMAIN [--branch B] [--reindex] [--prune]` runs a pass at once (backfill).
+- **A pass** covers the materialized branches of the Domain. A branch with no template is skipped without creating the model; a branch whose head equals the head recorded in `embedding_cursors` for the model is skipped (a schema change moves the head). Otherwise the branch's own live rows are read in key order, page by page: rows whose object hash has no vector of the model, and every row of the Kinds whose template fingerprint changed since the last complete pass (all Kinds with `--reindex`). Each text is rendered and hashed (`text_hash`): equal to the stored vector's hash, it is unchanged; equal to another stored text, its vector is copied without a model call; otherwise it is embedded in batches. A complete pass records the head and the fingerprints.
+- **Overlays and shared rows.** Vectors are keyed by object hash and a branch reads only its own rows, so an overlay's inherited rows (covered by its base) and the unchanged rows of a copied branch cost nothing; a branch adds work only for the Records it changed. Two branches whose templates differ for the same content share one row per object hash; the last pass wins until the branches converge (`--reindex` on the branch to restore).
+- **Backpressure, rate limits, retries.** A job reads at most `scribe.embeddings.max_records_per_job` rows and queues its continuation (`resume` after the last row) instead of holding a worker slot; model calls are paced by `max_calls_per_second` and retried `retry.attempts` times inside the job after the provider's own retries; then the worker retries the job (`store.jobs`). One pass per Domain runs at a time (advisory lock). Dimension mismatches (the model against `store.embeddings.dims`, or the probe text's vector) fail the job without retries.
+- **Model changes.** Vectors and cursors are keyed by the model name (`fake:<model>` for the fake provider), so a new model has no cursor and its first passes embed everything; Keeper searches `search.semantic.model`, switched once the backfill is complete; `--prune` then deletes the vectors of other models. Orphaned vectors (object hashes no branch holds any more) are not collected yet.
+- **Metrics.** `lorebase.scribe.embeddings.records` by outcome (`embedded`, `reused`, `unchanged`, `empty`) and `lorebase.scribe.embeddings.call.duration`, plus the job metrics of type `embeddings` ([metrics](metrics.md)).
 
 ### 9.4 Model-agnostic inference
 

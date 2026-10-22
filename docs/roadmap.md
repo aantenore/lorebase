@@ -90,7 +90,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [ ] Tiered extraction: rules, local GLiNER and GLiREL, then any LLM with JSON schema output; cache, verified evidence, entity resolution, schema suggestions (all but schema suggestions done, [docs/extraction.md](extraction.md))
 - [x] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles `local-models` and `litellm` ([inference providers](inference-providers.md))
 - [x] Extraction Proposal items and evidence Review UI (an Items tab in Review accepts, edits or rejects items one by one or by filter; the Documents viewer highlights the evidence)
-- [ ] Embedding jobs and hybrid search (semantic and hybrid search rank stored vectors against a query vector the caller supplies; no job computes embeddings)
+- [x] Embedding jobs and hybrid search: Kinds opt in with `search.embedding_template`; scheduled Scribe passes embed the Records that lack a vector of the configured model (content-hash keyed, shared across branches and overlays, batched, rate-limited, resumable), `lorebase-scribe embeddings` backfills and reindexes (migration `0014`, [scribe](scribe.md#embeddings)); query vectors are computed on the caller's side (`lorebase-inference embed`, `lorebase search --vector-file`). The model is not advertised in `GET /schema` or `describe_domain` yet
 - [ ] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path Derivations are defined in the schema but not materialized)
 
 ## M5: Enterprise hardening and 1.0

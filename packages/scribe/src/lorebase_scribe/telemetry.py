@@ -41,6 +41,17 @@ EXTRACTION_ITEMS = meter.create_counter(
     unit="{item}",
     description="Items proposed by extraction jobs, by tier and initial decision.",
 )
+EMBEDDING_RECORDS = meter.create_counter(
+    "lorebase.scribe.embeddings.records",
+    unit="{record}",
+    description="Records an embedding pass rendered, by outcome.",
+)
+EMBEDDING_CALL_DURATION = meter.create_histogram(
+    "lorebase.scribe.embeddings.call.duration",
+    unit="s",
+    description="Duration of one call of the embedding model by an embedding job.",
+    explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_S,
+)
 
 
 class QueueDepth:

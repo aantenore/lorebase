@@ -111,6 +111,34 @@ Hosted embeddings work the same way (`embeddings.provider: openai_compatible`, `
 `api_key`, `model`, `dims`). The embedding model name keys the stored vectors, so switching
 model creates new vectors next to the old ones ([design 9.3](design.md#93-embedding-jobs)).
 
+## Embeddings for search
+
+Scribe embeds the Records of Kinds that have an `embedding_template` with this model
+([scribe](scribe.md#embeddings)). Keeper and Herald never call a model, so the query vector of
+semantic and hybrid search is computed on the caller's side with the same settings:
+
+```bash
+lorebase-inference embed "late deliveries"
+# {"model": "BAAI/bge-small-en-v1.5", "dims": 384, "vector": [...]}
+lorebase-inference embed "late deliveries" | lorebase search "late deliveries" --vector-file -
+```
+
+From Python:
+
+```python
+from lorebase_inference import create_embedding_model, inference_settings
+from lorebase_platform.settings import load_settings
+
+model = create_embedding_model(inference_settings(load_settings()))
+[vector] = await model.embed(["late deliveries"])
+# client.records.search(domain, SearchRequest(q="late deliveries", query_vector=vector))
+```
+
+Agents on MCP pass the vector as `query_vector` of `lorebase_search`; Herald does not embed
+text. Keeper's `search.semantic.model` must be the name Scribe stores vectors under (the
+provider's model name; `fake:<model>` with the fake provider), and `store.embeddings.dims` the
+dimension of both.
+
 ## LiteLLM for routing and non-compatible providers
 
 Providers that do not speak the protocol natively (Anthropic, Google, Amazon Bedrock, and
@@ -259,7 +287,10 @@ every one can be set as `LOREBASE__INFERENCE__...` in the environment.
 
 - Chat has no tools and no streaming; one request per call.
 - Vectors are fixed-size: `embeddings.dims` must equal what the model returns. A mismatch
-  raises `DimensionMismatchError`; `check` reports it at deploy time.
+  raises `DimensionMismatchError`; `check` reports it at deploy time, and embedding jobs fail
+  without retries when it differs from `store.embeddings.dims`.
+- Query vectors use the same text path as stored ones: models that expect a query prefix
+  (some BGE and E5 variants) are not given one.
 - `json_schema` is not strict mode: schemas are sent as given, and the local validation is the
   guarantee. A server that rejects a particular schema feature in its message pins the process
   to a lower mode until restart.

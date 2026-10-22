@@ -82,6 +82,12 @@ class SchedulerSettings(SectionModel):
         default=True,
         description="Queue Source synchronizations according to each Source's `schedule`.",
     )
+    embeddings_interval_s: float = Field(
+        default=60.0,
+        ge=0,
+        description="Queue an embedding pass of every Domain this often; on a branch whose "
+        "head did not move a pass reads its schema and one key. 0 disables it.",
+    )
     domain_batch: int = Field(default=100, ge=1, description="Domains read per query.")
 
     @field_validator("gc_schedule")
@@ -262,6 +268,50 @@ class SourceSettings(SectionModel):
     postgres: PostgresSourceSettings = Field(default_factory=PostgresSourceSettings)
 
 
+class EmbeddingRetrySettings(SectionModel):
+    """Retries of a failed model call inside a job, after the provider's own retries."""
+
+    attempts: int = Field(default=2, ge=1, description="Attempts per call, the first included.")
+    backoff_s: float = Field(default=2.0, ge=0, description="Pause before the first retry.")
+    backoff_max_s: float = Field(
+        default=60.0, ge=0, description="Longest pause; each retry waits twice as long."
+    )
+
+
+class EmbeddingJobSettings(SectionModel):
+    """Embedding jobs (design 9.3). The model is `inference.embeddings`; Kinds opt in with
+    `search.embedding_template` in the schema."""
+
+    page_rows: int = Field(
+        default=500, ge=1, description="Record rows read and rendered per query."
+    )
+    batch_texts: int = Field(
+        default=64,
+        ge=1,
+        description="Texts per call of the embedding model (the provider may split a call "
+        "further by inference.embeddings.batch_size).",
+    )
+    max_records_per_job: int = Field(
+        default=20000,
+        ge=1,
+        description="Rows one job reads; a pass that needs more queues a continuation, so a "
+        "large backfill never holds a worker slot for long.",
+    )
+    max_calls_per_second: float = Field(
+        default=0.0,
+        ge=0,
+        description="Model calls per second of one job (a paid endpoint's rate limit); 0 "
+        "does not limit them.",
+    )
+    max_text_chars: int = Field(
+        default=8000,
+        ge=1,
+        description="Rendered texts are cut to this many characters before they are hashed and "
+        "embedded.",
+    )
+    retry: EmbeddingRetrySettings = Field(default_factory=EmbeddingRetrySettings)
+
+
 class ScribeSettings(SectionModel):
     """Scribe, the ingestion and maintenance worker."""
 
@@ -269,6 +319,7 @@ class ScribeSettings(SectionModel):
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     sources: SourceSettings = Field(default_factory=SourceSettings)
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
+    embeddings: EmbeddingJobSettings = Field(default_factory=EmbeddingJobSettings)
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

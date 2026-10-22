@@ -913,7 +913,7 @@ Search (design 8.4). Keeper never computes embeddings: semantic and hybrid searc
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `search.semantic.model` | `BAAI/bge-small-en-v1.5` | embedding model searched; equals inference.embeddings.model |
+| `search.semantic.model` | `BAAI/bge-small-en-v1.5` | embedding model searched: the name Scribe stores vectors under (inference.embeddings.model; `fake:<model>` for the fake provider) |
 
 ### `search.hybrid`
 
@@ -1117,6 +1117,7 @@ One process at a time is leader (Postgres advisory lock)
 | `scribe.scheduler.gc_schedule` | `"0 3 * * *"` | cron (UTC) of the collection of every Domain; null disables |
 | `scribe.scheduler.gc_dry_run` | `false` |  |
 | `scribe.scheduler.source_schedules` | `true` | queue Source synchronizations from each Source's `schedule` |
+| `scribe.scheduler.embeddings_interval_s` | `60.0` | embedding pass of every Domain; 0 disables |
 | `scribe.scheduler.domain_batch` | `100` | Domains read per query |
 
 ### `scribe.sources`
@@ -1240,3 +1241,25 @@ Confidence given by each technique
 | `scribe.extraction.confidence.cooccurrence_max` | `0.7` | ceiling of Links from co-occurrence in a sentence |
 | `scribe.extraction.confidence.heading` | `0.6` | Links between a heading's Record and those of its section |
 | `scribe.extraction.confidence.tier2` | `0.8` | facts from the chat model with verified evidence |
+
+### `scribe.embeddings`
+
+Embedding jobs (design 9.3); model: inference.embeddings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.embeddings.page_rows` | `500` | Record rows read and rendered per query |
+| `scribe.embeddings.batch_texts` | `64` | texts per call of the embedding model |
+| `scribe.embeddings.max_records_per_job` | `20000` | rows one job reads; the rest goes to a continuation job |
+| `scribe.embeddings.max_calls_per_second` | `0.0` | model calls per second of one job; 0: no limit |
+| `scribe.embeddings.max_text_chars` | `8000` | rendered texts are cut to this length before hashing |
+
+#### `scribe.embeddings.retry`
+
+Retries of a failed call, after the provider's own retries
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.embeddings.retry.attempts` | `2` | attempts per call, the first included |
+| `scribe.embeddings.retry.backoff_s` | `2.0` | pause before the first retry; doubles each time |
+| `scribe.embeddings.retry.backoff_max_s` | `60.0` | longest pause |

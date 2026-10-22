@@ -15,6 +15,7 @@ from lorebase_core.model import (
     Derivation,
     ElementStatus,
     HttpOptions,
+    KindSearch,
     LinkDirection,
     OperationParameter,
     OperationStep,
@@ -356,6 +357,14 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
         "title-missing",
         lambda s: replace_kind(s, PLANT, title_attribute=None),
         {C.SCHEMA_TITLE_ATTRIBUTE_MISSING},
+        None,
+    ),
+    (
+        "embedding-template-unknown-attribute",
+        lambda s: replace_kind(
+            s, SUPPLIER, search=KindSearch(embedding_template="{legal_name} {no_such}")
+        ),
+        {C.SCHEMA_EMBEDDING_TEMPLATE_INVALID},
         None,
     ),
     (

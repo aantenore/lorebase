@@ -23,7 +23,14 @@ from lorebase_store.models.ingestion import (
     SourceRun,
     VaultEntry,
 )
-from lorebase_store.models.materialized import Embedding, MatHistory, MatLink, MatRecord, MatSchema
+from lorebase_store.models.materialized import (
+    Embedding,
+    EmbeddingCursor,
+    MatHistory,
+    MatLink,
+    MatRecord,
+    MatSchema,
+)
 from lorebase_store.models.proposals import (
     Conflict,
     ConflictResolution,
@@ -61,6 +68,7 @@ __all__ = [
     "DocumentChunk",
     "Domain",
     "Embedding",
+    "EmbeddingCursor",
     "ExtractionCacheEntry",
     "ExtractionJob",
     "Grant",
