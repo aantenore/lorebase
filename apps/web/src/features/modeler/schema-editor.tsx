@@ -44,6 +44,11 @@ export function SchemaEditor({ base }: { base: Schema }) {
     return saved !== undefined && sameJson(saved, editor.document.operations?.[name]);
   };
 
+  const savedDerivation = (name: string) => {
+    const saved = editor.baseDocument.derivations?.[name];
+    return saved !== undefined && sameJson(saved, editor.document.derivations?.[name]);
+  };
+
   const goTo = (position: Position) => {
     setJump((previous) => ({ ...position, nonce: (previous?.nonce ?? 0) + 1 }));
   };
@@ -68,6 +73,7 @@ export function SchemaEditor({ base }: { base: Schema }) {
             ids={editor.ids}
             locked={editor.syntaxIssues.length > 0}
             savedOperation={savedOperation}
+            savedDerivation={savedDerivation}
           />
         </Section>
         <Section title="YAML" className="mb-0 min-w-0">
