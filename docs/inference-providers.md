@@ -86,6 +86,30 @@ An Ollama already running on the host is reached at `http://host.docker.internal
 `--no-deps` so that the Ollama container is not started. A hosted key kept in a file goes through
 the overlay `deploy/compose/hosted-model.yaml` ([quickstart](quickstart.md#4-use-a-real-model)).
 
+For `make up PROFILES=assistant` (and `make logs`, `make down`, `scripts/quickstart.sh`) to start
+Scribe with that key, list the overlay in `COMPOSE_OVERLAYS` in `.env`, with any overlay of your
+own after it (space separated, relative to the repository root; keep your own under the ignored
+`secrets/`):
+
+```bash
+# .env
+LLM_BASE_URL=https://api.example-provider.com/v1
+LLM_MODEL=<model name>
+LLM_API_KEY=
+COMPOSE_OVERLAYS=deploy/compose/hosted-model.yaml secrets/my-model.yaml
+```
+
+```yaml
+# secrets/my-model.yaml: settings of your own on top of the hosted overlay
+services:
+  scribe:
+    environment:
+      LOREBASE__INFERENCE__LLM__TIMEOUT_S: "300"
+```
+
+Compose resolves relative paths inside an overlay from the directory of the first file,
+`deploy/compose`, so a `secrets:` entry of your own names `../../secrets/<file>`.
+
 The backend image has no local models. Scribe and Guide run on a second image, `lorebase-ml`
 (target `backend-ml` of `deploy/docker/backend.Dockerfile`, 391 MB larger), that carries fastembed
 and the embedding model `EMBEDDING_MODEL` (default `BAAI/bge-small-en-v1.5`) downloaded at build

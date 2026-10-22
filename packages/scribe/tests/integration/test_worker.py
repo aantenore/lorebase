@@ -37,6 +37,7 @@ from lorebase_store.jobs import (
     SOURCE_SYNC_JOB,
     JobRow,
     enqueue_job,
+    requeue_stale,
     source_sync_payload,
 )
 from lorebase_store.repositories import scope_to_domain
@@ -243,6 +244,151 @@ async def test_concurrent_slots_heartbeat_and_graceful_shutdown(
     assert sorted(finished) == ids
     status, attempts, _ = await job_state(sessions, blocked)
     assert (status, attempts) == ("queued", 0)  # released without counting the attempt
+
+
+async def reclaim(sessions: async_sessionmaker[AsyncSession], jobs: JobSettings) -> int:
+    async with sessions() as session, session.begin():
+        return await requeue_stale(session, settings=jobs)
+
+
+async def test_a_worker_without_heartbeat_loses_its_job_to_another_worker(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    jobs = JobSettings(stale_after_seconds=0.5, retry_delay_seconds=0)
+    settings = WorkerSettings(poll_interval_s=0.05, heartbeat_interval_s=0.1)
+    runs: list[str] = []
+    started, resume = asyncio.Event(), asyncio.Event()
+
+    def handler(name: str) -> Any:
+        async def run(job: JobRow) -> Mapping[str, Any]:
+            runs.append(name)
+            if name == "dead":
+                started.set()
+                await resume.wait()
+            return {"by": name}
+
+        return run
+
+    job_id = await enqueue(sessions, "test")
+    dead = Worker(
+        sessions, {"test": handler("dead")}, settings=settings, jobs=jobs, worker_id="dead"
+    )
+    live = Worker(
+        sessions, {"test": handler("live")}, settings=settings, jobs=jobs, worker_id="live"
+    )
+    # The dead worker claimed the job and froze: its handler runs but no heartbeat is sent.
+    claimed = await dead.claim()
+    assert claimed is not None
+    assert claimed.id == job_id
+    frozen = asyncio.create_task(dead.execute(claimed))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    assert await reclaim(sessions, jobs) == 0  # within the threshold the job stays its own
+    assert await live.run_once() == 0
+    await asyncio.sleep(0.6)
+    assert await reclaim(sessions, jobs) == 1
+    assert await live.run_once() == 1
+    status, attempts, result = await job_state(sessions, job_id)
+    assert (status, attempts, result) == ("succeeded", 2, {"by": "live"})
+    # The frozen worker wakes up: it cannot overwrite the outcome of the run that replaced it.
+    resume.set()
+    assert await asyncio.wait_for(frozen, timeout=10) == "lost"
+    assert await job_state(sessions, job_id) == ("succeeded", 2, {"by": "live"})
+    assert runs == ["dead", "live"]
+
+
+async def test_a_job_that_keeps_losing_its_worker_fails_after_max_attempts(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    jobs = JobSettings(stale_after_seconds=0.2, max_attempts=2)
+    job_id = await enqueue(sessions, "test")
+    worker = Worker(
+        sessions,
+        {"test": lambda job: asyncio.sleep(0, {})},
+        settings=WorkerSettings(poll_interval_s=0.05, heartbeat_interval_s=0.1),
+        jobs=jobs,
+        worker_id="crashing",
+    )
+    for expected in ("queued", "failed"):
+        assert await worker.claim() is not None  # claimed, then the worker dies
+        await asyncio.sleep(0.3)
+        assert await reclaim(sessions, jobs) == 1
+        status, attempts, result = await job_state(sessions, job_id)
+        assert status == expected
+    assert attempts == 2
+    assert result["error"].startswith("lost: no heartbeat")
+
+
+async def test_heartbeats_keep_a_long_job_with_its_worker(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    jobs = JobSettings(stale_after_seconds=0.5)
+    runs: list[int] = []
+    started, ended = asyncio.Event(), asyncio.Event()
+
+    async def long(job: JobRow) -> Mapping[str, Any]:
+        runs.append(job.id)
+        started.set()
+        await asyncio.sleep(1.5)
+        ended.set()
+        return {}
+
+    job_id = await enqueue(sessions, "test")
+    worker = Worker(
+        sessions,
+        {"test": long},
+        settings=WorkerSettings(poll_interval_s=0.05, heartbeat_interval_s=0.1),
+        jobs=jobs,
+        worker_id="alive",
+    )
+    stop = asyncio.Event()
+    running = asyncio.create_task(worker.run(stop))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    for _ in range(8):  # three times the threshold: the heartbeat keeps the job
+        await asyncio.sleep(0.2)
+        assert await reclaim(sessions, jobs) == 0
+    await asyncio.wait_for(ended.wait(), timeout=10)
+    stop.set()  # the slot records the outcome within the shutdown grace
+    await asyncio.wait_for(running, timeout=10)
+    assert (await job_state(sessions, job_id))[:2] == ("succeeded", 1)
+    assert runs == [job_id]  # run once
+
+
+async def test_shutdown_releases_a_job_whose_handler_ignores_cancellation(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    started, done = asyncio.Event(), asyncio.Event()
+
+    async def stubborn(job: JobRow) -> Mapping[str, Any]:
+        started.set()
+        while not done.is_set():
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                continue
+        return {}
+
+    job_id = await enqueue(sessions, "test")
+    worker = Worker(
+        sessions,
+        {"test": stubborn},
+        settings=WorkerSettings(
+            poll_interval_s=0.05,
+            heartbeat_interval_s=0.1,
+            shutdown_grace_s=0.1,
+            shutdown_cancel_s=0.1,
+        ),
+        jobs=JobSettings(),
+        worker_id="stubborn",
+    )
+    stop = asyncio.Event()
+    running = asyncio.create_task(worker.run(stop))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    stop.set()
+    await asyncio.wait_for(running, timeout=10)
+    assert (await job_state(sessions, job_id))[:2] == ("queued", 0)
+    assert worker.running == ()
+    done.set()
+    await asyncio.sleep(0.2)  # the abandoned slot finds its job released and stops
 
 
 async def test_webhook_delivery_job_end_to_end(

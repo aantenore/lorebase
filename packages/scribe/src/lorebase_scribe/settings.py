@@ -30,16 +30,24 @@ class WorkerSettings(SectionModel):
         default=2.0, gt=0, description="Pause of an idle slot before it looks for jobs again."
     )
     heartbeat_interval_s: float = Field(
-        default=60.0,
+        default=30.0,
         gt=0,
-        description="Running jobs get their lock time refreshed this often; keep it well below "
-        "store.jobs.stale_after_seconds.",
+        description="Running jobs get their lock time refreshed this often; at most half of "
+        "store.jobs.stale_after_seconds, after which a job without heartbeat is reclaimed.",
     )
     shutdown_grace_s: float = Field(
         default=30.0,
         ge=0,
-        description="On shutdown, running jobs get this long to finish; unfinished ones go "
-        "back to the queue without counting the attempt.",
+        description="On shutdown, running jobs get this long to finish; unfinished ones are "
+        "cancelled and go back to the queue without counting the attempt.",
+    )
+    shutdown_cancel_s: float = Field(
+        default=5.0,
+        ge=0,
+        description="After shutdown_grace_s, cancelled jobs get this long to stop before they are "
+        "put back in the queue anyway. Keep shutdown_grace_s plus this below the time the "
+        "platform waits before killing the process (compose stop_grace_period, Kubernetes "
+        "terminationGracePeriodSeconds).",
     )
     statement_timeout_ms: int = Field(
         default=0,

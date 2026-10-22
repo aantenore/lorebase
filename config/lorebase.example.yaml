@@ -659,7 +659,7 @@ store:
   jobs:                          # job queue workers
     max_attempts: 3              # runs of a job before it is marked failed
     retry_delay_seconds: 60      # delay before a failed job runs again
-    stale_after_seconds: 3600    # running jobs locked longer than this are requeued
+    stale_after_seconds: 90      # running jobs without heartbeat for this long are reclaimed (worker gone)
   outbox:                        # outbox events, shared by every consumer (design 10.5)
     retention_s: 604800.0        # events every consumer handed off are kept this long (7 days)
     max_age_s: 2592000.0         # events are deleted after this even when still pending (30 days)
@@ -1077,8 +1077,9 @@ scribe:
   worker:
     concurrency: 2               # jobs run at the same time by one process
     poll_interval_s: 2.0         # pause of an idle slot before it looks for jobs again
-    heartbeat_interval_s: 60.0   # running jobs refresh their lock this often (< stale_after_seconds)
+    heartbeat_interval_s: 30.0   # running jobs refresh their lock this often (<= stale_after_seconds / 2)
     shutdown_grace_s: 30.0       # on SIGTERM, running jobs get this long, then go back to the queue
+    shutdown_cancel_s: 5.0       # then cancelled jobs get this long to stop before they are released anyway
     statement_timeout_ms: 0      # Scribe's own connections; 0 disables (GC and index builds run long)
     principal: svc_scribe        # author of Scribe's commits and Proposals
     types: []                    # job types this process runs; empty: all of them

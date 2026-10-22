@@ -17,12 +17,19 @@
 #                         PROFILES=assistant): the new contract C-3099 and the four documents of
 #                         examples/supply/documents. Two documents that share a field are what
 #                         schema suggestions need to be listed (schema.suggestions.min_support)
+#   quickstart.sh logs [SERVICE...]
+#                         follow the logs of the stack (every service, or the ones named)
 #   quickstart.sh down    stop the stack, whatever profiles it started, keep the data
 #   quickstart.sh clean   stop the stack and delete its volumes (data, pulled models)
 #
 # Settings (environment):
 #   PROFILES              compose profiles `up` starts besides the default services; only
 #                         `assistant` (Guide and Scribe), several separated by spaces or commas
+#   COMPOSE_OVERLAYS      extra compose files added after the others by every command that
+#                         runs compose, separated by spaces, relative to the repository root
+#                         (for example `deploy/compose/hosted-model.yaml`, or a file of your
+#                         own under secrets/); read from the environment, else from the
+#                         environment file
 #   LOREBASE_ENV_FILE     environment file of compose            (<repo>/.env)
 #   LOREBASE_URL          Keeper URL used by `data`               (http://127.0.0.1:KEEPER_HOST_PORT)
 #   QUICKSTART_APPROVALS  required_approvals of that Domain       (0: the only principal of a
@@ -62,15 +69,29 @@ has_profile() {
   esac
 }
 
-compose() {
-  local files=(-f "$COMPOSE_FILE")
-  if has_profile assistant; then files+=(-f "$OVERLAY_DIR/assistant.yaml" --profile assistant); fi
-  docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
-}
-
 # Value of NAME in the environment file, empty when unset.
 env_value() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+}
+
+# Extra compose files of COMPOSE_OVERLAYS (environment first, then the environment file).
+overlays() {
+  local value="${COMPOSE_OVERLAYS:-}"
+  if [ -z "$value" ] && [ -f "$ENV_FILE" ]; then value="$(env_value COMPOSE_OVERLAYS)"; fi
+  printf '%s' "$value" | tr -d "\"'"
+}
+
+compose() {
+  local files=(-f "$COMPOSE_FILE") overlay
+  if has_profile assistant; then files+=(-f "$OVERLAY_DIR/assistant.yaml" --profile assistant); fi
+  for overlay in $(overlays); do
+    if [ ! -f "$overlay" ]; then
+      say "COMPOSE_OVERLAYS names $overlay, which does not exist (paths start from $ROOT)"
+      exit 2
+    fi
+    files+=(-f "$overlay")
+  done
+  docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
 }
 
 # Replace (or append) NAME=VALUE in the environment file.
@@ -117,6 +138,7 @@ up() {
   local args=(postgres migrate keeper web)
   if has_profile assistant; then args+=(guide scribe); fi
   say "building the images and starting project $(env_value COMPOSE_PROJECT_NAME)"
+  if [ -n "$(overlays)" ]; then say "with the compose overlays: $(overlays)"; fi
   compose up -d --build --wait "${args[@]}" >&2
   say "Keeper is ready at $(keeper_url)"
   say "Web app: $(web_url)"
@@ -248,6 +270,11 @@ extract_documents() {
 case "${1:-}" in
   env) make_env ;;
   up) up ;;
+  logs)
+    require_env
+    shift
+    compose --profile "*" logs --follow --tail "${LOGS_TAIL:-200}" "$@"
+    ;;
   data) load_data ;;
   documents) extract_documents ;;
   down)

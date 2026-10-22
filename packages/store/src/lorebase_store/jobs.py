@@ -2,8 +2,15 @@
 
 Workers claim `queued` rows with `FOR UPDATE SKIP LOCKED` (served by `ix_jobs_claimable`), run
 them outside any transaction and record the outcome. A job that raises is requeued with a delay
-until `jobs.max_attempts` is reached, then marked `failed`. A `running` job whose lock is older
-than `jobs.stale_after_seconds` is assumed lost and requeued by `requeue_stale`.
+until `jobs.max_attempts` is reached, then marked `failed`.
+
+Delivery is at least once: a worker refreshes the lock time (`locked_at`) of its running jobs
+with `touch_jobs` (a heartbeat), and a `running` job whose last heartbeat is older than
+`jobs.stale_after_seconds` is taken for lost (its worker was killed or cut off) and reclaimed
+by `requeue_stale`: queued again, or failed when it has used its `max_attempts`. Handlers must
+therefore tolerate running a job again. A worker that stops puts its jobs back with
+`release_jobs`; outcomes are recorded only by the worker that still holds the lock, so a worker
+that lost a job to a reclaim cannot overwrite what the next one records.
 
 Claiming spans Domains, so it runs with the row-level security bypass.
 """
@@ -27,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.settings import JobSettings
-from lorebase_store.telemetry import JOBS_CLAIMED
+from lorebase_store.telemetry import JOBS_CLAIMED, JOBS_RECLAIMED, JOBS_RELEASED
 
 log = logging.getLogger(__name__)
 
@@ -105,19 +112,22 @@ _PENDING = text(
     """
 ).bindparams(bindparam("statuses", type_=ARRAY(Text())))
 
+# Outcomes are written only while the claiming worker still holds the job.
+_HELD = "id = :id AND status = 'running' AND locked_by IS NOT DISTINCT FROM CAST(:worker AS text)"
+
 _COMPLETE = text(
     "UPDATE jobs SET status = 'succeeded', result = CAST(:result AS jsonb), "
-    "locked_by = NULL, locked_at = NULL WHERE id = :id"
+    f"locked_by = NULL, locked_at = NULL WHERE {_HELD}"
 )
 
 _RETRY = text(
     "UPDATE jobs SET status = 'queued', run_after = :run_after, "
-    "result = CAST(:result AS jsonb), locked_by = NULL, locked_at = NULL WHERE id = :id"
+    f"result = CAST(:result AS jsonb), locked_by = NULL, locked_at = NULL WHERE {_HELD}"
 )
 
 _FAIL = text(
     "UPDATE jobs SET status = 'failed', result = CAST(:result AS jsonb), "
-    "locked_by = NULL, locked_at = NULL WHERE id = :id"
+    f"locked_by = NULL, locked_at = NULL WHERE {_HELD}"
 )
 
 _TOUCH = text(
@@ -127,13 +137,22 @@ _TOUCH = text(
 
 _RELEASE = text(
     "UPDATE jobs SET status = 'queued', run_after = :now, attempts = greatest(attempts - 1, 0), "
-    "locked_by = NULL, locked_at = NULL WHERE id = :id AND status = 'running'"
+    "locked_by = NULL, locked_at = NULL "
+    "WHERE id = ANY(CAST(:ids AS bigint[])) AND locked_by = :worker AND status = 'running' "
+    "RETURNING type"
 )
 
 _STALE = text(
     """
-    UPDATE jobs SET status = 'queued', locked_by = NULL, locked_at = NULL
-    WHERE status = 'running' AND locked_at < :before
+    UPDATE jobs SET
+        status = CASE WHEN attempts >= :max_attempts THEN 'failed' ELSE 'queued' END::job_status,
+        run_after = CASE WHEN attempts >= :max_attempts THEN run_after ELSE :now END,
+        result = CASE WHEN attempts >= :max_attempts
+                      THEN jsonb_build_object('error', CAST(:error AS text), 'attempt', attempts)
+                      ELSE result END,
+        locked_by = NULL, locked_at = NULL
+    WHERE status = 'running' AND (locked_at IS NULL OR locked_at < :before)
+    RETURNING id, type, CAST(status AS text) AS status, attempts
     """
 )
 
@@ -324,22 +343,38 @@ async def finish_job(
     """Record the outcome of a claimed job; returns the new status.
 
     With `error`, the job is requeued after `retry_delay_seconds` unless it has used its
-    `max_attempts`, in which case it is marked failed.
+    `max_attempts`, in which case it is marked failed. Nothing is written, and `"lost"` is
+    returned, when the job no longer runs under the worker that claimed it (`job.locked_by`):
+    its lock went stale and `requeue_stale` reclaimed it.
     """
     settings = settings or JobSettings()
+    held: dict[str, Any] = {"id": job.id, "worker": job.locked_by}
     async with rls_scope(session, bypass=True):
         if error is None:
-            await session.execute(
-                _COMPLETE, {"id": job.id, "result": json.dumps(dict(result or {}))}
+            statement, params, status = (
+                _COMPLETE,
+                {**held, "result": json.dumps(dict(result or {}))},
+                "succeeded",
             )
-            return "succeeded"
-        body = json.dumps({"error": error, "attempt": job.attempts})
-        if job.attempts < settings.max_attempts:
-            run_after = (now or _now()) + timedelta(seconds=settings.retry_delay_seconds)
-            await session.execute(_RETRY, {"id": job.id, "run_after": run_after, "result": body})
-            return "queued"
-        await session.execute(_FAIL, {"id": job.id, "result": body})
-        return "failed"
+        else:
+            body = json.dumps({"error": error, "attempt": job.attempts})
+            if job.attempts < settings.max_attempts:
+                run_after = (now or _now()) + timedelta(seconds=settings.retry_delay_seconds)
+                statement, params, status = (
+                    _RETRY,
+                    {**held, "run_after": run_after, "result": body},
+                    "queued",
+                )
+            else:
+                statement, params, status = _FAIL, {**held, "result": body}, "failed"
+        written = await session.execute(statement, params)
+    if not getattr(written, "rowcount", 0):
+        log.warning(
+            "job outcome not recorded: the job was reclaimed from this worker",
+            extra={"job": job.id, "type": job.type, "worker": job.locked_by, "status": status},
+        )
+        return "lost"
+    return status
 
 
 async def touch_jobs(
@@ -356,21 +391,69 @@ async def touch_jobs(
         return int(getattr(result, "rowcount", 0) or 0)
 
 
+async def release_jobs(
+    session: AsyncSession,
+    worker_id: str,
+    job_ids: Sequence[int],
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Put jobs `worker_id` still holds back in the queue, due at once and without counting the
+    attempt (worker shutdown). Returns the number of jobs released."""
+    if not job_ids:
+        return 0
+    async with rls_scope(session, bypass=True):
+        result = await session.execute(
+            _RELEASE, {"ids": list(job_ids), "worker": worker_id, "now": now or _now()}
+        )
+        types = [job_type for (job_type,) in result.all()]
+    for job_type in types:
+        JOBS_RELEASED.add(1, {"type": job_type})
+    return len(types)
+
+
 async def release_job(session: AsyncSession, job: JobRow, *, now: datetime | None = None) -> None:
     """Put a claimed job back in the queue without counting the attempt (worker shutdown)."""
-    async with rls_scope(session, bypass=True):
-        await session.execute(_RELEASE, {"id": job.id, "now": now or _now()})
+    if job.locked_by is not None:
+        await release_jobs(session, job.locked_by, [job.id], now=now)
 
 
 async def requeue_stale(
     session: AsyncSession, *, settings: JobSettings | None = None, now: datetime | None = None
 ) -> int:
-    """Requeue running jobs whose lock is older than `stale_after_seconds`."""
+    """Reclaim running jobs whose last heartbeat (`locked_at`) is older than
+    `stale_after_seconds`: their worker is gone. A job with attempts left is queued again, due
+    at once; one that used its `max_attempts` is failed (a job that keeps killing its worker
+    is not run forever). Returns the number of jobs reclaimed, counted by type and outcome in
+    `lorebase.jobs.reclaimed`."""
     settings = settings or JobSettings()
-    before = (now or _now()) - timedelta(seconds=settings.stale_after_seconds)
+    now = now or _now()
+    before = now - timedelta(seconds=settings.stale_after_seconds)
+    error = f"lost: no heartbeat for {settings.stale_after_seconds:g}s (worker gone)"
     async with rls_scope(session, bypass=True):
-        result = await session.execute(_STALE, {"before": before})
-        return int(getattr(result, "rowcount", 0) or 0)
+        result = await session.execute(
+            _STALE,
+            {
+                "before": before,
+                "now": now,
+                "max_attempts": settings.max_attempts,
+                "error": error,
+            },
+        )
+        reclaimed = list(result.mappings())
+    for row in reclaimed:
+        outcome = "requeued" if row["status"] == "queued" else "failed"
+        JOBS_RECLAIMED.add(1, {"type": row["type"], "outcome": outcome})
+        log.warning(
+            "stale job reclaimed",
+            extra={
+                "job": row["id"],
+                "type": row["type"],
+                "attempt": row["attempts"],
+                "status": row["status"],
+            },
+        )
+    return len(reclaimed)
 
 
 async def run_jobs(
@@ -384,6 +467,7 @@ async def run_jobs(
     """Claim and run due jobs of the handled types one by one until none is due (or `limit`
     jobs ran). Returns the number of jobs run."""
     worker = worker_id or default_worker_id()
+    settings = settings or JobSettings()
     types = list(handlers)
     ran = 0
     while limit is None or ran < limit:
@@ -393,15 +477,36 @@ async def run_jobs(
             return ran
         job = claimed[0]
         ran += 1
+        beat = asyncio.create_task(_heartbeat(sessions, worker, job.id, settings))
         try:
             result = await handlers[job.type](job)
             error = None
+        except asyncio.CancelledError:
+            async with sessions() as session, session.begin():
+                await release_jobs(session, worker, [job.id])
+            raise
         except Exception as exc:
             log.exception("job %s (%s) failed", job.id, job.type)
             result, error = None, f"{type(exc).__name__}: {exc}"
+        finally:
+            beat.cancel()
+            await asyncio.gather(beat, return_exceptions=True)
         async with sessions() as session, session.begin():
             await finish_job(session, job, result=result, error=error, settings=settings)
     return ran
+
+
+async def _heartbeat(
+    sessions: async_sessionmaker[AsyncSession], worker: str, job_id: int, settings: JobSettings
+) -> None:
+    """Refresh the lock of a running job three times per `stale_after_seconds`."""
+    while True:
+        await asyncio.sleep(settings.stale_after_seconds / 3)
+        try:
+            async with sessions() as session, session.begin():
+                await touch_jobs(session, worker, [job_id])
+        except Exception:
+            log.exception("job heartbeat failed")
 
 
 def _parser() -> argparse.ArgumentParser:

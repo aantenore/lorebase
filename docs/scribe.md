@@ -55,11 +55,23 @@ Each process runs `scribe.worker.concurrency` slots. A slot claims one due job w
 `SELECT ... FOR UPDATE SKIP LOCKED`, so replicas never run the same job, runs it outside any
 transaction and records the outcome. A failure is retried after `store.jobs.retry_delay_seconds`
 until `store.jobs.max_attempts`; failures that a retry cannot fix (an unknown Source, an invalid
-mapping, rows the branch rejects, more failed rows than allowed) fail the job at once. Running
-jobs refresh their lock every `heartbeat_interval_s`; a job whose lock is older than
-`store.jobs.stale_after_seconds` is taken for lost and requeued. On SIGTERM the slots stop
-claiming, running jobs get `shutdown_grace_s` to finish and the rest go back to the queue without
-counting the attempt.
+mapping, rows the branch rejects, more failed rows than allowed) fail the job at once.
+
+Jobs run at least once, so every handler tolerates running the same job again. Running jobs
+refresh their lock every `heartbeat_interval_s` (30 s). A job without heartbeat for
+`store.jobs.stale_after_seconds` (90 s, three missed heartbeats) belongs to a worker that is gone
+(killed, out of memory, cut off from the database): the scheduler leader reclaims it at its next
+tick, queued again, or failed when it has used `store.jobs.max_attempts` (a job that keeps
+killing its worker is not run forever). A worker that lost a job this way cannot record its
+outcome over the next run. `lorebase.jobs.reclaimed` counts reclaimed jobs by type and outcome.
+
+On SIGTERM (Scribe runs as PID 1 of its container and handles the signal itself) the slots stop
+claiming and running jobs get `shutdown_grace_s` to finish. The rest are cancelled and go back to
+the queue without counting the attempt; a job whose handler has not stopped `shutdown_cancel_s`
+later is released anyway, so a worker that stops cleanly leaves no job `running`
+(`lorebase.jobs.released`). Keep `shutdown_grace_s` plus `shutdown_cancel_s` below the time the
+platform waits before it kills the process (`SCRIBE_STOP_GRACE` in compose,
+`scribe.terminationGracePeriodSeconds` in the chart).
 
 Spans (`scribe.job <type>`, `scribe.source_sync`, `scribe.scheduler.tick`) and metrics
 (`lorebase.scribe.jobs`, `lorebase.scribe.job.duration`, `lorebase.scribe.scheduled`,

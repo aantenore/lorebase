@@ -805,7 +805,7 @@ Job queue workers
 |---------|---------|-------------|
 | `store.jobs.max_attempts` | `3` | runs of a job before it is marked failed |
 | `store.jobs.retry_delay_seconds` | `60` | delay before a failed job runs again |
-| `store.jobs.stale_after_seconds` | `3600` | running jobs locked longer than this are requeued |
+| `store.jobs.stale_after_seconds` | `90` | running jobs without heartbeat for this long are reclaimed (worker gone) |
 
 ### `store.outbox`
 
@@ -1433,8 +1433,9 @@ Scribe, the job worker (docs/scribe.md): Source synchronization, webhook deliver
 |---------|---------|-------------|
 | `scribe.worker.concurrency` | `2` | jobs run at the same time by one process |
 | `scribe.worker.poll_interval_s` | `2.0` | pause of an idle slot before it looks for jobs again |
-| `scribe.worker.heartbeat_interval_s` | `60.0` | running jobs refresh their lock this often (&lt; stale_after_seconds) |
+| `scribe.worker.heartbeat_interval_s` | `30.0` | running jobs refresh their lock this often (&lt;= stale_after_seconds / 2) |
 | `scribe.worker.shutdown_grace_s` | `30.0` | on SIGTERM, running jobs get this long, then go back to the queue |
+| `scribe.worker.shutdown_cancel_s` | `5.0` | then cancelled jobs get this long to stop before they are released anyway |
 | `scribe.worker.statement_timeout_ms` | `0` | Scribe's own connections; 0 disables (GC and index builds run long) |
 | `scribe.worker.principal` | `svc_scribe` | author of Scribe's commits and Proposals |
 | `scribe.worker.types` | `[]` | job types this process runs; empty: all of them |

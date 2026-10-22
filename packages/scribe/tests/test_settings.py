@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from lorebase_platform.settings import CONFIG_ENV_VAR, ConfigError, Settings, load_settings
-from lorebase_scribe.settings import ScribeSettings, scribe_settings
+from lorebase_scribe.settings import ScribeSettings, WorkerSettings, scribe_settings
+from lorebase_scribe.worker import Worker
+from lorebase_store.settings import JobSettings
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "config" / "lorebase.example.yaml"
 
@@ -47,3 +49,18 @@ def test_example_file_matches_code_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     defaults = scribe_settings(load_settings())
     monkeypatch.setenv(CONFIG_ENV_VAR, str(EXAMPLE))
     assert scribe_settings(load_settings()) == defaults
+
+
+def test_heartbeat_must_fit_twice_in_the_stale_threshold() -> None:
+    async def handler(job: object) -> dict[str, object]:
+        return {}
+
+    with pytest.raises(ValueError, match="at most half"):
+        Worker(
+            None,  # type: ignore[arg-type]
+            {"test": handler},  # type: ignore[dict-item]
+            settings=WorkerSettings(heartbeat_interval_s=60),
+            jobs=JobSettings(stale_after_seconds=90),
+        )
+    defaults = Worker(None, {"test": handler}, settings=WorkerSettings(), jobs=JobSettings())  # type: ignore[arg-type, dict-item]
+    assert defaults.types == ("test",)
