@@ -5,13 +5,15 @@ UVX ?= uvx
 PNPM ?= pnpm
 WEB_DIR ?= apps/web
 AUDIT_DIR ?= build/audit
+PIP_AUDIT ?= pip-audit@2.10.1
+WEB_AUDIT_LEVEL ?= high
 PY_PATHS := packages scripts tests
 STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src \
 	packages/client/src packages/cli/src packages/scribe/src
 OTHER_SRC := packages/platform/src packages/inference/src
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
-	test-perf security demo demo-down
+	test-perf security security-python security-web demo demo-down
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -62,25 +64,18 @@ demo: ## Five-day demo on its own compose stack (project lorebase-demo; KEEP=1 l
 demo-down: ## Stop the demo stack and delete its data
 	@examples/five_day_demo/stack.sh down
 
-# Fails only on advisories that have a fixed version; unfixable ones are listed as warnings.
-define AUDIT_CHECK
-import json, sys
-deps = json.load(open(sys.argv[1]))["dependencies"]
-found = [(d["name"], d["version"], v["id"], v["fix_versions"]) for d in deps for v in d.get("vulns", [])]
-for name, version, vid, fixes in found:
-    print(f"{name} {version} {vid} fix: {', '.join(fixes) or 'none yet'}")
-sys.exit(1 if any(fixes for *_, fixes in found) else 0)
-endef
-export AUDIT_CHECK
+# Both checks fail on any advisory that is not in .github/audit-allowlist.yaml and on expired entries.
+security: security-python security-web ## Advisories: pip-audit on the uv lock, pnpm audit (high) in apps/web
 
-security: ## Advisories: pip-audit on the uv lock, pnpm audit (high) in apps/web
+security-python: ## pip-audit on the locked Python runtime dependencies
 	@mkdir -p $(AUDIT_DIR)
 	@rm -f $(AUDIT_DIR)/pip-audit.json
 	$(UV) export --frozen --all-packages --no-dev --no-emit-workspace --quiet -o $(AUDIT_DIR)/requirements.txt
-	-$(UVX) pip-audit -r $(AUDIT_DIR)/requirements.txt --no-deps --disable-pip --progress-spinner off -f json -o $(AUDIT_DIR)/pip-audit.json
-	$(UV) run --no-project python -c "$$AUDIT_CHECK" $(AUDIT_DIR)/pip-audit.json
-	@# --ignore-unfixable makes pnpm write an empty pnpm-workspace.yaml; remove it unless it was already there
-	@cd $(WEB_DIR) && keep=$$([ -e pnpm-workspace.yaml ] && echo 1); \
-		echo "$(PNPM) audit --audit-level=high --ignore-unfixable"; \
-		$(PNPM) audit --audit-level=high --ignore-unfixable; status=$$?; \
-		[ -n "$$keep" ] || rm -f pnpm-workspace.yaml; exit $$status
+	-$(UVX) $(PIP_AUDIT) -r $(AUDIT_DIR)/requirements.txt --no-deps --disable-pip --progress-spinner off -f json -o $(AUDIT_DIR)/pip-audit.json
+	$(UV) run python scripts/audit_check.py python $(AUDIT_DIR)/pip-audit.json
+
+security-web: ## pnpm audit of the production dependencies of apps/web
+	@mkdir -p $(AUDIT_DIR)
+	@rm -f $(AUDIT_DIR)/pnpm-audit.json
+	-$(PNPM) --dir $(WEB_DIR) audit --prod --audit-level=$(WEB_AUDIT_LEVEL) --json > $(AUDIT_DIR)/pnpm-audit.json
+	$(UV) run python scripts/audit_check.py npm $(AUDIT_DIR)/pnpm-audit.json --min-severity $(WEB_AUDIT_LEVEL)

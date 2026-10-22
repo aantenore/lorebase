@@ -186,7 +186,7 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 | | Threat | Mitigation | Residual risk |
 |-|--------|------------|---------------|
 | T | A compromised third-party action | Every external action is pinned by commit SHA; checkouts do not persist the token (F11); CodeQL (`security-extended`) and Scorecard run on `main` | None known for pinned actions |
-| T | A malicious or vulnerable dependency | Lockfiles with `uv sync --frozen` and `pnpm install --frozen-lockfile`; `make security` runs pip-audit and `pnpm audit` and is part of the release checklist | No automated dependency updates (no Dependabot or Renovate) and no dependency audit in the CI workflow: advisories are found when someone runs `make security` |
+| T | A malicious or vulnerable dependency | Lockfiles with `uv sync --frozen` and `pnpm install --frozen-lockfile`; the Audit workflow (`.github/workflows/audit.yaml`) runs pip-audit on the locked workspace and `pnpm audit --prod` on every pull request, on `main` and weekly, failing on any advisory not accepted in the reviewed allowlist `.github/audit-allowlist.yaml` and on expired entries (`scripts/audit_check.py`, shared with `make security`) | No automated dependency updates (no Dependabot or Renovate, on purpose): fixes are applied by hand when the audit fails; a malicious release without an advisory is not detected |
 | S | Images or artifacts not built by the project | Images signed by digest with cosign keyless (GitHub OIDC identity of the release workflow, Sigstore transparency log), build provenance (`mode=max`), CycloneDX SBOM attestations, `SHA256SUMS` signed as a blob | Verification is up to the deployer; nothing in the Helm chart enforces signatures |
 | T | Base image drift | Base images pinned by tag (`python:3.12-slim`, `node:24-alpine`, `nginxinc/nginx-unprivileged:1.27-alpine`) | Not pinned by digest: a rebuild may pick up a different base |
 | E | Container escape from a compromised process | Backend image runs as UID 10001; the web image uses the unprivileged nginx base | Pod security settings beyond the chart's defaults are the deployer's |
@@ -197,8 +197,8 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
    `UPDATE, DELETE, TRUNCATE` on `audit_log` from the application role
    (`packages/store/migrations/versions/0015_append_only_audit_log.py`). The owner can still cut
    the tail of a chain; ship a recent `entry_hash` outside the database (TB6).
-2. **No dependency audit in CI and no automated updates.** Add `make security` (or a dependency
-   review action) to CI and enable Dependabot or Renovate (TB9).
+2. **No dependency audit in CI.** Fixed: `.github/workflows/audit.yaml` with the allowlist
+   `.github/audit-allowlist.yaml`. Version updates stay manual on purpose (TB9).
 3. **Document parsing in the worker.** Fixed: PDF and DOCX are parsed in a child process with
    time, CPU, memory and size limits and no network
    (`packages/scribe/src/lorebase_scribe/extraction/sandbox.py`); Keeper checks content
