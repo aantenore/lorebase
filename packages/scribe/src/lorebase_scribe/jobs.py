@@ -31,6 +31,7 @@ Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is con
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -156,12 +157,24 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         return report.as_dict()
 
     async def webhook_delivery(job: JobRow) -> Mapping[str, Any]:
-        report = await deliver_pending(
-            context.sessions,
-            context.webhooks,
-            HttpxSender(context.http),
-            writes=context.runtime.settings.writes,
-        )
+        # The pass bounds its attempts itself; past the lease of its deliveries another pass
+        # may send them again, so a pass still running then is abandoned (a failed attempt of
+        # the job) instead of holding a worker slot that its heartbeat keeps from going stale.
+        sender = HttpxSender(context.http, connect_timeout_s=context.webhooks.connect_timeout_s)
+        lease_s = context.webhooks.lease_s
+        budget = asyncio.timeout(lease_s)
+        try:
+            async with budget:
+                report = await deliver_pending(
+                    context.sessions,
+                    context.webhooks,
+                    sender,
+                    writes=context.runtime.settings.writes,
+                )
+        except TimeoutError:
+            if not budget.expired():
+                raise
+            raise TimeoutError(f"the pass outlasted webhooks.lease_s ({lease_s:g}s)") from None
         return dataclasses.asdict(report)
 
     async def index(job: JobRow) -> Mapping[str, Any]:

@@ -6,7 +6,11 @@ A pass, safe to run concurrently in several workers (rows are claimed with `SKIP
    (event type, branch, created before the event); the event is marked handed off;
 2. claim the due deliveries, leasing them for `lease_s`;
 3. send each one as an HMAC-signed JSON POST (`webhooks.signing`) through the injected
-   `Sender`; a 2xx answer delivers it, anything else is retried after
+   `Sender`, up to `concurrency` at a time. Each attempt, host lookup included, is cut off
+   after `timeout_s`, so a target that accepts and never answers, drops packets or closes
+   midway fails its attempt instead of holding the pass. No attempt starts after
+   `pass_timeout_s`: the deliveries left are released to the next pass without counting an
+   attempt. A 2xx answer delivers a delivery, anything else is retried after
    `min(backoff_base_s * backoff_factor ** (attempts - 1), backoff_max_s)` until
    `max_attempts`, then marked dead. Targets outside `allowed_schemes`, or resolving to
    private addresses unless `allow_private_targets`, are marked dead at once. The host is
@@ -47,7 +51,7 @@ from lorebase_store.changefeed import EventRef, branch_schema, describe
 from lorebase_store.commit.pipeline import COMMITTED_EVENT
 from lorebase_store.repositories.events import OutboxRepository, OutboxRow
 from lorebase_store.settings import WriteSettings
-from lorebase_store.telemetry import WEBHOOK_OUTCOMES
+from lorebase_store.telemetry import WEBHOOK_OUTCOMES, WEBHOOK_TIMEOUTS
 from lorebase_store.webhooks.keys import SigningKeys, StoredKey, seal_stored_keys
 from lorebase_store.webhooks.repository import WEBHOOK_DELIVERIES, WEBHOOKS, webhook_row
 from lorebase_store.webhooks.settings import WebhookSettings
@@ -181,6 +185,10 @@ class DeliveryReport:
     dead: int = 0
     pruned: int = 0
     sealed: int = 0
+    timed_out: int = 0
+    """Attempts cut off by `timeout_s` (counted in `retrying` or `dead` as well)."""
+    released: int = 0
+    """Claimed deliveries not attempted before `pass_timeout_s`, left to the next pass."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +209,7 @@ class _Outcome:
     status: str
     http_status: int | None
     error: str | None
+    timed_out: bool = False
 
 
 async def _payload(
@@ -351,9 +360,6 @@ async def _attempt(
             "the signing key cannot be opened: it was sealed under a key that is neither "
             "webhooks.encryption_key nor in webhooks.previous_encryption_keys",
         )
-    target = await check_target(claimed.url, settings, resolve)
-    if target.problem is not None:
-        return _Outcome(claimed, DEAD, None, f"target refused: {target.problem}")
     body = json.dumps(claimed.payload, ensure_ascii=False, separators=(",", ":")).encode()
     headers = {
         "Content-Type": "application/json",
@@ -362,13 +368,46 @@ async def _attempt(
         settings.delivery_header: str(claimed.id),
     }
     try:
-        status = await send(claimed.url, body, headers, settings.timeout_s, target.addresses)
+        # One deadline for the whole attempt: the lookup and every address the sender tries.
+        async with asyncio.timeout(settings.timeout_s):
+            target = await check_target(claimed.url, settings, resolve)
+            if target.problem is not None:
+                return _Outcome(claimed, DEAD, None, f"target refused: {target.problem}")
+            status = await send(claimed.url, body, headers, settings.timeout_s, target.addresses)
+    except TimeoutError:
+        message = f"timed out after {settings.timeout_s:g}s"
+        return _Outcome(claimed, _after_failure(claimed, settings), None, message, timed_out=True)
     except Exception as error:  # any transport failure is retried
         message = f"{type(error).__name__}: {error}"[:ERROR_LENGTH]
         return _Outcome(claimed, _after_failure(claimed, settings), None, message)
     if 200 <= status < 300:
         return _Outcome(claimed, DELIVERED, status, None)
     return _Outcome(claimed, _after_failure(claimed, settings), status, f"HTTP {status}")
+
+
+async def _attempt_all(
+    claimed: Sequence[_Claimed],
+    settings: WebhookSettings,
+    send: Sender,
+    clock: Clock,
+    resolve: Resolver,
+) -> tuple[list[_Outcome], list[_Claimed]]:
+    """Attempt the claimed deliveries, `concurrency` at a time, starting none after
+    `pass_timeout_s`; returns the outcomes and the deliveries not attempted."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.pass_timeout_s
+    gate = asyncio.Semaphore(settings.concurrency)
+
+    async def one(delivery: _Claimed) -> _Outcome | None:
+        async with gate:
+            if loop.time() >= deadline:
+                return None
+            return await _attempt(delivery, settings, send, clock, resolve)
+
+    results = await asyncio.gather(*(one(delivery) for delivery in claimed))
+    outcomes = [result for result in results if result is not None]
+    left = [delivery for delivery, result in zip(claimed, results, strict=True) if result is None]
+    return outcomes, left
 
 
 def _after_failure(claimed: _Claimed, settings: WebhookSettings) -> str:
@@ -398,6 +437,20 @@ async def _record(
                     updated_at=now,
                 )
             )
+
+
+async def _release(
+    sessions: async_sessionmaker[AsyncSession], left: Sequence[_Claimed], now: datetime
+) -> None:
+    """Make claimed deliveries that were not attempted due again, ending their lease."""
+    d = WEBHOOK_DELIVERIES
+    keys = [(delivery.domain_id, delivery.id) for delivery in left]
+    async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+        await session.execute(
+            update(d)
+            .where(tuple_(d.c.domain_id, d.c.id).in_(keys), d.c.status == PENDING)
+            .values(next_attempt_at=now)
+        )
 
 
 async def _prune(
@@ -433,15 +486,25 @@ async def deliver_pending(
             report.sealed = await seal_stored_keys(session, keys, limit=settings.batch)
     await _fan_out(sessions, settings, writes, clock(), report)
     claimed = await _claim(sessions, settings, keys, clock())
-    outcomes = [await _attempt(c, settings, send, clock, resolve) for c in claimed]
+    outcomes, left = await _attempt_all(claimed, settings, send, clock, resolve)
     if outcomes:
         await _record(sessions, outcomes, settings, clock())
+    if left:
+        await _release(sessions, left, clock())
+        logger.warning(
+            "webhook pass out of time",
+            extra={"released": len(left), "pass_timeout_s": settings.pass_timeout_s},
+        )
     report.attempted = len(outcomes)
+    report.released = len(left)
+    report.timed_out = sum(o.timed_out for o in outcomes)
     report.delivered = sum(o.status == DELIVERED for o in outcomes)
     report.dead = sum(o.status == DEAD for o in outcomes)
     report.retrying = sum(o.status == PENDING for o in outcomes)
     for outcome in outcomes:
         WEBHOOK_OUTCOMES.add(1, {"outcome": _OUTCOMES[outcome.status]})
+        if outcome.timed_out:
+            WEBHOOK_TIMEOUTS.add(1)
         if outcome.status != DELIVERED:
             logger.warning(
                 "webhook delivery failed",

@@ -282,6 +282,79 @@ async def test_webhook_delivery_job_end_to_end(
     assert b"S-1002" in request.body
 
 
+async def wait_status(
+    sessions: async_sessionmaker[AsyncSession], job_id: int, *statuses: str
+) -> tuple[Any, ...]:
+    while True:
+        state = await job_state(sessions, job_id)
+        if state[0] in statuses:
+            return state
+        await asyncio.sleep(0.05)
+
+
+async def test_a_silent_receiver_never_holds_the_worker(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    async def silent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await asyncio.sleep(3600)  # accepts the connection and never answers
+
+    server = await asyncio.start_server(silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    schema = example_schema()
+    await load_domain(sessions, runtime, clock, schema, kinds={"Supplier": "supplier.csv"})
+    worker = worker_for(context, sessions)
+    await enqueue(sessions, WEBHOOK_DELIVERY_JOB, unique=True)
+    await worker.run_once()  # hands off the events of the loading commits
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await WebhookRepository(session, DOMAIN).add(
+            url=f"http://127.0.0.1:{port}/hook",
+            description="gone silent",
+            event_types=["revision.committed"],
+            branches=None,
+            signing_key=StoredKey(signing_key("secret"), None),
+            created_by="usr_admin",
+        )
+    kind = schema.kind_by_api_name("Supplier")
+    assert kind is not None
+    row = next(r for r in rows("supplier.csv") if r["supplier_code"] == "S-1002")
+    await commit_on(sessions, runtime, clock, [record_change(kind, {**row, "risk_score": "90"})])
+
+    webhooks = context.webhooks.model_copy(
+        update={"timeout_s": 2.0, "connect_timeout_s": 1.0, "pass_timeout_s": 2.0, "lease_s": 10}
+    )
+    worker = worker_for(
+        dataclasses.replace(context, webhooks=webhooks),
+        sessions,
+        concurrency=2,
+        poll_interval_s=0.05,
+        heartbeat_interval_s=0.1,
+    )
+    stop = asyncio.Event()
+    running = asyncio.create_task(worker.run(stop))
+    try:
+        delivery = await enqueue(sessions, WEBHOOK_DELIVERY_JOB, unique=True)
+        await asyncio.wait_for(wait_status(sessions, delivery, "running"), 10)
+        # the other slot keeps working while the pass waits on the silent receiver
+        other = await enqueue(sessions, AUDIT_VERIFY_JOB, unique=True)
+        assert (await asyncio.wait_for(wait_status(sessions, other, "succeeded"), 10))[0]
+        assert (await job_state(sessions, delivery))[0] == "running"
+        status, _, result = await asyncio.wait_for(
+            wait_status(sessions, delivery, "succeeded", "queued", "failed"), 10
+        )
+    finally:
+        stop.set()
+        await asyncio.wait_for(running, 10)
+        server.close()
+    assert status == "succeeded"
+    assert (result["attempted"], result["retrying"], result["timed_out"]) == (1, 1, 1)
+    (error,) = await fetch(sessions, "SELECT last_error FROM webhook_deliveries")
+    assert error[0] == "timed out after 2s"
+
+
 async def test_worker_runs_a_store_index_job(
     context: JobContext,
     sessions: async_sessionmaker[AsyncSession],

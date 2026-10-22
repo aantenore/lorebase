@@ -36,6 +36,11 @@ WEBHOOK_OUTCOMES = meter.create_counter(
     unit="{delivery}",
     description="Webhook delivery attempts, by outcome (delivered, retrying, dead).",
 )
+WEBHOOK_TIMEOUTS = meter.create_counter(
+    "lorebase.webhooks.timeouts",
+    unit="{attempt}",
+    description="Webhook delivery attempts cut off by webhooks.timeout_s.",
+)
 GC_RUNS = meter.create_counter(
     "lorebase.gc.runs", unit="{run}", description="Completed garbage collections of a Domain."
 )
