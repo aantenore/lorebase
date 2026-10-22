@@ -117,6 +117,17 @@ class ReadSettings(SectionModel):
     schema_cache_entries: int = Field(
         default=64, ge=1, description="Compiled schemas kept in memory, by schema hash."
     )
+    derivation_preview: Bounds = Field(
+        default_factory=lambda: Bounds(default_limit=5, max_limit=25),
+        description="Records `POST /derivations:preview` evaluates a candidate Derivation on: "
+        "the default and the most one request may ask for.",
+    )
+    source_preview_max_rows: int = Field(
+        default=100,
+        ge=1,
+        description="Sample rows `POST /sources:preview` evaluates the expression mappings of a "
+        "candidate Source on.",
+    )
     query: QuerySettings = Field(default_factory=QuerySettings)
     traverse: TraverseSettings = Field(default_factory=TraverseSettings)
     time_travel: TimeTravelSettings = Field(default_factory=TimeTravelSettings)
