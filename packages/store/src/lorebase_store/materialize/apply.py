@@ -69,8 +69,15 @@ async def apply_changeset(
     settings: StoreSettings,
     expression_limits: ExprLimits | None = None,
     runtime: StoreRuntime | None = None,
+    lineage_source: str | None = None,
 ) -> None:
     """Apply a Revision's changeset to the materialized head of `branch`.
+
+    `lineage_source` names the branch a fast-forward moves `branch` to: the branch's
+    first-parent chain becomes the source's, so a written Record that the source holds with
+    the same object takes the source row's lineage, lineage revisions and update Revision, as
+    a rebuild folding that chain would (one primary-key read per batch of changed keys; a
+    source row without lineage revisions is folded from the changeset instead).
 
     `schema` is the schema at the Revision; `schema_hash` is its schema partition hash when
     the schema changed. `refresh_kinds` lists Kinds whose title or search settings changed:
@@ -155,6 +162,11 @@ async def apply_changeset(
             batch=settings.materialize.read_batch_rows,
             max_incremental=settings.materialize.derivation_max_incremental_records,
         )
+    source = (
+        None
+        if lineage_source is None
+        else MaterializedRepository(session, domain_id, lineage_source, writes=settings.writes)
+    )
     applied = AppliedChanges()
     keep_previous = (derived is not None and bool(derived.steps)) or bool(paths and paths.paths)
     written_kinds: list[str] = []
@@ -170,6 +182,7 @@ async def apply_changeset(
                 at,
                 applied,
                 keep_previous=keep_previous,
+                source=source,
             )
             written_kinds.append(parsed.element_id)
         elif parsed.type is PartitionType.RELATION:
@@ -278,6 +291,7 @@ async def _apply_records(
     applied: AppliedChanges,
     *,
     keep_previous: bool,
+    source: MaterializedRepository | None = None,
 ) -> None:
     removed = [c.entry.key for c in changes if c.body is None]
     written = [c for c in changes if c.body is not None]
@@ -295,11 +309,34 @@ async def _apply_records(
     if not written:
         return
     kind = schema.kinds.get(kind_id)
+    sourced = (
+        {} if source is None else await source.records(kind_id, [c.entry.key for c in written])
+    )
     rows: list[RecordRow] = []
     for change in written:
         assert change.body is not None
         assert change.entry.new_hash is not None
         values: dict[str, Any] = dict(change.body.get("values", {}))
+        same = sourced.get(change.entry.key)
+        if (
+            same is not None
+            and same.object_hash == change.entry.new_hash
+            and same.lineage_revisions is not None
+        ):
+            rows.append(
+                RecordRow(
+                    kind_id=kind_id,
+                    key=change.entry.key,
+                    values=values,
+                    title=record_title(kind, values),
+                    object_hash=change.entry.new_hash,
+                    lineage=dict(same.lineage),
+                    updated_revision=same.updated_revision,
+                    updated_at=same.updated_at,
+                    lineage_revisions=dict(same.lineage_revisions),
+                )
+            )
+            continue
         before = previous.get(change.entry.key)
         rows.append(
             RecordRow(

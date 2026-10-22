@@ -47,6 +47,9 @@ MAT_LINKS: Table = metadata.tables["mat_links"]
 MAT_HISTORY: Table = metadata.tables["mat_history"]
 REVISIONS: Table = metadata.tables["revisions"]
 
+MERGE_ORIGIN_TYPE = "merge"
+"""Origin type of merge Revisions (`merging.MERGE_ORIGIN`)."""
+
 DERIVED_LINK_PREFIX = "drv_"
 """`relation_id` prefix of the rows of materialized path Derivations in `mat_links` (the
 Derivation id): they are not tree objects, so tree comparisons leave them out."""
@@ -165,6 +168,8 @@ class HistoryStep:
     new_hash: bytes | None
     provenance: dict[str, str] | None
     old_hash: bytes | None
+    merge: bool = False
+    """The change is a merge Revision's (`MERGE_ORIGIN_TYPE`)."""
 
 
 def search_vector(
@@ -815,6 +820,7 @@ class MaterializedRepository:
                 history.c.new_hash,
                 history.c.provenance,
                 history.c.old_hash,
+                (REVISIONS.c.origin["type"].astext == MERGE_ORIGIN_TYPE).label("merge"),
             )
             .join(
                 REVISIONS,

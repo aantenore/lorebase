@@ -425,7 +425,39 @@ def _parser() -> argparse.ArgumentParser:
         help=f"Job types to run (default: {GC_JOB} {INDEX_JOB} {MATERIALIZE_JOB} "
         f"{BRANCH_DELETE_JOB} {SENSITIVITY_REFRESH_JOB} {LINEAGE_BACKFILL_JOB}).",
     )
+    lineage = commands.add_parser(
+        "lineage-backfill",
+        help=f"Queue a {LINEAGE_BACKFILL_JOB} job: every branch, or one with --domain and "
+        "--branch.",
+    )
+    lineage.add_argument("--domain", default=None, help="Domain id (with --branch).")
+    lineage.add_argument("--branch", default=None, help="Branch name (with --domain).")
+    lineage.add_argument(
+        "--recompute",
+        action="store_true",
+        help="Also fold again the rows whose lineage revisions name a merge Revision.",
+    )
     return parser
+
+
+async def _queue_lineage_backfill(domain: str | None, branch: str | None, recompute: bool) -> int:
+    from lorebase_platform.settings import load_settings
+    from lorebase_store.db import create_engine
+    from lorebase_store.materialize.lineage_backfill import backfill_payload
+    from lorebase_store.settings import database_settings
+
+    engine = create_engine(database_settings(load_settings()), pooled=False)
+    try:
+        async with async_sessionmaker(engine)() as session, session.begin():
+            return await enqueue_job(
+                session,
+                LINEAGE_BACKFILL_JOB,
+                domain_id=domain,
+                payload=backfill_payload(branch, recompute=recompute),
+                unique_queued=True,
+            )
+    finally:
+        await engine.dispose()
 
 
 async def _work(limit: int | None, types: Iterable[str]) -> int:
@@ -494,7 +526,14 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.command == "lineage-backfill":
+        if (args.domain is None) != (args.branch is None):
+            parser.error("--domain and --branch go together")
+        queued = asyncio.run(_queue_lineage_backfill(args.domain, args.branch, args.recompute))
+        sys.stdout.write(json.dumps({"job": queued}) + "\n")
+        return 0
     ran = asyncio.run(_work(args.limit, args.types))
     sys.stdout.write(json.dumps({"jobs_run": ran}) + "\n")
     return 0

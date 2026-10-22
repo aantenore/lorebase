@@ -80,7 +80,7 @@ from lorebase_store.repositories.deferred_events import DeferredEventRepository
 from lorebase_store.repositories.domains import DomainRepository
 from lorebase_store.repositories.events import OutboxRepository
 from lorebase_store.repositories.index_view import MaterializedIndexView
-from lorebase_store.repositories.materialized import MaterializedRepository
+from lorebase_store.repositories.materialized import MERGE_ORIGIN_TYPE, MaterializedRepository
 from lorebase_store.repositories.merges import (
     ConflictRepository,
     ConflictRow,
@@ -102,7 +102,7 @@ from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.telemetry import MERGE_ATTEMPTS
 
-MERGE_ORIGIN = "merge"
+MERGE_ORIGIN = MERGE_ORIGIN_TYPE
 """Origin type of merge Revisions and of the merge's own provenance entry."""
 MERGE_REASON = "proposal.merge"
 """Ref log reason of a merge."""
@@ -471,6 +471,7 @@ class MergeService:
             settings=settings,
             expression_limits=self._runtime.schema.expression_limits,
             runtime=self._runtime,
+            lineage_source=source.name if merged.result is MergeResult.FAST_FORWARD else None,
         )
         if target_schema is not None and prepared.schema_hash is not None:
             await queue_after_tagging(
