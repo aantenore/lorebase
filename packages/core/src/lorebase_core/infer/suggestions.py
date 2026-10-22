@@ -351,6 +351,25 @@ def kind_is_noise(
     return canonical in {_canonical(n) for n in attribute_names}
 
 
+def kind_is_filtered(
+    name: str,
+    attribute_names: Collection[str],
+    options: SuggestionOptions,
+    *,
+    instances: int,
+    fields: int,
+) -> bool:
+    """The one rule that drops a Kind suggestion as noise, for the extraction job and the
+    store alike: ``kind_is_noise`` with ``independent`` taken from the ``instances`` and
+    ``fields`` the evidence shows (``kind_is_independent``)."""
+    return kind_is_noise(
+        name,
+        attribute_names,
+        options,
+        independent=kind_is_independent(instances, fields, options),
+    )
+
+
 def dangling_reference_names(schema: Schema) -> list[str]:
     """Api names of the Attributes that hold a reference as free text and point to nothing:
     ``string`` or ``text`` Attributes that no Relation of their Kind is named like. A Kind
@@ -697,6 +716,7 @@ __all__ = [
     "field_name",
     "fingerprint",
     "infer_attribute",
+    "kind_is_filtered",
     "kind_is_independent",
     "kind_is_noise",
     "kind_name",

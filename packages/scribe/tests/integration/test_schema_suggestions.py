@@ -9,10 +9,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
-from lorebase_inference import InferenceSettings
+from lorebase_inference import InferenceError, InferenceSettings, InvalidOutputError
 from lorebase_inference.interfaces import ChatOptions, ChatResult, Message, Usage
 from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
-from lorebase_scribe.extraction.settings import DiscoverySettings, ExtractionSettings
+from lorebase_scribe.extraction.settings import (
+    ChunkSettings,
+    DiscoverySettings,
+    ExtractionSettings,
+)
 from lorebase_store.repositories import SchemaSuggestionRepository, SuggestionRow, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 
@@ -173,3 +177,117 @@ async def test_the_dedicated_discovery_pass_feeds_suggestions(
     contract = schema.kind_by_api_name("Contract")
     assert contract is not None
     assert (payment.kind_ref, payment.samples) == (contract.id, ["30"])
+
+
+class _Tier2Chat:
+    """Tier 2 model: every answer is unusable, but costs a few tokens and is logged."""
+
+    def __init__(self, log: list[str]) -> None:
+        self.log = log
+
+    async def complete_json(self, *_args: Any, **_kwargs: Any) -> ChatResult:
+        self.log.append("tier2")
+        raise InvalidOutputError("unusable", usage=Usage(10, 0))
+
+
+class _CostlyDiscovery:
+    """Discovery model: empty proposals at a high token cost, or a provider failure."""
+
+    def __init__(self, log: list[str], *, fail: bool = False) -> None:
+        self.log, self.fail = log, fail
+        self.options: list[ChatOptions | None] = []
+
+    async def complete_json(
+        self,
+        messages: Sequence[Message],
+        schema: dict[str, Any],
+        options: ChatOptions | None = None,
+    ) -> ChatResult:
+        self.log.append("discovery")
+        self.options.append(options)
+        if self.fail:
+            raise InferenceError("provider down")
+        return ChatResult(data={"kinds": [], "attributes": []}, usage=Usage(500, 500), model="m")
+
+
+def _two_tier_run(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    models: ExtractionModels,
+    *,
+    job_tokens: int,
+    discovery_tokens: int,
+) -> ExtractionRun:
+    return ExtractionRun(
+        sessions,
+        runtime,
+        ExtractionSettings(
+            tiers=(0, 2),
+            max_tokens_per_job=job_tokens,
+            chunking=ChunkSettings(max_chars=400, overlap_chars=50),
+            discovery=DiscoverySettings(llm_pass=True, llm_max_tokens=discovery_tokens),
+            cache=False,
+        ),
+        InferenceSettings(),
+        principal="svc_scribe",
+        clock=clock,
+        models=lambda tiers: models,
+    )
+
+
+async def test_the_discovery_pass_runs_after_tier_2_and_cannot_starve_it(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    documents = [await store_document(sessions, p) for p in sorted(DOCUMENTS.glob("*.md"))]
+    log: list[str] = []
+    discovery = _CostlyDiscovery(log)
+    models = ExtractionModels(
+        chat=_Tier2Chat(log),
+        chat_model="t:2",
+        discovery_chat=discovery,
+        discovery_model="t:d",
+    )
+    run = _two_tier_run(sessions, runtime, clock, models, job_tokens=1000, discovery_tokens=2500)
+    report = await run.run(DOMAIN, documents)
+
+    chunks = report.stats["chunks"]
+    # Each call of the discovery pass costs 1000 tokens, as much as the whole tier 2 budget,
+    # yet every chunk reaches tier 2: the passes do not share a budget.
+    assert report.stats["model_calls"] == chunks
+    assert "chunks_over_budget" not in report.stats
+    assert report.stats["discovery_calls"] <= 3
+    assert report.stats["discovery_chunks_over_budget"] > 0
+    assert report.stats["discovery_tokens"] <= 2500 + 1000
+    # Within one document, tier 2 comes before the discovery calls.
+    first_discovery = log.index("discovery")
+    assert log[:first_discovery].count("tier2") >= 1
+    assert "tier2" in log[first_discovery:]  # later documents still get their tier 2
+    # The answer is capped to what is left of the discovery budget.
+    assert all(o is not None and o.max_tokens for o in discovery.options)
+    assert max(o.max_tokens or 0 for o in discovery.options if o) <= 2500
+
+
+async def test_a_failing_discovery_provider_costs_the_chunk_not_the_job(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    document = await store_document(sessions, DOCUMENTS / "quality-notice-p-10016.md")
+    log: list[str] = []
+    models = ExtractionModels(
+        chat=_Tier2Chat(log),
+        chat_model="t:2",
+        discovery_chat=_CostlyDiscovery(log, fail=True),
+        discovery_model="t:d",
+    )
+    run = _two_tier_run(sessions, runtime, clock, models, job_tokens=0, discovery_tokens=0)
+    report = await run.run(DOMAIN, [document])
+    assert report.stats["discovery_errors"] == report.stats["chunks"]
+    assert "discovery_calls" not in report.stats
+    assert any("provider down" in w for w in report.warnings)
+    assert report.stats["model_calls"] == report.stats["chunks"]  # tier 2 was unaffected

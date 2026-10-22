@@ -37,8 +37,7 @@ from lorebase_core.infer.suggestions import (
     SuggestionType,
     dangling_reference_names,
     existing_match,
-    kind_is_independent,
-    kind_is_noise,
+    kind_is_filtered,
     proposed_kind,
 )
 from lorebase_core.model import Schema, Sensitivity
@@ -428,9 +427,10 @@ class Discovery:
 
     # Result -----------------------------------------------------------------------------
 
-    def _independent(self, name: str) -> bool:
-        """Whether the job's observations show the proposed Kind `name` as an entity of its
-        own: several distinct codes seen for it, or several Attributes it owns."""
+    def _noise(self, name: str, fields_known: Sequence[str]) -> bool:
+        """Whether the proposed Kind `name` is noise (`kind_is_filtered`), unless the job's
+        observations show an entity of its own: several distinct codes seen for it, or
+        several Attributes it owns."""
         instances = {
             o.value for o in self.observations if o.type is SuggestionType.KIND and o.name == name
         }
@@ -441,7 +441,9 @@ class Discovery:
             if o.type is SuggestionType.ATTRIBUTE and o.kind == owner
         }
         instances.discard(None)
-        return kind_is_independent(len(instances), len(fields), self.options)
+        return kind_is_filtered(
+            name, fields_known, self.options, instances=len(instances), fields=len(fields)
+        )
 
     def finish(self, records: Mapping[tuple[str, str], Mapping[str, Any]]) -> list[Observation]:
         """The observations to aggregate: new to the schema, never about a sensitive
@@ -451,14 +453,10 @@ class Discovery:
         secrets = _sensitive_values(records, tags)
         kept: list[Observation] = []
         fields = dangling_reference_names(self.schema)
+        verdicts: list[tuple[Observation, str | None]] = []
         for observation in self.observations:
-            if observation.type is SuggestionType.KIND and kind_is_noise(
-                observation.name,
-                fields,
-                self.options,
-                independent=self._independent(observation.name),
-            ):
-                self.count("suggestions_noise")
+            if observation.type is SuggestionType.KIND and self._noise(observation.name, fields):
+                verdicts.append((observation, "suggestions_noise"))
                 continue
             match = existing_match(
                 self.schema,
@@ -470,9 +468,29 @@ class Discovery:
                 tags=tags,
             )
             if match is not None:
-                self.count(
-                    "suggestions_withheld_sensitive" if match.sensitive else "suggestions_known"
+                verdicts.append(
+                    (
+                        observation,
+                        "suggestions_withheld_sensitive"
+                        if match.sensitive
+                        else "suggestions_known",
+                    )
                 )
+                continue
+            verdicts.append((observation, None))
+        # An Attribute owned by a proposed Kind that was filtered out has no owner to join.
+        kept_owners = {f"{PROPOSED}{o.name}" for o, why in verdicts if why is None}
+        lost_owners = {
+            f"{PROPOSED}{o.name}"
+            for o, why in verdicts
+            if why is not None and o.type is SuggestionType.KIND
+        } - kept_owners
+        for observation, why in verdicts:
+            if why is not None:
+                self.count(why)
+                continue
+            if observation.type is SuggestionType.ATTRIBUTE and observation.kind in lost_owners:
+                self.count("suggestions_orphaned")
                 continue
             quote = str((observation.evidence or {}).get("quote") or "").casefold()
             value = (observation.value or "").casefold()

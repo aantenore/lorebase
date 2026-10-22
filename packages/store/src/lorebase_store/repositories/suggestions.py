@@ -10,21 +10,29 @@ dropped and counted.
 
 Variants of one Attribute (`renewal_notice_days`, `renewal_proposal_notice_days`) are folded
 into the best supported suggestion of the Kind (`merge_attributes`), their labels kept; a Kind
-that only names a field or a generic word is not recorded (`kind_is_noise`) unless its evidence
-shows an entity of its own (`kind_is_independent`). `merge_variants` folds variants that were
-stored before they could be merged on arrival.
+that only names a field or a generic word is not recorded (`kind_is_filtered`, shared with
+the extraction job) unless its evidence shows an entity of its own. `merge_variants` folds
+variants that were stored before they could be merged on arrival.
+
+Concurrency: `record` and `merge_variants` of one Domain take the same transaction-scoped
+advisory lock, so they never wait for each other's rows; every `FOR UPDATE` select is ordered
+by id, and either method is retried once, in a savepoint, when Postgres picks it as the victim
+of a deadlock with another writer (`decide`). `record` locks the pending suggestions it
+consolidates against before reading them; `merge_variants` reads light columns, computes the
+merge without locks, then locks only the rows of each set it folds and checks them unchanged.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 
-from sqlalchemy import Table, delete, func, literal, or_, select, update
+from sqlalchemy import Table, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.infer.suggestions import (
@@ -33,8 +41,7 @@ from lorebase_core.infer.suggestions import (
     Observation,
     SuggestionOptions,
     SuggestionType,
-    kind_is_independent,
-    kind_is_noise,
+    kind_is_filtered,
     merge_attributes,
 )
 from lorebase_store.models import metadata
@@ -46,6 +53,9 @@ ACCEPTED = "accepted"
 REJECTED = "rejected"
 STATUSES = (PENDING, ACCEPTED, REJECTED)
 MAX_SOURCES = 10
+MAX_MERGE_PASSES = 5
+DEADLOCK = "40P01"
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +109,21 @@ class MergeOutcome:
     kept: int = 0
 
 
+def _sqlstate(error: DBAPIError) -> str | None:
+    for source in (error.orig, getattr(error.orig, "__cause__", None)):
+        code = getattr(source, "sqlstate", None) or getattr(source, "pgcode", None)
+        if code:
+            return str(code)
+    return None
+
+
+def _spread(kept: Sequence[Any], fresh: Iterable[Any]) -> list[Any]:
+    """`kept` examples, then the `fresh` ones from documents not shown yet before the others,
+    so the examples span documents."""
+    shown = {e.get("document_id") for e in kept}
+    return [*kept, *sorted(fresh, key=lambda e: e.get("document_id") in shown)]
+
+
 def _bounded(items: Iterable[Any], limit: int) -> list[Any]:
     return list(dict.fromkeys(items))[:limit]
 
@@ -117,8 +142,8 @@ def fold(
         share["n"] += 1
         share["c"] = round(share["c"] + observation.confidence, 6)
     shares.update({k: {"n": int(v["n"]), "c": v["c"]} for k, v in batch.items()})
-    support = sum(int(v["n"]) for v in shares.values())
-    total = sum(float(v["c"]) for v in shares.values())
+    support = sum(int(v.get("n", 0)) for v in shares.values())
+    total = sum(float(v.get("c", 0.0)) for v in shares.values())
     kept = [
         e for e in ((current or {}).get("examples") or []) if e.get("document_id") not in replaced
     ]
@@ -132,10 +157,7 @@ def fold(
         if key not in seen:
             seen.add(key)
             fresh.append(dict(evidence))
-    # Examples from documents not shown yet come first, so they span documents.
-    shown = {e.get("document_id") for e in kept}
-    fresh.sort(key=lambda e: e.get("document_id") in shown)
-    examples = (kept + fresh)[: options.max_examples]
+    examples = _spread(kept, fresh)[: options.max_examples]
     samples = _bounded(
         [
             *((current or {}).get("samples") or []),
@@ -173,21 +195,29 @@ def combine(
     for other in others:
         for document, share in (other.get("observations") or {}).items():
             into = shares.setdefault(document, {"n": 0, "c": 0.0})
-            into["n"] = int(into["n"]) + int(share["n"])
-            into["c"] = round(float(into["c"]) + float(share["c"]), 6)
-    support = sum(int(v["n"]) for v in shares.values())
-    total = sum(float(v["c"]) for v in shares.values())
+            into["n"] = int(into.get("n", 0)) + int(share.get("n", 0))
+            into["c"] = round(float(into.get("c", 0.0)) + float(share.get("c", 0.0)), 6)
+    support = sum(int(v.get("n", 0)) for v in shares.values())
+    total = sum(float(v.get("c", 0.0)) for v in shares.values())
     every = [kept, *others]
+    first = list(kept.get("examples") or [])
     examples: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
-    for row in every:
+    for example in first:
+        examples.setdefault(
+            (example.get("document_id"), example.get("start"), example.get("end")), example
+        )
+    more: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for row in others:
         for example in row.get("examples") or []:
             key = (example.get("document_id"), example.get("start"), example.get("end"))
-            examples.setdefault(key, example)
+            if key not in examples:
+                more.setdefault(key, example)
     return {
+        "target_ref": next((r["target_ref"] for r in every if r.get("target_ref")), None),
         "observations": shares,
         "support": support,
         "confidence": round(total / support, 4) if support else 0.0,
-        "examples": list(examples.values())[: options.max_examples],
+        "examples": _spread(list(examples.values()), more.values())[: options.max_examples],
         "samples": _bounded(
             (v for r in every for v in r.get("samples") or []), options.max_samples
         ),
@@ -253,8 +283,9 @@ def consolidate(
         instances = {o.value for o in groups[key] if o.value}
         instances.update((kinds[key].get("samples") or []) if key in kinds else [])
         fields = {s.key for s in sightings.values() if s.kind == owned}
-        independent = kind_is_independent(len(instances), len(fields), options)
-        if kind_is_noise(name, fields_known, options, independent=independent):
+        if kind_is_filtered(
+            name, fields_known, options, instances=len(instances), fields=len(fields)
+        ):
             del groups[key]
     return groups, {k: names.get(k, groups[k][0].name) for k in groups}
 
@@ -269,6 +300,24 @@ class SchemaSuggestionRepository:
     def _scoped(self) -> Any:
         return SUGGESTIONS.c.domain_id == self._domain
 
+    async def _serialize(self) -> None:
+        """Take the Domain's suggestion-writer lock, held to the end of the transaction."""
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"schema_suggestions\x1f{self._domain}"},
+        )
+
+    async def _retrying(self, work: Callable[[], Awaitable[T]]) -> T:
+        """`work` in a savepoint, run once more if Postgres chose it as a deadlock victim."""
+        for attempt in (0, 1):
+            try:
+                async with self._session.begin_nested():
+                    return await work()
+            except DBAPIError as error:
+                if attempt or _sqlstate(error) != DEADLOCK:
+                    raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
     async def record(
         self,
         observations: Sequence[Observation],
@@ -279,6 +328,24 @@ class SchemaSuggestionRepository:
         new_id: Callable[[], str],
     ) -> RecordOutcome:
         """Fold a job's observations into the stored suggestions (see module doc)."""
+
+        async def work() -> RecordOutcome:
+            await self._serialize()
+            return await self._record(
+                observations, job_id=job_id, options=options, now=now, new_id=new_id
+            )
+
+        return await self._retrying(work)
+
+    async def _record(
+        self,
+        observations: Sequence[Observation],
+        *,
+        job_id: str,
+        options: SuggestionOptions,
+        now: datetime,
+        new_id: Callable[[], str],
+    ) -> RecordOutcome:
         table = SUGGESTIONS
         refs = {o.kind for o in observations if o.type is SuggestionType.ATTRIBUTE and o.kind}
         kind_keys = {o.fingerprint for o in observations if o.type is SuggestionType.KIND}
@@ -288,12 +355,15 @@ class SchemaSuggestionRepository:
             pending = list(
                 (
                     await self._session.execute(
-                        select(table).where(
+                        select(table)
+                        .where(
                             self._scoped(),
                             table.c.suggestion_type == SuggestionType.ATTRIBUTE.value,
                             table.c.status == PENDING,
                             table.c.kind_ref.in_(sorted(refs)),
                         )
+                        .order_by(table.c.id)
+                        .with_for_update()
                     )
                 ).mappings()
             )
@@ -301,9 +371,10 @@ class SchemaSuggestionRepository:
             pending += list(
                 (
                     await self._session.execute(
-                        select(table).where(
-                            self._scoped(), table.c.fingerprint.in_(sorted(kind_keys))
-                        )
+                        select(table)
+                        .where(self._scoped(), table.c.fingerprint.in_(sorted(kind_keys)))
+                        .order_by(table.c.id)
+                        .with_for_update()
                     )
                 ).mappings()
             )
@@ -316,6 +387,7 @@ class SchemaSuggestionRepository:
                 await self._session.execute(
                     select(table)
                     .where(self._scoped(), table.c.fingerprint.in_(list(groups)))
+                    .order_by(table.c.id)
                     .with_for_update()
                 )
             ).mappings()
@@ -381,24 +453,51 @@ class SchemaSuggestionRepository:
             created += 1
         return RecordOutcome(created, updated, dropped)
 
-    async def merge_variants(self, *, options: SuggestionOptions, now: datetime) -> MergeOutcome:
+    async def merge_variants(
+        self,
+        *,
+        options: SuggestionOptions,
+        now: datetime,
+        max_passes: int = MAX_MERGE_PASSES,
+    ) -> MergeOutcome:
         """Fold the pending Attribute suggestions that are variants of one another
         (`merge_attributes`) into the best supported one of each set, as `record` does for new
         observations: support, documents, examples, samples and labels are united and the
-        absorbed rows deleted. Decided suggestions are left alone."""
+        absorbed rows deleted. Decided suggestions are left alone. Folding changes the samples
+        and support the similarity reads, so it repeats until nothing folds more, at most
+        `max_passes` times."""
+        merged = kept = 0
+        for _ in range(max(max_passes, 1)):
+            outcome = await self._retrying(lambda: self._merge_pass(options, now))
+            merged += outcome.merged
+            kept += outcome.kept
+            if not outcome.merged:
+                break
+        return MergeOutcome(merged=merged, kept=kept)
+
+    async def _merge_pass(self, options: SuggestionOptions, now: datetime) -> MergeOutcome:
         table = SUGGESTIONS
-        rows = {
+        await self._serialize()
+        light = [
+            table.c.id,
+            table.c.fingerprint,
+            table.c.name,
+            table.c.kind_ref,
+            table.c.samples,
+            table.c.support,
+            table.c.updated_at,
+        ]
+        seen = {
             row["fingerprint"]: row
             for row in (
                 await self._session.execute(
-                    select(table)
+                    select(*light)
                     .where(
                         self._scoped(),
                         table.c.suggestion_type == SuggestionType.ATTRIBUTE.value,
                         table.c.status == PENDING,
                     )
                     .order_by(table.c.id)
-                    .with_for_update()
                 )
             ).mappings()
         }
@@ -406,23 +505,46 @@ class SchemaSuggestionRepository:
             AttributeSighting(
                 key, r["name"], r["kind_ref"], tuple(r["samples"] or ()), int(r["support"])
             )
-            for key, r in rows.items()
+            for key, r in seen.items()
         ]
         folded: dict[str, list[str]] = defaultdict(list)
-        for key, kept in merge_attributes(sightings, options).items():
-            if key != kept:
-                folded[kept].append(key)
-        for kept, absorbed in sorted(folded.items()):
-            others = [rows[k] for k in sorted(absorbed)]
+        for key, target in merge_attributes(sightings, options).items():
+            if key != target:
+                folded[target].append(key)
+        merged = kept = 0
+        for target, absorbed in sorted(folded.items()):
+            members = [seen[k] for k in sorted([target, *absorbed], key=lambda k: seen[k]["id"])]
+            # Lock only these rows, in id order, and fold them if no writer touched them since.
+            locked = {
+                row["id"]: row
+                for row in (
+                    await self._session.execute(
+                        select(table)
+                        .where(self._scoped(), table.c.id.in_([m["id"] for m in members]))
+                        .order_by(table.c.id)
+                        .with_for_update()
+                    )
+                ).mappings()
+            }
+            if len(locked) != len(members) or any(
+                locked[m["id"]]["status"] != PENDING
+                or locked[m["id"]]["support"] != m["support"]
+                or locked[m["id"]]["updated_at"] != m["updated_at"]
+                for m in members
+            ):
+                continue
+            others = [locked[seen[k]["id"]] for k in sorted(absorbed)]
             await self._session.execute(
                 update(table)
-                .where(self._scoped(), table.c.id == rows[kept]["id"])
-                .values(**combine(rows[kept], others, options), updated_at=now)
+                .where(self._scoped(), table.c.id == seen[target]["id"])
+                .values(**combine(locked[seen[target]["id"]], others, options), updated_at=now)
             )
             await self._session.execute(
                 delete(table).where(self._scoped(), table.c.id.in_([o["id"] for o in others]))
             )
-        return MergeOutcome(merged=sum(len(v) for v in folded.values()), kept=len(folded))
+            merged += len(absorbed)
+            kept += 1
+        return MergeOutcome(merged=merged, kept=kept)
 
     async def count(self, status: str | None = None) -> int:
         query = select(func.count()).select_from(SUGGESTIONS).where(self._scoped())
@@ -486,7 +608,7 @@ class SchemaSuggestionRepository:
             return {}
         query = select(SUGGESTIONS).where(self._scoped(), SUGGESTIONS.c.id.in_(list(ids)))
         if for_update:
-            query = query.with_for_update()
+            query = query.order_by(SUGGESTIONS.c.id).with_for_update()
         rows = (await self._session.execute(query)).mappings()
         return {row["id"]: _row(row) for row in rows}
 
