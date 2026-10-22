@@ -366,6 +366,11 @@ in the allowlist (matched by package and id or alias) and on expired entries; ac
 printed as warnings. Entries carry a reason, a review date and an expiry. The allowlist starts
 empty: both audits found nothing. Dependabot version updates stay off. Test:
 `tests/tooling/test_audit_check.py`.
+**Base images pinned by digest** (`deploy/docker/backend.Dockerfile`,
+`deploy/docker/web.Dockerfile`, the compose proxy image). Each `FROM` uses an `ARG ..._IMAGE`
+default of the form `tag@sha256:<index digest>`, the multi-arch index so amd64 and arm64 builds
+get the same content; [release](release.md#base-images) describes the bump. Test:
+`tests/tooling/test_dockerfile_pins.py` fails on an external `FROM` without a 64-hex digest.
 
 ## Other observations
 

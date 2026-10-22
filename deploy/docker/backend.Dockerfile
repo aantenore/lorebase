@@ -8,10 +8,11 @@
 # Build from the repository root:
 #   docker build -f deploy/docker/backend.Dockerfile -t lorebase .
 
-ARG PYTHON_TAG=3.12-slim
+# Base image: python:3.12-slim, pinned by its multi-arch index digest (see docs/release.md).
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
 # ---- build: resolve and install the locked, non-dev dependencies and the workspace ----
-FROM python:${PYTHON_TAG} AS build
+FROM ${PYTHON_IMAGE} AS build
 
 ARG UV_VERSION=0.11.21
 # Extra arguments for `uv sync` (every package and the `documents` parsers are always
@@ -35,7 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --all-packages --extra documents ${UV_SYNC_ARGS}
 
 # ---- runtime: interpreter, virtual environment and migration scripts only ----
-FROM python:${PYTHON_TAG} AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
 
 ARG VCS_URL=https://github.com/aantenore/lorebase
 ARG VERSION=dev

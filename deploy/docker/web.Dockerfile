@@ -30,11 +30,14 @@
 # The build context is the repository root; web.Dockerfile.dockerignore keeps it to apps/web and
 # deploy/docker/web.
 
-ARG NODE_TAG=24-alpine
-ARG NGINX_TAG=1.27-alpine
+# Base images, pinned by their multi-arch index digests (see docs/release.md).
+# node:24-alpine
+ARG NODE_IMAGE=node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+# nginxinc/nginx-unprivileged:1.27-alpine
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
 
 # ---- build: install the locked dependencies, type check and bundle ----
-FROM node:${NODE_TAG} AS build
+FROM ${NODE_IMAGE} AS build
 
 ARG VITE_API_MODE=mock
 ARG VITE_KEEPER_BASE_URL=
@@ -52,7 +55,7 @@ COPY apps/web ./
 RUN pnpm build
 
 # ---- runtime: static files, the nginx configuration and the config.js writer ----
-FROM nginxinc/nginx-unprivileged:${NGINX_TAG} AS runtime
+FROM ${NGINX_IMAGE} AS runtime
 
 ARG VCS_URL=https://github.com/aantenore/lorebase
 ARG VERSION=dev

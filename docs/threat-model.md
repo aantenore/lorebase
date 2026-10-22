@@ -188,7 +188,7 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 | T | A compromised third-party action | Every external action is pinned by commit SHA; checkouts do not persist the token (F11); CodeQL (`security-extended`) and Scorecard run on `main` | None known for pinned actions |
 | T | A malicious or vulnerable dependency | Lockfiles with `uv sync --frozen` and `pnpm install --frozen-lockfile`; the Audit workflow (`.github/workflows/audit.yaml`) runs pip-audit on the locked workspace and `pnpm audit --prod` on every pull request, on `main` and weekly, failing on any advisory not accepted in the reviewed allowlist `.github/audit-allowlist.yaml` and on expired entries (`scripts/audit_check.py`, shared with `make security`) | No automated dependency updates (no Dependabot or Renovate, on purpose): fixes are applied by hand when the audit fails; a malicious release without an advisory is not detected |
 | S | Images or artifacts not built by the project | Images signed by digest with cosign keyless (GitHub OIDC identity of the release workflow, Sigstore transparency log), build provenance (`mode=max`), CycloneDX SBOM attestations, `SHA256SUMS` signed as a blob | Verification is up to the deployer; nothing in the Helm chart enforces signatures |
-| T | Base image drift | Base images pinned by tag (`python:3.12-slim`, `node:24-alpine`, `nginxinc/nginx-unprivileged:1.27-alpine`) | Not pinned by digest: a rebuild may pick up a different base |
+| T | Base image drift | Base images pinned by the digest of their multi-arch index with the tag kept readable (`python:3.12-slim@sha256:...`, `node:24-alpine@sha256:...`, `nginxinc/nginx-unprivileged:1.27-alpine@sha256:...` in `deploy/docker/*.Dockerfile`), checked by `tests/tooling/test_dockerfile_pins.py`; bumping is documented in [release](release.md#base-images) | Digests are moved by hand: security fixes in a base image arrive only when someone bumps the pin |
 | E | Container escape from a compromised process | Backend image runs as UID 10001; the web image uses the unprivileged nginx base | Pod security settings beyond the chart's defaults are the deployer's |
 
 ## Residual risks, by priority
@@ -217,7 +217,8 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 8. **Transport security headers.** Fixed: Keeper and the web image send them
    (`packages/keeper/src/lorebase_keeper/middleware.py`, `deploy/docker/web/40-lorebase-config.sh`);
    HSTS for the web app is the TLS proxy's or `LOREBASE_WEB_HSTS` (TB1).
-9. **Base images by tag.** Pin by digest and let an update tool move the digests (TB9).
+9. **Base images by tag.** Fixed: pinned by digest (`deploy/docker/*.Dockerfile`); digests are
+   bumped by hand ([release](release.md#base-images)) (TB9).
 
 ## Keeping this page current
 

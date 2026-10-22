@@ -132,6 +132,18 @@ helm template check "release/lorebase-$VERSION.tgz" -n lorebase >/dev/null
 uv run --with "lorebase-cli==$VERSION" lorebase --version     # only when published to PyPI
 ```
 
+## Base images
+
+The base images in `deploy/docker/backend.Dockerfile` and `deploy/docker/web.Dockerfile` (and the proxy image in `deploy/compose/docker-compose.yaml` and `.env.example`) are pinned by the digest of their multi-arch index, so `amd64` and `arm64` builds resolve to the same content. The readable tag stays in front of the digest (`python:3.12-slim@sha256:...`). The digests are moved by hand, on purpose: there are no automated version updates.
+
+To bump one:
+
+1. Get the index digest, the top-level `Digest:` line: `docker buildx imagetools inspect python:3.12-slim`. (`docker pull` prints the same digest for a multi-arch tag.)
+2. Replace the `@sha256:...` part of the `ARG ..._IMAGE` default (and of the proxy image, if it is the nginx one), keeping the tag.
+3. Rebuild both images. The `docker` workflow builds the backend image on pull requests, which verifies the new pin resolves.
+
+`tests/tooling/test_dockerfile_pins.py` fails if a `FROM` of an external image is not pinned by a 64-hex digest.
+
 ## Known gaps
 
 State these in the notes of each release until they are closed.
