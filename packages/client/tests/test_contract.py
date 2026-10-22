@@ -360,8 +360,17 @@ def test_every_builder_targets_a_documented_operation() -> None:
         assert used <= declared, f"{call.method} {full}: unknown parameters {used - declared}"
 
 
+BROWSER_ONLY = {
+    ("GET", f"{PREFIX}/auth/login"),
+    ("GET", f"{PREFIX}/auth/callback"),
+    ("GET", f"{PREFIX}/auth/session"),
+    ("POST", f"{PREFIX}/auth/logout"),
+}
+"""Web sign-in routes: cookie sessions of a browser, not something the client calls."""
+
+
 def test_every_documented_operation_has_a_builder() -> None:
     documented = operations()
     covered = {best_match(documented, c.method, PREFIX + c.path) for c in sample_calls()}
-    missing = sorted(set(documented) - covered)  # type: ignore[type-var]
+    missing = sorted(set(documented) - covered - BROWSER_ONLY)  # type: ignore[type-var]
     assert missing == [], f"operations without a client call: {missing}"
