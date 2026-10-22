@@ -18,6 +18,7 @@ from lorebase_cli.linkml import (
     dump_yaml,
     from_linkml,
     load_yaml,
+    merge_into_current,
     to_linkml,
 )
 from lorebase_cli.main import app
@@ -439,6 +440,9 @@ def test_schema_import_prints_the_document_and_warnings() -> None:
 
 
 def test_schema_import_dry_run_plans_the_change_on_a_branch(http: respx.MockRouter) -> None:
+    http.get("/domains/crm/schema", params={"branch": "work", "format": "yaml"}).respond(
+        404, json={"code": "not_found", "message": "no such Domain"}
+    )
     route = http.post("/domains/crm/branches/work/schema/changes").respond(
         200,
         json={
@@ -464,3 +468,167 @@ def test_schema_import_dry_run_plans_the_change_on_a_branch(http: respx.MockRout
     document = load_yaml(sent["yaml"])
     assert document["domain"]["id"] == "crm"
     assert set(document["kinds"]) >= {"Person", "Organization"}
+
+
+# Applying to an existing Domain ---------------------------------------------------------------
+
+#: Annotations a hand-written LinkML schema does not have: ids and what LinkML cannot carry.
+_EXPORT_ONLY_TAGS = {
+    f"lorebase.{tag}"
+    for tag in ("id", "operations", "derivations", "sources", "authority", "derivation")
+}
+
+
+def hand_written(
+    document: dict[str, Any], drop_attribute: tuple[str, str] | None = None, drop_kind: str = ""
+) -> dict[str, Any]:
+    """The LinkML schema of a Lorebase document as someone would write it by hand."""
+    schema = to_linkml(document)
+
+    def strip(node: Any) -> None:
+        if isinstance(node, dict):
+            for tag in _EXPORT_ONLY_TAGS & set(node.get("annotations") or {}):
+                del node["annotations"][tag]
+            for value in node.values():
+                strip(value)
+
+    strip(schema)
+    if drop_attribute:
+        del schema["classes"][drop_attribute[0]]["attributes"][drop_attribute[1]]
+    if drop_kind:
+        del schema["classes"][drop_kind]
+        for cls in schema["classes"].values():
+            for name, slot in list(cls.get("attributes", {}).items()):
+                if slot.get("range") == drop_kind:
+                    del cls["attributes"][name]
+    return schema
+
+
+def merged(schema: dict[str, Any], *, prune: bool = False) -> tuple[dict[str, Any], list[str]]:
+    result = merge_into_current(supply(), from_linkml(schema), prune=prune)
+    return result.document, [str(warning) for warning in result.warnings]
+
+
+def test_merge_keeps_what_linkml_cannot_carry() -> None:
+    document, warnings = merged(hand_written(supply()))
+
+    assert canonical(document) == canonical(supply())
+    assert set(document["operations"]) == {"flag_supplier_risk", "approve_contract"}
+    assert set(document["derivations"]) == {"supplier_count", "single_sourced"}
+    assert set(document["sources"]) == {"approved.suppliers", "erp.purchase_orders"}
+    legal_name = document["kinds"]["Supplier"]["attributes"]["legal_name"]
+    assert legal_name["authority"] == "approved.suppliers"
+    assert legal_name["id"] == supply()["kinds"]["Supplier"]["attributes"]["legal_name"]["id"]
+    assert not [w for w in warnings if "kept:" in w or "removed:" in w]
+
+
+def test_merge_applies_what_linkml_changes() -> None:
+    schema = hand_written(supply())
+    country = schema["classes"]["Supplier"]["attributes"]["country"]
+    country["description"] = "Country of the registered office."
+    country["required"] = False
+    document, _ = merged(schema)
+
+    country_now = document["kinds"]["Supplier"]["attributes"]["country"]
+    assert country_now["description"] == "Country of the registered office."
+    assert "required" not in country_now
+    assert country_now["indexed"] is True  # not in LinkML: kept
+    assert country_now["constraints"] == {"pattern": "^[A-Z]{2}$"}
+
+
+def test_merge_keeps_elements_the_linkml_schema_leaves_out_and_says_so() -> None:
+    schema = hand_written(supply(), drop_attribute=("Supplier", "risk_score"), drop_kind="RiskFlag")
+    document, warnings = merged(schema)
+
+    assert "risk_score" in document["kinds"]["Supplier"]["attributes"]
+    assert "RiskFlag" in document["kinds"]
+    assert "flags" in document["relations"]
+    assert errors(document) == errors(supply())
+    assert (
+        "kinds/Supplier/attributes/risk_score: kept: not in the LinkML schema (--prune removes it)"
+        in (warnings)
+    )
+    assert "kinds/RiskFlag: kept: not in the LinkML schema (--prune removes it)" in warnings
+
+
+def test_merge_with_prune_removes_them_with_their_relations() -> None:
+    schema = hand_written(supply(), drop_attribute=("Supplier", "risk_score"), drop_kind="RiskFlag")
+    document, warnings = merged(schema, prune=True)
+
+    assert "risk_score" not in document["kinds"]["Supplier"]["attributes"]
+    assert "RiskFlag" not in document["kinds"]
+    assert "flags" not in document["relations"]
+    assert (
+        "kinds/Supplier/attributes/risk_score: removed: not in the LinkML schema (--prune)"
+        in warnings
+    )
+    assert set(document["operations"]) == {"flag_supplier_risk", "approve_contract"}
+
+
+def test_merge_matches_renames_by_id() -> None:
+    schema = to_linkml(supply())
+    schema["classes"]["Vendor"] = schema["classes"].pop("Supplier")
+    for cls in schema["classes"].values():
+        for slot in cls.get("attributes", {}).values():
+            if slot.get("range") == "Supplier":
+                slot["range"] = "Vendor"
+    document, _ = merged(schema)
+
+    assert document["kinds"]["Vendor"]["id"] == supply()["kinds"]["Supplier"]["id"]
+    assert "Supplier" not in document["kinds"]
+    assert document["kinds"]["Vendor"]["icon"] == "factory"
+
+
+def apply_route(http: respx.MockRouter) -> respx.Route:
+    return http.post("/domains/supply/branches/work/schema/changes").respond(
+        200,
+        json={
+            "status": "dry_run",
+            "branch": "work",
+            "head": "ab" * 32,
+            "revision": None,
+            "changes": [],
+            "change_count": 0,
+            "data_changes": 0,
+            "issues": [],
+            "issue_count": 0,
+        },
+    )
+
+
+def test_schema_import_apply_merges_into_the_current_schema(
+    http: respx.MockRouter, tmp_path: Path
+) -> None:
+    http.get("/domains/supply/schema", params={"branch": "work", "format": "yaml"}).respond(
+        200, text=SUPPLY.read_text(encoding="utf-8"), headers={"content-type": "text/yaml"}
+    )
+    route = apply_route(http)
+    source = tmp_path / "supply.linkml.yaml"
+    source.write_text(
+        dump_yaml(hand_written(supply(), drop_attribute=("Supplier", "risk_score"))),
+        encoding="utf-8",
+    )
+    base = ["schema", "import", str(source), "--from", "linkml", "-d", "supply", "-b", "work"]
+
+    kept = runner.invoke(app, [*base, "--dry-run"])
+    assert kept.exit_code == 0, kept.output
+    assert "warning: kinds/Supplier/attributes/risk_score: kept" in kept.stderr
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["dry_run"] is True
+    document = load_yaml(sent["yaml"])
+    assert set(document["operations"]) == {"flag_supplier_risk", "approve_contract"}
+    assert "risk_score" in document["kinds"]["Supplier"]["attributes"]
+
+    pruned = runner.invoke(app, [*base, "--apply", "--prune"])
+    assert pruned.exit_code == 0, pruned.output
+    sent = json.loads(route.calls[1].request.content)
+    assert sent["dry_run"] is False
+    document = load_yaml(sent["yaml"])
+    assert "risk_score" not in document["kinds"]["Supplier"]["attributes"]
+    assert "operations" in document
+
+
+def test_schema_import_print_ignores_the_current_schema(http: respx.MockRouter) -> None:
+    result = runner.invoke(app, ["schema", "import", str(PERSONINFO), "--from", "linkml"])
+    assert result.exit_code == 0, result.output
+    assert not http.calls
