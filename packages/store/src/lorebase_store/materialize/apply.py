@@ -207,6 +207,7 @@ async def apply_changeset(
                 search_weights(tagged.kinds.get(kind_id)),
                 config=search_config,
                 revision=revision_id,
+                keys=sorted(applied.written.get(kind_id, ())),
             )
     for kind_id, keys in sorted(changed.items()):
         if keys and kind_id not in refresh_kinds and derived and derived.searchable(kind_id):

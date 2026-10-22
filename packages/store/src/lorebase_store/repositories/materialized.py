@@ -407,10 +407,11 @@ class MaterializedRepository:
         keys: Sequence[str] | None = None,
     ) -> None:
         """Recompute search vectors of a Kind's rows (only those of `revision`, or of `keys`,
-        when given)."""
-        if keys is not None:
+        when given). With both, `keys` are the keys `revision` wrote: they bound the update to
+        primary-key lookups, where `revision` alone filters every row of the Kind."""
+        if keys is not None and revision is None:
             await self._before_record_writes(kind_id, keys)
-        elif revision is None:
+        elif keys is None and revision is None:
             await self._before_writes(MAT_RECORDS, lambda s: [s.c.kind_id == kind_id])
         # Rows of `revision` were written by it, after their previous state was preserved.
         statement = (
