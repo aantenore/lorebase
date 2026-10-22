@@ -16,8 +16,8 @@
 #   DEMO_POSTGRES_PORT  host port of Postgres               (15432)
 #   DEMO_STATE_DIR      generated files, secrets, CSV copy  (<repo>/build/demo)
 #   DEMO_UP_TIMEOUT     seconds to wait for Keeper          (240)
-#   DEMO_NO_BUILD       1: do not build the image, use the one tagged lorebase-demo:local
-#                       (the CI workflow builds it first, with a layer cache)  (unset)
+#   DEMO_NO_BUILD       1: do not build the image, use the ones tagged lorebase-demo:local
+#                       and lorebase-demo-ml:local (the CI workflow builds them first, with a layer cache)  (unset)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -54,6 +54,7 @@ write_env() {
     umask 077
     cat >"$STATE/stack.env" <<EOF
 LOREBASE_IMAGE=lorebase-demo
+LOREBASE_ML_IMAGE=lorebase-demo-ml
 LOREBASE_TAG=local
 POSTGRES_PASSWORD=$(secret postgres.password)
 LOREBASE_APP_USER=lorebase_app
