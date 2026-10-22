@@ -79,6 +79,12 @@ class VaultSettings(SectionModel):
         description="How long a commit storing vault values waits for an erasure in the same "
         "Domain to finish (0: no limit).",
     )
+    erase_lock_timeout_ms: int = Field(
+        default=30_000,
+        ge=0,
+        description="How long an erasure waits for the commits storing vault values in the same "
+        "Domain to finish (0: no limit); it then answers 503 and can be retried.",
+    )
     rekey_batch: int = Field(
         default=500,
         ge=1,
