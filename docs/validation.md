@@ -549,11 +549,38 @@ were removed afterwards.
   `tests/tooling/test_compose_stack.py`: 18 passed.
 - `make docs` (strict) passed.
 
+### Web app in compose (follow-up pass)
+
+**Date:** 2026-10-22. The web app was the one step that needed Node.js and pnpm: the web image
+would have needed Keeper's CORS setting. The compose file now has a `web` service (the web
+image with an nginx proxy of `/api/`, and `/guide/` for the `assistant` profile, rendered from
+`deploy/compose/web/proxy.conf.template`), part of `make up`, on `127.0.0.1:8090`.
+
+Checked from a fresh clone of the pushed commit, with its own project name and ports
+(`COMPOSE_PROJECT_NAME`, `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT`), no Node.js
+involved: `make env`, `make up`, `make example-data`, then `curl` against the web port.
+
+| Step | Time (warm Docker cache) | Result |
+|------|--------------------------|--------|
+| `uv sync --all-packages` | 2 s | |
+| `make up` (backend and web images, Postgres, migrations, Keeper and web healthy) | 38 s | prints `Web app: http://127.0.0.1:PORT` |
+| `make example-data` | 5 s | Domain `supply` loaded |
+| `GET /` | | 200, the app shell |
+| `GET /config.js` | | `VITE_API_MODE=live`, `VITE_KEEPER_BASE_URL=/` |
+| CSP header | | `connect-src 'self'` |
+| `GET /api/v1/auth/whoami`, `/api/v1/domains/supply/branches` | | 200 through the proxy, Keeper unchanged (no CORS setting) |
+| `GET /api/v1/domains/supply/branches/main/events` (SSE) | | first frame at once, heartbeat after 15 s as Keeper sends it: not buffered |
+| `GET /supply/explorer` | | 200, the app shell (client-side route) |
+| `GET /guide/healthz` without the profile | | 502, as expected |
+| `GET /guide/healthz` with `--profile assistant` | | 200; a `POST /guide/explore` with the web origin passes the origin check (401 without credentials), another origin gets 403 |
+
+The first build of the web image adds a `pnpm install` and a Vite build to `make up`. Tests:
+`tests/tooling/test_compose_stack.py` and `tests/tooling/test_quickstart.py` (the `web` service,
+port and bind variables, the proxy template, Guide's allowed origins). Containers, volumes, the
+two images and the clone were removed afterwards.
+
 ### Open
 
-- The web app needs Node.js and the dev server; the stack has no web service in compose. The
-  web image (`deploy/docker/web.Dockerfile`) would need Keeper's CORS setting or a proxy to
-  run in live mode next to it.
 - A first machine downloads the base images during `make up`; that time was not measured, the
   build cache being warm.
 - The MCP host itself was not driven; the `mcpServers` entry follows [mcp.md](mcp.md) and the
