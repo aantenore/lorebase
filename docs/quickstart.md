@@ -476,6 +476,10 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml down -v   #
 
 Stop `pnpm dev` with Ctrl+C.
 
+## Next steps
+
+- Plug in an agent: [examples/agent](../examples/agent/README.md) reads the `supply` Domain through Herald and proposes changes as Proposals, with Ollama or a hosted model.
+
 ## Coming next
 
 These do not exist yet; the order follows the [M1 plan](plan/m1.md).

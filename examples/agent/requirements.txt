@@ -1,0 +1,3 @@
+# The agent needs only these two (it imports no Lorebase package).
+mcp>=2.3,<3
+httpx>=0.27

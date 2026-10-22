@@ -566,3 +566,7 @@ estimator, caps, trim order), `agents.explain` (listed Links and Proposals), `ag
 (task branches and automatic Proposals, section 4), `read.health` (records
 validated, examples, duplicate and orphan caps, statement timeout) and `webhooks` (targets,
 headers, timeouts, retries, retention).
+
+## Example agent
+
+[`examples/agent`](../examples/agent/README.md) is a process agent that connects through Herald ([MCP](mcp.md)) to any OpenAI-compatible chat model (Ollama by default), works on the `supply` Domain with ready-made tasks and writes only through Operations and Proposals.
