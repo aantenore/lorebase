@@ -548,6 +548,43 @@ class Records(_Resource):
             ep.get_record(domain, kind, key, branch=branch, at=at, links=links, lineage=lineage)
         )
 
+    def history(
+        self,
+        domain: str,
+        kind: str,
+        key: str,
+        *,
+        branch: str | None = None,
+        values: bool = False,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.RecordHistory:
+        """One page of the changes of a Record, newest first."""
+        return self._c.send(
+            ep.record_history(
+                domain, kind, key, branch=branch, values=values, limit=limit, cursor=cursor
+            )
+        )
+
+    def iterate_history(
+        self,
+        domain: str,
+        kind: str,
+        key: str,
+        *,
+        branch: str | None = None,
+        values: bool = False,
+        page_size: int | None = None,
+    ) -> Iterator[m.RecordChange]:
+        call = ep.record_history(domain, kind, key, branch=branch, values=values, limit=page_size)
+        return self._c.iterate(call)
+
+    def lineage(
+        self, domain: str, kind: str, key: str, *, branch: str | None = None
+    ) -> m.RecordLineage:
+        """Where the current values of a Record came from."""
+        return self._c.send(ep.record_lineage(domain, kind, key, branch=branch))
+
     def links(
         self,
         domain: str,
