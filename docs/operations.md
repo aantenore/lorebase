@@ -159,12 +159,20 @@ python -m lorebase_store.bundle import --in /backups/supply.tar [--domain supply
   bundle also compacts the Domain.
 - Vault values are not exported by default: after a restore they read as unknown. `export
   --include-vault-values [--actor <principal>]` also writes `vault.jsonl` with every value the
-  exported Records reference, in plain text, or `erased`. It needs the vault keys, creates the
-  file and tarball readable by their owner only, and appends a `bundle.export_plain` audit
-  entry (Domain, heads and counts, never values); if the entry cannot be written the output is
-  removed. Import seals the values under the target's vault keys (refused without them) and
-  checks that each token is held by that Record and Attribute in the bundle. Treat such a
-  bundle as personal data and delete it once restored.
+  exported Records reference, in plain text, or `erased`, plus the Domain's key changes
+  (`vault_lineage.jsonl`) and erasure tombstones (`vault_tombstones.jsonl`). It needs the vault
+  keys, takes its snapshot under the Domain's vault lock (an erasure in flight finishes first),
+  creates the files and tarball readable by their owner only, and appends
+  `bundle.export_plain_started` before reading any value and `bundle.export_plain` (Domain,
+  heads and counts, never values) when done; if an entry cannot be written the output is
+  removed. `--actor` is recorded as given: the command runs with the database credentials and
+  vault keys of the installation, so restrict who can run it. Import needs the target's vault
+  keys and the token key id every tombstone was made under (`vault.token_key_id` or
+  `previous_token_keys`); it seals the values under the target's keys, checks that every
+  Record holding a token holds it in the bound Attribute under the bound key or one linked by
+  a key change, validates each value against the bundle's schema, and stores a value a
+  tombstone holds as `vault.erased_values` says. A target Domain with vault rows, tombstones or
+  key changes is not empty. Treat such a bundle as personal data and delete it once restored.
 
 Not in a bundle: the audit log, principals, groups, grants and API keys (installation-wide, not
 Domain content), and per-Domain operational tables: Proposals and reviews, merge attempts,
