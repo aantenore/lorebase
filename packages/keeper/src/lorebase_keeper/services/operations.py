@@ -851,8 +851,11 @@ REDACTED_ERROR = "Evaluating the expression failed on a value the caller may not
 
 
 def _redactor(schema: Schema, masking: Masking, operation: Operation | None = None) -> Redact:
-    """Errors of expressions that read values the caller is not cleared for, Domain-wide, are
-    redacted: their messages may quote the values (a cast, a missing Record's key)."""
+    """Errors of expressions that read values the caller is not cleared for are redacted: their
+    messages may quote the values (a cast, a missing Record's key). The caller must be cleared
+    for each Attribute the expression may read on the Kinds that hold it (both Kinds of a
+    Relation for a Link Attribute), as when the values are read."""
+    holders = _attribute_kinds(schema)
 
     def redact(error: ExprError) -> bool:
         if error.source is None:
@@ -860,13 +863,31 @@ def _redactor(schema: Schema, masking: Masking, operation: Operation | None = No
         read = (
             attributes_named(schema, expression_fields(error.source))
             if operation is None
-            else operation_reads(schema, operation, error.source)
+            else operation_reads(schema, operation, error.source, step=_step_of(error))
         )
-        return any(
-            masking.sensitive(a) and not masking.clearance.covers(masking.tags(a), ()) for a in read
-        )
+        return any(masking.hidden(a, holders.get(a.id, ())) for a in read)
 
     return redact
+
+
+def _attribute_kinds(schema: Schema) -> dict[str, tuple[str, ...]]:
+    """Attribute id -> ids of the Kinds whose Records (or Links) hold its values."""
+    holders: dict[str, tuple[str, ...]] = {}
+    for kind in schema.kinds.values():
+        for attribute_id in kind.attributes:
+            holders[attribute_id] = (kind.id,)
+    for relation in schema.relations.values():
+        for attribute_id in relation.attributes:
+            holders[attribute_id] = (relation.from_kind, relation.to_kind)
+    return holders
+
+
+def _step_of(error: ExprError) -> int | None:
+    """The step a located evaluation error comes from (`("steps", n, ...)`), if any."""
+    path = tuple(error.path)
+    if len(path) >= 2 and path[0] == "steps" and isinstance(path[1], int):
+        return path[1]
+    return None
 
 
 def _expression_finding(error: ExprError, redact: Redact | None = None) -> Finding:

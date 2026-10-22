@@ -221,11 +221,8 @@ Remaining:
    stored until its Records are rewritten: Keeper keeps them out of responses, snippets and
    lexical search for callers without the clearance, and verification reports them as
    `sensitivity_stale` (TB3).
-6. **Conservative Operation analysis.** Fields an Operation expression reads from a Record
-   whose Kind cannot be told (inside a comprehension, say) are matched by name against every
-   Kind, so a same-named sensitive Attribute elsewhere can refuse a harmless Operation;
-   evaluation errors are shown in full only to callers cleared Domain-wide (TB3).
-7. **Limits of the read audit and of checkpoints.** Read records are sampled when
+
+6. **Limits of the read audit and of checkpoints.** Read records are sampled when
    `sample_rate` is below 1 and dropped when the queue is full or a batch fails (counted in
    `lorebase.audit.reads.dropped`), so the read stream is evidence of what it holds, not proof
    that nothing else was read; reads that showed or masked a sensitive value are never sampled
@@ -261,6 +258,14 @@ see the [security review](security-review.md#hardening-from-the-threat-model)):
   `test_sensitivity_api.py::test_violations_on_unreadable_values_do_not_tell_what_is_wrong`,
   `test_sensitivity_api.py::test_streamed_diffs_and_operation_edits_show_values_not_references`,
   `test_vault_rules.py::test_references_nested_inside_other_values_are_refused` (TB3).
+- **Conservative Operation analysis.** Fields an Operation expression reads are resolved
+  against the Kind the type checker infers, inside comprehensions, conditionals, traversals and
+  `record($step[n])` too; only fields of untyped (`dyn`) values are still matched by name.
+  Evaluation errors are shown in full to callers cleared on the Kinds that hold the Attributes
+  read (`packages/core/src/lorebase_core/expr/sensitivity.py`,
+  `packages/keeper/src/lorebase_keeper/services/operations.py`; tests
+  `packages/core/tests/validate/test_vault_rules.py`,
+  `packages/keeper/tests/reading/test_sensitivity.py`) (TB3).
 - **Erasure value on the command line.** `lorebase admin erase --value` accepts only `-`
   (standard input, no echo on a terminal) or `@FILE` (`packages/cli/src/lorebase_cli/commands/admin.py`,
   test `packages/cli/tests/test_commands.py`) (TB2).

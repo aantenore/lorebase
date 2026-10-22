@@ -13,6 +13,8 @@ from lorebase_core.model import (
     Domain,
     ExpressionDerivation,
     Kind,
+    Operation,
+    OperationParameter,
     Record,
     Schema,
     Sensitivity,
@@ -37,6 +39,7 @@ from lorebase_keeper.reading.sensitivity import (
 )
 from lorebase_keeper.routes.proposal_items import _scrub, _shown
 from lorebase_keeper.services.operations import (
+    REDACTED_ERROR,
     _expression_finding,
     _redactor,
     recorded_parameters,
@@ -408,16 +411,17 @@ def test_agent_writes_mask_with_the_default_branch_tags() -> None:
     assert masking.clearance == Clearance()
 
 
-def test_the_redactor_resolves_fields_against_the_addressed_kind() -> None:
-    from lorebase_core.model import Operation, OperationParameter
-
-    operation = Operation(
+def _touch() -> Operation:
+    return Operation(
         id="opr_01JB8Z00000000000000000001",
         api_name="touch",
         parameters=(OperationParameter(name="p", type=TypeSpec.ref(KIND), required=True),),
     )
+
+
+def test_the_redactor_resolves_fields_against_the_addressed_kind() -> None:
     error = ExprError(ExprErrorCode.EVALUATION, "bad 'Ada'", source="int(record(p).name)")
-    redact = _redactor(SCHEMA, Masking(Clearance()), operation)
+    redact = _redactor(SCHEMA, Masking(Clearance()), _touch())
     assert _expression_finding(error, redact).message.startswith("bad 'Ada'")
     phone = ExprError(ExprErrorCode.EVALUATION, "bad '555'", source="int(record(p).phone)")
     assert "555" not in _expression_finding(phone, redact).message
@@ -452,3 +456,36 @@ def test_issues_about_unreadable_values_do_not_tell_their_format() -> None:
         IssueCode.VALUE_INVALID
     )
     assert generalize_issues([unknown], (SCHEMA,), Masking(Clearance.full())) == [unknown]
+
+
+def test_evaluation_errors_are_shown_to_callers_cleared_on_the_kinds_read() -> None:
+    phone = ExprError(ExprErrorCode.EVALUATION, "bad '555'", source="int(record(p).phone)")
+    on_person = Masking(Clearance(kinds={Sensitivity.PII: frozenset({KIND})}))
+    assert "555" in _expression_finding(phone, _redactor(SCHEMA, on_person, _touch())).message
+    elsewhere = Masking(Clearance(kinds={Sensitivity.PII: frozenset({"knd_other"})}))
+    redacted = _expression_finding(phone, _redactor(SCHEMA, elsewhere, _touch()))
+    assert "555" not in redacted.message
+    # The secret is also restricted: a clearance for personal data alone does not show it.
+    secret = ExprError(ExprErrorCode.EVALUATION, "bad 'x'", source="int(record(p).secret)")
+    finding = _expression_finding(secret, _redactor(SCHEMA, on_person, _touch()))
+    assert finding.message == REDACTED_ERROR
+
+
+def test_the_redactor_resolves_comprehension_variables_by_their_kind() -> None:
+    badge_id, badge_name = "knd_01JB8Z00000000000000000002", "att_01JB8Z00000000000000000009"
+    badge = Kind(
+        id=badge_id,
+        api_name="Badge",
+        primary_key=(badge_name,),
+        attributes={badge_name: _attribute(badge_name, "name", Sensitivity.PII, required=True)},
+    )
+    schema = SCHEMA.model_copy(update={"kinds": {**SCHEMA.kinds, badge_id: badge}})
+    redact = _redactor(schema, Masking(Clearance()), _touch())
+    name = ExprError(
+        ExprErrorCode.EVALUATION, "bad 'Ada'", source="[record(p)].map(x, int(x.name))[0]"
+    )
+    assert _expression_finding(name, redact).message.startswith("bad 'Ada'")
+    phone = ExprError(
+        ExprErrorCode.EVALUATION, "bad '555'", source="[record(p)].map(x, int(x.phone))[0]"
+    )
+    assert "555" not in _expression_finding(phone, redact).message

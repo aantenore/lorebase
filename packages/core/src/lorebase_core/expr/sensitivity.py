@@ -2,8 +2,10 @@
 
 A value computed from sensitive values tells about them. Derivations and the step values of
 Operations read Attributes; what they compute must carry every tag of what they may read, and
-never read a vault Attribute (whose stored values are references). The reads are found by
-name, conservatively (a superset, never fewer).
+never read a vault Attribute (whose stored values are references). The reads of an
+Operation expression are resolved against the Kind the type checker infers for each Record
+read; fields of untyped (`dyn`) values are matched by name, conservatively (a superset,
+never fewer).
 
 `effective_tags` gives, per Attribute id, the tags of a schema united with tags from elsewhere
 (the default branch's schema) and carried through Derivations: what a reader must be cleared
@@ -25,10 +27,12 @@ from lorebase_core.expr.ast import (
     Select,
     parse,
 )
+from lorebase_core.expr.checker import Checker
 from lorebase_core.expr.derivations import _nodes, derivation_reads
-from lorebase_core.expr.environment import PARAMS, PRINCIPAL
+from lorebase_core.expr.environment import PARAMS, PRINCIPAL, operation_environment
 from lorebase_core.expr.errors import ExprError
 from lorebase_core.expr.limits import ExprLimits
+from lorebase_core.expr.types import ExprType, TypeKind
 from lorebase_core.model.attribute import Attribute, Sensitivity
 from lorebase_core.model.kind import Kind
 from lorebase_core.model.operation import Operation
@@ -135,16 +139,64 @@ def operation_reads(
     operation: Operation,
     source: str,
     limits: ExprLimits | None = None,
+    *,
+    step: int | None = None,
 ) -> list[Attribute]:
-    """Attributes an Operation expression may read from Records, resolved against the Kind
-    each Record comes from where it can be told: `record(p)` for a parameter `p` of type
-    `ref(Kind)`, `$step[n]` for a step that writes a Record of a Kind, `links(r, "rel")` for
-    the far Kind of a Relation. Fields read from anything else are matched by name against
-    every Kind and Relation (a superset)."""
+    """Attributes an Operation expression may read from Records. `step` is the index of the
+    step the expression belongs to (`$step[n]` is defined there), `None` for preconditions
+    and the review policy.
+
+    The expression is type checked and each field is resolved against the Kind of the Record
+    it is selected from, wherever the checker infers one: `record(p)`, `links(r, "rel")`,
+    comprehension variables over them, conditional results and nested selections. Fields of
+    untyped (`dyn`) values are matched by name against every Kind and Relation (a superset).
+    An expression that does not type check is resolved from its syntax (`_guessed_reads`)."""
     try:
         root = parse(source, limits or ExprLimits())
     except ExprError:
         return []  # reported by expression validation
+    environment = operation_environment(
+        schema,
+        operation,
+        step_index=None if step is None else max(0, min(step, len(operation.steps))),
+    )
+    checker = Checker(environment)
+    try:
+        checker.check(root)
+    except (ExprError, RecursionError):
+        return _guessed_reads(schema, operation, root)
+    found: dict[str, Attribute] = {}
+    unresolved: set[str] = set()
+    for node in _nodes(root):
+        if not isinstance(node, Select):
+            continue
+        operand = checker.types.get(node.operand)
+        if operand is None or operand.kind is TypeKind.DYN:
+            unresolved.add(node.field)
+            continue
+        owner = _record_kind(schema, operand)
+        if owner is None:
+            continue  # parameters, the principal, maps, references, geo points
+        attribute = owner.attribute_by_api_name(node.field)
+        if attribute is not None:
+            found[attribute.id] = attribute
+    for attribute in attributes_named(schema, unresolved):
+        found.setdefault(attribute.id, attribute)
+    return list(found.values())
+
+
+def _record_kind(schema: Schema, expr_type: ExprType) -> Kind | None:
+    """The Kind of a `record(Kind)` type; `None` for any other type."""
+    if expr_type.kind is not TypeKind.RECORD or expr_type.name is None:
+        return None
+    return schema.kinds.get(expr_type.name)
+
+
+def _guessed_reads(schema: Schema, operation: Operation, root: Node) -> list[Attribute]:
+    """`operation_reads` for an expression that does not type check, from its syntax alone:
+    fields of `record(p)` for a parameter `p` of type `ref(Kind)`, of `$step[n]` for a step
+    that writes a Record of a Kind and of `links(r, "rel")` resolve against that Kind; any
+    other field is matched by name against every Kind and Relation (a superset)."""
     kinds_of_parameters = {
         p.name: p.type.kind_ref for p in operation.parameters if p.type.kind_ref is not None
     }

@@ -1021,10 +1021,12 @@ class _Checker:
         limits = self.rules.expression_limits
         base: tuple[PathPart, ...] = ("operations", operation.id)
 
-        def quiet(expression: str, path: tuple[PathPart, ...], what: str) -> None:
+        def quiet(
+            expression: str, path: tuple[PathPart, ...], what: str, step: int | None = None
+        ) -> None:
             """Expressions whose outcome reaches the caller (preconditions; the Records a step
             addresses, echoed back when missing) read no sensitive or vault Attribute."""
-            read = operation_reads(self.schema, operation, expression, limits)
+            read = operation_reads(self.schema, operation, expression, limits, step=step)
             sensitive = sorted({a.api_name for a in read if a.is_sensitive or a.in_vault})
             if sensitive:
                 self.add(
@@ -1042,10 +1044,10 @@ class _Checker:
             )
         for index, step in enumerate(operation.steps):
             if isinstance(step, UpdateRecordStep | DeleteRecordStep):
-                quiet(step.target, (*base, "steps", index, "target"), "a step target")
+                quiet(step.target, (*base, "steps", index, "target"), "a step target", index)
             if isinstance(step, CreateLinkStep | DeleteLinkStep):
-                quiet(step.from_, (*base, "steps", index, "from"), "a step source")
-                quiet(step.to, (*base, "steps", index, "to"), "a step target")
+                quiet(step.from_, (*base, "steps", index, "from"), "a step source", index)
+                quiet(step.to, (*base, "steps", index, "to"), "a step target", index)
         for index, step in enumerate(operation.steps):
             owner = (
                 self.schema.kinds.get(step.kind)
@@ -1060,7 +1062,7 @@ class _Checker:
                 target = owner.attributes.get(attribute_id)
                 if target is None:
                     continue
-                read = operation_reads(self.schema, operation, expression, limits)
+                read = operation_reads(self.schema, operation, expression, limits, step=index)
                 path = (*base, "steps", index, "values", attribute_id)
                 needed = {t for a in read for t in a.sensitivity} - set(target.sensitivity)
                 if needed:
