@@ -126,6 +126,6 @@ Path("supply-v2.yaml").write_text(dump_schema(final))
 ```
 
 The same document can be sent to a running Keeper as a schema change set; see
-[the quickstart](../docs/quickstart.md#6-create-a-domain-and-apply-the-supply-schema). A change
+[the quickstart](../docs/quickstart.md#10-create-a-domain-and-apply-the-supply-schema). A change
 that two branches make differently is resolved by the merge engine, as in
 [merge_demo.py](merge_demo.py).

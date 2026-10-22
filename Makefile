@@ -13,7 +13,8 @@ STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/
 OTHER_SRC := packages/platform/src packages/inference/src
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
-	test-perf security security-python security-web demo demo-down
+	test-perf security security-python security-web demo demo-down \
+	env up example-data down clean-stack
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -63,6 +64,21 @@ demo: ## Five-day demo on its own compose stack (project lorebase-demo; KEEP=1 l
 
 demo-down: ## Stop the demo stack and delete its data
 	@examples/five_day_demo/stack.sh down
+
+env: ## Create .env from .env.example with generated database passwords (keeps an existing one)
+	@scripts/quickstart.sh env
+
+up: ## Build the image and start Postgres, migrations and Keeper; waits until Keeper is healthy
+	@scripts/quickstart.sh up
+
+example-data: ## Load the supply sample into the running Keeper (Domain supply, branches main and work)
+	@scripts/quickstart.sh data
+
+down: ## Stop the quickstart stack and keep its data
+	@scripts/quickstart.sh down
+
+clean-stack: ## Stop the quickstart stack and delete its volumes (data and pulled models)
+	@scripts/quickstart.sh clean
 
 # Both checks fail on any advisory that is not in .github/audit-allowlist.yaml and on expired entries.
 security: security-python security-web ## Advisories: pip-audit on the uv lock, pnpm audit (high) in apps/web

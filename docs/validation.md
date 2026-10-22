@@ -10,7 +10,7 @@ Every validation run of the project in one place: what was run, where, how, what
 | [Security reviews](#security-reviews) | Each review round, its findings and what remains |
 | [Interop and connectors](#interop-and-connectors) | LinkML, SQL Sources, JSON, Parquet and HTTP JSON |
 | [Live model runs](#live-model-runs) | Tier 2 extraction and schema suggestions with Claude Haiku 5.5 and LFM 2.5 8B, fastembed embeddings and hybrid search |
-| [Fresh-clone quickstart check](#fresh-clone-quickstart-check) | In progress |
+| [Fresh-clone quickstart check](#fresh-clone-quickstart-check) | The quickstart followed from a fresh clone: friction found, fixes, measured times |
 
 ## How to reproduce
 
@@ -457,4 +457,72 @@ process.
 
 ## Fresh-clone quickstart check
 
-In progress.
+**Date:** 2026-10-22. **Environment:** Apple silicon laptop, macOS, Docker Desktop with Docker
+29.5.3 and compose 5.1.4 (15 CPUs, 7.7 GB of memory for Docker), uv 0.11, Node 24.15, pnpm
+11.13, Ollama on the host for one of the model options. Other compose stacks were running on
+the same machine, one of them holding `127.0.0.1:5432`.
+
+**Goal:** someone who has never seen the project goes from zero to a working Lorebase with the
+documentation alone: stack up, example data, web app, a first query, an agent over MCP, a real
+model, cleanup.
+
+### Method
+
+Two passes, each from a fresh copy of the repository in an empty directory, with its own compose
+project name and ports (`COMPOSE_PROJECT_NAME`, `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT`), as
+the quickstart now documents.
+
+1. **Before the fixes**, a `git clone` of `main` at `c032815`, following README.md and
+   [quickstart.md](quickstart.md) as they were, word for word: `uv sync`, the core demo, `.env`,
+   compose, the CLI loading steps, the web app in live mode through the dev server proxy, Herald
+   over stdio (with a small MCP client), Ollama in compose and on the host, document extraction,
+   cleanup. Every friction point was written down.
+2. **After the fixes**, a copy of the fixed tree, following the new
+   [quickstart](quickstart.md) step by step: `make env`, `make up`, `make example-data`, the first
+   query, the web app, the Herald check script, the three model options (Ollama in compose,
+   Ollama on the host, a hosted endpoint through the key file overlay, with a placeholder key
+   against the host Ollama), an extraction, `make down` and `make clean-stack`. The times are
+   in the [quickstart](quickstart.md#timings).
+
+All containers, volumes, images built or pulled for the check and the copies of the repository
+were removed afterwards.
+
+### Issues found and fixed
+
+| # | Friction on the first pass | Fix |
+|---|----------------------------|-----|
+| 1 | `docker compose up` failed with `Bind for 127.0.0.1:5432 failed: port is already allocated`; the docs never named the port variables | Ports table in the prerequisites, comments in `.env.example`, a troubleshooting entry |
+| 2 | The compose project name is fixed to `lorebase`: a second checkout reuses or replaces the containers and volumes of the first | `COMPOSE_PROJECT_NAME` in `.env.example`, documented |
+| 3 | The image tag `lorebase:dev` is shared by every checkout; `up -d` without `--build` started an image built from another checkout | `make up` and the documented command pass `--build` |
+| 4 | `curl /readyz` right after `up -d` answered `Empty reply from server`: nothing said to wait | `--wait` in `make up` and the documented command |
+| 5 | Editing `.env` by hand for two generated passwords | `make env` (`scripts/quickstart.sh env`), tested |
+| 6 | Loading the sample took 12 commands, and left the data on branch `work`: the web app opened on an empty `main` ("This Branch has no Kinds yet"), Herald answered from the empty `main`, and extraction resolves against `main`. Merging needed an approval from a second principal, which a stack without authentication does not have | `make example-data` creates the Domain with `required_approvals: 0`, loads `work` and merges a Proposal into `main`; idempotent |
+| 7 | No word on credentials or sign-in for the web app | "Credentials" paragraph in step 2.3 and in 2.6 |
+| 8 | No path from the quickstart to an MCP host; the MCP page assumes an API key | Section 3: `mcpServers` entry without a key for the local stack, a check script, the key as `secret://file` once authentication is on |
+| 9 | `docker compose --profile local-models run --rm inference-check` (inference-providers.md, compose comment) fails from the repository root: no `--env-file`, no `-f` | Full command in the docs and the compose file comment |
+| 10 | The Ollama container publishes `127.0.0.1:11434`, the port of an Ollama already on the host; the image is 7 GB and runs on the CPU, nothing said so | `OLLAMA_HOST_PORT` documented; sizes and the host Ollama option with `--no-deps` |
+| 11 | A model server on the host was not reachable from Scribe on Linux | `extra_hosts: host.docker.internal:host-gateway` on Scribe and `inference-check` (checked by `docker compose config` in the tooling test; Linux itself not run) |
+| 12 | A hosted key could only go into `.env` as a literal: compose mounts no key file | `deploy/compose/hosted-model.yaml` mounts `secrets/llm_api_key` as a compose secret, read through `secret://file`; tested |
+| 13 | `ollama-pull` prints nothing during the download | The docs point at `logs -f ollama-pull` |
+| 14 | Extraction with `qwen3:4b` (a reasoning model) failed after 8 minutes with `ReadTimeout` | Model advice and a troubleshooting entry |
+| 15 | The sample documents of `examples/supply/documents` yield no items once the sample is loaded, so "upload a document" showed nothing | The quickstart uses `examples/five_day_demo/documents/contract-c-3099-*`, which opens a Proposal with two items |
+| 16 | "Coming next" listed Source syncs and the lineage API as missing, both done | Points at the roadmap |
+| 17 | No cleanup of profile containers and volumes | `make down`, `make clean-stack` (`--profile "*" down -v`) |
+
+### Verification
+
+- Second pass: every step above succeeded as written. Timings: [quickstart](quickstart.md#timings).
+- `tests/tooling/test_quickstart.py` (environment file generation, usage, the hosted model
+  overlay and `extra_hosts` rendered by `docker compose config`) and
+  `tests/tooling/test_compose_stack.py`: 18 passed.
+- `make docs` (strict) passed.
+
+### Open
+
+- The web app needs Node.js and the dev server; the stack has no web service in compose. The
+  web image (`deploy/docker/web.Dockerfile`) would need Keeper's CORS setting or a proxy to
+  run in live mode next to it.
+- A first machine downloads the base images during `make up`; that time was not measured, the
+  build cache being warm.
+- The MCP host itself was not driven; the `mcpServers` entry follows [mcp.md](mcp.md) and the
+  same command was checked with the MCP client of the Python SDK.

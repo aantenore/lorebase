@@ -52,7 +52,7 @@ merged: Revision 2cacd1bb, parents 60f665d3, 4d5440a3
 validation: 72 Records against the merged schema, 0 issues
 ```
 
-The analysts say 80, the ERP says 45, and someone has to decide. That decision is a recorded resolution, not a silent overwrite. The walkthrough of the whole output is in the [quickstart](docs/quickstart.md#3-run-the-core-demo).
+The analysts say 80, the ERP says 45, and someone has to decide. That decision is a recorded resolution, not a silent overwrite. The walkthrough of the whole output is in the [quickstart](docs/quickstart.md#7-run-the-core-demo).
 
 ## Try the five-day demo
 
@@ -136,22 +136,31 @@ Screens of the web app. The first row runs on a real Keeper with the supply samp
 
 ## Quickstart
 
-Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), Docker with compose, and Node.js 24 with pnpm for the web app.
+Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12), Docker with compose, `make`, `curl` and `openssl`; Node.js 24 with pnpm for the web app. Keeper uses port 8080 and Postgres port 5432 on `127.0.0.1`; change `KEEPER_HOST_PORT` and `POSTGRES_HOST_PORT` in `.env` if they are taken.
 
 ```bash
 git clone https://github.com/aantenore/lorebase.git && cd lorebase
 uv sync --all-packages
 
-# Core engine demo: branches, three-way merge, Conflicts, resolutions, diff (no services)
-uv run python examples/merge_demo.py
+make env            # .env from .env.example, with generated database passwords
+make up             # build the image, start Postgres, migrations and Keeper, wait until healthy
+make example-data   # Domain `supply`: schema, 185 Records with their Links, merged into main
 
-# Postgres, migrations and Keeper (builds the backend image on first run)
-cp .env.example .env     # set POSTGRES_PASSWORD and LOREBASE_APP_PASSWORD
-docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d postgres migrate keeper
-curl http://localhost:8080/readyz
+export LOREBASE_URL=http://localhost:8080 LOREBASE_DOMAIN=supply
+uv run lorebase search bearing --kind Part     # first query
 ```
 
-The [quickstart](docs/quickstart.md) continues from there: create the `supply` Domain, apply its schema, import the sample data through the REST API and run the web app in mock mode. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md), and the Kubernetes install in [docs/kubernetes.md](docs/kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
+Then open the web app at `http://localhost:5173`:
+
+```bash
+cd apps/web && pnpm install
+printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
+LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
+```
+
+There is nothing to sign in to: the example configuration runs with authentication off, on loopback only. `make down` stops the stack and `make clean-stack` deletes its data.
+
+The first `make up` builds the backend image (a few minutes); the rest takes about a minute. The [quickstart](docs/quickstart.md) explains each step and continues with [an agent connected over MCP](docs/quickstart.md#3-connect-an-agent-over-mcp), [a real model](docs/quickstart.md#4-use-a-real-model) (Ollama by default, or any hosted OpenAI-compatible endpoint with its key in a file), [cleanup](docs/quickstart.md#5-stop-and-clean-up) and [troubleshooting](docs/quickstart.md#6-troubleshooting), then goes through the REST API one call at a time. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md), and the Kubernetes install in [docs/kubernetes.md](docs/kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
 
 ## Architecture
 

@@ -17,8 +17,9 @@ The demo is covered by `tests/tooling/test_merge_demo.py`.
 
 ## Loading the supply sample into a running Keeper
 
-With Keeper up (see [the quickstart](../docs/quickstart.md#5-start-postgres-and-keeper)), the
-`lorebase` CLI creates the Domain, applies the schema as is (CEL Operations and Derivations
+`make example-data` does all of it in one command and merges the result into `main`
+([scripts/quickstart.sh](../scripts/quickstart.sh)). By hand: with Keeper up (see
+[the quickstart](../docs/quickstart.md#2-five-minute-path)), the `lorebase` CLI creates the Domain, applies the schema as is (CEL Operations and Derivations
 included) and loads the CSV files in `supply/data` (it converts the cells to the types of the
 schema and sends them in batches). `Contract`, `PurchaseOrder` and `RiskFlag` need a Link when
 they are created, so `import batch` loads them with the Link files and keeps each Record with
@@ -40,7 +41,7 @@ uv run lorebase import batch -b work \
 uv run lorebase record get Supplier S-1001 -b work
 ```
 
-[The quickstart](../docs/quickstart.md#7-import-the-sample-data-and-read-it-back) loads the same
+[The quickstart](../docs/quickstart.md#11-import-the-sample-data-and-read-it-back) loads the same
 six Kinds (`import records` and `import links` for three, `import batch` for the three
 that need Links), shows `Part.supplier_count` and `Part.single_sourced` computed by the
 materializer, and runs `flag_supplier_risk` and `approve_contract` through the Operation
