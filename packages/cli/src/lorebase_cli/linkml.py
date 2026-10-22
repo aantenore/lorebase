@@ -371,7 +371,7 @@ class _Exporter:
             path = f"derivations/{name}"
             derivation = _mapping(value, path)
             ends = self.path_ends(derivation)
-            if ends is None or name in classes[ends[0]].get("attributes", {}):
+            if ends is None:
                 kept[name] = value
                 continue
             start, end, many = ends
@@ -397,6 +397,8 @@ class _Exporter:
         definition = derivation.get("definition")
         if not isinstance(definition, Mapping) or definition.get("variant") != _PATH_MARK:
             return None
+        if set(definition) - {"variant", *_PATH_FIELDS}:
+            return None  # fields a slot cannot carry: the annotation keeps the whole Derivation
         start: str | None = None
         end: str | None = None
         many = False
@@ -714,6 +716,7 @@ class _Importer:
         self.default_range = str(schema.get("default_range") or options.default_range)
         self.class_names: dict[str, str] = {}
         self.derivations: dict[str, Any] = {}
+        self.skipped_paths: set[str] = set()
         self.trait_attributes: dict[str, list[str]] = {}
         self._enum_values: dict[str, tuple[str, ...] | None] = {}
         self._type_names: dict[str, str] = {}
@@ -974,10 +977,11 @@ class _Importer:
         lorebase = self.annotations(slot.get("annotations"), path)
         if lorebase.pop("derivation_variant", None) != _PATH_MARK:
             return False
-        if name in self.derivations:  # inherited by a subclass: already read
+        if name in self.derivations or name in self.skipped_paths:  # inherited: already read
             return True
         steps = lorebase.pop("steps", None)
         if not isinstance(steps, list) or not steps:
+            self.skipped_paths.add(name)
             self.warn(path, "path Derivation without steps, skipped")
             return True
         definition: dict[str, Any] = {"variant": _PATH_MARK, "steps": steps}
@@ -1342,7 +1346,13 @@ def merge_into_current(current: Any, imported: Conversion, *, prune: bool = Fals
     for section in EXPORT_ONLY_SECTIONS:
         if old.get(section):
             document[section] = copy.deepcopy(old[section])
-            merger.drop_stale_warnings(section)
+    renamed = {
+        before: now
+        for now, before in _match(
+            _mapping(old.get("relations"), "relations"),
+            _mapping(document.get("relations"), "relations"),
+        ).items()
+    }
     imported_paths = _mapping(imported.document.get("derivations"), "derivations")
     pruned: set[str] = set()
     for section, owned in (("traits", _OWNED_TRAIT), ("kinds", _OWNED_KIND)):
@@ -1353,7 +1363,8 @@ def merge_into_current(current: Any, imported: Conversion, *, prune: bool = Fals
     merged, gone = merger.section("relations", old, document, _OWNED_RELATION, pruned)
     _put(document, "relations", merged)
     document.pop("derivations", None)
-    _put(document, "derivations", merger.derivations(old, imported_paths, gone))
+    _put(document, "derivations", merger.derivations(old, imported_paths, gone, renamed))
+    merger.drop_stale_warnings(old, document)
     merger.restore_status(document, old)
     return Conversion(document, merger.warnings)
 
@@ -1366,34 +1377,95 @@ class _Merger:
     def note(self, path: str, message: str) -> None:
         self.warnings.append(ConversionWarning(path, message))
 
-    def drop_stale_warnings(self, section: str) -> None:
-        """The import warns that `section` is not imported; the merge keeps the current one."""
-        stale = f"{section} are not imported"
-        self.warnings = [
-            w
-            for w in self.warnings
-            if w.path != f"annotations/{ANNOTATION_PREFIX}{section}" and stale not in w.message
-        ]
+    def drop_stale_warnings(self, old: Mapping[str, Any], document: Mapping[str, Any]) -> None:
+        """The import warns that Operations, Derivations and Sources, and the references to them,
+        are not imported; the merge keeps the current ones, so those warnings no longer hold."""
+        kept = {section for section in EXPORT_ONLY_SECTIONS if old.get(section)}
+        reference = re.compile(r"^(?:derivation|authority) .* dropped: (\w+) are not imported$")
+        location = re.compile(r"^classes/(.+)/attributes/(.+)$")
+
+        def survives(warning: ConversionWarning, section: str) -> bool:
+            """Whether the merged Attribute the warning is about still has its reference."""
+            found = location.match(warning.path)
+            if not found or section not in kept:
+                return False
+            key = "derivation" if section == "derivations" else "authority"
+            owner = pascal_name(found.group(1))
+            for elements in ("kinds", "traits"):
+                element = _mapping(document.get(elements), elements).get(owner)
+                attributes = _mapping(_mapping(element, owner).get("attributes"), owner)
+                attribute = attributes.get(snake_name(found.group(2)))
+                if isinstance(attribute, Mapping) and key in attribute:
+                    return True
+            return False
+
+        def stale(warning: ConversionWarning) -> bool:
+            for section in kept:
+                if warning.path == f"annotations/{ANNOTATION_PREFIX}{section}":
+                    return True
+            match = reference.match(warning.message)
+            return match is not None and survives(warning, match.group(1))
+
+        self.warnings = [w for w in self.warnings if not stale(w)]
 
     def derivations(
-        self, old: Mapping[str, Any], imported: Mapping[str, Any], gone_relations: set[str]
+        self,
+        old: Mapping[str, Any],
+        imported: Mapping[str, Any],
+        gone_relations: set[str],
+        renamed: Mapping[str, str],
     ) -> dict[str, Any]:
-        """The current Derivations, with the path ones of the import laid over them (they
-        match by id, else by name); a path through a removed Relation is removed too."""
+        """The current Derivations, with the path ones of the import laid over them.
+
+        Path Derivations match by id, else by name; a name taken by another kind of Derivation
+        is not overwritten. A current path Derivation the LinkML schema leaves out stays with a
+        warning, or goes with `prune`, when an export would have written it; either way its
+        steps follow the Relations the import renamed, and a path through a removed Relation
+        is removed too."""
         before = _mapping(old.get("derivations"), "derivations")
-        matched = _match(before, imported)
+        paths = {
+            name: item
+            for name, item in before.items()
+            if isinstance(item, Mapping)
+            and _mapping(item.get("definition"), name).get("variant") == _PATH_MARK
+        }
+        matched = _match(paths, imported)
         merged = {name: copy.deepcopy(item) for name, item in before.items()}
         for name, item in imported.items():
-            previous = before.get(matched.get(name, ""))
+            previous = paths.get(matched.get(name, ""))
+            if previous is None and name in before:
+                self.note(
+                    f"derivations/{name}",
+                    "skipped: the Domain has another kind of Derivation with this name",
+                )
+                continue
             if previous is not None:
                 del merged[matched[name]]
                 item = _inherit(previous, item, _OWNED_DERIVATION)
             merged[name] = item
+        exporter = _Exporter(old, LinkmlOptions()) if paths else None
+        for name in paths:
+            if name in matched.values() or exporter is None:
+                continue
+            if exporter.path_ends(paths[name]) is None:
+                continue
+            path = f"derivations/{name}"
+            if self.prune:
+                del merged[name]
+                self.note(path, "removed: not in the LinkML schema (--prune)")
+            else:
+                self.note(path, "kept: not in the LinkML schema (--prune removes it)")
         for name, item in list(merged.items()):
-            steps = _mapping(item.get("definition"), name).get("steps") or []
+            definition = _mapping(item.get("definition"), name)
+            if definition.get("variant") != _PATH_MARK:
+                continue
+            steps = [step for step in definition.get("steps") or [] if isinstance(step, dict)]
             if any(step.get("relation") in gone_relations for step in steps):
                 del merged[name]
                 self.note(f"derivations/{name}", "removed: it refers to a pruned Relation")
+            elif name not in imported:
+                for step in steps:
+                    step["relation"] = renamed.get(str(step.get("relation")), step.get("relation"))
         return merged
 
     def section(

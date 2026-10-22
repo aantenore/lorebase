@@ -50,7 +50,9 @@ element that the LinkML schema does not carry (`derivation`, `authority`, `index
 schema has it, else by name, and keep their current id, so a rename in LinkML stays a rename.
 Kinds, Attributes, Relations and Traits that the LinkML schema leaves out stay too, each reported
 as a warning; `--prune` removes them (and the Relations of a removed Kind, with the path
-Derivations that use them); `--prune` without `--apply` or `--dry-run` is refused. A Domain or
+Derivations that use them). A path Derivation the LinkML schema leaves out is treated the same
+way, and the steps of a kept one follow the Relations the import renames. An export fails when a
+path Derivation has the name of an Attribute or Relation on its starting Kind. `--prune` without `--apply` or `--dry-run` is refused. A Domain or
 branch without a schema takes the document as it is.
 
 LinkML schemas rarely give a description to every slot, and never name a title attribute, both of
