@@ -105,8 +105,8 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] HTTP JSON Source with cursor, page, offset and Link header pagination ([scribe](scribe.md#sources)); landed early
 - [ ] LinkML schema import and export
 - [x] Documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built with `mkdocs build --strict` (`make docs`) and published by the Docs workflow
-- [ ] API stability guarantees for `/api/v1` (no stability policy is written yet)
-- [ ] Threat model published and the security review checklist completed (the review of the trust boundaries is done: 23 findings, all fixed, none open, [security review](security-review.md); the threat model document is not written)
+- [ ] API stability guarantees for `/api/v1` (the policy is written, [API stability](api-stability.md): what is stable, compatible and breaking changes, deprecation, client compatibility, MCP tools and the schema format; it binds from 1.0, and Keeper does not emit `Deprecation` or `Sunset` headers yet since nothing is deprecated)
+- [x] Threat model published and the security review checklist completed ([threat model](threat-model.md): STRIDE per trust boundary with mitigations and residual risks; [security review](security-review.md): 23 findings, all fixed, none open)
 - [ ] Full proof scenario (days 1 to 5) as an automated end-to-end test (`make demo` runs the scenario against a real stack, [demo](demo.md); it is not part of CI)
 
 ## Not on the roadmap

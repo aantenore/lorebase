@@ -4,6 +4,10 @@ Review of the trust boundaries of Lorebase at commit `4bd2d26`, with the fixes m
 Each fixed finding has its own commit with a test that fails without the fix. The findings left
 open by the first pass (F6, F7, F12 to F23) were fixed in a second pass, described below.
 
+The [threat model](threat-model.md) covers the same boundaries and the ones added since (agents
+over MCP, webhooks, inference providers, the release pipeline) by STRIDE category, with the
+mitigation of each threat and the risk that remains.
+
 ## Scope and method
 
 Packages `keeper`, `store`, `scribe`, `inference` and `herald`, the deployment files under
