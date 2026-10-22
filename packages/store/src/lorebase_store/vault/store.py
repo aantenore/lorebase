@@ -115,13 +115,28 @@ class Lineage:
 
 
 @dataclass(frozen=True, slots=True)
+class Move:
+    """A key change took `token` over: its value moved from `previous_key` to `key`."""
+
+    token: str
+    kind_id: str
+    attribute_id: str
+    previous_key: str
+    key: str
+
+
+def _moves(moved: dict[str, tuple[str, str, str, str]]) -> list[Move]:
+    return [Move(token, *found) for token, found in sorted(moved.items())]
+
+
+@dataclass(frozen=True, slots=True)
 class Tokenized:
     changes: list[DataChange]
     rows: list[VaultRow]
     issues: list[Issue]
     lineage: list[Lineage] = field(default_factory=list)
-    moved: list[tuple[str, str]] = field(default_factory=list)
-    """Tokens a key change took over, with the key their value moved to (`mark_moved`)."""
+    moved: list[Move] = field(default_factory=list)
+    """Tokens a key change took over and where their value moved (`mark_moved`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,7 +353,7 @@ def _check_claims(
     deleted: Collection[tuple[str, str]],
     current: RecordValues,
     keys: VaultKeys | None,
-) -> tuple[list[_Plain], list[Lineage], list[tuple[str, str]], list[Issue]]:
+) -> tuple[list[_Plain], list[Lineage], list[Move], list[Issue]]:
     """References no vault row binds to the Record and Attribute claiming them: the values of
     key changes to store again under the new key, the lineage they make, the tokens they move
     and issues for the others. A token moved once (`moved_to`) is taken over by no other key
@@ -350,7 +365,7 @@ def _check_claims(
     claims_per_token = Counter(claim.token for claim in claimed)
     taken: list[tuple[_Claim, str]] = []
     lineage: dict[tuple[str, str, str], Lineage] = {}
-    moved: dict[str, str] = {}
+    moved: dict[str, tuple[str, str, str, str]] = {}
     issues: list[Issue] = []
     for claim in claimed:
         found = bindings.get(claim.token)
@@ -358,19 +373,28 @@ def _check_claims(
             claim.kind_id,
             claim.attribute_id,
         ):
-            if found.record_key == claim.key and found.moved_to is None:
+            # An erased token carries no value: it may be held and moved freely.
+            free = found.erased or found.moved_to is None
+            if found.record_key == claim.key and free:
                 continue
-            if (
-                found.record_key != claim.key
-                and found.moved_to is None
+            source = (
+                _moved(claim, found, deleted, current)
+                if found.record_key != claim.key
+                and (free or found.moved_to == claim.key)  # the same move, on another branch
                 and claims_per_token[claim.token] == 1
-                and _moved(claim, found, deleted, current)
-            ):
-                lineage[(claim.kind_id, claim.key, found.record_key)] = Lineage(
-                    claim.kind_id, claim.key, found.record_key
+                else None
+            )
+            if source is not None:
+                lineage[(claim.kind_id, claim.key, source)] = Lineage(
+                    claim.kind_id, claim.key, source
                 )
-                moved[claim.token] = claim.key
                 if not found.erased:
+                    moved[claim.token] = (
+                        claim.kind_id,
+                        claim.attribute_id,
+                        found.record_key,
+                        claim.key,
+                    )
                     taken.append((claim, found.record_key))
                 continue  # an erased value moves as the erased reference it is
         issues.append(
@@ -381,7 +405,7 @@ def _check_claims(
             )
         )
     if issues or not taken:
-        return [], list(lineage.values()), sorted(moved.items()), issues
+        return [], list(lineage.values()), _moves(moved), issues
     opened = _open_sync(sync, domain_id, [claim.token for claim, _ in taken], keys)
     plain: list[_Plain] = []
     for claim, _ in taken:
@@ -396,7 +420,7 @@ def _check_claims(
             )
         else:
             plain.append(_Plain(claim.index, claim.kind_id, claim.key, claim.attribute_id, value))
-    return plain, list(lineage.values()), sorted(moved.items()), issues
+    return plain, list(lineage.values()), _moves(moved), issues
 
 
 def _moved(
@@ -404,17 +428,26 @@ def _moved(
     found: _Binding,
     deleted: Collection[tuple[str, str]],
     current: RecordValues,
-) -> bool:
-    """Whether the claim takes over the reference from a Record the same change set deletes,
-    which holds it in that Attribute at the branch head, for a Record that does not exist
-    there yet."""
-    if (claim.kind_id, found.record_key) not in deleted:
-        return False
+) -> str | None:
+    """The key of the Record the claim takes the reference over from: one the same change set
+    deletes, which holds it in that Attribute at the branch head, for a Record that does not
+    exist there yet. A live token comes from the Record its row binds it to; an erased one,
+    which a key change keeps as it is, from whichever deleted Record holds it."""
     if current.record_state(claim.kind_id, claim.key) is not None:
-        return False
-    state = current.record_state(claim.kind_id, found.record_key)
-    held = None if state is None else state.values.get(claim.attribute_id)
-    return vault_token(held) == claim.token
+        return None
+    candidates = (
+        [key for kind_id, key in deleted if kind_id == claim.kind_id]
+        if found.erased
+        else [found.record_key]
+        if (claim.kind_id, found.record_key) in deleted
+        else []
+    )
+    for key in sorted(candidates):
+        state = current.record_state(claim.kind_id, key)
+        held = None if state is None else state.values.get(claim.attribute_id)
+        if vault_token(held) == claim.token:
+            return key
+    return None
 
 
 def _open_sync(
@@ -771,19 +804,18 @@ async def erase_record(
     `VaultLockTimeoutError`): the keys are read under it, so a key change committing meanwhile
     is either seen or waits. With `keys`, the rows' fingerprints are made again under the
     current keys before they are recorded as tombstones, so those match case variants written
-    later. Keys are erased a batch at a time."""
+    later. Keys are erased a batch at a time. The costly part of that, after a key rotation,
+    is done before the lock is taken, so commits wait only for a second, cheap pass."""
+    if keys is not None:
+        for _, batch in _batches(await linked_keys(session, domain_id, kind_id, key)):
+            await _refresh(
+                session, keys, _record_condition(domain_id, kind_id, batch, attribute_ids)
+            )
     await lock_vault_exclusive(session, domain_id, timeout_ms=lock_timeout_ms)
-    v = VAULT
     found = await linked_keys(session, domain_id, kind_id, key)
     erased = unopenable = 0
-    for start in range(0, len(found), _CHUNK):
-        condition = [
-            v.c.domain_id == domain_id,
-            v.c.kind_id == kind_id,
-            v.c.record_key.in_(found[start : start + _CHUNK]),
-        ]
-        if attribute_ids is not None:
-            condition.append(v.c.attribute_id.in_(sorted(attribute_ids)))
+    for _, batch in _batches(found):
+        condition = _record_condition(domain_id, kind_id, batch, attribute_ids)
         if keys is not None:
             unopenable += await _refresh(session, keys, condition)
         erased += await _erase(session, domain_id, condition, at)
@@ -804,10 +836,11 @@ async def erase_matching(
     """Erase the canonical `value` and its case variants (same matching form) in every Record
     of the Kind. Under the Domain's vault lock (taken first, see `erase_record`), rows whose
     fingerprints were made under an earlier key or scheme are made again, so none that opens
-    is missed."""
-    await lock_vault_exclusive(session, domain_id, timeout_ms=lock_timeout_ms)
+    is missed; the costly first pass runs before the lock is taken."""
     v = VAULT
     scope = [v.c.domain_id == domain_id, v.c.kind_id == kind_id, v.c.attribute_id == attribute_id]
+    await _refresh(session, keys, scope)
+    await lock_vault_exclusive(session, domain_id, timeout_ms=lock_timeout_ms)
     unopenable = await _refresh(session, keys, scope)
     await session.execute(
         insert(TOMBSTONES).values(
@@ -825,15 +858,40 @@ async def erase_matching(
     return Erasure(erased, unopenable)
 
 
-async def mark_moved(
-    session: AsyncSession, domain_id: str, moved: Sequence[tuple[str, str]]
-) -> None:
-    """Record the key changes `tokenize` found: token -> the key its value moved to."""
+async def mark_moved(session: AsyncSession, domain_id: str, moved: Sequence[Move]) -> None:
+    """Record the key changes `tokenize` found. Tokens moved earlier to the key a value moves
+    away from now point at its new key, so a chain of renames is followed to its end."""
     v = VAULT
-    for token, key in moved:
+    for move in moved:
         await session.execute(
-            update(v).where(v.c.domain_id == domain_id, v.c.id == token).values(moved_to=key)
+            update(v)
+            .where(v.c.domain_id == domain_id, v.c.id == move.token)
+            .values(moved_to=move.key)
         )
+        await session.execute(
+            update(v)
+            .where(
+                v.c.domain_id == domain_id,
+                v.c.kind_id == move.kind_id,
+                v.c.attribute_id == move.attribute_id,
+                v.c.moved_to == move.previous_key,
+            )
+            .values(moved_to=move.key)
+        )
+
+
+def _batches(keys: Sequence[str]) -> list[tuple[int, Sequence[str]]]:
+    return [(start, keys[start : start + _CHUNK]) for start in range(0, len(keys), _CHUNK)]
+
+
+def _record_condition(
+    domain_id: str, kind_id: str, keys: Sequence[str], attribute_ids: Collection[str] | None
+) -> list[Any]:
+    v = VAULT
+    condition = [v.c.domain_id == domain_id, v.c.kind_id == kind_id, v.c.record_key.in_(keys)]
+    if attribute_ids is not None:
+        condition.append(v.c.attribute_id.in_(sorted(attribute_ids)))
+    return condition
 
 
 async def _refresh(session: AsyncSession, keys: VaultKeys, condition: list[Any]) -> int:

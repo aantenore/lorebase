@@ -126,6 +126,7 @@ from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import COMMIT_DURATION
 from lorebase_store.vault.store import (
     Lineage,
+    Move,
     VaultLockTimeoutError,
     VaultRow,
     insert_lineage,
@@ -162,7 +163,7 @@ class _Prepared:
     derived: list[DataChange] = field(default_factory=list)
     vault_rows: list[VaultRow] = field(default_factory=list)
     vault_lineage: list[Lineage] = field(default_factory=list)
-    vault_moved: list[tuple[str, str]] = field(default_factory=list)
+    vault_moved: list[Move] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
