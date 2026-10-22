@@ -4,6 +4,13 @@ import type { ProblemDetails } from './types';
 /** Path prefix of the Keeper REST API (design 11.1). Protocol constant, not configuration. */
 export const API_BASE_PATH = '/api/v1';
 
+/**
+ * Header naming the client of a request, and the value of this app (`keeper.trace.client_header`
+ * and `web_client`): Keeper leaves the screens' own traffic out of `trace_all` agent traces.
+ */
+export const CLIENT_HEADER = 'X-Lorebase-Client';
+export const CLIENT_NAME = 'web';
+
 /** A list sent as one parameter per value (`status=a&status=b`), as FastAPI list parameters expect. */
 export interface Repeated {
   readonly repeat: readonly string[];
@@ -152,6 +159,7 @@ export function createFetcher(options: FetcherOptions): Fetcher {
     const prepare = () => {
       const headers: Record<string, string> = {
         Accept: 'application/json',
+        [CLIENT_HEADER]: CLIENT_NAME,
         ...options.headers?.(method),
         ...init.headers,
       };

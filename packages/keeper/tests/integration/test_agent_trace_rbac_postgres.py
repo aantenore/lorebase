@@ -29,7 +29,9 @@ PEPPER = "test-pepper-0123456789-0123456789-abcdef"
 CODEC = ApiKeyCodec(ApiKeySettings(pepper=PEPPER))
 TRACE = "/api/v1/trace/sessions"
 REFS = {"records": [["Part", "P-1"], ["Supplier", "S-1"]], "links": []}
-QUERY = {"body": {"q": "bearing"}}
+QUERY = {"body": {"q": "bearing", "where": {"attr": "country", "op": "eq", "value": "PL"}}}
+"""As `capture_filter_values: non_sensitive` stores it: the literal follows the visibility
+of the query (withheld from readers not cleared in the Domain)."""
 
 
 async def seed(database_url: str) -> tuple[dict[str, dict[str, str]], dict[str, str]]:

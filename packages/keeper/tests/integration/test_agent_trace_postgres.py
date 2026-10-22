@@ -99,7 +99,7 @@ async def test_a_traced_session_records_queries_counts_refs_and_notes(seeded: Se
         assert first["tool"] == "lorebase_search"
         assert first["domain_id"] == DOMAIN
         assert first["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
-        assert first["query"]["body"]["where"]["value"] == {"redacted": "string"}
+        assert first["query"]["body"]["where"]["value"] == "PL"  # country is not sensitive
         assert first["result"]["counts"]["items"] == len(found.json()["items"])
         assert first["explain"]["plans"][0]["label"] == "query"
         assert first["explain"]["plans"][0]["node_types"]
@@ -149,6 +149,44 @@ async def test_literals_are_kept_when_configured_and_untraced_requests_are_not(
         assert step["explain"] is None  # no debug opt-in
         missing = await http.get(f"{TRACE}/never-seen")
         assert missing.status_code == 404
+
+
+async def test_filter_values_are_kept_only_on_attributes_that_are_not_sensitive(
+    seeded: Seeded,
+) -> None:
+    where = {
+        "or": [
+            {"attr": "country", "op": "in", "value": ["PL", "DE"]},
+            {"attr": "vat_number", "op": "eq", "value": "PL5260250995"},
+            {"attr": "title", "op": "prefix", "value": "Brevik"},
+            {"via": "supplies", "where": {"attr": "single_sourced", "op": "eq", "value": True}},
+        ]
+    }
+    query = {"kind": "Supplier", "where": where, "limit": 5}
+    for mode, session in (("non_sensitive", "sess-values"), ("none", "sess-no-values")):
+        async with keeper(seeded.app_url, trace_section(capture_filter_values=mode)) as http:
+            headers = {"X-Lorebase-Session": session, "X-Lorebase-Trace": "on"}
+            found = await http.post(f"{BASE}/query", json=query, headers=headers)
+            assert found.status_code == 200, found.text
+            listed = await http.get(
+                f"{BASE}/kinds/Supplier/records",
+                params={"where": json.dumps(where["or"][1])},
+                headers=headers,
+            )
+            assert listed.status_code == 200, listed.text
+            body = await timeline(http, session, 2)
+            sent, params = (step["query"] for step in body["steps"])
+            terms = [t.get("value", t.get("where")) for t in sent["body"]["where"]["or"]]
+            assert params["params"]["where"]["value"] == {"redacted": "string"}
+            assert "PL5260250995" not in json.dumps(body)  # vat_number is confidential
+            if mode == "none":
+                assert terms[0] == {"redacted": "list", "count": 2}
+                assert terms[2] == {"redacted": "string"}
+                continue
+            assert terms[0] == ["PL", "DE"]
+            assert terms[1] == {"redacted": "string"}
+            assert terms[2] == "Brevik"
+            assert terms[3]["value"] is True
 
 
 async def test_disabled_tracing_records_nothing(seeded: Seeded) -> None:
@@ -269,6 +307,36 @@ async def test_inferred_sessions_split_on_idle_gaps_and_never_across_principals(
         ]
         assert all(s.inferred for s in found)
         assert len({s.session_id for s in found}) == 3
+
+
+async def test_concurrent_calls_finishing_out_of_order_share_one_inferred_session(
+    seeded: Seeded,
+) -> None:
+    """Steps carry the time their request started but are queued as requests finish: a
+    client's concurrent calls reach the store out of time order, in one batch and across
+    batches, and still form one session."""
+    start = datetime.now(UTC)
+
+    def call(ms: int) -> NewTraceStep:
+        return NewTraceStep(
+            session_id="",
+            actor="usr_web",
+            type="call",
+            at=start + timedelta(milliseconds=ms),
+            inferred=True,
+            fingerprint="browser",
+        )
+
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        repository = TraceRepository(session)
+        await repository.append_many(
+            [call(300), call(100), call(200)], max_per_session=100, inferred_idle_s=60
+        )
+        await repository.append_many([call(50), call(400)], max_per_session=100)
+        everyone = TraceVisibility(owner="nobody", domains=None, domainless=True)
+        found = await repository.sessions(everyone, limit=50, actor="usr_web")
+        assert [(s.calls, s.inferred) for s in found] == [(5, True)]
+        assert found[0].started_at == start + timedelta(milliseconds=50)
 
 
 async def test_the_cap_holds_across_concurrent_writers(seeded: Seeded) -> None:

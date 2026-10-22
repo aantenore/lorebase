@@ -11,7 +11,7 @@ import {
   ValidationError,
   describeError,
 } from './errors';
-import { createFetcher } from './fetcher';
+import { CLIENT_HEADER, CLIENT_NAME, createFetcher } from './fetcher';
 
 interface Call {
   url: string;
@@ -82,6 +82,16 @@ describe('fetcher', () => {
     expect(calls[0]?.body).toBe('{"id":"x"}');
     expect(calls[1]?.headers['Authorization']).toBe('Bearer two');
     expect(calls[1]?.headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('marks every request as the web app, so agent traces leave it out', async () => {
+    const { calls, fetchStub } = scripted(json({}), json({}));
+    const fetcher = createFetcher({ baseUrl: 'https://keeper.test', fetch: fetchStub });
+    await fetcher.json('GET', '/domains');
+    await fetcher.json('POST', '/domains/x/query', { body: { kind: 'Part' } });
+    expect(calls.map((call) => call.headers[CLIENT_HEADER])).toEqual([CLIENT_NAME, CLIENT_NAME]);
+    expect(CLIENT_HEADER).toBe('X-Lorebase-Client');
+    expect(CLIENT_NAME).toBe('web');
   });
 
   it('revalidates a read with If-None-Match and serves the kept body on 304', async () => {

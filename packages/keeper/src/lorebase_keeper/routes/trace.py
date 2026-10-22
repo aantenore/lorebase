@@ -119,7 +119,9 @@ class TraceStepOut(BaseModel):
     cache: str | None = Field(default=None, description="Response cache: hit, miss or bypass.")
     branch: str | None = None
     query: dict[str, Any] | None = Field(
-        default=None, description="The query as sent, filter values redacted by default."
+        default=None,
+        description="The query as sent; filter values kept only on fields that are not "
+        "sensitive (keeper.trace.capture_filter_values).",
     )
     result: dict[str, Any] | None = Field(
         default=None, description="Counts, search mode and corrections, budget; no values."

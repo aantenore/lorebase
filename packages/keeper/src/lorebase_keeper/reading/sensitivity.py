@@ -98,6 +98,7 @@ from lorebase_keeper.auth.read_audit import note_sensitive
 from lorebase_keeper.errors import FORBIDDEN, ProblemError
 from lorebase_keeper.reading.problems import invalid
 from lorebase_keeper.settings import SensitivitySettings
+from lorebase_keeper.tracing.notes import note_field
 from lorebase_store.materialize.rows import PartitionType, parse_partition
 from lorebase_store.materialize.sensitivity import default_branch_schema
 from lorebase_store.runtime import StoreRuntime
@@ -641,8 +642,10 @@ def require_comparable(
 ) -> None:
     """Refuse filtering, ordering or grouping by values the caller may not read (403) or that
     are stored in the vault (422: Records hold tokens, which do not compare like values). The
-    `title` field is the title Attribute's value: it needs the same clearance."""
+    `title` field is the title Attribute's value: it needs the same clearance. Each field is
+    reported to the agent trace with whether it is sensitive (`field_sensitive`)."""
     for ref, kinds in fields:
+        note_field(ref.name, field_sensitive(schema, masking, ref, kinds))
         if ref.source is FieldSource.TITLE:
             for kind in kinds:
                 title = kind.attributes.get(kind.title_attribute or "")
@@ -664,6 +667,33 @@ def require_comparable(
                     "vault_attribute",
                 )
             masking.require_readable(attribute, (owner.id,), pointer)
+
+
+def field_sensitive(schema: Schema, masking: Masking, ref: FieldRef, kinds: Sequence[Kind]) -> bool:
+    """Whether values of a field read from Records of `kinds` tell about a sensitive Attribute
+    under the effective tags (`Masking.sensitive`, cleared or not): one of the Attributes it is
+    mapped to (per Kind, through a Trait too; a field mapped to none counts as sensitive), the
+    title Attribute of `title`, or a primary key Attribute of `key`."""
+    if ref.source is FieldSource.KEY:
+        return any(
+            attribute is None or masking.sensitive(attribute)
+            for kind in kinds
+            for attribute in (kind.attributes.get(a) for a in kind.primary_key)
+        )
+    if ref.source is FieldSource.TITLE:
+        return any(
+            title is not None and masking.sensitive(title)
+            for kind in kinds
+            for title in (kind.attributes.get(kind.title_attribute or ""),)
+        )
+    if not ref.attributes:
+        return True
+    for kind_id, attribute_id in ref.attributes.items():
+        owner = schema.kinds.get(kind_id)
+        attribute = None if owner is None else owner.attributes.get(attribute_id)
+        if attribute is None or attribute.in_vault or masking.sensitive(attribute):
+            return True
+    return False
 
 
 def require_comparable_plan(schema: Schema, masking: Masking, plan: QueryPlan, prefix: str) -> None:

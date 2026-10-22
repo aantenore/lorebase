@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from pydantic import Field, field_validator
 
@@ -18,9 +19,9 @@ class TraceSettings(SectionModel):
     off the request path to `agent_trace_steps`. Never values of Records.
 
     A request is traced when tracing is enabled and either it opts in (`opt_in_header`, when
-    `allow_header_opt_in`), its principal or API key is listed, or `trace_all` is set. Its
-    session is the one it names (`session_header`), or an inferred one
-    (`inferred_session_idle_s`).
+    `allow_header_opt_in`), its principal or API key is listed, or `trace_all` is set and it
+    is not traffic of the web app (unless `include_web`). Its session is the one it names
+    (`session_header`), or an inferred one (`inferred_session_idle_s`).
     """
 
     enabled: bool = Field(
@@ -47,7 +48,27 @@ class TraceSettings(SectionModel):
     allow_header_opt_in: bool = Field(
         default=True, description="Trace requests that opt in with `opt_in_header`."
     )
-    trace_all: bool = Field(default=False, description="Trace every authenticated request.")
+    trace_all: bool = Field(
+        default=False,
+        description="Trace every authenticated request, except the web app's own (see "
+        "`include_web`).",
+    )
+    client_header: str = Field(
+        default="X-Lorebase-Client",
+        min_length=1,
+        description="Header naming the client that sent a request; the web app sends `web_client`.",
+    )
+    web_client: str = Field(
+        default="web",
+        min_length=1,
+        description="Value of `client_header` that marks a request of the web app.",
+    )
+    include_web: bool = Field(
+        default=False,
+        description="Let `trace_all` trace the web app's own requests: those marked with "
+        "`client_header`, and those authenticated by a browser session cookie that name no "
+        "agent session. Off: the screens' traffic is not agent activity.",
+    )
     principals: tuple[str, ...] = Field(
         default=(), description="Principal ids whose requests are traced."
     )
@@ -56,8 +77,20 @@ class TraceSettings(SectionModel):
     )
     capture_literals: bool = Field(
         default=False,
-        description="Keep the values compared by filters (`attr`/`derived` predicates); "
-        "otherwise they are replaced by their type.",
+        description="Keep every value compared by filters (`attr`/`derived` predicates), on "
+        "sensitive Attributes too; overrides `capture_filter_values`.",
+    )
+    capture_filter_values: Literal["none", "non_sensitive"] = Field(
+        default="non_sensitive",
+        description="Values compared by filters that are kept: `non_sensitive` keeps those on "
+        "fields the read finds not sensitive under the effective tags (through Traits and "
+        "Derivations; `key` and `title` by their Attributes), bounded by `max_text_chars` and "
+        "`max_filter_value_items`; `none` replaces every one by its type.",
+    )
+    max_filter_value_items: int = Field(
+        default=20,
+        ge=1,
+        description="Items kept of a list compared by a filter (`in`); more are cut.",
     )
     capture_search_text: bool = Field(
         default=True,

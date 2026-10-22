@@ -58,6 +58,11 @@ describe('Agent activity', () => {
     expect(within(search).getByText(/"redacted"|"q": "brevik beerings"/)).toBeInTheDocument();
     expect(within(search).getByText(/Bitmap Heap Scan/)).toBeInTheDocument();
 
+    const traverse = steps[2] as HTMLElement;
+    const query = within(traverse).getByText(/"single_sourced"/).textContent ?? '';
+    expect(query).toContain('"value": true');
+    expect(query).toMatch(/"contact_email",\s+"op": "eq",\s+"value": \{\s+"redacted": "string"/);
+
     const context = steps[3] as HTMLElement;
     expect(within(context).getByText('Budget 1042 / 1200 tokens')).toBeInTheDocument();
 

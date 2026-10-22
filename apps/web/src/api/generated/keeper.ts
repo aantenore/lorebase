@@ -5893,7 +5893,7 @@ export interface components {
             branch?: string | null;
             /**
              * Query
-             * @description The query as sent, filter values redacted by default.
+             * @description The query as sent; filter values kept only on fields that are not sensitive (keeper.trace.capture_filter_values).
              */
             query?: {
                 [key: string]: unknown;

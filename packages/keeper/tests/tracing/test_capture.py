@@ -48,6 +48,61 @@ def test_filter_values_vectors_and_cursors_are_not_kept() -> None:
     assert "ann@example.com" not in json.dumps(query)
 
 
+def test_values_on_plain_fields_are_kept_bounded_and_the_rest_redacted() -> None:
+    plain = {"country", "single_sourced", "key", "risk_score"}.__contains__
+    settings = TraceSettings(max_text_chars=4, max_filter_value_items=2)
+    where = {
+        "and": [
+            {"attr": "single_sourced", "op": "eq", "value": True},
+            {"attr": "country", "op": "in", "value": ["PL", "DE", "IT"]},
+            {"attr": "key", "op": "prefix", "value": "S-100123"},
+            {"attr": "email", "op": "eq", "value": "ann@example.com"},
+            {"attr": "unknown", "op": "eq", "value": 3},
+            {"derived": "risk_score", "op": "gte", "value": 0.5},
+            {"attr": "country", "op": "eq", "value": {"nested": "x"}},
+            {"attr": "country", "op": "in", "value": [["PL"]]},
+            {"attr": "country", "derived": "email", "op": "eq", "value": "PL"},
+            {"via": "supplied_by", "where": {"attr": "country", "op": "eq", "value": "PL"}},
+        ]
+    }
+    query = capture.query_of(
+        settings,
+        params=[("where", json.dumps({"attr": "country", "op": "eq", "value": "PL"}))],
+        body=body({"kind": "Supplier", "where": where, "query_vector": [0.1] * 8}),
+        body_complete=True,
+        plain=plain,
+    )
+    assert query is not None
+    terms = query["body"]["where"]["and"]
+    assert [t["value"] for t in terms[:-1]] == [
+        True,
+        ["PL", "DE", {"truncated": 1}],
+        "S-10…",
+        {"redacted": "string"},
+        {"redacted": "number"},
+        0.5,
+        {"redacted": "object"},
+        {"redacted": "list", "count": 1},
+        {"redacted": "string"},  # names a sensitive field besides a plain one
+    ]
+    assert terms[-1]["where"]["value"] == "PL"
+    assert query["body"]["query_vector"] == {"dims": 8}
+    assert query["params"]["where"]["value"] == "PL"
+    assert "ann@example.com" not in json.dumps(query)
+
+    off = TraceSettings(capture_filter_values="none")
+    none = capture.query_of(
+        off, params=[], body=body({"where": where}), body_complete=True, plain=plain
+    )
+    assert none is not None
+    assert none["body"]["where"]["and"][0]["value"] == {"redacted": "boolean"}
+    unreported = capture.query_of(
+        SETTINGS, params=[], body=body({"where": where}), body_complete=True
+    )
+    assert unreported is not None
+    assert unreported["body"]["where"]["and"][0]["value"] == {"redacted": "boolean"}
+
+
 def test_literals_and_search_text_follow_the_settings() -> None:
     keep = TraceSettings(capture_literals=True, capture_search_text=False)
     query = capture.query_of(

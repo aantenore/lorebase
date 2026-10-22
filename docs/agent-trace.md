@@ -62,8 +62,11 @@ A traced request without a session id is not dropped and not given a session of 
 groups it with the previous calls of the same client. The client is the principal plus a
 fingerprint of its credential (the API key id, else a digest of the web session, else the
 authentication method) and of its `User-Agent`; only digests are stored. A call joins the
-inferred session of its client that saw a call at most `keeper.trace.inferred_session_idle_s`
-(300 s) earlier; after a longer gap a new one starts. Inferred sessions have ids
+inferred session of its client with a call at most `keeper.trace.inferred_session_idle_s`
+(300 s) before or after it (the nearest one); after a longer gap a new one starts. A step
+carries the time its request started but is written when the request finishes, so the window
+looks both ways: concurrent calls of one client finish out of order and still share a session.
+Inferred sessions have ids
 `inferred-<16 hex>`, are marked `inferred: true` in the API and with a badge in the web app
 (grouped heuristically: two agents behind the same key and user agent land in one session), and
 are never shared across principals. An explicit session id always wins. Notes need an explicit
@@ -100,9 +103,20 @@ lorebase trace show agent-42
 | `note` | Notes only: the text. |
 
 Never stored: values of Records, titles and snippets, response bodies, credentials, request
-bodies of writes. In the query, values compared by `attr` and `derived` predicates are replaced
-by their type (`{"redacted": "string"}`) unless `capture_literals: true`, query vectors by
-their dimension, cursors are dropped and long strings cut (`max_text_chars`). Search text
+bodies of writes. In the query, values compared by `attr` and `derived` predicates are kept only
+on fields that are not sensitive (`capture_filter_values: non_sensitive`, the default). The
+read checks every field it filters, orders or groups by against the caller's masking and
+reports, per field, whether it is sensitive under the effective tags (the schema read, the
+default branch's, and those carried through Derivations): a field resolved through a Trait is
+sensitive when the Attribute of any implementing Kind is, `title` when a title Attribute is,
+`key` when a primary key Attribute is. A name resolved to a sensitive field anywhere in the
+read keeps no value anywhere; fields the read never resolved, and steps outside a Domain, keep
+nothing. Kept
+values are scalars or lists of scalars, strings cut to `max_text_chars` and lists to
+`max_filter_value_items`; objects and every other value are replaced by their type
+(`{"redacted": "string"}`). `capture_filter_values: none` replaces them all; `capture_literals:
+true` keeps them all, sensitive ones included. Query vectors are replaced by their dimension,
+cursors are dropped and long strings cut (`max_text_chars`). Search text
 (`q`, `search`, `match`) is kept, since it is what an agent asked; `capture_search_text: false`
 keeps only its length and drops the search corrections, which name the query words. Members named `values` are never read when refs are collected, so
 references held in values are not refs.
@@ -119,7 +133,7 @@ principal reusing the id cannot slip steps or notes into the timeline you open.
   Domain-wide grant (the built-in `admin` role holds it; custom roles can grant it). Refs are
   filtered to the Kinds the reader may read. The query, the search corrections and the text of
   notes are what another principal typed and may hold values (a name searched for, a filter
-  value with `capture_literals`, a model's reasoning), so they are shown only to a reader with
+  value, a model's reasoning), so they are shown only to a reader with
   Domain-wide `data.read` and every sensitivity clearance (`pii.read`, `confidential.read`,
   `restricted.read`); for others the step is marked `withheld: true` and keeps its counts and
   refs only.
@@ -134,12 +148,25 @@ principal reusing the id cannot slip steps or notes into the timeline you open.
 `keeper.trace` in `config/lorebase.example.yaml` ([reference](reference/configuration.md)).
 A request is traced when `enabled` is true and one of: it opts in with
 the opt-in header (`allow_header_opt_in`), its principal is in `principals`, its API key id is
-in `api_keys`, or `trace_all` is set.
+in `api_keys`, or `trace_all` is set and the request is not the web app's own.
+
+The web app marks its requests with `X-Lorebase-Client: web` (`client_header`, `web_client`).
+`trace_all` leaves those out, and requests authenticated by a browser session cookie that name
+no session (`session_header`), unless `include_web: true`: browsing the screens is not agent
+activity. Guide forwards the user's cookie with a `guide-<hex>` session id and Herald sends its
+own credential, so both are still traced. Opting in with the header and listing a principal or
+key trace the web app too. The header is a convenience, not a control: a client can send it to
+stay out of `trace_all`, so trace an agent you must see by its principal or key.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Record traces (needs the `database` section). |
-| `capture_literals` | `false` | Keep filter values. |
+| `trace_all` | `false` | Trace every authenticated request except the web app's own. |
+| `client_header`, `web_client` | `X-Lorebase-Client`, `web` | Header and value marking the web app's requests. |
+| `include_web` | `false` | Let `trace_all` trace the web app's requests too. |
+| `capture_filter_values` | `non_sensitive` | Filter values kept: on fields not sensitive, or `none`. |
+| `max_filter_value_items` | 20 | Items kept of a list compared by a filter. |
+| `capture_literals` | `false` | Keep every filter value, sensitive ones included. |
 | `capture_search_text` | `true` | Keep search text. |
 | `max_query_bytes`, `max_text_chars` | 16384, 500 | Bounds of a recorded query. |
 | `max_response_bytes` | 1 MiB | Larger answers are recorded without counts and refs. |
