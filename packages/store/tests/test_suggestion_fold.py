@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lorebase_core.infer.suggestions import Observation, SuggestionOptions, SuggestionType
-from lorebase_store.repositories.suggestions import consolidate, fold
+from lorebase_store.repositories.suggestions import combine, consolidate, fold
 
 OPTIONS = SuggestionOptions(max_examples=2, max_samples=3)
 
@@ -95,3 +95,63 @@ def test_a_variant_joins_the_stored_suggestion() -> None:
     groups, names = consolidate(seen_again, [stored], OPTIONS)
     assert list(groups) == [stored["fingerprint"]]
     assert names == {stored["fingerprint"]: "renewal_notice_days"}
+
+
+def test_a_kind_named_like_a_field_stays_when_it_shows_an_entity_of_its_own() -> None:
+    kind, attribute = SuggestionType.KIND, SuggestionType.ATTRIBUTE
+    codes = [sighted(kind, "Buyer", "B-1", kind=None), sighted(kind, "Buyer", "B-2", kind=None)]
+    fields = [
+        sighted(kind, "Carrier", kind=None),
+        sighted(attribute, "carrier name", "Acme", kind="+Carrier"),
+        sighted(attribute, "carrier code", "C-9", kind="+Carrier"),
+    ]
+    one_code = [sighted(kind, "Buyer", "B-1", kind=None), sighted(kind, "Buyer", None, kind=None)]
+    seen = [sighted(attribute, "buyer", "Corvane"), sighted(attribute, "carrier", "Acme")]
+    _, names = consolidate([*seen, *codes], [], OPTIONS)
+    assert "Buyer" in names.values()
+    _, names = consolidate([*seen, *fields], [], OPTIONS)
+    assert "Carrier" in names.values()
+    _, names = consolidate([*seen, *one_code], [], OPTIONS)
+    assert "Buyer" not in names.values()
+    stored_kind = {
+        "fingerprint": "kind:buyer",
+        "suggestion_type": "kind",
+        "name": "Buyer",
+        "kind_ref": None,
+        "samples": ["B-1"],
+        "support": 1,
+    }
+    _, names = consolidate(
+        [*seen, sighted(kind, "Buyer", "B-2", kind=None)], [stored_kind], OPTIONS
+    )
+    assert "Buyer" in names.values()  # one code stored, one now: two in all
+
+
+def test_stored_variants_combine_into_the_kept_suggestion() -> None:
+    def row(name: str, documents: dict[str, int], samples: list[str], **extra: object) -> dict:
+        return {
+            "name": name,
+            "observations": {d: {"n": n, "c": 0.5 * n} for d, n in documents.items()},
+            "examples": [{"document_id": d, "start": 1, "end": 2} for d in documents],
+            "samples": samples,
+            "labels": [name],
+            "sources": ["rules"],
+            **extra,
+        }
+
+    kept = row("renewal_notice_days", {"doc_a": 2, "doc_b": 1}, ["90"])
+    other = row(
+        "renewal_proposal_notice_days", {"doc_b": 3, "doc_c": 1}, ["90", "60"], sources=["m"]
+    )
+    values = combine(kept, [other], OPTIONS)
+    assert values["support"] == 7
+    assert {d: v["n"] for d, v in values["observations"].items()} == {
+        "doc_a": 2,
+        "doc_b": 4,
+        "doc_c": 1,
+    }
+    assert values["confidence"] == 0.5
+    assert values["samples"] == ["90", "60"]
+    assert values["labels"] == ["renewal_notice_days", "renewal_proposal_notice_days"]
+    assert values["sources"] == ["rules", "m"]
+    assert len(values["examples"]) == OPTIONS.max_examples

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
 from lorebase_inference import InferenceSettings
-from lorebase_scribe.extraction.pipeline import ExtractionRun
+from lorebase_inference.interfaces import ChatOptions, ChatResult, Message, Usage
+from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
 from lorebase_scribe.extraction.settings import DiscoverySettings, ExtractionSettings
 from lorebase_store.repositories import SchemaSuggestionRepository, SuggestionRow, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
@@ -104,3 +108,68 @@ async def test_discovery_can_be_turned_off(
     )
     assert "suggestion_observations" not in report.stats
     assert await stored(sessions) == {}
+
+
+class _DiscoveryChat:
+    """A chat model answering the dedicated discovery call, recording the task it was given."""
+
+    def __init__(self) -> None:
+        self.tasks: list[str | None] = []
+
+    async def complete_json(
+        self,
+        messages: Sequence[Message],
+        schema: dict[str, Any],
+        options: ChatOptions | None = None,
+    ) -> ChatResult:
+        self.tasks.append(options.task if options else None)
+        data = {
+            "kinds": [{"name": "Incoterm", "example": "DAP", "evidence": "Delivery is DAP"}],
+            "attributes": [
+                {
+                    "kind": "Contract",
+                    "name": "payment days",
+                    "value": "30",
+                    "evidence": "payment is due 30 days after invoice",
+                }
+            ],
+        }
+        return ChatResult(data=data, usage=Usage(10, 5), model="fake:disc")
+
+
+async def test_the_dedicated_discovery_pass_feeds_suggestions(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    document = await store_document(sessions, DOCUMENTS / "amendment-c-3013-wexrix-filtration.md")
+    chat = _DiscoveryChat()
+
+    def extraction(llm_pass: bool) -> ExtractionRun:
+        return ExtractionRun(
+            sessions,
+            runtime,
+            ExtractionSettings(tiers=(0,), discovery=DiscoverySettings(llm_pass=llm_pass)),
+            InferenceSettings(),
+            principal="svc_scribe",
+            clock=clock,
+            models=lambda tiers: ExtractionModels(
+                discovery_chat=chat if llm_pass else None, discovery_model="fake:disc"
+            ),
+        )
+
+    await extraction(False).run(DOMAIN, [document])
+    assert chat.tasks == []
+    assert "kind:Incoterm" not in await stored(sessions)
+
+    report = await extraction(True).run(DOMAIN, [document])
+    assert chat.tasks == ["schema_discovery"] * report.stats["discovery_calls"]
+    assert report.usage["input_tokens"] >= 10
+    found = await stored(sessions)
+    assert found["kind:Incoterm"].samples == ["DAP"]
+    assert found["kind:Incoterm"].sources == ["discovery:fake:disc"]
+    payment = found["attribute:payment_days"]
+    contract = schema.kind_by_api_name("Contract")
+    assert contract is not None
+    assert (payment.kind_ref, payment.samples) == (contract.id, ["30"])

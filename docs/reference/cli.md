@@ -561,6 +561,7 @@ $ lorebase schema [OPTIONS] COMMAND [ARGS]...
 * `apply`: Apply a schema document to a branch as one...
 * `export`: Translate a schema into LinkML YAML.
 * `import`: Translate a LinkML schema into a Lorebase...
+* `suggestions`: Review the Kinds, Attributes and Relations...
 
 #### `lorebase schema get`
 
@@ -712,6 +713,108 @@ $ lorebase schema import [OPTIONS] {FILE}
 * `--cascade`: Allow removing Kinds or Relations that hold data.
 * `--expected-head <str>`: Fail unless the branch is at this Revision.
 * `--prune`: With --apply or --dry-run: also remove the Kinds, Attributes, Relations and Traits of the Domain that the LinkML schema leaves out (otherwise kept, with a warning).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase schema suggestions`
+
+Review the Kinds, Attributes and Relations document extraction suggests.
+
+**Usage**:
+
+```console
+$ lorebase schema suggestions [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `list`: List schema suggestions from extraction,...
+* `accept`: Accept suggestions: together they become...
+* `reject`: Reject suggestions.
+* `merge`: Fold stored Attribute suggestions that are...
+
+##### `lorebase schema suggestions list`
+
+List schema suggestions from extraction, the most supported first.
+
+**Usage**:
+
+```console
+$ lorebase schema suggestions list [OPTIONS]
+```
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--status <pending|accepted|rejected>`: Only this status. Repeatable.
+* `--type <kind|attribute|relation>`: Only this kind of suggestion. Repeatable.
+* `--weak`: Also pending ones below `schema.suggestions.min_support`.
+* `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
+* `--all`: Print every item, however many.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+##### `lorebase schema suggestions accept`
+
+Accept suggestions: together they become one schema change set on a new branch,
+proposed into the default branch (nothing changes there until the Proposal merges).
+
+**Usage**:
+
+```console
+$ lorebase schema suggestions accept [OPTIONS] {ID...}
+```
+
+**Arguments**:
+
+* `ID...`: Suggestion ids (`ssg_...`).  [required]
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--name <str>`: Api name to use instead (one suggestion only).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+##### `lorebase schema suggestions reject`
+
+Reject suggestions.
+
+**Usage**:
+
+```console
+$ lorebase schema suggestions reject [OPTIONS] {ID...}
+```
+
+**Arguments**:
+
+* `ID...`: Suggestion ids (`ssg_...`).  [required]
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+##### `lorebase schema suggestions merge`
+
+Fold stored Attribute suggestions that are variants of one another (names sharing
+`schema.suggestions.merge_similarity` of their words, compatible samples) into the best
+supported one. Safe to repeat.
+
+**Usage**:
+
+```console
+$ lorebase schema suggestions merge [OPTIONS]
+```
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 

@@ -1,4 +1,5 @@
-"""`schema get|validate|apply|diff|export|import`: the schema of a Domain as a YAML document."""
+"""`schema get|validate|apply|diff|export|import` and `schema suggestions list|accept|reject|merge`:
+the schema of a Domain as a YAML document, and the changes document extraction suggests."""
 
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from lorebase_cli.linkml import (
     merge_into_current,
     to_linkml,
 )
-from lorebase_cli.options import AtOpt, BranchOpt, DomainOpt, JsonOpt
+from lorebase_cli.options import AllOpt, AtOpt, BranchOpt, DomainOpt, JsonOpt, LimitOpt
 from lorebase_cli.output import Column
 from lorebase_client import NotFoundError
 from lorebase_client import models as m
@@ -377,3 +378,146 @@ def _print_conversion(app: AppContext, conversion: Conversion, output: Path | No
         )
         return
     _write(app, dump_yaml(conversion.document), output)
+
+
+# Schema suggestions -----------------------------------------------------------------------
+
+suggestions_app = typer.Typer(
+    help="Review the Kinds, Attributes and Relations document extraction suggests.",
+    no_args_is_help=True,
+)
+schema_app.add_typer(suggestions_app, name="suggestions")
+
+SUGGESTION_COLUMNS = [
+    Column("id", "id"),
+    Column("type", "type"),
+    Column("name", "name"),
+    Column("of", "kind", lambda v: v or ""),
+    Column("support", "support"),
+    Column("docs", "documents"),
+    Column("status", "status"),
+    Column("samples", "samples", lambda v: ", ".join(str(s) for s in (v or [])[:3])),
+]
+
+
+class SuggestionStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class SuggestionKind(StrEnum):
+    KIND = "kind"
+    ATTRIBUTE = "attribute"
+    RELATION = "relation"
+
+
+IdsArg = Annotated[list[str], typer.Argument(help="Suggestion ids (`ssg_...`).", metavar="ID...")]
+
+
+@suggestions_app.command("list")
+def suggestions_list(
+    ctx: typer.Context,
+    domain: DomainOpt = None,
+    status: Annotated[
+        list[SuggestionStatus] | None,
+        typer.Option("--status", help="Only this status. Repeatable."),
+    ] = None,
+    type_: Annotated[
+        list[SuggestionKind] | None,
+        typer.Option("--type", help="Only this kind of suggestion. Repeatable."),
+    ] = None,
+    weak: Annotated[
+        bool,
+        typer.Option("--weak", help="Also pending ones below `schema.suggestions.min_support`."),
+    ] = False,
+    limit: LimitOpt = None,
+    everything: AllOpt = False,
+    json_out: JsonOpt = False,
+) -> None:
+    """List schema suggestions from extraction, the most supported first."""
+    app = app_of(ctx, json_out)
+    items, more = app.take(
+        app.client().schema.iterate_suggestions(
+            app.domain(domain),
+            status=[x.value for x in status or []] or None,
+            type=[x.value for x in type_ or []] or None,
+            all=weak or None,
+        ),
+        limit,
+        everything,
+    )
+    app.out.emit(items, lambda: app.out.table([i.model_dump() for i in items], SUGGESTION_COLUMNS))
+    if more:
+        app.note_truncated(len(items))
+
+
+def _decide(
+    app: AppContext,
+    domain: str | None,
+    ids: list[str],
+    decision: m.ItemDecisionValue,
+    name: str | None,
+) -> None:
+    result = app.client().schema.decide_suggestions(
+        app.domain(domain),
+        [m.SuggestionDecision(suggestion=i, decision=decision, name=name) for i in ids],
+    )
+
+    def human() -> None:
+        app.out.table([s.model_dump() for s in result.suggestions], SUGGESTION_COLUMNS)
+        if result.proposal is not None:
+            app.out.pairs(
+                [
+                    ("proposal", result.proposal.id),
+                    ("branch", result.proposal.branch),
+                    ("title", result.proposal.title),
+                ]
+            )
+            _print_changes(app, result.proposal.changes)
+
+    app.out.emit(result, human)
+
+
+@suggestions_app.command("accept")
+def suggestions_accept(
+    ctx: typer.Context,
+    ids: IdsArg,
+    domain: DomainOpt = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Api name to use instead (one suggestion only)."),
+    ] = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Accept suggestions: together they become one schema change set on a new branch,
+    proposed into the default branch (nothing changes there until the Proposal merges)."""
+    if name is not None and len(ids) != 1:
+        raise CliError("--name needs exactly one suggestion", exit_code=EXIT_INVALID)
+    _decide(app_of(ctx, json_out), domain, ids, "accepted", name)
+
+
+@suggestions_app.command("reject")
+def suggestions_reject(
+    ctx: typer.Context,
+    ids: IdsArg,
+    domain: DomainOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Reject suggestions."""
+    _decide(app_of(ctx, json_out), domain, ids, "rejected", None)
+
+
+@suggestions_app.command("merge")
+def suggestions_merge(
+    ctx: typer.Context, domain: DomainOpt = None, json_out: JsonOpt = False
+) -> None:
+    """Fold stored Attribute suggestions that are variants of one another (names sharing
+    `schema.suggestions.merge_similarity` of their words, compatible samples) into the best
+    supported one. Safe to repeat."""
+    app = app_of(ctx, json_out)
+    result = app.client().schema.merge_suggestions(app.domain(domain))
+    app.out.emit(
+        result,
+        lambda: app.out.text(f"merged {result.merged} suggestions into {result.kept}"),
+    )

@@ -32,10 +32,13 @@ from typing import Any
 
 from lorebase_core.expr.sensitivity import effective_tags
 from lorebase_core.infer.suggestions import (
+    PROPOSED,
     Observation,
     SuggestionOptions,
     SuggestionType,
+    dangling_reference_names,
     existing_match,
+    kind_is_independent,
     kind_is_noise,
     proposed_kind,
 )
@@ -426,6 +429,21 @@ class Discovery:
 
     # Result -----------------------------------------------------------------------------
 
+    def _independent(self, name: str) -> bool:
+        """Whether the job's observations show the proposed Kind `name` as an entity of its
+        own: several distinct codes seen for it, or several Attributes it owns."""
+        instances = {
+            o.value for o in self.observations if o.type is SuggestionType.KIND and o.name == name
+        }
+        owner = f"{PROPOSED}{name}"
+        fields = {
+            o.name
+            for o in self.observations
+            if o.type is SuggestionType.ATTRIBUTE and o.kind == owner
+        }
+        instances.discard(None)
+        return kind_is_independent(len(instances), len(fields), self.options)
+
     def finish(self, records: Mapping[tuple[str, str], Mapping[str, Any]]) -> list[Observation]:
         """The observations to aggregate: new to the schema, never about a sensitive
         Attribute, without evidence holding a sensitive value of the Records in `records`
@@ -433,10 +451,13 @@ class Discovery:
         tags = effective_tags(self.schema)
         secrets = _sensitive_values(records, tags)
         kept: list[Observation] = []
-        fields = [a.api_name for k in self.schema.kinds.values() for a in k.attributes.values()]
+        fields = dangling_reference_names(self.schema)
         for observation in self.observations:
             if observation.type is SuggestionType.KIND and kind_is_noise(
-                observation.name, fields, self.options
+                observation.name,
+                fields,
+                self.options,
+                independent=self._independent(observation.name),
             ):
                 self.count("suggestions_noise")
                 continue

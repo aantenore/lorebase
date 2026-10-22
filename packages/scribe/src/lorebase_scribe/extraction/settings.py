@@ -156,6 +156,16 @@ class DiscoverySettings(SectionModel):
         description="Tier 2: the chat model may report facts outside the schema (`unlisted`) "
         "with verified evidence, and its answers outside the schema are kept as observations.",
     )
+    llm_pass: bool = Field(
+        default=False,
+        description="Run a dedicated discovery call per chunk through the "
+        "`inference.llm.tasks.schema_discovery` route (any chat model; the extraction route "
+        "when the task has no override) that proposes Kinds and Attributes from the document "
+        "text. Needs no tier 2; its tokens count against `max_tokens_per_job`.",
+    )
+    llm_max_items: int = Field(
+        default=20, ge=1, description="Proposals of each list the dedicated call may return."
+    )
     min_confidence: float = Field(
         default=0.3, ge=0, le=1, description="Weaker observations are dropped."
     )

@@ -169,6 +169,7 @@ reviewed: accepting them opens a schema change Proposal, never a direct schema c
 | 0 | A `**Label:** value` field line or a table column no Attribute of the described Record matches: an Attribute, or a Relation when the label names a Kind or the value names Records of another Kind. A heading naming a thing by a code no Kind's key pattern matches (`# Quality notice QN-2025-114`): a Kind, which then owns the fields of its section |
 | 1 | Spans of `discovery.span_labels` (a Kind of that name) and relations of `discovery.relation_labels` between Records of known Kinds (a Relation) |
 | 2 | The answer schema gains an `unlisted` list for facts the schema has no place for; records, values and links the model names outside the schema are observed too. Every one needs verified evidence, and an Attribute value must appear in its quote |
+| Discovery pass | Optional (`discovery.llm_pass`, off by default): one extra call per chunk through the `inference.llm.tasks.schema_discovery` route, independent of tier 2, asks a model that sees the Kinds and their Attribute names for Kinds and Attributes the text implies. The same evidence rules apply; its tokens count against `max_tokens_per_job` and its answers are cached |
 
 The record a field describes is the one its section heading names; a table row describes the
 first Record it names. Observations are matched against the default branch's schema before they
@@ -188,9 +189,19 @@ text): `renewal_notice_days` and `renewal_proposal_notice_days` (sample 90), or
 suggestion under the better supported name, the other kept among its labels. `start_date` and
 `end_date` (one word of three in common) stay apart. A Kind named by a generic word of documents or
 workflows (`schema.suggestions.kind_stoplist`: section, clause, annex, page, table, proposal,
-...) or by an Attribute (a Kind `Buyer` beside the Attribute `buyer`) is not suggested, and a
-proposed Kind is listed only once it has `kind_min_attributes` Attribute suggestions (2 by
-default) or as many observations.
+...) is not suggested. Neither is one that only restates a free-text Attribute (a Kind `Buyer`
+beside the `string` or `text` Attribute `buyer` that no Relation models), unless its evidence
+shows an entity of its own: `kind_independent_instances` distinct codes or names seen for it
+(2 by default) or `kind_independent_attributes` Attribute suggestions it owns (2). A typed
+Attribute (a date, a number, an enum) or a `ref` never hides a Kind. A proposed Kind is listed
+only once it has `kind_min_attributes` Attribute suggestions (2 by default) or as many
+observations.
+
+`lorebase schema suggestions merge` (`POST .../schema/suggestions:merge`, permission
+`schema.write`) applies the variant folding to suggestions stored earlier: pending Attribute
+suggestions of one Kind that pass the same similarity test are folded into the best supported
+one (documents, support, examples, samples and labels united) and the others removed. It is
+safe to repeat.
 
 **Sensitivity.** An observation that matches a sensitive Attribute (`pii`, `confidential`,
 `restricted`, carried through Derivations) is never kept, and an observation whose quote or
@@ -223,8 +234,12 @@ matches a sensitive Attribute the caller may not read (the same clearances as re
   is decided; an accepted suggestion cannot be decided again (409). Decisions are audited
   (`schema.suggestions.decide`).
 
-The web app lists them in the Schema suggestions tab of Review; the Python client has
-`client.schema.suggestions(...)`, `iterate_suggestions(...)` and `decide_suggestions(...)`.
+The web app lists them in the Schema suggestions tab of Review. The CLI has
+`lorebase schema suggestions list` (`--status`, `--type`, `--weak` for pending ones below
+`min_support`, `--limit`/`--all`, `--json`), `accept ID... [--name API_NAME]` (one change set
+and Proposal for all the ids), `reject ID...` and `merge`. The Python client has
+`client.schema.suggestions(...)`, `iterate_suggestions(...)`, `decide_suggestions(...)` and
+`merge_suggestions()`.
 
 On the four example documents, with the rules only and `min_support: 2`, the supplier review
 suggests an Attribute `ends` of Supplier (three table rows, typed `date`) and a Relation
@@ -236,7 +251,7 @@ until another document supports it.
 ## Configuration
 
 `scribe.extraction` (tiers, auto-accept threshold, chunking, matching thresholds, confidence
-per technique, budgets, prompt version, cache, `discovery`), `schema.suggestions` (support,
+per technique, budgets, prompt version, cache, `discovery` with the optional `llm_pass`), `schema.suggestions` (support,
 listing, examples, name matching, variants and noise), `keeper.schema_suggestions` (review branch prefix) and
 `keeper.documents` (size limit, accepted
 suffixes, URL allowlist, extraction on upload, longest text served) are documented with their defaults in
@@ -252,9 +267,8 @@ suffixes, URL allowlist, extraction on upload, longest text served) are document
 - Co-occurrence and heading Links propose every Relation the endpoint Kinds allow; on a
   many-to-one Relation several candidates may compete and the reviewer picks.
 - Schema suggestions come from field lines, table columns, headings with codes, configured
-  tier 1 labels and tier 2 answers; free prose suggests nothing to tier 0. The
-  `inference.llm.tasks.schema_discovery` route is not used: tier 2 reports unlisted facts
-  in its extraction call.
+  tier 1 labels, tier 2 answers and the optional discovery pass; free prose suggests nothing
+  to tier 0.
 - Header-mapped tables, embedding-based
   entity resolution and OCR of scanned PDFs are not implemented.
 - Trigram matching scans the titles of the named Kinds under row-level security (no index), and

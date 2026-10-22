@@ -1476,6 +1476,13 @@ class DecideSuggestions(RequestModel):
     decisions: list[SuggestionDecision] = Field(min_length=1)
 
 
+class SuggestionsMerged(Model):
+    """What merging stored variants of suggestions did."""
+
+    merged: int
+    kept: int
+
+
 class SuggestionProposal(Model):
     """The Proposal opened for the accepted suggestions."""
 

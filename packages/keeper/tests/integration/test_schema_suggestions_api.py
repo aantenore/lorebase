@@ -11,10 +11,12 @@ import pytest
 import yaml
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from lorebase_core.infer.suggestions import Observation, SuggestionOptions, SuggestionType
 from lorebase_inference import InferenceSettings
 from lorebase_scribe.extraction.pipeline import ExtractionRun
 from lorebase_scribe.extraction.settings import ExtractionSettings
 from lorebase_store.db import create_engine
+from lorebase_store.repositories import SchemaSuggestionRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 
@@ -162,3 +164,53 @@ async def test_suggestions_are_listed_rejected_and_accepted(seeded: Seeded) -> N
         )
         assert reset.json()["suggestions"][0]["status"] == "pending"
         assert reset.json()["suggestions"][0]["decided_by"] is None
+
+
+async def store_variants(seeded: Seeded, kind_id: str) -> None:
+    """Two suggestions that arrival-time merging (`merge_similarity` 1) kept apart."""
+    engine = create_engine(DatabaseSettings(), url=seeded.owner_url, statement_timeout_ms=0)
+    try:
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        options = SuggestionOptions(merge_similarity=1)
+        for index, (document, label) in enumerate(
+            (("doc_a", "renewal cycle days"), ("doc_b", "renewal cycle length days"))
+        ):
+            seen = Observation(
+                SuggestionType.ATTRIBUTE, label, document, 0.6, "rules", kind=kind_id, value="90"
+            )
+            async with sessions() as session, session.begin():
+                await scope_to_domain(session, DOMAIN)
+                await SchemaSuggestionRepository(session, DOMAIN).record(
+                    [seen, seen],
+                    job_id="job_1",
+                    options=options,
+                    now=Clock()(),
+                    new_id=lambda index=index: f"ssg_variant_{index}",
+                )
+    finally:
+        await engine.dispose()
+
+
+async def test_stored_variants_are_merged_on_request(seeded: Seeded) -> None:
+    async with keeper(seeded.app_url) as http:
+        document = (await http.get(f"{BASE}/schema", params={"format": "json"})).json()
+        supplier = next(
+            k for k, v in document["schema"]["kinds"].items() if v["api_name"] == "Supplier"
+        )
+        await store_variants(seeded, supplier)
+        before = named((await http.get(SUGGESTIONS, params={"all": "true"})).json()["items"])
+        assert {"attribute:renewal_cycle_days", "attribute:renewal_cycle_length_days"} <= set(
+            before
+        )
+
+        merged = await http.post(f"{SUGGESTIONS}:merge")
+        assert merged.status_code == 200, merged.text
+        assert merged.json() == {"merged": 1, "kept": 1}
+        after = named((await http.get(SUGGESTIONS, params={"all": "true"})).json()["items"])
+        assert "attribute:renewal_cycle_length_days" not in after
+        kept = after["attribute:renewal_cycle_days"]
+        assert (kept["support"], kept["documents"]) == (4, 2)
+        assert "renewal cycle length days" in kept["labels"]
+
+        again = await http.post(f"{SUGGESTIONS}:merge")
+        assert again.json() == {"merged": 0, "kept": 0}

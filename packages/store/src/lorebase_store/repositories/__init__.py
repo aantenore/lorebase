@@ -77,6 +77,7 @@ from lorebase_store.repositories.revisions import (
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.repositories.source_runs import SourceRunRepository, SourceRunRow
 from lorebase_store.repositories.suggestions import (
+    MergeOutcome,
     RecordOutcome,
     SchemaSuggestionRepository,
     SuggestionRow,
@@ -114,6 +115,7 @@ __all__ = [
     "MaterializedRepository",
     "MergeAttemptRepository",
     "MergeAttemptRow",
+    "MergeOutcome",
     "OutboxRepository",
     "PartitionFilter",
     "PgRevisionGraph",

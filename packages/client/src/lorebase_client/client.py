@@ -455,6 +455,10 @@ class SchemaApi(_Resource):
         )
         return self._c.send(ep.decide_schema_suggestions(domain, body))
 
+    def merge_suggestions(self, domain: str) -> m.SuggestionsMerged:
+        """Fold the stored Attribute suggestions that are variants of one another."""
+        return self._c.send(ep.merge_schema_suggestions(domain))
+
 
 class Operations(_Resource):
     def execute(
