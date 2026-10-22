@@ -12,6 +12,11 @@ STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/
 	packages/client/src packages/cli/src packages/scribe/src packages/guide/src
 OTHER_SRC := packages/platform/src packages/inference/src
 PROFILES ?=
+# Extra compose files (space separated, from the repository root) for up, logs, down and
+# clean-stack, e.g. COMPOSE_OVERLAYS=deploy/compose/hosted-model.yaml; empty: the value in .env.
+COMPOSE_OVERLAYS ?=
+SERVICES ?=
+export COMPOSE_OVERLAYS
 PERF_COMPOSE ?= docker compose -p lorebase-perf -f tests/perf/compose.yaml
 PERF_PG_PORT ?= 55410
 PERF_PG_PASSWORD ?= perf
@@ -27,7 +32,7 @@ export PERF_PG_PORT PERF_PG_PASSWORD
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
 	test-perf perf-1m perf-10m perf-down security security-python security-web demo demo-down \
-	env up up-assistant example-data example-documents down clean-stack
+	env up up-assistant logs example-data example-documents down clean-stack
 
 help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -100,6 +105,9 @@ up: ## Build the images and start Postgres, migrations, Keeper and the web app (
 
 up-assistant: ## Same as `make up PROFILES=assistant`: also Guide and Scribe on the backend-ml image (embeddings, semantic search)
 	@PROFILES=assistant scripts/quickstart.sh up
+
+logs: ## Follow the logs of the quickstart stack (SERVICES="scribe guide" narrows them)
+	@PROFILES="$(PROFILES)" scripts/quickstart.sh logs $(SERVICES)
 
 example-data: ## Load the supply sample into the running Keeper (Domain supply, branches main and work)
 	@scripts/quickstart.sh data

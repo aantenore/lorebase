@@ -7,7 +7,8 @@ loses the lock with it and another process takes over at its next tick.
 
 Each tick of the leader:
 
-- requeues jobs whose lock went stale (`store.jobs.stale_after_seconds`);
+- reclaims running jobs without heartbeat for `store.jobs.stale_after_seconds` (requeued, or
+  failed once their attempts are used up);
 - queues a `webhook_delivery` pass every `webhook_interval_s` (an identical queued job is
   reused, so a backlog never piles up);
 - queues an `audit_verify` pass every `audit_verify_interval_s` (reused like the webhook pass);
@@ -167,7 +168,7 @@ class Scheduler:
             async with self._sessions() as session, session.begin():
                 stale = await requeue_stale(session, settings=self._jobs, now=now)
                 if stale:
-                    log.warning("stale jobs requeued", extra={"jobs": stale})
+                    log.warning("stale jobs reclaimed", extra={"jobs": stale})
                 queued.extend(await self._intervals(session, now))
                 queued.extend(await self._domains(session, now))
                 QUEUE_DEPTH.update(await queue_depth(session, now=now))

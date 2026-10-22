@@ -478,8 +478,18 @@ exception. Fix the cause, then requeue the rows with `status = 'queued', attempt
 Claimable jobs have been queued (`lorebase_jobs_queue_depth{status="queued"}`, reported by the scheduler leader;
 jobs waiting for a retry delay are counted as `retrying` and do not count) while no worker claimed one (`lorebase_jobs_claimed_total`) in the last 15 minutes. Scribe workers are not running, cannot
 claim (database down), or every job hangs. The Scribe dashboard shows the queue depth by type. Check the Scribe pods
-and logs, `SELECT type, status, count(*) FROM jobs GROUP BY 1, 2`, and rows locked for longer than `store.jobs.stale_after_seconds` (the scheduler requeues those).
+and logs, `SELECT type, status, count(*) FROM jobs GROUP BY 1, 2`, and rows whose lock is older than `store.jobs.stale_after_seconds` (the scheduler leader reclaims those; with no leader nothing does).
 `python -m lorebase_store.jobs work` drains the queue from a shell.
+
+#### LorebaseJobsReclaimed
+
+Running jobs of a type (label `type`) went without heartbeat for `store.jobs.stale_after_seconds` and the scheduler
+leader took them back (`lorebase_jobs_reclaimed_total`; `outcome` is `requeued`, or `failed` once
+`store.jobs.max_attempts` were used). Their worker was killed (out of memory, `SIGKILL` after the stop grace period,
+node lost), froze, or lost the database. A clean stop releases its jobs (`lorebase_jobs_released_total`) and does not
+fire this. Check the Scribe containers or pods for restarts and `OOMKilled`, the `stale job reclaimed` log lines of the
+leader, and that `SCRIBE_STOP_GRACE` (compose) or `scribe.terminationGracePeriodSeconds` (chart) exceeds
+`scribe.worker.shutdown_grace_s` plus `scribe.worker.shutdown_cancel_s`. Requeued jobs run again on another worker.
 
 #### LorebaseOutboxPruneBacklog
 

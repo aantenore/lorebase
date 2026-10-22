@@ -393,8 +393,25 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
 Providers that do not speak the OpenAI protocol go through the LiteLLM proxy (profile `litellm`);
 per-task routing, prices and embeddings are in [inference-providers.md](inference-providers.md).
 
-**Extract a document.** Start Scribe with the same files (`make up PROFILES=assistant` starts it;
-or, by hand, add `-f deploy/compose/hosted-model.yaml` for a hosted key) and upload a contract that the sample does not hold yet; tier 0 uses rules
+**Keep the overlay for `make`.** `COMPOSE_OVERLAYS` lists extra compose files, separated by
+spaces and relative to the repository root, that `make up`, `make logs`, `make down`,
+`make clean-stack` and `scripts/quickstart.sh` add after their own. Set it in `.env` so that every
+command starts Scribe with the hosted key:
+
+```bash
+# in .env
+COMPOSE_OVERLAYS=deploy/compose/hosted-model.yaml
+```
+
+Your own overlay (another secret, a model setting of your own) goes next to the key, under the
+ignored `secrets/` directory, and is listed after it:
+`COMPOSE_OVERLAYS=deploy/compose/hosted-model.yaml secrets/my-model.yaml`. A listed file that does
+not exist stops the command before compose runs. `COMPOSE_OVERLAYS=... make up` on the command line
+overrides `.env` for one run.
+
+**Extract a document.** Start Scribe with the same files (`make up PROFILES=assistant` starts it
+with the files of `COMPOSE_OVERLAYS`; by hand, add `-f deploy/compose/hosted-model.yaml` for a
+hosted key) and upload a contract that the sample does not hold yet; tier 0 uses rules
 only, tier 2 adds the chat model:
 
 ```bash
@@ -415,6 +432,7 @@ seconds; a small model on the CPU inside Docker takes several minutes.
 ## 5. Stop and clean up
 
 ```bash
+make logs          # follow the logs (SERVICES="scribe guide" narrows them); Ctrl+C stops
 make down          # stop the containers of every profile `make up` can start, keep the data
 make clean-stack   # stop them and delete the volumes: database, pulled models
 ```

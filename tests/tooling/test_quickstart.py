@@ -219,3 +219,82 @@ def test_model_services_reach_a_model_server_on_the_host() -> None:
         assert "host.docker.internal=host-gateway" in hosts
         assert services[name]["environment"]["LLM_API_KEY"] == ""
         assert "secrets" not in services[name]
+
+
+def run_with_docker(
+    tmp_path: Path, *args: str, env_file: Path, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the script with a `docker` on PATH that prints its arguments, one per line."""
+    if shutil.which("bash") is None:
+        pytest.skip("bash not installed")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    docker = bin_dir / "docker"
+    docker.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "LOREBASE_ENV_FILE": str(env_file),
+        **extra,
+    }
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def compose_files(args: list[str]) -> list[str]:
+    return [args[i + 1] for i, arg in enumerate(args) if arg == "-f"]
+
+
+def test_compose_overlays_from_the_env_file_follow_the_stack_files(tmp_path: Path) -> None:
+    overlay = tmp_path / "my-model.yaml"
+    overlay.write_text("services: {}\n")
+    env_file = tmp_path / ".env"
+    env_file.write_text(f'COMPOSE_OVERLAYS="deploy/compose/hosted-model.yaml {overlay}"\n')
+    result = run_with_docker(tmp_path, "down", env_file=env_file, PROFILES="assistant")
+    assert result.returncode == 0, result.stderr
+    args = result.stdout.splitlines()
+    assert compose_files(args) == [
+        str(COMPOSE_FILE),
+        str(COMPOSE_FILE.parent / "assistant.yaml"),
+        "deploy/compose/hosted-model.yaml",
+        str(overlay),
+    ]
+    assert args[-2:] == ["down", "--remove-orphans"]
+
+
+def test_compose_overlays_from_the_environment_win_and_logs_use_them(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_OVERLAYS=missing.yaml\n")
+    result = run_with_docker(
+        tmp_path,
+        "logs",
+        "scribe",
+        env_file=env_file,
+        COMPOSE_OVERLAYS="deploy/compose/hosted-model.yaml",
+    )
+    assert result.returncode == 0, result.stderr
+    args = result.stdout.splitlines()
+    assert compose_files(args) == [str(COMPOSE_FILE), "deploy/compose/hosted-model.yaml"]
+    assert args[-5:] == ["logs", "--follow", "--tail", "200", "scribe"]
+
+
+def test_a_missing_compose_overlay_stops_before_compose_runs(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_OVERLAYS=secrets/nowhere.yaml\n")
+    result = run_with_docker(tmp_path, "down", env_file=env_file)
+    assert result.returncode == 2
+    assert "secrets/nowhere.yaml, which does not exist" in result.stderr
+    assert result.stdout == ""
+
+
+def test_makefile_hands_compose_overlays_to_the_script() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    assert "export COMPOSE_OVERLAYS" in makefile
+    assert "scripts/quickstart.sh logs $(SERVICES)" in makefile
+    assert "COMPOSE_OVERLAYS" in values(ROOT / ".env.example")

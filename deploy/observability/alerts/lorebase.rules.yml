@@ -161,6 +161,18 @@ groups:
           description: "{{ $value | humanize }} claimable jobs are queued and no worker claimed one in the last 15 minutes: workers are down, stuck or cannot reach the database."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobqueuestalled"
 
+      # Running jobs lost their worker (killed, out of memory, cut off) and were taken back by
+      # the scheduler leader. A clean stop releases its jobs instead, so this should stay at 0.
+      - alert: LorebaseJobsReclaimed
+        expr: sum by (type) (increase(lorebase_jobs_reclaimed_total[30m])) > 0
+        labels:
+          severity: warning
+          component: scribe
+        annotations:
+          summary: "{{ $labels.type }} jobs were reclaimed from workers that stopped sending heartbeats"
+          description: "{{ $value | humanize }} running {{ $labels.type }} jobs lost their worker in the last 30 minutes and were requeued (or failed, attempts used up). Workers are being killed or cannot reach the database."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasejobsreclaimed"
+
       # Dead deliveries: attempts used up, or a target refused (scheme, private address).
       - alert: LorebaseWebhookDeliveryFailing
         expr: sum(increase(lorebase_webhooks_deliveries_total{outcome="dead"}[1h])) > 0

@@ -35,6 +35,17 @@ DEFINER_READS = meter.create_counter(
 JOBS_CLAIMED = meter.create_counter(
     "lorebase.jobs.claimed", unit="{job}", description="Jobs claimed from the queue, by type."
 )
+JOBS_RECLAIMED = meter.create_counter(
+    "lorebase.jobs.reclaimed",
+    unit="{job}",
+    description="Running jobs whose worker stopped sending heartbeats, taken back from it, by "
+    "type and outcome (requeued, failed).",
+)
+JOBS_RELEASED = meter.create_counter(
+    "lorebase.jobs.released",
+    unit="{job}",
+    description="Running jobs a stopping worker put back in the queue, by type.",
+)
 WEBHOOK_OUTCOMES = meter.create_counter(
     "lorebase.webhooks.deliveries",
     unit="{delivery}",

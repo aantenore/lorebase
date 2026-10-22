@@ -389,9 +389,11 @@ class JobSettings(SectionModel):
         default=60, ge=0, description="Delay before a failed job is run again."
     )
     stale_after_seconds: float = Field(
-        default=3600,
+        default=90,
         gt=0,
-        description="A running job locked for longer than this is assumed lost and requeued.",
+        description="A running job whose last heartbeat is older than this is taken for lost "
+        "(its worker is gone) and reclaimed: queued again, or failed once it used max_attempts. "
+        "Keep it at least twice scribe.worker.heartbeat_interval_s (default three times).",
     )
 
 
