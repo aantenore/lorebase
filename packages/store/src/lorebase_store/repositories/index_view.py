@@ -14,7 +14,7 @@ import json
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import JsonValue
 from sqlalchemy import ColumnElement, FromClause, TextClause, and_, func, select, text, tuple_
@@ -27,6 +27,9 @@ from lorebase_core.validate import DataChange, LinkUpsert, RecordDelete, RecordU
 from lorebase_store.bulk import chunks, pairs_in
 from lorebase_store.layout import BranchLayout, load_layout_sync
 
+if TYPE_CHECKING:
+    from lorebase_store.indexes import IndexSpec
+
 Side = Literal["from", "to"]
 
 _UNIQUE_VALUES = """
@@ -34,6 +37,15 @@ _UNIQUE_VALUES = """
     FROM {records}
     WHERE domain_id = :domain AND branch = :branch AND kind_id = :kind
       AND "values" -> :attribute IN (SELECT jsonb_array_elements(CAST(:candidates AS jsonb)))
+    """
+#: `_UNIQUE_VALUES` through the Attribute's unique index: its predicate as literals and its
+#: expression compared with the candidates' canonical text (`IndexSpec.value_sql`).
+_UNIQUE_INDEXED = """
+    SELECT key, "values" -> :attribute AS value
+    FROM {records}
+    WHERE {predicate}
+      AND {expression} IN (
+          SELECT {value} FROM jsonb_array_elements_text(CAST(:candidates AS jsonb)) AS c(v))
     """
 _REFERENCING = """
     SELECT key, "values" -> :attribute AS value
@@ -105,6 +117,7 @@ class MaterializedIndexView:
         self._counts: dict[tuple[str, Side, str], int] = {}
         self._pairs: dict[tuple[str, Side, str], list[tuple[str, str]]] = {}
         self._referencing: dict[tuple[str, str, str], set[str]] = {}
+        self._unique_indexes: dict[tuple[str, str], IndexSpec] = {}
         self.stats = IndexStats()
 
     # IndexView protocol ---------------------------------------------------------------
@@ -267,11 +280,25 @@ class MaterializedIndexView:
             for v in values
             if (kind_id, attribute_id, value_key(v)) not in self._unique
         }
+        spec = self._unique_indexes.get((kind_id, attribute_id))
+        if spec is not None:
+            # Without the index's predicate and expression, the lookup reads every Record
+            # of the Kind.
+            statement = text(
+                _UNIQUE_INDEXED.format(
+                    records=self.layout().records_from(),
+                    predicate=spec.predicate_sql(self._domain, self._branch),
+                    expression=spec.expression,
+                    value=spec.value_sql("c.v"),
+                )
+            )
+        else:
+            statement = self._text(_UNIQUE_VALUES)
         for chunk in chunks(list(pending), self._batch):
             for memo in chunk:
                 self._unique[(kind_id, attribute_id, memo)] = None
             rows = self._execute(
-                self._text(_UNIQUE_VALUES),
+                statement,
                 {
                     "domain": self._domain,
                     "branch": self._branch,
@@ -338,6 +365,12 @@ class MaterializedIndexView:
 
     def prefetch_for(self, schema: Schema, changes: Sequence[DataChange]) -> None:
         """Load in bulk what validating `changes` against `schema` will read."""
+        # Imported here: `lorebase_store.indexes` imports the repositories package.
+        from lorebase_store.indexes import plan_indexes
+
+        self._unique_indexes = {
+            key: spec for key, spec in plan_indexes(schema).by_attribute().items() if spec.unique
+        }
         records: list[RecordIdentity] = []
         links: list[LinkIdentity] = []
         unique: dict[tuple[str, str], list[CanonicalValue]] = defaultdict(list)
