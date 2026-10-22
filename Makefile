@@ -11,13 +11,23 @@ PY_PATHS := packages scripts tests
 STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/herald/src \
 	packages/client/src packages/cli/src packages/scribe/src packages/guide/src
 OTHER_SRC := packages/platform/src packages/inference/src
+PERF_COMPOSE ?= docker compose -p lorebase-perf -f tests/perf/compose.yaml
+PERF_PG_PORT ?= 55410
+PERF_PG_PASSWORD ?= perf
+PERF_URL ?= postgresql://perf:$(PERF_PG_PASSWORD)@127.0.0.1:$(PERF_PG_PORT)/postgres
+PERF_SCALE_1m := 5406
+PERF_SCALE_10m := 54060
+PERF_ITERATIONS ?= 1000
+PERF_WARMUP ?= 100
+PERF_OUT ?= build/perf
+export PERF_PG_PORT PERF_PG_PASSWORD
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
-	test-perf security security-python security-web demo demo-down \
+	test-perf perf-1m perf-10m perf-down security security-python security-web demo demo-down \
 	env up example-data down clean-stack
 
 help: ## List available targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 sync: ## Install all workspace packages, the document parsers and dev tools
 	$(UV) sync --all-packages --extra documents
@@ -55,6 +65,20 @@ test-int: ## Integration tests (need Docker for Postgres)
 
 test-perf: ## Performance harness at a small scale (needs Docker); bench.py writes the baseline
 	$(UV) run pytest tests/perf -m perf
+
+perf-1m: perf-run-1m ## Benchmark at 1M Records on the perf Postgres (seeds once, then measures in place)
+
+perf-10m: perf-run-10m ## Benchmark at 10M Records on the perf Postgres (seeds once, then measures in place)
+
+perf-run-%:
+	$(PERF_COMPOSE) up -d --wait
+	@mkdir -p $(PERF_OUT)
+	LOREBASE_TEST_DATABASE_URL=$(PERF_URL) $(UV) run python tests/perf/bench.py \
+		--scale $(PERF_SCALE_$*) --extra-links 4 --iterations $(PERF_ITERATIONS) --warmup $(PERF_WARMUP) \
+		--branch-iterations 1 --seed-database perf_seed_$* --in-place --out $(PERF_OUT)/perf-$*.md
+
+perf-down: ## Stop the perf Postgres and delete its seeded datasets
+	$(PERF_COMPOSE) down -v
 
 test-changed: ## Run only the tests impacted by the current diff
 	$(UV) run python scripts/test_changed.py
