@@ -89,8 +89,8 @@ def profile_parquet_bytes(
 ) -> TableProfile:
     """Profile a Parquet file; ``ParquetUnavailableError`` without pyarrow."""
     try:
-        import pyarrow
-        import pyarrow.parquet as parquet
+        import pyarrow  # type: ignore[import-untyped]
+        import pyarrow.parquet as parquet  # type: ignore[import-untyped]
     except ImportError:
         raise ParquetUnavailableError(f"{name}: Parquet files need pyarrow") from None
     profiler = RecordProfiler(settings)
