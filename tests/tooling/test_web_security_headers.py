@@ -24,6 +24,8 @@ REQUIRED = [
     "--set",
     "secrets.values.apiKeyPepper=" + "p" * 32,
     "--set",
+    "secrets.values.webhookEncryptionKey=" + "w" * 32,
+    "--set",
     "web.enabled=true",
 ]
 

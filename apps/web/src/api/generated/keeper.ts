@@ -9670,6 +9670,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The Domain has the most webhooks allowed, or webhooks.encryption_key is not configured. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Invalid request. */
             422: {
                 headers: {

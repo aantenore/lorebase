@@ -465,11 +465,12 @@ internal service; redirects are never followed. Give the sender an `httpx.AsyncC
 with `trust_env=False`, so no proxy from the environment sits in between. `GET /webhooks` lists them (never the
 secret) and `DELETE /webhooks/{id}` removes one with its pending deliveries.
 
-The stored digest is enough to sign deliveries, so set `webhooks.encryption_key` (a `secret://`
-reference to at least 32 characters, the same for Keeper and Scribe) to keep it encrypted in the
-database (AES-256-GCM). Keeper then stores new keys encrypted, and each delivery pass encrypts up
-to `webhooks.batch` keys stored before, so existing webhooks keep working and receivers change
-nothing. To change the key, move the old value to `webhooks.previous_encryption_keys` and set the
+The stored digest is enough to sign deliveries, so it is kept encrypted in the database
+(AES-256-GCM) under `webhooks.encryption_key` (a `secret://` reference to at least 32 characters,
+the same for Keeper and Scribe; the compose stack and the Helm chart supply one). Without it Keeper
+refuses to create a webhook (409, `encryption_key_required`) unless `webhooks.allow_unsealed_keys`
+is true, which is for local development only. Each delivery pass encrypts up to `webhooks.batch`
+keys stored usable before, so existing webhooks keep working and receivers change nothing. To change the key, move the old value to `webhooks.previous_encryption_keys` and set the
 new one; the worker re-encrypts, and the old value can go once no webhook uses it. A key
 encrypted under a value that is no longer configured cannot sign: its deliveries fail with an
 error naming the setting until the value is configured again.

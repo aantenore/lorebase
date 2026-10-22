@@ -15,7 +15,12 @@ ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "deploy" / "helm" / "lorebase"
 PROFILES = CHART / "ci"
 HELM = shutil.which("helm")
-PEPPER = ["--set", "secrets.values.apiKeyPepper=" + "p" * 32]
+PEPPER = [
+    "--set",
+    "secrets.values.apiKeyPepper=" + "p" * 32,
+    "--set",
+    "secrets.values.webhookEncryptionKey=" + "w" * 32,
+]
 APP = "postgresql+asyncpg://lorebase_app:a@db.internal:5432/lorebase"
 OWNER = "postgresql+asyncpg://lorebase:o@db.internal:5432/lorebase"
 

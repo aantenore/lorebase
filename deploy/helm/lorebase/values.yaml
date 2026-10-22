@@ -71,7 +71,8 @@ containerSecurityContext:
 # LOREBASE_CONFIG. Same keys and defaults as config/lorebase.example.yaml; every key is optional.
 # Environment variables set by the chart override the file (precedence of the application):
 # database.dsn and read_dsn, keeper.host and port, keeper.reads.prefer_replica, logging.level,
-# telemetry.*, the API key pepper and the LLM settings of Scribe. Do not repeat those here.
+# telemetry.*, the API key pepper, webhooks.encryption_key and the LLM settings of Scribe. Do not
+# repeat those here.
 config:
   logging:
     # Structured logs for a log pipeline.
@@ -154,6 +155,12 @@ secrets:
     # Key (32 characters or more, for example `openssl rand -base64 48`) that encrypts the sign-in cookie and the
     # provider tokens held with a session. Wired only when sessions are enabled.
     sessionEncryptionKey: session-encryption-key
+    # Key (32 characters or more, for example `openssl rand -hex 32`) that seals the webhook signing keys
+    # stored in the database (secret://env/LOREBASE_WEBHOOK_KEY, webhooks.encryption_key), shared by Keeper
+    # and Scribe. Required: the chart refuses to render without it unless `config.webhooks.encryption_key`
+    # is set or `config.webhooks.allow_unsealed_keys: true` (local development only). Keep it: signing keys
+    # sealed under a lost key cannot be opened; rotate through webhooks.previous_encryption_keys.
+    webhookEncryptionKey: webhook-encryption-key
   # Values for the chart-managed Secret. Ignored when `existingSecret` is set. Prefer
   # `--set-file` or a values file kept out of git; never commit real values.
   values:
@@ -175,6 +182,8 @@ secrets:
     oidcClientSecret: ""
     # Session encryption key, 32 characters or more.
     sessionEncryptionKey: ""
+    # Key that seals the webhook signing keys, 32 characters or more.
+    webhookEncryptionKey: ""
   # Any further secret as ENV_NAME: value in the chart-managed Secret. Reference it from `config`
   # as secret://env/ENV_NAME (for example OIDC or hosted-embedding credentials). Exposed to Keeper and Scribe.
   extra: {}

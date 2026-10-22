@@ -342,6 +342,9 @@
             },
             "sessionEncryptionKey": {
               "type": "string"
+            },
+            "webhookEncryptionKey": {
+              "type": "string"
             }
           },
           "additionalProperties": false
@@ -377,6 +380,9 @@
               "type": "string"
             },
             "sessionEncryptionKey": {
+              "type": "string"
+            },
+            "webhookEncryptionKey": {
               "type": "string"
             }
           },

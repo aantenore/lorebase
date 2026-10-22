@@ -89,7 +89,7 @@ demo: ## Five-day demo on its own compose stack (project lorebase-demo; KEEP=1 l
 demo-down: ## Stop the demo stack and delete its data
 	@examples/five_day_demo/stack.sh down
 
-env: ## Create .env from .env.example with generated database passwords (keeps an existing one)
+env: ## Create .env from .env.example with generated passwords and webhook key (keeps an existing one)
 	@scripts/quickstart.sh env
 
 up: ## Build the images and start Postgres, migrations, Keeper and the web app; waits until healthy, prints the web URL

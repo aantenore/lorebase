@@ -12,3 +12,4 @@ secrets:
     # Maintenance role: owner of the tables, runs the migrations (needs CREATEROLE to create the role above).
     dbMaintenanceDsn: postgresql+asyncpg://lorebase:change-me@postgres.example.internal:5432/lorebase
     apiKeyPepper: change-me-change-me-change-me-change-me
+    webhookEncryptionKey: change-me-change-me-change-me-webhook

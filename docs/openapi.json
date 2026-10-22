@@ -5544,6 +5544,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The Domain has the most webhooks allowed, or webhooks.encryption_key is not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       },

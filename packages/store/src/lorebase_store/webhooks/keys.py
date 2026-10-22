@@ -4,9 +4,10 @@ The signing key of a webhook is `sha256(secret)` (`webhooks.signing`): whoever h
 sign deliveries. With `webhooks.encryption_key` set, it is stored sealed (AES-256-GCM under a
 key derived from that secret, `lorebase_store.keyring`) in `webhooks.sealed_key`, and
 `secret_hash` stays null. Without it, the key is stored usable in `secret_hash`, as before
-revision 0016; the delivery worker seals such rows once a key is configured
-(`seal_stored_keys`), so existing webhooks keep working through the change. Keys sealed under
-one of `previous_encryption_keys` still open and are sealed again under the current key.
+revision 0016 (Keeper does so only with `webhooks.allow_unsealed_keys`); the delivery worker
+seals such rows once a key is configured (`seal_stored_keys`), so existing webhooks keep
+working through the change. Keys sealed under one of `previous_encryption_keys` still open and
+are sealed again under the current key.
 """
 
 from __future__ import annotations

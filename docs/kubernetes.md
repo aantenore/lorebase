@@ -16,7 +16,7 @@ application's own `lorebase.yaml`, and the same environment variables.
 | Keeper (Deployment, Service, PDB, optional HPA) | on | Probes `/healthz` and `/readyz`, non-root, read-only root file system, topology spread |
 | Migration (Helm hook Job) | on | Sets up the application role (`db-roles` init container), then `alembic upgrade head` as the maintenance role, before Keeper rolls out ([database roles](#database-roles)) |
 | ConfigMap | on | The `config` values block, mounted as `/etc/lorebase/lorebase.yaml` |
-| Secret | on, unless `secrets.existingSecret` | DSNs, API key pepper, LLM key, web sign-in client secret and session key; never in the ConfigMap |
+| Secret | on, unless `secrets.existingSecret` | DSNs, API key pepper, webhook key, LLM key, web sign-in client secret and session key; never in the ConfigMap |
 | ServiceAccount | on | No API token mounted |
 | Scribe (Deployment, optional HPA, PDB) | off | `lorebase-scribe`, the job worker and scheduler ([scribe.md](scribe.md)) |
 | Herald, MCP over streamable HTTP (Deployment, Service, PDB, optional HPA) | off | |
@@ -58,7 +58,8 @@ kubectl create namespace lorebase
 kubectl -n lorebase create secret generic lorebase-secrets \
   --from-literal=db-dsn='postgresql+asyncpg://lorebase_app:<app password>@postgres.example.internal:5432/lorebase' \
   --from-literal=db-maintenance-dsn='postgresql+asyncpg://lorebase:<password>@postgres.example.internal:5432/lorebase' \
-  --from-literal=api-key-pepper="$(openssl rand -hex 32)"
+  --from-literal=api-key-pepper="$(openssl rand -hex 32)" \
+  --from-literal=webhook-encryption-key="$(openssl rand -hex 32)"
 
 # 4. Install with a profile (below) and your overrides.
 helm upgrade --install lorebase deploy/helm/lorebase -n lorebase \
@@ -91,6 +92,8 @@ Three layers, like compose:
    example hosted embedding credentials.
 
 The chart refuses to render when `keeper.auth.mode` needs an API key pepper and none is given, when no
+webhook key is given (`secrets.values.webhookEncryptionKey` or the `webhook-encryption-key` entry of an
+existing Secret; `config.webhooks.allow_unsealed_keys: true` skips it, for local development only), when no
 database is configured, when the application and maintenance roles are missing or the same
 ([database roles](#database-roles)), when `ollama` is on without `scribe`, and when the in-cluster
 Postgres has no pgvector image. Pods roll when the ConfigMap or the chart-managed Secret changes (checksum annotations).
@@ -114,6 +117,7 @@ secrets:
     dbDsn: postgresql+asyncpg://lorebase_app:<app password>@postgres.example.internal:5432/lorebase
     dbMaintenanceDsn: postgresql+asyncpg://lorebase:<password>@postgres.example.internal:5432/lorebase
     apiKeyPepper: <32 characters or more>
+    webhookEncryptionKey: <32 characters or more>
 ```
 
 ```bash
@@ -307,6 +311,9 @@ created as hooks so that they exist before a first install.
   check because it serves only the MCP endpoint. Set `herald.http.allowed_hosts` and `allowed_origins` in
   `config` for DNS rebinding protection behind your hostname.
 - API key mode needs the pepper (32 characters or more); changing it invalidates every issued key.
+- The webhook key (32 characters or more) seals the signing keys of webhooks in the database; Keeper and
+  Scribe read it as `webhooks.encryption_key`. Keep it: rotate it through `webhooks.previous_encryption_keys`
+  ([agents](agents.md)), never by replacing it alone.
 
 ### Network policy
 

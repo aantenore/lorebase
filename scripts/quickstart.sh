@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The local stack of the quickstart (docs/quickstart.md), in a few commands.
 #
-#   quickstart.sh env     create .env from .env.example with generated database passwords
-#                         (an existing .env is left as it is; empty or `change-me` passwords in
-#                         it are filled in)
+#   quickstart.sh env     create .env from .env.example with generated database passwords and
+#                         webhook key (an existing .env is left as it is; empty or `change-me`
+#                         values in it are filled in)
 #   quickstart.sh up      build the backend and web images from this checkout and start postgres,
 #                         db-roles, migrate, keeper and web; returns when both are healthy and
 #                         prints the URL of the web app
@@ -58,11 +58,13 @@ make_env() {
     (umask 077 && cp "$ROOT/.env.example" "$ENV_FILE")
     say "created $ENV_FILE from .env.example"
   fi
-  local name value
-  for name in POSTGRES_PASSWORD LOREBASE_APP_PASSWORD; do
+  local entry name value
+  # NAME:random bytes (hex encoded); the webhook key needs at least 32 characters.
+  for entry in POSTGRES_PASSWORD:24 LOREBASE_APP_PASSWORD:24 LOREBASE_WEBHOOK_KEY:32; do
+    name="${entry%%:*}"
     value="$(env_value "$name")"
     if [ -z "$value" ] || [ "$value" = "change-me" ]; then
-      set_env_value "$name" "$(openssl rand -hex 24)"
+      set_env_value "$name" "$(openssl rand -hex "${entry#*:}")"
       say "generated $name"
     fi
   done

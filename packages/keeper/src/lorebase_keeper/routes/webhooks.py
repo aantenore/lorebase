@@ -2,7 +2,8 @@
 
 Managing webhooks needs `domain.settings` (the `admin` role). A new webhook's secret is
 returned once; only its digest is stored (`lorebase_store.webhooks.signing`), sealed under
-`webhooks.encryption_key` when that is set (`lorebase_store.webhooks.keys`). Every change is
+`webhooks.encryption_key` (`lorebase_store.webhooks.keys`). Without that key a webhook is
+created only when `webhooks.allow_unsealed_keys` is set (local development). Every change is
 written to the audit log (`webhook.create`, `webhook.update`, `webhook.delete`) without the
 secret or the full URL. Deliveries are made by `lorebase_store.webhooks.deliver_pending`, run by
 a worker.
@@ -62,11 +63,19 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"model": Problem, "description": "Domain or webhook not found."},
     422: {"model": ValidationProblem, "description": "Invalid request."},
 }
-_CREATE_ERRORS: dict[int | str, dict[str, Any]] = {
+_CLEARANCE_ERRORS: dict[int | str, dict[str, Any]] = {
     **_ERRORS,
     403: {
         "model": Problem,
         "description": "The caller lacks domain.settings, or a clearance it gives the webhook.",
+    },
+}
+_CREATE_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_CLEARANCE_ERRORS,
+    409: {
+        "model": Problem,
+        "description": "The Domain has the most webhooks allowed, or webhooks.encryption_key "
+        "is not configured.",
     },
 }
 
@@ -147,6 +156,17 @@ def _out(row: WebhookRow) -> dict[str, Any]:
     }
 
 
+def _require_sealing(settings: WebhookSettings) -> None:
+    """409 unless signing keys are sealed, or storing them usable is explicitly allowed."""
+    if settings.encryption_key is None and not settings.allow_unsealed_keys:
+        raise ProblemError(
+            CONFLICT,
+            "Creating a webhook needs webhooks.encryption_key, which seals its signing key "
+            "(webhooks.allow_unsealed_keys allows it without, for local development only).",
+            extensions={"code": "encryption_key_required", "setting": "webhooks.encryption_key"},
+        )
+
+
 def _require_clearances(held: Clearance, tags: Iterable[str]) -> None:
     """403 unless `held` (the caller's clearance) covers, Domain-wide, every tag."""
     wanted = set(tags)
@@ -174,6 +194,7 @@ async def create_webhook(
     auth: AuthDep,
 ) -> WebhookCreated:
     """Register an endpoint for the Domain's events; the secret is returned once."""
+    _require_sealing(settings)
     problem = scheme_problem(body.url, settings)
     if problem is not None:
         raise invalid("/body/url", problem, "invalid_target")
@@ -227,7 +248,7 @@ async def list_webhooks(domain_id: str, access: Manage, store: StoreDep) -> Webh
     f"{BASE}/{{webhook_id}}",
     summary="Change the clearances of a webhook",
     response_model=WebhookOut,
-    responses=_CREATE_ERRORS,
+    responses=_CLEARANCE_ERRORS,
 )
 async def update_webhook(
     domain_id: str,
