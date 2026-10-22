@@ -48,6 +48,20 @@ narrow or reshape it. Model files are downloaded on first use into the library's
 directory (set `inference.embeddings.cache_dir` and
 `inference.local_extractors.<name>.cache_dir` to choose another, for example a volume).
 
+**Reasoning models.** Some local models (LFM 2.5, Qwen 3 and others) think before they answer
+and Ollama returns the thinking in a separate `reasoning` field. It still counts against
+`max_tokens`: with a low cap the answer can be empty, and the client reports "token limit
+reached before any answer". Raise `max_tokens`, or turn thinking off where the server supports
+it, with a field the client passes through as is:
+
+```yaml
+inference:
+  llm:
+    model: lfm25-bench-16k:latest
+    max_tokens: 4096
+    extra_body: {reasoning_effort: none}   # Ollama: no thinking
+```
+
 **Ollama for embeddings too**, instead of fastembed (no extra to install):
 
 ```yaml
@@ -107,9 +121,57 @@ inference:
         price_per_million_tokens: {input: <price>, output: <price>}
 ```
 
+`headers` and `extra_body` cover what a provider needs beyond the protocol: extra HTTP headers
+(values may be `secret://` references) and extra request fields merged into every request.
+The client keeps `Authorization`, `Content-Type`, `Accept`, `Host`, `Content-Length`, and the
+`model`, `messages`, `stream` and `response_format` fields to itself; settings that try to set
+them are refused at startup. A task routed to another `base_url` never inherits the default
+model's headers, as it never inherits its key.
+
 Hosted embeddings work the same way (`embeddings.provider: openai_compatible`, `base_url`,
 `api_key`, `model`, `dims`). The embedding model name keys the stored vectors, so switching
 model creates new vectors next to the old ones ([design 9.3](design.md#93-embedding-jobs)).
+
+## Anthropic
+
+Anthropic serves an OpenAI-compatible chat endpoint at `https://api.anthropic.com/v1/`, so
+Claude models need no proxy and no extra code. Checked live on 2026-10-22 with
+`claude-haiku-5-5` ([validation](validation.md#live-model-runs)):
+
+```yaml
+inference:
+  llm:
+    base_url: https://api.anthropic.com/v1/
+    model: claude-haiku-5-5
+    api_key: secret://env/ANTHROPIC_API_KEY          # or secret://file//run/secrets/anthropic
+    headers:
+      anthropic-workspace-id: secret://env/ANTHROPIC_WORKSPACE_ID   # organization-level keys only
+    temperature: null                  # current models refuse the parameter
+    json_schema_strict: true           # the endpoint requires strict: true
+    extra_body: {thinking: {type: disabled}}
+    max_tokens: 4096
+    price_per_million_tokens: {input: 0.10, output: 0.50}
+```
+
+What each line is for:
+
+- **`anthropic-workspace-id`.** A key that is not scoped to a workspace is refused with HTTP
+  400 ("must include the anthropic-workspace-id header") on every endpoint. Set the header,
+  or use a key created inside a workspace and leave `headers` out.
+- **`temperature: null`.** Current models answer HTTP 400 "`temperature` is deprecated for
+  this model"; null leaves the field out of the request.
+- **`json_schema_strict: true`.** The endpoint refuses `json_schema` without `strict: true`
+  and has no `json_object` mode. Strict schemas are limited to 24 optional properties: an
+  extraction schema over several Kinds has more, the request is refused, and the client steps
+  down to prompt-only mode for that job (two rejected requests, not billed; the answers are
+  still validated locally). Schemas within the limit are answered in `json_schema` mode.
+  `structured_output: json_mode` steps down to prompt-only mode at the first call.
+- **`thinking: disabled`.** Thinking is on by default for Haiku 5.5 and spends `max_tokens`
+  before the answer: with 1024 tokens every extraction answer was empty. With thinking off,
+  extraction answers took 1,700 to 4,100 output tokens; keep `max_tokens` at 4096.
+
+Anthropic has no embeddings endpoint: keep `fastembed` (or another provider) for embeddings.
+To send only some tasks there, put the same keys under `inference.llm.tasks.<task>`.
 
 ## Embeddings for search
 
@@ -167,8 +229,7 @@ dimension of both.
 
 ## LiteLLM for routing and non-compatible providers
 
-Providers that do not speak the protocol natively (Anthropic, Google, Amazon Bedrock, and
-others), or an organisation that wants central keys, budgets and fallbacks, put a LiteLLM
+Providers that do not speak the protocol natively (Google, Amazon Bedrock, and others), or an organisation that wants central keys, budgets and fallbacks, put a LiteLLM
 proxy in front. Lorebase treats it as one more compatible endpoint and never imports a
 provider library.
 
@@ -210,7 +271,8 @@ else, with `Authorization: Bearer <key>` only when a key is configured.
 
 | Endpoint | Chat | Embeddings | Verified |
 |----------|------|------------|----------|
-| Ollama (0.5 or later for `json_schema`) | yes | yes | live: chat with `json_schema` and embeddings, Ollama 0.32 |
+| Ollama (0.5 or later for `json_schema`) | yes | yes | live: chat with `json_schema` and embeddings, Ollama 0.32; extraction with LFM 2.5 8B on 2026-10-22 |
+| Anthropic (`https://api.anthropic.com/v1/`) | yes | no | live: extraction with `claude-haiku-5-5` on 2026-10-22, see [Anthropic](#anthropic) |
 | LiteLLM proxy | yes | yes | protocol level (mock server), not live |
 | vLLM, llama.cpp server, LM Studio | yes | where the server implements `/embeddings` | protocol level, not live |
 | Hosted OpenAI-compatible endpoints | yes | yes | protocol level, not live |
@@ -229,7 +291,8 @@ decreasing order of strength and validates the result locally, always:
 3. prompt only: no `response_format`, schema and a strict instruction in the system prompt.
 
 When the server answers HTTP 400 or 422 with an error that names the response format, the
-client steps down one mode and keeps it for that process (an unrelated 400, for example a
+client steps down one mode and keeps it for that model instance (an extraction job creates
+one) (an unrelated 400, for example a
 context overflow, is not mistaken for missing support). An answer that is not JSON, or does not
 satisfy the schema, triggers up to `repair_attempts` (default 1) repair calls that show the
 model what was wrong; if the answer is still invalid, `InvalidOutputError` is raised and the
@@ -297,10 +360,12 @@ every one can be set as `LOREBASE__INFERENCE__...` in the environment.
 | `llm.base_url` / `model` / `api_key` | `http://localhost:11434/v1` / `qwen2.5:7b-instruct` / none | aliases `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` |
 | `llm.structured_output` | `json_schema` | `json_schema` or `json_mode`; steps down on rejection |
 | `llm.repair_attempts` | 1 | 0 to 3 |
-| `llm.temperature`, `llm.max_tokens` | 0, unset | per call overridable through `ChatOptions` |
+| `llm.temperature`, `llm.max_tokens` | 0, unset | per call overridable through `ChatOptions`; `temperature: null` leaves it out |
+| `llm.json_schema_strict` | unset | `response_format.json_schema.strict`; unset leaves it out |
+| `llm.headers`, `llm.extra_body` | none | extra HTTP headers (secret references allowed) and request fields |
 | `llm.max_concurrency`, `llm.timeout_s` | 2, 120 | |
 | `llm.retry.max_retries` / `backoff_base_s` / `backoff_max_s` | 3 / 0.5 / 30 | |
-| `llm.tasks.<name>.*` | none | any of the `llm` keys above, per task; a task with another `base_url` uses only its own `api_key` |
+| `llm.tasks.<name>.*` | none | any of the `llm` keys above, per task; a task with another `base_url` uses only its own `api_key` and `headers` |
 | `embeddings.provider` / `model` / `dims` | `fastembed` / `BAAI/bge-small-en-v1.5` / 384 | |
 | `embeddings.batch_size` | 32 | texts per model call or request |
 | `embeddings.cache_dir`, `threads` | library defaults | fastembed |
@@ -317,9 +382,9 @@ every one can be set as `LOREBASE__INFERENCE__...` in the environment.
   without retries when it differs from `store.embeddings.dims`.
 - Query vectors use the same text path as stored ones: models that expect a query prefix
   (some BGE and E5 variants) are not given one.
-- `json_schema` is not strict mode: schemas are sent as given, and the local validation is the
-  guarantee. A server that rejects a particular schema feature in its message pins the process
-  to a lower mode until restart.
+- `json_schema` is not strict mode unless `json_schema_strict` is set: schemas are sent as
+  given, and the local validation is the guarantee. A server that rejects a particular schema
+  feature in its message pins that model instance to a lower mode.
 - `Retry-After` longer than `backoff_max_s` is cut to it; raise the cap to wait longer.
 - Usage is estimated (about four characters per token) when an endpoint reports none, so
   budgets from such endpoints are approximate.
