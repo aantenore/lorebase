@@ -1,0 +1,46 @@
+# Postgres for the large performance runs (`make perf-10m`): its own compose project, port and
+# volume, so the seeded dataset survives between runs and stays apart from other stacks.
+#
+#   docker compose -p lorebase-perf -f tests/perf/compose.yaml up -d --wait
+#   docker compose -p lorebase-perf -f tests/perf/compose.yaml down -v   # deletes the dataset
+#
+# Memory settings come from the environment (PERF_PG_*), defaults sized for a Docker VM of
+# 8 GiB; the run reports the values it measured with.
+services:
+  postgres:
+    image: ${PERF_PG_IMAGE:-pgvector/pgvector:pg16}
+    environment:
+      POSTGRES_USER: perf
+      POSTGRES_PASSWORD: ${PERF_PG_PASSWORD:-perf}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${PERF_PG_PORT:-55410}:5432"
+    shm_size: ${PERF_PG_SHM:-3g}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PERF_PG_SHARED_BUFFERS:-2GB}
+      - -c
+      - effective_cache_size=${PERF_PG_EFFECTIVE_CACHE_SIZE:-6GB}
+      - -c
+      - work_mem=${PERF_PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${PERF_PG_MAINTENANCE_WORK_MEM:-512MB}
+      - -c
+      - max_wal_size=${PERF_PG_MAX_WAL_SIZE:-16GB}
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - max_connections=50
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+    volumes:
+      - data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perf -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+volumes:
+  data:

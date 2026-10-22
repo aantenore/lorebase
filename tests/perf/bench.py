@@ -33,6 +33,7 @@ from sqlalchemy.pool import NullPool
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import harness
+import trace_overhead
 
 from lorebase_store import migrations, testing
 from lorebase_store.db import async_url, create_engine
@@ -113,6 +114,10 @@ class Options:
     overlay_changes: int
     seed_database: str | None
     out: Path | None
+    seed_only: bool = False
+    in_place: bool = False
+    trace_iterations: int = 200
+    trace_warmup: int = 20
 
 
 @dataclass
@@ -130,6 +135,7 @@ class Report:
     plans: dict[str, dict[str, list[str]]]
     hardware: dict[str, str]
     server: dict[str, str]
+    trace: trace_overhead.TraceOverhead | None = None
 
 
 def parse(argv: Sequence[str] | None = None) -> Options:
@@ -150,8 +156,28 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         default=None,
         help="keep the seeded dataset in this database and reuse it (see module doc)",
     )
+    parser.add_argument(
+        "--seed-only",
+        action="store_true",
+        help="with --seed-database: seed it when missing, measure nothing",
+    )
+    parser.add_argument(
+        "--trace-iterations",
+        type=int,
+        default=200,
+        help="timed Keeper requests per read with the agent trace off and on; 0 skips them",
+    )
+    parser.add_argument("--trace-warmup", type=int, default=20)
+    parser.add_argument(
+        "--in-place",
+        action="store_true",
+        help="with --seed-database: measure the seed database itself instead of a copy "
+        "(no second copy on disk; the run's commits stay on main, its branches are deleted)",
+    )
     parser.add_argument("--out", type=Path, default=None, help="write the markdown report here")
     args = parser.parse_args(argv)
+    if (args.seed_only or args.in_place) and args.seed_database is None:
+        parser.error("--seed-only and --in-place need --seed-database")
     return Options(
         args.scale,
         args.extra_links,
@@ -164,6 +190,10 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         args.overlay_changes,
         args.seed_database,
         args.out,
+        seed_only=args.seed_only,
+        in_place=args.in_place,
+        trace_iterations=args.trace_iterations,
+        trace_warmup=args.trace_warmup,
     )
 
 
@@ -226,6 +256,8 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
         if seeded is None:
             scale = harness.Scale(options.scale, options.extra_links)
             seeded = await harness.seed(engine, runtime, scale)
+        if options.in_place:
+            await harness.remove_perf_branches(engine, runtime)
         work = await harness.workload(engine, runtime)
         main = BranchLayout(harness.DOMAIN, "main")
         operations = harness.read_operations(work, runtime, main)
@@ -237,6 +269,11 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
             "owner": await plans_of(engine, operations, None),
             "rls": await plans_of(engine, operations, harness.READER_ROLE),
         }
+        trace = None
+        if options.trace_iterations > 0:
+            trace = await trace_overhead.measure_trace_overhead(
+                url, work, iterations=options.trace_iterations, warmup=options.trace_warmup
+            )
         timed = _timed_engine(url)
         try:
             branch = await harness.measure_branch_copy(
@@ -272,6 +309,10 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
                 )
         server = await harness.server_notes(engine)
         await harness.drop_reader(engine)
+        if options.in_place:
+            # The seed database keeps main (with this run's commits) and nothing else.
+            await harness.remove_perf_branches(engine, runtime)
+            await trace_overhead.delete_steps(url)
     finally:
         await engine.dispose()
     by_op: dict[str, dict[str, list[str]]] = {
@@ -291,6 +332,7 @@ async def benchmark(options: Options, url: str, seeded: harness.SeedReport | Non
         by_op,
         harness.hardware(),
         server,
+        trace,
     )
 
 
@@ -348,6 +390,7 @@ def render(report: Report) -> str:
         "\\* No budget in design 8.7; held to the budget of Links of a Record, the other "
         "per-Record index range read.",
     ]
+    lines += _trace_section(report)
     lines += [
         "",
         "## Writes (milliseconds)",
@@ -392,6 +435,34 @@ def render(report: Report) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _trace_section(report: Report) -> list[str]:
+    trace = report.trace
+    if trace is None:
+        return []
+    lines = [
+        "",
+        "## Agent trace overhead (milliseconds)",
+        "",
+        "Keeper requests in process (ASGI, authentication `none`, response cache off), each "
+        "read alternating call by call between a request without trace headers (off) and one "
+        f"that opts in (on), same keys, {report.options.trace_iterations} timed calls each. "
+        f"{trace.steps_written:,} of {trace.steps_expected:,} traced calls were written as "
+        "steps.",
+        "",
+        "| Request | off p50 | on p50 | off p95 | on p95 | off p99 | on p99 | overhead p50 "
+        "| overhead p95 |",
+        "|---------|--------:|-------:|--------:|-------:|--------:|-------:|-------------:"
+        "|-------------:|",
+    ]
+    for name, (off, on) in trace.reads.items():
+        lines.append(
+            f"| {name} | {_ms(off.p50)} | {_ms(on.p50)} | {_ms(off.p95)} | {_ms(on.p95)} "
+            f"| {_ms(off.p99)} | {_ms(on.p99)} | {_overhead(off.p50, on.p50)} "
+            f"| {_overhead(off.p95, on.p95)} |"
+        )
+    return lines
 
 
 def _overhead(copy: float, overlay: float) -> str:
@@ -477,13 +548,23 @@ def _copy_of(server: str, template: str) -> Iterator[str]:
         yield url
 
 
-def main(argv: Sequence[str] | None = None) -> Report:
+@contextmanager
+def _itself(server: str, name: str) -> Iterator[str]:
+    yield async_url(server).set(database=name).render_as_string(hide_password=False)
+
+
+def main(argv: Sequence[str] | None = None) -> Report | None:
     options = parse(argv)
     with testing.postgres_server() as server:
         seeded = None
         if options.seed_database is not None:
             seeded = _seeded_database(options, server, options.seed_database)
-            database = _copy_of(server, options.seed_database)
+            if options.seed_only:
+                return None
+            if options.in_place:
+                database = _itself(server, options.seed_database)
+            else:
+                database = _copy_of(server, options.seed_database)
         else:
             database = testing.scratch_database(server)
         with database as url:
