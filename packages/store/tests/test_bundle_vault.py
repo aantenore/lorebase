@@ -11,17 +11,21 @@ import pytest
 from lorebase_core.model import vault_reference
 from lorebase_store.bundle import (
     BundleError,
-    _bind_tokens,
     _check_vault_values,
+    _collect_holders,
     _Import,
     _vault_attributes,
 )
-from lorebase_store.vault import VaultState, VaultValue
 from lorebase_store.vault.transfer import (
+    Holder,
+    KeyLinks,
+    LineageEntry,
     VaultEntry,
     VaultTransferError,
-    exported_entry,
+    holders_problem,
     parse_entry,
+    parse_lineage,
+    parse_tombstone,
 )
 
 KIND = "knd_01JB8Z00000000000000000001"
@@ -84,7 +88,7 @@ def test_vault_entries_of_a_bundle_are_checked() -> None:
     assert parse_entry(_entry(value=_DROP, erased=True)).erased
     for line, reason in (
         (_entry(token="vlt_short"), "malformed token"),
-        (_entry(record_key=7), "must be strings"),
+        (_entry(record_key=7), "must be non-empty strings"),
         (_entry(erased=True), "either a value or erased"),
         (_entry(value=_DROP), "either a value or erased"),
         (_entry(value=None), "empty or a vault reference"),
@@ -95,30 +99,50 @@ def test_vault_entries_of_a_bundle_are_checked() -> None:
             parse_entry(line)
 
 
-def test_exported_entries_follow_the_vault_state() -> None:
-    value = VaultValue(VaultState.VALUE, KIND, EMAIL, "ada@example.com")
-    assert exported_entry(TOKEN, KIND, EMAIL, "P-1", value).as_json()["value"] == "ada@example.com"
-    unknown = exported_entry(TOKEN, KIND, EMAIL, "P-1", VaultValue(VaultState.ERASED))
-    assert unknown.as_json() == {
-        "token": TOKEN,
+def test_records_linked_by_key_changes_may_hold_one_token() -> None:
+    holders: dict[str, set[Holder]] = {}
+    _collect_holders(_record({EMAIL: vault_reference(TOKEN), NAME: "Ada"}), holders)
+    renamed = _record({EMAIL: vault_reference(TOKEN)})
+    renamed["body"]["key"] = "P-2"
+    _collect_holders(renamed, holders)
+    assert holders == {TOKEN: {Holder(KIND, EMAIL, "P-1"), Holder(KIND, EMAIL, "P-2")}}
+
+    links = KeyLinks()
+    problem = holders_problem(TOKEN, KIND, EMAIL, "P-1", holders[TOKEN], links)
+    assert problem is not None
+    assert "P-2" in problem
+    links.link(LineageEntry(KIND, "P-2", "P-1"))
+    assert holders_problem(TOKEN, KIND, EMAIL, "P-1", holders[TOKEN], links) is None
+    links.link(LineageEntry(KIND, "P-3", "P-2"))  # linked through P-2
+    assert holders_problem(TOKEN, KIND, EMAIL, "P-3", holders[TOKEN], links) is None
+    assert holders_problem(TOKEN, KIND, NAME, "P-1", holders[TOKEN], links) is not None
+    assert "no Record object" in str(holders_problem(TOKEN, KIND, EMAIL, "P-1", (), links))
+
+
+def test_lineage_and_tombstones_of_a_bundle_are_checked() -> None:
+    lineage = {"kind": KIND, "record_key": "P-2", "previous_key": "P-1"}
+    assert parse_lineage(lineage) == LineageEntry(KIND, "P-2", "P-1")
+    with pytest.raises(VaultTransferError, match="to itself"):
+        parse_lineage({**lineage, "previous_key": "P-2"})
+    with pytest.raises(VaultTransferError, match="non-empty strings"):
+        parse_lineage({**lineage, "kind": ""})
+
+    tombstone = {
         "kind": KIND,
         "attribute": EMAIL,
-        "record_key": "P-1",
-        "erased": True,
+        "record_key": None,
+        "fingerprint": "ab" * 32,
+        "fingerprint_key": "1/2",
     }
-    unavailable = VaultValue(VaultState.UNAVAILABLE, KIND, EMAIL)
-    with pytest.raises(VaultTransferError, match="not configured"):
-        exported_entry(TOKEN, KIND, EMAIL, "P-1", unavailable)
-    elsewhere = VaultValue(VaultState.VALUE, KIND, NAME, "x")
-    with pytest.raises(VaultTransferError, match="another Kind or Attribute"):
-        exported_entry(TOKEN, KIND, EMAIL, "P-1", elsewhere)
-
-
-def test_a_token_held_by_two_records_is_refused() -> None:
-    bindings: dict[str, Any] = {}
-    _bind_tokens(_record({EMAIL: vault_reference(TOKEN), NAME: "Ada"}), bindings)
-    assert list(bindings) == [TOKEN]
-    other = _record({EMAIL: vault_reference(TOKEN)})
-    other["body"]["key"] = "P-2"
-    with pytest.raises(BundleError, match="held by two"):
-        _bind_tokens(other, bindings)
+    assert parse_tombstone(tombstone, {"1"}).fingerprint == bytes.fromhex("ab" * 32)
+    assert parse_tombstone(tombstone, {"2", "1"}).record_key is None
+    with pytest.raises(VaultTransferError, match="token key '1/2'"):
+        parse_tombstone(tombstone, {"7"})
+    for changed, reason in (
+        ({"fingerprint_key": None}, "token key None"),
+        ({"fingerprint_key": "1"}, "token key '1'"),
+        ({"fingerprint": "ab"}, "malformed fingerprint"),
+        ({"record_key": ""}, "record_key"),
+    ):
+        with pytest.raises(VaultTransferError, match=reason):
+            parse_tombstone({**tombstone, **changed}, {"1"})
