@@ -5969,7 +5969,7 @@
             }
           },
           "403": {
-            "description": "The caller lacks the permission.",
+            "description": "The caller lacks source.sync, or pii.import for a Source mapping vault Attributes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6183,6 +6183,16 @@
           },
           "409": {
             "description": "Erasure by value needs the vault keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The vault of the Domain stayed locked.",
             "content": {
               "application/json": {
                 "schema": {

@@ -135,8 +135,9 @@ class MergeRequest:
     idempotency_key: str | None = None
     #: Delete the source branch after a successful merge (auto-close).
     delete_source: bool = False
-    #: Called with the target's schema and the merged schema when a clean merge would remove
-    #: sensitivity tags; raises to refuse it. Without it such merges are refused
+    #: Called with the target's schema and the merged schema before a clean merge commits;
+    #: raises to refuse it (the caller's checks: removed sensitivity tags, Sources feeding
+    #: vault Attributes). Without it merges that remove sensitivity tags are refused
     #: (`SensitivityLoweredError`).
     schema_guard: Callable[[Schema, Schema], Awaitable[None]] | None = None
 
@@ -413,13 +414,14 @@ class MergeService:
         target_schema: Schema | None = None
         if compiled is not None:
             target_schema = load_compiled(compiled.compiled)
-            lowered = lowered_tags(target_schema, prepared.schema)
-            if lowered:
+            if request.schema_guard is not None:
+                await request.schema_guard(target_schema, prepared.schema)
+            else:
                 # Fails closed: only a caller-supplied guard (which checks clearance) may
                 # let a merge remove sensitivity tags.
-                if request.schema_guard is None:
+                lowered = lowered_tags(target_schema, prepared.schema)
+                if lowered:
                     raise SensitivityLoweredError(t.value for t in lowered)
-                await request.schema_guard(target_schema, prepared.schema)
         merged = prepared.merged
         changes = [
             MaterializedChange(entry, prepared.bodies[(entry.partition, entry.key)])

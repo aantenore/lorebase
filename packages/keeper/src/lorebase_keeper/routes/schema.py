@@ -42,7 +42,7 @@ from lorebase_keeper.context import StoreAccess, StoreDep, parse_revision_id
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.reading.runtime import ReadRuntime, ReadRuntimeDep
-from lorebase_keeper.reading.sensitivity import clearance_of, default_schema, require_lowering
+from lorebase_keeper.reading.sensitivity import clearance_of, default_schema
 from lorebase_keeper.services import schema as service
 from lorebase_keeper.services.errors import (
     ProtectedBranchError,
@@ -52,6 +52,7 @@ from lorebase_keeper.services.errors import (
     violations_problem,
 )
 from lorebase_keeper.services.operation_catalog import builtin_definition
+from lorebase_keeper.services.pii_import import require_schema_change
 from lorebase_keeper.services.reads import ReadTarget, resolve_readable
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
@@ -490,7 +491,7 @@ async def apply_schema_changes(
             expected_head=expected,
             dry_run=body.dry_run,
             cascade=body.cascade,
-            guard=lambda old, new: require_lowering(
+            guard=lambda old, new: require_schema_change(
                 auth.authorizer, access.principal, domain_id, old, new
             ),
             cleared=clearance.everywhere,

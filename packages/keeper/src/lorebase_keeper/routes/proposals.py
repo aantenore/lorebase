@@ -59,12 +59,12 @@ from lorebase_keeper.reading.sensitivity import (
     default_schema,
     mask_conflict,
     masking_for,
-    require_lowering,
 )
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import proposals as service
 from lorebase_keeper.services.errors import commit_problem, findings_of
+from lorebase_keeper.services.pii_import import require_schema_change
 from lorebase_keeper.services.proposal_reads import (
     ConflictScope,
     conflict_scope,
@@ -848,7 +848,7 @@ async def merge_proposal(
             message=None if body is None else body.message,
             page_limit=keeper.pagination.default_limit,
             scope=scope,
-            schema_guard=lambda old, new: require_lowering(
+            schema_guard=lambda old, new: require_schema_change(
                 auth.authorizer, principal, domain_id, old, new
             ),
         )

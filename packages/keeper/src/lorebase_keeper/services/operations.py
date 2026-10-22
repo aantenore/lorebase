@@ -2,7 +2,8 @@
 
     resolve the Operation (stored, or built-in from the schema of the branch head)
     -> authorize (built-in: operation.execute; custom: operation.execute_custom and the
-       Operation's own `permissions`)
+       Operation's own `permissions`; built-in imports holding values of vault Attributes
+       also pii.import on the whole Domain, `services.pii_import`)
     -> expressions gate (only when `expressions_enabled` is off: preconditions are refused
        or, when settings allow, skipped with a warning; steps and expression review policies
        are refused)
@@ -135,6 +136,7 @@ from lorebase_keeper.services.operation_events import (
     execution_fields,
     write_side_effects,
 )
+from lorebase_keeper.services.pii_import import import_rows_vault_attributes
 from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.commit import (
     BranchNotMaterializedError,
@@ -510,6 +512,12 @@ async def _execute(
     resolved = resolve(schema, request.operation)
     permission, context = _permission(resolved, branch)
     await check(permission, context)
+    if resolved.builtin is not None and import_rows_vault_attributes(
+        schema, resolved.builtin, request.parameters
+    ):
+        # Imports check vault values against erased ones: refuse before anything is committed,
+        # so the outcome does not tell whether a guessed value was erased.
+        await check(Permission.PII_IMPORT, AccessContext())
     warnings: list[Finding] = []
     if resolved.custom is not None:
         _check_operation_permissions(resolved.custom, principal)
