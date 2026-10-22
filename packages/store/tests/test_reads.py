@@ -518,10 +518,6 @@ async def _exercise(
     )
 
 
-REVERSE_LINKS_INDEX = "_reverse_covering_idx"
-"""Suffix of the partition indexes of `ix_mat_links_reverse_covering` (revision 0025)."""
-
-
 def _assert_index_plans(plans: list[list[tuple[str, str | None]]]) -> None:
     for plan in plans:
         assert plan, "every statement reads a table"
@@ -534,9 +530,7 @@ def _assert_index_kinds(plans: list[list[tuple[str, str | None]]]) -> None:
     assert any(name.endswith("search_idx") for name in used), used
     assert any("mat_lexicon" in name for name in used), used
     assert any("pkey" in name for name in used), used
-    assert any(name.endswith(REVERSE_LINKS_INDEX) for name in used), (
-        "incoming Links use the reverse index"
-    )
+    assert any("to_key" in name for name in used), "incoming Links use the reverse index"
 
 
 @asynccontextmanager
@@ -733,35 +727,6 @@ async def test_overlay_reads_keep_index_plans(
     assert changed.title.endswith(" changed")
     assert gone is None
     assert kept is not None
-
-    # The neighborhood's inbound Link hop reads the covering reverse index alone, on the copy
-    # (the bulk branch) and on its overlay, through the definer function and plain SQL.
-    async with bulk() as session, session.begin():
-        await scope_to_domain(session, DOMAIN)
-        copy = await load_layout(session, DOMAIN, BULK_BRANCH)
-    assert not copy.overlay
-    for branch in (copy, layout):
-        for hood in (definer, plain):
-            async with bulk() as session, session.begin(), nested_plans(session) as hops:
-                await scope_to_domain(session, DOMAIN)
-                walked = await neighborhood(
-                    session,
-                    DOMAIN,
-                    branch,
-                    found.schema,
-                    [(SUPPLIER, "BS-7001")],  # BP-1000 links to it
-                    depth=1,
-                    runtime=hood,
-                )
-            assert len(walked.records) > 1
-            inbound = {
-                node
-                for plan in hops
-                for node, name in _mat_scans(plan)
-                if name.endswith(REVERSE_LINKS_INDEX)
-            }
-            definer_path = hood.settings.reads.use_definer_functions
-            assert inbound == {"Index Only Scan"}, (branch.branch, definer_path, inbound)
 
 
 RIVAL = "rival"

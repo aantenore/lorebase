@@ -27,14 +27,15 @@ Create Date: 2026-10-27 09:00:00.000000
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+import json
+import re
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
-
-from lorebase_store.commit.schema import load_compiled
-from lorebase_store.embeddings import template_fingerprints
 
 revision: str = "0024"
 down_revision: str | Sequence[str] | None = "0023"
@@ -69,6 +70,80 @@ _BACKFILL = sa.text(
 """A vector gets the fingerprint every live Record holding its object hash agrees on."""
 
 
+# Fingerprints as `lorebase_core.model.embedding` computed them at this revision (rendering
+# version 1), on the stored compiled schema document. Frozen here so the backfill does not
+# change with the application code.
+_RENDERING_VERSION = 1
+_KIND_FIELD = "_kind"
+_SPECIAL_FIELDS = frozenset({_KIND_FIELD, "_key"})
+_TOKEN = re.compile(r"\{\{|\}\}|\{([^{}]*)\}|[{}]")
+
+
+def _template_fields(source: str) -> tuple[str, ...] | None:
+    """Placeholder names in order of first use; `None` when the template cannot be parsed."""
+    names: list[str] = []
+    for match in _TOKEN.finditer(source):
+        token = match.group(0)
+        if token in ("{{", "}}"):
+            continue
+        name = match.group(1)
+        if name is None or not name.strip():
+            return None
+        names.append(name.strip())
+    return tuple(dict.fromkeys(names)) or None
+
+
+def _kind_fingerprint(kind: Mapping[str, Any]) -> str | None:
+    """Fingerprint of the Kind's embedding template; `None` without a usable one."""
+    search = kind.get("search") or {}
+    source = search.get("embedding_template")
+    if source is None or not source.strip():
+        return None
+    fields = _template_fields(source)
+    if fields is None:
+        return None
+    allow_sensitive = bool(search.get("embedding_sensitive"))
+    attributes: dict[str, str] = {}
+    for name in fields:
+        if name in _SPECIAL_FIELDS:
+            continue
+        attribute = next(
+            (a for a in (kind.get("attributes") or {}).values() if a["api_name"] == name), None
+        )
+        if (
+            attribute is None
+            or attribute.get("derivation_id") is not None
+            or attribute.get("vault") is True
+            or (attribute.get("sensitivity") and not allow_sensitive)
+        ):
+            return None
+        attributes[name] = attribute["id"]
+    label = kind.get("display_name") or kind["api_name"]
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "v": _RENDERING_VERSION,
+                "kind": kind["id"],
+                "template": source,
+                "attributes": attributes,
+                "label": label if _KIND_FIELD in fields else None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _template_fingerprints(compiled: Mapping[str, Any]) -> dict[str, str]:
+    """Fingerprint by Kind id of each Kind of a compiled schema with a usable template."""
+    found: dict[str, str] = {}
+    for kind in (compiled.get("kinds") or {}).values():
+        fingerprint = _kind_fingerprint(kind)
+        if fingerprint is not None:
+            found[kind["id"]] = fingerprint
+    return found
+
+
 def _templates(bind: sa.Connection) -> None:
     bind.execute(
         sa.text(
@@ -80,7 +155,7 @@ def _templates(bind: sa.Connection) -> None:
         sa.text("SELECT DISTINCT ON (schema_hash) schema_hash, compiled FROM mat_schema")
     ).all()
     for schema_hash, compiled in schemas:
-        fingerprints = template_fingerprints(load_compiled(compiled).kinds.values())
+        fingerprints = _template_fingerprints(compiled)
         if fingerprints:
             bind.execute(
                 _FILL,
