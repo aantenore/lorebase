@@ -15234,7 +15234,7 @@
             },
             "type": "array",
             "title": "Examples",
-            "description": "Keys of some of the Records."
+            "description": "Keys of some of the Records; none for an Attribute whose values the caller may not read."
           }
         },
         "type": "object",

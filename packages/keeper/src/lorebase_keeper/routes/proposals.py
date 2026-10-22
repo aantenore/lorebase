@@ -52,10 +52,11 @@ from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, Val
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.points import read_guard
 from lorebase_keeper.reading.sensitivity import (
+    Disclosure,
     Masking,
+    collapse_issues,
     conflict_hidden,
     default_schema,
-    generalize_issues,
     mask_conflict,
     masking_for,
     require_lowering,
@@ -471,6 +472,26 @@ def _conflict(row: ConflictRow, seen: _Visibility) -> ConflictOut:
     )
 
 
+async def _attempt(
+    view: service.AttemptView,
+    store: StoreDep,
+    guard: ReadGuard,
+    domain_id: str,
+    target: str,
+    keeper: KeeperSettings,
+) -> ConflictsOut:
+    """The attempt as the caller may see it: values masked by schema (`_conflicts`), then
+    the vault references left in it resolved as on every read (`Disclosure`)."""
+    seen = await _visibility(store, guard, domain_id, target, keeper)
+    attempt = _conflicts(view, seen)
+    schemas = () if seen.schema is None else (seen.schema,)
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        disclosure = Disclosure(session, domain_id, schemas, seen.masking, store.runtime.vault)
+        body = await disclosure.model(attempt)
+    return ConflictsOut.model_validate_json(body)
+
+
 def _conflicts(view: service.AttemptView, seen: _Visibility) -> ConflictsOut:
     hidden = {row.fingerprint for row in view.conflicts if seen.hidden(row.payload)}
     shown = {row.fingerprint for row in view.conflicts} - hidden
@@ -568,7 +589,7 @@ async def _store_problem(
         error,
         max_issues=1,
         retry_after_s=retry_after_s,
-        locate=lambda issues: findings_of(generalize_issues(issues, schemas, visible.masking)),
+        locate=lambda issues: findings_of(collapse_issues(issues, schemas, visible.masking)),
     )
 
 
@@ -837,10 +858,7 @@ async def merge_proposal(
             keeper.branches.lock_retry_after_s,
             lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
         ) from None
-    attempt = _conflicts(
-        outcome.view,
-        await _visibility(store, guard, domain_id, proposal.target_ref, keeper),
-    )
+    attempt = await _attempt(outcome.view, store, guard, domain_id, proposal.target_ref, keeper)
     annotate(
         request,
         action="proposal.merge",
@@ -914,7 +932,7 @@ async def list_conflicts(
             keeper.branches.lock_retry_after_s,
             lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
         ) from None
-    return _conflicts(view, await _visibility(store, guard, domain_id, proposal.target_ref, keeper))
+    return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper)
 
 
 @router.post(
@@ -1029,4 +1047,4 @@ async def resolve_conflicts(
         conflicts=[item.fingerprint for item in body.resolutions],
         attempt=view.attempt.id,
     )
-    return _conflicts(view, await _visibility(store, guard, domain_id, proposal.target_ref, keeper))
+    return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper)

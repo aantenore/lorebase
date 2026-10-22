@@ -448,7 +448,7 @@ async def test_uncleared_callers_learn_nothing_about_sensitive_values(seeded: Se
         supplier = response.json()["health"]
         issues = {(i["code"], i["attribute"]): i for i in supplier["violations"]["issues"]}
         # vat_number is confidential: its issue does not tell what is wrong with the value
-        assert issues[("value.invalid", "vat_number")]["examples"] == ["S-1003"]
+        assert issues[("value.invalid", "vat_number")]["examples"] == []
         assert ("value.type", "vat_number") not in issues
         assert issues[("value.pattern", "country")]["examples"] == ["S-1003"]
         # which Records share a VAT number is not listed, only how many there are
@@ -468,7 +468,7 @@ async def test_uncleared_callers_learn_nothing_about_sensitive_values(seeded: Se
             )
         ).text
         assert "- vat_number [unique]: 1 groups, 2 Records (not listed: sensitive)" in text_
-        assert "- value.invalid on vat_number: 1 (e.g. S-1003)" in text_
+        assert "- value.invalid on vat_number: 1\n" in text_
         assert "S-1006" not in text_
 
 

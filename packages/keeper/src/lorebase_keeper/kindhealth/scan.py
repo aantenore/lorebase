@@ -172,10 +172,12 @@ async def validate_records(
     total: int,
     settings: HealthSettings,
     generalize: Callable[[list[Issue]], list[Issue]] | None = None,
+    hidden: Callable[[Attribute], bool] = lambda a: False,
 ) -> ViolationReport:
     """Re-validate the Records of a Kind with `validate_record` against the branch's schema.
     `generalize` rewrites the issues of each Record before they are grouped (issues about
-    values the caller may not read lose their specific code)."""
+    values the caller may not read lose their specific code); issues about a `hidden`
+    Attribute list no Record keys, which would tell which values fail the rule."""
     r = where.records
     step = max(1, math.ceil(total / settings.max_records_validated))
     checked = invalid = 0
@@ -211,7 +213,11 @@ async def validate_records(
                 label = (issue.code.value, name)
                 entry = groups[label]
                 entry[0] += 1
-                if label not in seen and len(entry[1]) < settings.examples_per_issue:
+                if (
+                    label not in seen
+                    and len(entry[1]) < settings.examples_per_issue
+                    and not (attribute is not None and hidden(attribute))
+                ):
                     entry[1].append(key)
                 seen.add(label)
         last = rows[-1][0]

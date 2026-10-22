@@ -85,6 +85,7 @@ async def scan_branch(
                         total,
                         settings,
                         lambda issues: generalize_issues(issues, (schema,), masking),
+                        partial(_hidden, masking, kind),
                     ),
                     duplicates=await scan.find_duplicates(
                         session,

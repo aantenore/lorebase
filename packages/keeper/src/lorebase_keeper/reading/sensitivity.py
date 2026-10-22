@@ -28,7 +28,10 @@ otherwise).
   Attribute are cleared for the caller, by `erased_value` when it was erased, and by
   `masked_value` otherwise (unknown tokens and keys that are not configured included). A read
   path that forgets to mask still never discloses a vault value, and cached bodies hold
-  tokens, not personal data, so an erasure takes effect on the next read.
+  tokens, not personal data, so an erasure takes effect on the next read. References are
+  found in structured data only, never by matching text: a markdown body is cached as an
+  envelope (`deferred_markdown`) whose references were swapped for unguessable placeholders
+  before rendering, so a stored string that looks like a reference stays a string.
 
 Filtering, ordering and grouping on a sensitive Attribute need the clearance (403
 otherwise); on a vault Attribute they are refused (422): its stored values are tokens.
@@ -36,7 +39,10 @@ otherwise); on a vault Attribute they are refused (422): its stored values are t
 **Validation issues.** The code of an issue about a value (`value.pattern`, `value.enum_values`,
 ...) tells what the value looks like. Issues about values of an Attribute the caller may not
 read are reported with the generic `value.invalid` and a message without the rule
-(`generalize_issues`); path, Kind, key and Attribute stay.
+(`generalize_issues`); path, Kind, key and Attribute stay. Where stored values are revalidated
+(schema changes), such issues are collapsed into one per Kind and Attribute with a count and
+no Record key or path (`collapse_issues`), so tightening a rule cannot test values Record by
+Record.
 """
 
 from __future__ import annotations
@@ -44,9 +50,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from threading import Lock
 from types import MappingProxyType
 from typing import Any
@@ -87,7 +94,7 @@ from lorebase_keeper.settings import SensitivitySettings
 from lorebase_store.materialize.rows import PartitionType, parse_partition
 from lorebase_store.materialize.sensitivity import default_branch_schema
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.vault import VaultKeys, VaultState, open_values
+from lorebase_store.vault import VaultKeys, VaultState, VaultValue, open_values
 
 CLEARANCES: Mapping[Sensitivity, Permission] = MappingProxyType(
     {
@@ -99,7 +106,6 @@ CLEARANCES: Mapping[Sensitivity, Permission] = MappingProxyType(
 """The permission that clears each sensitivity tag."""
 
 _REFERENCE_MARK = json.dumps(VAULT_KEY).encode()
-_TEXT_REFERENCE = re.compile(r'\{\s*"\$vault"\s*:\s*"(vlt_[0-9a-f]{32})"\s*\}')
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,31 +428,34 @@ class Disclosure:
 
     async def send(self, body: bytes, media_type: str) -> bytes:
         """A body about to be sent, with its vault references resolved: JSON documents are
-        parsed, other text (markdown) has the JSON form of each reference replaced."""
+        parsed, markdown is unwrapped from its envelope (`deferred_markdown`) with each
+        placeholder replaced; other bodies are sent as they are."""
+        kind = media_type.split(";")[0].strip()
+        if kind == "text/markdown":
+            return await self.markdown(body)
         if _REFERENCE_MARK not in body:
             return body
-        kind = media_type.split(";")[0].strip()
         if kind == "application/json" or kind.endswith("+json"):
             return await self.body(body)
         if kind in ("application/x-ndjson", "application/jsonl"):
             lines = [await self.body(line) if line else line for line in body.split(b"\n")]
             return b"\n".join(lines)
-        return await self.text(body)
+        return body
 
-    async def text(self, body: bytes) -> bytes:
-        """Text with every JSON-rendered reference replaced by what the caller may see."""
-        content = body.decode()
-        tokens = {m.group(1) for m in _TEXT_REFERENCE.finditer(content)}
-        if not tokens:
-            return body
-        shown = await self._shown(tokens)
-
-        def render(match: re.Match[str]) -> str:
-            value = shown[match.group(1)]
+    async def markdown(self, envelope: bytes) -> bytes:
+        """The markdown of an envelope made by `deferred_markdown`, each placeholder replaced
+        by what the caller may see of its reference."""
+        document = json.loads(envelope)
+        text: str = document["markdown"]
+        slots: dict[str, str] = document["slots"]
+        if not slots:
+            return text.encode()
+        shown = await self._shown(set(slots.values()))
+        for placeholder, token in slots.items():
+            value = shown[token]
             plain = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-            return markdown_text(plain)
-
-        return _TEXT_REFERENCE.sub(render, content).encode()
+            text = text.replace(placeholder, markdown_text(plain))
+        return text.encode()
 
     async def body(self, body: bytes) -> bytes:
         """A JSON body with its vault references resolved; unchanged when it holds none."""
@@ -471,23 +480,45 @@ class Disclosure:
             container[slot] = shown[token]
         return True
 
+    async def slots(self, slots: Sequence[tuple[Any, Any, str, str]]) -> None:
+        """Resolve, in place, the references at `(container, key, Kind id, Attribute id)`:
+        each one is shown only when its vault row belongs to that Kind and Attribute (the
+        mask otherwise), so a reference claimed in the wrong place opens nothing."""
+        found = [
+            (container, slot, token, (kind_id, attribute_id))
+            for container, slot, kind_id, attribute_id in slots
+            if (token := vault_token(container[slot])) is not None
+        ]
+        if not found:
+            return
+        opened = await open_values(
+            self._session, self._domain_id, {token for _, _, token, _ in found}, self._keys
+        )
+        for container, slot, token, where in found:
+            value = opened[token]
+            if (value.kind_id, value.attribute_id) == where:
+                container[slot] = self._show(value)
+            else:
+                note_sensitive("masked")
+                container[slot] = self._masking.settings.masked_value
+
     async def _shown(self, tokens: set[str]) -> dict[str, JsonValue]:
         """What the caller sees for each token."""
         opened = await open_values(self._session, self._domain_id, tokens, self._keys)
+        return {token: self._show(found) for token, found in opened.items()}
+
+    def _show(self, found: VaultValue) -> JsonValue:
+        """What the caller sees of one opened vault row."""
         settings = self._masking.settings
-        out: dict[str, JsonValue] = {}
-        for token, found in opened.items():
-            if not self._cleared(found.kind_id, found.attribute_id):
-                note_sensitive("masked")
-                out[token] = settings.masked_value
-            elif found.state is VaultState.VALUE:
-                note_sensitive("shown")
-                out[token] = found.value
-            elif found.state is VaultState.ERASED:
-                out[token] = settings.erased_value
-            else:
-                out[token] = settings.masked_value
-        return out
+        if not self._cleared(found.kind_id, found.attribute_id):
+            note_sensitive("masked")
+            return settings.masked_value
+        if found.state is VaultState.VALUE:
+            note_sensitive("shown")
+            return found.value
+        if found.state is VaultState.ERASED:
+            return settings.erased_value
+        return settings.masked_value
 
     def _cleared(self, kind_id: str | None, attribute_id: str | None) -> bool:
         """Whether the caller may read a value of the vault row's Kind and Attribute: `pii`,
@@ -502,6 +533,33 @@ class Disclosure:
             if attribute is not None:
                 tags |= set(attribute.sensitivity)
         return self._masking.clearance.covers(tags, (kind_id,))
+
+
+def deferred_markdown(data: Any, render: Callable[[Any], str]) -> bytes:
+    """The envelope of the markdown `render(data)`, for a cache that must hold references,
+    not values: every vault reference inside `data` (dicts, lists, tuples, dataclasses) is
+    swapped for a placeholder made with a random nonce before rendering, so no stored text can
+    forge one; `Disclosure.markdown` puts what the caller may see in its place when sent."""
+    nonce = secrets.token_hex(16)
+    slots: dict[str, str] = {}
+
+    def swap(value: Any) -> Any:
+        token = vault_token(value)
+        if token is not None:
+            placeholder = f"LBVAULT{nonce}N{len(slots):06d}E"
+            slots[placeholder] = token
+            return placeholder
+        if isinstance(value, Mapping):
+            return {key: swap(item) for key, item in value.items()}
+        if isinstance(value, list | tuple):
+            return type(value)(swap(item) for item in value)
+        if is_dataclass(value) and not isinstance(value, type):
+            changed = {f.name: swap(getattr(value, f.name)) for f in fields(value) if f.init}
+            return replace(value, **changed)
+        return value
+
+    text = render(swap(data))
+    return json.dumps({"markdown": text, "slots": slots}, ensure_ascii=False).encode()
 
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]<>()#+!|~])")
@@ -614,6 +672,8 @@ GENERALIZED_CODES: frozenset[IssueCode] = frozenset(
         IssueCode.VALUE_UNIQUE,
         IssueCode.VALUE_REFERENCE_MISSING,
         IssueCode.VALUE_VAULT_REFERENCE,
+        IssueCode.VALUE_VAULT_UNAVAILABLE,
+        IssueCode.VALUE_VAULT_ERASED,
         IssueCode.RECORD_TRAIT_CONFORMANCE,
     }
 )
@@ -640,6 +700,41 @@ def generalize_issues(
                     }
                 )
         out.append(issue)
+    return out
+
+
+def collapse_issues(
+    issues: Iterable[Issue], schemas: Sequence[Schema], masking: Masking
+) -> list[Issue]:
+    """`issues` from revalidating stored values, where every issue about an Attribute the
+    caller may not read (whatever its code) is folded into one `value.invalid` issue per Kind
+    or Relation and Attribute, with the number of issues in `details.count` and no Record key
+    or path: which Records fail a new rule would test their values one by one. The other
+    issues are left as they are."""
+    out: list[Issue] = []
+    folded: dict[tuple[str | None, str | None, str], int] = {}
+    counts: dict[int, int] = {}
+    for issue in issues:
+        name = None if issue.attribute is None else _issue_hidden(issue, schemas, masking)
+        if name is None or issue.attribute is None:
+            out.append(issue)
+            continue
+        group = (issue.kind, issue.relation, issue.attribute)
+        if group not in folded:
+            folded[group] = len(out)
+            out.append(
+                Issue(
+                    code=IssueCode.VALUE_INVALID,
+                    message=f"stored values of {name!r} are not valid",
+                    kind=issue.kind,
+                    relation=issue.relation,
+                    attribute=issue.attribute,
+                )
+            )
+        position = folded[group]
+        counts[position] = counts.get(position, 0) + 1
+    for position, count in counts.items():
+        out[position] = out[position].model_copy(update={"details": {"count": count}})
     return out
 
 
@@ -678,7 +773,7 @@ def _element_attributes(
     try:
         parsed = parse_partition(partition)
     except ValueError:
-        return None
+        return {}, ()  # unknown: masked unless the caller is cleared for everything
     if parsed.type is PartitionType.SCHEMA:
         return None
     if schema is None:
