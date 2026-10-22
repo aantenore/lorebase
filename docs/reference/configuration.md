@@ -776,6 +776,16 @@ Pages of a branch log
 | `read.log.default_limit` | `50` |  |
 | `read.log.max_limit` | `500` |  |
 
+### `read.history`
+
+Per-Record history pages and lineage
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `read.history.default_limit` | `50` |  |
+| `read.history.max_limit` | `500` |  |
+| `read.history.lineage_max_changes` | `10000` | newest changes of a Record read to attribute its values |
+
 ## `read` (continued)
 
 | Setting | Default | Description |

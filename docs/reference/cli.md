@@ -788,6 +788,8 @@ $ lorebase record [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `get`: Show one Record with its values.
+* `history`: Show the changes of one Record, newest...
+* `lineage`: Show where each current value of one...
 * `list`: List the Records of a Kind.
 
 #### `lorebase record get`
@@ -812,6 +814,53 @@ $ lorebase record get [OPTIONS] {KIND} {KEY}
 * `--at <str>`: Revision id or tag to read at (time travel).
 * `--links`: Add Link counts per Relation.
 * `--lineage`: Add where each value came from.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase record history`
+
+Show the changes of one Record, newest first (one page).
+
+**Usage**:
+
+```console
+$ lorebase record history [OPTIONS] {KIND} {KEY}
+```
+
+**Arguments**:
+
+* `KIND`: Kind api name.  [required]
+* `KEY`: Record key.  [required]
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--values`: Add the value before and after each change.
+* `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
+* `--cursor <str>`: Continue after this page&#x27;s `next_cursor`.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase record lineage`
+
+Show where each current value of one Record came from.
+
+**Usage**:
+
+```console
+$ lorebase record lineage [OPTIONS] {KIND} {KEY}
+```
+
+**Arguments**:
+
+* `KIND`: Kind api name.  [required]
+* `KEY`: Record key.  [required]
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 
