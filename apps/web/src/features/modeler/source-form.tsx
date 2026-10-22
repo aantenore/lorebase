@@ -32,6 +32,7 @@ import {
 } from './form-helpers';
 import { KeyInput } from './key-input';
 import { ListInput } from './list-input';
+import { SourcePreview } from './source-preview-panel';
 import { TransformsEditor } from './transform-editor';
 import { transformsOf } from './transform-edits';
 
@@ -761,6 +762,9 @@ function SourceEditor({
       </Section>
       <Section title="Sync and merge">
         <Sync source={source} path={path} issues={issues} change={change} />
+      </Section>
+      <Section title="Preview">
+        <SourcePreview name={name} source={source} document={document} />
       </Section>
     </div>
   );

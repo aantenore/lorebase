@@ -4,6 +4,7 @@ import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
 import { Section } from '@/ui/layout';
 import { CelField } from './cel-field';
+import { DerivationPreview } from './derivation-preview';
 import type { SchemaDocument } from './document';
 import { ElementName, ElementPicker, StatusAndDescription } from './element-controls';
 import {
@@ -29,6 +30,8 @@ type Doc = Record<string, unknown>;
 
 interface Props {
   document: SchemaDocument;
+  /** Whether the named Derivation is saved on the Branch exactly as shown, so it can be previewed. */
+  saved?: (name: string) => boolean;
   issues: SchemaIssue[];
   edit: Edit;
   ids: ElementIds;
@@ -306,6 +309,7 @@ function DerivationEditor({
   issues,
   edit,
   onSelect,
+  canPreview,
 }: {
   name: string;
   derivation: Doc;
@@ -313,6 +317,7 @@ function DerivationEditor({
   issues: SchemaIssue[];
   edit: Edit;
   onSelect: (name: string | undefined) => void;
+  canPreview: boolean;
 }) {
   const path = `derivations/${name}`;
   const at = `${path}/definition`;
@@ -411,12 +416,27 @@ function DerivationEditor({
           )}
         </div>
       </Section>
+      <Section title="Preview">
+        {!canPreview ? (
+          <p className="text-sm text-muted">
+            Save the change set first: the preview reads what the Derivation computes as saved on
+            the Branch.
+          </p>
+        ) : asText(definition['kind']) === '' || asText(definition['attribute']) === '' ? (
+          <p className="text-sm text-muted">Choose the target Attribute to preview its values.</p>
+        ) : (
+          <DerivationPreview
+            kind={asText(definition['kind'])}
+            attribute={asText(definition['attribute'])}
+          />
+        )}
+      </Section>
     </div>
   );
 }
 
 /** Derivation editor: expression, aggregate and path variants with their target. */
-export function DerivationsForm({ document, issues, edit, ids, selected, onSelect }: Props) {
+export function DerivationsForm({ document, saved, issues, edit, ids, selected, onSelect }: Props) {
   const derivations = document.derivations ?? {};
   const names = Object.keys(derivations);
   const name = selected !== undefined && selected in derivations ? selected : names[0];
@@ -450,6 +470,7 @@ export function DerivationsForm({ document, issues, edit, ids, selected, onSelec
           issues={issues}
           edit={edit}
           onSelect={onSelect}
+          canPreview={saved?.(name) ?? false}
         />
       )}
     </div>

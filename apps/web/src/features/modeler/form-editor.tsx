@@ -31,6 +31,8 @@ export interface FormEditorProps {
   locked: boolean;
   /** Whether an Operation is saved on the Branch exactly as shown, so it can be dry run. */
   savedOperation?: (name: string) => boolean;
+  /** Whether a Derivation is saved on the Branch exactly as shown, so it can be previewed. */
+  savedDerivation?: (name: string) => boolean;
 }
 
 /** Form view of the schema document: one editor per element type. */
@@ -41,6 +43,7 @@ export function FormEditor({
   ids,
   locked,
   savedOperation,
+  savedDerivation,
 }: FormEditorProps) {
   const [tab, setTab] = useState<FormTab>('kinds');
   const [selected, setSelected] = useState<Partial<Record<FormTab, string>>>({});
@@ -66,7 +69,12 @@ export function FormEditor({
         {...(savedOperation === undefined ? {} : { saved: savedOperation })}
       />
     ),
-    derivations: <DerivationsForm {...props('derivations')} />,
+    derivations: (
+      <DerivationsForm
+        {...props('derivations')}
+        {...(savedDerivation === undefined ? {} : { saved: savedDerivation })}
+      />
+    ),
     sources: <SourcesForm {...props('sources')} />,
   };
 
