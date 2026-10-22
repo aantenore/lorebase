@@ -10,7 +10,10 @@ that never matched are returned as unmatched.
 
 `complete_provenance` attributes every change of a merge Revision: values taken from the
 source keep their provenance, values decided by a resolution get the provenance entry of that
-resolution (`merge_resolution`, design 6.10) and the rest the merge's own entry.
+resolution (`merge_resolution`, design 6.10) and the rest the merge's own entry. Only the
+Attributes a change sets are attributed (`taken_provenance`): an element taken whole from the
+source brings the source's whole Lineage, and its unchanged values keep the Revision that last
+changed them on the target.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ __all__ = [
     "complete_provenance",
     "compute_attempt",
     "decisions_of",
+    "taken_provenance",
 ]
 
 #: Grouped kinds whose custom resolution may give values for some members only.
@@ -260,6 +264,32 @@ def _values(objects: ObjectStore, digest: bytes | None) -> Mapping[str, Any] | N
     return values if isinstance(values, dict) else {}
 
 
+def _changed(entry: ChangesetEntry, objects: ObjectStore) -> list[str] | None:
+    """Attributes whose value the change sets; None for schema elements and deletions."""
+    if entry.partition == PARTITION_SCHEMA or entry.new_hash is None:
+        return None
+    return changed_attributes(
+        _values(objects, entry.old_hash), _values(objects, entry.new_hash) or {}
+    )
+
+
+def _restricted(entry: ChangesetEntry, changed: list[str] | None) -> dict[str, str]:
+    if changed is None:
+        return dict(entry.provenance)
+    kept = {*changed, ELEMENT_PROVENANCE_KEY}
+    return {a: p for a, p in entry.provenance.items() if a in kept}
+
+
+def taken_provenance(
+    entries: Sequence[ChangesetEntry], objects: ObjectStore
+) -> list[ChangesetEntry]:
+    """Entries whose provenance names only the Attributes they change (and the element key);
+    schema elements and deletions are kept as they are."""
+    return [
+        replace(entry, provenance=_restricted(entry, _changed(entry, objects))) for entry in entries
+    ]
+
+
 def complete_provenance(
     entries: Sequence[ChangesetEntry],
     objects: ObjectStore,
@@ -270,7 +300,8 @@ def complete_provenance(
     """Entries whose provenance covers every changed Attribute; returns the decisions used.
 
     `decision_ids` maps decision fingerprints to provenance entry ids; `fallback` is the id
-    used for changes that neither the source nor a decision accounts for.
+    used for changes that neither the source nor a decision accounts for. Provenance of
+    Attributes a change leaves as they are is dropped (`taken_provenance`).
     """
     index = _index(decisions)
     used: set[str] = set()
@@ -286,12 +317,9 @@ def complete_provenance(
 
     completed: list[ChangesetEntry] = []
     for entry in entries:
-        provenance = dict(entry.provenance)
-        if entry.partition == PARTITION_SCHEMA or entry.new_hash is None:
-            changed: list[str] = []
-        else:
-            new_values = _values(objects, entry.new_hash) or {}
-            changed = changed_attributes(_values(objects, entry.old_hash), new_values)
+        found = _changed(entry, objects)
+        provenance = _restricted(entry, found)
+        changed = found or []
         for attribute in changed:
             chosen = decided(entry.partition, entry.key, attribute)
             if chosen is not None:

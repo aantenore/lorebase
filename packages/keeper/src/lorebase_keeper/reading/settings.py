@@ -96,6 +96,21 @@ class DiffSettings(SectionModel):
 class HistorySettings(Bounds):
     """Per-Record history and lineage (`.../records/{key}/history` and `/lineage`)."""
 
+    lineage_scan_changes: int = Field(
+        default=1000,
+        ge=1,
+        description="Newest changes of a Record lineage searches for the Revision behind a "
+        "value, or the change that created the Record, when the materialized row does not name "
+        "them (rows written before migration 0032 and not yet backfilled); older ones name no "
+        "Revision.",
+    )
+    lineage_count_max: int = Field(
+        default=10_000,
+        ge=1,
+        description="Changes of a Record lineage counts; beyond, `changes` is this bound and "
+        "`changes_truncated` is true.",
+    )
+
 
 class ReadSettings(SectionModel):
     """Bounds of the read path."""

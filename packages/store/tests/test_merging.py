@@ -36,6 +36,7 @@ from lorebase_store.merging import (
     check_resolution,
     complete_provenance,
     compute_attempt,
+    taken_provenance,
 )
 
 from .support import ident
@@ -248,6 +249,26 @@ def test_complete_provenance_attributes_every_change() -> None:
     assert dict(completed[0].provenance) == {NAME: "prv_theirs", VAT: "prv_resolution"}
     assert dict(completed[1].provenance) == {ELEMENT_PROVENANCE_KEY: "prv_merge"}
     assert used == {"f" * 64}
+
+
+def test_merges_attribute_only_the_values_they_change() -> None:
+    objects = InMemoryObjectStore()
+    old = objects.put(ObjectType.RECORD, supplier("S-1", "IT001", "Old").content())
+    new = objects.put(ObjectType.RECORD, supplier("S-1", "IT001", "New").content())
+    partition = kind_partition(SUPPLIER)
+    # Taken whole from the source: the source's whole Lineage comes with it.
+    whole = {CODE: "prv_code", VAT: "prv_vat", NAME: "prv_name"}
+    entries = [
+        ChangesetEntry(partition, "S-1", old, new, whole),
+        ChangesetEntry(partition, "S-2", None, new, whole),
+        ChangesetEntry(partition, "S-9", old, None, {ELEMENT_PROVENANCE_KEY: "prv_gone"}),
+    ]
+    taken = taken_provenance(entries, objects)
+    assert dict(taken[0].provenance) == {NAME: "prv_name"}
+    assert dict(taken[1].provenance) == whole
+    assert dict(taken[2].provenance) == {ELEMENT_PROVENANCE_KEY: "prv_gone"}
+    completed, _ = complete_provenance(entries, objects, [], {}, "prv_merge")
+    assert dict(completed[0].provenance) == {NAME: "prv_name"}
 
 
 def vault_repo() -> Repo:

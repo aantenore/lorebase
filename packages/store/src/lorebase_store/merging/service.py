@@ -70,6 +70,7 @@ from lorebase_store.merging.attempts import (
     complete_provenance,
     compute_attempt,
     decisions_of,
+    taken_provenance,
 )
 from lorebase_store.merging.lineage import BranchLineage, MergeLineage
 from lorebase_store.models.enums import MergeAttemptStatus, ProposalStatus, RefKind
@@ -542,7 +543,9 @@ def _prepare_commit(
     """Changeset with provenance, object bodies and schema of a clean outcome."""
     provenance: list[ProvenanceRow] = []
     changeset = list(merged.changes)
-    if merged.result is MergeResult.MERGED:
+    if merged.result is not MergeResult.MERGED:
+        changeset = taken_provenance(changeset, objects)
+    else:
         own = ProvenanceRow(
             id=new_id(IdPrefix.PROVENANCE),
             origin_type=MERGE_ORIGIN,

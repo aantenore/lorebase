@@ -29,8 +29,10 @@ python -m lorebase_store.indexes plan --domain supply     # pending per-Attribut
 
 `jobs work` runs `gc`, `store.index`, `store.materialize` (the background copy of a large copy
 branch, or of an overlay branch whose base moved too far), `store.branch_delete` (the rows of
-a large deleted branch) and `store.sensitivity_refresh` (the titles and search vectors a branch
-stored before the default branch tagged an Attribute) jobs by default (`--types` narrows it; see [Large
+a large deleted branch), `store.sensitivity_refresh` (the titles and search vectors a branch
+stored before the default branch tagged an Attribute) and `store.lineage_backfill` (the
+lineage revisions of rows materialized before migration `0032`; a starting worker queues the
+sweep once) jobs by default (`--types` narrows it; see [Large
 branches](#large-branches)). Index jobs
 build and drop per-Attribute indexes; they run as `database.maintenance_dsn` when it is set,
 because their DDL needs a role that owns `mat_records` ([store schema

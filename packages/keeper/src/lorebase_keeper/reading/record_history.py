@@ -164,7 +164,14 @@ class RecordLineageOut(Served):
     created: RecordChangeOut | None = Field(
         default=None, description="The change that last created the Record."
     )
-    changes: int = Field(description="Changes of the Record on the branch.")
+    changes: int = Field(
+        description="Changes of the Record on the branch, at most `read.history.lineage_count_max`."
+    )
+    changes_truncated: bool = Field(
+        default=False,
+        description="The Record has more changes than `changes` (the count stopped at "
+        "`read.history.lineage_count_max`).",
+    )
     attributes: list[ValueLineageOut]
     sources: list[str] = Field(description="Sources behind the current values, by api name.")
     proposals: list[LineageProposalOut] = Field(description="Proposals behind the current values.")
@@ -412,55 +419,77 @@ async def record_history(
 # Lineage --------------------------------------------------------------------------------------
 
 # Per Attribute of the lineage, its provenance entry and the Revision of its last change, at the
-# branch head: from `mat_records.lineage_revisions`, or for rows written before it was kept,
-# the newest change of the branch history that recorded that entry for the Attribute.
+# branch head: from `mat_records.lineage_revisions`. For rows that do not name them (written
+# before they were kept and not yet backfilled), the newest `:scan` changes of the Record are
+# read once (`recent`, skipped when the row names everything) and searched: the newest change
+# that recorded that entry for the Attribute, and the newest creation. The change that created
+# the Record is the history row of `$created`, or that fallback when the row is missing. JSON
+# that is not an object (null lineage, for one) reads as empty. Changes are counted up to
+# `:count`, so a Record with a long history costs no more than that bound.
 _HEAD = """
 rec AS MATERIALIZED (
-    SELECT m."values" AS vals, m.lineage, m.lineage_revisions AS revs
+    SELECT m."values" AS vals,
+           CASE WHEN jsonb_typeof(m.lineage) = 'object' THEN m.lineage
+                ELSE '{{}}'::jsonb END AS lineage,
+           CASE WHEN jsonb_typeof(m.lineage_revisions) = 'object' THEN m.lineage_revisions
+                END AS revs
     FROM {records}
     WHERE m.domain_id = :domain AND m.branch = :branch AND m.kind_id = :kind AND m.key = :key
 ),
-lin AS (
-    SELECT l.attribute, l.provenance_id,
-           COALESCE(decode(rec.revs ->> l.attribute, 'hex'), f.revision_id) AS revision_id
-    FROM rec
-    CROSS JOIN LATERAL jsonb_each_text(rec.lineage) AS l(attribute, provenance_id)
-    LEFT JOIN LATERAL (
-        SELECT h.revision_id
-        FROM {history_h}
-        JOIN revisions r ON r.domain_id = h.domain_id AND r.id = h.revision_id
-        WHERE (rec.revs ->> l.attribute) IS NULL
-          AND h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
-          AND h.element_key = :key AND h.provenance ->> l.attribute = l.provenance_id
-        ORDER BY r.generation DESC, h.revision_id DESC
-        LIMIT 1
-    ) AS f ON true
-),
-created AS (
+created_direct AS MATERIALIZED (
     SELECT h.revision_id, h.old_hash, h.new_hash, h.provenance
     FROM rec
     JOIN {history_h}
       ON h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
      AND h.element_key = :key AND h.revision_id = decode(rec.revs ->> '{created_key}', 'hex')
+    LIMIT 1
+),
+recent AS MATERIALIZED (
+    SELECT h.revision_id, h.old_hash, h.new_hash, h.provenance, r.generation
+    FROM {history_h}
+    JOIN revisions r ON r.domain_id = h.domain_id AND r.id = h.revision_id
+    WHERE h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
+      AND h.element_key = :key
+      AND EXISTS (SELECT 1 FROM rec)
+      AND (NOT EXISTS (SELECT 1 FROM created_direct)
+           OR EXISTS (
+             SELECT 1 FROM rec CROSS JOIN LATERAL jsonb_object_keys(rec.lineage) AS k(attribute)
+             WHERE (rec.revs ->> k.attribute) IS NULL))
+    ORDER BY r.generation DESC, h.revision_id DESC
+    LIMIT :scan
+),
+lin AS (
+    SELECT l.attribute, l.provenance_id,
+           COALESCE(
+             decode(rec.revs ->> l.attribute, 'hex'),
+             (SELECT s.revision_id FROM recent s
+              WHERE s.provenance ->> l.attribute = l.provenance_id
+              ORDER BY s.generation DESC, s.revision_id DESC
+              LIMIT 1)) AS revision_id
+    FROM rec
+    CROSS JOIN LATERAL jsonb_each_text(rec.lineage) AS l(attribute, provenance_id)
+),
+created AS (
+    SELECT revision_id, old_hash, new_hash, provenance FROM created_direct
     UNION ALL
     SELECT c.revision_id, c.old_hash, c.new_hash, c.provenance
-    FROM rec
-    CROSS JOIN LATERAL (
-        SELECT h.revision_id, h.old_hash, h.new_hash, h.provenance
-        FROM {history_h}
-        JOIN revisions r ON r.domain_id = h.domain_id AND r.id = h.revision_id
-        WHERE (rec.revs ->> '{created_key}') IS NULL
-          AND h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
-          AND h.element_key = :key AND h.old_hash IS NULL
-        ORDER BY r.generation DESC, h.revision_id DESC
+    FROM (
+        SELECT s.revision_id, s.old_hash, s.new_hash, s.provenance
+        FROM recent s
+        WHERE s.old_hash IS NULL AND NOT EXISTS (SELECT 1 FROM created_direct)
+        ORDER BY s.generation DESC, s.revision_id DESC
         LIMIT 1
     ) AS c
 ),
 counted AS (
     SELECT count(*) AS changes
-    FROM {history_h}
-    WHERE h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
-      AND h.element_key = :key
+    FROM (
+        SELECT 1
+        FROM {history_h}
+        WHERE h.domain_id = :domain AND h.branch = :branch AND h.partition = :partition
+          AND h.element_key = :key
+        LIMIT :count
+    ) AS c
 )
 """
 
@@ -490,7 +519,8 @@ SELECT
      WHERE p.domain_id = :domain
        AND p.id IN (
          SELECT provenance_id FROM lin
-         UNION SELECT e.value FROM created, jsonb_each_text(created.provenance) AS e)
+         UNION SELECT e.value FROM created,
+           jsonb_each_text({provenance_object}) AS e)
     ) AS provenance,
     (SELECT jsonb_agg(jsonb_build_object(
         'id', q.id, 'title', q.title, 'status', q.status,
@@ -505,12 +535,20 @@ SELECT
     ) AS proposals,
     (SELECT jsonb_build_object(
         'revision', encode(c.revision_id, 'hex'), 'new_hash', encode(c.new_hash, 'hex'),
-        'provenance', c.provenance, 'values', o.body -> 'values')
+        'provenance', {created_provenance}, 'values', o.body -> 'values')
      FROM created c
      LEFT JOIN objects o ON o.domain_id = :domain AND o.hash = c.new_hash
      LIMIT 1) AS created,
     (SELECT changes FROM counted) AS changes
 """
+
+
+def _object(expression: str) -> str:
+    """`expression` when it is a JSON object, else an empty one (null and other JSON)."""
+    return (
+        f"(CASE WHEN jsonb_typeof({expression}) = 'object' THEN {expression} "
+        "ELSE '{}'::jsonb END)"
+    )
 
 
 def _lineage_statement(point: ReadPoint) -> TextClause:
@@ -524,6 +562,8 @@ def _lineage_statement(point: ReadPoint) -> TextClause:
         found="EXISTS (SELECT 1 FROM rec)",
         values="(SELECT vals FROM rec)",
         merge_resolution=OriginType.MERGE_RESOLUTION.value,
+        provenance_object=_object("created.provenance"),
+        created_provenance=_object("c.provenance"),
     )
     return text(f"WITH {ctes.strip()}{tail}")
 
@@ -542,12 +582,15 @@ async def record_lineage(
     """Where the values of `kind/key` at the read point came from (see module doc): one
     statement over the head's rows, or a snapshot's at another Revision."""
     point = await with_rows(session, runtime, point, "Record lineage")
+    settings = runtime.read.history
     params = {
         "domain": point.domain.id,
         "branch": point.layout.branch,
         "kind": kind.id,
         "partition": kind_partition(kind.id),
         "key": key,
+        "scan": settings.lineage_scan_changes,
+        "count": settings.lineage_count_max + 1,
     }
     row = (await session.execute(_lineage_statement(point), params)).mappings().one()
     if not row["found"]:
@@ -614,6 +657,7 @@ async def record_lineage(
     order = _reading_order(kind)
     attributes.sort(key=lambda a: order(a.name))
     proposals = {p.id: p for a in attributes if (p := a.proposal) is not None}
+    changes = int(row["changes"] or 0)
     return RecordLineageOut(
         revision=point.revision_hex,
         served_from=point.served_from,
@@ -621,7 +665,8 @@ async def record_lineage(
         kind=kind.api_name,
         key=key,
         created=_created(kind, point, row["created"], revisions, provenance),
-        changes=int(row["changes"] or 0),
+        changes=min(changes, settings.lineage_count_max),
+        changes_truncated=changes > settings.lineage_count_max,
         attributes=attributes,
         sources=sorted({a.source for a in attributes if a.source is not None}),
         proposals=list(proposals.values()),

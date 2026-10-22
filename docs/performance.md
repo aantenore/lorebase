@@ -468,8 +468,10 @@ same database. Times include resolving the branch head (Domain, ref, head Revisi
   from about 3x to about 2.2x. The full harness in the same conditions gave the same order
   (lineage now below the history page, which was above it before).
 - Its cost no longer depends on the number of changes of the Record: the history range is read
-  only to count the changes (an index-only scan) and, for rows written before migration `0032`
-  (null `lineage_revisions`), to find the Revisions they lack.
+  only to count the changes (an index-only scan, stopped at `read.history.lineage_count_max`)
+  and, for rows written before migration `0032` (null `lineage_revisions`) that the
+  `store.lineage_backfill` job has not filled yet, to find the Revisions they lack among the
+  newest `read.history.lineage_scan_changes` changes, read once per request.
 - Lineage at another Revision (`at`) runs the same statement on a snapshot of the Revision
   (`reading.snapshots`); it was not measured here.
 

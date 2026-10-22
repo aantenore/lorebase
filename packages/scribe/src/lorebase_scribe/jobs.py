@@ -82,6 +82,7 @@ from lorebase_store.jobs import (
     EXTRACTION_JOB,
     GC_JOB,
     INDEX_JOB,
+    LINEAGE_BACKFILL_JOB,
     MATERIALIZE_JOB,
     SENSITIVITY_REFRESH_JOB,
     SOURCE_SYNC_JOB,
@@ -92,6 +93,7 @@ from lorebase_store.jobs import (
 )
 from lorebase_store.materialize import (
     run_branch_delete_job,
+    run_lineage_backfill_job,
     run_materialize_job,
     run_sensitivity_refresh_job,
 )
@@ -112,6 +114,7 @@ JOB_TYPES = (
     MATERIALIZE_JOB,
     BRANCH_DELETE_JOB,
     SENSITIVITY_REFRESH_JOB,
+    LINEAGE_BACKFILL_JOB,
     GC_JOB,
     EXTRACTION_JOB,
     EMBEDDINGS_JOB,
@@ -235,6 +238,9 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         return await run_sensitivity_refresh_job(
             context.engine, job, runtime=context.runtime, clock=context.clock
         )
+
+    async def lineage_backfill(job: JobRow) -> Mapping[str, Any]:
+        return await run_lineage_backfill_job(context.engine, job, runtime=context.runtime)
 
     async def gc(job: JobRow) -> Mapping[str, Any]:
         _domain(job)
@@ -384,6 +390,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         MATERIALIZE_JOB: materialize,
         BRANCH_DELETE_JOB: branch_delete,
         SENSITIVITY_REFRESH_JOB: sensitivity_refresh,
+        LINEAGE_BACKFILL_JOB: lineage_backfill,
         GC_JOB: gc,
         EXTRACTION_JOB: extraction,
         EMBEDDINGS_JOB: embeddings,

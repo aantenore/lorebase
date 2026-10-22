@@ -18622,7 +18622,13 @@
           "changes": {
             "type": "integer",
             "title": "Changes",
-            "description": "Changes of the Record on the branch."
+            "description": "Changes of the Record on the branch, at most `read.history.lineage_count_max`."
+          },
+          "changes_truncated": {
+            "type": "boolean",
+            "title": "Changes Truncated",
+            "description": "The Record has more changes than `changes` (the count stopped at `read.history.lineage_count_max`).",
+            "default": false
           },
           "attributes": {
             "items": {

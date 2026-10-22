@@ -529,7 +529,8 @@ export interface paths {
          *     so verification no longer reports them as `sensitivity_stale`. A branch that already has
          *     the tags gives `no_op`. Protected branches refuse the change (409) unless `rows_only`:
          *     then only a `store.sensitivity_refresh` job is queued, which rewrites those rows in
-         *     batches and leaves the schema as it is.
+         *     batches and leaves the schema as it is. `tags` lists the tags added only to callers
+         *     who may read the default branch's schema (empty otherwise).
          */
         post: operations["rebase_tags_api_v1_domains__domain_id__branches__branch__rebase_tags_post"];
         delete?: never;
@@ -3555,7 +3556,7 @@ export interface components {
             count: number;
             /**
              * Examples
-             * @description Keys of some of the Records.
+             * @description Keys of some of the Records; none for an Attribute whose values the caller may not read.
              */
             examples: string[];
         };
@@ -4815,9 +4816,15 @@ export interface components {
             created?: components["schemas"]["RecordChangeOut"] | null;
             /**
              * Changes
-             * @description Changes of the Record on the branch.
+             * @description Changes of the Record on the branch, at most `read.history.lineage_count_max`.
              */
             changes: number;
+            /**
+             * Changes Truncated
+             * @description The Record has more changes than `changes` (the count stopped at `read.history.lineage_count_max`).
+             * @default false
+             */
+            changes_truncated: boolean;
             /** Attributes */
             attributes: components["schemas"]["ValueLineageOut"][];
             /**

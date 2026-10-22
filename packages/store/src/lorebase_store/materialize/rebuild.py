@@ -230,7 +230,9 @@ async def fold_history(
     keys: Sequence[str] | None = None,
 ) -> dict[str, Folded]:
     """Per element still present (of those in `keys`, when given), the union of its
-    provenance maps since it was last created."""
+    provenance maps since it was last created, and the Revision of each entry. A step that
+    creates the element (no old hash) records its Revision under `CREATED_KEY`; history
+    that starts after the creation names none."""
     folded: dict[str, Folded] = {}
     async for steps in repository.stream_history_steps(partition, batch=batch, keys=keys):
         for step in steps:
@@ -240,9 +242,9 @@ async def fold_history(
             previous = folded.get(step.element_key)
             provenance = {} if previous is None else previous.provenance
             provenance.update(step.provenance or {})
-            revisions = (
-                {CREATED_KEY: step.revision_id.hex()} if previous is None else previous.revisions
-            )
+            revisions = {} if previous is None else previous.revisions
+            if step.old_hash is None:
+                revisions = {CREATED_KEY: step.revision_id.hex()}
             revisions.update(dict.fromkeys(step.provenance or {}, step.revision_id.hex()))
             folded[step.element_key] = Folded(provenance, revisions, step.revision_id, step.at)
     return folded

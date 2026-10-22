@@ -21,8 +21,8 @@ from lorebase_scribe.sources.connectors import ConnectorFactory, default_connect
 from lorebase_scribe.worker import Worker
 from lorebase_store.db import create_engine
 from lorebase_store.embeddings import SchemaCache
-from lorebase_store.jobs import MATERIALIZE_JOB, default_worker_id
-from lorebase_store.materialize import run_path_fanout_sweep
+from lorebase_store.jobs import LINEAGE_BACKFILL_JOB, MATERIALIZE_JOB, default_worker_id
+from lorebase_store.materialize import queue_lineage_sweep, run_path_fanout_sweep
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import database_settings
 from lorebase_store.webhooks import webhook_settings
@@ -43,7 +43,12 @@ class Scribe:
     async def serve(self, stop: asyncio.Event) -> None:
         """Work and schedule until `stop` is set. A worker running materialization jobs also
         rewrites, in the background, materialized path Derivations computed with another
-        `store.traverse.path_fanout` (`run_path_fanout_sweep`)."""
+        `store.traverse.path_fanout` (`run_path_fanout_sweep`); one running lineage backfills
+        queues the sweep of rows without lineage revisions once (`materialize.lineage_backfill`)."""
+        if LINEAGE_BACKFILL_JOB in self.worker.types:
+            swept = await queue_lineage_sweep(self.context.sessions)
+            if swept is not None:
+                log.info("lineage revisions backfill queued", extra={"job": swept})
         tasks = [asyncio.create_task(self.worker.run(stop), name="scribe-worker")]
         if MATERIALIZE_JOB in self.worker.types:
             tasks.append(

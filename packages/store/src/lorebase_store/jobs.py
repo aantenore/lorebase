@@ -54,6 +54,10 @@ SENSITIVITY_REFRESH_JOB = "store.sensitivity_refresh"
 """Job type of the batched rewrite of the titles and search vectors a branch materialized
 before the default branch tagged an Attribute; payload `{"branch": name}`, plus `"resume":
 [kind id, key]` for a continuation (see `lorebase_store.materialize.stale`)."""
+LINEAGE_BACKFILL_JOB = "store.lineage_backfill"
+"""Job type of the backfill of `mat_records.lineage_revisions` for rows materialized before
+migration 0032; payload `{}` (no Domain: queue one per branch holding such rows) or
+`{"branch": name}` (see `lorebase_store.materialize.lineage_backfill`)."""
 EMBEDDINGS_JOB = "embeddings"
 """Job type of an embedding pass over a Domain's branches run by Scribe; payload from
 `embeddings_payload`."""
@@ -410,9 +414,16 @@ def _parser() -> argparse.ArgumentParser:
     work.add_argument(
         "--types",
         nargs="+",
-        default=[GC_JOB, INDEX_JOB, MATERIALIZE_JOB, BRANCH_DELETE_JOB, SENSITIVITY_REFRESH_JOB],
+        default=[
+            GC_JOB,
+            INDEX_JOB,
+            MATERIALIZE_JOB,
+            BRANCH_DELETE_JOB,
+            SENSITIVITY_REFRESH_JOB,
+            LINEAGE_BACKFILL_JOB,
+        ],
         help=f"Job types to run (default: {GC_JOB} {INDEX_JOB} {MATERIALIZE_JOB} "
-        f"{BRANCH_DELETE_JOB} {SENSITIVITY_REFRESH_JOB}).",
+        f"{BRANCH_DELETE_JOB} {SENSITIVITY_REFRESH_JOB} {LINEAGE_BACKFILL_JOB}).",
     )
     return parser
 
@@ -423,6 +434,10 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_store.gc import run_gc_job
     from lorebase_store.indexes import run_index_job
     from lorebase_store.materialize.background import run_branch_delete_job, run_materialize_job
+    from lorebase_store.materialize.lineage_backfill import (
+        queue_lineage_sweep,
+        run_lineage_backfill_job,
+    )
     from lorebase_store.materialize.paths import run_path_fanout_sweep
     from lorebase_store.materialize.stale import run_sensitivity_refresh_job
     from lorebase_store.runtime import StoreRuntime
@@ -450,6 +465,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
         SENSITIVITY_REFRESH_JOB: lambda job: run_sensitivity_refresh_job(
             engine, job, runtime=runtime
         ),
+        LINEAGE_BACKFILL_JOB: lambda job: run_lineage_backfill_job(engine, job, runtime=runtime),
     }
     unknown = [t for t in types if t not in known]
     if unknown:
@@ -461,6 +477,8 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
         else None
     )
     try:
+        if LINEAGE_BACKFILL_JOB in types:
+            await queue_lineage_sweep(async_sessionmaker(engine, expire_on_commit=False))
         return await run_jobs(
             async_sessionmaker(engine, expire_on_commit=False),
             {t: known[t] for t in types},
