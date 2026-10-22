@@ -37,7 +37,12 @@ from lorebase_keeper.services.reads import resolve_readable
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.materialize import BranchMode
 from lorebase_store.models.enums import Materialization, RefKind
-from lorebase_store.repositories import RefRow
+from lorebase_store.repositories import (
+    MaterializationPhase,
+    MaterializationState,
+    MaterializationStatus,
+    RefRow,
+)
 
 router = APIRouter(tags=["branches"])
 
@@ -52,6 +57,25 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 }
 
 
+class MaterializationProgress(BaseModel):
+    """How far the background copy of a branch got."""
+
+    phase: MaterializationPhase = Field(
+        description="What the next batch copies: `records`, `links`, `history`, then `switch` "
+        "(the branch becomes a full copy); `done` at the end."
+    )
+    rows_done: int = Field(description="Rows of the source branch read so far.")
+    rows_total: int | None = Field(
+        description="Rows of the source branch to read (Records, Links and history entries "
+        "at the start of the copy); null until the job has started."
+    )
+    error: str | None = Field(
+        description="Last failure of the copy job, kept while it is retried and when it failed."
+    )
+    updated_at: datetime
+    finished_at: datetime | None
+
+
 class BranchOut(BaseModel):
     """A branch."""
 
@@ -63,6 +87,17 @@ class BranchOut(BaseModel):
     version: int
     created_at: datetime
     created_by: str
+    materialization_status: MaterializationStatus | None = Field(
+        default=None,
+        description="Background copy of the branch: a large copy branch is created as an "
+        "overlay of its source (`materialization` is `overlay`, reads and writes work at once) "
+        "and a job copies its rows in batches. `pending` (queued, or waiting for a retry), "
+        "`running`, `done` (`materialization` is then `full`) or `failed` (the branch stays a "
+        "correct overlay). Null for a branch that was never copied in the background.",
+    )
+    materialization_progress: MaterializationProgress | None = Field(
+        default=None, description="Progress of the background copy; null without one."
+    )
 
 
 class BranchDetail(BranchOut):
@@ -116,7 +151,17 @@ class TagCreate(BaseModel):
     revision: str | None = Field(default=None, description="Revision id to tag.")
 
 
-def _branch(ref: RefRow, *, default: bool) -> BranchOut:
+def _branch(ref: RefRow, *, default: bool, state: MaterializationState | None = None) -> BranchOut:
+    progress = None
+    if state is not None:
+        progress = MaterializationProgress(
+            phase=state.phase,
+            rows_done=state.rows_done,
+            rows_total=state.rows_total,
+            error=state.error,
+            updated_at=state.updated_at,
+            finished_at=state.finished_at,
+        )
     return BranchOut(
         name=ref.name,
         head=hex(ref.head),
@@ -126,6 +171,8 @@ def _branch(ref: RefRow, *, default: bool) -> BranchOut:
         version=ref.version,
         created_at=ref.created_at,
         created_by=ref.created_by,
+        materialization_status=None if state is None else state.status,
+        materialization_progress=progress,
     )
 
 
@@ -175,12 +222,15 @@ async def list_branches(
     _: Annotated[Access, Depends(require(Permission.SCHEMA_READ))],
 ) -> Page[BranchOut]:
     """Branches ordered by name."""
-    default, rows = await service.page(
+    found = await service.page(
         store, domain_id, RefKind.BRANCH, limit=params.limit + 1, after=_after(params)
     )
     return Page[BranchOut](
-        items=[_branch(r, default=r.name == default) for r in rows[: params.limit]],
-        next_cursor=_next(rows, params.limit),
+        items=[
+            _branch(r, default=r.name == found.default, state=found.materializations.get(r.name))
+            for r in found.refs[: params.limit]
+        ],
+        next_cursor=_next(found.refs, params.limit),
     )
 
 
@@ -201,8 +251,11 @@ async def create_branch(
     """Create a materialized branch (a copy, or an overlay on its source) from a branch, tag
     or Revision.
 
-    With an `Idempotency-Key`, retrying a create that succeeded returns the branch with status
-    200 and `Idempotent-Replayed: true`.
+    A copy of a large source (above `store.materialize.async_copy_min_rows` rows) is created
+    as an overlay at once and copied by a background job: `materialization_status` is then
+    `pending`, and the branch becomes `full` when it is `done`. With an `Idempotency-Key`,
+    retrying a create that succeeded returns the branch with status 200 and
+    `Idempotent-Replayed: true`.
     """
     await authorize(
         request,
@@ -241,7 +294,7 @@ async def create_branch(
     response.headers["Location"] = (
         f"{keeper.api_prefix}/domains/{domain_id}/branches/{quote(body.name, safe='')}"
     )
-    return _branch(created.ref, default=created.default)
+    return _branch(created.ref, default=created.default, state=created.materialization)
 
 
 @router.get("/domains/{domain_id}/tags", summary="List tags", responses=_ERRORS)
@@ -252,11 +305,12 @@ async def list_tags(
     _: Annotated[Access, Depends(require(Permission.SCHEMA_READ))],
 ) -> Page[TagOut]:
     """Tags ordered by name."""
-    _default, rows = await service.page(
+    found = await service.page(
         store, domain_id, RefKind.TAG, limit=params.limit + 1, after=_after(params)
     )
     return Page[TagOut](
-        items=[_tag(r) for r in rows[: params.limit]], next_cursor=_next(rows, params.limit)
+        items=[_tag(r) for r in found.refs[: params.limit]],
+        next_cursor=_next(found.refs, params.limit),
     )
 
 
@@ -316,7 +370,7 @@ async def get_branch(
 ) -> BranchDetail:
     """The branch head, protection flag and ahead/behind counts against the default branch."""
     state = await service.get(store, domain_id, branch)
-    out = _branch(state.ref, default=state.default)
+    out = _branch(state.ref, default=state.default, state=state.materialization)
     return BranchDetail(**out.model_dump(), ahead=state.ahead, behind=state.behind)
 
 
@@ -348,7 +402,13 @@ async def delete_branch(
     keeper: KeeperSettingsDep,
     _: Annotated[Access, Depends(require(Permission.BRANCH_CREATE, branch_param="branch"))],
 ) -> Response:
-    """Delete a branch and its materialized rows; the default and protected branches stay."""
-    ref = await service.delete(store, domain_id, branch, keeper.branches)
-    annotate(request, action="branch.delete", target=branch, head=hex(ref.head))
+    """Delete a branch and its materialized rows; the default and protected branches stay.
+
+    A large branch (above `store.materialize.async_delete_min_rows` rows) disappears at once
+    and a background job deletes its rows; its name can be used again when that is done.
+    """
+    ref, deletion = await service.delete(store, domain_id, branch, keeper.branches)
+    annotate(
+        request, action="branch.delete", target=branch, head=hex(ref.head), deletion=deletion.value
+    )
     return Response(status_code=204)

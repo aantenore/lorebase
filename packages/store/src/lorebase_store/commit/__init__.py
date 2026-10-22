@@ -10,6 +10,7 @@ from lorebase_store.commit.changes import (
 )
 from lorebase_store.commit.errors import (
     BranchLockTimeoutError,
+    BranchMaterializingError,
     BranchNotFoundError,
     BranchNotMaterializedError,
     CommitError,
@@ -21,6 +22,7 @@ from lorebase_store.commit.pipeline import commit, create_domain
 
 __all__ = [
     "BranchLockTimeoutError",
+    "BranchMaterializingError",
     "BranchNotFoundError",
     "BranchNotMaterializedError",
     "Change",

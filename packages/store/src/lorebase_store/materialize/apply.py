@@ -29,6 +29,7 @@ from lorebase_store.materialize.rows import (
     search_weights,
     split_link_key,
 )
+from lorebase_store.repositories.materializations import BranchMaterializationRepository
 from lorebase_store.repositories.materialized import (
     HistoryRow,
     LinkRow,
@@ -73,7 +74,9 @@ async def apply_changeset(
 
     The caller holds the branch lock. An overlay branch is promoted to a full copy first when
     the schema changes, and afterwards when it is over its limits (`materialize.overlay`);
-    overlays based on the branch get the previous state of the rows it changes.
+    overlays based on the branch get the previous state of the rows it changes. A schema
+    change on an overlay whose background copy is queued or running raises
+    `BranchMaterializingError` (`materialize.background`).
     """
     runtime = runtime or StoreRuntime.from_settings(settings)
     generation = (await RevisionRepository(session, domain_id).generations([revision_id]))[
@@ -88,6 +91,14 @@ async def apply_changeset(
         lock_timeout_ms=settings.commit.lock_timeout_ms,
     )
     if schema_hash is not None and (await repository.layout()).overlay:
+        if await BranchMaterializationRepository(session, domain_id).active(branch):
+            # Imported here: the commit package imports the materializer.
+            from lorebase_store.commit.errors import BranchMaterializingError
+
+            raise BranchMaterializingError(
+                f"branch {branch!r} is still being copied in the background; retry the "
+                "schema change when its materialization is done"
+            )
         await promote(session, domain_id, branch, runtime=runtime, locked=True)
         repository.forget_layout()
     await repository.insert_history(

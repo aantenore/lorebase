@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy.exc import IntegrityError
 
@@ -23,15 +23,20 @@ from lorebase_keeper.services.errors import (
     PROTECTED_BRANCH,
 )
 from lorebase_store.materialize import (
+    BranchDeletingError,
+    BranchDeletion,
     BranchExistsError,
     BranchMode,
     MaterializationMode,
     create_branch,
-    promote_overlays_of,
+    delete_branch,
 )
 from lorebase_store.models.enums import Materialization, RefKind
 from lorebase_store.repositories import (
+    BranchMaterializationRepository,
     LockTimeoutError,
+    MaterializationState,
+    RefNotFoundError,
     RefRepository,
     RefRow,
     RevisionRepository,
@@ -42,22 +47,34 @@ TAG_CREATE_REASON = "tag.create"
 
 @dataclass(frozen=True)
 class BranchState:
-    """A branch with its position relative to the default branch."""
+    """A branch with its position relative to the default branch and its background copy."""
 
     ref: RefRow
     default: bool
     ahead: int
     behind: int
+    materialization: MaterializationState | None = None
 
 
 @dataclass(frozen=True)
 class CreatedRef:
-    """A new branch or tag; `mode` tells how a branch got its rows, `replayed` that it existed."""
+    """A new branch or tag; `mode` tells how a branch got its rows, `replayed` that it existed,
+    `materialization` the background copy of a large copy branch."""
 
     ref: RefRow
     mode: MaterializationMode | None = None
     replayed: bool = False
     default: bool = False
+    materialization: MaterializationState | None = None
+
+
+@dataclass(frozen=True)
+class RefPage:
+    """A page of refs with the Domain's default branch and their background copies."""
+
+    default: str
+    refs: list[RefRow]
+    materializations: dict[str, MaterializationState]
 
 
 def check_ref_name(name: str, settings: BranchSettings, pointer: str = "/body/name") -> None:
@@ -89,12 +106,15 @@ def _busy(settings: BranchSettings) -> ProblemError:
 
 async def page(
     store: StoreAccess, domain_id: str, kind: RefKind, *, limit: int, after: str | None
-) -> tuple[str, list[RefRow]]:
+) -> RefPage:
     """Refs of one kind ordered by name, with the Domain's default branch name."""
     async with store.sessions() as session, session.begin():
         domain = await require_domain(session, domain_id)
         refs = await RefRepository(session, domain_id).page(kind, limit=limit, after=after)
-    return domain.default_branch, refs
+        states = await BranchMaterializationRepository(session, domain_id).of(
+            [r.name for r in refs]
+        )
+    return RefPage(domain.default_branch, refs, states)
 
 
 async def get(store: StoreAccess, domain_id: str, name: str) -> BranchState:
@@ -108,8 +128,13 @@ async def get(store: StoreAccess, domain_id: str, name: str) -> BranchState:
             ahead, behind = await RevisionRepository(session, domain_id).ahead_behind(
                 ref.head, default.head
             )
+        state = await BranchMaterializationRepository(session, domain_id).get(name)
     return BranchState(
-        ref=ref, default=ref.name == domain.default_branch, ahead=ahead, behind=behind
+        ref=ref,
+        default=ref.name == domain.default_branch,
+        ahead=ahead,
+        behind=behind,
+        materialization=state,
     )
 
 
@@ -130,8 +155,9 @@ async def create(
     `source` is a branch or tag (default: the Domain's default branch). An overlay (`mode`,
     default from `store.materialize`) reads the source's rows and stores only its changes;
     otherwise rows are copied from the source branch when the new branch starts at its head,
-    rebuilt from the tree otherwise. Overlays do not count against
-    `max_materialized_per_domain`.
+    rebuilt from the tree otherwise. A large copy starts as an overlay whose rows a background
+    job copies (`materialization` pending). Overlays do not count against
+    `max_materialized_per_domain`; copies in progress do.
     """
     check_ref_name(name, settings)
     try:
@@ -140,19 +166,22 @@ async def create(
             refs = RefRepository(session, domain_id)
             existing = await refs.get(name)
             if existing is not None:
-                return _replay(
+                replayed = _replay(
                     existing,
                     principal,
                     idempotency_key,
                     RefKind.BRANCH,
                     default=name == domain.default_branch,
                 )
+                state = await BranchMaterializationRepository(session, domain_id).get(name)
+                return replace(replayed, materialization=state)
             source_name = source or domain.default_branch
             if await refs.get(source_name) is None:
                 raise ProblemError(NOT_FOUND, f"Branch or tag {source_name!r} not found.")
             if revision is not None:
                 await require_revision(session, domain_id, revision)
             materialized = await refs.count(RefKind.BRANCH, Materialization.FULL)
+            materialized += await BranchMaterializationRepository(session, domain_id).count_active()
             if materialized >= settings.max_materialized_per_domain:
                 raise ProblemError(
                     LIMIT_EXCEEDED,
@@ -170,6 +199,15 @@ async def create(
                 runtime=store.runtime,
                 clock=store.clock,
             )
+            state = None
+            if created.pending:
+                state = await BranchMaterializationRepository(session, domain_id).get(name)
+    except BranchDeletingError:
+        raise ProblemError(
+            ALREADY_EXISTS,
+            f"Branch {name!r} is being deleted; its name is free again once its rows are gone.",
+            headers={"Retry-After": str(settings.lock_retry_after_s)},
+        ) from None
     except BranchExistsError:
         async with store.sessions() as session, session.begin():
             await require_domain(session, domain_id)
@@ -177,7 +215,7 @@ async def create(
         return _replay(found, principal, idempotency_key, RefKind.BRANCH)
     except LockTimeoutError:
         raise _busy(settings) from None
-    return CreatedRef(ref=created.ref, mode=created.mode)
+    return CreatedRef(ref=created.ref, mode=created.mode, materialization=state)
 
 
 def _replay(
@@ -194,9 +232,13 @@ def _replay(
     return CreatedRef(ref=existing, replayed=True, default=default)
 
 
-async def delete(store: StoreAccess, domain_id: str, name: str, settings: BranchSettings) -> RefRow:
+async def delete(
+    store: StoreAccess, domain_id: str, name: str, settings: BranchSettings
+) -> tuple[RefRow, BranchDeletion]:
     """Delete a branch and its materialized rows. The default and protected branches stay;
-    overlay branches based on it are promoted to full copies first."""
+    overlay branches based on it are promoted to full copies first. A large branch is hidden
+    at once and its rows are deleted by a background job (`BranchDeletion.SCHEDULED`), which
+    first waits for the background copies of the overlays based on it."""
     try:
         async with store.sessions() as session, session.begin():
             domain = await require_domain(session, domain_id)
@@ -211,11 +253,15 @@ async def delete(store: StoreAccess, domain_id: str, name: str, settings: Branch
                 raise ProblemError(
                     PROTECTED_BRANCH, f"Branch {name!r} is protected; unprotect it first."
                 )
-            await promote_overlays_of(session, domain_id, name, runtime=store.runtime)
-            await refs.delete(name)
+            try:
+                deletion = await delete_branch(
+                    session, domain_id, name, runtime=store.runtime, clock=store.clock
+                )
+            except RefNotFoundError:
+                raise ProblemError(NOT_FOUND, f"Branch {name!r} not found.") from None
     except LockTimeoutError:
         raise _busy(settings) from None
-    return ref
+    return ref, deletion
 
 
 async def set_protected(

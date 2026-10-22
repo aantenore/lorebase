@@ -668,6 +668,11 @@ Storage engine. `layout` and `embeddings` are read once by the initial migration
 | `store.materialize.overlay_max_rows` | `50000` | an overlay holding more rows is promoted to a full copy |
 | `store.materialize.overlay_max_base_lag_revisions` | `1000` | generations the base may move past the fork point before the overlay is promoted |
 | `store.materialize.overlay_max_per_branch` | `32` | open overlays per base branch; further branches are copies |
+| `store.materialize.async_copy_min_rows` | `10000` | larger copies start as overlays, a job copies the rows |
+| `store.materialize.async_delete_min_rows` | `10000` | larger branches are hidden at once, a job deletes the rows |
+| `store.materialize.job_batch_rows` | `5000` | rows per transaction of a branch copy or deletion job |
+| `store.materialize.job_concurrency` | `2` | branch copy and deletion jobs running at once (all workers) |
+| `store.materialize.job_retry_seconds` | `10` | delay before a branch job that had to wait runs again |
 
 ### `store.gc`
 

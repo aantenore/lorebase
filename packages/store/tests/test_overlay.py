@@ -127,6 +127,11 @@ def drop(kind: str, key: str) -> RecordDelete:
 @pytest.fixture
 async def sessions(engine: AsyncEngine, runtime: StoreRuntime) -> Sessions:
     """`main` with the small graph and a derived part count on Suppliers."""
+    return await seeded_sessions(engine, runtime)
+
+
+async def seeded_sessions(engine: AsyncEngine, runtime: StoreRuntime) -> Sessions:
+    """Sessions on `main` with the small graph and a derived part count on Suppliers."""
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         await create_domain(session, domain(), author=AUTHOR, runtime=runtime, clock=Clock())
@@ -499,7 +504,7 @@ async def test_base_lag_queues_a_promotion_and_the_job_runs_it(
     assert await materialization(sessions, OVERLAY) is Materialization.OVERLAY
     await assert_same_reads(sessions, runtime)
     result = await run_materialize_job(engine, jobs[0], runtime=runtime)
-    assert result == {"branch": OVERLAY, "promoted": True}
+    assert (result["branch"], result["status"], result["promoted"]) == (OVERLAY, "done", True)
     assert await materialization(sessions, OVERLAY) is Materialization.FULL
     await assert_same_reads(sessions, runtime)
 

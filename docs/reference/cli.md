@@ -411,7 +411,8 @@ $ lorebase branch get [OPTIONS] {NAME}
 
 #### `lorebase branch create`
 
-Create a branch from a branch, a tag or a Revision.
+Create a branch from a branch, a tag or a Revision. A large copy starts as an overlay
+that a background job copies; --wait blocks until it is a full copy.
 
 **Usage**:
 
@@ -428,6 +429,9 @@ $ lorebase branch create [OPTIONS] {NAME}
 * `--source <str>`: Branch or tag to start from (default branch).
 * `--revision <str>`: Revision id to start at.
 * `--mode <str>`: copy (own rows) or overlay (only its changes).
+* `--wait`: Wait until the background copy of the branch ends.
+* `--wait-timeout <float range>`: Seconds --wait gives up after.  [default: 3600.0; x&gt;=0]
+* `--poll-interval <float range>`: Seconds between --wait checks.  [default: 2.0; x&gt;=0]
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.

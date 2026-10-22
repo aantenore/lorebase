@@ -9,7 +9,10 @@ Creating the ref is O(1). The source branch is locked meanwhile, so no commit mo
 - `copy`: the materialized head is copied from the source branch with `INSERT ... SELECT`
   when the branch starts at the source head (an overlay source gives its resolved rows);
   otherwise it is rebuilt from the tree of the start Revision. The branch then gets its
-  per-Attribute indexes.
+  per-Attribute indexes. When an overlay is possible and the source holds more than
+  `store.materialize.async_copy_min_rows` rows, the branch is created as an overlay and a
+  `store.materialize` job copies its rows in batches (`materialize.background`):
+  `BranchCreation.pending` is then true.
 
 Without an explicit mode, `store.materialize.branch_mode` decides, except for names starting
 with one of `overlay_branch_prefixes`, which default to overlays.
@@ -26,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.indexes import BranchIndexes
+from lorebase_store.materialize.background import queue_materialization
 from lorebase_store.materialize.overlay import wants_overlay
 from lorebase_store.materialize.rebuild import materialize_revision
 from lorebase_store.models.enums import Materialization, RefKind
@@ -58,10 +62,17 @@ class BranchExistsError(Exception):
     """A ref with that name already exists."""
 
 
+class BranchDeletingError(Exception):
+    """A branch with that name is being deleted in the background; the name is free again
+    once its rows are gone."""
+
+
 @dataclass(frozen=True, slots=True)
 class BranchCreation:
     ref: RefRow
     mode: MaterializationMode
+    pending: bool = False
+    """A copy whose rows a background job is still copying (the ref is an overlay)."""
 
 
 async def create_branch(
@@ -111,6 +122,10 @@ async def _create(
     refs = RefRepository(session, domain_id)
     if await refs.get(name) is not None:
         raise BranchExistsError(f"ref {name!r} already exists in Domain {domain_id!r}")
+    if await refs.get_deleting(name) is not None:
+        raise BranchDeletingError(
+            f"branch {name!r} of Domain {domain_id!r} is being deleted; retry later"
+        )
     source_name = source or (await DomainRepository(session).require(domain_id)).default_branch
     await refs.lock(source_name, timeout_ms=runtime.settings.commit.lock_timeout_ms)
     source_ref = await refs.require(source_name)
@@ -121,14 +136,20 @@ async def _create(
     )
     source_schema = await source_rows.schema()
     at_head = source_ref.head == head.id and source_schema is not None
-    if (
-        wanted is BranchMode.OVERLAY
-        and at_head
+    settings = runtime.settings.materialize
+    overlay_possible = (
+        at_head
         and source_ref.kind is RefKind.BRANCH
         and source_ref.materialization is Materialization.FULL
-        and len(await refs.overlays_of(source_name))
-        < runtime.settings.materialize.overlay_max_per_branch
-    ):
+        and len(await refs.overlays_of(source_name)) < settings.overlay_max_per_branch
+    )
+    background = (
+        wanted is BranchMode.COPY
+        and overlay_possible
+        and await source_rows.own_rows(limit=settings.async_copy_min_rows)
+        > settings.async_copy_min_rows
+    )
+    if (wanted is BranchMode.OVERLAY and overlay_possible) or background:
         assert source_schema is not None
         ref = await refs.create(
             name,
@@ -153,6 +174,9 @@ async def _create(
             settings=runtime.settings.indexes,
             maintenance=runtime.index_maintenance,
         ).sync(load_compiled(source_schema.compiled))
+        if background:
+            await queue_materialization(session, domain_id, ref, at=now())
+            return BranchCreation(ref, MaterializationMode.COPY, pending=True)
         return BranchCreation(ref, MaterializationMode.OVERLAY)
     ref = await refs.create(
         name,

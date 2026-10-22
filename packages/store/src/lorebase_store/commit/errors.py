@@ -19,6 +19,11 @@ class BranchNotMaterializedError(CommitError):
     """The branch has no materialized head to validate against."""
 
 
+class BranchMaterializingError(CommitError):
+    """The branch is still being copied in the background, and the change (a schema change)
+    needs its full copy: retry once its materialization is done."""
+
+
 class StaleHeadError(CommitError):
     """The branch head is not the one the caller expected (or moved during the commit)."""
 

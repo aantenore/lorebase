@@ -45,6 +45,25 @@ GC_FREED_BYTES = meter.create_counter(
     description="Bytes of tree nodes and objects deleted by garbage collection.",
 )
 
+BRANCH_JOB_ROWS = meter.create_counter(
+    "lorebase.store.branch_jobs.rows",
+    unit="{row}",
+    description="Rows read by background branch jobs, by job (materialize: base rows copied "
+    "to a branch, delete: rows of a deleted branch removed).",
+)
+BRANCH_JOB_RUNS = meter.create_counter(
+    "lorebase.store.branch_jobs.runs",
+    unit="{run}",
+    description="Runs of background branch jobs, by job and outcome (done, deferred, waiting, "
+    "skipped, cancelled, failed).",
+)
+BRANCH_JOB_BATCH_DURATION = meter.create_histogram(
+    "lorebase.store.branch_jobs.batch.duration",
+    unit="s",
+    description="Duration of one batch transaction of a background branch job, by job.",
+    explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_S,
+)
+
 
 def record_definer_call(function: str) -> None:
     DEFINER_READS.add(1, {"function": function})

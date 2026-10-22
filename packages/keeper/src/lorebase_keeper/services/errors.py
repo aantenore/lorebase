@@ -10,6 +10,7 @@ Store errors become problem details with stable codes:
 | `SchemaChangeError` | 422 | `schema-change-invalid` | |
 | `BranchNotFoundError` | 404 | `not-found` | |
 | `BranchNotMaterializedError` | 409 | `branch-not-materialized` | |
+| `BranchMaterializingError` | 409 | `branch-materializing` | `Retry-After` header |
 
 A lock timeout is transient (another writer holds the branch), so it is a 503 with a retry
 hint rather than 423, which clients rarely handle.
@@ -26,6 +27,7 @@ from lorebase_core.validate import Issue
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, ProblemError, ProblemType
 from lorebase_store.commit import (
     BranchLockTimeoutError,
+    BranchMaterializingError,
     BranchNotFoundError,
     BranchNotMaterializedError,
     CommitError,
@@ -37,6 +39,7 @@ from lorebase_store.commit import (
 STALE_HEAD = ProblemType("stale-head", 409, "Branch head moved")
 BRANCH_BUSY = ProblemType("branch-busy", 503, "Branch is busy")
 BRANCH_NOT_MATERIALIZED = ProblemType("branch-not-materialized", 409, "Branch not materialized")
+BRANCH_MATERIALIZING = ProblemType("branch-materializing", 409, "Branch still being copied")
 SCHEMA_CHANGE_INVALID = ProblemType("schema-change-invalid", 422, "Schema change not applicable")
 PROTECTED_BRANCH = ProblemType("protected-branch", 409, "Branch is protected")
 REVIEW_REQUIRED = ProblemType("review-required", 409, "Review required")
@@ -172,4 +175,8 @@ def commit_problem(
         return ProblemError(NOT_FOUND, str(error))
     if isinstance(error, BranchNotMaterializedError):
         return ProblemError(BRANCH_NOT_MATERIALIZED, str(error))
+    if isinstance(error, BranchMaterializingError):
+        return ProblemError(
+            BRANCH_MATERIALIZING, str(error), headers={"Retry-After": str(retry_after_s)}
+        )
     raise error

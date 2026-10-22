@@ -151,6 +151,10 @@ class Ref(Base):
     An overlay branch (design 6.11) names its base branch and the base head it was forked
     from (`base_revision`, with its generation): it stores only the rows it changed and reads
     the base rows as of that point. The three columns are set exactly for overlays.
+
+    `deleted_at` marks a branch whose deletion is in progress (revision 0017): it is hidden
+    from every read and write while a `store.branch_delete` job removes its rows in batches,
+    and its name stays taken until the job deletes the ref.
     """
 
     __tablename__ = "refs"
@@ -199,6 +203,7 @@ class Ref(Base):
     base_branch: Mapped[str | None]
     base_revision: Mapped[H32 | None]
     base_generation: Mapped[int | None] = mapped_column(BigInteger)
+    deleted_at: Mapped[datetime | None]
 
 
 class RefLogEntry(Base):

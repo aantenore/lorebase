@@ -7,6 +7,7 @@
 | `store.index` | `{"action", "name", "branch", "kind"}`, Domain set | `indexes.run_index_job` |
 | `gc` | `{"dry_run": bool, "grace_seconds": int}`, Domain set | `lorebase_store.gc.run_gc_job` |
 | `store.materialize` | `{"branch"}`, Domain set | `materialize.run_materialize_job` |
+| `store.branch_delete` | `{"branch"}`, Domain set | `materialize.run_branch_delete_job` |
 | `extraction` | `{"documents", "tiers", "requested_by"}`, Domain set | `ExtractionRun.run` |
 | `embeddings` | `{"branches", "reindex", "resume"}` optional, Domain set | `EmbeddingPass.run` |
 | `audit_verify` | none | `lorebase_store.auth.AuditRepository.verify` over every chain |
@@ -16,6 +17,10 @@ An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 
 An `embeddings` job that reads `scribe.embeddings.max_records_per_job` rows before its pass is
 complete queues its continuation (same payload plus `resume`) and succeeds.
+
+`store.materialize` and `store.branch_delete` copy or delete a large branch's rows in batches
+(`store.materialize.job_batch_rows` per transaction); at most `store.materialize.job_concurrency`
+of them run at once across workers, and one that has to wait queues itself again.
 
 An `audit_verify` job succeeds whether the chains verify or not: its result and the
 `lorebase.audit.verifications` counter (outcome `intact` or `broken`) carry the answer, and a
@@ -52,6 +57,7 @@ from lorebase_store.auth import AuditRepository, Chains
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
+    BRANCH_DELETE_JOB,
     EMBEDDINGS_JOB,
     EXTRACTION_JOB,
     GC_JOB,
@@ -62,7 +68,7 @@ from lorebase_store.jobs import (
     embeddings_payload,
     enqueue_job,
 )
-from lorebase_store.materialize import run_materialize_job
+from lorebase_store.materialize import run_branch_delete_job, run_materialize_job
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
@@ -76,6 +82,7 @@ JOB_TYPES = (
     WEBHOOK_DELIVERY_JOB,
     INDEX_JOB,
     MATERIALIZE_JOB,
+    BRANCH_DELETE_JOB,
     GC_JOB,
     EXTRACTION_JOB,
     EMBEDDINGS_JOB,
@@ -163,7 +170,15 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
 
     async def materialize(job: JobRow) -> Mapping[str, Any]:
         _domain(job)
-        return await run_materialize_job(context.engine, job, runtime=context.runtime)
+        return await run_materialize_job(
+            context.engine, job, runtime=context.runtime, clock=context.clock
+        )
+
+    async def branch_delete(job: JobRow) -> Mapping[str, Any]:
+        _domain(job)
+        return await run_branch_delete_job(
+            context.engine, job, runtime=context.runtime, clock=context.clock
+        )
 
     async def gc(job: JobRow) -> Mapping[str, Any]:
         _domain(job)
@@ -258,6 +273,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
         INDEX_JOB: index,
         MATERIALIZE_JOB: materialize,
+        BRANCH_DELETE_JOB: branch_delete,
         GC_JOB: gc,
         EXTRACTION_JOB: extraction,
         EMBEDDINGS_JOB: embeddings,

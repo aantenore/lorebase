@@ -58,6 +58,7 @@ from lorebase_store.commit.pipeline import (
     utc_now,
 )
 from lorebase_store.materialize.apply import MaterializedChange, apply_changeset
+from lorebase_store.materialize.background import delete_branch
 from lorebase_store.merging.attempts import (
     AttemptComputation,
     ConflictState,
@@ -310,7 +311,15 @@ class MergeService:
         if commit and computation.clean:
             head = await self._commit(request, target, source, computed, created_at)
             if request.delete_source and source.name != target.name:
-                source_deleted = await RefRepository(session, domain_id).delete(source.name)
+                # A large source (promoted to a full copy) is hidden now and its rows are
+                # deleted by a background job.
+                try:
+                    await delete_branch(
+                        session, domain_id, source.name, runtime=self._runtime, clock=self._clock
+                    )
+                except LockTimeoutError as error:
+                    raise BranchLockTimeoutError(str(error)) from error
+                source_deleted = True
         status = (
             MergeAttemptStatus.MERGED
             if head is not None

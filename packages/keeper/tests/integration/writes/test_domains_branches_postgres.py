@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 
 from lorebase_store.db import create_engine
-from lorebase_store.settings import DatabaseSettings
+from lorebase_store.jobs import BRANCH_DELETE_JOB, MATERIALIZE_JOB, JobRow
+from lorebase_store.materialize import run_branch_delete_job, run_materialize_job
+from lorebase_store.runtime import StoreRuntime
+from lorebase_store.settings import DatabaseSettings, MaterializeSettings, StoreSettings
+
+from .test_operations_postgres import csv_rows, execute, supply_yaml
 
 pytestmark = pytest.mark.integration
 
@@ -179,3 +185,103 @@ async def test_materialized_branch_cap(keeper: Any, installation_admin: Any) -> 
         capped = await http.post(f"{DOMAIN}/branches", json={"name": "b2"}, headers=admin)
         assert capped.status_code == 409
         assert capped.json()["code"] == "limit-exceeded"
+
+
+def _job(job_type: str, branch: str) -> JobRow:
+    now = datetime.now(UTC)
+    return JobRow(
+        id=0,
+        type=job_type,
+        domain_id="supply",
+        payload={"branch": branch},
+        priority=0,
+        attempts=1,
+        run_after=now,
+        locked_by="test",
+        created_at=now,
+    )
+
+
+async def test_large_copies_and_deletions_run_in_the_background(
+    keeper: Any, installation_admin: Any, role_key: Any, database_url: str
+) -> None:
+    """A copy above `async_copy_min_rows` answers at once as an overlay with a pending copy;
+    a deletion above `async_delete_min_rows` hides the branch at once."""
+    materialize = {"async_copy_min_rows": 1, "async_delete_min_rows": 1, "job_batch_rows": 2}
+    runtime = StoreRuntime.from_settings(
+        StoreSettings(materialize=MaterializeSettings(**materialize))
+    )
+    admin = installation_admin.headers
+    engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+    try:
+        async with keeper({"store": {"materialize": materialize}}) as http:
+            await http.post(f"{API}/domains", json={"id": "supply"}, headers=admin)
+            editor = await role_key(http, "supply", "editor")
+            modeler = await role_key(http, "supply", "modeler")
+            viewer = await role_key(http, "supply", "viewer")
+            await http.post(f"{DOMAIN}/branches", json={"name": "load"}, headers=editor)
+            applied = await http.post(
+                f"{DOMAIN}/branches/load/schema/changes",
+                json={"yaml": supply_yaml()},
+                headers=modeler,
+            )
+            assert applied.status_code == 200, applied.text
+            loaded = await http.post(
+                execute("import_records"),
+                json={
+                    "branch": "load",
+                    "parameters": {"kind": "Supplier", "rows": csv_rows("supplier")},
+                },
+                headers=editor,
+            )
+            assert loaded.status_code == 200, loaded.text
+
+            created = await http.post(
+                f"{DOMAIN}/branches",
+                json={"name": "big", "source": "load", "mode": "copy"},
+                headers=editor,
+            )
+            assert created.status_code == 201, created.text
+            body = created.json()
+            assert (body["materialization"], body["materialization_status"]) == (
+                "overlay",
+                "pending",
+            )
+            assert body["materialization_progress"]["phase"] == "records"
+            listed = (await http.get(f"{DOMAIN}/branches", headers=viewer)).json()["items"]
+            assert {b["name"]: b["materialization_status"] for b in listed} == {
+                "big": "pending",
+                "load": None,
+                "main": None,
+            }
+
+            result = await run_materialize_job(
+                engine, _job(MATERIALIZE_JOB, "big"), runtime=runtime
+            )
+            assert result["promoted"]
+            done = (await http.get(f"{DOMAIN}/branches/big", headers=viewer)).json()
+            assert (done["materialization"], done["materialization_status"]) == ("full", "done")
+            progress = done["materialization_progress"]
+            assert progress["phase"] == "done"
+            assert progress["rows_done"] == progress["rows_total"] > 0
+
+            assert (await http.delete(f"{DOMAIN}/branches/big", headers=editor)).status_code == 204
+            assert (await http.get(f"{DOMAIN}/branches/big", headers=viewer)).status_code == 404
+            names = [
+                b["name"]
+                for b in (await http.get(f"{DOMAIN}/branches", headers=viewer)).json()["items"]
+            ]
+            assert names == ["load", "main"]
+            taken = await http.post(f"{DOMAIN}/branches", json={"name": "big"}, headers=editor)
+            assert taken.status_code == 409
+            assert taken.json()["code"] == "already-exists"
+            assert "Retry-After" in taken.headers
+
+            deleted = await run_branch_delete_job(
+                engine, _job(BRANCH_DELETE_JOB, "big"), runtime=runtime
+            )
+            assert deleted["status"] == "done"
+            again = await http.post(f"{DOMAIN}/branches", json={"name": "big"}, headers=editor)
+            assert again.status_code == 201, again.text
+    finally:
+        await engine.dispose()

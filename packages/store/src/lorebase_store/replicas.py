@@ -58,7 +58,7 @@ STATE_SQL = f"SELECT {STATE_COLUMNS}"
 
 _HEAD_OF_BRANCH = """
     (SELECT r.head FROM refs r
-      WHERE r.domain_id = :domain_id
+      WHERE r.domain_id = :domain_id AND r.deleted_at IS NULL
         AND r.name = coalesce(
             CAST(:branch AS text),
             (SELECT d.default_branch FROM domains d WHERE d.id = :domain_id)

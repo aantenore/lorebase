@@ -359,6 +359,76 @@ def test_branch_commands(http: respx.MockRouter) -> None:
     assert "ahead" in run("branch", "get", "work", "-d", "supply").stdout
 
 
+def _copy_branch(
+    status: str, phase: str = "records", done: int = 0, **progress: Any
+) -> dict[str, Any]:
+    return branch(
+        "big",
+        materialization="full" if status == "done" else "overlay",
+        materialization_status=status,
+        materialization_progress={
+            "phase": phase,
+            "rows_done": done,
+            "rows_total": 10,
+            "error": None,
+            "updated_at": NOW,
+            "finished_at": None,
+            **progress,
+        },
+    )
+
+
+def test_branch_create_wait(http: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorebase_cli.commands import domains
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(domains, "_sleep", sleeps.append)
+    http.post("/domains/supply/branches").respond(201, json=_copy_branch("pending"))
+    get = http.get("/domains/supply/branches/big").mock(
+        side_effect=[
+            httpx.Response(
+                200, json={**_copy_branch("running", "links", 4), "ahead": 0, "behind": 0}
+            ),
+            httpx.Response(
+                200, json={**_copy_branch("running", "links", 4), "ahead": 0, "behind": 0}
+            ),
+            httpx.Response(200, json={**_copy_branch("done", "done", 10), "ahead": 0, "behind": 0}),
+        ]
+    )
+    done = run("branch", "create", "big", "--wait", "--poll-interval", "0.5", "-d", "supply")
+    assert done.exit_code == 0
+    assert get.call_count == 3
+    assert sleeps == [0.5, 0.5, 0.5]
+    assert done.stderr.count("links 4/10") == 1  # a note only when the progress changes
+    assert "done" in done.stdout
+
+    http.post("/domains/supply/branches").respond(201, json=branch("small"))
+    assert run("branch", "create", "small", "--wait", "-d", "supply").exit_code == 0
+    assert len(sleeps) == 3  # no background copy: nothing to wait for
+
+
+def test_branch_create_wait_failure_and_timeout(
+    http: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorebase_cli.commands import domains
+
+    monkeypatch.setattr(domains, "_sleep", lambda _s: None)
+    http.post("/domains/supply/branches").respond(201, json=_copy_branch("pending"))
+    http.get("/domains/supply/branches/big").respond(
+        200,
+        json={**_copy_branch("failed", "links", 4, error="disk full"), "ahead": 0, "behind": 0},
+    )
+    failed = run("branch", "create", "big", "--wait", "-d", "supply")
+    assert failed.exit_code == 1
+    assert "disk full" in failed.stderr
+    http.get("/domains/supply/branches/big").respond(
+        200, json={**_copy_branch("running"), "ahead": 0, "behind": 0}
+    )
+    late = run("branch", "create", "big", "--wait", "--wait-timeout", "0", "-d", "supply")
+    assert late.exit_code == 1
+    assert "still being copied" in late.stderr
+
+
 def test_domain_comes_from_the_environment_or_the_config_file(
     http: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

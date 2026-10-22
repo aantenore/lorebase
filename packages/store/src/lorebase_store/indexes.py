@@ -515,7 +515,8 @@ class BranchIndexes:
 
     With `maintenance` (a maintenance role is configured, `database.maintenance_dsn`), a
     session role that does not own `mat_records` queues every change instead of skipping it;
-    the job worker runs the jobs as the maintenance role.
+    the job worker runs the jobs as the maintenance role. With `defer`, every index to create
+    is queued, whatever the size of its Kind (a transaction that must stay short).
     """
 
     def __init__(
@@ -526,8 +527,10 @@ class BranchIndexes:
         *,
         settings: IndexSettings,
         maintenance: bool = False,
+        defer: bool = False,
     ) -> None:
         self._session = session
+        self._defer = defer
         self._domain = domain_id
         self._branch = branch
         self._settings = settings
@@ -593,7 +596,7 @@ class BranchIndexes:
             return result
         present = {index.name for index in await self._indexes() if index.valid}
         partition = await partition_of(self._session, self._domain)
-        queue_all = mode is IndexMode.QUEUE or await self.overlay()
+        queue_all = mode is IndexMode.QUEUE or self._defer or await self.overlay()
         rows: dict[str, int] = {}
         for spec in (await self._plan(schema)).indexes:
             name = spec.name(self._domain, self._branch)
@@ -757,7 +760,9 @@ _FINISH = text("UPDATE jobs SET status = :status, result = CAST(:result AS jsonb
 _BRANCH_SCHEMA = text(
     "SELECT compiled FROM mat_schema WHERE domain_id = :domain AND branch = :branch"
 )
-_BRANCH_EXISTS = text("SELECT 1 FROM refs WHERE domain_id = :domain AND name = :branch")
+_BRANCH_EXISTS = text(
+    "SELECT 1 FROM refs WHERE domain_id = :domain AND name = :branch AND deleted_at IS NULL"
+)
 _BYPASS = text("SELECT set_config('lorebase.bypass_rls', 'on', true)")
 
 
@@ -897,7 +902,7 @@ async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:
 _SCHEMAS = text(
     "SELECT r.name, s.compiled, r.materialization = 'overlay' FROM refs r "
     "JOIN mat_schema s ON s.domain_id = r.domain_id AND s.branch = r.name "
-    "WHERE r.domain_id = :domain ORDER BY r.name"
+    "WHERE r.domain_id = :domain AND r.deleted_at IS NULL ORDER BY r.name"
 )
 
 

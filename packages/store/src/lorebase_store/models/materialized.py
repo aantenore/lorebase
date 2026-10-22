@@ -168,3 +168,35 @@ class EmbeddingCursor(Base):
     head: Mapped[H32]
     fingerprints: Mapped[dict[str, Any]]
     updated_at: Mapped[datetime]
+
+
+class BranchMaterialization(Base):
+    """Progress of turning an overlay into a full copy in batches (revision 0017).
+
+    One row per branch whose rows a `store.materialize` job copies: a copy branch created
+    as an overlay, or an overlay promoted in the background. `phase` and `cursor` say where
+    the next batch starts (the last key copied of `mat_records`, `mat_links` or
+    `mat_history`); `base_branch` and `base_generation` are the fork point the copy reads.
+    Rows go with their branch.
+    """
+
+    __tablename__ = "branch_materializations"
+    __table_args__ = (
+        _branch_fk(),
+        CheckConstraint("status IN ('pending', 'running', 'done', 'failed')", name="status"),
+        CheckConstraint("phase IN ('records', 'links', 'history', 'switch', 'done')", name="phase"),
+    )
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    status: Mapped[str]
+    phase: Mapped[str]
+    base_branch: Mapped[str]
+    base_generation: Mapped[int] = mapped_column(BigInteger)
+    cursor: Mapped[dict[str, Any] | None]
+    rows_done: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    rows_total: Mapped[int | None] = mapped_column(BigInteger)
+    error: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+    finished_at: Mapped[datetime | None]

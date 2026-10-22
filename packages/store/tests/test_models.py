@@ -21,6 +21,7 @@ DESIGN_TABLES = {
     "mat_history",
     "embeddings",
     "embedding_cursors",
+    "branch_materializations",
     # 7.3 proposals and merges
     "proposals",
     "proposal_reviews",
@@ -98,4 +99,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_web_sessions_migration() -> None:
-    assert head_revisions() == ("0016",)
+    assert head_revisions() == ("0017",)
