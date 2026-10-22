@@ -1,20 +1,13 @@
-"""Inbound Link hops read from the index alone (design 8.7; store schema notes).
+"""The plain reverse Link index again.
 
-The neighborhood walk (`lb_neighborhood`, `lb_neighborhood_overlay`) follows inbound Links
-through `ix_mat_links_reverse` on `(domain_id, branch, relation_id, to_key)` and fetched every
-Link it found from the heap for `from_key`, `values` and `object_hash`. The Links pointing at a
-Record were written by the commits of the Records they come from, so they lie on as many heap
-pages as there are Links: about one page read per Link walked. This revision replaces it with
-`ix_mat_links_reverse_covering`, the same key with `INCLUDE (from_key, "values", object_hash,
-revision_generation, deleted)`, so the hop is an index-only scan on full branches and on both
-halves of an overlay (its lookup filters on `revision_generation` and `deleted`): the Links of
-one target are adjacent in the index. Pages not yet marked all-visible by vacuum are still
-read from the heap.
-
-Index keys and the included columns are kept without deduplication, so the index is about
-twice the size of the one it replaces. The swap follows revision 0011: the parent index is
-created `ON ONLY mat_links`, each partition's index is built concurrently and attached, and
-the old index is dropped once the new one is valid.
+An earlier version of this revision replaced `ix_mat_links_reverse` with a covering index
+(`INCLUDE (from_key, "values", ...)`) so that inbound Link hops of the neighborhood would be
+index-only scans. It was withdrawn: a B-tree entry is limited to about 2.7 KB, so a Link with
+large `values` could no longer be written ("index row size exceeds maximum"), and without
+`values` the hop, which returns them, reads the heap anyway while the index doubles in size.
+On a database that ran the withdrawn version this restores the plain index (built
+concurrently per partition, revision 0011 style) and drops the covering one; elsewhere it
+changes nothing.
 
 Revision ID: 0026
 Revises: 0025
@@ -112,8 +105,8 @@ def _swap(old: BtreeIndex, new: BtreeIndex) -> None:
 
 
 def upgrade() -> None:
-    _swap(OLD, NEW)
+    _swap(NEW, OLD)
 
 
 def downgrade() -> None:
-    _swap(NEW, OLD)
+    """Nothing to undo: the plain index is the one revision 0025 had."""

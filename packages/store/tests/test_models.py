@@ -95,7 +95,7 @@ def test_named_indexes_and_constraints() -> None:
         "ix_mat_records_branch_search",
         "ix_mat_records_values",
         "ix_mat_lexicon_branch_word",
-        "ix_mat_links_reverse_covering",
+        "ix_mat_links_reverse",
         "ix_revision_parents_domain_id_parent_id",
         "uq_operation_invocations_idempotency",
         "ix_jobs_claimable",
