@@ -7,7 +7,15 @@ import json
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_core.model import Schema
+from lorebase_core.model import (
+    Derivation,
+    LinkDirection,
+    PathDerivation,
+    PathStep,
+    Schema,
+    new_id,
+)
+from lorebase_core.model.ids import IdPrefix
 from lorebase_store.commit import create_domain
 from lorebase_store.reads import Direction, head_schema
 from lorebase_store.repositories import scope_to_domain
@@ -188,3 +196,49 @@ async def test_caps(walk: Sessions, engine: AsyncEngine, store: StoreSettings) -
         await around(walk, runtime, [(PART, "P-1")], depth=3)
     with pytest.raises(TraversalLimitError, match="max_nodes 4 exceeds"):
         await around(walk, runtime, [(PART, "P-1")], max_nodes=4)
+
+
+async def test_a_composed_path_is_truncated_only_when_links_are_left_out(
+    walk: Sessions, runtime: StoreRuntime
+) -> None:
+    """`co_supplied` (supplied_by, then back) reaches P-1, P-2 and P-3 from P-1 through S-1:
+    three Links, all followed at fan-out 3, one left out at fan-out 2."""
+    co_supplied = Derivation(
+        id=new_id(IdPrefix.DERIVATION),
+        api_name="co_supplied",
+        definition=PathDerivation(
+            steps=(
+                PathStep(relation=SUPPLIED_BY),
+                PathStep(relation=SUPPLIED_BY, direction=LinkDirection.INVERSE),
+            ),
+        ),
+    )
+
+    async def composed(fanout: int) -> Neighborhood:
+        async with walk() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            found = await head_schema(session, DOMAIN, "main", runtime=runtime)
+            assert found is not None
+            derivations = {**found.schema.derivations, co_supplied.id: co_supplied}
+            return await neighborhood(
+                session,
+                DOMAIN,
+                "main",
+                found.schema.model_copy(update={"derivations": derivations}),
+                [(PART, "P-1")],
+                depth=1,
+                follow={co_supplied.id: Direction.OUT},
+                fanout=fanout,
+                runtime=runtime,
+            )
+
+    exact = await composed(3)
+    assert {(link.from_key, link.to_key) for link in exact.links} == {
+        ("P-1", "P-1"),
+        ("P-1", "P-2"),
+        ("P-1", "P-3"),
+    }
+    assert not exact.truncated, "three Links, all followed"
+    narrow = await composed(2)
+    assert len(narrow.links) == 2
+    assert narrow.truncated, "three Links, two followed"

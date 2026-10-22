@@ -683,7 +683,8 @@ class TraverseSettings(SectionModel):
         description="Links a path Derivation follows from one intermediate Record (smallest "
         "far keys first), at read time and when materialized; a new value rewrites the "
         "materialized paths and the derived values reading a path at the next commit of a "
-        "branch, or when a job worker starts.",
+        "branch, or in the background when a job worker starts. Every process of a "
+        "deployment (Keeper, Scribe, job workers) must use the same value.",
     )
 
 

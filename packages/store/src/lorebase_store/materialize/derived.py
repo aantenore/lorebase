@@ -332,7 +332,9 @@ class DerivedValues:
         forward = hop.direction is LinkDirection.FORWARD
         if hop.path is not None:
             steps = hop.path.steps if forward else reverse_steps(hop.path.steps)
-            keys = await path_affected(self.repository, steps, applied)
+            keys = await path_affected(
+                self.repository, steps, applied, fanout=self.fanout, inverse=not forward
+            )
         else:
             keys = {f if forward else t for f, t in applied.links.get(relation.id, ())}
         far = hop.far_kind

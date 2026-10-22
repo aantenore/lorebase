@@ -15,7 +15,8 @@ the first step, at most `fanout` Links (smallest far keys) per intermediate Reco
 - `fanout_stale` tells whether the recorded fan-out differs from `store.traverse.path_fanout`
   while materialized paths or derived values reading a path depend on it: commits check it
   before their incremental update and then recompute both whole, and `refresh_stale_paths`
-  does the same for every branch (the job workers run it when they start);
+  does the same for every branch (the job workers run it in the background when they start,
+  `run_path_fanout_sweep`; branches with nothing depending on the fan-out only record it);
 - `recompute` rewrites the pairs of the start Records a changeset can affect. A Link of step
   `i` that changed (for a foreign-key step: a `from` Record written or removed) marks its
   near Record at level `i`; the start Records reaching a marked Record, found by walking the
@@ -30,6 +31,7 @@ computes (`expected`) with the stored ones.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
@@ -45,8 +47,9 @@ from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
 from lorebase_store.materialize.links import path_affected, path_pairs_from
 from lorebase_store.materialize.rows import search_weights
 from lorebase_store.materialize.sensitivity import reference_tags
+from lorebase_store.repositories.materializations import BranchMaterializationRepository
 from lorebase_store.repositories.materialized import LinkRow, MaterializedRepository
-from lorebase_store.repositories.refs import LockTimeoutError, RefNotFoundError, RefRepository
+from lorebase_store.repositories.refs import RefRepository
 from lorebase_store.repositories.revisions import RevisionRepository
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
@@ -198,7 +201,10 @@ async def refresh_path_fanout(
 ) -> bool:
     """Rewrite the materialized paths of `branch`, and recompute its derived values when one
     reads a path, when they were computed with another fan-out; in the caller's transaction
-    and under the branch lock. Returns whether it did."""
+    and under the branch lock. Returns whether it did. A branch whose background copy is
+    queued or running is left alone (rewriting it would hold its lock for long and turn its
+    path Links and derived values into own rows mid-copy): its next commit, or the next
+    sweep, rewrites it."""
     settings = runtime.settings
     if not settings.materialize.derivations_enabled:
         return False
@@ -206,6 +212,8 @@ async def refresh_path_fanout(
     refs = RefRepository(session, domain_id)
     await refs.lock(branch, timeout_ms=settings.commit.lock_timeout_ms)
     ref = await refs.require(branch)
+    if await BranchMaterializationRepository(session, domain_id).active(branch):
+        return False
     head = await RevisionRepository(session, domain_id).require(ref.head)
     repository = MaterializedRepository(
         session,
@@ -258,12 +266,17 @@ async def refresh_path_fanout(
 
 
 async def refresh_stale_paths(
-    sessions: async_sessionmaker[AsyncSession], *, runtime: StoreRuntime
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    runtime: StoreRuntime,
+    stop: asyncio.Event | None = None,
 ) -> list[tuple[str, str]]:
     """Rewrite the materialized paths of every branch computed with another fan-out than
     `store.traverse.path_fanout`, one branch per transaction; returns the branches
-    rewritten. A branch deleted or locked past `commit.lock_timeout_ms` meanwhile is skipped
-    (the next commit on it rewrites them)."""
+    rewritten. A branch that fails (deleted or locked past `commit.lock_timeout_ms`
+    meanwhile, or any other error) is logged and skipped: the next commit on it rewrites
+    them. Stops between branches once `stop` is set. Job workers run it next to their job
+    loop (`run_path_fanout_sweep`), not before it."""
     if not runtime.settings.materialize.derivations_enabled:
         return []
     async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
@@ -271,13 +284,32 @@ async def refresh_stale_paths(
         stale = [(d, b) for d, b in await session.execute(_STALE, {"fanout": fanout})]
     rewritten: list[tuple[str, str]] = []
     for domain_id, branch in stale:
+        if stop is not None and stop.is_set():
+            break
         try:
             async with sessions() as session, session.begin():
                 if await refresh_path_fanout(session, domain_id, branch, runtime=runtime):
                     rewritten.append((domain_id, branch))
-        except (RefNotFoundError, LockTimeoutError) as error:
+        except Exception as error:  # one branch must not stop the others
             logger.warning(
                 "materialized paths not rewritten",
-                extra={"domain": domain_id, "branch": branch, "error": str(error)},
+                extra={"domain": domain_id, "branch": branch, "error": type(error).__name__},
             )
     return rewritten
+
+
+async def run_path_fanout_sweep(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    runtime: StoreRuntime,
+    stop: asyncio.Event | None = None,
+) -> None:
+    """`refresh_stale_paths` as a background task of a job worker: never raises (an error
+    listing the branches is logged), logs how many branches it rewrote."""
+    try:
+        rewritten = await refresh_stale_paths(sessions, runtime=runtime, stop=stop)
+    except Exception as error:
+        logger.warning("path fan-out sweep failed", extra={"error": type(error).__name__})
+        return
+    if rewritten:
+        logger.info("materialized paths rewritten", extra={"branches": len(rewritten)})

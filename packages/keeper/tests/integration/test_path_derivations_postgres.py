@@ -41,8 +41,10 @@ from lorebase_store.materialize import (
     rebuild,
     verify,
 )
+from lorebase_store.materialize import paths as paths_module
 from lorebase_store.materialize.paths import refresh_path_fanout, refresh_stale_paths
 from lorebase_store.models.enums import GrantScope, PrincipalType
+from lorebase_store.repositories.materializations import BranchMaterializationRepository
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
@@ -765,3 +767,127 @@ async def test_a_fanout_change_rewrites_materialized_paths(seeded: Seeded) -> No
         async with session.begin():
             report = await verify(session, DOMAIN, "main", runtime=runtime(), derived=True)
         assert report.ok, report.divergences[:3]
+
+
+async def test_inverse_path_values_follow_the_fanout_bound_incrementally(seeded: Seeded) -> None:
+    """At `path_fanout` 2, a Contract moved to a Supplier with two Contracts pushes the larger
+    of them out of the Supplier's bound: its `part_count` (over `contracted_parts`, the
+    inverse direction; added by `test_derivations_and_operations_read_paths`) changes though
+    none of its Links did, and the commit updates it like a full recomputation would."""
+    narrow = StoreRuntime.from_settings(StoreSettings(traverse={"path_fanout": 2}))
+    with_supplier = relation_id(seeded.schema, "with_supplier")
+    async with keeper(seeded.app_url) as http:
+        data = await current(http)
+    supplying = {s for _, s in data.supplied_by}
+    contracts_of: dict[str, set[str]] = defaultdict(set)
+    for contract, holder in data.with_supplier:
+        contracts_of[holder].add(contract)
+    own, supplier = next(
+        (c, s)
+        for c, s in sorted(data.with_supplier)
+        if s in supplying and len(contracts_of[s]) == 1
+    )
+    others = sorted({c for c, _ in data.with_supplier} - {own})
+    big, small = others[-1], others[0]
+    displaced = max(own, big)
+    held_by = dict(data.with_supplier)  # many_to_one: one Supplier per Contract
+
+    def moved(contract: str) -> list[LinkDelete | LinkUpsert]:
+        return [
+            LinkDelete(relation=with_supplier, from_key=contract, to_key=held_by[contract]),
+            LinkUpsert(link=Link(relation=with_supplier, from_key=contract, to_key=supplier)),
+        ]
+
+    async with owner_session(seeded.owner_url) as session:
+        await commit_changes(session, runtime(), Clock(), moved(big), message="Move one")
+        async with session.begin():
+            assert await refresh_path_fanout(session, DOMAIN, "main", runtime=narrow)
+        before = await stored(session, "main", path_id(seeded, "supplier_contracts"))
+        assert displaced in {c for _, c in before}
+        await commit_changes(session, narrow, Clock(), moved(small), message="Move another")
+        after = await stored(session, "main", path_id(seeded, "supplier_contracts"))
+        assert displaced not in {c for _, c in after}
+        async with session.begin():
+            report = await verify(session, DOMAIN, "main", runtime=narrow, derived=True)
+        assert report.ok, report.divergences[:3]
+
+
+async def test_the_fanout_sweep_skips_failing_and_copying_branches(
+    seeded: Seeded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wide = StoreRuntime.from_settings(StoreSettings(traverse={"path_fanout": 3}))
+    tried: list[str] = []
+
+    async def failing(session: AsyncSession, domain_id: str, branch: str, **_: Any) -> bool:
+        tried.append(branch)
+        raise RuntimeError("not this one")
+
+    async def copying(self: BranchMaterializationRepository, branch: str) -> bool:
+        return True
+
+    async def recorded(session: AsyncSession) -> int | None:
+        async with session.begin():
+            await scope_to_domain(session, DOMAIN)
+            found = await session.scalar(
+                text("SELECT path_fanout FROM mat_schema WHERE domain_id = :d AND branch = 'main'"),
+                {"d": DOMAIN},
+            )
+            return None if found is None else int(found)
+
+    async with owner_session(seeded.owner_url) as session:
+        sessions = async_sessionmaker(session.bind, expire_on_commit=False)
+        with monkeypatch.context() as patched:
+            patched.setattr(paths_module, "refresh_path_fanout", failing)
+            assert await refresh_stale_paths(sessions, runtime=wide) == []
+        assert "main" in tried
+        assert len(tried) > 1  # one failing branch does not stop the others
+
+        before = await recorded(session)
+        assert before != 3
+        with monkeypatch.context() as patched:
+            # a branch copied in the background is left to a later commit or sweep
+            patched.setattr(BranchMaterializationRepository, "active", copying)
+            async with session.begin():
+                assert not await refresh_path_fanout(session, DOMAIN, "main", runtime=wide)
+        assert await recorded(session) == before
+
+
+async def test_operation_links_over_a_path_stop_at_the_page_cap(seeded: Seeded) -> None:
+    """With `store.reads.max_page_rows` 2, `links()` over a path whose first step has two
+    Links or more is refused like a Relation with that many (the step is read no further);
+    one with a single Link to a Supplier with a single Contract is evaluated."""
+    async with keeper(seeded.app_url) as http:
+        data = await current(http)
+    suppliers: dict[str, set[str]] = defaultdict(set)
+    for part, supplier in data.supplied_by:
+        suppliers[part].add(supplier)
+    contracts: dict[str, set[str]] = defaultdict(set)
+    for contract, supplier in data.with_supplier:
+        contracts[supplier].add(contract)
+    wide = next(p for p, held in sorted(suppliers.items()) if len(held) >= 2)
+    narrow = next(
+        p
+        for p, held in sorted(suppliers.items())
+        if len(held) == 1 and len(contracts[next(iter(held))]) == 1
+    )
+    contract = sorted(contracts[next(iter(suppliers[narrow]))])[0]
+    parts = len({a for a, c in data.expected("supplier_contracts") if c == contract})
+
+    async def run(http: httpx.AsyncClient, part: str) -> httpx.Response:
+        return await http.post(
+            f"{BASE}/operations/check_contracts/execute",
+            json={
+                "branch": "main",
+                "dry_run": True,
+                "parameters": {"part": part, "contract": contract, "contracts": 1, "parts": parts},
+            },
+        )
+
+    async with keeper(seeded.app_url, store={"reads": {"max_page_rows": 2}}) as http:
+        refused = await run(http, wide)
+        assert refused.status_code == 200, refused.text
+        assert [v["code"] for v in refused.json()["violations"]] == ["expression.limit_exceeded"]
+        assert "store.reads.max_page_rows" in refused.json()["violations"][0]["message"]
+        evaluated = await run(http, narrow)
+        assert evaluated.status_code == 200, evaluated.text
+        assert evaluated.json()["violations"] == []

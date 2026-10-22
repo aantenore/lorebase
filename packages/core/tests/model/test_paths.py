@@ -5,14 +5,23 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
-from lorebase_core.expr import ExprLimits, LinkedRecord, MemoryResolver, links_read
+from lorebase_core.expr import (
+    ExprLimits,
+    LinkedRecord,
+    MemoryResolver,
+    derivation_reads,
+    links_read,
+)
 from lorebase_core.expr.compiler import compile, run
 from lorebase_core.expr.context import activation
 from lorebase_core.expr.environment import link_fields, record_environment
+from lorebase_core.expr.sensitivity import effective_tags, operation_reads
 from lorebase_core.expr.types import INT
 from lorebase_core.model import (
     Derivation,
+    ExpressionDerivation,
     LinkDirection,
+    OperationParameter,
     PathDerivation,
     PathStep,
     Record,
@@ -20,6 +29,7 @@ from lorebase_core.model import (
     schema_from_document,
     schema_to_document,
 )
+from lorebase_core.model.attribute import Sensitivity
 from lorebase_core.model.paths import bounded, path_relation, walk
 from lorebase_core.query import (
     Query,
@@ -29,16 +39,22 @@ from lorebase_core.query import (
     resolve_query,
     target_of_kind,
 )
-from lorebase_core.validate import validate_schema
+from lorebase_core.types import TypeSpec
+from lorebase_core.validate import IssueCode, validate_schema
 
 from .supply import (
     CONTRACT,
+    CONTRACT_VALUE,
     MADE_AT,
     PART,
     PLANT,
     SUPPLIED_BY,
+    SUPPLIER,
+    SUPPLIER_COUNT,
     SUPPLIER_COUNT_DRV,
+    SUPPLIER_COUNTRY,
     WITH_SUPPLIER,
+    flag_operation,
     ident,
     supply_schema,
 )
@@ -193,3 +209,80 @@ def test_a_yaml_aggregate_may_name_a_path() -> None:
     document["derivations"]["supplier_count"]["definition"]["relation"] = "contracts_of_suppliers"
     loaded = schema_from_document(document, base=schema)
     assert loaded == aggregate_over_contracts(schema)
+
+
+def tagged(schema: Schema) -> Schema:
+    """`schema` with the Supplier country (crossed by `contracts_of_suppliers`) tagged `pii`
+    and the Contract value (at its far end) tagged `confidential`."""
+    kinds = dict(schema.kinds)
+    for kind_id, attribute_id, tag in (
+        (SUPPLIER, SUPPLIER_COUNTRY, Sensitivity.PII),
+        (CONTRACT, CONTRACT_VALUE, Sensitivity.CONFIDENTIAL),
+    ):
+        kind = kinds[kind_id]
+        attribute = kind.attributes[attribute_id].model_copy(update={"sensitivity": (tag,)})
+        kinds[kind_id] = kind.model_copy(
+            update={"attributes": {**kind.attributes, attribute_id: attribute}}
+        )
+    return schema.model_copy(update={"kinds": kinds})
+
+
+def with_definition(schema: Schema, definition: object) -> Schema:
+    count = schema.derivations[SUPPLIER_COUNT_DRV]
+    changed = count.model_copy(update={"definition": definition})
+    return schema.model_copy(
+        update={"derivations": {**schema.derivations, SUPPLIER_COUNT_DRV: changed}}
+    )
+
+
+def inherited(schema: Schema) -> list[str]:
+    return [
+        issue.message
+        for issue in validate_schema(schema)
+        if issue.code is IssueCode.SCHEMA_SENSITIVITY_INHERITED
+    ]
+
+
+def test_a_path_value_carries_the_tags_of_what_it_reads_not_of_what_it_crosses() -> None:
+    schema = tagged(aggregate_over_contracts(schema_with(part_contracts())))
+    count = schema.derivations[SUPPLIER_COUNT_DRV]
+    # a count reads no Attribute: crossing Suppliers only reveals linkage (Kind scope)
+    assert derivation_reads(schema, count) == frozenset()
+    assert SUPPLIER_COUNT not in effective_tags(schema)
+    assert inherited(schema) == []
+
+    definition = count.definition.model_copy(update={"filter": "value > 0"})
+    filtered = with_definition(schema, definition)
+    assert derivation_reads(filtered, filtered.derivations[SUPPLIER_COUNT_DRV]) == {
+        (CONTRACT, CONTRACT_VALUE)
+    }
+    assert effective_tags(filtered)[SUPPLIER_COUNT] == {Sensitivity.CONFIDENTIAL}
+    (message,) = inherited(filtered)
+    assert "confidential" in message
+
+    expression = with_definition(
+        schema,
+        ExpressionDerivation(
+            kind=PART,
+            attribute=SUPPLIER_COUNT,
+            expression="size(links.contracts_of_suppliers.filter(c, c.value > 0))",
+        ),
+    )
+    assert effective_tags(expression)[SUPPLIER_COUNT] == {Sensitivity.CONFIDENTIAL}
+    assert inherited(expression)
+
+
+def test_operation_links_over_a_path_read_the_far_kind() -> None:
+    schema = tagged(schema_with(part_contracts()))
+    operation = flag_operation().model_copy(
+        update={"parameters": (OperationParameter(name="part", type=TypeSpec.ref(PART)),)}
+    )
+
+    def read(source: str) -> set[str]:
+        return {a.api_name for a in operation_reads(schema, operation, source)}
+
+    typed = 'links(part, "contracts_of_suppliers").exists(c, c.value > 0)'
+    assert read(typed) == {"value"}
+    assert read('size(links(part, "contracts_of_suppliers")) > 0') == set()
+    # an expression that does not type check is resolved from its syntax
+    assert read('links(part, "contracts_of_suppliers").value + "x"') == {"value"}
