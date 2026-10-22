@@ -28,12 +28,21 @@ export function DerivationPreview({ kind, attribute }: { kind: string; attribute
     );
   }
   const rows = records.data.rows.slice(0, SAMPLE_RECORDS);
+  const valueOf = (row: (typeof rows)[number]) =>
+    row.derived[attribute] ?? row.attributes[attribute];
+  const noValues = rows.length > 0 && rows.every((row) => valueOf(row) == null);
   return (
     <div className="flex flex-col gap-2">
       <p className="text-xs text-muted">
         {attribute} of the first {SAMPLE_RECORDS} {kind} Records on {scope.branch}, computed by the
         saved Derivation.
       </p>
+      {noValues && (
+        <p className="text-xs text-muted">
+          Keeper returned no value of {attribute} for these Records: none is computed yet, or this
+          Keeper does not serve derived values.
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="text-sm text-muted">No {kind} Records on this Branch.</p>
       ) : (
@@ -56,7 +65,7 @@ export function DerivationPreview({ kind, attribute }: { kind: string; attribute
                     {row.title === '' ? row.key : row.title}
                   </th>
                   <td className="py-1">
-                    <ValueView value={row.derived[attribute] ?? row.attributes[attribute]} />
+                    <ValueView value={valueOf(row)} />
                   </td>
                 </tr>
               ))}

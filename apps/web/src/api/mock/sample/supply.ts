@@ -257,8 +257,14 @@ const mainSchema: SchemaBody = {
       target_kind: supplier.id,
       key_mapping: ['vendor_id'],
       attribute_mapping: {
-        [eid('att', 'supplier_legal_name')]: { column: 'vendor_name' },
-        [eid('att', 'supplier_country')]: { column: 'country_iso' },
+        [eid('att', 'supplier_legal_name')]: {
+          column: 'vendor_name',
+          transforms: [{ name: 'trim' }],
+        },
+        [eid('att', 'supplier_country')]: {
+          column: 'country_iso',
+          transforms: [{ name: 'trim' }, { name: 'upper' }],
+        },
         [eid('att', 'supplier_tier')]: { column: 'tier' },
       },
       relation_mapping: [],
