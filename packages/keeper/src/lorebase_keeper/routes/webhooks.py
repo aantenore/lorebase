@@ -1,20 +1,24 @@
-"""Webhooks of a Domain (design 10.5): create, list, delete.
+"""Webhooks of a Domain (design 10.5): create, list, update clearances, delete.
 
 Managing webhooks needs `domain.settings` (the `admin` role). A new webhook's secret is
 returned once; only its digest is stored (`lorebase_store.webhooks.signing`), sealed under
 `webhooks.encryption_key` when that is set (`lorebase_store.webhooks.keys`). Every change is
-written to the audit log (`webhook.create`, `webhook.delete`) without the secret or the full
-URL. Deliveries are made by `lorebase_store.webhooks.deliver_pending`, run by a worker.
+written to the audit log (`webhook.create`, `webhook.update`, `webhook.delete`) without the
+secret or the full URL. Deliveries are made by `lorebase_store.webhooks.deliver_pending`, run by
+a worker.
 
 A webhook subscribes to `revision.committed`, to `operation.<side effect>` events or to every
 Operation event (`operation.*`). Sensitive values in Operation events reach it masked unless it
 holds `clearances` for their tags; granting one needs the matching clearance permission
 (`pii.read`, `confidential.read`, `restricted.read`) on the whole Domain, so an administrator
-cannot route values to a webhook that they could not read themselves.
+cannot route values to a webhook that they could not read themselves. `PATCH` replaces the
+clearances: the permission is needed only for those it adds, so anyone managing webhooks can
+narrow one.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
@@ -36,7 +40,7 @@ from lorebase_keeper.errors import (
     ValidationProblem,
 )
 from lorebase_keeper.reading.problems import invalid
-from lorebase_keeper.reading.sensitivity import CLEARANCES, clearance_of
+from lorebase_keeper.reading.sensitivity import CLEARANCES, Clearance, clearance_of
 from lorebase_platform.settings import Settings
 from lorebase_store.outbox_events import EVENT_TYPES, event_type_problem
 from lorebase_store.webhooks import (
@@ -97,6 +101,15 @@ class CreateWebhook(BaseModel):
     )
 
 
+class UpdateWebhook(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clearances: list[Literal["pii", "confidential", "restricted"]] = Field(
+        description="The new clearances, replacing the current ones. Each one added needs the "
+        "matching clearance permission on the Domain; removing needs only domain.settings."
+    )
+
+
 class WebhookOut(BaseModel):
     id: str
     url: str
@@ -134,6 +147,22 @@ def _out(row: WebhookRow) -> dict[str, Any]:
     }
 
 
+def _require_clearances(held: Clearance, tags: Iterable[str]) -> None:
+    """403 unless `held` (the caller's clearance) covers, Domain-wide, every tag."""
+    wanted = set(tags)
+    missing = sorted(
+        CLEARANCES[Sensitivity(tag)].value
+        for tag in wanted
+        if Sensitivity(tag) not in held.everywhere
+    )
+    if missing:
+        raise ProblemError(
+            FORBIDDEN,
+            f"Clearing a webhook for sensitive values needs {' and '.join(missing)} on the Domain.",
+            extensions={"code": "clearance_required", "permission": missing[0]},
+        )
+
+
 @router.post(BASE, status_code=201, summary="Create a webhook", responses=_CREATE_ERRORS)
 async def create_webhook(
     domain_id: str,
@@ -155,18 +184,7 @@ async def create_webhook(
             raise invalid(f"/body/events/{index}", unknown, "unknown")
     if body.clearances:
         held = await clearance_of(auth.authorizer, access.principal, domain_id, None)
-        missing = sorted(
-            CLEARANCES[Sensitivity(tag)].value
-            for tag in set(body.clearances)
-            if Sensitivity(tag) not in held.everywhere
-        )
-        if missing:
-            raise ProblemError(
-                FORBIDDEN,
-                f"Clearing a webhook for sensitive values needs {' and '.join(missing)} on the "
-                "Domain.",
-                extensions={"code": "clearance_required", "permission": missing[0]},
-            )
+        _require_clearances(held, body.clearances)
     secret = new_secret(settings.secret_bytes)
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
@@ -203,6 +221,44 @@ async def list_webhooks(domain_id: str, access: Manage, store: StoreDep) -> Webh
         await require_domain(session, domain_id)
         rows = await WebhookRepository(session, domain_id).all()
     return WebhookList(items=[WebhookOut(**_out(row)) for row in rows])
+
+
+@router.patch(
+    f"{BASE}/{{webhook_id}}",
+    summary="Change the clearances of a webhook",
+    response_model=WebhookOut,
+    responses=_CREATE_ERRORS,
+)
+async def update_webhook(
+    domain_id: str,
+    webhook_id: str,
+    body: UpdateWebhook,
+    access: Manage,
+    store: StoreDep,
+    request: Request,
+    auth: AuthDep,
+) -> WebhookOut:
+    """Replace the sensitivity clearances of a webhook; only added ones need their permission."""
+    # Read before the row lock: the authorizer may be slow, the lock is held only to compare.
+    held = await clearance_of(auth.authorizer, access.principal, domain_id, None)
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        webhooks = WebhookRepository(session, domain_id)
+        current = await webhooks.get(webhook_id, for_update=True)
+        if current is None:
+            raise ProblemError(NOT_FOUND, f"Webhook {webhook_id!r} not found.")
+        _require_clearances(held, set(body.clearances) - set(current.clearances))
+        row = await webhooks.set_clearances(webhook_id, body.clearances)
+    if row is None:
+        raise ProblemError(NOT_FOUND, f"Webhook {webhook_id!r} not found.")
+    annotate(
+        request,
+        action="webhook.update",
+        target=row.id,
+        clearances_before=list(current.clearances),
+        clearances=list(row.clearances),
+    )
+    return WebhookOut(**_out(row))
 
 
 @router.delete(

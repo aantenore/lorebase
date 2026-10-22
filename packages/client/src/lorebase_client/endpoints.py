@@ -1093,6 +1093,17 @@ def list_webhooks(domain: str) -> Call[m.WebhookList]:
     return Call("GET", f"{_domain(domain)}/webhooks", parse_model(m.WebhookList), safe=True)
 
 
+def update_webhook(domain: str, webhook_id: str, body: m.UpdateWebhook) -> Call[m.Webhook]:
+    """Idempotent: the body is the full new set of clearances."""
+    return Call(
+        "PATCH",
+        f"{_domain(domain)}/webhooks/{_seg(webhook_id)}",
+        parse_model(m.Webhook),
+        body=body.payload(),
+        safe=True,
+    )
+
+
 def delete_webhook(domain: str, webhook_id: str) -> Call[None]:
     return Call("DELETE", f"{_domain(domain)}/webhooks/{_seg(webhook_id)}", parse_none, safe=True)
 

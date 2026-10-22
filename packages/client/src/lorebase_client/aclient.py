@@ -1433,6 +1433,14 @@ class Webhooks(_Resource):
     async def list(self, domain: str) -> m.WebhookList:
         return await self._c.send(ep.list_webhooks(domain))
 
+    async def set_clearances(
+        self, domain: str, webhook_id: str, clearances: Sequence[str]
+    ) -> m.Webhook:
+        """Replace the clearances of a webhook; adding one needs its clearance permission on
+        the Domain."""
+        body = m.UpdateWebhook(clearances=list(clearances))
+        return await self._c.send(ep.update_webhook(domain, webhook_id, body))
+
     async def delete(self, domain: str, webhook_id: str) -> None:
         await self._c.send(ep.delete_webhook(domain, webhook_id))
 

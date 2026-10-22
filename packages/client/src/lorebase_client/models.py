@@ -1236,6 +1236,12 @@ class CreateWebhook(RequestModel):
     in clear; others are masked."""
 
 
+class UpdateWebhook(RequestModel):
+    """The new clearances of a webhook, replacing the current ones."""
+
+    clearances: list[str]
+
+
 class Webhook(Model):
     id: str
     url: str

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Table, delete, func, insert, select
+from sqlalchemy import Table, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.auth.scope import new_id
@@ -110,6 +110,27 @@ class WebhookRepository:
             select(func.count()).select_from(WEBHOOKS).where(WEBHOOKS.c.domain_id == self._domain)
         )
         return int(found or 0)
+
+    async def get(self, webhook_id: str, *, for_update: bool = False) -> WebhookRow | None:
+        """One webhook of the Domain, row-locked when `for_update`; None when absent."""
+        query = select(*_COLUMNS).where(
+            WEBHOOKS.c.domain_id == self._domain, WEBHOOKS.c.id == webhook_id
+        )
+        found = (
+            await self._session.execute(query.with_for_update() if for_update else query)
+        ).first()
+        return None if found is None else webhook_row(found)
+
+    async def set_clearances(self, webhook_id: str, clearances: Sequence[str]) -> WebhookRow | None:
+        """Replace the clearances of a webhook; None when it does not exist."""
+        result = await self._session.execute(
+            update(WEBHOOKS)
+            .where(WEBHOOKS.c.domain_id == self._domain, WEBHOOKS.c.id == webhook_id)
+            .values(clearances=sorted(set(clearances)))
+            .returning(*_COLUMNS)
+        )
+        found = result.first()
+        return None if found is None else webhook_row(found)
 
     async def delete(self, webhook_id: str) -> bool:
         """Delete a webhook and its deliveries; false when it does not exist."""
