@@ -5855,7 +5855,7 @@
             }
           },
           "403": {
-            "description": "The caller lacks schema.read for the branch.",
+            "description": "The caller lacks schema.read for the branch and for the Source's target Kind.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13492,7 +13492,7 @@
               }
             ],
             "title": "Keys",
-            "description": "Keys of the Records to evaluate instead of the first ones by key."
+            "description": "Keys of the Records to evaluate instead of the first ones by key; at most `read.derivation_preview.max_limit`, each at most `read.derivation_preview_max_key_length` characters."
           }
         },
         "type": "object",
@@ -17342,8 +17342,16 @@
       "PreviewErrorOut": {
         "properties": {
           "code": {
-            "type": "string",
-            "title": "Code"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code",
+            "description": "Null when the value is masked: only the failure itself is reported."
           },
           "message": {
             "anyOf": [
@@ -20408,7 +20416,7 @@
             "type": "array",
             "minItems": 1,
             "title": "Rows",
-            "description": "Sample rows: column name to value (text for CSV, native values for JSON). At most `read.source_preview_max_rows`."
+            "description": "Sample rows: column name to value (text for CSV, native values for JSON). At most `read.source_preview_max_rows`, each with at most `read.source_preview_max_columns` columns."
           },
           "branch": {
             "anyOf": [

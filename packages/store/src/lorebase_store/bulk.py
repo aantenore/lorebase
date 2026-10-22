@@ -58,10 +58,14 @@ def pairs_in(
     time grows with the list (about half a millisecond per pair); the semi-join plans once
     and probes the index once per pair.
     """
-    keys = func.unnest(
-        bindparam(None, [a for a, _ in pairs], type_=ARRAY(Text)),
-        bindparam(None, [b for _, b in pairs], type_=ARRAY(Text)),
-    ).table_valued("first", "second").render_derived()
+    keys = (
+        func.unnest(
+            bindparam(None, [a for a, _ in pairs], type_=ARRAY(Text)),
+            bindparam(None, [b for _, b in pairs], type_=ARRAY(Text)),
+        )
+        .table_valued("first", "second")
+        .render_derived()
+    )
     return tuple_(first, second).in_(select(keys.c.first, keys.c.second))
 
 

@@ -1,9 +1,9 @@
 /** Previews of schema edits that are not saved yet (Derivations and Source expression mappings). */
 import type { JsonValue } from './types';
 
-/** Why a value could not be computed. `message` is null when the value is masked. */
+/** Why a value could not be computed. `code` and `message` are null when the value is masked. */
 export interface PreviewError {
-  code: string;
+  code: string | null;
   message: string | null;
 }
 

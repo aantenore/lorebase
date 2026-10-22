@@ -8,25 +8,20 @@ each expression before the mapping's transforms; transforms and the coercion to 
 type are the mapper's (`lorebase_scribe.sources.mapping`, which Keeper does not import).
 
 The rows are the caller's own input and the answer is made of them: no Record is read, nothing is
-stored and no connection is opened, so reading the schema is the only permission involved.
+stored and no connection is opened, so reading the schema is the only permission involved (a
+grant narrowed to a Kind is enough when it names the Source's target Kind). Expressions are
+compiled once over every column the rows have; a column a row lacks is null, as in Scribe.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import JsonValue
 
-from lorebase_core.expr import (
-    ExprError,
-    ExprLimits,
-    compile_row_expression,
-    evaluate_row_expression,
-    row_value,
-)
-from lorebase_core.expr.compiler import CompiledExpression
+from lorebase_core.expr import ExprError, ExprLimits, RowExpressions, row_value
 from lorebase_core.model import Schema, Source
 from lorebase_core.validate import SchemaRules
 from lorebase_keeper.services.derivation_preview import CandidateInvalidError
@@ -59,21 +54,31 @@ class SourceCandidate:
 
 
 def candidate_of(
-    current: Schema, change: ChangeSetInput, name: str, rules: SchemaRules
+    current: Schema,
+    change: ChangeSetInput,
+    name: str,
+    rules: SchemaRules,
+    *,
+    authorize: Callable[[Schema, Source | None], None] | None = None,
 ) -> SourceCandidate:
     """The Source `name` of the schema `change` asks for, once the schema is valid.
 
-    Raises `CandidateInvalidError` when the change set cannot be read, fails static validation
-    or `name` is not a Source of it.
+    `authorize` is called with the schema the change set produces and the Source in it (None
+    when there is none) before the schema is validated, so a caller who may not read the
+    Source's target Kind is refused before any issue is reported. Raises
+    `CandidateInvalidError` when the change set cannot be read, fails static validation or
+    `name` is not a Source of it.
     """
     try:
         schema = target_schema(current, change)
     except ChangeSetInvalidError as invalid:
         raise CandidateInvalidError(invalid.issues) from None
+    source = schema.source_by_api_name(name)
+    if authorize is not None:
+        authorize(schema, source)
     issues = static_issues(schema, rules)
     if issues:
         raise CandidateInvalidError(issues)
-    source = schema.source_by_api_name(name)
     if source is None:
         raise CandidateInvalidError(
             [Finding(SOURCE_NOT_FOUND, f"No Source {name!r} in the schema.", ("sources",))]
@@ -99,29 +104,22 @@ def evaluate(
     limits: ExprLimits,
     now: datetime,
 ) -> list[dict[str, ExpressionCell]]:
-    """The value of every expression mapping of the Source for each row, in row order."""
+    """The value of every expression mapping of the Source for each row, in row order.
+
+    Expressions are compiled once over every column the rows have, as Scribe compiles them
+    over the columns of the Source: a column a row lacks is null."""
     expressions = expression_attributes(candidate)
-    programs: dict[tuple[str, frozenset[str]], CompiledExpression | ExprError] = {}
-
-    def program(expression: str, row: Mapping[str, JsonValue]) -> CompiledExpression | ExprError:
-        key = (expression, frozenset(row))
-        if key not in programs:
-            try:
-                programs[key] = compile_row_expression(candidate.schema, expression, row, limits)
-            except ExprError as error:
-                programs[key] = error
-        return programs[key]
-
+    columns: dict[str, None] = {}
+    for row in rows:
+        columns.update(dict.fromkeys(row))
+    programs = RowExpressions(candidate.schema, columns, limits)
     cells: list[dict[str, ExpressionCell]] = []
     for row in rows:
         found: dict[str, ExpressionCell] = {}
         for attribute, expression in expressions.items():
-            compiled = program(expression, row)
             try:
-                if isinstance(compiled, ExprError):
-                    raise compiled
                 found[attribute] = ExpressionCell(
-                    row_value(evaluate_row_expression(compiled, row, now=now))
+                    row_value(programs.evaluate(expression, row, now=now))
                 )
             except ExprError as error:
                 found[attribute] = ExpressionCell(None, error.code.value, error.describe())

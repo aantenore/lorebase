@@ -10,12 +10,15 @@ What the caller may see follows Record reads: the Kinds the Derivation touches (
 far Kind of an aggregate, the Kinds reached through `links.<relation>`) must be readable, and
 the value is masked when the computed Attribute is sensitive in the schema read, in the default
 branch's or in the candidate, which carries the tags of everything the Derivation may read
-(`lorebase_core.expr.sensitivity`). A masked value hides its error message too.
+(`lorebase_core.expr.sensitivity`), unless the caller is cleared for each tag on the
+Derivation's Kind and on every Kind the tag comes from (`tag_origins`: a value computed from a
+sensitive Attribute of a far Kind tells about its Records). A masked value only says whether
+it failed: no error code, no message.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from pydantic import JsonValue
@@ -28,6 +31,7 @@ from lorebase_core.expr import (
     derivation_reads,
     links_read,
 )
+from lorebase_core.expr.sensitivity import schema_tags, tag_origins
 from lorebase_core.model import (
     AggregateDerivation,
     Attribute,
@@ -36,6 +40,7 @@ from lorebase_core.model import (
     Kind,
     LinkDirection,
     Schema,
+    Sensitivity,
 )
 from lorebase_core.validate import SchemaRules
 from lorebase_keeper.auth.read_audit import note_sensitive
@@ -72,25 +77,27 @@ class Candidate:
     kind: Kind
     attribute: Attribute
     compiled: CompiledDerivation
+    limits: ExprLimits
 
     @property
     def touched(self) -> frozenset[str]:
         """Ids of the Kinds the Derivation reads Records of, its own included."""
-        return touched_kinds(self.schema, self.derivation, self.compiled)
+        return touched_kinds(self.schema, self.derivation, self.compiled, self.limits)
 
 
 @dataclass(frozen=True)
 class PreviewItem:
     """One sample Record: its key and title, and the value or the error masked for the caller.
 
-    A masked item carries the masked value (none with `keeper.reads.sensitivity.omit`) and the
-    error code only.
+    A masked item carries the masked value (none with `keeper.reads.sensitivity.omit`) and
+    whether the value failed (`failed`), without the error code or message.
     """
 
     key: str
     title: str | None
     value: JsonValue
     masked: bool
+    failed: bool = False
     error_code: str | None = None
     error_message: str | None = None
 
@@ -138,12 +145,16 @@ def candidate_of(
         )
     kind = schema.kinds[definition.kind]
     attribute = kind.attributes[definition.attribute]
-    compiled = compile_derivation(schema, derivation, rules.expression_limits or ExprLimits())
-    return Candidate(schema, derivation, kind, attribute, compiled)
+    limits = rules.expression_limits or ExprLimits()
+    compiled = compile_derivation(schema, derivation, limits)
+    return Candidate(schema, derivation, kind, attribute, compiled, limits)
 
 
 def touched_kinds(
-    schema: Schema, derivation: Derivation, compiled: CompiledDerivation
+    schema: Schema,
+    derivation: Derivation,
+    compiled: CompiledDerivation,
+    limits: ExprLimits | None = None,
 ) -> frozenset[str]:
     """Ids of the Kinds whose Records the Derivation reads: its own, the Kinds of the
     Attributes it may read and the far Kinds of the Relations it follows (every Kind a path
@@ -153,7 +164,7 @@ def touched_kinds(
         return frozenset()
     paths = schema.path_relations()
     kinds = {definition.kind}
-    kinds.update(kind_id for kind_id, _ in derivation_reads(schema, derivation))
+    kinds.update(kind_id for kind_id, _ in derivation_reads(schema, derivation, limits))
     followed: list[tuple[str, LinkDirection]] = []
     if isinstance(definition, AggregateDerivation):
         followed.append((definition.relation, definition.direction))
@@ -207,7 +218,13 @@ async def preview(
         fanout=store.settings.traverse.path_fanout,
     )
     masking = point.masking.over(point.schema, candidate.schema)
-    masked = masking.hidden(candidate.attribute, (candidate.kind.id,))
+    origins = tag_origins(
+        candidate.schema,
+        candidate.attribute.id,
+        _united(masking.reference, schema_tags(point.schema)),
+        candidate.limits,
+    )
+    masked = masking.hidden_with_origins(candidate.attribute, (candidate.kind.id,), origins)
     items: list[PreviewItem] = []
     for found in await values.preview(candidate.attribute.id, keys=keys, limit=limit):
         title = masking.title(candidate.schema, candidate.kind.id, found.title)
@@ -219,7 +236,7 @@ async def preview(
                     title,
                     None if masking.settings.omit else masking.masked,
                     True,
-                    None if found.error is None else found.error.code.value,
+                    found.error is not None,
                 )
             )
             continue
@@ -232,8 +249,18 @@ async def preview(
                 title,
                 found.value,
                 False,
+                error is not None,
                 None if error is None else error.code.value,
                 None if error is None else error.describe(),
             )
         )
     return items
+
+
+def _united(*tag_maps: Mapping[str, frozenset[Sensitivity]]) -> dict[str, frozenset[Sensitivity]]:
+    """Attribute id -> tags, united over `tag_maps`."""
+    united: dict[str, frozenset[Sensitivity]] = {}
+    for tags in tag_maps:
+        for attribute_id, found in tags.items():
+            united[attribute_id] = united.get(attribute_id, frozenset()) | found
+    return united

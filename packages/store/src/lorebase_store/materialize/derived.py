@@ -305,10 +305,8 @@ class DerivedValues:
         if step is None:
             raise ExprError(ExprErrorCode.EVALUATION, "the Derivation cannot be evaluated")
         if keys is None:
-            batch: list[str] = []
-            async for rows in self.repository.stream_records(step.kind.id, batch=limit):
-                batch = [row.key for row in rows[:limit]]
-                break
+            rows = await self.repository.record_page(step.kind.id, after=None, limit=limit)
+            batch = [row.key for row in rows]
         else:
             batch = list(dict.fromkeys(keys))[:limit]
         loaded = await self._load(step, batch)

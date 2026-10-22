@@ -269,6 +269,20 @@ class Masking:
         tags = self.tags(attribute)
         return bool(tags) and not self.clearance.covers(tags, kinds)
 
+    def hidden_with_origins(
+        self,
+        attribute: Attribute,
+        kinds: Sequence[str],
+        origins: Mapping[Sensitivity, Iterable[str]],
+    ) -> bool:
+        """`hidden`, with each tag also needing clearance on the Kinds it comes from
+        (`origins`, from `lorebase_core.expr.sensitivity.tag_origins`): for a value computed
+        from sensitive Attributes of other Kinds."""
+        return any(
+            not self.clearance.covers((tag,), sorted({*kinds, *origins.get(tag, ())}))
+            for tag in self.tags(attribute)
+        )
+
     @property
     def masked(self) -> str:
         return self.settings.masked_value

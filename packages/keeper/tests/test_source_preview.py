@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from lorebase_core.expr import ExprLimits
-from lorebase_core.model import Schema, load_schema
+from lorebase_core.model import Schema, Source, load_schema
 from lorebase_keeper.reading.settings import ReadSettings
 from lorebase_keeper.services.derivation_preview import CandidateInvalidError
 from lorebase_keeper.services.schema import ChangeSetInput
@@ -104,3 +104,53 @@ def test_unknown_sources_and_unreadable_change_sets(supply: Schema) -> None:
 
 def test_the_row_count_is_a_setting() -> None:
     assert ReadSettings().source_preview_max_rows == 100
+
+
+def test_expressions_compile_once_over_every_column_the_rows_have(supply: Schema) -> None:
+    candidate = candidate_of(
+        supply,
+        edited(city={"expression": 'town == null ? "none" : town'}),
+        "approved.suppliers",
+        RULES,
+    )
+    cells = evaluate(candidate, [{"name": "a"}, {"town": "Gdansk"}], limits=ExprLimits(), now=NOW)
+    assert [row["city"].value for row in cells] == ["none", "Gdansk"]
+    assert all(row["city"].error_code is None for row in cells)
+
+
+def test_the_target_kind_is_authorized_before_the_schema_is_validated(supply: Schema) -> None:
+    seen: list[str | None] = []
+
+    def refuse(schema: Schema, found: Source | None) -> None:
+        seen.append(None if found is None else schema.kinds[found.target_kind].api_name)
+        raise PermissionError
+
+    with pytest.raises(PermissionError):
+        candidate_of(
+            supply, ChangeSetInput(patch={}), "approved.suppliers", RULES, authorize=refuse
+        )
+    definition = {"variant": "expression", "kind": "Part", "attribute": "single_sourced"}
+    invalid = ChangeSetInput(
+        patch={
+            "derivations": {
+                "single_sourced": {"definition": {**definition, "expression": "supplier_count + 1"}}
+            }
+        }
+    )
+    with pytest.raises(CandidateInvalidError):
+        candidate_of(supply, invalid, "approved.suppliers", RULES, authorize=lambda *_: None)
+    with pytest.raises(PermissionError):  # no issue is reported to a refused caller
+        candidate_of(supply, invalid, "approved.suppliers", RULES, authorize=refuse)
+    with pytest.raises(PermissionError):
+        candidate_of(supply, ChangeSetInput(patch={}), "nothing", RULES, authorize=refuse)
+    assert seen == ["Supplier", "Supplier", None]
+    accepted = candidate_of(
+        supply, ChangeSetInput(patch={}), "approved.suppliers", RULES, authorize=lambda *_: None
+    )
+    assert accepted.source.api_name == "approved.suppliers"
+
+
+def test_the_preview_bounds_are_settings() -> None:
+    read = ReadSettings()
+    assert (read.source_preview_max_columns, read.source_preview_max_cells) == (200, 1000)
+    assert read.derivation_preview_max_key_length == 1024

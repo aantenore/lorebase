@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
+import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Attribute, Derivation, ExpressionDerivation, Sensitivity
@@ -27,7 +28,7 @@ from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings
 
 from .read_fixtures import Seeded, keeper, seeded_database
-from .supply import AUTHOR, DOMAIN, Clock, load_supply, rows
+from .supply import AUTHOR, DOMAIN, EXAMPLE, Clock, load_supply, rows
 
 pytestmark = pytest.mark.integration
 
@@ -55,6 +56,10 @@ async def _principal(store: SqlAuthStore, name: str, *grants: dict[str, Any]) ->
             scopes=[f"domain:{DOMAIN}"],
         )
     return generated.token
+
+
+def _pii_on(kind: str) -> dict[str, Any]:
+    return {"role": "pii-only", "scope_type": GrantScope.KIND, "scope_ref": kind}
 
 
 async def seed(
@@ -111,6 +116,14 @@ async def seed(
                 "parts only",
                 {"role": "viewer", "scope_type": GrantScope.KIND, "scope_ref": "Part"},
             ),
+            # pii.read narrowed to the Kinds a value of Part computed from Suppliers involves.
+            "pii_parts": await _principal(store, "pii parts", {"role": "viewer"}, _pii_on("Part")),
+            "pii_suppliers": await _principal(
+                store, "pii suppliers", {"role": "viewer"}, _pii_on("Supplier")
+            ),
+            "pii_both": await _principal(
+                store, "pii both", {"role": "viewer"}, _pii_on("Part"), _pii_on("Supplier")
+            ),
         }
     finally:
         await engine.dispose()
@@ -133,6 +146,7 @@ def _section() -> dict[str, Any]:
                 "custom_roles": {
                     "pii-reader": ["schema.read", "data.read", "pii.read"],
                     "schema-only": ["schema.read"],
+                    "pii-only": ["pii.read"],
                 }
             },
         }
@@ -309,3 +323,75 @@ async def test_the_caller_needs_to_read_every_kind_the_derivation_touches(seeded
         assert allowed.status_code == 200, allowed.text
         anonymous = await http.post(PREVIEW, json={"derivation": "single_sourced", "patch": {}})
         assert anonymous.status_code == 401
+
+
+async def test_masked_failures_carry_no_code(seeded: Seeded) -> None:
+    facts = seeded.facts
+    failing = _edit(
+        BAND,
+        variant="expression",
+        kind="Supplier",
+        attribute=BAND,
+        expression='risk_score / 0 >= 1 ? "high" : "low"',
+    )
+    async with keeper(seeded.app_url, _section()) as http:
+        masked = await _preview(http, facts["viewer"], BAND, failing, limit=5)
+        assert masked.status_code == 200, masked.text
+        items = masked.json()["items"]
+        assert items
+        assert all(item["masked"] for item in items)
+        assert all(item["error"] == {"code": None, "message": None} for item in items)
+        shown = await _preview(http, facts["cleared"], BAND, failing, limit=5)
+        errors = [item["error"] for item in shown.json()["items"]]
+        assert errors
+        assert all(error["code"] and error["message"] for error in errors)
+
+
+async def test_keys_are_bounded_in_length(seeded: Seeded) -> None:
+    key = seeded.facts["viewer"]
+    async with keeper(
+        seeded.app_url, _section(), read={"derivation_preview_max_key_length": 8}
+    ) as http:
+        fine = await _preview(http, key, "single_sourced", {}, keys=["P-1"])
+        assert fine.status_code == 200, fine.text
+        long = await _preview(http, key, "single_sourced", {}, keys=["P-1", "P-" + "9" * 8])
+        assert long.status_code == 422
+        assert long.json()["errors"][0]["pointer"] == "/keys/1"
+
+
+async def test_values_from_a_sensitive_far_kind_need_clearance_on_every_kind(
+    seeded: Seeded,
+) -> None:
+    """supplier_count of Parts counting Suppliers by their pii risk score (tagged pii, as the
+    schema rules ask) tells about the Suppliers: pii.read is needed on Supplier, and on Part,
+    which holds the value."""
+    facts = seeded.facts
+    filtered = _edit(
+        "supplier_count",
+        variant="aggregate",
+        kind="Part",
+        attribute="supplier_count",
+        relation="supplied_by",
+        function="count",
+        filter="risk_score >= 50",
+    )
+    part = yaml.safe_load((EXAMPLE / "schema.yaml").read_text())["kinds"]["Part"]
+    for derived in ("supplier_count", "single_sourced"):  # single_sourced reads the count
+        part["attributes"][derived]["sensitivity"] = ["pii"]
+    filtered["kinds"] = {"Part": part}
+    async with keeper(seeded.app_url, _section()) as http:
+        for caller, masked in (
+            ("pii_parts", True),
+            ("pii_suppliers", True),
+            ("pii_both", False),
+            ("cleared", False),
+            ("viewer", True),
+        ):
+            response = await _preview(http, facts[caller], "supplier_count", filtered, limit=3)
+            assert response.status_code == 200, (caller, response.text)
+            items = response.json()["items"]
+            assert items
+            assert all(item["masked"] is masked for item in items), caller
+        # Read as saved, the count reads nothing sensitive: a Part clearance is not needed.
+        plain = await _preview(http, facts["viewer"], "supplier_count", {}, limit=3)
+        assert not any(item["masked"] for item in plain.json()["items"])

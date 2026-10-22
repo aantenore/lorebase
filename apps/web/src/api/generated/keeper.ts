@@ -2773,7 +2773,7 @@ export interface components {
             limit?: number | null;
             /**
              * Keys
-             * @description Keys of the Records to evaluate instead of the first ones by key.
+             * @description Keys of the Records to evaluate instead of the first ones by key; at most `read.derivation_preview.max_limit`, each at most `read.derivation_preview_max_key_length` characters.
              */
             keys?: string[] | null;
         };
@@ -4336,8 +4336,11 @@ export interface components {
          * @description Why a value could not be computed for a Record.
          */
         PreviewErrorOut: {
-            /** Code */
-            code: string;
+            /**
+             * Code
+             * @description Null when the value is masked: only the failure itself is reported.
+             */
+            code: string | null;
             /**
              * Message
              * @description Null when the value is masked: messages quote values.
@@ -5521,7 +5524,7 @@ export interface components {
             source: string;
             /**
              * Rows
-             * @description Sample rows: column name to value (text for CSV, native values for JSON). At most `read.source_preview_max_rows`.
+             * @description Sample rows: column name to value (text for CSV, native values for JSON). At most `read.source_preview_max_rows`, each with at most `read.source_preview_max_columns` columns.
              */
             rows: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -9831,7 +9834,7 @@ export interface operations {
                     "application/json": components["schemas"]["SourcePreviewOut"];
                 };
             };
-            /** @description The caller lacks schema.read for the branch. */
+            /** @description The caller lacks schema.read for the branch and for the Source's target Kind. */
             403: {
                 headers: {
                     [name: string]: unknown;
