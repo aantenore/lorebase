@@ -10,7 +10,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, CheckConstraint, Double, Identity, Index, Integer, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Double,
+    Identity,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lorebase_store.models.base import Base
@@ -62,3 +73,44 @@ class AgentTraceStep(Base):
     fingerprint while requests keep coming within `keeper.trace.inferred_session_idle_s`."""
     fingerprint: Mapped[str | None]
     """Digest of the principal, its credential and user agent; set on inferred steps."""
+
+
+class AgentTraceSession(Base):
+    """One session of one actor: the number of steps it holds, which caps it.
+
+    The trace writer raises `steps` in the transaction that writes the steps, under the row
+    lock, and skips the steps past `keeper.trace.max_steps_per_session`; pruning lowers it by
+    the steps it deletes and removes the row once none is left.
+    """
+
+    __tablename__ = "agent_trace_sessions"
+
+    actor: Mapped[str] = mapped_column(primary_key=True)
+    session_id: Mapped[str] = mapped_column(primary_key=True)
+    steps: Mapped[int] = mapped_column(Integer)
+    last_at: Mapped[datetime]
+
+
+class AgentTraceSessionDomain(Base):
+    """Summary of the steps of one session of one actor in one Domain (`domain_id` null: steps
+    outside any Domain), kept by the trace writer and pruning. Sessions are listed from these
+    rows, which visibility filters like steps (by actor and Domain)."""
+
+    __tablename__ = "agent_trace_session_domains"
+    __table_args__ = (
+        UniqueConstraint("actor", "session_id", "domain_id", postgresql_nulls_not_distinct=True),
+        Index(None, "actor", "last_at"),
+        Index(None, "domain_id", "last_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    actor: Mapped[str]
+    session_id: Mapped[str]
+    domain_id: Mapped[str | None]
+    started_at: Mapped[datetime]
+    last_at: Mapped[datetime]
+    calls: Mapped[int] = mapped_column(Integer)
+    notes: Mapped[int] = mapped_column(Integer)
+    inferred: Mapped[bool]
+    tools: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    proposals: Mapped[list[str]] = mapped_column(ARRAY(Text))

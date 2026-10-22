@@ -145,13 +145,18 @@ in `api_keys`, or `trace_all` is set.
 | `max_response_bytes` | 1 MiB | Larger answers are recorded without counts and refs. |
 | `max_refs` | 500 | Refs kept per step. |
 | `max_note_chars` | 4000 | Longest note. |
-| `max_steps_per_session` | 2000 | Steps kept per session and principal; later ones are dropped. |
+| `max_steps_per_session` | 2000 | Steps kept per session and principal; later ones are dropped. The count lives in the session row and is raised under its row lock in the transaction writing the steps, so the cap holds across Keepers. |
 | `inferred_session_idle_s` | 300 | Gap after which calls without a session id start a new inferred session. |
 | `retention_days` | 7 | Steps older than this are deleted every `prune_interval_s`. |
 | `queue_size`, `batch_size`, `flush_interval_s`, `write_timeout_s` | 10000, 200, 1 s, 5 s | Off-path writing, like the read audit. |
 
 Steps live in `agent_trace_steps` (migration `0023`, row-level security like every table with
-a `domain_id`). Dropped steps are counted in `lorebase.trace.steps.dropped` by reason
+a `domain_id`). Each written batch also keeps two session tables (migration `0029`):
+`agent_trace_sessions` counts the steps of a session and principal (the cap), and
+`agent_trace_session_domains` summarizes them per Domain (first and last step, calls, notes,
+tools, Proposals; indexed on principal and on Domain, each with the last step). Sessions are
+listed from the summaries; pruning lowers both by the steps it deletes and removes rows left
+empty. Dropped steps are counted in `lorebase.trace.steps.dropped` by reason
 (`queue_full`, `write_failed`, `session_full`, `shutdown`), written ones in
 `lorebase.trace.steps.recorded` ([metrics](metrics.md)).
 
@@ -162,6 +167,6 @@ An untraced request pays one header lookup. A traced read keeps its request body
 (up to `max_response_bytes`; 64 KiB for writes, read only for the Proposal they name) in memory
 until it is sent, then parses it once for counts and refs; the write happens in a background
 batch. A read Keeper rejects as invalid (422) is recorded as `{"rejected": true}`, without its
-query. Listing sessions groups the visible steps of the retention period, and the per-session
-cap is checked per write (concurrent Keepers may pass it by a few steps). Turn on `trace_all`
-only for short investigations on busy installations.
+query. Each batch updates one session row per session and one summary row per session and
+Domain in its transaction; listing sessions reads the summaries, never the steps. Turn on
+`trace_all` only for short investigations on busy installations.

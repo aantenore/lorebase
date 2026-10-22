@@ -44,6 +44,8 @@ DESIGN_TABLES = {
     "audit_read_log",
     "rate_limit_buckets",
     "agent_trace_steps",
+    "agent_trace_sessions",
+    "agent_trace_session_domains",
     "outbox",
     "outbox_consumers",
     "outbox_pending",
@@ -111,4 +113,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_latest_migration() -> None:
-    assert head_revisions() == ("0028",)
+    assert head_revisions() == ("0029",)
