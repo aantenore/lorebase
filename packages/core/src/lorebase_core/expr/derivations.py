@@ -78,7 +78,7 @@ def _compile(
             return CompiledDerivation(derivation)
         return CompiledDerivation(derivation, expression=program, target=attribute.type)
     if isinstance(definition, AggregateDerivation) and definition.filter is not None:
-        relation = schema.relations.get(definition.relation)
+        relation = schema.link_relation(definition.relation)
         if relation is None:
             if errors is None:
                 raise ExprError(ExprErrorCode.TYPE, "the aggregated Relation does not exist")
@@ -243,7 +243,7 @@ def derivation_inputs(
         return frozenset(_record_inputs(schema, definition.kind, definition.expression, limits))
     if not isinstance(definition, AggregateDerivation):
         return frozenset()
-    relation = schema.relations.get(definition.relation)
+    relation = schema.link_relation(definition.relation)
     if relation is None:
         return frozenset()
     far_id = relation.far_endpoint(definition.direction)
@@ -294,7 +294,7 @@ def derivation_reads(
         return frozenset(_expression_reads(schema, definition.kind, definition.expression, limits))
     if not isinstance(definition, AggregateDerivation):
         return frozenset()
-    relation = schema.relations.get(definition.relation)
+    relation = schema.link_relation(definition.relation)
     if relation is None:
         return frozenset()
     far_id = relation.far_endpoint(definition.direction)

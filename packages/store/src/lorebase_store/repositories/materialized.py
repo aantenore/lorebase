@@ -149,6 +149,7 @@ class HistoryRow:
 class SchemaRow:
     schema_hash: bytes
     compiled: dict[str, Any]
+    path_fanout: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,12 +283,15 @@ class MaterializedRepository:
 
     async def schema(self) -> SchemaRow | None:
         result = await self._session.execute(
-            select(MAT_SCHEMA.c.schema_hash, MAT_SCHEMA.c.compiled).where(self._scope(MAT_SCHEMA))
+            select(MAT_SCHEMA.c.schema_hash, MAT_SCHEMA.c.compiled, MAT_SCHEMA.c.path_fanout).where(
+                self._scope(MAT_SCHEMA)
+            )
         )
         found = result.one_or_none()
-        return None if found is None else SchemaRow(found[0], found[1])
+        return None if found is None else SchemaRow(found[0], found[1], found[2])
 
     async def set_schema(self, row: SchemaRow) -> None:
+        """Write the schema row; its `path_fanout` is kept unless `row` gives one."""
         await bulk_write(
             self._session,
             MAT_SCHEMA,
@@ -297,11 +301,28 @@ class MaterializedRepository:
                     "branch": self._branch,
                     "schema_hash": row.schema_hash,
                     "compiled": row.compiled,
+                    "path_fanout": row.path_fanout,
                 }
             ],
             writes=self._writes,
             on_conflict=OnConflict.UPDATE,
-            update_columns=("schema_hash", "compiled"),
+            update_columns=(
+                ("schema_hash", "compiled")
+                if row.path_fanout is None
+                else ("schema_hash", "compiled", "path_fanout")
+            ),
+        )
+
+    async def path_fanout(self) -> int | None:
+        """The fan-out the branch's materialized paths were computed with."""
+        found = await self._session.scalar(
+            select(MAT_SCHEMA.c.path_fanout).where(self._scope(MAT_SCHEMA))
+        )
+        return None if found is None else int(found)
+
+    async def set_path_fanout(self, fanout: int) -> None:
+        await self._session.execute(
+            update(MAT_SCHEMA).where(self._scope(MAT_SCHEMA)).values(path_fanout=fanout)
         )
 
     # Records --------------------------------------------------------------------------

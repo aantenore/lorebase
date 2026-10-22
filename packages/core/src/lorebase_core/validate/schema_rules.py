@@ -920,7 +920,7 @@ class _Checker:
     def check_aggregate(
         self, definition: AggregateDerivation, kind: Kind, base: tuple[PathPart, ...]
     ) -> None:
-        relation = self.schema.relations.get(definition.relation)
+        relation = self.schema.link_relation(definition.relation)
         if relation is None:
             self.add(
                 IssueCode.SCHEMA_DERIVATION_REFERENCE_UNKNOWN,
@@ -1108,7 +1108,7 @@ class _Checker:
                 or definition.source_attribute is None
             ):
                 continue
-            relation = self.schema.relations.get(definition.relation)
+            relation = self.schema.link_relation(definition.relation)
             if relation is None:
                 continue
             far_kind = self.schema.kinds.get(relation.far_endpoint(definition.direction))

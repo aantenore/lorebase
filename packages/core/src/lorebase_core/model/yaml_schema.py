@@ -405,7 +405,28 @@ class _Reader:
         for name, entry in entries["relations"].items():
             if isinstance(entry, dict):
                 self.ends[name] = (entry.get("from_kind"), entry.get("to_kind"))
+        for name, entry in entries["derivations"].items():
+            ends = self._path_ends(entry)
+            if ends is not None and name not in self.ends:
+                self.ends[name] = ends
         return entries
+
+    def _path_ends(self, entry: object) -> tuple[object, object] | None:
+        """First near and last far Kind name of a `path` Derivation entry (an aggregate may
+        read a path like a Relation); `None` when it is not one or its steps are unknown."""
+        definition = entry.get("definition") if isinstance(entry, dict) else None
+        if not isinstance(definition, dict) or definition.get("variant") != "path":
+            return None
+        steps = definition.get("steps")
+        kinds: list[object] = []
+        for step in steps if isinstance(steps, list) else []:
+            if not isinstance(step, dict) or str(step.get("relation")) not in self.ends:
+                return None
+            ends = self.ends[str(step["relation"])]
+            inverse = step.get("direction") == LinkDirection.INVERSE
+            kinds.append(ends[1] if inverse else ends[0])
+            kinds.append(ends[0] if inverse else ends[1])
+        return (kinds[0], kinds[-1]) if kinds else None
 
     # Reference resolution --------------------------------------------------------------------
 
@@ -666,7 +687,13 @@ class _Reader:
             return self.build(ExpressionDerivation, path, data, **fields)
         if variant == "aggregate":
             relation_name = data.pop("relation", None)
-            fields["relation"] = self.lookup("relations", relation_name, (*path, "relation"))
+            fields["relation"] = (
+                self.ids["derivations"][relation_name]
+                if isinstance(relation_name, str)
+                and relation_name not in self.ids["relations"]
+                and relation_name in self.ids["derivations"]
+                else self.lookup("relations", relation_name, (*path, "relation"))
+            )  # a path Derivation is read like a Relation
             if data.get("source_attribute") is not None:
                 far_end = 0 if data.get("direction") == LinkDirection.INVERSE else 1
                 far = self.ends.get(str(relation_name), (None, None))[far_end]

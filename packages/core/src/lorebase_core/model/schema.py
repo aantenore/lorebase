@@ -152,6 +152,23 @@ class Schema(Model):
         """The valid path Derivations as virtual Relations, by Derivation id."""
         return self._paths
 
+    def link_by_api_name(self, api_name: str) -> tuple[Relation, LinkDirection] | None:
+        """Resolve a Relation name or a path Derivation name (its virtual Relation, whose id
+        is the Derivation id) to the Relation and the direction."""
+        found = self._relations_by_name.get(api_name)
+        if found is not None:
+            return found
+        path = self._paths_by_name.get(api_name)
+        return None if path is None else (path[0].relation, path[1])
+
+    def link_relation(self, relation_id: str) -> Relation | None:
+        """A Relation by id, or the virtual Relation of a valid path Derivation."""
+        relation = self.relations.get(relation_id)
+        if relation is not None:
+            return relation
+        path = self._paths.get(relation_id)
+        return None if path is None else path.relation
+
     def operation_by_api_name(self, api_name: str) -> Operation | None:
         return self._operations_by_name.get(api_name)
 

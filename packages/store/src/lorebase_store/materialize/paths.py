@@ -10,7 +10,12 @@ the first step, at most `fanout` Links (smallest far keys) per intermediate Reco
 
 `PathLinks` keeps them current in the commit transaction, after derived values:
 
-- `recompute_all` rewrites every materialized path (rebuilds, schema changes);
+- `recompute_all` rewrites every materialized path (rebuilds, schema changes); the fan-out
+  used is recorded in `mat_schema.path_fanout` (`record_fanout`);
+- `fanout_stale` tells whether the recorded fan-out differs from `store.traverse.path_fanout`
+  while materialized paths or derived values reading a path depend on it: commits check it
+  before their incremental update and then recompute both whole, and `refresh_stale_paths`
+  does the same for every branch (the job workers run it when they start);
 - `recompute` rewrites the pairs of the start Records a changeset can affect. A Link of step
   `i` that changed (for a foreign-key step: a `from` Record written or removed) marks its
   near Record at level `i`; the start Records reaching a marked Record, found by walking the
@@ -26,24 +31,43 @@ computes (`expected`) with the stored ones.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import AsyncIterator, Sequence
 
-from lorebase_core.model import LinkDirection, PathRelation, RelationBacking, Schema
-from lorebase_core.model.paths import PathHop, bounded
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from lorebase_core.expr.sensitivity import with_tags
+from lorebase_core.model import PathRelation, Schema
+from lorebase_store.auth.scope import rls_scope
 from lorebase_store.bulk import chunks
-from lorebase_store.materialize.derived import AppliedChanges, links_of
+from lorebase_store.commit.schema import load_compiled
+from lorebase_store.materialize.derived import AppliedChanges, DerivedValues
+from lorebase_store.materialize.links import path_affected, path_pairs_from
+from lorebase_store.materialize.rows import search_weights
+from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.repositories.materialized import LinkRow, MaterializedRepository
+from lorebase_store.repositories.refs import LockTimeoutError, RefNotFoundError, RefRepository
+from lorebase_store.repositories.revisions import RevisionRepository
+from lorebase_store.repositories.scope import scope_to_domain
+from lorebase_store.runtime import StoreRuntime
+
+logger = logging.getLogger("lorebase.store.paths")
 
 Pair = tuple[str, str]
+
+# Branches with a path Derivation whose recorded fan-out differs from the setting.
+_STALE = text(
+    "SELECT domain_id, branch FROM mat_schema "
+    "WHERE path_fanout IS DISTINCT FROM :fanout "
+    "AND jsonb_path_exists(compiled, '$.derivations.*.definition ? (@.variant == \"path\")') "
+    "ORDER BY domain_id, branch"
+)
 
 
 def path_link_hash(path_id: str, from_key: str, to_key: str) -> bytes:
     """`object_hash` of a materialized path Link: a digest of the pair, never an object."""
     return hashlib.sha256(f"lb1 path\0{path_id}\0{from_key}\0{to_key}".encode()).digest()
-
-
-def _reverse(direction: LinkDirection) -> LinkDirection:
-    return LinkDirection.INVERSE if direction is LinkDirection.FORWARD else LinkDirection.FORWARD
 
 
 class PathLinks:
@@ -83,6 +107,17 @@ class PathLinks:
         for path in self.paths:
             await self._rewrite(path)
 
+    async def fanout_stale(self, derived: DerivedValues | None) -> bool:
+        """Whether materialized paths, or derived values reading a path, were computed with
+        another fan-out than `store.traverse.path_fanout` (or none was recorded yet)."""
+        dependent = bool(self.paths) or (derived is not None and derived.reads_paths)
+        return dependent and await self.repository.path_fanout() != self.fanout
+
+    async def record_fanout(self) -> None:
+        """Record the fan-out the branch's path Links and derived values now follow."""
+        if self.write:
+            await self.repository.set_path_fanout(self.fanout)
+
     async def recompute(self, applied: AppliedChanges) -> None:
         for path in self.paths:
             starts = await self.affected(path, applied)
@@ -98,65 +133,13 @@ class PathLinks:
 
     async def affected(self, path: PathRelation, applied: AppliedChanges) -> set[str]:
         """Start Records whose pairs a changeset can change (a superset)."""
-        starts: set[str] = set()
-        for level, step in enumerate(path.steps):
-            marked = await self._marked(step, applied)
-            for back in reversed(path.steps[:level]):
-                if not marked:
-                    break
-                found = await links_of(
-                    self.repository, back.relation, _reverse(back.direction), sorted(marked)
-                )
-                marked = {far for items in found.values() for far, _ in items}
-            starts |= marked
-        return starts
-
-    async def _marked(self, step: PathHop, applied: AppliedChanges) -> set[str]:
-        """Near Records of a step whose Links along it changed."""
-        relation = step.relation
-        forward = step.direction is LinkDirection.FORWARD
-        marked = {f if forward else t for f, t in applied.links.get(relation.id, ())}
-        attribute = relation.foreign_key_attribute
-        if relation.backing is not RelationBacking.FOREIGN_KEY or attribute is None:
-            return marked
-        source = relation.from_kind
-        holders = set(applied.written.get(source, ())) | set(applied.removed.get(source, ()))
-        if forward:
-            return marked | holders
-        for key in holders:  # targets before the change, then after it
-            before = applied.previous.get((source, key))
-            if before is not None and isinstance(before.get(attribute), str):
-                marked.add(before[attribute])
-        if holders:
-            now = await links_of(self.repository, relation, LinkDirection.FORWARD, sorted(holders))
-            marked |= {far for items in now.values() for far, _ in items}
-        return marked
+        return await path_affected(self.repository, path.steps, applied)
 
     # Evaluation -------------------------------------------------------------------------------
 
     async def pairs_from(self, path: PathRelation, starts: Sequence[str]) -> dict[str, set[str]]:
         """Far keys reached from each start Record (`lorebase_core.model.paths`)."""
-        reached: dict[str, set[str]] = {start: {start} for start in starts}
-        for index, step in enumerate(path.steps):
-            frontier = sorted({key for keys in reached.values() for key in keys})
-            found = (
-                await links_of(self.repository, step.relation, step.direction, frontier)
-                if frontier
-                else {}
-            )
-            nexts: dict[str, list[str]] = {
-                near: (
-                    [far for far, _ in items]
-                    if index == 0
-                    else bounded((far for far, _ in items), self.fanout)
-                )
-                for near, items in found.items()
-            }
-            reached = {
-                start: {far for near in keys for far in nexts.get(near, ())}
-                for start, keys in reached.items()
-            }
-        return reached
+        return await path_pairs_from(self.repository, path, starts, self.fanout)
 
     async def _refresh(self, path: PathRelation, starts: Sequence[str]) -> None:
         """Recompute the pairs of `starts` and write the difference."""
@@ -204,3 +187,89 @@ class PathLinks:
     async def compute_all(self, path: PathRelation) -> None:
         """Compute every pair of a path into `expected` (with `write=False`)."""
         await self._rewrite(path)
+
+
+async def refresh_path_fanout(
+    session: AsyncSession, domain_id: str, branch: str, *, runtime: StoreRuntime
+) -> bool:
+    """Rewrite the materialized paths of `branch`, and recompute its derived values when one
+    reads a path, when they were computed with another fan-out; in the caller's transaction
+    and under the branch lock. Returns whether it did."""
+    settings = runtime.settings
+    if not settings.materialize.derivations_enabled:
+        return False
+    await scope_to_domain(session, domain_id)
+    refs = RefRepository(session, domain_id)
+    await refs.lock(branch, timeout_ms=settings.commit.lock_timeout_ms)
+    ref = await refs.require(branch)
+    head = await RevisionRepository(session, domain_id).require(ref.head)
+    repository = MaterializedRepository(
+        session,
+        domain_id,
+        branch,
+        writes=settings.writes,
+        layout=ref.layout,
+        generation=head.generation,
+        lock_timeout_ms=settings.commit.lock_timeout_ms,
+    )
+    row = await repository.schema()
+    if row is None:
+        return False
+    schema = load_compiled(row.compiled)
+    batch = settings.materialize.read_batch_rows
+    max_incremental = settings.materialize.derivation_max_incremental_records
+    fanout = settings.traverse.path_fanout
+    derived = DerivedValues(
+        repository,
+        schema,
+        limits=runtime.schema.expression_limits,
+        now=head.created_at,
+        batch=batch,
+        max_incremental=max_incremental,
+        fanout=fanout,
+    )
+    paths = PathLinks(
+        repository, schema, fanout=fanout, batch=batch, max_incremental=max_incremental
+    )
+    stale = await paths.fanout_stale(derived)
+    if stale:
+        changed = await derived.recompute_all() if derived.reads_paths else {}
+        await paths.recompute_all()
+        tags = await reference_tags(session, domain_id, branch, runtime=runtime)
+        tagged = with_tags(schema, tags)
+        for kind_id, keys in sorted(changed.items()):
+            if keys and derived.searchable(kind_id):
+                await repository.refresh_search(
+                    kind_id,
+                    search_weights(tagged.kinds.get(kind_id)),
+                    config=settings.materialize.text_search_config,
+                    keys=sorted(keys),
+                )
+    await paths.record_fanout()  # also when nothing depends on it: not checked again
+    return stale
+
+
+async def refresh_stale_paths(
+    sessions: async_sessionmaker[AsyncSession], *, runtime: StoreRuntime
+) -> list[tuple[str, str]]:
+    """Rewrite the materialized paths of every branch computed with another fan-out than
+    `store.traverse.path_fanout`, one branch per transaction; returns the branches
+    rewritten. A branch deleted or locked past `commit.lock_timeout_ms` meanwhile is skipped
+    (the next commit on it rewrites them)."""
+    if not runtime.settings.materialize.derivations_enabled:
+        return []
+    async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+        fanout = runtime.settings.traverse.path_fanout
+        stale = [(d, b) for d, b in await session.execute(_STALE, {"fanout": fanout})]
+    rewritten: list[tuple[str, str]] = []
+    for domain_id, branch in stale:
+        try:
+            async with sessions() as session, session.begin():
+                if await refresh_path_fanout(session, domain_id, branch, runtime=runtime):
+                    rewritten.append((domain_id, branch))
+        except (RefNotFoundError, LockTimeoutError) as error:
+            logger.warning(
+                "materialized paths not rewritten",
+                extra={"domain": domain_id, "branch": branch, "error": str(error)},
+            )
+    return rewritten

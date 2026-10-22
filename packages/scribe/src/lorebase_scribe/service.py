@@ -21,7 +21,8 @@ from lorebase_scribe.sources.connectors import ConnectorFactory, default_connect
 from lorebase_scribe.worker import Worker
 from lorebase_store.db import create_engine
 from lorebase_store.embeddings import SchemaCache
-from lorebase_store.jobs import default_worker_id
+from lorebase_store.jobs import MATERIALIZE_JOB, default_worker_id
+from lorebase_store.materialize import refresh_stale_paths
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import database_settings
 from lorebase_store.webhooks import webhook_settings
@@ -40,7 +41,15 @@ class Scribe:
     settings: ScribeSettings
 
     async def serve(self, stop: asyncio.Event) -> None:
-        """Work and schedule until `stop` is set."""
+        """Work and schedule until `stop` is set. A worker running materialization jobs
+        first rewrites materialized path Derivations computed with another
+        `store.traverse.path_fanout`."""
+        if MATERIALIZE_JOB in self.worker.types:
+            rewritten = await refresh_stale_paths(
+                self.context.sessions, runtime=self.context.runtime
+            )
+            if rewritten:
+                log.info("materialized paths rewritten", extra={"branches": len(rewritten)})
         tasks = [asyncio.create_task(self.worker.run(stop), name="scribe-worker")]
         if self.settings.scheduler.enabled:
             tasks.append(asyncio.create_task(self.scheduler.run(stop), name="scribe-scheduler"))

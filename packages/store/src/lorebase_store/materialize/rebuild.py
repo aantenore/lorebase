@@ -199,15 +199,18 @@ async def materialize_revision(
             now=head.created_at,
             batch=batch,
             max_incremental=settings.materialize.derivation_max_incremental_records,
+            fanout=settings.traverse.path_fanout,
         )
         await derived.recompute_all()
-        await PathLinks(
+        paths = PathLinks(
             repository,
             schema,
             fanout=settings.traverse.path_fanout,
             batch=batch,
             max_incremental=settings.materialize.derivation_max_incremental_records,
-        ).recompute_all()
+        )
+        await paths.recompute_all()
+        await paths.record_fanout()
         for kind_id in sorted(derived.kinds):
             if derived.searchable(kind_id):
                 await repository.refresh_search(

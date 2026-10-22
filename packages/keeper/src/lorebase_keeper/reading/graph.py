@@ -2,8 +2,8 @@
 
 Traversal runs one set-based query per hop, capped per hop. A neighborhood is one statement
 of the store primitive `lorebase_store.traverse.neighborhood` (a recursive walk with fan-out,
-Link and node caps). Both read the materialized head, or at another Revision a snapshot of it
-(`reading.snapshots`).
+Link and node caps; hop by hop when it follows a path Derivation composed at read time). Both
+read the materialized head, or at another Revision a snapshot of it (`reading.snapshots`).
 """
 
 from __future__ import annotations
@@ -124,9 +124,10 @@ async def neighborhood(
 ) -> NeighborhoodResponse:
     """Records and Links around the seeds, breadth first, within the depth and the caps.
 
-    One statement of the store primitive `lorebase_store.traverse.neighborhood`; caps are the
-    smaller of `read.traverse` and `store.traverse`. Nodes come nearest first; each Link is
-    reported once, by its forward name, from its `from` Record to its `to` Record.
+    The store primitive `lorebase_store.traverse.neighborhood`; caps are the smaller of
+    `read.traverse` and `store.traverse`. Nodes come nearest first; each Link is reported
+    once, by its forward name, from its `from` Record to its `to` Record. Path Derivations are
+    followed when named in `relations`.
     """
     point = await with_rows(session, runtime, point, "Neighborhoods")
     caps, store = runtime.read.traverse, runtime.store_settings.traverse
@@ -171,7 +172,8 @@ async def neighborhood(
     ]
     edges = []
     for link in walked.links:
-        relation = point.schema.relations[link.relation_id]
+        relation = point.schema.link_relation(link.relation_id)
+        assert relation is not None  # the walk follows only Relations of the schema
         edges.append(
             Edge(
                 relation=relation.api_name,
@@ -208,7 +210,7 @@ def _followed(point: ReadPoint, names: list[str] | None) -> set[tuple[str, LinkD
         return None
     wanted: set[tuple[str, LinkDirection]] = set()
     for index, name in enumerate(names):
-        found = point.schema.relation_by_api_name(name)
+        found = point.schema.link_by_api_name(name)
         if found is None:
             raise invalid(f"/body/relations/{index}", f"unknown Relation {name!r}", "unknown")
         relation, direction = found
@@ -219,17 +221,30 @@ def _followed(point: ReadPoint, names: list[str] | None) -> set[tuple[str, LinkD
 def _follow(
     point: ReadPoint, wanted: set[tuple[str, LinkDirection]] | None
 ) -> dict[str, Direction]:
-    """Relations to walk (id to direction): those requested (all by default) in the
-    directions whose far Kind the caller may read; Kinds the caller may not read are left
-    out."""
+    """Relations to walk (id to direction): those requested (every Relation by default, path
+    Derivations only when named) in the directions whose far Kind the caller may read; Kinds
+    the caller may not read are left out, and so are paths crossing one."""
+    schema = point.schema
+    paths = schema.path_relations()
+    relations = [
+        *schema.relations.values(),
+        *(path.relation for path in paths.values() if wanted is not None),
+    ]
     follow: dict[str, Direction] = {}
-    for relation in sorted(point.schema.relations.values(), key=lambda r: r.id):
+    for relation in sorted(relations, key=lambda r: r.id):
+        path = paths.get(relation.id)
+        inner = () if path is None else path.inner_kinds
         ways: list[Direction] = []
         for direction in LinkDirection:
             if wanted is not None and (relation.id, direction) not in wanted:
                 continue
-            far: Kind | None = point.schema.kinds.get(relation.far_endpoint(direction))
+            far: Kind | None = schema.kinds.get(relation.far_endpoint(direction))
             if far is None or not point.scope.allows(far.api_name):
+                continue
+            if not all(
+                (k := schema.kinds.get(kind_id)) is not None and point.scope.allows(k.api_name)
+                for kind_id in inner
+            ):
                 continue
             ways.append(Direction.OUT if direction is LinkDirection.FORWARD else Direction.IN)
         if ways:

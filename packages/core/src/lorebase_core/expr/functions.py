@@ -544,7 +544,7 @@ def _check_links(site: CallSite) -> ExprType:
     name = site.literal(1)
     if not isinstance(name, str):
         raise type_error("links() needs a Relation name as a string literal", site.node.pos)
-    found = site.environment.schema.relation_by_api_name(name)
+    found = site.environment.schema.link_by_api_name(name)
     if found is None:
         raise type_error(f"unknown Relation {name!r}", site.node.pos)
     relation, direction = found

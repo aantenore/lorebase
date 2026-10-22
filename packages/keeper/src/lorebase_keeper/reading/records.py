@@ -170,16 +170,21 @@ async def get_record(
     fetched = await fetch_record(session, runtime, point, kind, key)
     record = record_out(point.schema, fetched.row, masking=point.masking)
     if links:
-        record.links = await link_counts(session, point, kind, fetched.row)
+        record.links = await link_counts(session, runtime, point, kind, fetched.row)
     if lineage:
         record.lineage = await lineage_summary(session, runtime, point, kind, fetched.row)
     return record, fetched
 
 
 async def link_counts(
-    session: AsyncSession, point: ReadPoint, kind: Kind, row: Mapping[Any, Any]
+    session: AsyncSession,
+    runtime: ReadRuntime,
+    point: ReadPoint,
+    kind: Kind,
+    row: Mapping[Any, Any],
 ) -> list[LinkCountOut]:
-    """Number of Links per Relation and direction touching the Record."""
+    """Number of Links per Relation and direction touching the Record, path Derivations
+    included (a path only when the caller may read every Kind it crosses)."""
     key = row["key"]
     counts: list[LinkCountOut] = []
     explicit: dict[LinkDirection, list[Relation]] = defaultdict(list)
@@ -221,7 +226,36 @@ async def link_counts(
             )
             for r in relations
         )
+    counts.extend(await _path_counts(session, runtime, point, kind, key))
     return sorted(counts, key=lambda c: (c.relation, c.direction))
+
+
+async def _path_counts(
+    session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, kind: Kind, key: str
+) -> list[LinkCountOut]:
+    """Link counts of the path Derivations starting or ending at the Record's Kind, stored
+    or composed like their Links (`Compiler.link_source`)."""
+    target = target_of_kind(point.schema, kind.api_name)
+    assert target is not None
+    counts: list[LinkCountOut] = []
+    compiler: Compiler | None = None
+    for path in sorted(point.schema.path_relations().values(), key=lambda p: p.id):
+        for direction in LinkDirection:
+            name = relation_name(path.relation, direction)
+            if not name or path.relation.endpoint(direction) != kind.id:
+                continue
+            hop = resolve_hop(point.schema, target, name)
+            if isinstance(hop, str) or not all(point.scope.allows(k) for k in hop.kinds_read):
+                continue  # paths crossing Kinds the caller may not read are not counted
+            compiler = compiler or compiler_for(point, runtime)
+            source = compiler.link_source(hop)
+            count = await session.scalar(
+                select(func.count())
+                .select_from(source.rows)
+                .where(source.scope, source.near == literal(key))
+            )
+            counts.append(LinkCountOut(relation=name, direction=direction, count=int(count or 0)))
+    return counts
 
 
 async def _foreign_key_count(

@@ -418,6 +418,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_store.gc import run_gc_job
     from lorebase_store.indexes import run_index_job
     from lorebase_store.materialize.background import run_branch_delete_job, run_materialize_job
+    from lorebase_store.materialize.paths import refresh_stale_paths
     from lorebase_store.materialize.stale import run_sensitivity_refresh_job
     from lorebase_store.runtime import StoreRuntime
     from lorebase_store.settings import database_settings
@@ -449,6 +450,8 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     if unknown:
         raise SystemExit(f"no handler for job type(s): {', '.join(unknown)}")
     try:
+        if MATERIALIZE_JOB in types:
+            await refresh_stale_paths(async_sessionmaker(engine), runtime=runtime)
         return await run_jobs(
             async_sessionmaker(engine, expire_on_commit=False),
             {t: known[t] for t in types},
