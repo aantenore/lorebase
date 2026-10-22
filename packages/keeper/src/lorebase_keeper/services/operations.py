@@ -137,6 +137,7 @@ from lorebase_store.commit import (
 )
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.digests import DigestKeys
+from lorebase_store.materialize.links import path_links_of
 from lorebase_store.models.enums import InvocationStatus
 from lorebase_store.reads import Direction, head_schema, links_of_record
 from lorebase_store.repositories import (
@@ -707,11 +708,30 @@ def _link_reader(
     schema: Schema,
     rows: MaterializedRepository,
 ) -> LinkReader:
-    """`links()` for expressions: Links of a Record (stored or foreign-key backed) at the
-    materialized head, with the Records at their far end."""
-    cap = store.runtime.settings.reads.max_page_rows
+    """`links()` for expressions: Links of a Record (stored or foreign-key backed, or of a
+    path Derivation, composed from the Links of its steps) at the materialized head, with
+    the Records at their far end."""
+    settings = store.runtime.settings
+    cap = settings.reads.max_page_rows
+
+    def too_many() -> ExprError:
+        return ExprError(
+            ExprErrorCode.LIMIT_EXCEEDED,
+            f"links() reached {cap} Links (store.reads.max_page_rows)",
+        )
 
     async def read(relation_id: str, direction: LinkDirection, key: str) -> list[LinkedRecord]:
+        path = schema.path_relations().get(relation_id)
+        if path is not None:
+            found_far = await path_links_of(
+                rows, path, direction, [key], settings.traverse.path_fanout
+            )
+            pairs = found_far.get(key, [])
+            if len(pairs) >= cap:
+                raise too_many()
+            far_kind = path.relation.far_endpoint(direction)
+            linked = await rows.records(far_kind, [far for far, _ in pairs])
+            return [LinkedRecord(far, linked[far].inputs, {}) for far, _ in pairs if far in linked]
         relation = schema.relations.get(relation_id)
         if relation is None:
             return []
@@ -729,10 +749,7 @@ def _link_reader(
             runtime=store.runtime,
         )
         if len(found) >= cap:
-            raise ExprError(
-                ExprErrorCode.LIMIT_EXCEEDED,
-                f"links() reached {cap} Links (store.reads.max_page_rows)",
-            )
+            raise too_many()
         far = {(link.to_key if forward else link.from_key): link for link in found}
         records = await rows.records(relation.far_endpoint(direction), list(far))
         return [

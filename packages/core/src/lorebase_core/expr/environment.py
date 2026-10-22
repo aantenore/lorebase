@@ -6,7 +6,7 @@
   Record of an earlier step.
 - Record expressions (Derivations, aggregate filters): the Record's Attributes by api name,
   ``key``, and ``links.<relation>``: the Records one hop away, by forward or inverse
-  Relation name.
+  Relation name (or path Derivation name).
 """
 
 from __future__ import annotations
@@ -161,10 +161,15 @@ def record_environment(schema: Schema, kind_id: str) -> Environment:
 
 def link_fields(schema: Schema, kind_id: str) -> dict[str, LinkField]:
     """Relation names usable from a Record of ``kind_id``: forward names of Relations that
-    start at the Kind, inverse names of Relations that end there."""
+    start at the Kind, inverse names of Relations that end there; path Derivations count as
+    Relations (their virtual Relation, design 5.8)."""
     fields: dict[str, LinkField] = {}
-    for relation in schema.relations.values():
-        if relation.to_kind == kind_id:
+    relations = [
+        *schema.relations.values(),
+        *(path.relation for path in schema.path_relations().values()),
+    ]
+    for relation in relations:
+        if relation.to_kind == kind_id and relation.inverse_api_name:
             fields[relation.inverse_api_name] = LinkField(relation, LinkDirection.INVERSE)
         if relation.from_kind == kind_id:
             fields[relation.api_name] = LinkField(relation, LinkDirection.FORWARD)

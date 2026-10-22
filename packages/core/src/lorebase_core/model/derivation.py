@@ -36,13 +36,14 @@ class ExpressionDerivation(Model):
 class AggregateDerivation(Model):
     """An aggregate over the Records reached from ``kind`` through ``relation`` in ``direction``.
 
+    ``relation`` is a Relation or a path Derivation (its virtual Relation).
     ``source_attribute`` is an Attribute of the Kind at the far end; ``count`` needs none.
     """
 
     variant: Literal["aggregate"] = "aggregate"
     kind: KindId
     attribute: AttributeId
-    relation: RelationId
+    relation: RelationId | DerivationId
     direction: LinkDirection = LinkDirection.FORWARD
     function: AggregateFunction
     source_attribute: AttributeId | None = None

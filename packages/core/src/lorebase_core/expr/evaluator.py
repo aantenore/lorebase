@@ -146,7 +146,7 @@ class Evaluator:
         return RecordValue(kind, ref.key, values)
 
     def load_links(self, ref: Ref, name: str) -> list[RecordValue]:
-        found = self.env.schema.relation_by_api_name(name)
+        found = self.env.schema.link_by_api_name(name)
         if found is None:
             raise evaluation_error(f"unknown Relation {name!r}")
         relation, direction = found

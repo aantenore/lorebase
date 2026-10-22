@@ -3,7 +3,8 @@
 Runs inside the commit transaction (invariant I4). Rows are written in bulk: one statement
 batch per partition and operation, then the derived values the changeset can affect
 (`materialize.derived`; every derived value when the schema changed) and the Links of
-materialized path Derivations (`materialize.paths`), then one set-based
+materialized path Derivations (`materialize.paths`; every one when the schema or
+`store.traverse.path_fanout` changed), then one set-based
 search vector update per Kind.
 """
 
@@ -135,6 +136,7 @@ async def apply_changeset(
             now=at,
             batch=settings.materialize.read_batch_rows,
             max_incremental=settings.materialize.derivation_max_incremental_records,
+            fanout=settings.traverse.path_fanout,
         )
     paths = None
     if settings.materialize.derivations_enabled:
@@ -166,16 +168,22 @@ async def apply_changeset(
             await _apply_links(repository, parsed.element_id, group)
             applied.links[parsed.element_id].update(split_link_key(c.entry.key) for c in group)
     changed: dict[str, set[str]] = {}
+    # A change of `store.traverse.path_fanout` recomputes whatever follows it, once.
+    stale = schema_hash is None and paths is not None and await paths.fanout_stale(derived)
     if derived is not None:
         if schema_hash is not None:
             await derived.prune()
             changed = await derived.recompute_all()
+        elif stale and derived.reads_paths:
+            changed = await derived.recompute_all()
         elif derived.steps:
             changed = await derived.recompute(applied)
     if paths is not None:
-        if schema_hash is not None:
-            await paths.prune()
+        if schema_hash is not None or stale:
+            if schema_hash is not None:
+                await paths.prune()
             await paths.recompute_all()
+            await paths.record_fanout()
         elif paths.paths:
             await paths.recompute(applied)
     search_config = settings.materialize.text_search_config

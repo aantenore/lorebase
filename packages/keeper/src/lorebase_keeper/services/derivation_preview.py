@@ -34,6 +34,7 @@ from lorebase_core.model import (
     Derivation,
     ExpressionDerivation,
     Kind,
+    LinkDirection,
     Schema,
 )
 from lorebase_core.validate import SchemaRules
@@ -145,19 +146,26 @@ def touched_kinds(
     schema: Schema, derivation: Derivation, compiled: CompiledDerivation
 ) -> frozenset[str]:
     """Ids of the Kinds whose Records the Derivation reads: its own, the Kinds of the
-    Attributes it may read and the far Kinds of the Relations it follows."""
+    Attributes it may read and the far Kinds of the Relations it follows (every Kind a path
+    Derivation crosses)."""
     definition = derivation.definition
     if not isinstance(definition, ExpressionDerivation | AggregateDerivation):
         return frozenset()
+    paths = schema.path_relations()
     kinds = {definition.kind}
     kinds.update(kind_id for kind_id, _ in derivation_reads(schema, derivation))
+    followed: list[tuple[str, LinkDirection]] = []
     if isinstance(definition, AggregateDerivation):
-        relation = schema.relations.get(definition.relation)
-        if relation is not None:
-            kinds.add(relation.far_endpoint(definition.direction))
+        followed.append((definition.relation, definition.direction))
     for program in (compiled.expression, compiled.filter):
         if program is not None:
-            kinds.update(f.relation.far_endpoint(f.direction) for f in links_read(program))
+            followed.extend((f.relation.id, f.direction) for f in links_read(program))
+    for relation_id, direction in followed:
+        relation = schema.link_relation(relation_id)
+        if relation is not None:
+            kinds.add(relation.far_endpoint(direction))
+        if relation_id in paths:
+            kinds.update(paths[relation_id].kinds)
     return frozenset(kinds)
 
 
@@ -196,6 +204,7 @@ async def preview(
         now=point.revision.created_at,
         batch=materialize.read_batch_rows,
         max_incremental=materialize.derivation_max_incremental_records,
+        fanout=store.settings.traverse.path_fanout,
     )
     masking = point.masking.over(point.schema, candidate.schema)
     masked = masking.hidden(candidate.attribute, (candidate.kind.id,))

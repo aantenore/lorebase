@@ -11,8 +11,9 @@ reads a derived Attribute runs after the one computing it):
 - `recompute_all` computes every Record of every Kind with a Derivation (rebuilds, schema
   changes, verification);
 - `recompute` computes, after a changeset was applied, the Records it can affect: Records
-  written, Records whose Links of a Relation the Derivation reads changed, Records linked to
-  written Records or to Records whose derived values changed. One Derivation recomputes at most
+  written, Records whose Links of a Relation the Derivation reads changed (for a path
+  Derivation, a Link of any of its steps), Records linked to written Records or to Records
+  whose derived values changed. One Derivation recomputes at most
   `store.materialize.derivation_max_incremental_records` Records this way; beyond that, every
   Record of its Kind.
 
@@ -61,6 +62,7 @@ from lorebase_core.model import (
     ExpressionDerivation,
     Kind,
     LinkDirection,
+    PathRelation,
     Record,
     Relation,
     RelationBacking,
@@ -68,6 +70,13 @@ from lorebase_core.model import (
 )
 from lorebase_core.types import AttributeType
 from lorebase_store.bulk import chunks
+from lorebase_store.materialize.links import (
+    links_of,
+    path_affected,
+    path_links_of,
+    reverse,
+    reverse_steps,
+)
 from lorebase_store.repositories.materialized import MaterializedRepository, RecordRow
 
 logger = logging.getLogger("lorebase.store.derived")
@@ -78,10 +87,12 @@ RecordKey = tuple[str, str]
 @dataclass(frozen=True, eq=False)
 class Hop:
     """A Relation traversed from the Derivation's Kind (`relation.endpoint(direction)`);
-    hashed by identity (one object per Derivation step)."""
+    hashed by identity (one object per Derivation step). For a path Derivation, `relation`
+    is its virtual Relation and `path` the path."""
 
     relation: Relation
     direction: LinkDirection
+    path: PathRelation | None = None
 
     @property
     def near_kind(self) -> str:
@@ -129,13 +140,17 @@ def plan_derivations(schema: Schema, limits: ExprLimits) -> list[DerivationStep]
             )
             continue
         hops: list[Hop] = []
+        paths = schema.path_relations()
         if isinstance(definition, AggregateDerivation):
-            relation = schema.relations.get(definition.relation)
+            relation = schema.link_relation(definition.relation)
             if relation is None:
                 continue
-            hops.append(Hop(relation, definition.direction))
+            hops.append(Hop(relation, definition.direction, paths.get(relation.id)))
         elif compiled.expression is not None:
-            hops.extend(Hop(f.relation, f.direction) for f in links_read(compiled.expression))
+            hops.extend(
+                Hop(f.relation, f.direction, paths.get(f.relation.id))
+                for f in links_read(compiled.expression)
+            )
         steps[attribute.id] = DerivationStep(
             derivation,
             kind,
@@ -212,6 +227,7 @@ class DerivedValues:
         now: datetime,
         batch: int,
         max_incremental: int,
+        fanout: int,
         write: bool = True,
     ) -> None:
         self.repository = repository
@@ -219,6 +235,7 @@ class DerivedValues:
         self.limits = limits
         self.now = now
         self.batch = batch
+        self.fanout = fanout
         self.max_incremental = max_incremental
         self.write = write
         self.steps = plan_derivations(schema, limits)
@@ -229,6 +246,11 @@ class DerivedValues:
     def kinds(self) -> set[str]:
         """Kinds with at least one Derivation."""
         return {step.kind.id for step in self.steps}
+
+    @property
+    def reads_paths(self) -> bool:
+        """Whether a Derivation reads a path Derivation (its values follow the fan-out)."""
+        return any(hop.path is not None for step in self.steps for hop in step.hops)
 
     def searchable(self, kind_id: str) -> bool:
         """Whether a derived Attribute of the Kind is in its search vector."""
@@ -300,10 +322,15 @@ class DerivedValues:
     async def _affected_through(
         self, hop: Hop, applied: AppliedChanges, changed: Mapping[str, set[str]]
     ) -> set[str]:
-        """Keys of the hop's near Kind whose Links or far Records changed."""
+        """Keys of the hop's near Kind whose Links or far Records changed. For a path, the
+        Records whose pairs a change of any step can change (`path_affected`)."""
         relation = hop.relation
         forward = hop.direction is LinkDirection.FORWARD
-        keys = {f if forward else t for f, t in applied.links.get(relation.id, ())}
+        if hop.path is not None:
+            steps = hop.path.steps if forward else reverse_steps(hop.path.steps)
+            keys = await path_affected(self.repository, steps, applied)
+        else:
+            keys = {f if forward else t for f, t in applied.links.get(relation.id, ())}
         far = hop.far_kind
         far_keys = (
             set(applied.written.get(far, ()))
@@ -313,8 +340,8 @@ class DerivedValues:
         if relation.backing is RelationBacking.FOREIGN_KEY:
             keys |= self._foreign_key_targets(hop, applied)
         if far_keys:
-            reverse = Hop(relation, LinkDirection.INVERSE if forward else LinkDirection.FORWARD)
-            for near_keys in (await self._links(reverse, sorted(far_keys))).values():
+            back = Hop(relation, reverse(hop.direction), hop.path)
+            for near_keys in (await self._links(back, sorted(far_keys))).values():
                 keys.update(far_key for far_key, _ in near_keys)
         return keys
 
@@ -337,6 +364,8 @@ class DerivedValues:
 
     async def _links(self, hop: Hop, keys: Sequence[str]) -> dict[str, list[tuple[str, Any]]]:
         """`near key -> [(far key, link values)]` of the hop for `keys`."""
+        if hop.path is not None:
+            return await path_links_of(self.repository, hop.path, hop.direction, keys, self.fanout)
         return await links_of(self.repository, hop.relation, hop.direction, keys)
 
     def _inputs(self, kind_id: str, row: RecordRow) -> dict[str, Any]:
@@ -448,42 +477,18 @@ class DerivedValues:
                     raise ExprError(
                         ExprErrorCode.EVALUATION, "Records cannot be read by a Derivation"
                     ) from None
-                relation = self.schema.relations[request.relation]
-                hop = Hop(relation, request.direction)
+                relation = self.schema.link_relation(request.relation)
+                if relation is None:
+                    raise ExprError(
+                        ExprErrorCode.EVALUATION, f"unknown Relation {request.relation}"
+                    ) from None
+                path = self.schema.path_relations().get(relation.id)
+                hop = Hop(relation, request.direction, path)
                 linked = await self._linked(hop, [request.key])
                 resolver.links[(request.relation, request.direction, request.key)] = linked.get(
                     request.key, []
                 )
         return compute()
-
-
-async def links_of(
-    repository: MaterializedRepository,
-    relation: Relation,
-    direction: LinkDirection,
-    keys: Sequence[str],
-) -> dict[str, list[tuple[str, Any]]]:
-    """`near key -> [(far key, link values)]` of `relation` followed in `direction` from
-    `keys`: stored Links, or the Records holding the key of a foreign-key Relation."""
-    forward = direction is LinkDirection.FORWARD
-    out: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-    if relation.backing is RelationBacking.FOREIGN_KEY:
-        attribute = relation.foreign_key_attribute
-        if attribute is None:
-            return out
-        pairs = await repository.foreign_key_links(
-            relation.from_kind, attribute, keys=keys, by_target=not forward
-        )
-        for from_key, to_key in pairs:
-            near, far = (from_key, to_key) if forward else (to_key, from_key)
-            out[near].append((far, {}))
-        return out
-    found = await repository.linked_keys(
-        relation.id, near="from_key" if forward else "to_key", keys=keys
-    )
-    for near, far, values in found:
-        out[near].append((far, values))
-    return out
 
 
 def aggregate(

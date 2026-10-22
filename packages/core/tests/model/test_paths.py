@@ -3,8 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 
-from lorebase_core.model import Derivation, LinkDirection, PathDerivation, PathStep, Schema
+from lorebase_core.expr import ExprLimits, LinkedRecord, MemoryResolver, links_read
+from lorebase_core.expr.compiler import compile, run
+from lorebase_core.expr.context import activation
+from lorebase_core.expr.environment import link_fields, record_environment
+from lorebase_core.expr.types import INT
+from lorebase_core.model import (
+    Derivation,
+    LinkDirection,
+    PathDerivation,
+    PathStep,
+    Record,
+    Schema,
+    schema_from_document,
+    schema_to_document,
+)
 from lorebase_core.model.paths import bounded, path_relation, walk
 from lorebase_core.query import (
     Query,
@@ -14,9 +29,21 @@ from lorebase_core.query import (
     resolve_query,
     target_of_kind,
 )
+from lorebase_core.validate import validate_schema
 
-from .supply import CONTRACT, MADE_AT, PART, PLANT, SUPPLIED_BY, WITH_SUPPLIER, ident, supply_schema
+from .supply import (
+    CONTRACT,
+    MADE_AT,
+    PART,
+    PLANT,
+    SUPPLIED_BY,
+    SUPPLIER_COUNT_DRV,
+    WITH_SUPPLIER,
+    ident,
+    supply_schema,
+)
 
+NOW = datetime(2026, 10, 21, 9, 30, tzinfo=UTC)
 PART_CONTRACTS = ident("drv", 50)
 BROKEN = ident("drv", 51)
 
@@ -126,3 +153,43 @@ def test_a_path_may_start_from_the_inverse_of_a_foreign_key() -> None:
     )
     found = schema.path_relations()[BROKEN]
     assert found.kinds == (PLANT, PART, schema.relations[SUPPLIED_BY].to_kind)
+
+
+def aggregate_over_contracts(schema: Schema) -> Schema:
+    count = schema.derivations[SUPPLIER_COUNT_DRV]
+    definition = count.definition.model_copy(update={"relation": PART_CONTRACTS})
+    over_path = count.model_copy(update={"definition": definition})
+    return schema.model_copy(
+        update={"derivations": {**schema.derivations, SUPPLIER_COUNT_DRV: over_path}}
+    )
+
+
+def test_expressions_and_aggregates_read_a_path_like_a_relation() -> None:
+    schema = aggregate_over_contracts(schema_with(part_contracts()))
+    assert not [issue for issue in validate_schema(schema) if issue.is_error]
+    virtual = schema.path_relations()[PART_CONTRACTS].relation
+    assert schema.link_relation(PART_CONTRACTS) == virtual
+    assert schema.link_by_api_name("parts_under_contract") == (virtual, LinkDirection.INVERSE)
+
+    assert link_fields(schema, PART)["contracts_of_suppliers"].relation.id == PART_CONTRACTS
+    assert "parts_under_contract" in link_fields(schema, CONTRACT)
+    program = compile(
+        "size(links.contracts_of_suppliers)", record_environment(schema, PART), expected=INT
+    )
+    (read,) = links_read(program)
+    assert (read.relation.id, read.direction) == (PART_CONTRACTS, LinkDirection.FORWARD)
+    resolver = MemoryResolver()
+    resolver.links[(PART_CONTRACTS, LinkDirection.FORWARD, "P-1")] = [
+        LinkedRecord("C-1", {}),
+        LinkedRecord("C-2", {}),
+    ]
+    variables = activation(program.environment, record=Record(kind=PART, key="P-1", values={}))
+    assert run(program, variables, now=NOW, resolver=resolver, limits=ExprLimits()) == 2
+
+
+def test_a_yaml_aggregate_may_name_a_path() -> None:
+    schema = schema_with(part_contracts())
+    document = schema_to_document(schema)
+    document["derivations"]["supplier_count"]["definition"]["relation"] = "contracts_of_suppliers"
+    loaded = schema_from_document(document, base=schema)
+    assert loaded == aggregate_over_contracts(schema)

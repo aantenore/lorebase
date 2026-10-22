@@ -25,7 +25,12 @@ def _branch_fk() -> ForeignKeyConstraint:
 
 
 class MatSchema(Base):
-    """Compiled schema at a branch head."""
+    """Compiled schema at a branch head.
+
+    `path_fanout` is the `store.traverse.path_fanout` the branch's materialized path
+    Derivations were computed with (`None` before any was): a different setting rewrites
+    them (`lorebase_store.materialize.paths`).
+    """
 
     __tablename__ = "mat_schema"
     __table_args__ = (_branch_fk(),)
@@ -34,6 +39,7 @@ class MatSchema(Base):
     branch: Mapped[str] = mapped_column(primary_key=True)
     schema_hash: Mapped[H32]
     compiled: Mapped[dict[str, Any]]
+    path_fanout: Mapped[int | None] = mapped_column(Integer)
 
 
 class MatRecord(Base):

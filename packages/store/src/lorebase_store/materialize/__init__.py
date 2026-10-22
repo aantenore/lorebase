@@ -25,6 +25,7 @@ from lorebase_store.materialize.overlay import (
     promote_overlays_of,
     refork,
 )
+from lorebase_store.materialize.paths import refresh_path_fanout, refresh_stale_paths
 from lorebase_store.materialize.rebuild import RebuildReport, materialize_revision, rebuild
 from lorebase_store.materialize.stale import (
     StaleRefresh,
@@ -70,6 +71,8 @@ __all__ = [
     "rebuild",
     "refork",
     "refresh_kind",
+    "refresh_path_fanout",
+    "refresh_stale_paths",
     "refresh_stale_rows",
     "run_branch_delete_job",
     "run_materialize_job",

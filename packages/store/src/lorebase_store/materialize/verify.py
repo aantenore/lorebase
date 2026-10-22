@@ -180,6 +180,7 @@ async def _compare_derived(
         now=at,
         batch=settings.read_batch_rows,
         max_incremental=settings.derivation_max_incremental_records,
+        fanout=runtime.settings.traverse.path_fanout,
         write=False,
     )
     await recomputed.recompute_all()

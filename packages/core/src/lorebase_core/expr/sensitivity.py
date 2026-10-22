@@ -243,7 +243,7 @@ def _guessed_reads(schema: Schema, operation: Operation, root: Node) -> list[Att
             if node.function == "links" and len(node.args) == 2:
                 relation = node.args[1]
                 if isinstance(relation, Literal) and isinstance(relation.value, str):
-                    found = schema.relation_by_api_name(relation.value)
+                    found = schema.link_by_api_name(relation.value)
                     if found is not None:
                         rel, direction = found
                         return schema.kinds.get(rel.far_endpoint(direction))

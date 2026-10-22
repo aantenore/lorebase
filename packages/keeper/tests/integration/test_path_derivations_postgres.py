@@ -1,6 +1,8 @@
-"""Path Derivations: materialized Links kept current by commits (overlays included), composed
-Links at read time, both readable through the API at the head and at past Revisions, with the
-same fan-out bound."""
+"""Path Derivations: materialized Links kept current by commits (overlays included) and rewritten
+when the fan-out setting changes, composed Links at read time, both readable through the API at
+the head and at past Revisions, with the same fan-out bound; followed by neighborhoods, Link
+counts, Operation `links()` and Derivations, and only by callers who may read every Kind they
+cross."""
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ from typing import Any
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.model import (
     Derivation,
@@ -21,11 +23,17 @@ from lorebase_core.model import (
     PathStep,
     Schema,
     new_id,
+    schema_from_document,
+    schema_to_document,
 )
 from lorebase_core.model.ids import IdPrefix
 from lorebase_core.revision import Origin
 from lorebase_core.validate import LinkDelete, LinkUpsert
+from lorebase_keeper.auth.api_keys import ApiKeyCodec
+from lorebase_keeper.auth.config import ApiKeySettings
+from lorebase_store.auth import SqlAuthStore
 from lorebase_store.commit import SchemaUpsert, commit
+from lorebase_store.db import create_engine
 from lorebase_store.materialize import (
     DivergenceReason,
     MaterializationMode,
@@ -33,9 +41,11 @@ from lorebase_store.materialize import (
     rebuild,
     verify,
 )
+from lorebase_store.materialize.paths import refresh_path_fanout, refresh_stale_paths
+from lorebase_store.models.enums import GrantScope, PrincipalType
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import StoreSettings
+from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 from .read_fixtures import Seeded, keeper, owner_session, seeded_database
 from .supply import AUTHOR, DOMAIN, Clock, commit_changes, load_supply, record_change, rows
@@ -49,6 +59,8 @@ PAIRS = (
     "AND relation_id = :r AND NOT deleted"
 )
 OVERLAY = "agent/paths"
+PEPPER = "path-auth-pepper-0123456789-0123456789"
+CODEC = ApiKeyCodec(ApiKeySettings(pepper=PEPPER))
 
 Pairs = set[tuple[str, str]]
 
@@ -151,11 +163,36 @@ async def seed(
     schema = schema.model_copy(
         update={"derivations": {**schema.derivations, **{d.id: d for d in added}}}
     )
+    engine = create_engine(DatabaseSettings(), url=owner_url, pooled=False)
+    try:
+        auth = SqlAuthStore(async_sessionmaker(engine, expire_on_commit=False))
+        async with auth.unit() as unit:
+            # reads Parts and Contracts, not the Suppliers the contract paths cross
+            principal = await unit.principals.add(PrincipalType.SERVICE, "parts and contracts")
+            for kind in ("Part", "Contract"):
+                await unit.grants.add(
+                    domain_id=DOMAIN,
+                    subject=principal.id,
+                    role="viewer",
+                    created_by="usr_seed",
+                    scope_type=GrantScope.KIND,
+                    scope_ref=kind,
+                )
+            generated = CODEC.generate()
+            await unit.api_keys.add(
+                principal_id=principal.id,
+                prefix=generated.prefix,
+                key_hash=generated.key_hash,
+                scopes=[f"domain:{DOMAIN}"],
+            )
+    finally:
+        await engine.dispose()
     return Seeded(
         owner_url=owner_url,
         app_url=app_url,
         schema=schema,
         revisions={"paths": result.revision_id.hex()},
+        facts={"narrow_key": generated.token},
     )
 
 
@@ -358,6 +395,31 @@ async def test_materialized_paths_follow_commits_and_rebuilds(seeded: Seeded) ->
         assert {i["from_key"] for i in back} == {
             a for a, c in Data().expected("order_parts") if c == "P-10001"
         }
+        # neighborhoods and Link counts at that Revision read a snapshot of it
+        contracts = Data().expected("supplier_contracts")
+        part = sorted(grouped(contracts))[0]
+        for name in ("supplier_contracts", "supplier_contracts_live"):
+            past = await http.post(
+                f"{BASE}/neighborhood",
+                json={
+                    "seeds": [{"kind": "Part", "key": part}],
+                    "depth": 1,
+                    "relations": [name],
+                    "at": seeded.revisions["paths"],
+                },
+            )
+            assert past.status_code == 200, past.text
+            assert edges(past.json(), name) == {(part, c) for c in grouped(contracts)[part]}
+        record = await http.get(
+            f"{BASE}/kinds/Part/records/{part}",
+            params={"links": True, "at": seeded.revisions["paths"]},
+        )
+        assert record.status_code == 200, record.text
+        found = {
+            (c["relation"], c["direction"]): c["count"] for c in record.json()["record"]["links"]
+        }
+        for name in ("supplier_contracts", "supplier_contracts_live"):
+            assert found[(name, "forward")] == len(grouped(contracts)[part])
 
 
 async def test_overlay_branches_keep_their_own_path_links(seeded: Seeded) -> None:
@@ -399,3 +461,307 @@ async def test_overlay_branches_keep_their_own_path_links(seeded: Seeded) -> Non
         assert ("P-10001", "S-1005") not in overlay.supplied_by
         assert on_overlay == live == overlay.expected("supplier_contracts")
         assert on_overlay != main_before
+
+
+async def current(http: httpx.AsyncClient) -> Data:
+    """The Links the paths read on `main` now (earlier tests change them)."""
+    data = Data()
+    data.supplied_by = await relation_pairs(http, "supplied_by")
+    data.with_supplier = await relation_pairs(http, "with_supplier")
+    data.issued_to = await relation_pairs(http, "issued_to")
+    return data
+
+
+async def counts(http: httpx.AsyncClient, kind: str, key: str, **headers: str) -> dict[str, int]:
+    response = await http.get(
+        f"{BASE}/kinds/{kind}/records/{key}", params={"links": True}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    return {
+        f"{c['relation']}:{c['direction']}": c["count"] for c in response.json()["record"]["links"]
+    }
+
+
+async def hood(
+    http: httpx.AsyncClient, kind: str, key: str, relations: list[str], **headers: str
+) -> dict[str, Any]:
+    response = await http.post(
+        f"{BASE}/neighborhood",
+        json={"seeds": [{"kind": kind, "key": key}], "depth": 2, "relations": relations},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def edges(body: Mapping[str, Any], relation: str) -> Pairs:
+    return {(e["from"]["key"], e["to"]["key"]) for e in body["edges"] if e["relation"] == relation}
+
+
+async def test_neighborhoods_and_link_counts_follow_paths(seeded: Seeded) -> None:
+    async with keeper(seeded.app_url) as http:
+        data = await current(http)
+        contracts = data.expected("supplier_contracts")
+        part = sorted(grouped(contracts))[0]
+        reached = grouped(contracts)[part]
+        back = {a for a, c in contracts if c in reached}
+        for name in ("supplier_contracts", "supplier_contracts_live"):
+            # two hops: the Contracts of the Part, then back to every Part they cover
+            inverse = name.replace("supplier_contracts", "contracted_parts")
+            found = await hood(http, "Part", part, [name, inverse])
+            assert {(n["kind"], n["key"]) for n in found["nodes"]} == {
+                ("Part", part),
+                *(("Contract", c) for c in reached),
+                *(("Part", a) for a in back),
+            }
+            assert edges(found, name) == {(a, c) for a, c in contracts if c in reached}
+            assert not found["truncated"]
+        # a composed path and a stored Relation in one walk
+        mixed = await hood(http, "Part", part, ["supplier_contracts_live", "with_supplier"])
+        assert edges(mixed, "supplier_contracts_live") == {(part, c) for c in reached}
+        assert edges(mixed, "with_supplier") == {
+            (c, s) for c, s in data.with_supplier if c in reached
+        }
+
+        found_counts = await counts(http, "Part", part)
+        for name in ("supplier_contracts", "supplier_contracts_live"):
+            assert found_counts[f"{name}:forward"] == len(reached)
+        assert found_counts["co_supplied:forward"] == len(
+            {c for a, c in data.expected("co_supplied") if a == part}
+        )
+        contract = sorted(reached)[0]
+        contract_counts = await counts(http, "Contract", contract)
+        for name in ("contracted_parts", "contracted_parts_live"):
+            assert contract_counts[f"{name}:inverse"] == len(
+                {a for a, c in contracts if c == contract}
+            )
+
+
+async def test_paths_need_read_access_to_every_kind_crossed(seeded: Seeded) -> None:
+    """A caller reading Parts and Contracts, not Suppliers: following a contract path is
+    refused, and neighborhoods and Link counts leave it out instead of leaking it."""
+    auth = {"Authorization": f"Bearer {seeded.facts['narrow_key']}"}
+    section = {"auth": {"mode": "api_key", "api_keys": {"pepper": PEPPER}}}
+    async with keeper(seeded.app_url) as http:
+        contracts = (await current(http)).expected("supplier_contracts")
+    part = sorted(grouped(contracts))[0]
+    async with keeper(seeded.app_url, section) as http:
+        for name in ("supplier_contracts", "supplier_contracts_live"):
+            refused = await http.get(f"{BASE}/kinds/Part/records/{part}/links/{name}", headers=auth)
+            assert refused.status_code == 403, refused.text
+            listed = await http.get(f"{BASE}/relations/{name}/links", headers=auth)
+            assert listed.status_code == 403, listed.text
+        assert (
+            await http.get(f"{BASE}/kinds/Part/records/{part}", headers=auth)
+        ).status_code == 200
+
+        found_counts = await counts(http, "Part", part, **auth)
+        assert not {k for k in found_counts if k.startswith("supplier_contracts")}
+        assert "co_supplied:forward" not in found_counts  # crosses Supplier too
+
+        found = await hood(
+            http, "Part", part, ["supplier_contracts", "supplier_contracts_live"], **auth
+        )
+        assert {n["kind"] for n in found["nodes"]} == {"Part"}
+        assert found["edges"] == []
+
+
+async def test_derivations_and_operations_read_paths(seeded: Seeded) -> None:
+    patch: dict[str, dict[str, Any]] = {
+        "kinds": {
+            "Part": {
+                "attributes": {
+                    "contract_count": {
+                        "type": "integer",
+                        "description": "Contracts of the Part's suppliers.",
+                        "derivation": "part_contract_count",
+                    }
+                }
+            },
+            "Contract": {
+                "attributes": {
+                    "part_count": {
+                        "type": "integer",
+                        "description": "Parts its supplier supplies.",
+                        "derivation": "contract_part_count",
+                    }
+                }
+            },
+        },
+        "derivations": {
+            "part_contract_count": {
+                "definition": {
+                    "variant": "aggregate",
+                    "kind": "Part",
+                    "attribute": "contract_count",
+                    "relation": "supplier_contracts_live",
+                    "function": "count",
+                }
+            },
+            "contract_part_count": {
+                "definition": {
+                    "variant": "expression",
+                    "kind": "Contract",
+                    "attribute": "part_count",
+                    "expression": "size(links.contracted_parts)",
+                }
+            },
+        },
+        "operations": {
+            "check_contracts": {
+                "description": "Checks the contract paths of a Part and a Contract.",
+                "parameters": [
+                    {"name": "part", "type": "ref(Part)", "required": True},
+                    {"name": "contract", "type": "ref(Contract)", "required": True},
+                    {"name": "contracts", "type": "integer", "required": True},
+                    {"name": "parts", "type": "integer", "required": True},
+                ],
+                "preconditions": [
+                    {
+                        "expression": 'size(links(part, "supplier_contracts_live")) == contracts',
+                        "message": "Contracts differ.",
+                    },
+                    {
+                        "expression": 'size(links(contract, "contracted_parts")) == parts',
+                        "message": "Parts differ.",
+                    },
+                ],
+            }
+        },
+    }
+
+    async def derived(http: httpx.AsyncClient, kind: str, key: str, name: str) -> Any:
+        response = await http.get(f"{BASE}/kinds/{kind}/records/{key}")
+        assert response.status_code == 200, response.text
+        return response.json()["record"]["values"].get(name)
+
+    async def check(http: httpx.AsyncClient) -> None:
+        contracts = (await current(http)).expected("supplier_contracts")
+        by_part = grouped(contracts)
+        for part in sorted(by_part)[:5]:
+            assert await derived(http, "Part", part, "contract_count") == str(len(by_part[part]))
+        for contract in sorted({c for _, c in contracts})[:5]:
+            parts = len({a for a, c in contracts if c == contract})
+            assert await derived(http, "Contract", contract, "part_count") == str(parts)
+
+    document = schema_to_document(seeded.schema)
+    for section, entries in patch.items():
+        for name, entry in entries.items():
+            merged = document[section].setdefault(name, {})
+            for field, value in entry.items():
+                merged[field] = (
+                    {**merged.get(field, {}), **value} if isinstance(value, dict) else value
+                )
+    changed = schema_from_document(document, base=seeded.schema)
+    async with owner_session(seeded.owner_url) as session:
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            [],
+            schema_changes=[
+                SchemaUpsert(element)
+                for section in ("kinds", "derivations", "operations")
+                for element in getattr(changed, section).values()
+                if element.api_name in patch[section]
+            ],
+            author=AUTHOR,
+            message="Derive values over paths",
+            origin=Origin(type="test"),
+            runtime=runtime(),
+            clock=Clock(),
+        )
+    async with keeper(seeded.app_url) as http:
+        await check(http)
+
+        contracts = (await current(http)).expected("supplier_contracts")
+        part = sorted(grouped(contracts))[0]
+        contract = sorted(grouped(contracts)[part])[0]
+        parts = len({a for a, c in contracts if c == contract})
+        parameters = {"part": part, "contract": contract}
+        body = {"branch": "main", "dry_run": True}
+        ok = await http.post(
+            f"{BASE}/operations/check_contracts/execute",
+            json={
+                **body,
+                "parameters": {
+                    **parameters,
+                    "contracts": len(grouped(contracts)[part]),
+                    "parts": parts,
+                },
+            },
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["violations"] == []
+        off = await http.post(
+            f"{BASE}/operations/check_contracts/execute",
+            json={**body, "parameters": {**parameters, "contracts": 0, "parts": parts + 1}},
+        )
+        assert off.status_code == 200, off.text
+        assert len(off.json()["violations"]) == 2
+
+    # a change two steps away from the Records holding the values updates them incrementally
+    schema_now = seeded.schema
+    with_supplier = relation_id(schema_now, "with_supplier")
+    async with keeper(seeded.app_url) as http:
+        data = await current(http)
+    moved = sorted(data.with_supplier)[-1]
+    target = next(s for _, s in sorted(data.with_supplier) if s != moved[1])
+    async with owner_session(seeded.owner_url) as session:
+        await commit_changes(
+            session,
+            runtime(),
+            Clock(),
+            [
+                LinkDelete(relation=with_supplier, from_key=moved[0], to_key=moved[1]),
+                LinkUpsert(link=Link(relation=with_supplier, from_key=moved[0], to_key=target)),
+            ],
+            message="Move a contract to another supplier",
+        )
+        async with session.begin():
+            report = await verify(session, DOMAIN, "main", runtime=runtime(), derived=True)
+        assert report.ok, report.divergences[:3]
+    async with keeper(seeded.app_url) as http:
+        await check(http)
+
+
+async def test_a_fanout_change_rewrites_materialized_paths(seeded: Seeded) -> None:
+    narrow = StoreRuntime.from_settings(StoreSettings(traverse={"path_fanout": 1}))
+    async with keeper(seeded.app_url) as http:
+        data = await current(http)
+    names = ("supplier_contracts", "order_parts", "co_supplied")
+    async with owner_session(seeded.owner_url) as session:
+        for name in names:
+            assert await stored(session, "main", path_id(seeded, name)) == data.expected(name)
+        rewritten = await refresh_stale_paths(
+            async_sessionmaker(session.bind, expire_on_commit=False), runtime=narrow
+        )
+        assert "main" in {b for d, b in rewritten if d == DOMAIN}
+        for name in names:
+            assert await stored(session, "main", path_id(seeded, name)) == data.expected(
+                name, fanout=1
+            )
+        async with session.begin():
+            report = await verify(session, DOMAIN, "main", runtime=narrow, derived=True)
+        assert report.ok, report.divergences[:3]
+        # nothing left to rewrite at the same setting; a commit at the default rewrites back
+        async with session.begin():
+            assert not await refresh_path_fanout(session, DOMAIN, "main", runtime=narrow)
+        supplied_by = relation_id(seeded.schema, "supplied_by")
+        part = sorted(a for a, _ in data.supplied_by)[0]
+        linked = {s for a, s in data.supplied_by if a == part}
+        supplier = sorted({s for _, s in data.supplied_by} - linked)[0]
+        await commit_changes(
+            session,
+            runtime(),
+            Clock(),
+            [LinkUpsert(link=Link(relation=supplied_by, from_key=part, to_key=supplier))],
+            message="Add a supplier Link",
+        )
+        data.supplied_by.add((part, supplier))
+        for name in names:
+            assert await stored(session, "main", path_id(seeded, name)) == data.expected(name)
+        async with session.begin():
+            report = await verify(session, DOMAIN, "main", runtime=runtime(), derived=True)
+        assert report.ok, report.divergences[:3]

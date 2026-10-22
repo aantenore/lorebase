@@ -17,6 +17,13 @@ resolved rows (`lorebase_store.layout`): Links and Records by key through one la
 over the overlay's and the base's rows at once (`BranchLayout.links_lookup`,
 `records_lookup`), inbound foreign keys through both halves and their per-Attribute indexes;
 the function is `lb_neighborhood_overlay` (revisions 0010 and 0012).
+
+Path Derivations (design 5.8) are followed when named: a materialized one like a stored
+Relation (its Links are rows of `mat_links`), one composed at read time hop by hop. A walk
+that follows a composed path runs one hop at a time: per hop one statement of depth 1 from the
+frontier for the other Relations, and the path's Links of the frontier composed from the
+Links of its steps (`lorebase_store.materialize.links.path_links_of`), at most `fanout` per
+Record. Caps and the result are the same as for the single statement.
 """
 
 from __future__ import annotations
@@ -30,18 +37,20 @@ from sqlalchemy import ColumnElement, Integer, LargeBinary, Text, column, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Relation, Schema
+from lorebase_core.model import LinkDirection, PathRelation, Relation, Schema
 from lorebase_store.indexes import predicate_sql, sql_literal, values_text
 from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
+from lorebase_store.materialize.links import path_links_of
 from lorebase_store.reads import (
     MAT_RECORDS,
     RECORD_NAMES,
     Direction,
     LinkRef,
     foreign_key_relations,
+    hydrate_records,
     stored_relation_ids,
 )
-from lorebase_store.repositories.materialized import RecordRow
+from lorebase_store.repositories.materialized import MaterializedRepository, RecordRow
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import record_definer_call
 
@@ -123,13 +132,21 @@ def plan_hops(
     follow: Mapping[str, Direction] | None = None,
 ) -> Hops:
     """The Relations to follow: `direction` over `relation_ids` (all when `None`), or each
-    Relation of `follow` (Relation id to direction) in its own direction only when given."""
-    relations = sorted(schema.relations.values(), key=lambda r: r.id)
+    Relation of `follow` (Relation id to direction) in its own direction only when given.
+    Materialized path Derivations named there are followed as stored Relations; composed
+    ones are not part of the statement (`composed_paths`)."""
+    relations = sorted(
+        [
+            *schema.relations.values(),
+            *(p.relation for p in schema.path_relations().values() if p.materialized),
+        ],
+        key=lambda r: r.id,
+    )
     if follow is not None:
         outgoing = {rid for rid, way in follow.items() if way.outgoing}
         incoming = {rid for rid, way in follow.items() if way.incoming}
     else:
-        wanted = {r.id for r in relations} if relation_ids is None else set(relation_ids)
+        wanted = set(schema.relations) if relation_ids is None else set(relation_ids)
         outgoing = wanted if direction.outgoing else set()
         incoming = wanted if direction.incoming else set()
     out = [r for r in relations if r.id in outgoing]
@@ -141,6 +158,18 @@ def plan_hops(
         foreign_out=tuple(foreign_key_relations(out)),
         foreign_in=tuple(foreign_key_relations(into)),
     )
+
+
+def composed_paths(
+    schema: Schema, follow: Mapping[str, Direction]
+) -> dict[str, tuple[PathRelation, Direction]]:
+    """Path Derivations of `follow` composed at read time (by id, with the direction)."""
+    paths = schema.path_relations()
+    return {
+        rid: (paths[rid], way)
+        for rid, way in sorted(follow.items())
+        if rid in paths and not paths[rid].materialized
+    }
 
 
 def _branches(hops: Hops, layout: BranchLayout) -> list[str]:
@@ -321,6 +350,14 @@ _DEFINER = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class _Walked:
+    records: list[Neighbor]
+    links: list[LinkRef]
+    steps: int
+    saturated: bool
+
+
 async def neighborhood(
     session: AsyncSession,
     domain_id: str,
@@ -340,11 +377,12 @@ async def neighborhood(
     """Records within `depth` hops of `seeds` (`(kind_id, key)` pairs) and the Links between.
 
     Follows `direction` over `relation_ids` (every Relation when `None`), or exactly the
-    `(relation id, direction)` pairs of `follow`. Caps default to and may not exceed
+    `(relation id, direction)` pairs of `follow`; path Derivations are followed when named
+    there (their id is the Relation id). Caps default to and may not exceed
     `store.traverse`. Seeds that do not exist are absent from the result.
     """
-    settings = (runtime or default_runtime()).settings
-    caps = settings.traverse
+    runtime = runtime or default_runtime()
+    caps = runtime.settings.traverse
     layout = await resolve_layout(session, domain_id, branch)
     seeds = list(dict.fromkeys(seeds))
     _within("seed count", len(seeds), caps.max_seeds)
@@ -358,8 +396,38 @@ async def neighborhood(
         "max_steps": links_cap + len(seeds),
         "max_nodes": nodes_cap,
     }
-    if settings.reads.use_definer_functions:
-        hops = plan_hops(schema, direction, relation_ids, follow=follow)
+    if follow is None and relation_ids is not None:
+        follow = dict.fromkeys(relation_ids, direction)
+    composed = {} if follow is None else composed_paths(schema, follow)
+    if follow is not None and composed:
+        walked = await _hop_by_hop(
+            session, layout, schema, seeds, follow, composed, bounds, runtime
+        )
+    else:
+        walked = await _walk(session, layout, schema, seeds, direction, follow, bounds, runtime)
+    records = sorted(walked.records, key=lambda n: (n.depth, n.record.kind_id, n.record.key))
+    truncated = walked.saturated or walked.steps >= bounds["max_steps"] or len(records) > nodes_cap
+    if len(records) > nodes_cap:
+        records = records[:nodes_cap]
+    kept = {(n.record.kind_id, n.record.key) for n in records}
+    links = [link for link in walked.links if _between(schema, link, kept)]
+    links.sort(key=lambda link: (link.relation_id, link.from_key, link.to_key))
+    return Neighborhood(records, links, truncated)
+
+
+async def _walk(
+    session: AsyncSession,
+    layout: BranchLayout,
+    schema: Schema,
+    seeds: Sequence[tuple[str, str]],
+    direction: Direction,
+    follow: Mapping[str, Direction] | None,
+    bounds: Mapping[str, Any],
+    runtime: StoreRuntime,
+) -> _Walked:
+    """One neighborhood statement over Relations and materialized paths."""
+    if runtime.settings.reads.use_definer_functions:
+        hops = plan_hops(schema, direction, None, follow=follow)
         params = {
             **bounds,
             "seeds": json.dumps([list(seed) for seed in seeds]),
@@ -370,7 +438,7 @@ async def neighborhood(
         statement = _DEFINER[function]
     else:
         sql, params = neighborhood_sql(
-            schema, domain_id, layout, direction, relation_ids, follow=follow
+            schema, layout.domain_id, layout, direction, None, follow=follow
         )
         params.update(
             bounds,
@@ -400,16 +468,104 @@ async def neighborhood(
             saturated = True
         else:
             steps = row["depth"]
-    records.sort(key=lambda n: (n.depth, n.record.kind_id, n.record.key))
-    truncated = saturated or steps >= bounds["max_steps"] or len(records) > nodes_cap
-    if len(records) > nodes_cap:
-        records = records[:nodes_cap]
-    kept = {(n.record.kind_id, n.record.key) for n in records}
-    links = [link for link in links if _between(schema, link, kept)]
-    links.sort(key=lambda link: (link.relation_id, link.from_key, link.to_key))
-    return Neighborhood(records, links, truncated)
+    return _Walked(records, links, steps, saturated)
+
+
+async def _hop_by_hop(
+    session: AsyncSession,
+    layout: BranchLayout,
+    schema: Schema,
+    seeds: Sequence[tuple[str, str]],
+    follow: Mapping[str, Direction],
+    composed: Mapping[str, tuple[PathRelation, Direction]],
+    bounds: Mapping[str, Any],
+    runtime: StoreRuntime,
+) -> _Walked:
+    """A walk following composed path Derivations, one hop at a time (module docstring):
+    `steps` counts the seeds and the Links walked, like the statement's."""
+    settings = runtime.settings
+    repository = MaterializedRepository(
+        session, layout.domain_id, layout.branch, writes=settings.writes, layout=layout
+    )
+    others = {rid: way for rid, way in follow.items() if rid not in composed}
+    fanout = int(bounds["fanout"])
+    max_steps = int(bounds["max_steps"])
+    max_nodes = int(bounds["max_nodes"])
+    depths: dict[tuple[str, str], int] = dict.fromkeys(seeds, 0)
+    rows: dict[tuple[str, str], RecordRow] = {}
+    links: dict[tuple[str, str, str], LinkRef] = {}
+    frontier = list(seeds)
+    steps = len(seeds)
+    saturated = False
+    for level in range(1, int(bounds["depth"]) + 1):
+        if not frontier or steps >= max_steps or len(depths) > max_nodes:
+            break
+        reached: list[tuple[str, str]] = []
+        if others:
+            hop = await _walk(
+                session,
+                layout,
+                schema,
+                frontier,
+                Direction.BOTH,
+                others,
+                {
+                    **bounds,
+                    "depth": 1,
+                    "max_steps": max_steps - steps + len(frontier),
+                    "max_nodes": max_nodes + len(frontier),
+                },
+                runtime,
+            )
+            saturated = saturated or hop.saturated
+            steps += max(hop.steps - len(frontier), 0)
+            for neighbor in hop.records:
+                identity = (neighbor.record.kind_id, neighbor.record.key)
+                rows.setdefault(identity, neighbor.record)
+                if neighbor.depth == 1:
+                    reached.append(identity)
+            for link in hop.links:
+                links.setdefault((link.relation_id, link.from_key, link.to_key), link)
+        for path_id, (path, way) in composed.items():
+            for along in _directions(way):
+                keys = sorted(
+                    {key for kind, key in frontier if kind == path.relation.endpoint(along)}
+                )
+                if not keys or steps >= max_steps:
+                    continue
+                far_kind = path.relation.far_endpoint(along)
+                found = await path_links_of(
+                    repository, path, along, keys, settings.traverse.path_fanout
+                )
+                for near, items in sorted(found.items()):
+                    saturated = saturated or len(items) >= fanout
+                    for far, _ in items[: min(fanout, max(max_steps - steps, 0))]:
+                        pair = (near, far) if along is LinkDirection.FORWARD else (far, near)
+                        links.setdefault((path_id, *pair), LinkRef(path_id, *pair, {}, None))
+                        reached.append((far_kind, far))
+                        steps += 1
+        frontier = []
+        for identity in reached:
+            if identity not in depths:
+                depths[identity] = level
+                frontier.append(identity)
+    missing = [identity for identity in depths if identity not in rows]
+    rows.update(await hydrate_records(session, layout.domain_id, layout, missing, runtime=runtime))
+    records = [
+        Neighbor(depth, rows[identity]) for identity, depth in depths.items() if identity in rows
+    ]
+    return _Walked(records, list(links.values()), steps, saturated)
+
+
+def _directions(way: Direction) -> list[LinkDirection]:
+    return [
+        *([LinkDirection.FORWARD] if way.outgoing else []),
+        *([LinkDirection.INVERSE] if way.incoming else []),
+    ]
 
 
 def _between(schema: Schema, link: LinkRef, kept: set[tuple[str, str]]) -> bool:
-    relation = schema.relations[link.relation_id]
+    relation = schema.link_relation(link.relation_id)
+    if relation is None:
+        return False
     return (relation.from_kind, link.from_key) in kept and (relation.to_kind, link.to_key) in kept
