@@ -171,12 +171,19 @@ explorations instead, so it can be tried without Guide.
 | `guide.limits.max_concurrent` | 4 | per process |
 | `guide.limits.embeds_per_minute` | 120 | per credential |
 
-Before each model call Guide estimates the input (prompt, accumulated messages and tool results,
-about 4 characters per token) and makes the call only if used plus estimated input still fits in
+Before each model call Guide estimates the input (prompt, accumulated messages and tool results)
+from its length: 4 characters per token for the first call, then the ratio the endpoint's own
+count of the previous call gives (JSON tool results measured about 2.2 characters per token on
+Claude models). The call is made only if used plus estimated input still fits in
 `max_total_tokens`; otherwise the exploration ends as below without calling the model. The
 completion cap is cut to what remains after the estimate, so the total stays within the budget up
-to the estimate's error. When a budget runs out the stream ends with an `error` event, a `Not found in the graph.` answer
-and `done`. Rate windows and concurrency slots are keyed on the principal Keeper reported, so
+to the estimate's error; an answer of the final turn is kept even when the endpoint counted more
+than estimated. Before each tool step Guide also checks that the budget covers that
+step, the next call with a full tool result (`max_result_chars`) and an answer of
+`max_tokens_per_call`; when it does not, that turn is the last one, as when `max_steps` is
+reached: the model answers from what it has read, citing it, instead of the exploration
+stopping with nothing. Only when even an answer no longer fits does the stream end with an
+`error` event (`budget`), a `Not found in the graph.` answer and `done`. Rate windows and concurrency slots are keyed on the principal Keeper reported, so
 several keys of one principal share them, and unverified credentials never enter them; the
 window table holds at most `guide.limits.max_tracked_callers` callers, and while it is full of
 callers active in the last minute a new caller is refused with 429 `busy`. Limits are per
@@ -225,18 +232,37 @@ inference:
     tasks:
       explore:
         base_url: https://api.anthropic.com/v1/
-        model: <model name>
+        model: claude-haiku-5-5
         api_key: secret://file//run/secrets/anthropic_api_key
         headers:                           # organization-level keys only
           anthropic-workspace-id: secret://file//run/secrets/anthropic_workspace_id
         temperature: null
         json_schema_strict: true
         extra_body: {thinking: {type: disabled}}
-        price_per_million_tokens: {input: <price>, output: <price>}
+        price_per_million_tokens: {input: 0.10, output: 0.50}
 guide:
   agent:
-    max_tokens_per_call: 2048
+    max_tokens_per_call: 2048              # 4096 with claude-sonnet-5-5 or claude-opus-5-5
 ```
+
+Which model, from the [live runs](validation.md#explore-guide) (eight questions on the `supply`
+sample, three runs each, answers checked against the data):
+
+| Model | `extra_body` | Mean score | Cost per question | Median time |
+|-------|--------------|-----------|-------------------|-------------|
+| `claude-haiku-5-5` | `{thinking: {type: disabled}}` | 0.83 | 0.003 USD | 11 s |
+| `claude-sonnet-5-5` | `{thinking: {type: between_tools}}` | 0.85 | 0.058 USD | 16 s |
+| `claude-opus-5-5` | `{reasoning_effort: low}` | 0.91 | 0.10 USD | 20 s |
+
+Haiku 5.5 is the recommended exploration model for hosted setups: it answered every lookup and
+most multi-hop questions correctly at a twentieth of Sonnet's cost. Opus 5.5 was the most
+accurate on the multi-hop questions; use it where an answer's completeness matters more than
+cost. Sonnet 5.5 was not better than Haiku on these questions. With `max_tokens_per_call` at
+2048, 3 of 48 Sonnet and Opus runs ended with `error` `model` (an answer that did not parse
+after the repair call, most likely cut off by the cap: Opus thinks within it); at 4096 none of
+16 further runs did. Guide's log line `model call failed` now names the schema problems
+(`/: json` for an answer that is not JSON) and counts the tokens of such calls. The default budgets fit: runs used
+1 to 8 steps and at most 37,000 tokens.
 
 A task on another `base_url` uses only its own `api_key` and `headers`: the main key and headers
 are never sent to an endpoint they were not configured for. The step schema has a free-form

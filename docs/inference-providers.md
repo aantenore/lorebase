@@ -175,6 +175,39 @@ What each line is for:
   before the answer: with 1024 tokens every extraction answer was empty. With thinking off,
   extraction answers took 1,700 to 4,100 output tokens; keep `max_tokens` at 4096.
 
+The other current models need a different `extra_body` (checked live on 2026-10-22, every
+other line of the block above unchanged; all three refuse `temperature`):
+
+| Model | `extra_body` | Why |
+|-------|--------------|-----|
+| `claude-haiku-5-5` | `{thinking: {type: disabled}}` | as above |
+| `claude-sonnet-5-5` | `{thinking: {type: between_tools}}` | `disabled` is refused with HTTP 400; `between_tools` turns thinking off |
+| `claude-opus-5-5` | `{reasoning_effort: low}` | thinking cannot be turned off (`disabled` is refused); it counts against `max_tokens`, so give Opus 8192 for extraction |
+
+Prices per million tokens (input / output), for `price_per_million_tokens`: Haiku 5.5
+0.10 / 0.50, Sonnet 5.5 2 / 10, Opus 5.5 4 / 20.
+
+### Which model for which task
+
+From the [live runs](validation.md#live-model-runs) (exploration questions on the `supply`
+sample, the process agent, tier 2 extraction on five documents). These are recommendations for
+hosted setups; the shipped defaults stay on the local Ollama model.
+
+| Task | Model | Why | Settings |
+|------|-------|-----|----------|
+| Exploration (Guide, `inference.llm.tasks.explore`) | `claude-haiku-5-5` | mean score 0.83 against 0.85 for Sonnet and 0.91 for Opus, at 0.003 USD and 11 s per question (Sonnet 0.058 USD, Opus 0.10 USD) | Guide's default budgets; `max_tokens_per_call` 2048, 4096 for Sonnet or Opus |
+| Exploration where completeness matters more than cost | `claude-opus-5-5` | best on the multi-hop questions, no refused tool call | `max_tokens_per_call` 4096 |
+| Process agent, read-only tasks | `claude-haiku-5-5` | correct conclusions; it stops earlier than the others when the token bound is low | `--max-total-tokens 150000` |
+| Process agent, tasks that run Operations | `claude-sonnet-5-5` | correct Proposals without a refused call, at a third of Opus's cost; the writes stay behind review either way | the same |
+| Extraction (tier 2) | `claude-haiku-5-5` | 0.011 USD for five documents; one wrong value in 27 items | `max_tokens` 4096 |
+| Extraction where a wrong value costs more than tokens | `claude-sonnet-5-5` | no wrong value, 17 times Haiku's cost | `max_tokens` 4096 |
+| Extraction of a new document set, for its schema suggestions | `claude-opus-5-5` | the most Links and the most useful suggestions (notice periods with support 2, an `Amendment` Kind) | `max_tokens` 8192 |
+
+Send each task to its model with `inference.llm.tasks.<task>` (`explore`, `extraction`); the
+process agent takes `--model` and `--extra-body`. The suggestions above came from the
+observations of the tier 2 calls; the dedicated discovery pass
+(`scribe.extraction.discovery.llm_pass`, task `schema_discovery`) was not part of the runs.
+
 Anthropic has no embeddings endpoint: keep `fastembed` (or another provider) for embeddings.
 To send only some tasks there, put the same keys under `inference.llm.tasks.<task>`.
 

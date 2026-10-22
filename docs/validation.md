@@ -9,7 +9,7 @@ Every validation run of the project in one place: what was run, where, how, what
 | [End-to-end](#end-to-end) | The five-day scenario and the web app's Playwright suite |
 | [Security reviews](#security-reviews) | Each review round, its findings and what remains |
 | [Interop and connectors](#interop-and-connectors) | LinkML, SQL Sources, JSON, Parquet and HTTP JSON |
-| [Live model runs](#live-model-runs) | Tier 2 extraction and schema suggestions with Claude Haiku 5.5 and LFM 2.5 8B, fastembed embeddings and hybrid search |
+| [Live model runs](#live-model-runs) | Tier 2 extraction and schema suggestions with Claude Haiku 5.5 and LFM 2.5 8B, fastembed embeddings and hybrid search; Guide's Explore, the process agent and extraction with Claude Haiku, Sonnet and Opus 5.5 |
 | [Fresh-clone quickstart check](#fresh-clone-quickstart-check) | The quickstart followed from a fresh clone: friction found, fixes, measured times |
 
 ## How to reproduce
@@ -493,6 +493,199 @@ again on the same `supply` data (Postgres 16, default `simple` text search confi
 
 Search cost at 100k Records, before and after, is in
 [performance](performance.md#partial-matching-100k-records).
+
+### Agent-facing features with Haiku, Sonnet and Opus 5.5
+
+**Date:** 2026-10-22. **Models:** `claude-haiku-5-5`, `claude-sonnet-5-5` and `claude-opus-5-5`
+through the OpenAI-compatible endpoint. Three runs: Guide's `/explore` (the backend of the web
+app's Explore panel), the [process agent](../examples/agent/README.md)
+over Herald, and tier 2 extraction with schema discovery.
+
+**Setup.** The quickstart stack (`make env`, `make up` with the `assistant` profile,
+`make example-data`) under its own compose project and ports, with three settings in a
+configuration file kept outside the repository: `keeper.auth.mode: api_key` (the administrator
+key from `python -m lorebase_keeper bootstrap`, the agent's key on the service principal
+`agent-risk` as in [day 5 of the demo](demo.md#day-5-agents)), `keeper.trace.enabled: true`, and
+one `inference.llm.tasks` entry per model, switched with `guide.agent.task`. The key and the
+workspace id were compose secrets read through `secret://file//run/secrets/...`; the agent read
+them with `--api-key-file` and `--header-file`. Per-model request options:
+
+| Model | `extra_body` | Price in / out per million tokens |
+|-------|--------------|------------------------------------|
+| `claude-haiku-5-5` | `{thinking: {type: disabled}}` | 0.10 / 0.50 USD |
+| `claude-sonnet-5-5` | `{thinking: {type: between_tools}}` | 2 / 10 USD |
+| `claude-opus-5-5` | `{reasoning_effort: low}` | 4 / 20 USD |
+
+All three answer HTTP 400 to `temperature` ("deprecated for this model"); Sonnet refuses
+`thinking: disabled` (it names `between_tools` instead) and Opus refuses any way of turning
+thinking off.
+
+**Ground truth.** Computed from `examples/supply/data` (the loaded sample) with a script, for
+the five preset questions of the Explore panel and three multi-hop questions added for this run:
+
+| Question | Expected answer |
+|----------|-----------------|
+| Single-source risk | 32 single-sourced Parts; the riskiest sole supplier is S-1025 (74, four Parts) |
+| Tier-1 high risk with open orders | none: the four tier-1 suppliers score 16 to 52; only S-1003 (16) has an open order (PO-200016) |
+| What if S-1007 stops | P-10025 loses its only supplier, P-10028 keeps one; PO-200043 (issued) to PL-11 is open, PO-200040 received; Parts stocked at PL-20 and PL-11; contract C-3007 |
+| History of C-3013 | one change: created by the sample import |
+| Who supplies "bering" parts | the six bearings come from S-1005, S-1021, S-1025, S-1015, S-1013 |
+| Parts with Kavvik Filtration as only supplier, where stocked | P-10012 PL-17 1,700; P-10018 PL-10 3,520; P-10023 PL-16 4,590; P-10036 PL-03 1,420 (not P-10020, two suppliers) |
+| Single-sourced Parts of suppliers on hold or terminated, their plants | P-10013 (S-1021) PL-02; P-10030 (S-1021) PL-05 and PL-16; P-10016 (S-1019) PL-11 |
+| Kavvik Filtration's open orders, Parts and plants | PO-200031 (shipped) P-10018 to PL-10; PO-200037 (issued) P-10036 to PL-03 |
+
+Each answer was scored from 0 to 1 as the share of the expected facts it states, 0 when it
+claims something false (a multi-sourced Part as single-sourced, a closed order as open); every
+score below 1 was read and checked by hand.
+
+#### Explore (Guide)
+
+Each question three times per model, Guide's default budgets (`max_steps` 8,
+`max_total_tokens` 40000), `max_tokens_per_call` 2048. "Before" is Haiku on the code as it was;
+the problems it showed are in [problems found and fixed](#problems-found-and-fixed-in-these-runs),
+and the other columns ran after the fixes.
+
+| Question | Haiku, before | Haiku | Sonnet | Opus |
+|----------|--------------|-------|--------|------|
+| Single-source risk | 0.19 | 0.52 | 0.74 | 0.52 |
+| Tier-1 high risk with open orders | 0.00 | 1.00 | 0.67 | 1.00 |
+| What if S-1007 stops | 0.40 | 0.60 | 0.87 | 0.73 |
+| History of C-3013 | 0.67 | 1.00 | 1.00 | 1.00 |
+| "bering" parts | 0.13 | 0.80 | 1.00 | 1.00 |
+| Kavvik as only supplier, stock | 0.00 | 0.92 | 1.00 | 1.00 |
+| On hold or terminated suppliers | 0.22 | 1.00 | 0.89 | 1.00 |
+| Kavvik's open orders | 0.00 | 0.78 | 0.67 | 1.00 |
+| **Mean score** | **0.20** | **0.83** | **0.85** | **0.91** |
+| Fully correct runs | 2 of 24 | 15 of 24 | 18 of 24 | 19 of 24 |
+| `Not found in the graph.` answers (besides `model` errors) | 13 | 0 | 0 | 0 |
+| Runs ended by `error` `model` | 0 | 0 | 2 | 1 |
+| Refused tool calls (all runs) | 53 | 9 | 1 | 0 |
+| Steps per run | 2 to 8 | 2 to 8 | 1 to 8 | 1 to 8 |
+| Tokens per run, in / out (mean) | 26,962 / 1,559 | 22,674 / 1,289 | 23,848 / 1,013 | 19,584 / 1,191 |
+| Median time per run | 15.1 s | 11.0 s | 15.7 s | 19.7 s |
+| Cost per run | 0.0035 USD | 0.0029 USD | 0.058 USD | 0.10 USD |
+
+- **Variance.** The three runs of a question differed on 5 of 8 questions for Haiku and
+  Sonnet and on 2 for Opus (mean spread between best and worst run 0.28, 0.41 and 0.18). The
+  single-source question stays partial for every model: the query returns 20 Records a page
+  (`max_items`) and the models report the first page with the riskiest supplier rather than
+  all 32 Parts.
+- **Errors.** Where Haiku lost points it stopped short and said so (an unchecked plant,
+  contract or supplier); the checks for false claims found none after the fixes. Sonnet and Opus mostly lost runs to the three `model`
+  errors: an answer that did not parse after the repair call. At `max_tokens_per_call` 4096 a
+  further run of every question with Sonnet (mean 0.93) and Opus (0.95) had none, which
+  points at answers cut off by the completion cap (Opus thinks within it).
+- **Trace.** Every run was one session in the agent trace: each Keeper read Guide made appeared
+  as a step with its `guide.<tool>` name, route and status, refused queries included (422),
+  and each reasoning note as a note step; calls that Guide refused on its own argument check
+  never reach Keeper and have no step, as designed. The one hybrid search made two reads.
+- **Before the fixes**, 53 tool calls were refused, almost all queries written in the shape
+  the `query` tool's description gave (`{"single_sourced": true}`, `{"attr": "tier", "eq":
+  "1"}`), and 13 runs answered `Not found in the graph.`, most of them after reading part of
+  what they needed, when the step budget ran out. The description fix alone raised Haiku's mean
+  to 0.68; the budget, prompt and Link Attribute fixes to 0.83.
+
+#### Process agent
+
+`examples/agent/agent.py` over Herald (stdio) with the agent's key, `--temperature none` and
+the `extra_body` above. Tasks: `single-source-risk` (read) three times per model with the
+default bounds, once more with `--max-total-tokens 150000`; `what-if S-1007` once (150000);
+`flag-critical` once; and the same flagging rule at a risk score of 75 or more (`--prompt` with
+`--allow-operation flag_supplier_risk`), since no supplier of the sample reaches 80.
+
+| | Haiku | Sonnet | Opus |
+|---|---|---|---|
+| `single-source-risk`, correct "no Part qualifies" (no contract ends within 90 days of 2026-10-22) | 1 of 3 (2 hedged); 1 of 1 at 150k | 3 of 3; 1 of 1 | 3 of 3; 1 of 1 |
+| Runs ended by the token bound (60000) | 2 of 3 | 3 of 3 | 3 of 3 |
+| `what-if S-1007`, expected facts | 4 of 5 (no contract) | 4 of 5 (no contract) | 5 of 5 |
+| `flag-critical`: no write, none qualifies | yes | yes | yes |
+| Flag at 75: one Proposal for S-1020, `main` unchanged | yes (one refused dry run first) | yes | yes |
+| Tokens per run (mean, all runs) | 78,800 | 74,600 | 72,900 |
+| Time per run | 15 to 30 s | 16 to 37 s | 16 to 45 s |
+| Cost per run (output share estimated at 10 %) | 0.011 USD | 0.21 USD | 0.41 USD |
+
+- Every write went through `lorebase_execute` with a task: the Proposal came from branch
+  `agent/agent-risk/custom` to `main`, author `agent-risk`, one RiskFlag of severity
+  `critical` linked to S-1020 with a reason made of the facts read (score 77, two `high`
+  flags, status active). `main` kept its revision and its 20 RiskFlags after every run. The
+  agent's trace session showed each Herald call, the notes, and the Proposal id on the
+  committing `execute` step.
+- The agent first sent `temperature: 0`, which every model refused: fixed below.
+- Each step resends the conversation and Herald's tool catalogue (13 tools), so five or six
+  steps used 45,000 to 90,000 tokens; with the default bound of 60000 most runs answered from
+  what they had read when the bound stopped them, correctly but without the risk detail.
+  With 150000 every run finished on its own in 4 to 7 steps.
+- Both summaries reported the RiskFlag key minted by the dry run, which differs from the
+  committed one: the agent cannot know the committed key unless it reads the Proposal.
+
+#### Extraction (tier 2) and schema discovery
+
+The setup of [the first runs](#setup): five documents, tiers `[0, 2]`, `auto_accept_threshold`
+0.55, discovery on, `max_tokens` 4096 (8192 for Opus). Haiku ran again on the current code for
+a like-for-like comparison.
+
+| | Rules only | Haiku | Sonnet | Opus |
+|---|---|---|---|---|
+| Structured output mode | n/a | prompt only | prompt only | prompt only |
+| Facts proposed by the model | n/a | 125 | 103 | 137 |
+| Kept after grounding and resolution | n/a | 81 % | 83 % | 83 % |
+| Proposal items (tier 2) | 17 (0) | 27 (13) | 25 (13) | 25 (18) |
+| Wrong values among tier 2 items | n/a | 1 | 0 | 0 |
+| Links without a required value (pending) | n/a | 1 | 0 | 0 |
+| Schema suggestions (from the model) | 8 | 19 (12) | 13 (5) | 18 (10) |
+| Tokens in / out, five jobs | 0 | 47,511 / 12,038 | 47,145 / 9,077 | 37,014 / 12,039 |
+| Time per job | 0.4 to 1.8 s | 7.8 to 14.8 s | 7.1 to 22.0 s | 18.3 to 23.9 s |
+| Cost of the five jobs | 0 | 0.011 USD | 0.19 USD | 0.39 USD |
+
+- Every discarded fact failed value grounding or resolution (unresolved Links to purchase
+  orders and plants the seeded Domain lacks); none failed the evidence check.
+- **Haiku** proposed the most facts but took "agreed unit price 16.30 PLN" of the C-3013
+  amendment as a new `unit_cost` of P-10033 (a standard cost in euro), and proposed one
+  `stocked_at` Link without its quantity.
+- **Sonnet** proposed the fewest facts, all checked items correct; one suggestion,
+  `critical_risk_flag` on Supplier, came from the sentence asking Procurement to raise a flag.
+- **Opus** found the most Links (also those of the review's sole-source table) and the best
+  suggestions: `renewal_notice_days` and `termination_notice_days` with support 2, a Kind
+  `Amendment` from two documents, `price_increase_cap` (4 percent), `on_time_delivery_rate`.
+- The schema with free-form `args` (Guide) and the extraction schemas both stepped down from
+  `json_schema` to prompt-only mode on every model, as described for Haiku above.
+
+#### Recommended settings for hosted setups
+
+The shipped defaults stay on the local Ollama model; these are the settings to use with the
+Anthropic endpoint ([inference providers](inference-providers.md#which-model-for-which-task)).
+
+| Task | Model | Settings |
+|------|-------|----------|
+| Explore (Guide) | `claude-haiku-5-5`; `claude-opus-5-5` where completeness matters more than cost | default budgets; `max_tokens_per_call` 2048 (4096 for Sonnet or Opus) |
+| Process agent, reads | `claude-haiku-5-5` | `--max-total-tokens 150000` |
+| Process agent, Operations | `claude-sonnet-5-5` | the same; writes still go through Proposals |
+| Extraction (tier 2) | `claude-haiku-5-5`; `claude-sonnet-5-5` where a wrong value costs more than the tokens | `max_tokens` 4096 |
+| Schema suggestions of a new document set | `claude-opus-5-5` on the extraction task, for a one-off pass | `max_tokens` 8192; the dedicated discovery pass (`discovery.llm_pass`) was not measured |
+
+#### Problems found and fixed in these runs
+
+| Problem | Effect | Fix | Tests |
+|---|---|---|---|
+| Guide's `query` description gave `where` as `{attr: value}` and `order_by` as `{attr: asc\|desc}` | most refused tool calls; runs out of steps | the DSL's predicate forms and a valid example; bounds stated for `history`, `neighborhood`, `traverse` | `packages/guide/tests/test_tool_catalogue.py` |
+| Only the step budget left a turn to answer | `Not found in the graph.` after useful reads when tokens ran out first | the last turn comes when the budget no longer covers a step, the next result and an answer | `packages/guide/tests/test_explore.py` |
+| The input estimate assumed 4 characters per token; JSON results measured 2.2 | the final call passed the estimate, the reported total went over, the answer was dropped | the ratio is taken from the endpoint's count of the previous call; the final answer is kept | `test_explore.py` |
+| The tokens of an answer that did not parse were not counted | `done.tokens` and the budget missed those calls | counted; the log line names the schema problems | `test_explore.py` |
+| `neighborhood` and `traverse` dropped Link Attributes | "the graph does not record stock quantities" | edges carry their values | `test_tool_catalogue.py` |
+| The final-turn instruction asked for `found: false` when not enough; checked negatives were read as not found | empty answers for "none qualifies" | partial answers with citations; a checked negative result is an answer | `test_tool_catalogue.py` |
+| The process agent always sent `temperature: 0` | HTTP 400 from every Claude model | `--temperature none`, `--extra-body` | `examples/agent/test_agent.py` |
+| Herald logged each Keeper URL at INFO through httpx | Record keys in the agent's standard error | the HTTP client's logger kept at WARNING, as in Guide | `packages/herald/tests/test_safety.py` |
+
+#### Tokens and cost of these runs
+
+| Run | Haiku | Sonnet | Opus |
+|-----|-------|--------|------|
+| Explore (every pass, including the ones before and between the fixes) | 2,418,358 / 136,886 tokens, 0.31 USD | 1,559,224 / 67,536, 3.79 USD | 630,110 / 38,382, 3.29 USD |
+| Process agent (output share estimated at 10 %) | 551,755 tokens, 0.08 USD | 596,977, 1.67 USD | 509,960, 2.86 USD |
+| Extraction | 59,549 tokens, 0.01 USD | 56,222, 0.19 USD | 49,053, 0.39 USD |
+| Probes (parameters, tokenizer ratio, a failure reproduction) | 0.00 USD | 0.15 USD | 0.10 USD |
+
+About 12.8 USD in all, at the prices above; refused requests (HTTP 400) are not billed.
 
 ## Fresh-clone quickstart check
 
