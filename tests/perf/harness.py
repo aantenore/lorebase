@@ -441,7 +441,8 @@ DEFERRED_INDEXES = {
 #: `lb_rv` applies it to the text values of a Record and gives unique Attributes (`uniq`)
 #: the replica number.
 _RENUMBER = r"""
-CREATE FUNCTION pg_temp.lb_rk(k text, s int, n jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+CREATE OR REPLACE FUNCTION pg_temp.lb_rk(k text, s int, n jsonb)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE
     WHEN k ~ '^(S|P|PL|PO|C)-[0-9]+$' THEN
       split_part(k, '-', 1) || '-'
@@ -450,7 +451,7 @@ CREATE FUNCTION pg_temp.lb_rk(k text, s int, n jsonb) RETURNS text LANGUAGE sql 
       substr('123456789ABCDEFGHJKMNPQRSTVWXYZ', s, 1) || substr(k, 2)
     ELSE k
   END $$;
-CREATE FUNCTION pg_temp.lb_rv(v jsonb, s int, n jsonb, uniq text[]) RETURNS jsonb
+CREATE OR REPLACE FUNCTION pg_temp.lb_rv(v jsonb, s int, n jsonb, uniq text[]) RETURNS jsonb
 LANGUAGE sql IMMUTABLE AS $$
   SELECT coalesce(jsonb_object_agg(e.key, CASE
     WHEN jsonb_typeof(e.value) <> 'string' THEN e.value
@@ -459,7 +460,8 @@ LANGUAGE sql IMMUTABLE AS $$
     ELSE to_jsonb(pg_temp.lb_rk(e.value #>> '{}', s, n))
   END), '{}'::jsonb)
   FROM jsonb_each(v) AS e $$;
-CREATE FUNCTION pg_temp.lb_base(k text, ends jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+CREATE OR REPLACE FUNCTION pg_temp.lb_base(k text, ends jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
   SELECT k LIKE '0%' OR (k ~ '^[A-Z]+-[0-9]+$'
     AND split_part(k, '-', 2)::bigint < (ends ->> split_part(k, '-', 1))::bigint) $$;
 """
