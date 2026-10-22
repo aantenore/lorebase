@@ -82,7 +82,7 @@ describe('Sources screen', () => {
       Promise.reject(problem(403, 'Forbidden', 'needs a Domain-wide grant', 'forbidden'));
     const api: KeeperApi = {
       ...mock,
-      sources: { runs: forbidden, sync: (domain, source) => mock.sources.sync(domain, source) },
+      sources: { ...mock.sources, runs: forbidden },
     };
     renderApp('/supply/sources', testConfig(), api);
 

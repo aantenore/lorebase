@@ -1,9 +1,28 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
 import type { SchemaDocument } from './document';
+import { AppProviders } from '@/app/providers';
+import { ScopeProvider } from '@/app/scope';
+import { testConfig } from '@/config/env';
 import { renderForm } from './form-harness';
 import { SourcesForm } from './source-form';
-import { applyTransform, mapRows, parseDate, parseDelimited, readSample } from './source-preview';
+import {
+  applyTransform,
+  expressionAttributes,
+  mapRows,
+  parseDate,
+  parseDelimited,
+  readSample,
+} from './source-preview';
+
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <AppProviders config={testConfig()}>
+    <ScopeProvider domain="supply" search={{}}>
+      {children}
+    </ScopeProvider>
+  </AppProviders>
+);
 
 const OPTIONS = { recordsPath: '', flattenSeparator: '', limit: 5 };
 
@@ -88,11 +107,34 @@ describe('mapping', () => {
     expect(ok?.key).toEqual({ value: 'S1' });
     expect(ok?.cells['name']).toEqual({ value: 'Acme' });
     expect(ok?.cells['score']).toEqual({ value: '5' });
-    expect(ok?.cells['note']?.error).toMatch(/not read by Scribe/);
+    expect(ok?.cells['note']?.error).toMatch(/has not evaluated the expression/);
     expect(ok?.cells['unmapped']).toBeUndefined();
     expect(bad?.cells['score']?.error).toBe('five is not an integer');
     expect(noKey?.key.error).toBe('The key is empty.');
     expect(noKey?.cells['score']).toEqual({ value: null });
+  });
+
+  it('starts expression mappings from the values Keeper evaluated, then transforms them', () => {
+    const source = {
+      key_mapping: ['code'],
+      attribute_mapping: {
+        name: { expression: 'a + b', transforms: [{ name: 'upper' }] },
+        score: { expression: 'n', transforms: [{ name: 'cast', args: { to: 'integer' } }] },
+        note: { expression: 'broken +' },
+      },
+    };
+    expect(expressionAttributes(source)).toEqual(['name', 'score', 'note']);
+    const types = { name: 'string', score: 'integer', note: 'string' };
+    const [first, second] = mapRows([{ code: 'S1' }, { code: 'S2' }], source, types, [
+      { name: { value: 'ab' }, score: { value: '7' }, note: { error: 'syntax error' } },
+      { name: { value: null }, score: { value: 'x' }, note: { value: 'fine' } },
+    ]);
+    expect(first?.cells['name']).toEqual({ value: 'AB' });
+    expect(first?.cells['score']).toEqual({ value: '7' });
+    expect(first?.cells['note']).toEqual({ error: 'syntax error' });
+    expect(second?.cells['name']).toEqual({ value: null });
+    expect(second?.cells['score']?.error).toBe('x is not an integer');
+    expect(second?.cells['note']).toEqual({ value: 'fine' });
   });
 });
 
@@ -147,6 +189,25 @@ describe('Source preview', () => {
     expect(current().sources?.['approved.suppliers']?.['connection']).toBe(
       'secret://env/APPROVED_CSV',
     );
+  });
+
+  it('sends the sample rows to Keeper to evaluate expression mappings and keeps the transforms', async () => {
+    const user = userEvent.setup();
+    const doc = document();
+    const source = doc.sources?.['approved.suppliers'];
+    if (source === undefined) throw new Error('No Source');
+    source['attribute_mapping'] = {
+      ...(source['attribute_mapping'] as object),
+      legal_name: { expression: 'name + "-" + risk', transforms: [{ name: 'upper' }] },
+    };
+    renderForm(SourcesForm, doc, [], wrapper);
+    const file = new File(['supplier_code,name,risk\nS1,acme,7\n'], 'suppliers.csv', {
+      type: 'text/csv',
+    });
+    await user.upload(await screen.findByLabelText('Sample file for approved.suppliers'), file);
+    const table = await screen.findByRole('table', { name: 'Sample rows of approved.suppliers' });
+    expect(await within(table).findByText('ACME-7')).toBeInTheDocument();
+    expect(screen.getByText(/Keeper receives the sample rows shown below/)).toBeInTheDocument();
   });
 
   it('reports a file it cannot read', async () => {

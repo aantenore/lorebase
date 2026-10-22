@@ -1,7 +1,7 @@
 /** Test helpers of the element forms: a document held in state and CodeMirror access. */
 import { EditorView } from '@codemirror/view';
 import { render, screen } from '@testing-library/react';
-import { useState, type ComponentType } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import type { SchemaIssue } from '@/api/schema-rules';
 import type { SchemaDocument } from './document';
 import type { Edit, ElementIds } from './form-helpers';
@@ -17,11 +17,15 @@ export interface ElementFormProps {
 
 const ids: ElementIds = (prefix, key) => `${prefix}_${key.replace(/\W/g, '_')}`;
 
-/** Render `Form` over `initial`; `current()` is the document after the edits so far. */
+/**
+ * Render `Form` over `initial`; `current()` is the document after the edits so far. `wrapper`
+ * provides the app's context to forms that call Keeper.
+ */
 export function renderForm(
   Form: ComponentType<ElementFormProps>,
   initial: SchemaDocument,
   issues: SchemaIssue[] = [],
+  wrapper?: ComponentType<{ children: ReactNode }>,
 ) {
   let latest = structuredClone(initial);
   function Harness() {
@@ -44,7 +48,7 @@ export function renderForm(
       />
     );
   }
-  const utils = render(<Harness />);
+  const utils = render(<Harness />, wrapper === undefined ? {} : { wrapper });
   return { ...utils, current: () => latest };
 }
 

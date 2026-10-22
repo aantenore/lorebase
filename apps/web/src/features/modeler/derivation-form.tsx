@@ -30,7 +30,7 @@ type Doc = Record<string, unknown>;
 
 interface Props {
   document: SchemaDocument;
-  /** Whether the named Derivation is saved on the Branch exactly as shown, so it can be previewed. */
+  /** Whether the named Derivation is saved on the Branch exactly as shown. */
   saved?: (name: string) => boolean;
   issues: SchemaIssue[];
   edit: Edit;
@@ -417,17 +417,15 @@ function DerivationEditor({
         </div>
       </Section>
       <Section title="Preview">
-        {!canPreview ? (
-          <p className="text-sm text-muted">
-            Save the change set first: the preview reads what the Derivation computes as saved on
-            the Branch.
-          </p>
-        ) : asText(definition['kind']) === '' || asText(definition['attribute']) === '' ? (
+        {asText(definition['kind']) === '' || asText(definition['attribute']) === '' ? (
           <p className="text-sm text-muted">Choose the target Attribute to preview its values.</p>
         ) : (
           <DerivationPreview
+            name={name}
             kind={asText(definition['kind'])}
             attribute={asText(definition['attribute'])}
+            document={document}
+            saved={canPreview}
           />
         )}
       </Section>

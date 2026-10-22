@@ -88,6 +88,12 @@ import type {
   SchemaSuggestion,
   SuggestionListParams,
 } from './suggestion-types';
+import type {
+  DerivationPreview,
+  DerivationPreviewRequest,
+  SourceExpressionPreview,
+  SourceExpressionPreviewRequest,
+} from './preview-types';
 import type { SourceRun, SourceRunListParams, SourceSyncQueued } from './sources-types';
 
 /**
@@ -128,6 +134,16 @@ export interface KeeperApi {
       branch: BranchName,
       request: SchemaChangeRequest,
     ): Promise<SchemaChangeResult>;
+  };
+
+  readonly derivations: {
+    /**
+     * Evaluates a Derivation of an edited schema document on sample Records of its Kind on the
+     * Branch of the scope (`POST .../derivations:preview`), with Keeper's permissions and
+     * masking. The document is checked like a schema change (a 422 `ValidationError` with the
+     * issues when it fails); nothing is written.
+     */
+    preview(scope: ReadScope, request: DerivationPreviewRequest): Promise<DerivationPreview>;
   };
 
   readonly records: {
@@ -297,6 +313,15 @@ export interface KeeperApi {
     runs(domain: DomainId, params?: SourceRunListParams): Promise<Page<SourceRun>>;
     /** Queues a run of one Source (by api name) for Scribe (`POST .../sources/{source}/sync`). */
     sync(domain: DomainId, source: string): Promise<SourceSyncQueued>;
+    /**
+     * Evaluates the expression mappings of a Source of an edited schema document on sample rows
+     * (`POST .../sources:preview`), as Scribe evaluates them. The rows are sent; no connection
+     * is opened. An invalid document is a 422 `ValidationError`.
+     */
+    previewExpressions(
+      scope: ReadScope,
+      request: SourceExpressionPreviewRequest,
+    ): Promise<SourceExpressionPreview>;
   };
 
   readonly admin: {

@@ -4698,6 +4698,94 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/derivations:preview": {
+      "post": {
+        "tags": [
+          "derivations"
+        ],
+        "summary": "Preview a candidate Derivation",
+        "description": "Evaluate a Derivation, as edited and not yet saved, on sample Records of its Kind.\n\nThe candidate schema is checked like a schema change; reading follows Record reads\n(permissions per Kind, masking of sensitive values). Nothing is written.",
+        "operationId": "preview_derivation_api_v1_domains__domain_id__derivations_preview_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DerivationPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivationPreviewOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for a Kind the Derivation touches, or schema.read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Revision not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or a candidate schema that fails validation (`issues` locate why).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/health": {
       "get": {
         "tags": [
@@ -5565,6 +5653,94 @@
           },
           "422": {
             "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/sources:preview": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Preview the expression mappings of a candidate Source",
+        "description": "Evaluate the `expression` mappings of a Source, as edited and not yet saved, on sample\nrows. Nothing is read from the Source and nothing is written.",
+        "operationId": "preview_source_api_v1_domains__domain_id__sources_preview_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePreviewOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks schema.read for the branch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or Revision not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or a candidate schema that fails validation (`issues` locate why).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13035,6 +13211,162 @@
         ],
         "title": "DecideSuggestionsOut"
       },
+      "DerivationPreviewOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision whose Records were evaluated."
+          },
+          "served_from": {
+            "type": "string",
+            "title": "Served From"
+          },
+          "derivation": {
+            "type": "string",
+            "title": "Derivation"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "attribute": {
+            "type": "string",
+            "title": "Attribute"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "branch",
+          "revision",
+          "served_from",
+          "derivation",
+          "kind",
+          "attribute",
+          "items"
+        ],
+        "title": "DerivationPreviewOut",
+        "description": "Values a candidate Derivation computes on sample Records."
+      },
+      "DerivationPreviewRequest": {
+        "properties": {
+          "yaml": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yaml",
+            "description": "Full schema document; elements it leaves out are removed."
+          },
+          "patch": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patch",
+            "description": "Partial document (same layout as the YAML document): each element replaces the element with the same api name, or is added."
+          },
+          "remove": {
+            "items": {
+              "$ref": "#/components/schemas/ElementRemoval"
+            },
+            "type": "array",
+            "title": "Remove"
+          },
+          "derivation": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Derivation",
+            "description": "Api name of the `expression` or `aggregate` Derivation to evaluate in the schema the change set produces."
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch",
+            "description": "Default: the default branch."
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id, tag or branch name; only the branch head."
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit",
+            "description": "Records to evaluate; default and maximum: `read.derivation_preview`."
+          },
+          "keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keys",
+            "description": "Keys of the Records to evaluate instead of the first ones by key."
+          }
+        },
+        "type": "object",
+        "required": [
+          "derivation"
+        ],
+        "title": "DerivationPreviewRequest",
+        "description": "A candidate schema change set and the Derivation to evaluate in it."
+      },
       "DerivedCondition": {
         "properties": {
           "derived": {
@@ -14201,6 +14533,30 @@
           "values"
         ],
         "title": "ExplainedRecordOut"
+      },
+      "ExpressionCellOut": {
+        "properties": {
+          "value": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Null when there is none or `error` is set."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewErrorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "title": "ExpressionCellOut",
+        "description": "The value of one expression mapping for one row, before the transforms."
       },
       "ExtractionEvidenceOut": {
         "properties": {
@@ -16833,6 +17189,79 @@
           "relation"
         ],
         "title": "PartitionType"
+      },
+      "PreviewErrorOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "Null when the value is masked: messages quote values."
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "PreviewErrorOut",
+        "description": "Why a value could not be computed for a Record."
+      },
+      "PreviewItemOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "The canonical value; null when there is none, the masked value (or null with `keeper.reads.sensitivity.omit`) when `masked`."
+          },
+          "masked": {
+            "type": "boolean",
+            "title": "Masked"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewErrorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "title",
+          "value",
+          "masked"
+        ],
+        "title": "PreviewItemOut",
+        "description": "The computed value for one sample Record."
       },
       "PreviewOut": {
         "properties": {
@@ -19570,6 +19999,156 @@
         ],
         "title": "SessionInfo",
         "description": "The browser session of the caller."
+      },
+      "SourcePreviewOut": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision whose schema the change set was applied to."
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "target_kind": {
+            "type": "string",
+            "title": "Target Kind"
+          },
+          "attributes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attributes",
+            "description": "Attributes mapped by an expression, by api name."
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ExpressionCellOut"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "One entry per row sent: the cell of each Attribute in `attributes`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "branch",
+          "revision",
+          "source",
+          "target_kind",
+          "attributes",
+          "rows"
+        ],
+        "title": "SourcePreviewOut",
+        "description": "Values of the expression mappings of a candidate Source on sample rows."
+      },
+      "SourcePreviewRequest": {
+        "properties": {
+          "yaml": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yaml",
+            "description": "Full schema document; elements it leaves out are removed."
+          },
+          "patch": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patch",
+            "description": "Partial document (same layout as the YAML document): each element replaces the element with the same api name, or is added."
+          },
+          "remove": {
+            "items": {
+              "$ref": "#/components/schemas/ElementRemoval"
+            },
+            "type": "array",
+            "title": "Remove"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source",
+            "description": "Api name of the Source in the schema the change set produces."
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows",
+            "description": "Sample rows: column name to value (text for CSV, native values for JSON). At most `read.source_preview_max_rows`."
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch",
+            "description": "Default: the default branch."
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id, tag or branch name."
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "rows"
+        ],
+        "title": "SourcePreviewRequest",
+        "description": "A candidate schema change set, the Source to preview in it and sample rows."
       },
       "SourceRunOut": {
         "properties": {

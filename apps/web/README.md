@@ -307,7 +307,7 @@ In this mode `VITE_API_TOKEN` is ignored and Settings, Connection, offers no tok
 - **Derived values** are not served by Keeper yet; a derived Attribute shows no value.
 - **The built-in Operations** are not part of the schema Keeper serves (they are generated); the Operations list shows the stored ones.
 - **Schema elements the editor does not model** are carried as they are when the document is written back (`status`, `watermark_column`, the `domain` block, descriptions of Trait Attributes); anything else a future schema version adds would not survive a save, which is why the round trip test compares against a real schema.
-- **Previews are limited by what Keeper serves.** There is no endpoint that reads a Source or evaluates an unsaved Derivation without writing, so the Source preview runs on a sample file in the browser and the Derivation preview shows the saved Derivation on real Records.
+- **Previews of unsaved edits go through two read-only endpoints.** The Derivation preview reads a saved Derivation as Records and sends an edited one to `POST /derivations:preview`; the Source preview maps a sample file in the browser and sends only the sample rows (with the edited document) to `POST /sources:preview` when a mapping uses an `expression`. Keeper has no endpoint that reads the rows of a Source itself. The mock evaluates column references, literals and `+` only.
 
 ## Tests
 
