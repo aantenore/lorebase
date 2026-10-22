@@ -36,7 +36,6 @@ from typing import Any
 
 import httpx
 from opentelemetry import trace
-from opentelemetry.propagate import inject
 
 from lorebase_herald.settings import TraceSettings
 
@@ -106,15 +105,16 @@ def tool_span(session_id: str | None, incoming: str | None = None) -> Span:
 
 
 def request_traceparent() -> str | None:
-    """The `traceparent` of the next Keeper request of the tool call being served: the active
-    OpenTelemetry span's context, else a new child span of the tool call's span; None when
-    tracing is off."""
-    carrier: dict[str, str] = {}
-    inject(carrier)
-    if "traceparent" in carrier:
-        return carrier["traceparent"]
+    """The `traceparent` of the next Keeper request of the tool call being served: a new span
+    whose parent is the active OpenTelemetry span when there is one, else the tool call's span;
+    None when tracing is off."""
     parent = call_span.get()
-    return parent.child().traceparent if parent else None
+    if parent is None:
+        return None
+    active = trace.get_current_span().get_span_context()
+    if active.is_valid:
+        parent = Span(f"{active.trace_id:032x}", f"{active.span_id:016x}")
+    return parent.child().traceparent
 
 
 async def stamp_request(request: httpx.Request) -> None:

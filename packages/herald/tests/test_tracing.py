@@ -10,6 +10,9 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from lorebase_herald.settings import TraceSettings
 from lorebase_herald.tracing import (
+    TRACEPARENT as W3C_TRACEPARENT,
+)
+from lorebase_herald.tracing import (
     Tracing,
     call_headers,
     call_span,
@@ -164,8 +167,24 @@ def test_active_opentelemetry_span_is_propagated() -> None:
     with trace.use_span(NonRecordingSpan(context)):
         tracing().begin(None, "lorebase_get")
         tool = call_span.get()
-        sent = request_traceparent()
+        sent = [request_traceparent() for _ in range(2)]
     assert tool is not None
     assert tool.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert tool.span_id == "00f067aa0ba902b7"
-    assert sent == "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    spans = [W3C_TRACEPARENT.fullmatch(value or "") for value in sent]
+    assert all(m is not None and m.group(1) == tool.trace_id for m in spans)
+    ids = {m.group(2) for m in spans if m is not None}
+    assert len(ids) == 2  # each request is a child span of its own
+    assert tool.span_id not in ids
+
+
+def test_active_opentelemetry_span_is_not_sent_when_tracing_is_off() -> None:
+    context = SpanContext(
+        trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+        span_id=0x00F067AA0BA902B7,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    with trace.use_span(NonRecordingSpan(context)):
+        tracing(enabled=False).begin(None, "lorebase_get")
+        assert request_traceparent() is None
