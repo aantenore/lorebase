@@ -65,6 +65,7 @@ Everything comes from Vite environment variables, read at build time, overlaid w
 | --------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `VITE_API_MODE`                               | yes                                  | `mock` (in-memory sample Domains) or `live` (Keeper over REST)                                                       |
 | `VITE_KEEPER_BASE_URL`                        | in `live` mode                       | Keeper origin without `/api/v1`, for example `http://localhost:8080`, or `/` for the app's own origin behind a proxy |
+| `VITE_AUTH_MODE`                              | no (`token`)                         | `token` sends the API token; `session` signs in through Keeper (see [Session mode](#session-mode)); `live` only      |
 | `VITE_API_TOKEN`                              | no                                   | API key or access token sent as `Authorization: Bearer`; development only (see [Authentication](#authentication))    |
 | `VITE_PAGE_SIZE`                              | no (50)                              | Rows per page in Record lists                                                                                        |
 | `VITE_SEARCH_LIMIT`                           | no (20)                              | Results per search                                                                                                   |
@@ -165,6 +166,7 @@ src/
     fetcher.ts          fetch layer: base path, auth header, Idempotency-Key, ETag, problems
     errors.ts           ApiError and its typed subclasses, describeError for toasts
     credentials.ts      the API token of the session (VITE_API_TOKEN or typed in Settings)
+    session.ts          the browser session in session mode: login URL, CSRF header, sign-out
     live/               mappers from Keeper responses to view models (schema, data, versioning)
     mock/               in-memory adapter, query interpreter, sample Domains
     queries.ts          TanStack Query hooks and Revision-aware cache keys
@@ -271,6 +273,18 @@ LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
 ### Authentication
 
 Keeper in `keeper.auth.mode: none` (development) needs nothing. With `api_key` or `oidc`, set `VITE_API_TOKEN` or type the token into Settings, Connection: the adapter sends `Authorization: Bearer <token>` on every request. The token typed in Settings is kept in this browser's local storage and wins over `VITE_API_TOKEN`; "Forget stored token" removes it. **Both are development conveniences.** A `VITE_` variable is part of the bundle, and local storage is readable by any script on the origin, so neither belongs in a deployment that other people use; put the app behind a login or a proxy that adds the header instead. Settings, "Who am I", shows what Keeper (`GET /auth/whoami`) makes of the credential.
+
+### Session mode
+
+With `VITE_AUTH_MODE=session` (`authMode` in `/config.js`) the app does not handle a token. A person without a session lands on `/login`, "Sign in" sends the browser to Keeper (`GET /api/v1/auth/login?return_to=<path>`), Keeper runs the OIDC login and brings the browser back to the path it left. From then on the browser carries the session cookie; the app reads the session from `GET /api/v1/auth/session`, shows the display name in the top bar and sends the CSRF header (name and value from that answer) on every `POST`, `PATCH`, `PUT` and `DELETE`. If Keeper refuses a write with `reason: "csrf"`, the app reloads the session and repeats the request once. A `401` sends the browser to `/login`. "Sign out" calls `POST /api/v1/auth/logout` and then opens the end-session URL of the provider, or `/login` when Keeper returns none. A failed login comes back as `/login?error=<code>` with one of `login_expired`, `login_failed`, `access_denied`, `no_account` or `provider_unavailable`; the screen explains it.
+
+Requirements:
+
+- Keeper runs with `keeper.auth.sessions` enabled; without it `GET /auth/session` answers 404 and the app reports that sign-in is unavailable.
+- Serve the app and Keeper on the same site, preferably on the same origin with `/api` proxied to Keeper (`VITE_KEEPER_BASE_URL=/`). The cookie is then first-party and needs no CORS.
+- With Keeper on another origin, set `keeper.cors.allow_credentials: true` and list the app origin in `keeper.cors.allow_origins` (a wildcard is not accepted together with credentials) and, unless it is the origin of `app_url`, in `keeper.auth.sessions.allowed_origins`. See [deployment](../../docs/deployment.md#web-sign-in).
+
+In this mode `VITE_API_TOKEN` is ignored and Settings, Connection, offers no token field.
 
 ### What the adapter does
 

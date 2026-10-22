@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DomainRouteImport } from './routes/$domain'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as DomainCanvasRouteImport } from './routes/$domain.canvas'
 import { Route as DomainModelerRouteImport } from './routes/$domain.modeler'
 import { Route as DomainSettingsRouteImport } from './routes/$domain.settings'
@@ -31,6 +32,11 @@ const IndexRoute = IndexRouteImport.update({
 const DomainRoute = DomainRouteImport.update({
   id: '/$domain',
   path: '/$domain',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DomainCanvasRoute = DomainCanvasRouteImport.update({
@@ -92,6 +98,7 @@ const DomainExplorerKindKeyRoute = DomainExplorerKindKeyRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$domain': typeof DomainRouteWithChildren
+  '/login': typeof LoginRoute
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$domain': typeof DomainRouteWithChildren
+  '/login': typeof LoginRoute
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
@@ -123,6 +131,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$domain': typeof DomainRouteWithChildren
+  '/login': typeof LoginRoute
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/modeler': typeof DomainModelerRoute
   '/$domain/settings': typeof DomainSettingsRoute
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/$domain'
+    | '/login'
     | '/$domain/canvas'
     | '/$domain/modeler'
     | '/$domain/settings'
@@ -155,6 +165,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/$domain'
+    | '/login'
     | '/$domain/canvas'
     | '/$domain/modeler'
     | '/$domain/settings'
@@ -170,6 +181,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/$domain'
+    | '/login'
     | '/$domain/canvas'
     | '/$domain/modeler'
     | '/$domain/settings'
@@ -186,6 +198,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DomainRoute: typeof DomainRouteWithChildren
+  LoginRoute: typeof LoginRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -202,6 +215,13 @@ declare module '@tanstack/react-router' {
       path: '/$domain'
       fullPath: '/$domain'
       preLoaderRoute: typeof DomainRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$domain/canvas': {
@@ -318,6 +338,7 @@ const DomainRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DomainRoute: DomainRouteWithChildren,
+  LoginRoute: LoginRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

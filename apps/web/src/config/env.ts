@@ -14,13 +14,21 @@ declare global {
 
 export type ApiMode = 'mock' | 'live';
 
+/**
+ * How a live app authenticates: `token` sends a Bearer token, `session` relies on the cookie
+ * session Keeper opens after an OIDC login (Backend-for-Frontend).
+ */
+export type AuthMode = 'token' | 'session';
+
 export interface AppConfig {
   apiMode: ApiMode;
   /** Keeper origin without the API path. `null` in mock mode. */
   keeperBaseUrl: string | null;
+  /** From `VITE_AUTH_MODE`. Always `token` in mock mode. */
+  authMode: AuthMode;
   /**
    * Token sent as `Authorization: Bearer` in live mode, from `VITE_API_TOKEN`. Anything in a
-   * `VITE_` variable is readable in the bundle: development only.
+   * `VITE_` variable is readable in the bundle: development only. `null` in session mode.
    */
   apiToken: string | null;
   pageSize: number;
@@ -241,6 +249,7 @@ function parseBaseUrl(value: string): string {
 const RUNTIME_ALIASES: Readonly<Record<string, string>> = {
   apiMode: 'VITE_API_MODE',
   keeperBaseUrl: 'VITE_KEEPER_BASE_URL',
+  authMode: 'VITE_AUTH_MODE',
   apiToken: 'VITE_API_TOKEN',
   token: 'VITE_API_TOKEN',
 };
@@ -288,10 +297,20 @@ export function loadConfig(raw: RawEnv): AppConfig {
     keeperBaseUrl = parseBaseUrl(base);
   }
 
+  const authText = text(raw, 'VITE_AUTH_MODE') ?? 'token';
+  if (authText !== 'token' && authText !== 'session') {
+    throw new ConfigError(
+      `VITE_AUTH_MODE (authMode in /config.js) must be "token" or "session", got "${authText}".`,
+    );
+  }
+  const authMode: AuthMode = mode === 'live' ? authText : 'token';
+
   return {
     apiMode: mode,
     keeperBaseUrl,
-    apiToken: mode === 'live' ? (text(raw, 'VITE_API_TOKEN') ?? null) : null,
+    authMode,
+    apiToken:
+      mode === 'live' && authMode === 'token' ? (text(raw, 'VITE_API_TOKEN') ?? null) : null,
     pageSize: positiveInt(raw, 'VITE_PAGE_SIZE', NON_FUNCTIONAL_DEFAULTS.pageSize),
     searchLimit: positiveInt(raw, 'VITE_SEARCH_LIMIT', NON_FUNCTIONAL_DEFAULTS.searchLimit),
     canvas: {

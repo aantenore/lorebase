@@ -192,3 +192,31 @@ describe('withRuntimeConfig', () => {
     expect(() => loadConfig(withRuntimeConfig({}, { apiMode: '' }))).toThrow(/mock" or "live/);
   });
 });
+
+describe('authMode', () => {
+  const live = { VITE_API_MODE: 'live', VITE_KEEPER_BASE_URL: '/', VITE_API_TOKEN: 'lbk_x' };
+
+  it('defaults to token', () => {
+    expect(loadConfig(live).authMode).toBe('token');
+    expect(loadConfig(live).apiToken).toBe('lbk_x');
+  });
+
+  it('reads session mode and drops the token', () => {
+    const config = loadConfig({ ...live, VITE_AUTH_MODE: 'session' });
+    expect(config.authMode).toBe('session');
+    expect(config.apiToken).toBeNull();
+  });
+
+  it('rejects an unknown value', () => {
+    expect(() => loadConfig({ ...live, VITE_AUTH_MODE: 'cookie' })).toThrow(/"token" or "session"/);
+  });
+
+  it('is always token in mock mode', () => {
+    expect(loadConfig({ VITE_API_MODE: 'mock', VITE_AUTH_MODE: 'session' }).authMode).toBe('token');
+  });
+
+  it('takes the runtime alias', () => {
+    const merged = withRuntimeConfig(live, { authMode: 'session' });
+    expect(loadConfig(merged).authMode).toBe('session');
+  });
+});
