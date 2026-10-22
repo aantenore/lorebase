@@ -114,6 +114,78 @@ neither `SUPERUSER` nor `BYPASSRLS` (the tables force row-level security on thei
 Check the role a service uses with
 `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`: both must be false.
 
+## Web sign-in
+
+People sign in to the web app through Keeper, which acts as backend-for-frontend (design 13.2):
+Keeper runs the OpenID Connect authorization code flow with PKCE, keeps the provider's tokens
+server-side and gives the browser an opaque session cookie. The app never sees a token. Agents
+and scripts keep using API keys and bearer tokens, which work as before.
+
+Requirements: `keeper.auth.mode` `oidc` or `api_key+oidc` (the `oidc` section names the issuer;
+the same claims, group mapping and `auto_provision` apply to signed-in users), the `database`
+section (sessions live in the `web_sessions` table of migration `0013`), and a client registered
+at the provider:
+
+- redirect URI: the public URL of `<api_prefix>/auth/callback`, for example
+  `https://lorebase.example.com/api/v1/auth/callback`; Keeper sends exactly
+  `keeper.auth.sessions.redirect_uri`, so register that string;
+- post-logout redirect URI: `post_logout_redirect_uri`, or `app_url` when unset;
+- a confidential client (`client_secret_basic` or `client_secret_post`) or a public client with
+  `token_endpoint_auth_method: none`; PKCE S256 is always used;
+- the groups claim (`keeper.auth.oidc.groups_claim`) in the ID token, when grants name groups.
+
+```yaml
+keeper:
+  auth:
+    mode: oidc
+    oidc:
+      issuer: https://idp.example.com/realms/acme
+      audience: [lorebase-api]
+    sessions:
+      enabled: true
+      client_id: lorebase-web
+      client_secret: secret://env/LOREBASE_OIDC_CLIENT_SECRET
+      redirect_uri: https://lorebase.example.com/api/v1/auth/callback
+      app_url: https://lorebase.example.com/
+      encryption_key: secret://env/LOREBASE_SESSION_KEY   # openssl rand -base64 48
+```
+
+The web app runs with `VITE_AUTH_MODE=session` (`authMode: 'session'` in `/config.js`). Serve
+it and Keeper on the same origin, with the reverse proxy sending `/api/` to Keeper: the session
+cookie is then first-party and no CORS is involved. A Keeper on another origin of the same site
+also works with `keeper.cors.allow_origins` listing the app, `allow_credentials: true`, and the
+app origin in `sessions.allowed_origins` if it is neither `app_url`'s nor `redirect_uri`'s
+origin. A Keeper on another site does not: browsers do not send `SameSite=Lax` cookies there.
+
+What the browser holds and what Keeper checks:
+
+| Item | Detail |
+|------|--------|
+| Session cookie | `__Host-lorebase_session` (`cookie_name`): 256 random bits, `HttpOnly`, `Secure`, `SameSite=Lax` (`same_site: strict` is possible), `Path=/`, no `Domain`, `Max-Age` = `absolute_timeout_s` |
+| Sign-in cookie | `__Host-lorebase_login`, for `login_timeout_s`: state, nonce, PKCE verifier and return path, AES-256-GCM encrypted; cleared by the callback |
+| Stored session | SHA-256 of the id, principal, subject, provider groups, timestamps, refresh and ID tokens encrypted with a key derived from `encryption_key`; never the id itself |
+| Lifetime | Ends after `idle_timeout_s` without use or `absolute_timeout_s` after sign-in; a new id at every sign-in; sign-out deletes it |
+| Refresh | When the access token expires, one request uses the refresh token (`refresh_tokens`); a refusal ends the session, new group claims apply; an unreachable provider postpones the refresh by `refresh_lease_s` |
+| CSRF | POST, PUT, PATCH and DELETE with the cookie need `X-CSRF-Token` (`csrf_header`) with the token of `GET /auth/session` (an HMAC of the session id), an `Origin` among the trusted origins when present, and no `Sec-Fetch-Site: cross-site`; otherwise 403 with `reason: csrf` |
+| Return path | `return_to` of `/auth/login` must be a path (one leading `/`, no scheme, host, backslash or control character); the callback redirects only to `app_url`'s origin |
+
+Operations: several Keeper processes share the sessions through the database, so no session
+affinity is needed. Expired sessions are deleted when met and, `purge_batch` at a time, at each
+sign-in. To end every session of a user at once, delete their rows:
+`DELETE FROM web_sessions WHERE principal_id = 'usr_...'`. Changing `encryption_key` voids
+sign-ins in progress and ends each session at its next refresh. Sign-ins and sign-outs are in
+the audit log (`auth.session.create`, `auth.session.delete`); failed sign-ins redirect to
+`error_path` with `?error=login_expired|login_failed|access_denied|no_account|provider_unavailable`
+and are logged by Keeper with the reason.
+
+Trying it locally: run any OpenID Connect provider on loopback (Keycloak in development mode,
+or a mock provider for tests) and register a client with the redirect URI
+`http://localhost:5173/api/v1/auth/callback`. Start Keeper with the provider's issuer,
+`sessions.cookie_secure: false` (plain http), `redirect_uri` as registered and `app_url:
+http://localhost:5173/`; http is accepted for loopback hosts. Start the app with Vite's proxy so
+that app and API share the origin: `LOREBASE_KEEPER_PROXY=http://127.0.0.1:8080
+VITE_API_MODE=live VITE_KEEPER_BASE_URL=/ VITE_AUTH_MODE=session pnpm dev` in `apps/web`.
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot
