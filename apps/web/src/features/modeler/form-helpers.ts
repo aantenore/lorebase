@@ -1,3 +1,4 @@
+import { renamePlaceholder } from '@/api/embedding-template';
 import type { SchemaIssue } from '@/api/schema-rules';
 import { SCALAR_TYPES } from '@/api/values';
 import type {
@@ -142,6 +143,9 @@ export function renameAttribute(draft: SchemaDocument, kind: string, from: strin
   owner.attributes = renameKey(owner.attributes, from, to);
   owner.primary_key = owner.primary_key?.map((n) => (n === from ? to : n));
   if (owner.title_attribute === from) owner.title_attribute = to;
+  if (owner.search?.embedding_template !== undefined) {
+    owner.search.embedding_template = renamePlaceholder(owner.search.embedding_template, from, to);
+  }
   for (const implementation of owner.traits ?? []) {
     for (const [traitAttribute, own] of Object.entries(implementation.attribute_map)) {
       if (own === from) implementation.attribute_map[traitAttribute] = to;

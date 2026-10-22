@@ -82,6 +82,10 @@ SCHEMA = {
     "domain": "supply",
     "branch": "main",
     "revision": REVISION,
+    "search": {
+        "modes": ["lexical", "semantic", "hybrid"],
+        "embedding": {"model": "BAAI/bge-small-en-v1.5", "dims": 384},
+    },
     "schema": {
         "domain": {"id": "supply", "default_branch": "main"},
         "kinds": {

@@ -363,7 +363,7 @@ name (`fake:<model>` for the fake provider) and run `lorebase-scribe embeddings 
 to delete the old vectors. `--reindex` renders every text again and re-embeds those that changed.
 
 **Query vectors.** Keeper and Herald never call a model. Compute the query vector with the same
-settings: `lorebase-inference embed "late deliveries" | lorebase search "late deliveries"
+settings: `lorebase-inference embed --query "late deliveries" | lorebase search "late deliveries"
 --vector-file -` (hybrid), or `create_embedding_model(settings).embed([text])` in Python.
 
 ## Operations

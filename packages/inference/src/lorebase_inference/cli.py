@@ -5,10 +5,11 @@ chat model and one short text to the embedding model, and prints the model, late
 size. Exit status 0 means every probed provider answered correctly.
 
 `embed TEXT` prints the vector of `TEXT` from the configured embedding model as JSON
-(`{"model", "dims", "vector"}`): the query vector of semantic and hybrid search, computed on
-the caller's side because Keeper and Herald never call a model (for example
-`lorebase-inference embed "late deliveries" | lorebase search "late deliveries" --mode hybrid
---vector-file -`).
+(`{"model", "dims", "vector"}`). With `--query`, `embeddings.query_prefix` is put before the
+text: that is the query vector of semantic and hybrid search, computed on the caller's side
+because Keeper and Herald never call a model (for example
+`lorebase-inference embed --query "late deliveries" | lorebase search "late deliveries" --mode
+hybrid --vector-file -`). Documents are embedded by Scribe with `embeddings.document_prefix`.
 
 These are the only code paths of the package meant to reach the network on demand.
 """
@@ -141,11 +142,15 @@ async def run_checks(
     return results
 
 
-async def embed_query(settings: InferenceSettings, text: str) -> dict[str, Any]:
-    """`{"model", "dims", "vector"}` of `text`; `dims` is checked against `embeddings.dims`."""
+async def embed_query(
+    settings: InferenceSettings, text: str, *, query: bool = False
+) -> dict[str, Any]:
+    """`{"model", "dims", "vector"}` of `text`, preceded by `embeddings.query_prefix` when
+    `query`; `dims` is checked against `embeddings.dims`."""
     model = create_embedding_model(settings)
     try:
-        vectors = await model.embed([text])
+        prefix = settings.embeddings.query_prefix if query else ""
+        vectors = await model.embed([prefix + text])
     finally:
         close = getattr(model, "aclose", None)
         if close is not None:
@@ -172,6 +177,11 @@ def _parser() -> argparse.ArgumentParser:
         "embed", help="print the query vector of a text from the configured embedding model"
     )
     embed.add_argument("text", help="text to embed")
+    embed.add_argument(
+        "--query",
+        action="store_true",
+        help="embed a search query: put embeddings.query_prefix before the text",
+    )
     return parser
 
 
@@ -187,7 +197,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per request is noise here
     if args.command == "embed":
         try:
-            print(json.dumps(asyncio.run(embed_query(inference, args.text))))
+            print(json.dumps(asyncio.run(embed_query(inference, args.text, query=args.query))))
         except (InferenceError, ValueError) as exc:
             sys.exit(f"{type(exc).__name__}: {exc}")
         sys.exit(0)

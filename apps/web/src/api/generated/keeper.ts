@@ -2622,6 +2622,22 @@ export interface components {
             name: string;
         };
         /**
+         * EmbeddingOut
+         * @description The embedding model of a Domain: what a caller embeds `query_vector` with.
+         */
+        EmbeddingOut: {
+            /**
+             * Model
+             * @description Name the stored vectors are keyed by.
+             */
+            model: string;
+            /**
+             * Dims
+             * @description Length of a query vector.
+             */
+            dims: number;
+        };
+        /**
          * ExecuteRequest
          * @description An execution of an Operation.
          */
@@ -4421,6 +4437,7 @@ export interface components {
             schema: {
                 [key: string]: unknown;
             };
+            search: components["schemas"]["SchemaSearchOut"];
         };
         /** SchemaRelationOut */
         SchemaRelationOut: {
@@ -4438,6 +4455,16 @@ export interface components {
             description?: string | null;
             /** Attributes */
             attributes?: components["schemas"]["SchemaAttributeOut"][] | null;
+        };
+        /**
+         * SchemaSearchOut
+         * @description How the Domain can be searched at this Revision.
+         */
+        SchemaSearchOut: {
+            /** Modes */
+            modes: ("lexical" | "semantic" | "hybrid")[];
+            /** @description Set when some Kind has `search.embedding_template`: semantic and hybrid search need a `query_vector` made by this model; null otherwise. */
+            embedding: components["schemas"]["EmbeddingOut"] | null;
         };
         /**
          * SchemaValidateRequest

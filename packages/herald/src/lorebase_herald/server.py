@@ -194,7 +194,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         name="lorebase_search",
         description="Find Records by words (lexical full-text over searchable attributes). "
         "Semantic or hybrid search runs only when you pass `query_vector`, an embedding of the "
-        "Domain's configured model; Herald never computes embeddings.",
+        "Domain's embedding model (name and dimension: the SEARCH line of lorebase_schema); "
+        "Herald never computes embeddings.",
         annotations=READ,
         structured_output=False,
     )

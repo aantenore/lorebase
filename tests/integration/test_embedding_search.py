@@ -113,6 +113,10 @@ async def test_commit_embed_and_hybrid_search(
     imported = await client.operations.import_records(DOMAIN, "Note", NOTES, branch=BRANCH)
     assert imported.status == "committed", imported.violations
 
+    advertised = (await client.schema.get(DOMAIN, branch=BRANCH)).search
+    assert advertised.modes == ["lexical", "semantic", "hybrid"]
+    assert advertised.embedding == m.EmbeddingModel(model=MODEL, dims=DIMS)
+
     vector = await query_vector("Price increase. Steel suppliers raise prices in Q3.")
     before = await client.records.search(
         DOMAIN, m.SearchRequest(branch=BRANCH, query_vector=vector, mode="semantic")

@@ -169,9 +169,12 @@ Read tools are annotated read-only; `lorebase_execute` is the only tool that can
 
 Herald never embeds text. For semantic or hybrid `lorebase_search`, the agent computes
 `query_vector` on its side with the model Scribe uses for the Domain (for example
-`lorebase-inference embed "text"` with the same `inference.embeddings` settings,
+`lorebase-inference embed --query "text"` with the same `inference.embeddings` settings,
 [inference providers](inference-providers.md#embeddings-for-search)); a vector of another
-dimension is refused.
+dimension is refused. The output of `lorebase_schema` ends with a `SEARCH` line (`search` in
+the JSON format): the search modes of the
+Domain and, when a Kind has an `embedding_template`, the embedding model name and dimension to
+embed queries with. Without an embedding model the only mode is lexical.
 
 **Resources.** `lorebase://{domain}/schema` (schema summary) and
 `lorebase://{domain}/{kind}/{key}` (one Record), for hosts that attach resources to the context.

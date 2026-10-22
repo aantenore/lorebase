@@ -167,6 +167,10 @@ function kind(raw: Raw, names: Names): Kind {
       embedding_template: isRaw(raw['search'])
         ? strOrNull(raw['search']['embedding_template'])
         : null,
+      embedding_sensitive:
+        isRaw(raw['search']) && typeof raw['search']['embedding_sensitive'] === 'boolean'
+          ? raw['search']['embedding_sensitive']
+          : null,
     },
     icon: strOrNull(raw['icon']),
     color: strOrNull(raw['color']),
@@ -423,6 +427,6 @@ export function mapSchema(out: SchemaOut): Schema {
     operations: entries(body['operations']).map((o) => operation(o, names)),
     derivations: entries(body['derivations']).map((d) => derivation(d, names)),
     sources: entries(body['sources']).map(source),
-    search: { modes: ['lexical'], embedding: null },
+    search: { modes: [...out.search.modes], embedding: out.search.embedding },
   };
 }

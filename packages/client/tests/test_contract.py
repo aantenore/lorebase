@@ -39,6 +39,8 @@ RESPONSES: dict[type[m.Model], str] = {
     m.BranchDetail: "BranchDetail",
     m.Tag: "TagOut",
     m.SchemaDocument: "SchemaOut",
+    m.SchemaSearch: "SchemaSearchOut",
+    m.EmbeddingModel: "EmbeddingOut",
     m.ElementChange: "ElementChangeOut",
     m.SchemaChangeResult: "SchemaChangeOut",
     m.SchemaValidation: "SchemaValidationOut",

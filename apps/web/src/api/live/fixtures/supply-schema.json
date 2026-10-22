@@ -2,6 +2,10 @@
   "domain": "supply",
   "branch": "main",
   "revision": "43eb6848f9b828c91b223fa97e697322cd7a9b62af1609254719e5fb239f47bb",
+  "search": {
+    "modes": ["lexical"],
+    "embedding": null
+  },
   "schema": {
     "domain": {
       "id": "supply",

@@ -147,6 +147,18 @@ class EmbeddingSettings(SectionModel):
     )
     api_key: SecretValue | None = None
     batch_size: int = Field(default=32, ge=1, description="Texts per model call or request.")
+    query_prefix: str = Field(
+        default="",
+        description="Text put before a search query when it is embedded "
+        "(`lorebase-inference embed --query`); models such as E5 and BGE expect one, for "
+        'example "query: " or "Represent this sentence for searching relevant passages: ".',
+    )
+    document_prefix: str = Field(
+        default="",
+        description="Text put before every Record text Scribe embeds, for models that expect "
+        'one (E5: "passage: "). Part of the stored text hash and of the template fingerprint: '
+        "after changing it the next embedding pass embeds every text again.",
+    )
     cache_dir: Path | None = Field(
         default=None, description="fastembed: where model files are stored; unset: library default."
     )

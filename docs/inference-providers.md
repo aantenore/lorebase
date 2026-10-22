@@ -118,10 +118,36 @@ Scribe embeds the Records of Kinds that have an `embedding_template` with this m
 semantic and hybrid search is computed on the caller's side with the same settings:
 
 ```bash
-lorebase-inference embed "late deliveries"
+lorebase-inference embed --query "late deliveries"
 # {"model": "BAAI/bge-small-en-v1.5", "dims": 384, "vector": [...]}
-lorebase-inference embed "late deliveries" | lorebase search "late deliveries" --vector-file -
+lorebase-inference embed --query "late deliveries" | lorebase search "late deliveries" --vector-file -
 ```
+
+`--query` puts `inference.embeddings.query_prefix` before the text; without it the text is
+embedded as given.
+
+**Prefixes.** Some models, the E5 family and BGE with instructions among them, are trained with
+different prefixes for queries and documents. Set them next to the model; both default to
+empty, which changes nothing:
+
+```yaml
+inference:
+  embeddings:
+    model: intfloat/multilingual-e5-small
+    dims: 384
+    query_prefix: "query: "
+    document_prefix: "passage: "
+```
+
+`document_prefix` is put before every Record text Scribe embeds and is part of the stored text
+hash, so changing it makes the next embedding pass embed every text again. `query_prefix` is
+applied by `lorebase-inference embed --query` only: a caller that embeds queries with its own
+code has to add the prefix itself.
+
+**Which model to use.** `GET /api/v1/domains/{domain}/schema` and the MCP tool
+`lorebase_schema` report `search.embedding` (`model`, `dims`) for a Domain that has a Kind with an
+`embedding_template`, taken from `search.semantic.model` and `store.embeddings.dims`. Embed
+queries with that model; a vector of another dimension is refused.
 
 From Python:
 

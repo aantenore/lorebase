@@ -40,6 +40,31 @@ describe('schema document', () => {
     expect(custom(back)).toEqual(custom(schema));
   });
 
+  it('writes the embedding template under the Kind search block and reads it back', async () => {
+    const schema = await sample('main');
+    const kinds = schema.kinds.map((k) =>
+      k.api_name === 'Supplier'
+        ? {
+            ...k,
+            search: { ...k.search, embedding_template: '{legal_name}', embedding_sensitive: true },
+          }
+        : k,
+    );
+    const changed: Schema = { ...schema, kinds };
+    const document = schemaToDocument(changed);
+    expect(document.kinds?.['Supplier']?.search).toEqual({
+      embedding_template: '{legal_name}',
+      embedding_sensitive: true,
+    });
+    expect(document.kinds?.['Part']).not.toHaveProperty('search');
+    const parsed = parseSchemaYaml(dumpSchemaYaml(document));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const { schema: back, issues } = documentToSchema(parsed.document, changed, mint);
+    expect(issues).toEqual([]);
+    expect(back.kinds).toEqual(changed.kinds);
+  });
+
   it('writes elements by api name with references by api name and ids always', async () => {
     const document = schemaToDocument(await sample('main'));
     const supplier = document.kinds?.['Supplier'];

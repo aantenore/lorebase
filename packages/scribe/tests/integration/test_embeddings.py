@@ -89,10 +89,11 @@ def embedding_pass(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     model: CountingModel,
+    inference: InferenceSettings | None = None,
     **settings: Any,
 ) -> EmbeddingPass:
     dims = runtime.settings.embeddings.dims
-    models = EmbeddingModels(InferenceSettings(), dims=dims, factory=lambda: model)
+    models = EmbeddingModels(inference or InferenceSettings(), dims=dims, factory=lambda: model)
     return EmbeddingPass(
         engine,
         sessions,
@@ -160,6 +161,33 @@ async def test_a_pass_embeds_every_record_once_and_then_only_changes(
     reused = await run.run(DOMAIN)
     assert (reused.branches[0].reused, reused.branches[0].embedded) == (1, 0)
     assert len(model.texts) == calls
+
+
+async def test_document_prefix_is_embedded_and_a_change_embeds_everything_again(
+    engine: AsyncEngine,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    await load_domain(
+        sessions, runtime, clock, schema_with(TEMPLATE), kinds={"Supplier": "supplier.csv"}
+    )
+    model = CountingModel(runtime.settings.embeddings.dims)
+
+    def prefixed(prefix: str) -> EmbeddingPass:
+        inference = InferenceSettings.model_validate({"embeddings": {"document_prefix": prefix}})
+        return embedding_pass(engine, sessions, runtime, model, inference)
+
+    report = await prefixed("passage: ").run(DOMAIN)
+    assert report.branches[0].embedded == len(SUPPLIERS)
+    assert sorted(model.texts) == sorted("passage: " + text_of(r) for r in SUPPLIERS)
+
+    # Same prefix: nothing to do. Another prefix: every text again, with the new prefix.
+    assert (await prefixed("passage: ").run(DOMAIN)).branches[0].skipped
+    model.texts.clear()
+    again = await prefixed("doc: ").run(DOMAIN)
+    assert again.branches[0].embedded == len(SUPPLIERS)
+    assert sorted(model.texts) == sorted("doc: " + text_of(r) for r in SUPPLIERS)
 
 
 async def test_overlays_template_changes_budget_and_model_switch(
