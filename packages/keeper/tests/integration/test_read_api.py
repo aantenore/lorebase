@@ -709,6 +709,43 @@ async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> No
     assert hybrid["mode"] == "hybrid"
     assert hybrid["items"][0]["key"] in {"P-10001", "P-10002"}
 
+    assert {hit["match"] for hit in lexical["items"]} == {"all"}
+    # A descriptive query: no Part holds every word, so Parts holding some of them follow,
+    # most terms first.
+    described = {"q": "tapered roller bearing for the kiln", "kinds": ["Part"]}
+    some = await post_ok(http, "/search", described)
+    assert some["items"][0]["key"] == "P-10001"
+    assert {hit["match"] for hit in some["items"]} == {"partial"}
+    assert "roller" in (some["items"][0]["snippet"] or "").lower()
+    active = {r["part_number"] for r in rows("part.csv") if r["lifecycle"] == "active"}
+    filtered_some = await post_ok(
+        http,
+        "/search",
+        {**described, "where": {"attr": "lifecycle", "op": "eq", "value": "active"}},
+    )
+    assert filtered_some["items"][0]["key"] == "P-10001"
+    assert {hit["key"] for hit in filtered_some["items"]} <= active
+    assert {hit["match"] for hit in filtered_some["items"]} == {"partial"}
+    filtered_full = await post_ok(
+        http,
+        "/search",
+        {
+            "q": "roller bearing",
+            "kinds": ["Part"],
+            "where": {"attr": "lifecycle", "op": "eq", "value": "active"},
+        },
+    )
+    assert filtered_full["items"]
+    assert {hit["match"] for hit in filtered_full["items"]} == {"all"}
+    hybrid_some = await post_ok(
+        http,
+        "/search",
+        {"q": "tapered roller kiln", "kinds": ["Part"], "query_vector": unit_vector(40)},
+    )
+    matches = {hit["key"]: hit["match"] for hit in hybrid_some["items"]}
+    assert matches["P-10001"] == "partial"
+    assert None in matches.values()
+
     wrong = await http.post(f"{BASE}/search", json={"query_vector": [0.1, 0.2]})
     assert wrong.status_code == 422
     assert wrong.json()["errors"][0]["code"] == "dimension_mismatch"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lorebase_core.infer.suggestions import Observation, SuggestionOptions, SuggestionType
-from lorebase_store.repositories.suggestions import fold
+from lorebase_store.repositories.suggestions import consolidate, fold
 
 OPTIONS = SuggestionOptions(max_examples=2, max_samples=3)
 
@@ -47,3 +47,51 @@ def test_examples_and_samples_are_bounded_and_span_documents() -> None:
         OPTIONS,
     )
     assert [e["document_id"] for e in mixed["examples"]] == ["doc_a", "doc_b"]
+
+
+def sighted(
+    type_: SuggestionType, label: str, value: str | None = None, kind: str | None = "knd_c"
+) -> Observation:
+    return Observation(type_, label, "doc_a", 0.6, "tier2", kind=kind, value=value)
+
+
+def test_variants_and_noise_kinds_consolidate() -> None:
+    attribute = SuggestionType.ATTRIBUTE
+    observations = [
+        sighted(attribute, "renewal notice days", "90"),
+        sighted(attribute, "renewal notice days", "90"),
+        sighted(attribute, "renewal proposal notice days", "90"),
+        sighted(attribute, "termination notice days", "30"),
+        sighted(attribute, "termination for cause notice days", "30"),
+        sighted(attribute, "buyer", "Corvane"),
+        sighted(SuggestionType.KIND, "Buyer", kind=None),
+        sighted(SuggestionType.KIND, "Proposal", kind=None),
+        sighted(SuggestionType.KIND, "Quality notice", kind=None),
+    ]
+    groups, names = consolidate(observations, [], OPTIONS)
+    assert sorted(names.values()) == [
+        "QualityNotice",
+        "buyer",
+        "renewal_notice_days",
+        "termination_notice_days",
+    ]
+    by_name = {names[k]: v for k, v in groups.items()}
+    assert len(by_name["renewal_notice_days"]) == 3
+    assert {o.label for o in by_name["termination_notice_days"]} == {
+        "termination notice days",
+        "termination for cause notice days",
+    }
+
+
+def test_a_variant_joins_the_stored_suggestion() -> None:
+    stored = {
+        "fingerprint": "attribute:knd_c:renewal_notice_day",
+        "name": "renewal_notice_days",
+        "kind_ref": "knd_c",
+        "samples": ["90"],
+        "support": 4,
+    }
+    seen_again = [sighted(SuggestionType.ATTRIBUTE, "renewal proposal notice days", "90")]
+    groups, names = consolidate(seen_again, [stored], OPTIONS)
+    assert list(groups) == [stored["fingerprint"]]
+    assert names == {stored["fingerprint"]: "renewal_notice_days"}

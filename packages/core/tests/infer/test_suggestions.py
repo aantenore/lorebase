@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lorebase_core.infer.suggestions import (
+    AttributeSighting,
     Observation,
     Suggestion,
     SuggestionError,
@@ -14,7 +15,9 @@ from lorebase_core.infer.suggestions import (
     field_name,
     fingerprint,
     infer_attribute,
+    kind_is_noise,
     kind_name,
+    merge_attributes,
     name_similarity,
     proposed_kind,
     suggestion_patch,
@@ -174,3 +177,47 @@ def test_patch_refuses_unknown_kinds_and_duplicates(schema: Schema) -> None:
     titled = suggestion_patch(schema, [Suggestion("s3", SuggestionType.KIND, "Warehouse")], OPTIONS)
     assert titled["kinds"]["Warehouse"]["title_attribute"] == "name"
     assert "primary_key" not in titled["kinds"]["Warehouse"]
+
+
+def sighting(
+    name: str, sample: str, *, kind: str = "knd_contract", support: int = 2
+) -> AttributeSighting:
+    return AttributeSighting(f"attribute:{kind}:{name}", name, kind, (sample,), support)
+
+
+def test_attribute_variants_merge_into_the_best_supported() -> None:
+    renewal = [
+        sighting("renewal_notice_days", "90", support=3),
+        sighting("renewal_proposal_notice_days", "90", support=2),
+    ]
+    merged = merge_attributes(renewal, OPTIONS)
+    assert set(merged.values()) == {renewal[0].key}
+    # The kept suggestion does not depend on the order seen.
+    assert merge_attributes(renewal[::-1], OPTIONS) == merged
+    termination = [
+        sighting("termination_for_cause_notice_days", "30"),
+        sighting("termination_notice_days", "30"),
+    ]
+    # Equal support: the shorter name is kept.
+    assert set(merge_attributes(termination, OPTIONS).values()) == {termination[1].key}
+
+
+def test_unrelated_attributes_are_not_merged() -> None:
+    pairs = [
+        (sighting("start_date", "2026-01-01"), sighting("end_date", "2026-12-31")),
+        (sighting("notice_days", "30"), sighting("payment_days", "30")),
+        # Same words, other owner or other kind of value.
+        (sighting("notice_days", "30"), sighting("renewal_notice_days", "30", kind="knd_other")),
+        (sighting("renewal_notice_days", "90"), sighting("renewal_proposal_notice_days", "n/a")),
+    ]
+    for first, second in pairs:
+        merged = merge_attributes([first, second], OPTIONS)
+        assert merged == {first.key: first.key, second.key: second.key}
+
+
+def test_noise_kinds_are_recognized() -> None:
+    assert kind_is_noise(kind_name("Proposal"), [], OPTIONS)
+    assert kind_is_noise(kind_name("sections"), [], OPTIONS)
+    assert kind_is_noise(kind_name("Buyer"), ["buyer", "renewal_notice_days"], OPTIONS)
+    assert not kind_is_noise(kind_name("Quality notice"), ["buyer"], OPTIONS)
+    assert not kind_is_noise("Proposal", [], SuggestionOptions(kind_stoplist=()))

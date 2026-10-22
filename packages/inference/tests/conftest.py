@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from lorebase_inference.chat import reset_known_modes
 from lorebase_inference.settings import ENV_ALIASES
 from lorebase_platform import settings as platform_settings
 
@@ -21,6 +22,12 @@ def clean_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
             or name in ENV_ALIASES
         ):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def fresh_output_modes() -> None:
+    """Start every test without structured output modes learned by earlier tests."""
+    reset_known_modes()
 
 
 class ScriptedEndpoint:

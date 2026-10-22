@@ -24,7 +24,8 @@ A Kind proposed by another suggestion is referred to as ``+<KindName>`` until it
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+import re
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from enum import StrEnum
@@ -105,6 +106,42 @@ class SuggestionOptions(BaseModel):
             ("quantity", "qty"),
         ),
         description="Groups of names that mean the same element (snake_case, singular).",
+    )
+    merge_similarity: float = Field(
+        default=0.6,
+        gt=0,
+        le=1,
+        description="Least overlap (Jaccard index of the snake_case words, 0 to 1) for two "
+        "Attribute suggestions of one Kind with compatible sample values to count as one "
+        "(renewal_notice_days and renewal_proposal_notice_days). 1 merges only the same words.",
+    )
+    kind_stoplist: tuple[str, ...] = Field(
+        default=(
+            "section",
+            "clause",
+            "article",
+            "paragraph",
+            "chapter",
+            "annex",
+            "appendix",
+            "schedule",
+            "exhibit",
+            "attachment",
+            "page",
+            "table",
+            "figure",
+            "document",
+            "proposal",
+        ),
+        description="Generic document-structure and workflow words (snake_case, singular) "
+        "that are never suggested as a Kind.",
+    )
+    kind_min_attributes: int = Field(
+        default=2,
+        ge=0,
+        description="Attribute suggestions (or observations) a proposed Kind needs before it "
+        "is listed for review; a Kind seen once without fields is noise more often than not. "
+        "0 lists every Kind.",
     )
     type_inference: InferenceOptions = Field(
         default_factory=_type_inference,
@@ -189,6 +226,94 @@ def name_similarity(first: str, second: str, options: SuggestionOptions) -> floa
         if a in names and b in names:
             return 1.0
     return SequenceMatcher(None, a, b).ratio()
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+_INTEGER = re.compile(r"[+-]?[0-9]+")
+_NUMBER = re.compile(r"[+-]?[0-9]+(?:[.,][0-9]+)?")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ].*)?")
+_BOOLEAN = frozenset({"true", "false", "yes", "no"})
+
+
+def name_words(name: str) -> frozenset[str]:
+    """The singular words of a name: ``renewal_notice_days`` -> ``renewal``, ``notice``, ``day``."""
+    return frozenset(singular(w) for w in _WORD.findall(normalize(name)))
+
+
+def word_overlap(first: str, second: str) -> float:
+    """Jaccard index of the words of two names (0 when either has none)."""
+    a, b = name_words(first), name_words(second)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def value_classes(samples: Iterable[str]) -> frozenset[str]:
+    """Coarse value types of sample texts: ``number``, ``date``, ``boolean`` or ``text``."""
+    found: set[str] = set()
+    for sample in samples:
+        text = sample.strip()
+        if _NUMBER.fullmatch(text) or _INTEGER.fullmatch(text):
+            found.add("number")
+        elif _DATE.fullmatch(text):
+            found.add("date")
+        elif text.casefold() in _BOOLEAN:
+            found.add("boolean")
+        elif text:
+            found.add("text")
+    return frozenset(found)
+
+
+@dataclass(frozen=True, slots=True)
+class AttributeSighting:
+    """An Attribute suggestion (stored or in a job) that may be a variant of another."""
+
+    key: str
+    """Identity of the suggestion (its fingerprint)."""
+    name: str
+    kind: str | None
+    samples: tuple[str, ...]
+    support: int
+
+
+def merge_attributes(
+    sightings: Sequence[AttributeSighting], options: SuggestionOptions
+) -> dict[str, str]:
+    """Attribute suggestions that are variants of one another, as ``key -> kept key``.
+
+    Two suggestions are variants when they belong to the same Kind, their names share at least
+    ``merge_similarity`` of their words and their samples have a value type in common (both
+    need samples). The best supported suggestion is kept, then the shorter name, then the
+    alphabetically first, so the result does not depend on the order of ``sightings``. Every
+    key is in the result; a kept key maps to itself.
+    """
+    ordered = sorted(sightings, key=lambda s: (-s.support, len(s.name), s.name, s.key))
+    kept: list[tuple[AttributeSighting, frozenset[str]]] = []
+    merged: dict[str, str] = {}
+    for sighting in ordered:
+        classes = value_classes(sighting.samples)
+        best: tuple[float, AttributeSighting] | None = None
+        for other, other_classes in kept:
+            if other.kind != sighting.kind or not (classes & other_classes):
+                continue
+            score = word_overlap(sighting.name, other.name)
+            if score >= options.merge_similarity and (best is None or score > best[0]):
+                best = (score, other)
+        if best is None:
+            kept.append((sighting, classes))
+            merged[sighting.key] = sighting.key
+        else:
+            merged[sighting.key] = best[1].key
+    return merged
+
+
+def kind_is_noise(name: str, attribute_names: Collection[str], options: SuggestionOptions) -> bool:
+    """Whether a Kind suggestion is a generic word (``kind_stoplist``) or only names a field
+    (an Attribute called ``attribute_names``: a Kind ``Buyer`` beside the Attribute ``buyer``)."""
+    canonical = _canonical(name)
+    if canonical in {_canonical(w) for w in options.kind_stoplist}:
+        return True
+    return canonical in {_canonical(n) for n in attribute_names}
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +629,7 @@ def suggestion_patch(
 __all__ = [
     "PROPOSED",
     "AttributeGuess",
+    "AttributeSighting",
     "ExistingMatch",
     "Observation",
     "Suggestion",
@@ -514,10 +640,14 @@ __all__ = [
     "field_name",
     "fingerprint",
     "infer_attribute",
+    "kind_is_noise",
     "kind_name",
+    "merge_attributes",
     "name_similarity",
     "proposed_kind",
     "resolve_kind",
     "sensitive_attributes",
     "suggestion_patch",
+    "value_classes",
+    "word_overlap",
 ]

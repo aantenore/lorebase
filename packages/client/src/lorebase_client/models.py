@@ -523,6 +523,9 @@ class SearchHit(Model):
     title: str | None = None
     snippet: str | None = None
     score: float
+    match: Literal["all", "partial"] | None = None
+    """`all` when the hit holds every term of q, `partial` when only some (ranked after the
+    others); None for hits found by vector only."""
 
 
 class SearchCorrection(Model):

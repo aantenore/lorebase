@@ -296,9 +296,10 @@ decreasing order of strength and validates the result locally, always:
 3. prompt only: no `response_format`, schema and a strict instruction in the system prompt.
 
 When the server answers HTTP 400 or 422 with an error that names the response format, the
-client steps down one mode and keeps it for that model instance (an extraction job creates
-one) (an unrelated 400, for example a
-context overflow, is not mistaken for missing support). An answer that is not JSON, or does not
+client steps down one mode (an unrelated 400, for example a context overflow, is not mistaken
+for missing support). The mode that works is remembered for the lifetime of the process, per
+`base_url`, model, `structured_output` and `json_schema_strict`, so the next extraction job
+starts there instead of being refused once more. An answer that is not JSON, or does not
 satisfy the schema, triggers up to `repair_attempts` (default 1) repair calls that show the
 model what was wrong; if the answer is still invalid, `InvalidOutputError` is raised and the
 caller discards and counts the item ([design 9.2](design.md#92-unstructured-extraction), step 6).

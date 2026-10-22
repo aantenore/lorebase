@@ -7,6 +7,10 @@ extracting a document again does not count it twice; examples of that document a
 samples, labels and sources are united, each within its bound. A decided suggestion keeps
 counting observations but stays decided. New fingerprints beyond `max_tracked` rows are
 dropped and counted.
+
+Variants of one Attribute (`renewal_notice_days`, `renewal_proposal_notice_days`) are folded
+into the best supported suggestion of the Kind (`merge_attributes`), their labels kept; a Kind
+that only names a field or a generic word is not recorded (`kind_is_noise`).
 """
 
 from __future__ import annotations
@@ -17,11 +21,19 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, func, or_, select, update
+from sqlalchemy import Table, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.infer.suggestions import Observation, SuggestionOptions
+from lorebase_core.infer.suggestions import (
+    PROPOSED,
+    AttributeSighting,
+    Observation,
+    SuggestionOptions,
+    SuggestionType,
+    kind_is_noise,
+    merge_attributes,
+)
 from lorebase_store.models import metadata
 
 SUGGESTIONS: Table = metadata.tables["schema_suggestions"]
@@ -138,6 +150,51 @@ def fold(
     }
 
 
+def consolidate(
+    observations: Sequence[Observation],
+    stored: Sequence[Mapping[Any, Any]],
+    options: SuggestionOptions,
+) -> tuple[dict[str, list[Observation]], dict[str, str]]:
+    """Observations grouped by the fingerprint of the suggestion they count for, and the name
+    of each group. Attribute variants join the best supported suggestion of their Kind,
+    among the pending ``stored`` ones and the job's; noise Kinds are left out."""
+    sightings: dict[str, AttributeSighting] = {}
+    for row in stored:
+        sightings[row["fingerprint"]] = AttributeSighting(
+            row["fingerprint"],
+            row["name"],
+            row["kind_ref"],
+            tuple(row["samples"] or ()),
+            int(row["support"]),
+        )
+    batch: dict[str, list[Observation]] = defaultdict(list)
+    for observation in observations:
+        batch[observation.fingerprint].append(observation)
+    for key, group in batch.items():
+        first = group[0]
+        if first.type is not SuggestionType.ATTRIBUTE:
+            continue
+        known = sightings.get(key)
+        samples = tuple(dict.fromkeys(o.value for o in group if o.value))
+        sightings[key] = AttributeSighting(
+            key,
+            first.name,
+            first.kind,
+            tuple(dict.fromkeys([*(known.samples if known else ()), *samples])),
+            (known.support if known else 0) + len(group),
+        )
+    merged = merge_attributes(list(sightings.values()), options)
+    names = {s.key: s.name for s in sightings.values()}
+    groups: dict[str, list[Observation]] = defaultdict(list)
+    for key, group in batch.items():
+        groups[merged.get(key, key)].extend(group)
+    fields_known = [s.name for s in sightings.values()]
+    for key in [k for k, g in groups.items() if g[0].type is SuggestionType.KIND]:
+        if kind_is_noise(groups[key][0].name, fields_known, options):
+            del groups[key]
+    return groups, {k: names.get(k, groups[k][0].name) for k in groups}
+
+
 class SchemaSuggestionRepository:
     """Schema suggestions of one Domain, in the caller's transaction (after `scope_to_domain`)."""
 
@@ -158,12 +215,27 @@ class SchemaSuggestionRepository:
         new_id: Callable[[], str],
     ) -> RecordOutcome:
         """Fold a job's observations into the stored suggestions (see module doc)."""
-        groups: dict[str, list[Observation]] = defaultdict(list)
-        for observation in observations:
-            groups[observation.fingerprint].append(observation)
+        table = SUGGESTIONS
+        refs = sorted(
+            {o.kind for o in observations if o.type is SuggestionType.ATTRIBUTE and o.kind}
+        )
+        pending = []
+        if refs:
+            pending = list(
+                (
+                    await self._session.execute(
+                        select(table).where(
+                            self._scoped(),
+                            table.c.suggestion_type == SuggestionType.ATTRIBUTE.value,
+                            table.c.status == PENDING,
+                            table.c.kind_ref.in_(refs),
+                        )
+                    )
+                ).mappings()
+            )
+        groups, names = consolidate(observations, pending, options)
         if not groups:
             return RecordOutcome()
-        table = SUGGESTIONS
         stored = {
             row["fingerprint"]: row
             for row in (
@@ -200,7 +272,7 @@ class SchemaSuggestionRepository:
                         id=new_id(),
                         fingerprint=key,
                         suggestion_type=first.type.value,
-                        name=first.name,
+                        name=names[key],
                         kind_ref=first.kind,
                         target_ref=first.target,
                         last_job_id=job_id,
@@ -247,15 +319,37 @@ class SchemaSuggestionRepository:
         statuses: Sequence[str] = (),
         types: Sequence[str] = (),
         min_support: int = 1,
+        kind_min_attributes: int = 0,
         limit: int,
         after: tuple[int, str] | None = None,
     ) -> list[SuggestionRow]:
         """Suggestions by support (descending), then id, after the keyset `(support, id)`;
-        pending ones need `min_support`."""
+        pending ones need `min_support`, and pending Kinds `kind_min_attributes` Attribute
+        suggestions of their own (owner ref `+<Kind>`) or as many observations."""
         table = SUGGESTIONS
         query = select(table).where(
             self._scoped(), or_(table.c.status != PENDING, table.c.support >= min_support)
         )
+        if kind_min_attributes > 0:
+            owned = SUGGESTIONS.alias("owned")
+            attributes = (
+                select(func.count())
+                .select_from(owned)
+                .where(
+                    owned.c.domain_id == table.c.domain_id,
+                    owned.c.suggestion_type == SuggestionType.ATTRIBUTE.value,
+                    owned.c.kind_ref == func.concat(literal(PROPOSED), table.c.name),
+                )
+                .scalar_subquery()
+            )
+            query = query.where(
+                or_(
+                    table.c.status != PENDING,
+                    table.c.suggestion_type != SuggestionType.KIND.value,
+                    table.c.support >= kind_min_attributes,
+                    attributes >= kind_min_attributes,
+                )
+            )
         if statuses:
             query = query.where(table.c.status.in_(list(statuses)))
         if types:

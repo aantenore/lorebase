@@ -15,7 +15,8 @@ validated against the schema locally:
 
 The first mode is chosen by `structured_output`. When the server rejects a mode with HTTP
 400 or 422 and an error text that names the response format, the client steps down one mode
-and remembers it for the lifetime of the instance. A parse or validation failure triggers up
+and remembers it for the lifetime of the process, per endpoint, model and output settings, so
+later clients start at the mode that works. A parse or validation failure triggers up
 to `repair_attempts` repair calls that show the model its mistakes; usage of all calls is
 summed in the result.
 """
@@ -26,6 +27,8 @@ import json
 import logging
 import math
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +49,7 @@ _UNSUPPORTED_STATUS = frozenset({400, 422})
 _FORMAT_HINT = re.compile(
     r"response_format|json_schema|json_object|structured|grammar|schema", re.IGNORECASE
 )
+_MODE_CACHE_LIMIT = 256
 _FENCE = re.compile(r"^```[a-zA-Z0-9_-]*\s*\n?(.*?)\n?```\s*$", re.DOTALL)
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 _ECHO_LIMIT = 4000
@@ -60,6 +64,37 @@ _REPAIR_INSTRUCTION = (
     "Your previous answer is not valid: {problems}\n"
     "Answer again with only the corrected JSON value that conforms to the schema."
 )
+
+
+_ModeKey = tuple[str, str, str, bool | None]
+_known_modes: OrderedDict[_ModeKey, int] = OrderedDict()
+_known_modes_lock = threading.Lock()
+
+
+def reset_known_modes() -> None:
+    """Forget the structured output modes learned from server rejections (for tests)."""
+    with _known_modes_lock:
+        _known_modes.clear()
+
+
+def _mode_key(llm: LlmSettings) -> _ModeKey:
+    return (llm.base_url, llm.model, llm.structured_output, llm.json_schema_strict)
+
+
+def _known_mode(key: _ModeKey) -> int | None:
+    with _known_modes_lock:
+        index = _known_modes.get(key)
+        if index is not None:
+            _known_modes.move_to_end(key)
+        return index
+
+
+def _remember_mode(key: _ModeKey, index: int) -> None:
+    with _known_modes_lock:
+        _known_modes[key] = max(index, _known_modes.get(key, 0))
+        _known_modes.move_to_end(key)
+        while len(_known_modes) > _MODE_CACHE_LIMIT:
+            _known_modes.popitem(last=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +117,8 @@ class EndpointChatModel:
         self._llm = llm
         self._transport = transport
         self._sleep = sleep
-        self._mode_index = MODES.index(llm.structured_output)
+        self._mode_key = _mode_key(llm)
+        self._mode_index = max(MODES.index(llm.structured_output), _known_mode(self._mode_key) or 0)
         self._client = EndpointClient(
             base_url=llm.base_url,
             api_key=llm.api_key,
@@ -188,6 +224,7 @@ class EndpointChatModel:
                 ):
                     previous = MODES[self._mode_index]
                     self._mode_index += 1
+                    _remember_mode(self._mode_key, self._mode_index)
                     logger.info(
                         "endpoint rejected structured output mode %s; using %s",
                         previous,

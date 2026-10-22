@@ -145,6 +145,41 @@ class HybridSettings(SectionModel):
     semantic_weight: float = Field(default=1.0, ge=0)
 
 
+class PartialMatchSettings(SectionModel):
+    """Ranked partial matching of lexical search: descriptive queries rarely have every word
+    in one Record, so when the query as written (every term) finds too few, Records holding
+    some of its terms follow, after every full match."""
+
+    min_results: int = Field(
+        default=1,
+        ge=0,
+        description="Full matches below which partial matches are added; 0 turns partial "
+        "matching off.",
+    )
+    weight: float = Field(
+        default=0.5,
+        ge=0,
+        description="Partial matches score weight * (ts_rank_cd of the terms joined by OR + "
+        "term_bonus * terms matched).",
+    )
+    term_bonus: float = Field(
+        default=1.0, ge=0, description="Score added for each query term a partial match holds."
+    )
+    candidates: int = Field(
+        default=100,
+        ge=1,
+        description="Partial matches ranked per search, best by ts_rank_cd first; at most "
+        "store.reads.max_search_rows without filters, search.candidates with them.",
+    )
+    stop_words: str | None = Field(
+        default="english",
+        min_length=1,
+        description="Text search configuration whose stop words are left out of the terms of "
+        "partial matching (the, for, that...): the search configuration, simple by default, "
+        "keeps every word. null leaves only the search configuration's own stop words out.",
+    )
+
+
 class SearchSettings(SectionModel):
     """Ranking of `POST /search`."""
 
@@ -179,6 +214,7 @@ class SearchSettings(SectionModel):
         min_length=1,
         description="ts_headline options of result snippets.",
     )
+    partial: PartialMatchSettings = Field(default_factory=PartialMatchSettings)
     semantic: SemanticSettings = Field(default_factory=SemanticSettings)
     hybrid: HybridSettings = Field(default_factory=HybridSettings)
 

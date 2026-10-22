@@ -18158,6 +18158,22 @@
           "score": {
             "type": "number",
             "title": "Score"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all",
+                  "partial"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match",
+            "description": "How the hit matched q: every term (`all`), or only some of them (`partial`, ranked after every `all` hit); absent for hits found by vector only."
           }
         },
         "type": "object",

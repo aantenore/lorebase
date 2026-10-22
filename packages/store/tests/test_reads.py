@@ -22,6 +22,8 @@ from lorebase_store.reads import (
     Comparison,
     Correction,
     Direction,
+    PartialMatching,
+    PartialQuery,
     TypoTolerance,
     get_record,
     head_revision,
@@ -31,6 +33,8 @@ from lorebase_store.reads import (
     links_of_record,
     links_to_record,
     list_records,
+    partial_query,
+    partial_terms,
     query_by_attribute,
     search_corrections,
     search_records,
@@ -290,6 +294,93 @@ async def test_records_links_queries_and_search(sessions: Sessions, definer: boo
         assert [h.exact for h in mixed] == sorted((h.exact for h in mixed), reverse=True)
         assert {h.key for h in mixed if h.exact} == {"P-1", "P-3"}
         assert [h.key for h in mixed if not h.exact] == ["S-3"]
+
+        # Partial matching: no Record holds every word, so those holding the most come first.
+        partial = PartialMatching(min_results=1, weight=0.5, term_bonus=1.0, candidates=50)
+        some = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "roller bearing seal",
+            limit=10,
+            partial=partial,
+            runtime=runtime,
+        )
+        assert all(h.partial for h in some)
+        assert some[0].key == "P-1"
+        assert {h.key for h in some} == {"P-1", "P-3", "P-4"}
+        assert [h.score for h in some] == sorted((h.score for h in some), reverse=True)
+        assert await search_records(session, DOMAIN, "main", "roller bearing seal", limit=10) == []
+        # Full matches stand alone when there are enough of them, and always come first.
+        full = await search_records(
+            session, DOMAIN, "main", "roller bearing", limit=10, partial=partial, runtime=runtime
+        )
+        assert [(h.key, h.partial) for h in full] == [("P-1", False)]
+        wider = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "roller bearing",
+            limit=10,
+            partial=PartialMatching(min_results=3, weight=0.5, term_bonus=1.0, candidates=50),
+            runtime=runtime,
+        )
+        assert (wider[0].key, wider[0].partial) == ("P-1", False)
+        assert {h.key for h in wider[1:]} == {"P-3"}
+        assert all(h.partial for h in wider[1:])
+        # Negations hold for every alternative; phrases stay phrases.
+        negated_partial = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "roller seal -oil",
+            limit=10,
+            partial=partial,
+            runtime=runtime,
+        )
+        assert {h.key for h in negated_partial} == {"P-1"}
+        phrase = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            '"ball bearing" washer',
+            limit=10,
+            partial=partial,
+            runtime=runtime,
+        )
+        assert {h.key for h in phrase} == {"P-2", "P-3"}
+        # Corrections apply per term.
+        corrected = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "rollr bearing seal",
+            limit=10,
+            corrections=[Correction("rollr", ("roller",))],
+            correction_weight=0.5,
+            partial=partial,
+            runtime=runtime,
+        )
+        assert corrected[0].key == "P-1"
+        assert corrected[0].partial
+        # Stop words of the configuration named are left out of the terms.
+        content = await partial_terms(session, "the roller for seal -oil", "english")
+        assert content == PartialQuery(("roller", "seal"), ("-oil",))
+        assert await partial_terms(session, "the roller", "english") == PartialQuery(("roller",))
+        assert await partial_terms(session, "the of", "english") is None
+        assert await partial_terms(session, "roller", "english") is None
+        stopped = await search_records(
+            session,
+            DOMAIN,
+            "main",
+            "the tapered washer",
+            limit=10,
+            partial=PartialMatching(
+                min_results=1, weight=0.5, term_bonus=1.0, candidates=50, stop_words="english"
+            ),
+            runtime=runtime,
+        )
+        assert {h.key for h in stopped} == {"P-1", "P-2"}
 
         supplied = schema.relations[SUPPLIED_BY]
         first = await links_to_record(
@@ -748,3 +839,15 @@ async def test_read_functions_read_only_the_domain_they_are_given(
         titles += [n.record.title for n in hood.records]
         assert titles
         assert not any((title or "").startswith("Rival") for title in titles)
+
+
+def test_partial_query_keeps_phrases_and_negations() -> None:
+    query = partial_query('electric "drive motor" or -gear -"hand tool" Motor')
+    assert query is not None
+    assert query.terms == ("electric", '"drive motor"', "Motor")
+    assert query.text == (
+        'electric -gear -"hand tool" or "drive motor" -gear -"hand tool" or Motor -gear '
+        '-"hand tool"'
+    )
+    assert partial_query("bearing BEARING") == PartialQuery(("bearing",))
+    assert partial_query("-seal or") is None

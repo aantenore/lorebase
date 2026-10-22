@@ -306,6 +306,67 @@ UNLISTED_SCHEMA: dict[str, Any] = {
 """Tier 2 `unlisted` answers: what the model saw outside the schema (schema discovery)."""
 
 
+def link_attributes(relation: Relation) -> list[Attribute]:
+    """Link Attributes of `relation` that extraction can propose."""
+    return [a for a in relation.attributes.values() if extractable(a)]
+
+
+def _link_schema(
+    relations: Sequence[Relation], with_values: Relation | None = None
+) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "relation": {"const": with_values.api_name}
+        if with_values
+        else {"enum": [r.api_name for r in relations]},
+        "from": {"type": "string", "description": "Key or name of the from Record"},
+        "to": {"type": "string", "description": "Key or name of the to Record"},
+        "evidence": {"type": "string", "description": "Verbatim quote of the fact"},
+    }
+    required = ["relation", "from", "to", "evidence"]
+    if with_values is not None:
+        attributes = link_attributes(with_values)
+        properties["values"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "description": "Link Attributes stated by the text; give every required one",
+            "properties": {
+                a.api_name: {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "value": value_schema(a),
+                        "evidence": {
+                            "type": "string",
+                            "description": "Verbatim quote holding the value",
+                        },
+                    },
+                    "required": ["value", "evidence"],
+                }
+                for a in attributes
+            },
+            "required": [a.api_name for a in attributes if a.required],
+        }
+        required.append("values")
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": required,
+    }
+
+
+def _links_schema(relations: Sequence[Relation]) -> dict[str, Any]:
+    """Schema of one link answer: Relations with link Attributes get a branch of their own
+    whose `values` lists those Attributes."""
+    plain = [r for r in relations if not link_attributes(r)]
+    typed = [r for r in relations if link_attributes(r)]
+    if not typed:
+        return _link_schema(plain)
+    branches = [_link_schema(plain)] if plain else []
+    branches.extend(_link_schema(relations, r) for r in typed)
+    return {"anyOf": branches}
+
+
 def fragment_schema(
     ontology: Ontology, kind_ids: Sequence[str], *, unlisted: bool = False
 ) -> dict[str, Any]:
@@ -318,20 +379,7 @@ def fragment_schema(
     required = ["records"]
     relations = ontology.relations_between(kind_ids)
     if relations:
-        properties["links"] = {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "relation": {"enum": [r.api_name for r in relations]},
-                    "from": {"type": "string", "description": "Key or name of the from Record"},
-                    "to": {"type": "string", "description": "Key or name of the to Record"},
-                    "evidence": {"type": "string", "description": "Verbatim quote of the fact"},
-                },
-                "required": ["relation", "from", "to", "evidence"],
-            },
-        }
+        properties["links"] = {"type": "array", "items": _links_schema(relations)}
         required.append("links")
     if unlisted:
         properties["unlisted"] = UNLISTED_SCHEMA
@@ -361,4 +409,9 @@ def fragment_description(ontology: Ontology, kind_ids: Sequence[str]) -> str:
         lines.append(
             f"Relation {relation.api_name}: {source} -> {target}. {relation.description}".rstrip()
         )
+        for attribute in link_attributes(relation):
+            need = " (required: give it with evidence)" if attribute.required else ""
+            lines.append(
+                f"  - link attribute {attribute.api_name}{need}: {attribute.description}".rstrip()
+            )
     return "\n".join(lines)

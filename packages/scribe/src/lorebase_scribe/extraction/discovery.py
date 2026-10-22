@@ -36,6 +36,7 @@ from lorebase_core.infer.suggestions import (
     SuggestionOptions,
     SuggestionType,
     existing_match,
+    kind_is_noise,
     proposed_kind,
 )
 from lorebase_core.model import Schema, Sensitivity
@@ -432,7 +433,13 @@ class Discovery:
         tags = effective_tags(self.schema)
         secrets = _sensitive_values(records, tags)
         kept: list[Observation] = []
+        fields = [a.api_name for k in self.schema.kinds.values() for a in k.attributes.values()]
         for observation in self.observations:
+            if observation.type is SuggestionType.KIND and kind_is_noise(
+                observation.name, fields, self.options
+            ):
+                self.count("suggestions_noise")
+                continue
             match = existing_match(
                 self.schema,
                 observation.type,

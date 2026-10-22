@@ -169,8 +169,8 @@ async def page(
     position: dict[str, Any] | None,
 ) -> SuggestionPage:
     """Suggestions by support, the most supported first: pending ones need
-    `schema.suggestions.min_support` (unless `all_support`), and at most `max_suggestions`
-    are listed in all."""
+    `schema.suggestions.min_support` (pending Kinds also `kind_min_attributes`), unless
+    `all_support`, and at most `max_suggestions` are listed in all."""
     options = store.runtime.schema.suggestions
     _, schema = await default_schema(store, domain_id)
     listed = 0
@@ -193,6 +193,7 @@ async def page(
             statuses=statuses,
             types=types,
             min_support=1 if all_support else options.min_support,
+            kind_min_attributes=0 if all_support else options.kind_min_attributes,
             limit=take + 1,
             after=after,
         )

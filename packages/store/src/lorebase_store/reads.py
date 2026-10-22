@@ -11,7 +11,9 @@ reports, run the reads of one request in a `REPEATABLE READ` transaction.
 - `links_of_record`: Links in either direction, stored or foreign-key backed.
 - `links_to_record`: one page of the Links pointing at a Record along one Relation.
 - `query_by_attribute`: comparisons served by the per-Attribute partial indexes.
-- `search_records`: full-text search over the GIN index, ranking a bounded candidate set.
+- `search_records`: full-text search over the GIN index, ranking a bounded candidate set;
+  with `PartialMatching`, a query whose words do not all occur together falls back to Records
+  that hold some of them (`partial_terms`).
 - `search_corrections`: typo corrections of query words from the branch's word lexicon.
 
 Incoming foreign-key Links, attribute queries and search compare with functions Postgres does
@@ -31,6 +33,7 @@ on a full branch they are unchanged.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -123,13 +126,15 @@ class LinkRef:
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
-    """A search match; `exact` is false when it matched only through a typo correction."""
+    """A search match; `exact` is false when it matched only through a typo correction,
+    `partial` is true when it holds only some of the query's terms (`PartialMatching`)."""
 
     kind_id: str
     key: str
     title: str | None
     score: float
     exact: bool = True
+    partial: bool = False
 
 
 def _runtime(runtime: StoreRuntime | None) -> StoreRuntime:
@@ -768,10 +773,11 @@ async def search_corrections(
     return [Correction(word, tuple(replacements)) for word, replacements in found.items()]
 
 
-def _corrected_query(corrections: int) -> str:
-    """The query with the words of `corrections` replacements rewritten, as SQL text over
-    `:word_<n>` and `:replacements_<n>` (`lb_lexeme_query`, as `lb_search_corrected` does)."""
-    fixed = _QUERY
+def _corrected_query(corrections: int, query: str = ":query") -> str:
+    """The query (web search syntax; `query` is its SQL expression) with the words of
+    `corrections` replacements rewritten, as SQL text over `:word_<n>` and
+    `:replacements_<n>` (`lb_lexeme_query`, as `lb_search_corrected` does)."""
+    fixed = f"websearch_to_tsquery(CAST(:config AS regconfig), {query})"
     for n in range(corrections):
         fixed = (
             f"ts_rewrite({fixed}, lb_lexeme_query(:word_{n}), "
@@ -835,6 +841,119 @@ _SEARCH_DEFINER = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class PartialMatching:
+    """Ranked partial matching of multi-word queries.
+
+    Search matches every term of the query first. When that finds fewer than `min_results`
+    Records, the Records holding at least one term follow (`partial_terms`): at most
+    `candidates` of them, best by `ts_rank_cd` of the terms joined by OR, are scored
+    `weight * (rank + term_bonus * matched terms)` and ranked after every full match.
+    `stop_words` names a text search configuration whose stop words are left out of the
+    terms (`None`: only those of the search configuration, which drops them anyway).
+    """
+
+    min_results: int
+    weight: float
+    term_bonus: float
+    candidates: int
+    stop_words: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PartialQuery:
+    """The positive terms of a query (words and quoted phrases) and its negated ones."""
+
+    terms: tuple[str, ...]
+    negated: tuple[str, ...] = ()
+
+    @property
+    def text(self) -> str:
+        """The query matching any term, in web search syntax, each alternative carrying the
+        negations of the original."""
+        suffix = "".join(f" {n}" for n in self.negated)
+        return " or ".join(f"{t}{suffix}" for t in self.terms)
+
+
+_TOKENS = re.compile(r'(-?)"([^"]*)"?|([^\s"]+)')
+
+
+def partial_query(query: str) -> PartialQuery | None:
+    """The terms of `query` (web search syntax), or `None` when it has no positive term.
+    Negations (`-word`, `-"a phrase"`) apply to every alternative and `or` is dropped; a term
+    repeated in another case counts once."""
+    terms: dict[str, str] = {}
+    negated: list[str] = []
+    for sign, phrase, word in _TOKENS.findall(query):
+        if word:
+            if word.lower() == "or" or word == "-":
+                continue
+            if word.startswith("-"):
+                negated.append(word)
+                continue
+            term = word
+        else:
+            if not phrase.strip():
+                continue
+            term = f'"{phrase.strip()}"'
+            if sign:
+                negated.append(f"-{term}")
+                continue
+        terms.setdefault(term.lower(), term)
+    if not terms:
+        return None
+    return PartialQuery(tuple(terms.values()), tuple(negated))
+
+
+_CONTENT_TERMS = text(
+    "SELECT t.term FROM unnest(CAST(:terms AS text[])) WITH ORDINALITY AS t(term, n) "
+    "WHERE numnode(websearch_to_tsquery(CAST(:config AS regconfig), t.term)) > 0 ORDER BY t.n"
+)
+
+
+async def partial_terms(
+    session: AsyncSession, query: str, stop_words: str | None
+) -> PartialQuery | None:
+    """The terms partial matching searches for `query`: `None` when it has fewer than two
+    terms (a partial match would be a full one) or none is left once the stop words of the
+    configuration `stop_words` are dropped (one round trip)."""
+    found = partial_query(query)
+    if found is None or len(found.terms) < 2:
+        return None
+    if stop_words is None:
+        return found
+    rows = await session.execute(_CONTENT_TERMS, {"terms": list(found.terms), "config": stop_words})
+    kept = tuple(rows.scalars())
+    return PartialQuery(kept, found.negated) if kept else None
+
+
+def _matched_sql(records: str, corrections: int, *, overlay: bool) -> str:
+    """How many of `:terms` (each in web search syntax, its corrected words widened as in
+    `search_sql`) each Record of `:kinds`/`:keys` holds, read by primary key."""
+    fixed = _corrected_query(corrections, "t.term")
+    matched = (
+        f"(SELECT count(*) FROM unnest(CAST(:terms AS text[])) AS t(term) "
+        f"WHERE m.search @@ {fixed})"
+    )
+    identities = "unnest(CAST(:kinds AS text[]), CAST(:keys AS text[])) AS i(kind_id, key)"
+    if overlay:
+        # Each identity looked up laterally reaches both halves of the overlay by key.
+        return (
+            f"SELECT i.kind_id, i.key, m.matched FROM {identities} "
+            f"CROSS JOIN LATERAL (SELECT {matched} AS matched FROM {records} "
+            f"WHERE {_SCOPE} AND m.kind_id = i.kind_id AND m.key = i.key LIMIT 1) AS m"
+        )
+    return (
+        f"SELECT i.kind_id, i.key, {matched} AS matched FROM {identities} "
+        f"JOIN {records} ON {_SCOPE} AND m.kind_id = i.kind_id AND m.key = i.key"
+    )
+
+
+@lru_cache(maxsize=256)
+def _matched(records: str, corrections: int, overlay: bool) -> TextClause:
+    return text(_matched_sql(records, corrections, overlay=overlay))
+
+
 async def search_records(
     session: AsyncSession,
     domain_id: str,
@@ -845,6 +964,7 @@ async def search_records(
     kind_ids: Sequence[str] | None = None,
     corrections: Sequence[Correction] = (),
     correction_weight: float = 1.0,
+    partial: PartialMatching | None = None,
     runtime: StoreRuntime | None = None,
 ) -> list[SearchHit]:
     """Best `limit` lexical matches of `query` (web search syntax) on the branch head.
@@ -852,22 +972,23 @@ async def search_records(
     `kind_ids` restricts the Kinds searched (`None`: every Kind). `corrections`
     (`search_corrections`) widens each corrected word to its replacements: hits found only
     that way have `exact` false and come after the others, ranked at `correction_weight`
-    times their rank.
+    times their rank. With `partial`, fewer than `partial.min_results` hits are followed by
+    Records that hold only some of the terms (`partial` true; `PartialMatching`).
     """
     settings = _runtime(runtime).settings
     layout = await resolve_layout(session, domain_id, branch)
     fixes = [c for c in corrections if c.replacements]
+    cap = _cap(limit, settings.reads.max_search_rows)
     params: dict[str, Any] = {
         "domain": domain_id,
         "branch": layout.branch,
         "config": settings.materialize.text_search_config,
-        "query": query,
         "candidates": settings.reads.search_candidates,
-        "limit": _cap(limit, settings.reads.max_search_rows),
         "weight": correction_weight,
     }
     kinds = None if kind_ids is None else list(kind_ids)
-    if _definer(runtime):
+    definer = _definer(runtime)
+    if definer:
         params.update(
             kinds=kinds,
             words=[c.word for c in fixes for _ in c.replacements],
@@ -880,13 +1001,81 @@ async def search_records(
             params[f"replacements_{n}"] = list(correction.replacements)
         if kinds is not None:
             params["kinds"] = kinds
-        records = layout.records_from("m", probe=False)
-        statement = _search(records, kinds is not None, len(fixes))
-    rows = (await session.execute(statement, params)).all()
-    return [
+        statement = _search(layout.records_from("m", probe=False), kinds is not None, len(fixes))
+    rows = (await session.execute(statement, {**params, "query": query, "limit": cap})).all()
+    hits = [
         SearchHit(kind_id, key, title, float(score), bool(exact))
         for kind_id, key, title, score, exact in rows
     ]
+    if partial is None or len(hits) >= min(partial.min_results, cap):
+        return hits
+    alternatives = await partial_terms(session, query, partial.stop_words)
+    if alternatives is None:
+        return hits
+    if definer:
+        _function("lb_search_corrected", layout)
+    found = {(h.kind_id, h.key) for h in hits}
+    others = {
+        "query": alternatives.text,
+        "limit": _cap(partial.candidates, settings.reads.max_search_rows),
+    }
+    candidates = [
+        (kind_id, key, title, float(score), bool(exact))
+        for kind_id, key, title, score, exact in (
+            await session.execute(statement, {**params, **others})
+        ).all()
+        if (kind_id, key) not in found
+    ]
+    if not candidates:
+        return hits
+    matched = await _matched_terms(
+        session,
+        domain_id,
+        layout,
+        [(c[0], c[1]) for c in candidates],
+        alternatives,
+        fixes,
+        params["config"],
+    )
+    scored = [
+        SearchHit(
+            kind_id,
+            key,
+            title,
+            partial.weight * (rank + partial.term_bonus * matched.get((kind_id, key), 0)),
+            exact,
+            partial=True,
+        )
+        for kind_id, key, title, rank, exact in candidates
+    ]
+    scored.sort(key=lambda h: (-h.score, h.kind_id, h.key))
+    return hits + scored[: cap - len(hits)]
+
+
+async def _matched_terms(
+    session: AsyncSession,
+    domain_id: str,
+    layout: BranchLayout,
+    identities: Sequence[tuple[str, str]],
+    alternatives: PartialQuery,
+    fixes: Sequence[Correction],
+    config: str,
+) -> dict[tuple[str, str], int]:
+    """Terms of `alternatives` each Record holds (corrections applied), by primary key."""
+    params: dict[str, Any] = {
+        "domain": domain_id,
+        "branch": layout.branch,
+        "config": config,
+        "kinds": [kind for kind, _ in identities],
+        "keys": [key for _, key in identities],
+        "terms": list(alternatives.terms),
+    }
+    for n, correction in enumerate(fixes):
+        params[f"word_{n}"] = correction.word
+        params[f"replacements_{n}"] = list(correction.replacements)
+    statement = _matched(layout.records_from("m"), len(fixes), layout.overlay)
+    rows = (await session.execute(statement, params)).all()
+    return {(kind_id, key): int(count) for kind_id, key, count in rows}
 
 
 # Title matching (entity resolution) -------------------------------------------------------------
