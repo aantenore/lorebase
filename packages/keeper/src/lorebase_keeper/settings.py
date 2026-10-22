@@ -7,7 +7,7 @@ Every value has a code default for local runs; deployments override them through
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -45,6 +45,57 @@ class CorsSettings(SectionModel):
         if self.allow_credentials and "*" in self.allow_origins:
             raise ValueError("allow_origins cannot contain '*' when allow_credentials is true")
         return self
+
+
+class HstsSettings(SectionModel):
+    """`Strict-Transport-Security`, which only makes sense when the connection is TLS."""
+
+    enabled: Literal["auto", "always", "never"] = Field(
+        default="auto",
+        description="auto: send it when the request arrived over https (directly, or through a "
+        "trusted proxy that sets X-Forwarded-Proto: https); always; never.",
+    )
+    max_age_s: int = Field(default=31_536_000, ge=0, description="max-age directive.")
+    include_subdomains: bool = True
+    preload: bool = Field(
+        default=False,
+        description="Add the preload directive; needs include_subdomains and a max_age_s of at "
+        "least one year.",
+    )
+
+    @model_validator(mode="after")
+    def _preload_requirements(self) -> Self:
+        if self.preload and (not self.include_subdomains or self.max_age_s < 31_536_000):
+            raise ValueError("preload needs include_subdomains and max_age_s of at least 31536000")
+        return self
+
+    @property
+    def header_value(self) -> str:
+        parts = [f"max-age={self.max_age_s}"]
+        if self.include_subdomains:
+            parts.append("includeSubDomains")
+        if self.preload:
+            parts.append("preload")
+        return "; ".join(parts)
+
+
+class SecurityHeadersSettings(SectionModel):
+    """Response headers that limit what a browser does with Keeper's responses. A header a
+    route sets itself is never replaced."""
+
+    enabled: bool = Field(default=True, description="Master switch for all of these headers.")
+    hsts: HstsSettings = Field(default_factory=HstsSettings)
+    frame_options: Literal["DENY", "SAMEORIGIN", "off"] = Field(
+        default="DENY",
+        description="X-Frame-Options, and the matching CSP frame-ancestors ('none' or 'self'). "
+        "off sends neither.",
+    )
+    referrer_policy: str = Field(
+        default="no-referrer", description="Referrer-Policy value. Empty: not sent."
+    )
+    content_type_nosniff: bool = Field(
+        default=True, description="Send X-Content-Type-Options: nosniff."
+    )
 
 
 class LimitSettings(SectionModel):
@@ -163,6 +214,7 @@ class KeeperSettings(SectionModel):
         "failed authentication limits. Empty: the socket peer is the client.",
     )
     cors: CorsSettings = Field(default_factory=CorsSettings)
+    security_headers: SecurityHeadersSettings = Field(default_factory=SecurityHeadersSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
     reads: ReadsSettings = Field(default_factory=ReadsSettings)

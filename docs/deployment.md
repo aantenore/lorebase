@@ -186,6 +186,30 @@ http://localhost:5173/`; http is accepted for loopback hosts. Start the app with
 that app and API share the origin: `LOREBASE_KEEPER_PROXY=http://127.0.0.1:8080
 VITE_API_MODE=live VITE_KEEPER_BASE_URL=/ VITE_AUTH_MODE=session pnpm dev` in `apps/web`.
 
+## Security headers
+
+Keeper adds `X-Content-Type-Options`, `X-Frame-Options`, a `frame-ancestors` Content-Security-Policy and
+`Referrer-Policy` to every response, and `Strict-Transport-Security` when the request came over https
+(`keeper.security_headers`; a header a route sets itself is kept). Keeper runs without the server's proxy header
+handling, so behind a TLS-terminating proxy `hsts.enabled: auto` needs the proxy in `keeper.trusted_proxies` and an
+`X-Forwarded-Proto: https` header from it; otherwise set `hsts.enabled: always`, or `never` when the proxy sends
+the header itself.
+
+The web image (`lorebase-web`) writes its headers when the container starts, from the environment:
+
+| Variable | Effect |
+| --- | --- |
+| `VITE_KEEPER_BASE_URL` | Its origin (`scheme://host[:port]`) is added to the `connect-src` of the policy; a relative URL adds nothing. Read at run time, not the build argument |
+| `LOREBASE_WEB_CSP_CONNECT_SRC` | Further `connect-src` sources, space separated |
+| `LOREBASE_WEB_CSP` | The whole policy, replacing the default |
+| `LOREBASE_WEB_HSTS` | `Strict-Transport-Security` value, e.g. `max-age=31536000`; empty (default): not sent, as TLS is usually terminated before the container |
+
+The default policy is `default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'self'
+<Keeper origin>; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; object-src 'none';
+base-uri 'self'; frame-ancestors 'none'; form-action 'self'`. Values cannot contain a double quote, `$`, a backslash,
+a brace or a newline; the container refuses to start otherwise. The Helm chart renders the same headers from
+`web.security` ([Kubernetes](kubernetes.md#web-security-headers)).
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot

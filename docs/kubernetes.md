@@ -276,6 +276,24 @@ against any Keeper; `keeperBaseUrl` defaults to the first Ingress host.
 talks to the Keeper named there ([web app configuration](../apps/web/README.md)). The live mode has not been verified
 end to end against a cluster. Everything else works without the web app.
 
+### Web security headers
+
+The web app sends a Content-Security-Policy, `X-Content-Type-Options`, `X-Frame-Options: DENY` and
+`Referrer-Policy: no-referrer` from every location. The default policy allows scripts, styles, images and fonts
+from the app itself, `blob:` workers (the Canvas layout) and connections to the app and to the origin of
+`web.config.keeperBaseUrl` (live mode). The styles allow `'unsafe-inline'` because the YAML editor adds `<style>`
+elements at run time. In values:
+
+```yaml
+web:
+  security:
+    connectSrc: ["https://api.example.com"]   # further connect-src sources of the default policy
+    csp: ""                                   # or the whole policy, replacing the default
+    hsts: ""                                  # e.g. "max-age=31536000"; empty: not sent
+```
+
+Keeper sends its own headers (`keeper.security_headers`, [configuration](reference/configuration.md)).
+
 ### Web sign-in
 
 Keeper can sign people in to the web app with OpenID Connect and cookie sessions

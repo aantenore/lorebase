@@ -38,6 +38,17 @@ keeper:
                                  # Only from these peers is X-Forwarded-For read (right to left,
                                  # trusted hops skipped) to find the client address used by API
                                  # key allowlists; empty: the socket peer is the client
+  security_headers:
+    enabled: true                # master switch for the response headers below
+    hsts:
+      enabled: auto              # Strict-Transport-Security: auto (only when the request came over https,
+                                 # directly or from a trusted proxy sending X-Forwarded-Proto: https), always, never
+      max_age_s: 31536000
+      include_subdomains: true
+      preload: false             # needs include_subdomains and max_age_s >= 31536000
+    frame_options: DENY          # X-Frame-Options and CSP frame-ancestors: DENY, SAMEORIGIN or off
+    referrer_policy: no-referrer # Referrer-Policy; empty: not sent
+    content_type_nosniff: true   # X-Content-Type-Options: nosniff
   cors:
     allow_origins: []            # browser origins allowed to call the API; empty disables CORS
     allow_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]

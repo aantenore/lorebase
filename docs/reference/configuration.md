@@ -53,6 +53,29 @@ Keeper, the REST API service. Environment: LOREBASE__KEEPER__PORT, LOREBASE__KEE
 | `keeper.problem_type_base` | `"urn:lorebase:problem:"` | error `type` URI = this prefix + error code |
 | `keeper.trusted_proxies` | `[]` | networks of reverse proxies in front of Keeper, e.g. [10.0.0.0/8]. Only from these peers is X-Forwarded-For read (right to left, trusted hops skipped) to find the client address used by API key allowlists; empty: the socket peer is the client |
 
+### `keeper.security_headers`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.security_headers.enabled` | `true` | master switch for the response headers below |
+
+#### `keeper.security_headers.hsts`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.security_headers.hsts.enabled` | `auto` | Strict-Transport-Security: auto (only when the request came over https, directly or from a trusted proxy sending X-Forwarded-Proto: https), always, never |
+| `keeper.security_headers.hsts.max_age_s` | `31536000` |  |
+| `keeper.security_headers.hsts.include_subdomains` | `true` |  |
+| `keeper.security_headers.hsts.preload` | `false` | needs include_subdomains and max_age_s &gt;= 31536000 |
+
+### `keeper.security_headers` (continued)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.security_headers.frame_options` | `DENY` | X-Frame-Options and CSP frame-ancestors: DENY, SAMEORIGIN or off |
+| `keeper.security_headers.referrer_policy` | `no-referrer` | Referrer-Policy; empty: not sent |
+| `keeper.security_headers.content_type_nosniff` | `true` | X-Content-Type-Options: nosniff |
+
 ### `keeper.cors`
 
 | Setting | Default | Description |

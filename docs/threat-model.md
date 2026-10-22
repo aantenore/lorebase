@@ -17,7 +17,8 @@ disclosure, **D**enial of service, **E**levation of privilege.
 - The operator who holds the configuration, the secrets and the database owner role is trusted.
   So are installation administrators (`keeper.auth.installation_admins`).
 - Keeper is reached over TLS terminated by a reverse proxy or ingress in front of it; Keeper itself
-  serves plain HTTP and sets no transport security headers.
+  serves plain HTTP; it sends HSTS when the request came over https (directly or through a
+  trusted proxy's `X-Forwarded-Proto`) or when `keeper.security_headers.hsts.enabled: always`.
 - Postgres, the model endpoints and the object storage of the deployment are run by the operator.
   Sources, webhook targets, documents and the identity provider are outside the installation.
 - Code at the commit of this page. Features that the design describes but the code does not have
@@ -69,7 +70,7 @@ the full table; the summary:
 | S | Stolen or fixed session id | Opaque id in an `HttpOnly`, `__Host-`, `Secure`, `SameSite=Lax` cookie; a new id at every sign-in; only its SHA-256 is stored | A browser compromised by malware can still ride the session until a timeout |
 | S | Login CSRF, code injection, replayed ID token | `state`, `nonce` and the PKCE verifier in an encrypted 10-minute cookie; the callback checks state before redeeming the code; ID token signature, issuer, audience, `azp`, expiry and nonce checked (`auth/oidc.py`) | None known |
 | T | Cross-site request forgery | CSRF header (HMAC of the session id) on unsafe methods, trusted `Origin`, no cross-site `Sec-Fetch-Site` | Any origin listed in `keeper.cors` with credentials can read the CSRF token: list only the app's origins |
-| I | Token theft by script in the page | The browser never gets a token; refresh and ID tokens are AES-256-GCM encrypted under an HKDF key from `sessions.encryption_key` | The web image sets `nosniff`, `X-Frame-Options` and `Referrer-Policy` (`deploy/docker/web/default.conf`) but no Content Security Policy or HSTS: add them at the proxy |
+| I | Token theft by script in the page | The browser never gets a token; refresh and ID tokens are AES-256-GCM encrypted under an HKDF key from `sessions.encryption_key` ; the web image sends a Content Security Policy (`script-src 'self'`, `worker-src 'self' blob:`, `connect-src` limited to the app and the Keeper origin of the runtime configuration, `object-src 'none'`, `frame-ancestors 'none'`), `nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer` on every response (`deploy/docker/web/40-lorebase-config.sh`, `default.conf`, the chart's `web.security`); Keeper sends `nosniff`, `frame-ancestors 'none'`, `X-Frame-Options`, `Referrer-Policy` and HSTS over https (`packages/keeper/src/lorebase_keeper/middleware.py`, `keeper.security_headers`) | `style-src` allows `'unsafe-inline'` (the code editor injects style elements); HSTS on the web image is off unless `LOREBASE_WEB_HSTS` is set, so set it there or at the proxy that terminates TLS |
 | I | Authorization codes in proxy logs | Codes are single use and useless without the PKCE verifier | Proxy logs that keep query strings hold them; protect or strip them |
 | D | Session table growth, refresh storms | Idle and absolute timeouts, purge of expired rows, refresh serialized by a lease (`refresh_lease_s`) | A refresh that fails mid-way delays the next one by the lease |
 | E | Open redirect after sign-in | `return_to` must be a local path, checked again when the state cookie is opened; redirects only to `app_url`'s origin | None known |
@@ -213,8 +214,9 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
 7. **Reads are not audited and sensitivity masking is not enforced.** Both are in the design
    ([13.6](design.md#136-threats-and-mitigations)) and not in the code; until then, use
    Kind-narrowed grants for sensitive Kinds (TB2, TB3).
-8. **Transport security headers.** Set HSTS and a Content Security Policy at the proxy in front of
-   Keeper and the web app (TB1).
+8. **Transport security headers.** Fixed: Keeper and the web image send them
+   (`packages/keeper/src/lorebase_keeper/middleware.py`, `deploy/docker/web/40-lorebase-config.sh`);
+   HSTS for the web app is the TLS proxy's or `LOREBASE_WEB_HSTS` (TB1).
 9. **Base images by tag.** Pin by digest and let an update tool move the digests (TB9).
 
 ## Keeping this page current

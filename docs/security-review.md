@@ -345,6 +345,19 @@ exist. Tests: `packages/store/tests/test_webhook_keys.py` (sealing, rotation, ta
 settings, unchanged session key derivation) and
 `packages/store/tests/test_webhook_keys_integration.py` (a webhook created before the key is
 sealed by the worker and still verifies at the receiver; rotation; an unknown key).
+**Security headers from Keeper and the web image**
+(`packages/keeper/src/lorebase_keeper/middleware.py`, `settings.py`,
+`deploy/docker/web/40-lorebase-config.sh`, `deploy/docker/web/default.conf`,
+`deploy/helm/lorebase/templates/web-configmap.yaml`). Keeper's outermost middleware adds
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` with `Content-Security-Policy:
+frame-ancestors 'none'`, `Referrer-Policy: no-referrer` and, in `hsts.enabled: auto`, HSTS when
+the request scheme is https or a peer in `keeper.trusted_proxies` forwarded https; a header a
+route set is kept (`keeper.security_headers`). The web image writes an nginx include at start
+with a Content Security Policy built from the runtime Keeper URL (`connect-src`), extra sources
+(`LOREBASE_WEB_CSP_CONNECT_SRC`) or a whole replacement (`LOREBASE_WEB_CSP`), included in every
+location so `add_header` inheritance cannot drop it; values with quotes, `$`, braces or newlines
+stop the container. Tests: `packages/keeper/tests/test_security_headers.py`,
+`tests/tooling/test_web_security_headers.py` (the entrypoint script and the rendered chart).
 
 ## Other observations
 

@@ -15,11 +15,16 @@ from lorebase_keeper import __version__
 from lorebase_keeper.auth.audit import AuditMiddleware
 from lorebase_keeper.auth.ports import AuthStore
 from lorebase_keeper.auth.runtime import build_runtime
+from lorebase_keeper.client_address import ClientAddresses
 from lorebase_keeper.client_address import install as install_client_addresses
 from lorebase_keeper.db import create_database
 from lorebase_keeper.errors import Problem, ProblemRenderer, install_error_handlers
 from lorebase_keeper.health import router as health_router
-from lorebase_keeper.middleware import BodyLimitMiddleware, RequestContextMiddleware
+from lorebase_keeper.middleware import (
+    BodyLimitMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
 from lorebase_keeper.ratelimit.enforce import (
     EXPOSED_HEADERS,
     RateLimitHeadersMiddleware,
@@ -215,4 +220,11 @@ def create_app(
         tracer_provider=telemetry.tracer_provider if telemetry else None,
         meter_provider=telemetry.meter_provider if telemetry else None,
     )
+    # Outermost, so that the answers built by the request context middleware carry them too.
+    if keeper.security_headers.enabled:
+        app.add_middleware(
+            SecurityHeadersMiddleware,
+            settings=keeper.security_headers,
+            proxies=ClientAddresses(keeper.trusted_proxies),
+        )
     return app

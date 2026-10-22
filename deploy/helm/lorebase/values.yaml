@@ -525,6 +525,18 @@ web:
     keeperBaseUrl: ""
     # Further VITE_* values (for example VITE_PAGE_SIZE: "50"), written to config.js unchanged.
     extra: {}
+  # Security headers of the web app. Always sent: X-Content-Type-Options, X-Frame-Options DENY and
+  # Referrer-Policy no-referrer.
+  security:
+    # Content-Security-Policy. Empty: the default policy, which allows scripts, styles, images and
+    # fonts from the app itself, blob: workers (the Canvas layout) and connections to the app and to
+    # Keeper (the origin of `config.keeperBaseUrl`, live mode).
+    csp: ""
+    # Further connect-src sources of the default policy, e.g. ["https://api.example.com"].
+    connectSrc: []
+    # Strict-Transport-Security value, e.g. "max-age=31536000". Empty: not sent (TLS is usually
+    # terminated at the Ingress, which can add it).
+    hsts: ""
   # Cache-Control of the hashed assets under /assets/.
   assetsCacheControl: "public, max-age=31536000, immutable"
   strategy:

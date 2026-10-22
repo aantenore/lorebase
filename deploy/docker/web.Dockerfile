@@ -14,6 +14,11 @@
 # The entrypoint script writes /config.js from the VITE_* variables of the container environment;
 # a mounted config.js (as the Helm chart does) works too.
 #
+# The entrypoint script also writes the security headers. The Content-Security-Policy allows the
+# origin of VITE_KEEPER_BASE_URL (read at run time, not the build argument below) for connections;
+# LOREBASE_WEB_CSP_CONNECT_SRC adds sources, LOREBASE_WEB_CSP replaces the whole policy and
+# LOREBASE_WEB_HSTS turns on Strict-Transport-Security (docs/deployment.md).
+#
 # The build arguments only set the defaults used when /config.js says nothing:
 #
 #   docker build -f deploy/docker/web.Dockerfile -t lorebase-web \
@@ -62,5 +67,7 @@ LABEL org.opencontainers.image.title="lorebase-web" \
 COPY --from=build --chown=101:101 /src/dist /usr/share/nginx/html
 COPY deploy/docker/web/default.conf /etc/nginx/conf.d/default.conf
 COPY --chmod=755 deploy/docker/web/40-lorebase-config.sh /docker-entrypoint.d/40-lorebase-config.sh
+# The headers file default.conf includes; the script writes it again at every start.
+RUN /docker-entrypoint.d/40-lorebase-config.sh
 
 EXPOSE 8080
