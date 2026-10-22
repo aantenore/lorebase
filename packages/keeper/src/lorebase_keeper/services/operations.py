@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pydantic import JsonValue
 from sqlalchemy.exc import IntegrityError
@@ -91,8 +91,10 @@ from lorebase_keeper.context import StoreAccess, author_of, require_branch, requ
 from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, VALIDATION_FAILED, ProblemError
 from lorebase_keeper.reading.sensitivity import (
     Clearance,
+    Disclosure,
     Masking,
     default_schema,
+    generalize_issues,
     reference_tags,
 )
 from lorebase_keeper.services.config import OperationSettings
@@ -421,7 +423,8 @@ async def execute(
 ) -> ExecutionOutcome:
     """Run an Operation on a branch (default: the Domain's default branch). Edits in the
     outcome are masked for the caller's clearance (`reveal`; without it, as for a caller
-    without clearances).
+    without clearances), with vault references resolved as reads resolve them; validation
+    issues about values the caller may not read have a generic code (`generalize_issues`).
 
     Raises `ProblemError` for refusals and violations and the commit pipeline's `CommitError`s
     (`StaleHeadError`, `BranchLockTimeoutError`, ...), which the route maps.
@@ -554,6 +557,11 @@ async def _execute(
     outcome.edits = [
         edit_document(schema, c, masking) for c in changes[: settings.dry_run_max_edits]
     ]
+    # An update carries the Record's current values: those of vault Attributes are references,
+    # shown to the caller as on every read (the value, `erased_value` or the mask).
+    await Disclosure(session, domain_id, (schema,), masking, store.runtime.vault).resolve(
+        cast(JsonValue, outcome.edits)
+    )
     if findings:
         if request.dry_run:
             outcome.violations = findings
@@ -590,7 +598,8 @@ async def _execute(
                 clock=store.clock,
             )
         except ValidationFailedError as error:
-            located = _locate(findings_of(error.issues), position, batch_size, resolved)
+            issues = generalize_issues(error.issues, (schema,), masking)
+            located = _locate(findings_of(issues), position, batch_size, resolved)
             if request.dry_run:
                 outcome.violations = located
                 return outcome

@@ -8,17 +8,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Kind, Relation
+from lorebase_core.model import Attribute, Kind, Relation
 from lorebase_keeper.errors import UNAVAILABLE, ProblemError
 from lorebase_keeper.kindhealth import scan
 from lorebase_keeper.kindhealth.config import HealthSettings
 from lorebase_keeper.kindhealth.models import HealthSummary, KindHealth, RelationHealth
 from lorebase_keeper.reading.points import ReadPoint
+from lorebase_keeper.reading.sensitivity import Masking, generalize_issues
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,7 @@ async def scan_branch(
     """Run every check for `kinds` and `relations` at the head of the point's branch."""
     where = scan.Branch(point.domain.id, point.layout.branch, point.layout)
     schema = point.schema
+    masking = point.masking
     await session.execute(
         select(func.set_config("statement_timeout", str(settings.statement_timeout_ms), True))
     )
@@ -75,10 +78,22 @@ async def scan_branch(
                     records=total,
                     last_change=changes.get(kind.id),
                     violations=await scan.validate_records(
-                        session, where, schema, kind, total, settings
+                        session,
+                        where,
+                        schema,
+                        kind,
+                        total,
+                        settings,
+                        lambda issues: generalize_issues(issues, (schema,), masking),
                     ),
                     duplicates=await scan.find_duplicates(
-                        session, where, kind, total, settings, point.masking.sensitive
+                        session,
+                        where,
+                        kind,
+                        total,
+                        settings,
+                        masking.sensitive,
+                        partial(_hidden, masking, kind),
                     ),
                     derived=await scan.derived_status(session, where, kind, total),
                 )
@@ -98,13 +113,20 @@ async def scan_branch(
     return Findings(reports, related, summarize(reports, related))
 
 
+def _hidden(masking: Masking, kind: Kind, attribute: Attribute) -> bool:
+    """Whether the caller may not read values of `attribute` of `kind`."""
+    return masking.hidden(attribute, (kind.id,))
+
+
 def summarize(kinds: Sequence[KindHealth], relations: Sequence[RelationHealth]) -> HealthSummary:
     """Totals over Kind and Relation reports."""
     invalid = sum(k.violations.invalid_records for k in kinds)
     orphans = sum(r.orphan_links.count for r in relations)
     gaps = sum(r.required_gaps.missing for r in relations if r.required_gaps is not None)
     duplicates = sum(k.duplicates.total_groups for k in kinds)
-    unique = sum(1 for k in kinds for g in k.duplicates.groups if g.unique)
+    unique = sum(1 for k in kinds for g in k.duplicates.groups if g.unique) + sum(
+        h.groups for k in kinds for h in k.duplicates.hidden if h.unique
+    )
     return HealthSummary(
         ok=not (invalid or orphans or gaps or unique),
         kinds=len(kinds),

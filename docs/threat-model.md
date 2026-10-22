@@ -211,12 +211,7 @@ Remaining:
    rotate them (`lorebase admin vault rotate`). Tombstones cannot be made again under a new
    token key (they hold no value), so they stay matchable only while the old key stays in
    `previous_token_keys`.
-4. **Small value oracles.** Kind health lists which Records share a sensitive unique or title
-   value (never the value); validation issue codes on sensitive values tell their format; a
-   reference nested inside a `json` value of another Attribute is stored (it discloses nothing
-   the caller is not cleared for). Some answers show raw references instead of values to cleared
-   callers (the NDJSON diff stream, Operation edits): no value leaks, but none is shown (TB3).
-   The installation digest secret of revision `0027` (used when neither `vault.digest_key` nor
+4. **Installation digest secret in the database.** The installation digest secret of revision `0027` (used when neither `vault.digest_key` nor
    vault keys are set) is readable by whoever reads the database (TB6).
 5. **Branches forked before a tag.** Once the default branch tags an Attribute that a
    branch's schema searches, titles with or derives from, schema changes on that branch fail
@@ -255,6 +250,17 @@ see the [security review](security-review.md#hardening-from-the-threat-model)):
 - **Plain parameter digest without vault keys.** Always keyed: `vault.digest_key`, the token
   key, or the installation secret of revision `0027` (`packages/store/src/lorebase_store/digests.py`,
   test `packages/keeper/tests/test_operations.py`) (TB3).
+- **Small value oracles.** Kind health only counts the duplicate groups of sensitive values
+  for callers without the clearance (`duplicates.hidden`,
+  `packages/keeper/src/lorebase_keeper/kindhealth/scan.py`); validation issues about values the
+  caller may not read carry the generic `value.invalid` code (`reading/sensitivity.py`,
+  `generalize_issues`); a vault reference nested inside another value is refused
+  (`packages/core/src/lorebase_core/validate/data_rules.py`); the NDJSON diff stream and
+  Operation edits show values, `[erased]` or the mask like other reads. Tests:
+  `test_health_postgres.py::test_uncleared_callers_learn_nothing_about_sensitive_values`,
+  `test_sensitivity_api.py::test_violations_on_unreadable_values_do_not_tell_what_is_wrong`,
+  `test_sensitivity_api.py::test_streamed_diffs_and_operation_edits_show_values_not_references`,
+  `test_vault_rules.py::test_references_nested_inside_other_values_are_refused` (TB3).
 - **Erasure value on the command line.** `lorebase admin erase --value` accepts only `-`
   (standard input, no echo on a terminal) or `@FILE` (`packages/cli/src/lorebase_cli/commands/admin.py`,
   test `packages/cli/tests/test_commands.py`) (TB2).

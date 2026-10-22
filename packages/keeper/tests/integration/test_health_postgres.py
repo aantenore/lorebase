@@ -92,6 +92,15 @@ async def seed(
         )
         # an invalid value, a missing required value
         await _mutate(session, set_value, a=country, v="germany", k=supplier, key="S-1003")
+        # an invalid value of a sensitive (confidential) Attribute, on the same Record
+        await _mutate(
+            session,
+            'UPDATE mat_records SET "values" = jsonb_set("values", ARRAY[:a], \'42\'::jsonb) '
+            "WHERE domain_id = :d AND branch = :b AND kind_id = :k AND key = :key",
+            a=vat,
+            k=supplier,
+            key="S-1003",
+        )
         await _mutate(
             session,
             'UPDATE mat_records SET "values" = "values" - :a '
@@ -245,6 +254,7 @@ async def test_damage_is_found_per_kind_and_relation(http: httpx.AsyncClient) ->
     issues = {(i["code"], i["attribute"]): i for i in supplier["violations"]["issues"]}
     assert issues[("value.pattern", "country")]["examples"] == ["S-1003"]
     assert issues[("value.required", "legal_name")]["examples"] == ["S-1004"]
+    assert issues[("value.type", "vat_number")]["examples"] == ["S-1003"]
     duplicates = by_name(supplier["duplicates"]["groups"], "attribute")
     assert supplier["duplicates"]["total_groups"] == 2
     assert duplicates["legal_name"]["keys"] == ["S-1002", "S-1005"]
@@ -425,6 +435,41 @@ async def test_kind_scoped_grants_see_only_their_kinds(seeded: Seeded) -> None:
         # the cache does not hand the full report to the narrow reader, nor the reverse
         again = await http.get(f"{BASE}/health", params={"branch": BROKEN}, headers=narrow)
         assert [k["kind"] for k in again.json()["kinds"]] == ["Supplier"]
+
+
+async def test_uncleared_callers_learn_nothing_about_sensitive_values(seeded: Seeded) -> None:
+    auth = {"auth": {"mode": "api_key", "api_keys": {"pepper": PEPPER}}}
+    viewer = {"Authorization": f"Bearer {seeded.facts['domain_key']}"}
+    async with keeper(seeded.app_url, auth) as http:
+        response = await http.get(
+            f"{BASE}/kinds/Supplier/health", params={"branch": BROKEN}, headers=viewer
+        )
+        assert response.status_code == 200, response.text
+        supplier = response.json()["health"]
+        issues = {(i["code"], i["attribute"]): i for i in supplier["violations"]["issues"]}
+        # vat_number is confidential: its issue does not tell what is wrong with the value
+        assert issues[("value.invalid", "vat_number")]["examples"] == ["S-1003"]
+        assert ("value.type", "vat_number") not in issues
+        assert issues[("value.pattern", "country")]["examples"] == ["S-1003"]
+        # which Records share a VAT number is not listed, only how many there are
+        duplicates = supplier["duplicates"]
+        assert [g["attribute"] for g in duplicates["groups"]] == ["legal_name"]
+        assert duplicates["hidden"] == [
+            {"attribute": "vat_number", "unique": True, "groups": 1, "records": 2}
+        ]
+        assert duplicates["total_groups"] == 2
+        assert "S-1006" not in response.text
+        assert response.json()["summary"]["ok"] is False
+        text_ = (
+            await http.get(
+                f"{BASE}/kinds/Supplier/health",
+                params={"branch": BROKEN, "format": "markdown"},
+                headers=viewer,
+            )
+        ).text
+        assert "- vat_number [unique]: 1 groups, 2 Records (not listed: sensitive)" in text_
+        assert "- value.invalid on vat_number: 1 (e.g. S-1003)" in text_
+        assert "S-1006" not in text_
 
 
 def test_a_statement_timeout_is_recognized() -> None:

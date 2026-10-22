@@ -268,6 +268,7 @@ async def decide(
             branches,
             proposals,
             outcome,
+            masking,
         )
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
@@ -347,6 +348,7 @@ async def _accept(
     branches: BranchSettings,
     proposals: ProposalSettings,
     outcome: DecisionOutcome,
+    masking: Masking | None,
 ) -> None:
     change = schema_service.ChangeSetInput(patch=_patch(rows, schema, options))
     try:
@@ -380,6 +382,7 @@ async def _accept(
             expected_head=None,
             dry_run=False,
             cascade=False,
+            clearance=None if masking is None else masking.clearance,
         )
         created = await proposal_service.create(
             store,

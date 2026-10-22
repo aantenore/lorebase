@@ -13,12 +13,14 @@ from lorebase_core.model import (
     Domain,
     ExpressionDerivation,
     Kind,
+    Record,
     Schema,
     Sensitivity,
 )
 from lorebase_core.query import Query, QueryLimits, resolve_query
 from lorebase_core.tree import kind_partition
 from lorebase_core.types import TypeSpec
+from lorebase_core.validate import Issue, IssueCode, validate_record
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.reading.sensitivity import (
@@ -26,6 +28,7 @@ from lorebase_keeper.reading.sensitivity import (
     Disclosure,
     Masking,
     clearance_of,
+    generalize_issues,
     lowered_tags,
     mask_conflict,
     masking_for,
@@ -418,3 +421,34 @@ def test_the_redactor_resolves_fields_against_the_addressed_kind() -> None:
     assert _expression_finding(error, redact).message.startswith("bad 'Ada'")
     phone = ExprError(ExprErrorCode.EVALUATION, "bad '555'", source="int(record(p).phone)")
     assert "555" not in _expression_finding(phone, redact).message
+
+
+def test_issues_about_unreadable_values_do_not_tell_their_format() -> None:
+    values = {CODE: "P-1", NAME: 1, PHONE: 5, EMAIL: 7, SECRET: "x"}
+    issues = validate_record(SCHEMA, Record(kind=KIND, key="P-1", values=values))
+    assert {i.attribute: i.code for i in issues} == {
+        NAME: IssueCode.VALUE_TYPE,
+        PHONE: IssueCode.VALUE_TYPE,
+        EMAIL: IssueCode.VALUE_TYPE,
+    }
+    uncleared = {i.attribute: i for i in generalize_issues(issues, (SCHEMA,), Masking(Clearance()))}
+    assert uncleared[NAME].code is IssueCode.VALUE_TYPE  # not sensitive
+    for attribute, name in ((PHONE, "phone"), (EMAIL, "email")):
+        found = uncleared[attribute]
+        original = next(i for i in issues if i.attribute == attribute)
+        assert (found.code, found.message, found.details) == (
+            IssueCode.VALUE_INVALID,
+            f"{name!r} is not valid",
+            {},
+        )
+        assert (found.path, found.kind, found.key) == (original.path, KIND, "P-1")
+    cleared = Masking(Clearance(everywhere=frozenset({Sensitivity.PII})))
+    assert generalize_issues(issues, (SCHEMA,), cleared) == issues
+    # absence tells nothing about the value; an Attribute no schema knows is hidden
+    required = Issue(code=IssueCode.VALUE_REQUIRED, message="m", kind=KIND, attribute=PHONE)
+    assert generalize_issues([required], (SCHEMA,), Masking(Clearance())) == [required]
+    unknown = Issue(code=IssueCode.VALUE_PATTERN, message="m", kind=KIND, attribute="att_x")
+    assert generalize_issues([unknown], (SCHEMA,), Masking(Clearance()))[0].code is (
+        IssueCode.VALUE_INVALID
+    )
+    assert generalize_issues([unknown], (SCHEMA,), Masking(Clearance.full())) == [unknown]

@@ -75,6 +75,9 @@ class IssueCode(StrEnum):
     VALUE_VAULT_REFERENCE = "value.vault_reference"
     VALUE_VAULT_UNAVAILABLE = "value.vault_unavailable"
     VALUE_VAULT_ERASED = "value.vault_erased"
+    VALUE_INVALID = "value.invalid"
+    """A value of a sensitive Attribute is invalid; how is not told to callers without the
+    clearance (Keeper replaces the specific code with this one)."""
     # Data: Records
     RECORD_KIND_UNKNOWN = "record.kind_unknown"
     RECORD_KEY_INVALID = "record.key_invalid"

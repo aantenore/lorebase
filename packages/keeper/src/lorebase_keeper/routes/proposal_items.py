@@ -49,10 +49,11 @@ from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.sensitivity import (
     Masking,
     default_schema,
+    generalize_issues,
     masking_for,
     relation_kinds,
 )
-from lorebase_keeper.services.errors import commit_problem
+from lorebase_keeper.services.errors import commit_problem, findings_of
 from lorebase_store.commit import CommitError
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.extraction import (
@@ -501,8 +502,14 @@ async def decide(
     except ReviewError as error:
         raise _review_problem(error) from None
     except CommitError as error:
+        seen = (await _masking(store, auth, principal, domain_id, keeper.reads.sensitivity)).over(
+            schema
+        )
         raise commit_problem(
-            error, max_issues=20, retry_after_s=keeper.branches.lock_retry_after_s
+            error,
+            max_issues=20,
+            retry_after_s=keeper.branches.lock_retry_after_s,
+            locate=lambda issues: findings_of(generalize_issues(issues, (schema,), seen)),
         ) from None
     outcome = reviewed.outcome
     annotate(

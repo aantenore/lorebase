@@ -1,5 +1,7 @@
 """Response shapes of the health reports. Names are api names; no Attribute value is ever
-printed except the normalized value of a duplicate on an Attribute without sensitivity tags."""
+printed except the normalized value of a duplicate on an Attribute without sensitivity tags.
+For Attributes whose values the caller may not read, validation issues carry the generic
+`value.invalid` code and duplicate groups are only counted (`DuplicateReport.hidden`)."""
 
 from __future__ import annotations
 
@@ -15,7 +17,10 @@ from lorebase_keeper.reading.views import Served
 class IssueGroup(BaseModel):
     """Records failing the same rule of the current schema."""
 
-    code: str = Field(description="Validation issue code, e.g. value.required or value.pattern.")
+    code: str = Field(
+        description="Validation issue code, e.g. value.required or value.pattern; value.invalid "
+        "for an Attribute whose values the caller may not read."
+    )
     attribute: str | None = Field(default=None, description="Attribute api name, when one.")
     count: int
     examples: list[str] = Field(description="Keys of some of the Records.")
@@ -43,13 +48,28 @@ class DuplicateGroup(BaseModel):
     keys: list[str]
 
 
+class HiddenDuplicates(BaseModel):
+    """Duplicates on an Attribute whose values the caller may not read: counted, not listed
+    (which Records share a value would tell that their values are equal)."""
+
+    attribute: str
+    unique: bool = Field(description="The Attribute is unique: this is a violation, not a hint.")
+    groups: int = Field(description="Groups of Records sharing a value.")
+    records: int = Field(description="Records in those groups.")
+
+
 class DuplicateReport(BaseModel):
     """Normalized exact duplicates on unique and title Attributes."""
 
     attributes: list[str] = Field(description="Attributes checked.")
     groups: list[DuplicateGroup]
-    total_groups: int
+    total_groups: int = Field(description="Groups found, listed or not (`hidden` included).")
     skipped: Literal["too_many_records", "disabled"] | None = None
+    hidden: list[HiddenDuplicates] = Field(
+        default_factory=list,
+        description="Attributes with duplicates whose groups are not listed: the caller is "
+        "not cleared for their values.",
+    )
 
 
 class DerivedReport(BaseModel):

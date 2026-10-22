@@ -13481,7 +13481,8 @@
           },
           "total_groups": {
             "type": "integer",
-            "title": "Total Groups"
+            "title": "Total Groups",
+            "description": "Groups found, listed or not (`hidden` included)."
           },
           "skipped": {
             "anyOf": [
@@ -13497,6 +13498,14 @@
               }
             ],
             "title": "Skipped"
+          },
+          "hidden": {
+            "items": {
+              "$ref": "#/components/schemas/HiddenDuplicates"
+            },
+            "type": "array",
+            "title": "Hidden",
+            "description": "Attributes with duplicates whose groups are not listed: the caller is not cleared for their values."
           }
         },
         "type": "object",
@@ -14467,6 +14476,38 @@
         ],
         "title": "HealthSummary"
       },
+      "HiddenDuplicates": {
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "title": "Attribute"
+          },
+          "unique": {
+            "type": "boolean",
+            "title": "Unique",
+            "description": "The Attribute is unique: this is a violation, not a hint."
+          },
+          "groups": {
+            "type": "integer",
+            "title": "Groups",
+            "description": "Groups of Records sharing a value."
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records",
+            "description": "Records in those groups."
+          }
+        },
+        "type": "object",
+        "required": [
+          "attribute",
+          "unique",
+          "groups",
+          "records"
+        ],
+        "title": "HiddenDuplicates",
+        "description": "Duplicates on an Attribute whose values the caller may not read: counted, not listed\n(which Records share a value would tell that their values are equal)."
+      },
       "HistoryOut": {
         "properties": {
           "changes": {
@@ -14577,7 +14618,7 @@
           "code": {
             "type": "string",
             "title": "Code",
-            "description": "Validation issue code, e.g. value.required or value.pattern."
+            "description": "Validation issue code, e.g. value.required or value.pattern; value.invalid for an Attribute whose values the caller may not read."
           },
           "attribute": {
             "anyOf": [

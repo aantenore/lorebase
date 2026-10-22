@@ -61,13 +61,19 @@ def _kind_details(kind: KindHealth) -> list[str]:
         if violations.issues_truncated:
             lines.append("- (more kinds of violation omitted)")
     duplicates = kind.duplicates
-    if duplicates.groups:
+    if duplicates.groups or duplicates.hidden:
         lines += [f"### {kind.kind}: duplicates ({duplicates.total_groups} groups)"]
         for group in duplicates.groups:
             value = "" if group.value is None else f' "{group.value}"'
             flag = " [unique]" if group.unique else ""
             lines.append(
                 f"- {group.attribute}{value}{flag}: {', '.join(group.keys)} ({group.count})"
+            )
+        for withheld in duplicates.hidden:
+            flag = " [unique]" if withheld.unique else ""
+            lines.append(
+                f"- {withheld.attribute}{flag}: {withheld.groups} groups, {withheld.records} "
+                "Records (not listed: sensitive)"
             )
     elif duplicates.skipped:
         lines.append(f"### {kind.kind}: duplicates not checked ({duplicates.skipped})")

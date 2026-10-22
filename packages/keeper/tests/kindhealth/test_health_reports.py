@@ -17,6 +17,7 @@ from lorebase_keeper.kindhealth.models import (
     DomainHealthOut,
     DuplicateGroup,
     DuplicateReport,
+    HiddenDuplicates,
     IssueGroup,
     KindHealth,
     KindHealthOut,
@@ -126,6 +127,18 @@ def test_the_summary_counts_findings_and_decides_whether_all_is_well() -> None:
         ),
     )
     assert not report.summarize([unique], []).ok
+    withheld = kind_health(
+        "Supplier",
+        duplicates=DuplicateReport(
+            attributes=["vat_number"],
+            groups=[],
+            total_groups=1,
+            hidden=[HiddenDuplicates(attribute="vat_number", unique=True, groups=1, records=2)],
+        ),
+    )
+    hidden = report.summarize([withheld], [])
+    assert not hidden.ok  # a duplicate of a unique value counts even when it is not listed
+    assert hidden.duplicate_groups == 1
 
     invalid = kind_health(
         "Part",

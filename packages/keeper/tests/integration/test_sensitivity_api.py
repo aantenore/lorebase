@@ -142,11 +142,18 @@ async def seed(
             {"role": "pii-reader", "scope_type": GrantScope.KIND, "scope_ref": "Supplier"},
         )
         admin = await _principal(store, "admin", {"role": "admin"})
+        editor = await _principal(store, "editor", {"role": "editor"})
     finally:
         await engine.dispose()
     seeded = Seeded(owner_url=owner_url, app_url=app_url, schema=schema)
     seeded.revisions = {"first": first.revision_id.hex(), "second": second.revision_id.hex()}
-    seeded.facts = {"viewer": viewer, "cleared": cleared, "kind": kind_cleared, "admin": admin}
+    seeded.facts = {
+        "viewer": viewer,
+        "cleared": cleared,
+        "kind": kind_cleared,
+        "admin": admin,
+        "editor": editor,
+    }
     return seeded
 
 
@@ -264,6 +271,69 @@ async def test_clearance_unmasks_and_responses_are_kept_apart(seeded: Seeded) ->
         assert [hit["key"] for hit in cleared_search.json()["items"]] == [KEY]
 
 
+async def _diff_lines(http: httpx.AsyncClient, key: str, revs: dict[str, str]) -> httpx.Response:
+    params = {"from": revs["first"], "to": revs["second"], "format": "ndjson"}
+    response = await _get(http, key, "/diff", **params)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    return response
+
+
+async def _dry_update(http: httpx.AsyncClient, key: str, **values: Any) -> httpx.Response:
+    body = {"parameters": {"key": KEY, **values}, "dry_run": True}
+    response = await _post(http, key, "/operations/update_supplier/execute", body)
+    assert response.status_code == 200, response.text
+    return response
+
+
+def _email_of_edit(response: httpx.Response) -> Any:
+    (edit,) = response.json()["edits"]
+    return edit["values"]["email"]
+
+
+async def test_streamed_diffs_and_operation_edits_show_values_not_references(
+    seeded: Seeded,
+) -> None:
+    facts = seeded.facts
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        cleared = await _diff_lines(http, facts["cleared"], seeded.revisions)
+        assert NEW_EMAIL in cleared.text
+        assert OLD_EMAIL in cleared.text
+        assert "vlt_" not in cleared.text
+        viewer = await _diff_lines(http, facts["viewer"], seeded.revisions)
+        assert "vlt_" not in viewer.text
+        assert not any(secret in viewer.text for secret in SECRETS)
+
+        # an update's edit carries the Record's current values, the vault ones included
+        shown = await _dry_update(http, facts["admin"], phone="555 0199")
+        assert _email_of_edit(shown) == NEW_EMAIL
+        assert "vlt_" not in shown.text
+        masked = await _dry_update(http, facts["editor"], phone="555 0199")
+        assert _email_of_edit(masked) == "***"
+        assert "vlt_" not in masked.text
+        assert NEW_EMAIL not in masked.text
+
+
+async def test_violations_on_unreadable_values_do_not_tell_what_is_wrong(seeded: Seeded) -> None:
+    taken = next(r for r in rows("supplier.csv") if r["supplier_code"] != KEY)["vat_number"]
+    facts = seeded.facts
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        # vat_number is unique and confidential: telling an uncleared caller that a value is
+        # taken would confirm another Supplier's VAT number
+        admin = await _dry_update(http, facts["admin"], vat_number=taken)
+        editor = await _dry_update(http, facts["editor"], vat_number=taken)
+    (shown,) = admin.json()["violations"]
+    (hidden,) = editor.json()["violations"]
+    assert shown["code"] == "value.unique"
+    assert hidden["code"] == "value.invalid"
+    assert hidden["message"] == "'vat_number' is not valid"
+    assert (hidden["path"], hidden.get("key"), hidden.get("attribute")) == (
+        shown["path"],
+        shown.get("key"),
+        shown.get("attribute"),
+    )
+
+
 async def test_erasure_reaches_history_and_is_audited(seeded: Seeded) -> None:
     facts = seeded.facts
     body = {"kind": "Supplier", "key": KEY}
@@ -280,6 +350,12 @@ async def test_erasure_reaches_history_and_is_audited(seeded: Seeded) -> None:
         assert OLD_EMAIL not in history.text
         assert NEW_EMAIL not in history.text
         assert "[erased]" in history.text
+        streamed = await _diff_lines(http, facts["cleared"], seeded.revisions)
+        assert "[erased]" in streamed.text
+        assert "vlt_" not in streamed.text
+        assert (
+            _email_of_edit(await _dry_update(http, facts["admin"], phone="555 0177")) == "[erased]"
+        )
     async with owner_session(seeded.owner_url) as session, session.begin():
         await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
         entries = (

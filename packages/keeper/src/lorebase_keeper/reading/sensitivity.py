@@ -32,6 +32,11 @@ otherwise).
 
 Filtering, ordering and grouping on a sensitive Attribute need the clearance (403
 otherwise); on a vault Attribute they are refused (422): its stored values are tokens.
+
+**Validation issues.** The code of an issue about a value (`value.pattern`, `value.enum_values`,
+...) tells what the value looks like. Issues about values of an Attribute the caller may not
+read are reported with the generic `value.invalid` and a message without the rule
+(`generalize_issues`); path, Kind, key and Attribute stay.
 """
 
 from __future__ import annotations
@@ -71,6 +76,7 @@ from lorebase_core.query import (
     Negation,
     QueryPlan,
 )
+from lorebase_core.validate import Issue, IssueCode
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import AccessContext, Authorizer
@@ -579,6 +585,73 @@ def require_comparable_plan(schema: Schema, masking: Masking, plan: QueryPlan, p
             condition_fields(include.where, include.hop.far.kinds),
             f"{prefix}/include",
         )
+
+
+GENERALIZED_CODES: frozenset[IssueCode] = frozenset(
+    {
+        IssueCode.VALUE_TYPE,
+        IssueCode.VALUE_NOT_CANONICAL,
+        IssueCode.VALUE_MIN,
+        IssueCode.VALUE_MAX,
+        IssueCode.VALUE_MIN_LENGTH,
+        IssueCode.VALUE_MAX_LENGTH,
+        IssueCode.VALUE_PATTERN,
+        IssueCode.VALUE_ENUM_VALUES,
+        IssueCode.VALUE_UNIQUE,
+        IssueCode.VALUE_REFERENCE_MISSING,
+        IssueCode.VALUE_VAULT_REFERENCE,
+        IssueCode.RECORD_TRAIT_CONFORMANCE,
+    }
+)
+"""Issue codes that tell something about a value beyond its absence."""
+
+
+def generalize_issues(
+    issues: Iterable[Issue], schemas: Sequence[Schema], masking: Masking
+) -> list[Issue]:
+    """`issues` (with element ids, as the core reports them) where those about a value the
+    caller may not read have the code `value.invalid`, a message naming only the Attribute,
+    and no details. The Attribute is looked up in `schemas` in turn; one none of them knows is
+    treated as sensitive unless the caller is cleared for every tag."""
+    out: list[Issue] = []
+    for issue in issues:
+        if issue.code in GENERALIZED_CODES and issue.attribute is not None:
+            name = _issue_hidden(issue, schemas, masking)
+            if name is not None:
+                issue = issue.model_copy(
+                    update={
+                        "code": IssueCode.VALUE_INVALID,
+                        "message": f"{name!r} is not valid",
+                        "details": {},
+                    }
+                )
+        out.append(issue)
+    return out
+
+
+def _issue_hidden(issue: Issue, schemas: Sequence[Schema], masking: Masking) -> str | None:
+    """The api name of the issue's Attribute when the caller may not read its values."""
+    attribute_id = issue.attribute or ""
+    for schema in schemas:
+        attributes: Mapping[str, Attribute]
+        if issue.relation is not None:
+            relation = schema.relations.get(issue.relation)
+            if relation is None:
+                continue
+            attributes, kinds = relation.attributes, relation_kinds(schema, relation)
+        else:
+            kind = schema.kinds.get(issue.kind or "")
+            if kind is None:
+                continue
+            attributes, kinds = kind.attributes, (kind.id,)
+        attribute = attributes.get(attribute_id)
+        if attribute is None:
+            continue
+        tags = masking.tags(attribute) | ({Sensitivity.PII} if attribute.in_vault else set())
+        hidden = bool(tags) and not masking.clearance.covers(tags, kinds)
+        return attribute.api_name if hidden else None
+    kinds = tuple(k for k in (issue.kind,) if k is not None)
+    return None if masking.clearance.covers(Sensitivity, kinds) else attribute_id
 
 
 _CONFLICT_VALUES = ("base", "ours", "theirs")

@@ -487,7 +487,8 @@ async def _stream(
     old: RevisionRow,
     new: RevisionRow,
 ) -> AsyncIterator[bytes]:
-    """JSON lines: one summary line, then one line per change, expanded batch by batch."""
+    """JSON lines: one summary line, then one line per change, expanded batch by batch. Each
+    batch has its vault references resolved as a JSON answer would (`Disclosure`)."""
     summary = {
         "type": "summary",
         "from_revision": old.id.hex(),
@@ -502,6 +503,9 @@ async def _stream(
     async with runtime.sessions() as session, session.begin():
         await begin_read(session, runtime)
         await scope_to_domain(session, domain_id)
+        disclosure = Disclosure(
+            session, domain_id, (new_schema, old_schema), masking, runtime.vault
+        )
         for start in range(0, len(changes), batch):
             items = await expand(
                 session,
@@ -516,4 +520,4 @@ async def _stream(
                 json.dumps({"type": "change", **item.model_dump(mode="json", exclude_none=True)})
                 for item in items
             )
-            yield ("\n".join(lines) + "\n").encode()
+            yield await disclosure.send(("\n".join(lines) + "\n").encode(), NDJSON)
