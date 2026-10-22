@@ -1,6 +1,35 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { KeeperApi, HistoryResponse, RecordChange } from '@/api';
+import { asRemote, createMockApi } from '@/api/mock/adapter';
+import { testConfig } from '@/config/env';
 import { renderApp } from '@/test/render';
+
+const mock = () => asRemote(createMockApi({ pageSize: 50, searchLimit: 20, maxNodes: 200 }), 0);
+
+const change = (revision: string, message: string, overrides: Partial<RecordChange> = {}) => ({
+  revision,
+  generation: 1,
+  at: '2026-10-02T10:30:00Z',
+  author: 'svc_scribe',
+  on_behalf_of: null,
+  message,
+  origin: {},
+  change: 'updated' as const,
+  attributes: [{ name: 'status', before: 'draft', after: 'active', provenance: null }],
+  provenance: null,
+  ...overrides,
+});
+
+const historyPage = (items: RecordChange[], next: string | null): HistoryResponse => ({
+  revision: 'r9',
+  served_from: 'tree',
+  branch: 'main',
+  kind: 'Part',
+  key: 'P-77813',
+  items,
+  next_cursor: next,
+});
 
 describe('Explorer', () => {
   it('shows the Domain home with Kinds, Revisions and open Proposals', async () => {
@@ -64,5 +93,59 @@ describe('Explorer', () => {
     await user.click(within(table).getByRole('link', { name: 'Risk score' }));
     await screen.findByRole('link', { name: 'Risk score (asc)' });
     expect(router.state.location.search).toMatchObject({ sort: 'risk_score', dir: 'asc' });
+  });
+
+  it('shows origin, Source, extraction evidence, Revision and author per value in Lineage', async () => {
+    renderApp('/supply/explorer/Part/P-77813');
+    const table = await screen.findByRole('table', { name: 'Lineage of each value' });
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]).toHaveTextContent('source_sync');
+    expect(rows[0]).toHaveTextContent('Source erp.vendors');
+    expect(rows[0]).toHaveTextContent('usr_marco');
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent),
+    ).toEqual(['Attribute', 'Origin', 'Value', 'Detail', 'Revision', 'Author', 'At']);
+  });
+
+  it('lists the changes in the History tab and loads more through the cursor', async () => {
+    const user = userEvent.setup();
+    const base = mock();
+    const cursors: (string | null | undefined)[] = [];
+    const api: KeeperApi = {
+      ...base,
+      records: {
+        ...base.records,
+        history: (_scope, _kind, _key, params) => {
+          cursors.push(params?.cursor);
+          expect(params?.values).toBe(true);
+          return Promise.resolve(
+            params?.cursor === 'c2'
+              ? historyPage([change('bbbbbbbb2222', 'Import parts', { change: 'created' })], null)
+              : historyPage([change('aaaaaaaa1111', 'Raise status')], 'c2'),
+          );
+        },
+      },
+    };
+    renderApp('/supply/explorer/Part/P-77813', testConfig(), api);
+    await user.click(await screen.findByRole('tab', { name: 'History' }));
+
+    const list = await screen.findByRole('list', { name: 'Changes, newest first' });
+    expect(list).toHaveTextContent('updated');
+    expect(list).toHaveTextContent('aaaaaaaa');
+    expect(list).toHaveTextContent('Raise status');
+    expect(list).toHaveTextContent('svc_scribe');
+    expect(list).toHaveTextContent('2026-10-02 10:30 UTC');
+    expect(list).toHaveTextContent('status: draft');
+    expect(list).toHaveTextContent('active');
+
+    await user.click(screen.getByRole('button', { name: 'Load more' }));
+    await screen.findByText('Import parts');
+    expect(screen.getByText('created')).toBeInTheDocument();
+    expect(screen.getByText('Raise status')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+    expect(cursors).toEqual([null, 'c2']);
   });
 });

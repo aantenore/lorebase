@@ -15,6 +15,7 @@ import type {
   ExecuteOperationRequest,
   ExecuteOperationResponse,
   ExplainedRecord,
+  HistoryParams,
   HistoryResponse,
   LineageResponse,
   LinksResponse,
@@ -130,7 +131,7 @@ export interface KeeperApi {
       scope: ReadScope,
       kind: string,
       key: string,
-      params?: PageParams,
+      params?: HistoryParams,
     ): Promise<HistoryResponse>;
   };
 

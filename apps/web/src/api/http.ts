@@ -6,8 +6,6 @@ import type { components } from './generated/keeper';
 import { mapSchema } from './live/schema';
 import {
   mapDiff,
-  mapHistory,
-  mapLineage,
   mapLinks,
   mapNeighborhood,
   mapQuery,
@@ -42,6 +40,8 @@ import type { DocumentText, UploadDocumentInput } from './extraction-types';
 import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
   Branch,
+  HistoryResponse,
+  LineageResponse,
   Page,
   PageParams,
   Proposal,
@@ -183,14 +183,16 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
     }
   };
 
-  const explain = async (scope: ReadScope, kind: string, key: string) => {
+  /** Lineage, history and explain are served for a Branch head only. */
+  const branchOnly = (scope: ReadScope): QueryParams => {
     if (scope.at !== undefined) {
       throw notSupported('Lineage and history of a Record at a past Revision');
     }
-    return await get<S['ExplainOut']>(`${rec(scope.domain, kind, key)}/explain`, {
-      branch: scope.branch,
-    });
+    return { branch: scope.branch };
   };
+
+  const explain = async (scope: ReadScope, kind: string, key: string) =>
+    get<S['ExplainOut']>(`${rec(scope.domain, kind, key)}/explain`, branchOnly(scope));
 
   const revisionLog = (domain: string, branch: string, params?: PageParams) =>
     get<S['LogPage']>(`${b(domain, branch)}/log`, pageParams(params));
@@ -300,8 +302,14 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
           }),
           relation,
         ),
-      lineage: async (scope, kind, key) => mapLineage(await explain(scope, kind, key)),
-      history: async (scope, kind, key) => mapHistory(await explain(scope, kind, key)),
+      lineage: async (scope, kind, key) =>
+        get<LineageResponse>(`${rec(scope.domain, kind, key)}/lineage`, branchOnly(scope)),
+      history: async (scope, kind, key, params) =>
+        get<HistoryResponse>(`${rec(scope.domain, kind, key)}/history`, {
+          ...branchOnly(scope),
+          values: params?.values,
+          ...pageParams(params),
+        }),
     },
 
     query: {

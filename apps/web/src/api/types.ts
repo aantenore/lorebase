@@ -520,35 +520,22 @@ export interface LinksResponse {
   next_cursor: string | null;
 }
 
-export type LineageOriginType =
-  'operation' | 'source_sync' | 'extraction' | 'merge_resolution' | 'schema_migration' | 'import';
+/** Where a value came from: `operation`, `source_sync`, `extraction`, `merge_resolution`, `schema_migration` or `import`. */
+export type Provenance = components['schemas']['ProvenanceOut'];
+export type AttributeLineage = components['schemas']['ValueLineageOut'];
+export type ExtractionEvidence = components['schemas']['ExtractionEvidenceOut'];
+export type LineageProposal = components['schemas']['LineageProposalOut'];
+/** `GET .../records/{key}/lineage`: per-Attribute provenance of the current values. */
+export type LineageResponse = components['schemas']['RecordLineageOut'];
 
-export interface LineageEntry {
-  attribute: string;
-  value: AttributeValue;
-  origin_type: LineageOriginType;
-  origin: Record<string, unknown>;
-  actor: string;
-  at: string;
-  revision: RevisionId;
-}
+export type AttributeValueChange = components['schemas']['AttributeChangeOut'];
+export type RecordChange = components['schemas']['RecordChangeOut'];
+/** `GET .../records/{key}/history`: the changes of one Record, newest first. */
+export type HistoryResponse = components['schemas']['RecordHistoryOut'];
 
-export interface LineageResponse {
-  revision: RevisionId;
-  lineage: LineageEntry[];
-}
-
-export interface HistoryEntry {
-  revision: RevisionId;
-  at: string;
-  actor: string;
-  message: string;
-  changed_attributes: string[];
-}
-
-export interface HistoryResponse {
-  entries: HistoryEntry[];
-  next_cursor: string | null;
+export interface HistoryParams extends PageParams {
+  /** Add the values before and after each changed Attribute. */
+  values?: boolean;
 }
 
 // ------------------------------------------------ Query, search, traversal
