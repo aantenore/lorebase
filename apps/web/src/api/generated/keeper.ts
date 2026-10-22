@@ -9913,7 +9913,7 @@ export interface operations {
                     "application/json": components["schemas"]["SyncQueued"];
                 };
             };
-            /** @description The caller lacks the permission. */
+            /** @description The caller lacks source.sync, or pii.import for a Source mapping vault Attributes. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10055,6 +10055,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The vault of the Domain stayed locked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Problem details (RFC 9457), media type application/problem+json. */
