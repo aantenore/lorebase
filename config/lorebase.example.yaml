@@ -1143,6 +1143,7 @@ scribe:
     max_records_per_job: 20000   # rows one job reads; the rest goes to a continuation job
     max_calls_per_second: 0.0    # model calls per second of one job; 0: no limit
     max_text_chars: 8000         # rendered texts are cut to this length before hashing
+    template_cache_size: 64      # schemas whose resolved templates are kept, by schema hash
     retry:                       # retries of a failed call, after the provider's own retries
       attempts: 2                # attempts per call, the first included
       backoff_s: 2.0             # pause before the first retry; doubles each time

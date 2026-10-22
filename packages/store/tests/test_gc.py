@@ -11,9 +11,10 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_store.commit import CommitResult, commit, create_domain
+from lorebase_core.model import Kind, KindSearch
+from lorebase_store.commit import CommitResult, SchemaUpsert, commit, create_domain
 from lorebase_store.db import create_engine
-from lorebase_store.embeddings import NewVector, store_vectors
+from lorebase_store.embeddings import NewVector, store_vectors, template_fingerprints
 from lorebase_store.gc import (
     PHASE_MARKED,
     GcBusyError,
@@ -36,11 +37,15 @@ from .support import (
     AUTHOR,
     DOMAIN,
     ORIGIN,
+    SUPPLIER,
     Clock,
     domain,
     part,
+    part_kind,
     schema_changes,
+    supplied_by,
     supplier,
+    supplier_kind,
 )
 
 pytestmark = pytest.mark.integration
@@ -478,51 +483,80 @@ def test_command_line_reports_and_rejects_unknown_domains(
     assert "nope" in capsys.readouterr().err
 
 
-async def vector_hashes(sessions: Sessions) -> set[bytes]:
+VectorKey = tuple[bytes, str]
+
+
+def templated(supplier_template: str = "{legal_name}") -> tuple[Kind, Kind]:
+    """Supplier and Part with embedding templates."""
+    supplier_with = supplier_kind(search=KindSearch(embedding_template=supplier_template))
+    plain = part_kind()
+    part_with = plain.model_copy(update={"search": KindSearch(embedding_template="{name}")})
+    return supplier_with, part_with
+
+
+async def vector_keys(sessions: Sessions) -> set[VectorKey]:
     async with sessions() as session:
-        rows = await session.execute(text("SELECT object_hash FROM embeddings"))
-        return {bytes(h) for h in rows.scalars()}
+        rows = await session.execute(text("SELECT object_hash, fingerprint FROM embeddings"))
+        return {(bytes(h), str(f)) for h, f in rows.all()}
 
 
 async def test_unreferenced_vectors_are_counted_then_deleted(
     engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime
 ) -> None:
-    await seed_main(sessions, runtime)
+    kinds = templated()
+    await put(
+        sessions,
+        runtime,
+        [supplier("S-1", "Acme", country="IT"), part("P-1", "Bearing")],
+        schema_changes=[SchemaUpsert(k) for k in (*kinds, supplied_by())],
+    )
     await branch_with_work(sessions, runtime)
+    fingerprints = template_fingerprints(kinds)
     async with sessions() as session:
         rows = await session.execute(
-            text("SELECT branch, object_hash FROM mat_records WHERE domain_id = :d"),
+            text("SELECT branch, kind_id, object_hash FROM mat_records WHERE domain_id = :d"),
             {"d": DOMAIN},
         )
-        by_branch: dict[str, set[bytes]] = {}
-        for branch, object_hash in rows.all():
-            by_branch.setdefault(branch, set()).add(bytes(object_hash))
+        by_branch: dict[str, set[VectorKey]] = {}
+        for branch, kind_id, object_hash in rows.all():
+            by_branch.setdefault(branch, set()).add((bytes(object_hash), fingerprints[kind_id]))
     only_dev = by_branch["dev"] - by_branch["main"]
     assert only_dev
-    stray = b"\x07" * 32
+    held = next(iter(by_branch["main"]))
+    stray = (b"\x07" * 32, fingerprints[SUPPLIER])
+    stale = (held[0], "a-template-no-branch-uses")
     dims = runtime.settings.embeddings.dims
-    hashes = sorted(by_branch["main"] | only_dev | {stray})
+    keys = sorted(by_branch["main"] | only_dev | {stray, stale})
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
         await store_vectors(
             session,
             DOMAIN,
             model="m",
-            vectors=[NewVector(h, h, [0.5] * dims) for h in hashes],
+            vectors=[NewVector(h, f, h, [0.5] * dims) for h, f in keys],
         )
-    assert await vector_hashes(sessions) == set(hashes)
+    assert await vector_keys(sessions) == set(keys)
 
-    # Every vector but the stray one is referenced by a branch head.
+    # Every vector but the stray one and the one of a template no branch uses is referenced.
     quiet = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
-    assert quiet.embeddings == 1
+    assert quiet.embeddings == 2
+
+    # A new Supplier template on dev: the vector of its own Supplier under the old template
+    # is no longer referenced (main does not hold that Record).
+    supplier_now, _ = templated("{legal_name} ({country})")
+    await put(sessions, runtime, [], branch="dev", schema_changes=[SchemaUpsert(supplier_now)])
+    replaced = {(h, f) for h, f in only_dev if f == fingerprints[SUPPLIER]}
+    assert replaced
+    changed = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
+    assert changed.embeddings == 2 + len(replaced)
 
     await delete_ref(sessions, "dev")
     preview = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
-    assert preview.embeddings == 1 + len(only_dev)
-    assert await vector_hashes(sessions) == set(hashes)  # dry run changes nothing
+    assert preview.embeddings == 2 + len(only_dev)
+    assert await vector_keys(sessions) == set(keys)  # dry run changes nothing
 
     report = await collect_garbage(engine, DOMAIN, runtime=runtime, now=LATER)
     assert report.embeddings == preview.embeddings
-    assert await vector_hashes(sessions) == by_branch["main"]
+    assert await vector_keys(sessions) == by_branch["main"]
     again = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, now=LATER)
     assert again.embeddings == 0

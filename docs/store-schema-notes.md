@@ -229,6 +229,14 @@ during an upgrade; their trigram branch has no index any more.
   a vector), and per branch and model the head and template fingerprints of the last complete
   embedding pass. `embedding_cursors` is Domain-scoped with row-level security and goes with its
   branch ([scribe](scribe.md#embeddings)).
+- `embeddings.fingerprint` (revision `0024`): the fingerprint of the embedding template a vector
+  was rendered with, part of the primary key `(domain_id, object_hash, model, fingerprint)`, so
+  branches whose templates differ for the same content keep a vector each and Keeper reads the
+  one of the searched branch's template. The upgrade sets it where every branch holding the
+  content agrees on one template; the other vectors keep `''` (never read, collected by GC) and
+  every cursor loses its fingerprints, so the next pass renders each text once more, copies
+  vectors of equal texts and embeds the rest. The downgrade keeps one vector per `(domain_id,
+  object_hash, model)` and clears the cursors' fingerprints too.
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
 

@@ -384,13 +384,20 @@ Each `embeddings` job runs one pass:
 
 - branches with no template, and branches whose head has not moved since the last complete pass
   for the model, are skipped;
-- otherwise the branch's own rows that lack a vector of the model are rendered and embedded,
-  plus every row of the Kinds whose template changed (the template fingerprint is recorded per
-  branch in `embedding_cursors`);
+- otherwise the branch's own rows that lack a vector of the model under their Kind's template
+  are rendered and embedded, plus every row of the Kinds whose template changed (the template
+  fingerprint is recorded per branch in `embedding_cursors`);
 - a text whose hash equals the stored one is left alone; a text already embedded for another
-  Record content is copied, not sent to the model;
-- vectors are keyed by content hash, so overlay and copied branches share the vectors of their
-  unchanged Records and only add work for the Records they change.
+  Record content or another template is copied, not sent to the model;
+- vectors are keyed by content hash and template fingerprint, so overlay and copied branches
+  share the vectors of their unchanged Records and only add work for the Records they change,
+  while a branch whose template differs keeps vectors of its own and Keeper searches each
+  branch with its own template's vectors;
+- the templates of a schema are resolved once per schema hash and kept for the last
+  `template_cache_size` schemas, so branches sharing a schema do not read and parse it again.
+
+Garbage collection ([operations](#operations)) deletes the vectors no branch reads any more:
+those whose content no branch holds, and those of templates no branch uses for that content.
 
 | Setting (`scribe.embeddings`) | Default | Meaning |
 |-------------------------------|---------|---------|
@@ -399,6 +406,7 @@ Each `embeddings` job runs one pass:
 | `max_records_per_job` | 20000 | rows one job reads; the rest goes to a queued continuation |
 | `max_calls_per_second` | 0 | pacing of model calls (a paid endpoint's rate limit); 0: none |
 | `max_text_chars` | 8000 | rendered texts are cut to this length |
+| `template_cache_size` | 64 | schemas whose resolved templates a process keeps, by schema hash |
 | `retry.attempts`, `backoff_s`, `backoff_max_s` | 2, 2.0, 60.0 | retries of a failed call inside the job |
 
 `store.embeddings.dims` must equal `inference.embeddings.dims`: the job checks the model's

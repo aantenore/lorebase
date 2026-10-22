@@ -51,7 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from lorebase_inference import InferenceSettings
 from lorebase_scribe.checkpoints import CheckpointSink, build_sink, publish_checkpoints
 from lorebase_scribe.embeddings import PERMANENT_ERRORS as EMBEDDING_ERRORS
-from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass
+from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass, Templates
 from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
 from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
 from lorebase_scribe.settings import ScribeSettings
@@ -62,6 +62,7 @@ from lorebase_scribe.telemetry import AUDIT_CHECKPOINTS, AUDIT_VERIFICATIONS
 from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
 from lorebase_store.auth import AuditRepository, AuditStream, Chains
+from lorebase_store.embeddings import SchemaCache
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
@@ -108,8 +109,9 @@ class JobContext:
     `ddl_engine` runs per-Attribute index DDL: the maintenance engine
     (`database.maintenance_dsn`) when configured, else `engine`. `extraction_models` replaces
     the models built from `inference` (tests). `embedding_models` is the process's embedding
-    model, created on first use from `inference` unless given. `checkpoint_sink` replaces
-    the sink of `scribe.audit_checkpoints` (tests)."""
+    model, created on first use from `inference` unless given; `embedding_templates` the
+    process's cache of resolved embedding templates (one per pass when not given).
+    `checkpoint_sink` replaces the sink of `scribe.audit_checkpoints` (tests)."""
 
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
@@ -124,6 +126,7 @@ class JobContext:
     inference: InferenceSettings = field(default_factory=InferenceSettings)
     extraction_models: Callable[[Sequence[int]], ExtractionModels] | None = None
     embedding_models: EmbeddingModels | None = None
+    embedding_templates: SchemaCache[Templates] | None = None
     checkpoint_sink: CheckpointSink | None = None
 
     def embedding_pass(self) -> EmbeddingPass:
@@ -138,6 +141,7 @@ class JobContext:
             self.settings.embeddings,
             dims=self.runtime.settings.embeddings.dims,
             clock=self.clock,
+            templates=self.embedding_templates,
         )
 
 

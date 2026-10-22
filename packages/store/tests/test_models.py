@@ -106,5 +106,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_agent_trace_migration() -> None:
-    assert head_revisions() == ("0023",)
+def test_head_revision_is_the_embedding_template_keys_migration() -> None:
+    assert head_revisions() == ("0024",)

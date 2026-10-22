@@ -105,10 +105,11 @@ def example_changes(schema: Schema) -> list[DataChange]:
 
 
 async def load_supply(
-    session: AsyncSession, runtime: StoreRuntime, clock: Clock
+    session: AsyncSession, runtime: StoreRuntime, clock: Clock, schema: Schema | None = None
 ) -> tuple[Schema, list[CommitResult]]:
-    """Create the Domain, commit the schema, then the example rows; returns the commits."""
-    schema = supply_schema()
+    """Create the Domain, commit the schema (the example's unless given), then the example
+    rows; returns the commits."""
+    schema = schema or supply_schema()
     created = await create_domain(
         session, schema.domain, author=AUTHOR, runtime=runtime, clock=clock
     )

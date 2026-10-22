@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,14 +20,19 @@ from lorebase_scribe.embeddings import (
     EmbeddingConfigError,
     EmbeddingModels,
     EmbeddingPass,
+    Templates,
 )
 from lorebase_scribe.jobs import JobContext, build_handlers
 from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import EmbeddingJobSettings, SchedulerSettings, ScribeSettings
+from lorebase_store import migrations
 from lorebase_store.commit import SchemaUpsert, commit
+from lorebase_store.embeddings import SchemaCache, template_fingerprints
+from lorebase_store.gc import collect_garbage
 from lorebase_store.jobs import EMBEDDINGS_JOB, JobRow, embeddings_payload
 from lorebase_store.materialize.branch import create_branch
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.settings import DatabaseSettings, StoreSettings
 from lorebase_store.webhooks import WebhookSettings
 
 from .support import (
@@ -263,7 +269,9 @@ async def test_overlays_template_changes_budget_and_model_switch(
     switched = embedding_pass(engine, sessions, runtime, other)
     result = await switched.run(DOMAIN, prune=True)
     assert result.complete
-    assert len(other.texts) == len(SUPPLIERS) + 1  # main, and the overlay's own Record
+    # main under its new template, and the overlay (promoted to a copy before main's schema
+    # change, so still on the first template) under its own: no vector serves both.
+    assert len(other.texts) == 2 * len(SUPPLIERS)
     assert result.pruned > 0
     models = await fetch(sessions, "SELECT DISTINCT model FROM embeddings")
     assert [m for (m,) in models] == ["fake:other"]
@@ -375,3 +383,219 @@ async def test_job_continuation_and_schedule(
         sessions, "SELECT type, domain_id, payload FROM jobs WHERE id = :id", id=first[0]
     )
     assert [tuple(r) for r in queued] == [(EMBEDDINGS_JOB, DOMAIN, {})]
+
+
+async def change_template(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    template: str,
+    *,
+    branch: str = "main",
+) -> None:
+    supplier = schema_with(template).kind_by_api_name("Supplier")
+    assert supplier is not None
+    async with sessions() as session:
+        await commit(
+            session,
+            DOMAIN,
+            branch,
+            [],
+            schema_changes=[SchemaUpsert(supplier)],
+            author=Author(principal="usr_modeler"),
+            message="Change the embedding template",
+            origin=Origin(type="operation"),
+            runtime=runtime,
+            clock=clock,
+        )
+
+
+async def searched(
+    sessions: async_sessionmaker[AsyncSession], branch: str, template: str, model: str
+) -> dict[str, list[float]]:
+    """The Supplier vectors a search of `branch` reads: those under the fingerprint of the
+    branch's template, as Keeper looks them up."""
+    supplier = schema_with(template).kind_by_api_name("Supplier")
+    assert supplier is not None
+    found = await fetch(
+        sessions,
+        "SELECT r.key, e.embedding::text FROM mat_records r JOIN embeddings e "
+        "ON e.domain_id = r.domain_id AND e.object_hash = r.object_hash AND e.model = :m "
+        "AND e.fingerprint = :f WHERE r.domain_id = :d AND r.branch = :b AND r.kind_id = :k",
+        m=model,
+        f=template_fingerprints([supplier])[supplier.id],
+        d=DOMAIN,
+        b=branch,
+        k=supplier.id,
+    )
+    return {key: [float(v) for v in vector.strip("[]").split(",")] for key, vector in found}
+
+
+def assert_searched(
+    vectors: dict[str, list[float]], template: str, dims: int, rows: Sequence[dict[str, str]]
+) -> None:
+    assert sorted(vectors) == sorted(r["supplier_code"] for r in rows)
+    for row in rows:
+        expected = embed_text(text_of(row, template), dims)
+        assert vectors[row["supplier_code"]] == pytest.approx(expected, abs=1e-6)
+
+
+async def full_branch(sessions: async_sessionmaker[AsyncSession], runtime: StoreRuntime) -> None:
+    async with sessions() as session:
+        await create_branch(
+            session, DOMAIN, "dev", created_by="usr_editor", mode="copy", runtime=runtime
+        )
+
+
+async def test_branches_whose_templates_differ_keep_their_own_vectors(
+    engine: AsyncEngine,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    await load_domain(
+        sessions, runtime, clock, schema_with(TEMPLATE), kinds={"Supplier": "supplier.csv"}
+    )
+    await full_branch(sessions, runtime)
+    other = "{legal_name} in {country}"
+    await change_template(sessions, runtime, clock, other, branch="dev")
+    dims = runtime.settings.embeddings.dims
+    model = CountingModel(dims)
+    run = embedding_pass(engine, sessions, runtime, model)
+
+    report = await run.run(DOMAIN)
+    assert report.complete
+    by_branch = {b.branch: b for b in report.branches}
+    assert by_branch["main"].embedded == by_branch["dev"].embedded == len(SUPPLIERS)
+    assert await scalar(sessions, "SELECT count(*) FROM embeddings") == 2 * len(SUPPLIERS)
+    main_vectors = await searched(sessions, "main", TEMPLATE, model.name)
+    assert_searched(main_vectors, TEMPLATE, dims, SUPPLIERS)
+    assert_searched(await searched(sessions, "dev", other, model.name), other, dims, SUPPLIERS)
+
+    # Later passes overwrite neither branch's vectors.
+    assert all(b.skipped for b in (await run.run(DOMAIN)).branches)
+    assert await searched(sessions, "main", TEMPLATE, model.name) == main_vectors
+
+    # dev changes its template again: the vectors of the template no branch uses any more are
+    # collected, main's stay.
+    third = "{legal_name}"
+    await change_template(sessions, runtime, clock, third, branch="dev")
+    assert (await run.run(DOMAIN)).complete
+    assert_searched(await searched(sessions, "dev", third, model.name), third, dims, SUPPLIERS)
+    gc = await collect_garbage(engine, DOMAIN, runtime=runtime)
+    assert gc.embeddings == len(SUPPLIERS)
+    assert await searched(sessions, "dev", other, model.name) == {}
+    assert await searched(sessions, "main", TEMPLATE, model.name) == main_vectors
+    assert_searched(await searched(sessions, "dev", third, model.name), third, dims, SUPPLIERS)
+
+
+async def test_templates_are_resolved_once_per_schema(
+    engine: AsyncEngine,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    await load_domain(
+        sessions, runtime, clock, schema_with(TEMPLATE), kinds={"Supplier": "supplier.csv"}
+    )
+    await full_branch(sessions, runtime)
+    dims = runtime.settings.embeddings.dims
+    model = CountingModel(dims)
+    settings = EmbeddingJobSettings()
+    cache: SchemaCache[Templates] = SchemaCache(settings.template_cache_size)
+    run = EmbeddingPass(
+        engine,
+        sessions,
+        EmbeddingModels(InferenceSettings(), dims=dims, factory=lambda: model),
+        settings,
+        dims=dims,
+        sleep=no_sleep,
+        templates=cache,
+    )
+
+    assert (await run.run(DOMAIN)).complete
+    assert (cache.misses, cache.hits) == (1, 1)  # two branches, one schema
+    assert (await run.run(DOMAIN)).complete
+    assert (cache.misses, cache.hits) == (1, 3)
+
+    # A schema change on one branch: only its new schema is read.
+    await change_template(sessions, runtime, clock, "{legal_name}", branch="dev")
+    assert (await run.run(DOMAIN)).complete
+    assert (cache.misses, cache.hits) == (2, 4)
+
+    # The cache keeps the schemas used last.
+    small: SchemaCache[str] = SchemaCache(1)
+    small.put(b"a", "first")
+    small.put(b"b", "second")
+    assert (small.get(b"a"), small.get(b"b")) == (None, "second")
+
+
+async def test_migration_keys_existing_vectors_by_template(
+    engine: AsyncEngine,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    database_url: str,
+) -> None:
+    schema = schema_with(TEMPLATE)
+    await load_domain(sessions, runtime, clock, schema, kinds={"Supplier": "supplier.csv"})
+    await full_branch(sessions, runtime)
+    other = "{legal_name} in {country}"
+    await change_template(sessions, runtime, clock, other, branch="dev")
+    supplier = schema.kind_by_api_name("Supplier")
+    assert supplier is not None
+    first = SUPPLIERS[0]
+    moved = {**first, "legal_name": "Moved Ltd"}
+    await commit_on(sessions, runtime, clock, [record_change(supplier, moved)], branch="dev")
+    dims = runtime.settings.embeddings.dims
+    model = CountingModel(dims)
+    assert (await embedding_pass(engine, sessions, runtime, model).run(DOMAIN)).complete
+
+    # Back to one vector per object hash, then forward again.
+    def migrate(step: Callable[..., None], revision: str) -> None:
+        step(revision, database=DatabaseSettings(), store=StoreSettings(), url=database_url)
+
+    await asyncio.to_thread(migrate, migrations.downgrade, "0023")
+    assert await scalar(sessions, "SELECT count(*) FROM embeddings") == len(SUPPLIERS) + 1
+    await asyncio.to_thread(migrate, migrations.upgrade, "head")
+
+    by_template: dict[str, str] = {}
+    for template in (TEMPLATE, other):
+        kind = schema_with(template).kind_by_api_name("Supplier")
+        assert kind is not None
+        by_template[template] = template_fingerprints([kind])[kind.id]
+    keyed = dict(
+        await fetch(
+            sessions,
+            "SELECT r.key, e.fingerprint FROM mat_records r JOIN embeddings e "
+            "ON e.domain_id = r.domain_id AND e.object_hash = r.object_hash "
+            "WHERE r.branch = :b",
+            b="dev",
+        )
+    )
+    # Only dev holds its moved Supplier, so that vector's template is known; the rows both
+    # branches hold under different templates are not.
+    code = first["supplier_code"]
+    assert keyed[code] == by_template[other]
+    assert {f for k, f in keyed.items() if k != code} == {""}
+    main_first = await fetch(
+        sessions,
+        "SELECT e.fingerprint FROM mat_records r JOIN embeddings e "
+        "ON e.domain_id = r.domain_id AND e.object_hash = r.object_hash "
+        "WHERE r.branch = 'main' AND r.key = :k",
+        k=code,
+    )
+    assert [f for (f,) in main_first] == [by_template[TEMPLATE]]
+    cursors = await fetch(sessions, "SELECT fingerprints FROM embedding_cursors")
+    assert cursors
+    assert all(f == {} for (f,) in cursors)
+
+    # The next pass renders every text again: the texts whose vector survived are copied,
+    # only the others are embedded, and each branch searches its own template's vectors.
+    model.texts.clear()
+    assert (await embedding_pass(engine, sessions, runtime, model).run(DOMAIN)).complete
+    assert len(model.texts) == len(SUPPLIERS) - 1
+    main_vectors = await searched(sessions, "main", TEMPLATE, model.name)
+    assert_searched(main_vectors, TEMPLATE, dims, SUPPLIERS)
+    dev_vectors = await searched(sessions, "dev", other, model.name)
+    assert_searched(dev_vectors, other, dims, [moved, *SUPPLIERS[1:]])

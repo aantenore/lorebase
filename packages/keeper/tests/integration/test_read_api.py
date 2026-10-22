@@ -14,17 +14,27 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.model import Schema
 from lorebase_core.query import Query as DslQuery
 from lorebase_core.query import QueryLimits, resolve_query
 from lorebase_keeper.reading.compiler import Compiler
 from lorebase_keeper.reading.settings import SearchSettings
+from lorebase_store.embeddings import template_fingerprints
 from lorebase_store.indexes import plan_indexes
 from lorebase_store.materialize import create_branch, verify
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 
 from .read_fixtures import Seeded, keeper, owner_session, seeded_database
-from .supply import DOMAIN, Clock, commit_changes, load_supply, record_change, rows
+from .supply import (
+    DOMAIN,
+    Clock,
+    commit_changes,
+    load_supply,
+    record_change,
+    rows,
+    supply_schema,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -40,10 +50,23 @@ def unit_vector(index: int) -> list[float]:
     return vector
 
 
+def with_part_template() -> Schema:
+    """The example schema with Parts embedded by name, so their vectors are searched."""
+    schema = supply_schema()
+    part = schema.kind_by_api_name("Part")
+    assert part is not None
+    search = part.search.model_copy(update={"embedding_template": "{name}"})
+    return schema.model_copy(
+        update={"kinds": {**schema.kinds, part.id: part.model_copy(update={"search": search})}}
+    )
+
+
 async def seed(
     session: AsyncSession, runtime: StoreRuntime, clock: Clock, owner_url: str, app_url: str
 ) -> Seeded:
-    schema, (created, schema_commit, data) = await load_supply(session, runtime, clock)
+    schema, (created, schema_commit, data) = await load_supply(
+        session, runtime, clock, with_part_template()
+    )
     supplier = schema.kind_by_api_name("Supplier")
     assert supplier is not None
     original = next(r for r in rows("supplier.csv") if r["supplier_code"] == "S-1001")
@@ -80,17 +103,30 @@ async def seed(
         found = await session.execute(
             text(
                 "SELECT key, object_hash FROM mat_records WHERE domain_id = :d AND branch = 'main' "
-                "AND kind_id = :k AND key IN ('P-10001', 'P-10002', 'P-10003')"
+                "AND kind_id = :k AND key IN ('P-10001', 'P-10002', 'P-10003', 'P-10004')"
             ),
             {"d": DOMAIN, "k": schema.kind_by_api_name("Part").id},  # type: ignore[union-attr]
         )
-        for index, (_, digest) in enumerate(sorted(found)):
+        part = schema.kind_by_api_name("Part")
+        assert part is not None
+        fingerprint = template_fingerprints([part])[part.id]
+        for index, (key, digest) in enumerate(sorted(found)):
+            # P-10004's only vector was rendered by another template: never served here.
+            stale = key == "P-10004"
             await session.execute(
                 text(
-                    "INSERT INTO embeddings (domain_id, object_hash, model, dims, embedding) "
-                    "VALUES (:d, :h, :m, :n, CAST(:v AS vector))"
+                    "INSERT INTO embeddings "
+                    "(domain_id, object_hash, model, fingerprint, dims, embedding) "
+                    "VALUES (:d, :h, :m, :f, :n, CAST(:v AS vector))"
                 ),
-                {"d": DOMAIN, "h": digest, "m": MODEL, "n": DIMS, "v": str(unit_vector(index))},
+                {
+                    "d": DOMAIN,
+                    "h": digest,
+                    "m": MODEL,
+                    "f": "another-template" if stale else fingerprint,
+                    "n": DIMS,
+                    "v": str(unit_vector(0 if stale else index)),
+                },
             )
         for branch in ("main", "feature/risk"):
             report = await verify(session, DOMAIN, branch, runtime=runtime)
@@ -702,6 +738,8 @@ async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> No
     assert semantic["mode"] == "semantic"
     assert semantic["items"][0]["key"] == "P-10001"
     assert semantic["items"][0]["score"] == pytest.approx(1.0)
+    # Only vectors under the fingerprint of the branch's Part template are searched.
+    assert "P-10004" not in {hit["key"] for hit in semantic["items"]}
 
     hybrid = await post_ok(
         http, "/search", {"q": "bearing", "query_vector": unit_vector(1), "kinds": ["Part"]}
