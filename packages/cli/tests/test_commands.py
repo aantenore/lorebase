@@ -752,6 +752,74 @@ def test_record_get_and_list(http: respx.MockRouter) -> None:
     assert listing.calls[1].request.url.params["cursor"] == "c1"
 
 
+def test_record_history_and_lineage(http: respx.MockRouter) -> None:
+    served = {
+        "revision": REV,
+        "served_from": "tree",
+        "branch": "work",
+        "kind": "Part",
+        "key": "P-1",
+    }
+    change = {
+        "revision": REV,
+        "generation": 1,
+        "at": "2026-01-01T00:00:00Z",
+        "author": "ada",
+        "message": "add",
+        "origin": {},
+        "change": "created",
+        "attributes": [{"name": "stock", "after": "5"}],
+    }
+    history = http.get("/domains/supply/kinds/Part/records/P-1/history").respond(
+        200, json={**served, "items": [change], "next_cursor": "c1"}
+    )
+    http.get("/domains/supply/kinds/Part/records/P-1/lineage").respond(
+        200,
+        json={
+            **served,
+            "created": change,
+            "changes": 1,
+            "attributes": [
+                {
+                    "name": "stock",
+                    "value": "5",
+                    "revision": REV,
+                    "author": "ada",
+                    "provenance": {
+                        "id": "p1",
+                        "origin_type": "operation",
+                        "origin": {},
+                        "actor": "ada",
+                        "at": "2026-01-01T00:00:00Z",
+                    },
+                }
+            ],
+            "sources": ["erp"],
+            "proposals": [],
+        },
+    )
+    listed = run(
+        "record", "history", "Part", "P-1", "-d", "supply", "-b", "work",
+        "--values", "--limit", "5", "--cursor", "c0",
+    )  # fmt: skip
+    assert listed.exit_code == 0, listed.stderr
+    assert "created" in listed.stdout
+    assert "--cursor c1" in listed.stderr
+    params = history.calls[0].request.url.params
+    assert (params["branch"], params["values"], params["limit"], params["cursor"]) == (
+        "work",
+        "true",
+        "5",
+        "c0",
+    )
+    as_json = run("record", "history", "Part", "P-1", "-d", "supply", "--json")
+    assert json.loads(as_json.stdout)["next_cursor"] == "c1"
+    traced = run("record", "lineage", "Part", "P-1", "-d", "supply")
+    assert traced.exit_code == 0, traced.stderr
+    assert "operation by ada" in traced.stdout
+    assert "erp" in traced.stdout
+
+
 def test_record_list_where_from_a_file_and_bad_json(http: respx.MockRouter, tmp_path: Path) -> None:
     route = http.get("/domains/supply/kinds/Part/records").respond(
         200, json={"revision": REV, "served_from": "tree", "items": [], "next_cursor": None}

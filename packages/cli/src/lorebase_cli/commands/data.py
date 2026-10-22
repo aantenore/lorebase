@@ -391,6 +391,86 @@ def record_get(
     app.out.emit(found, human)
 
 
+@record_app.command("history")
+def record_history(
+    ctx: typer.Context,
+    kind: Annotated[str, typer.Argument(help="Kind api name.", metavar="KIND")],
+    key: Annotated[str, typer.Argument(help="Record key.", metavar="KEY")],
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    values: Annotated[
+        bool, typer.Option("--values", help="Add the value before and after each change.")
+    ] = False,
+    limit: LimitOpt = None,
+    cursor: Annotated[
+        str | None, typer.Option("--cursor", help="Continue after this page's `next_cursor`.")
+    ] = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Show the changes of one Record, newest first (one page)."""
+    app = app_of(ctx, json_out)
+    page = app.client().records.history(
+        app.domain(domain),
+        kind,
+        key,
+        branch=app.branch(branch),
+        values=values,
+        limit=limit or app.settings.list_limit,
+        cursor=cursor,
+    )
+
+    def human() -> None:
+        rows = [
+            {
+                "revision": short_id(c.revision),
+                "change": c.change,
+                "at": c.at,
+                "author": c.author,
+                "attributes": ", ".join(a.name for a in c.attributes),
+                "message": c.message,
+            }
+            for c in page.items
+        ]
+        columns = [Column(n, n) for n in ("revision", "change", "at", "author", "attributes")]
+        app.out.table(rows, [*columns, Column("message", "message")])
+        if page.next_cursor and not app.quiet:
+            app.out.info(f"more changes: --cursor {page.next_cursor}")
+
+    app.out.emit(page, human)
+
+
+@record_app.command("lineage")
+def record_lineage(
+    ctx: typer.Context,
+    kind: Annotated[str, typer.Argument(help="Kind api name.", metavar="KIND")],
+    key: Annotated[str, typer.Argument(help="Record key.", metavar="KEY")],
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Show where each current value of one Record came from."""
+    app = app_of(ctx, json_out)
+    found = app.client().records.lineage(app.domain(domain), kind, key, branch=app.branch(branch))
+
+    def human() -> None:
+        pairs: list[tuple[str, Any]] = [
+            ("kind", found.kind),
+            ("key", found.key),
+            ("changes", found.changes),
+            ("sources", ", ".join(found.sources)),
+            ("proposals", ", ".join(f"{p.title} ({p.status})" for p in found.proposals)),
+            ("revision", short_id(found.revision)),
+        ]
+        for item in found.attributes:
+            origin = item.provenance.origin_type if item.provenance else "unknown"
+            by = f" by {item.author}" if item.author else ""
+            at = f" in {short_id(item.revision)}" if item.revision else ""
+            pairs.append((f"{item.name}", f"{item.value} <- {origin}{by}{at}"))
+        app.out.pairs(pairs)
+
+    app.out.emit(found, human)
+
+
 @record_app.command("list")
 def record_list(
     ctx: typer.Context,
