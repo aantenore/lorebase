@@ -62,6 +62,7 @@ from lorebase_store.auth.scope import rls_scope
 from lorebase_store.changefeed import EventRef, branch_schema, describe
 from lorebase_store.commit.pipeline import COMMITTED_EVENT
 from lorebase_store.outbox_events import cleared_tokens, disclose, subscribed
+from lorebase_store.repositories.deferred_events import expire as expire_deferred
 from lorebase_store.repositories.events import OutboxRepository, OutboxRow
 from lorebase_store.settings import OutboxSettings, WriteSettings
 from lorebase_store.telemetry import (
@@ -560,6 +561,13 @@ async def _prune(
         drained = max(batch_handed, batch_expired) < outbox.prune_batch
         if drained or monotonic() >= deadline:
             break
+    async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+        stale = await expire_deferred(session, cutoffs["expire_before"], limit=outbox.prune_batch)
+    if stale:
+        logger.warning(
+            "deferred Operation events expired before their Proposal merged",
+            extra={"expired": stale, "max_age_s": outbox.max_age_s},
+        )
     backlog = 0
     if not drained:  # out of budget: count what is left (a drained pass left nothing)
         async with sessions() as session, session.begin(), rls_scope(session, bypass=True):

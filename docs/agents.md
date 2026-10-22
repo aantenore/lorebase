@@ -485,9 +485,12 @@ operations:
 ```
 
 Each committed execution writes one `operation.risk_flag_raised` event in its commit
-transaction; dry runs, refusals, executions that need review (a `task` write that opens a
-Proposal included: follow `revision.committed` on the target for the merge) and replays of an
-`idempotency_key` write none. A webhook subscribed to it (or to `operation.*`) receives:
+transaction; dry runs, refusals and replays of an `idempotency_key` write none. An execution
+that needs review (a `task` write that opens a Proposal) writes its events when the Proposal
+merges, once, in the merge transaction: `branch` is then the target, `head` the merged head,
+and `source_branch` and `proposal` name the task branch and the Proposal (`revisions` stay
+those of the task branch). Events of a task branch deleted unmerged are dropped with it. A
+webhook subscribed to it (or to `operation.*`) receives:
 
 ```json
 {"type": "operation.risk_flag_raised", "sequence": 812, "side_effect": "risk_flag_raised",

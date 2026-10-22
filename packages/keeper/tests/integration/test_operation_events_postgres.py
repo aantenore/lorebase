@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -18,6 +19,7 @@ from lorebase_keeper.services import operations
 from lorebase_keeper.services.operation_events import write_side_effects
 from lorebase_store.db import create_engine
 from lorebase_store.materialize import create_branch
+from lorebase_store.repositories.deferred_events import DeferredEventRepository, expire
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
@@ -144,6 +146,78 @@ async def test_dry_runs_refusals_and_replays_write_nothing(seeded: Seeded) -> No
         assert again.status_code == 200
         assert again.json()["invocation_id"] == first.json()["invocation_id"]
     assert len(await events(seeded, FLAG)) == before + 1
+
+
+async def deferred(seeded: Seeded) -> int:
+    async with owner_session(seeded.owner_url) as session:
+        found = await session.scalar(text("SELECT count(*) FROM operation_deferred_events"))
+    return int(found or 0)
+
+
+async def test_a_reviewed_execution_writes_its_events_once_when_its_proposal_merges(
+    seeded: Seeded,
+) -> None:
+    params = {"supplier": "S-1005", "severity": "critical", "reason": "Audit finding"}
+    before = len(await events(seeded, FLAG))
+    async with keeper(seeded.app_url) as http:
+        proposed = await run(
+            http, "flag_supplier_risk", params, task="deferred-flag", auto_propose=True
+        )
+        assert proposed.status_code == 202, proposed.text
+        body = proposed.json()
+        assert len(await events(seeded, FLAG)) == before
+        assert await deferred(seeded) >= 1
+
+        proposal = body["proposal"]["id"]
+        merged = await http.post(f"{BASE}/proposals/{proposal}/merge")
+        assert merged.status_code == 200, merged.text
+        written = await events(seeded, FLAG)
+        assert len(written) == before + 1
+        _, payload = written[-1]
+        assert payload["invocation_id"] == body["invocation_id"]
+        assert payload["branch"] == BRANCH
+        assert payload["source_branch"] == body["branch"]
+        assert payload["proposal"] == proposal
+        assert payload["head"] == merged.json()["revision"]
+        assert payload["revisions"] == body["revisions"]
+        assert payload["parameters"]["severity"] == "critical"
+
+        again = await http.post(f"{BASE}/proposals/{proposal}/merge")
+        assert again.status_code != 200 or again.json()["revision"] == payload["head"]
+    assert len(await events(seeded, FLAG)) == before + 1
+    async with owner_session(seeded.owner_url) as session:
+        left = await session.scalar(
+            text("SELECT count(*) FROM operation_deferred_events WHERE branch = :b"),
+            {"b": body["branch"]},
+        )
+    assert left == 0
+
+
+async def test_deferred_events_wait_for_a_merge_that_contains_their_revision(
+    seeded: Seeded,
+) -> None:
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        repository = DeferredEventRepository(session, DOMAIN)
+        await repository.defer(
+            branch="elsewhere",
+            revision=b"\x01" * 32,  # not in the merged history
+            invocation_id="inv_x",
+            event_type=FLAG,
+            payload={"side_effect": "risk_flag_raised"},
+        )
+        assert await repository.release("elsewhere", await head(seeded), {"branch": BRANCH}) == []
+        assert await repository.discard("elsewhere") == 1
+
+        await repository.defer(
+            branch="forgotten",
+            revision=b"\x02" * 32,
+            invocation_id="inv_y",
+            event_type=FLAG,
+            payload={"side_effect": "risk_flag_raised"},
+        )
+        assert await expire(session, datetime.now(UTC) - timedelta(days=1), limit=10) == 0
+        assert await expire(session, datetime.now(UTC) + timedelta(seconds=1), limit=10) >= 1
 
 
 async def test_a_failure_after_the_events_rolls_everything_back(

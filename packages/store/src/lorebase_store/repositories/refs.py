@@ -23,6 +23,7 @@ from lorebase_store.jobs import INDEX_JOB, MATERIALIZE_JOB, cancel_queued_jobs
 from lorebase_store.layout import BranchLayout, layout_from
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
+from lorebase_store.repositories.deferred_events import DeferredEventRepository
 
 REFS: Table = metadata.tables["refs"]
 REF_LOG: Table = metadata.tables["ref_log"]
@@ -192,7 +193,7 @@ class RefRepository:
 
         In the same transaction, the queued index builds and materializations of the branch
         are cancelled: there is nothing left to build. Queued drops stay, they clean up the
-        branch's indexes.
+        branch's indexes. Operation events still deferred on the branch (not merged) go too.
         """
         result = await self._session.execute(
             delete(REFS)
@@ -202,6 +203,7 @@ class RefRepository:
         if result.scalar_one_or_none() is None:
             return False
         await self._cancel_jobs(name)
+        await DeferredEventRepository(self._session, self._domain).discard(name)
         return True
 
     async def mark_deleted(self, name: str, *, at: datetime) -> bool:
