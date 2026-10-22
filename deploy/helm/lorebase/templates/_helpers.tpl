@@ -93,17 +93,24 @@ annotations:
 {{- if $key -}}
 {{- if $s.existingSecret -}}
 {{- /* An existing Secret is trusted to hold the key; the pepper is wired only where API keys are used. */ -}}
-{{- if or (ne .name "apiKeyPepper") (contains "api_key" (dig "keeper" "auth" "mode" "none" .ctx.Values.config)) -}}true{{- end -}}
-{{- else if get $s.values .name -}}true
+{{- if eq .name "apiKeyPepper" -}}{{- if contains "api_key" (dig "keeper" "auth" "mode" "none" .ctx.Values.config) -}}true{{- end -}}
+{{- else if or (eq .name "oidcClientSecret") (eq .name "sessionEncryptionKey") -}}{{- if include "lorebase.sessionsEnabled" .ctx -}}true{{- end -}}
+{{- else -}}true{{- end -}}
+{{- else if get $s.values .name -}}{{- if or (not (or (eq .name "oidcClientSecret") (eq .name "sessionEncryptionKey"))) (include "lorebase.sessionsEnabled" .ctx) -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/* "true" when browser sign-in (config.keeper.auth.sessions) is enabled. */}}
+{{- define "lorebase.sessionsEnabled" -}}
+{{- if dig "keeper" "auth" "sessions" "enabled" false .Values.config -}}true{{- end -}}
 {{- end -}}
 
 {{/* "true" when the chart must create the managed Secret. */}}
 {{- define "lorebase.managedSecret" -}}
 {{- $s := .Values.secrets -}}
 {{- if not $s.existingSecret -}}
-{{- if or (and (not .Values.postgresql.enabled) (get $s.values "dbDsn")) (get $s.values "dbReadDsn") (get $s.values "apiKeyPepper") (get $s.values "llmApiKey") $s.extra -}}true{{- end -}}
+{{- if or (and (not .Values.postgresql.enabled) (get $s.values "dbDsn")) (get $s.values "dbReadDsn") (get $s.values "apiKeyPepper") (get $s.values "llmApiKey") (get $s.values "oidcClientSecret") (get $s.values "sessionEncryptionKey") $s.extra -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -236,6 +243,26 @@ key: {{ required "secrets.keys.dbDsn must not be empty" .ctx.Values.secrets.keys
 {{- end -}}
 {{- if and (not .Values.postgresql.enabled) (not (include "lorebase.secretHas" (dict "ctx" . "name" "dbDsn"))) -}}
 {{- fail "no database: set secrets.values.dbDsn, or secrets.existingSecret with secrets.keys.dbDsn, or postgresql.enabled=true" -}}
+{{- end -}}
+{{- if include "lorebase.sessionsEnabled" . -}}
+{{- $sessions := dig "keeper" "auth" "sessions" dict .Values.config -}}
+{{- if not (contains "oidc" $mode) -}}
+{{- fail (printf "config.keeper.auth.sessions.enabled needs an oidc auth mode (oidc or api_key+oidc), got %q" $mode) -}}
+{{- end -}}
+{{- range $name := list "client_id" "redirect_uri" "app_url" -}}
+{{- if not (get $sessions $name) -}}
+{{- fail (printf "config.keeper.auth.sessions.%s is required when sessions are enabled" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (include "lorebase.secretHas" (dict "ctx" . "name" "sessionEncryptionKey")) -}}
+{{- fail "sessions are enabled: set secrets.values.sessionEncryptionKey (32 characters or more), or secrets.existingSecret with secrets.keys.sessionEncryptionKey" -}}
+{{- end -}}
+{{- if and (ne (get $sessions "token_endpoint_auth_method" | default "client_secret_basic") "none") (not (include "lorebase.secretHas" (dict "ctx" . "name" "oidcClientSecret"))) -}}
+{{- fail "sessions are enabled: set secrets.values.oidcClientSecret, or secrets.existingSecret with secrets.keys.oidcClientSecret (or config.keeper.auth.sessions.token_endpoint_auth_method: none for a public client)" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq .Values.web.config.authMode "session") (not (include "lorebase.sessionsEnabled" .)) -}}
+{{- fail "web.config.authMode is session: enable config.keeper.auth.sessions" -}}
 {{- end -}}
 {{- if and .Values.postgresql.enabled (not .Values.postgresql.cluster.imageName) -}}
 {{- fail "postgresql.cluster.imageName must name a CloudNativePG compatible Postgres image that includes pgvector" -}}

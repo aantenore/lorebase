@@ -190,6 +190,7 @@ jobs:
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml"
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml"
           helm lint --strict "$CHART" -f "$CHART/ci/local-models-values.yaml"
+          helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/sessions-values.yaml"
       - name: helm template, every profile
         run: |
           mkdir -p build/helm
@@ -197,11 +198,16 @@ jobs:
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" > build/helm/production.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" > build/helm/scale-out.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/local-models-values.yaml" > build/helm/local-models.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/sessions-values.yaml" > build/helm/sessions.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" -f "$CHART/ci/local-models-values.yaml" > build/helm/all.yaml
       - name: The chart refuses an unsafe or incomplete configuration
         run: |
           if helm template ci "$CHART" > /dev/null 2>&1; then
             echo "the chart rendered without a database or an API key pepper" >&2
+            exit 1
+          fi
+          if helm template ci "$CHART" -f "$CHART/ci/minimal-values.yaml" --set config.keeper.auth.sessions.enabled=true > /dev/null 2>&1; then
+            echo "the chart rendered web sign-in without an OIDC mode, client or secrets" >&2
             exit 1
           fi
       - name: kubeconform, strict, against the Kubernetes schemas
