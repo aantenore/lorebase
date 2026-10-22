@@ -2,8 +2,8 @@
 
 Scribe is the Lorebase worker. It runs the jobs queued in Postgres and schedules the periodic
 ones: Source synchronization, document extraction ([extraction.md](extraction.md)), webhook
-delivery, queued index builds and garbage collection. Embeddings (design 9.3) come later.
-Design references:
+delivery, queued index builds, garbage collection and embeddings
+([below](#embeddings)). Design references:
 [5.9](design.md#59-source) (Source), [9.1](design.md#91-structured-sources) (structured
 Sources), [6.6](design.md#66-the-commit-pipeline) (commit pipeline), AC-18 (no external broker).
 
@@ -18,6 +18,8 @@ lorebase-scribe                                   # work and schedule until SIGT
 lorebase-scribe once [--limit N]                  # run the due jobs, then exit
 lorebase-scribe sync supply approved.suppliers    # synchronize one Source now, print the report
 lorebase-scribe sync supply approved.suppliers --dry-run
+lorebase-scribe embeddings supply                 # embed what lacks a vector now (backfill)
+lorebase-scribe embeddings supply --reindex --prune
 ```
 
 Configuration comes from the same layered settings as Keeper (`LOREBASE_CONFIG`, then
@@ -42,6 +44,7 @@ Domain-wide `data.read` grant.
 | `store.materialize` | commits that move a base branch past an overlay's `overlay_max_base_lag_revisions` | Promotes the overlay branch to a full copy ([store schema notes](store-schema-notes.md#overlay-branches)). Payload `{"branch": name}` |
 | `gc` | the scheduler, at `gc_schedule` per Domain; `python -m lorebase_store.gc --enqueue` | Garbage collection of a Domain ([operations](operations.md)) |
 | `extraction` | `{"documents": [ids], "tiers": [..] or null, "requested_by"}` | Documents into a Proposal of items ([extraction.md](extraction.md)) |
+| `embeddings` | the scheduler, every `embeddings_interval_s` per Domain; a job that used its row budget (continuation) | One embedding pass over the Domain's materialized branches ([below](#embeddings)). Payload `{"branches"?, "reindex"?, "resume"?}`; the scheduled one is `{}` |
 
 ### Worker loop
 
@@ -72,7 +75,9 @@ over at its next tick (`tick_s`). The leader requeues stale jobs and queues:
   backlog never piles up);
 - a `gc` job per Domain at each firing of `gc_schedule` (cron, UTC);
 - a `source_sync` job for each Source whose `schedule` fired, read from the schema of the
-  Domain's default branch.
+  Domain's default branch;
+- an `embeddings` job per Domain every `embeddings_interval_s` (0 disables; an identical queued
+  job is reused).
 
 Cron jobs are queued with `run_after` set to the firing time; a firing is due when it is later
 than the newest such job or, without one, than the moment the process became leader. Missed
@@ -303,6 +308,63 @@ with no changes leaves an open Proposal untouched; with an automatic policy it r
 
 A dry run (`dry_run: true`) reads, maps and computes the delta against the state step 3 would
 produce, records the counts in the run and writes nothing else.
+
+## Embeddings
+
+Semantic and hybrid search rank stored vectors against a query vector the caller computes
+([design 8.4](design.md#84-search)); Scribe computes the stored ones
+([design 9.3](design.md#93-embedding-jobs)) with the model of `inference.embeddings`
+([inference providers](inference-providers.md)).
+
+A Kind opts in with an embedding template in the schema; nothing is embedded otherwise, and a
+Domain without templates never creates the model:
+
+```yaml
+kinds:
+  Supplier:
+    search:
+      embedding_template: "{legal_name}, {city} ({country}). Tier {tier}."
+      # embedding_sensitive: true   # needed to name a pii/confidential/restricted Attribute
+```
+
+Placeholders are Attribute api names, plus `{_kind}` (the Kind's display name) and `{_key}`;
+`{{` and `}}` are literal braces. Derived Attributes cannot be named. Schema validation reports
+`schema.embedding_template_invalid` for a template it cannot use.
+
+Each `embeddings` job runs one pass:
+
+- branches with no template, and branches whose head has not moved since the last complete pass
+  for the model, are skipped;
+- otherwise the branch's own rows that lack a vector of the model are rendered and embedded,
+  plus every row of the Kinds whose template changed (the template fingerprint is recorded per
+  branch in `embedding_cursors`);
+- a text whose hash equals the stored one is left alone; a text already embedded for another
+  Record content is copied, not sent to the model;
+- vectors are keyed by content hash, so overlay and copied branches share the vectors of their
+  unchanged Records and only add work for the Records they change.
+
+| Setting (`scribe.embeddings`) | Default | Meaning |
+|-------------------------------|---------|---------|
+| `page_rows` | 500 | rows read and rendered per query |
+| `batch_texts` | 64 | texts per model call |
+| `max_records_per_job` | 20000 | rows one job reads; the rest goes to a queued continuation |
+| `max_calls_per_second` | 0 | pacing of model calls (a paid endpoint's rate limit); 0: none |
+| `max_text_chars` | 8000 | rendered texts are cut to this length |
+| `retry.attempts`, `backoff_s`, `backoff_max_s` | 2, 2.0, 60.0 | retries of a failed call inside the job |
+
+`store.embeddings.dims` must equal `inference.embeddings.dims`: the job checks the model's
+dimension and embeds a probe text before its first call, and fails without retries on a
+mismatch. One pass per Domain runs at a time.
+
+**Switching model.** Set the new `inference.embeddings` and run
+`lorebase-scribe embeddings DOMAIN` (or let the schedule do it): vectors are stored under the
+new model name next to the old ones. Then point Keeper's `search.semantic.model` at the new
+name (`fake:<model>` for the fake provider) and run `lorebase-scribe embeddings DOMAIN --prune`
+to delete the old vectors. `--reindex` renders every text again and re-embeds those that changed.
+
+**Query vectors.** Keeper and Herald never call a model. Compute the query vector with the same
+settings: `lorebase-inference embed "late deliveries" | lorebase search "late deliveries"
+--vector-file -` (hybrid), or `create_embedding_model(settings).embed([text])` in Python.
 
 ## Operations
 

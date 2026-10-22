@@ -592,6 +592,21 @@ def _query_body(text: str) -> dict[str, Any]:
     return parsed
 
 
+def query_vector(file: str) -> list[float]:
+    """A query vector from a file, or standard input with `-`: a JSON array of numbers, or an
+    object with a `vector` array (the output of `lorebase-inference embed`)."""
+    parsed = json_argument(file if file == "-" else "@" + file)
+    if isinstance(parsed, dict):
+        parsed = parsed.get("vector")
+    if (
+        not isinstance(parsed, list)
+        or not parsed
+        or not all(isinstance(v, int | float) and not isinstance(v, bool) for v in parsed)
+    ):
+        raise CliError('a query vector is a JSON array of numbers or {"vector": [...]}')
+    return [float(v) for v in parsed]
+
+
 def _print_aggregate(app: AppContext, result: m.QueryResult) -> None:
     assert result.aggregate is not None
     rows = [c.model_dump() for c in result.aggregate.counts]
@@ -609,20 +624,34 @@ def search_command(
         list[str] | None, typer.Option("--kind", help="Only this Kind. Repeatable.")
     ] = None,
     mode: Annotated[
-        str | None, typer.Option("--mode", help="lexical, semantic or hybrid (default: lexical).")
+        str | None,
+        typer.Option(
+            "--mode",
+            help="lexical, semantic or hybrid (default: lexical, hybrid with --vector-file).",
+        ),
+    ] = None,
+    vector_file: Annotated[
+        str | None,
+        typer.Option(
+            "--vector-file",
+            help="Query vector of the Domain's embedding model: a JSON array, or the output of "
+            "`lorebase-inference embed`; `-` reads standard input.",
+        ),
     ] = None,
     domain: DomainOpt = None,
     branch: BranchOpt = None,
     limit: LimitOpt = None,
     json_out: JsonOpt = False,
 ) -> None:
-    """Search Records by text."""
+    """Search Records by text, and by meaning with a query vector computed on your side."""
     app = app_of(ctx, json_out)
+    vector = None if vector_file is None else query_vector(vector_file)
     request = m.SearchRequest.model_validate(
         {
             "q": text,
             "kinds": kind,
             "mode": mode,
+            "query_vector": vector,
             "branch": app.branch(branch),
             "limit": limit or app.settings.list_limit,
         }

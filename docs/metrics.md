@@ -74,17 +74,20 @@ Meter `lorebase.scribe` (`lorebase_scribe.telemetry`).
 
 | OpenTelemetry name | Prometheus series | Type | Unit | Labels | Meaning | Emitted by |
 |--------------------|-------------------|------|------|--------|---------|------------|
-| `lorebase.scribe.jobs` | `lorebase_scribe_jobs_total` | counter | `{job}` | `type`, `status` | Job runs. `type` is `source_sync`, `webhook_delivery`, `store.index`, `gc` or `extraction`. `status` is the state after the run: `succeeded`, `queued` (failed and requeued for another attempt: a retry) or `failed` (attempts used up, or a permanent error). | `lorebase_scribe.worker.Worker` |
+| `lorebase.scribe.jobs` | `lorebase_scribe_jobs_total` | counter | `{job}` | `type`, `status` | Job runs. `type` is `source_sync`, `webhook_delivery`, `store.index`, `gc`, `extraction` or `embeddings`. `status` is the state after the run: `succeeded`, `queued` (failed and requeued for another attempt: a retry) or `failed` (attempts used up, or a permanent error). | `lorebase_scribe.worker.Worker` |
 | `lorebase.scribe.job.duration` | `lorebase_scribe_job_duration_seconds` (`_bucket`, `_sum`, `_count`) | histogram | s | `type` | Wall time of one run of a job, including the write of its outcome. | `lorebase_scribe.worker.Worker` |
-| `lorebase.scribe.scheduled` | `lorebase_scribe_scheduled_total` | counter | `{job}` | none | Jobs the scheduler queued in one tick (the webhook delivery pass, scheduled Source syncs, garbage collection). Jobs queued by the API are not counted. | `lorebase_scribe.scheduler.Scheduler` |
+| `lorebase.scribe.scheduled` | `lorebase_scribe_scheduled_total` | counter | `{job}` | none | Jobs the scheduler queued in one tick (the webhook delivery pass, scheduled Source syncs, garbage collection, embedding passes). Jobs queued by the API are not counted. | `lorebase_scribe.scheduler.Scheduler` |
 | `lorebase.scribe.source.rows` | `lorebase_scribe_source_rows_total` | counter | `{row}` | `lorebase_source` | Rows read from a Source by sync runs. | `lorebase_scribe.sources.sync.SourceSync` |
 | `lorebase.scribe.source.changes` | `lorebase_scribe_source_changes_total` | counter | `{change}` | `lorebase_source`, `dry_run` | Data changes a Source run computed against the Domain (committed unless `dry_run` is `true`). | `lorebase_scribe.sources.sync.SourceSync` |
 | `lorebase.jobs.queue_depth` | `lorebase_jobs_queue_depth` | gauge | `{job}` | `type`, `status` | Rows of the `jobs` table waiting or running, counted by the scheduler leader at each tick (`scribe.scheduler.tick_s`). `status` is `queued` or `running`. Only the leader reports it, so it is absent when no Scribe holds leadership; a type and status pair that empties reports 0. | `lorebase_scribe.scheduler.Scheduler` |
 | `lorebase.extraction.items` | `lorebase_extraction_items_total` | counter | `{item}` | `tier`, `decision` | Items an extraction job proposes. `tier` is `0`, `1`, `2` or `none` (items without a tier). `decision` is `accepted` (accepted at once by the confidence rules) or `pending` (left for review). | `lorebase_scribe.extraction.pipeline` |
+| `lorebase.scribe.embeddings.records` | `lorebase_scribe_embeddings_records_total` | counter | `{record}` | `outcome` | Records an embedding pass rendered. `outcome` is `embedded` (sent to the model), `reused` (the vector of an identical text was copied), `unchanged` (the stored vector has the same text) or `empty` (the template rendered nothing). | `lorebase_scribe.embeddings.EmbeddingPass` |
+| `lorebase.scribe.embeddings.call.duration` | `lorebase_scribe_embeddings_call_duration_seconds` (`_bucket`, `_sum`, `_count`) | histogram | s | none | Duration of one call of the embedding model by an embedding job, failed attempts included. | `lorebase_scribe.embeddings.EmbeddingPass` |
 
 Job counts per type answer most questions about the work: runs of `source_sync` are Source sync
 runs, `extraction` is extraction throughput, `webhook_delivery` is the delivery pass, `gc` is
-garbage collection. A retry is a `queued` run.
+garbage collection, `embeddings` the embedding passes (a pass larger than
+`scribe.embeddings.max_records_per_job` runs as several jobs). A retry is a `queued` run.
 
 ## Spans
 
@@ -96,6 +99,7 @@ Traces use the same pipeline. Instrumentation names `lorebase.keeper` and `loreb
 | `scribe.job {type}` | `lorebase.job.type`, `lorebase.job.id`, `lorebase.domain`, `lorebase.job.status`; error status and the exception when the attempt fails | `lorebase_scribe.worker.Worker` |
 | `scribe.source_sync` | `lorebase.domain`, `lorebase.source`, `lorebase.run`, `lorebase.dry_run`, `lorebase.changes` | `lorebase_scribe.sources.sync.SourceSync` |
 | `scribe.scheduler.tick` | none | `lorebase_scribe.scheduler.Scheduler` |
+| `scribe.embeddings` | `lorebase.domain`, `lorebase.complete` | `lorebase_scribe.embeddings.EmbeddingPass` |
 
 The spans of design 14 beyond these (authentication, query compile, SQL, commit and merge phases,
 extraction steps) are not emitted yet. Herald emits no telemetry of its own.

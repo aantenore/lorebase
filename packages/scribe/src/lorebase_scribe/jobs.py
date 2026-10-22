@@ -8,9 +8,13 @@
 | `gc` | `{"dry_run": bool, "grace_seconds": int}`, Domain set | `lorebase_store.gc.run_gc_job` |
 | `store.materialize` | `{"branch"}`, Domain set | `materialize.run_materialize_job` |
 | `extraction` | `{"documents", "tiers", "requested_by"}`, Domain set | `ExtractionRun.run` |
+| `embeddings` | `{"branches", "reindex", "resume"}` optional, Domain set | `EmbeddingPass.run` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
+
+An `embeddings` job that reads `scribe.embeddings.max_records_per_job` rows before its pass is
+complete queues its continuation (same payload plus `resume`) and succeeds.
 
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
@@ -27,6 +31,8 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_inference import InferenceSettings
+from lorebase_scribe.embeddings import PERMANENT_ERRORS as EMBEDDING_ERRORS
+from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass
 from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
 from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
 from lorebase_scribe.settings import ScribeSettings
@@ -38,12 +44,15 @@ from lorebase_scribe.worker import JobHandler, PermanentJobError
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
+    EMBEDDINGS_JOB,
     EXTRACTION_JOB,
     GC_JOB,
     INDEX_JOB,
     MATERIALIZE_JOB,
     SOURCE_SYNC_JOB,
     JobRow,
+    embeddings_payload,
+    enqueue_job,
 )
 from lorebase_store.materialize import run_materialize_job
 from lorebase_store.runtime import StoreRuntime
@@ -58,6 +67,7 @@ JOB_TYPES = (
     MATERIALIZE_JOB,
     GC_JOB,
     EXTRACTION_JOB,
+    EMBEDDINGS_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -68,7 +78,8 @@ class JobContext:
 
     `ddl_engine` runs per-Attribute index DDL: the maintenance engine
     (`database.maintenance_dsn`) when configured, else `engine`. `extraction_models` replaces
-    the models built from `inference` (tests)."""
+    the models built from `inference` (tests). `embedding_models` is the process's embedding
+    model, created on first use from `inference` unless given."""
 
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
@@ -82,6 +93,21 @@ class JobContext:
     ddl_engine: AsyncEngine | None = None
     inference: InferenceSettings = field(default_factory=InferenceSettings)
     extraction_models: Callable[[Sequence[int]], ExtractionModels] | None = None
+    embedding_models: EmbeddingModels | None = None
+
+    def embedding_pass(self) -> EmbeddingPass:
+        """An embedding pass sharing the process's model."""
+        models = self.embedding_models
+        if models is None:
+            raise RuntimeError("no embedding model: build the context with `embedding_models`")
+        return EmbeddingPass(
+            self.engine,
+            self.sessions,
+            models,
+            self.settings.embeddings,
+            dims=self.runtime.settings.embeddings.dims,
+            clock=self.clock,
+        )
 
 
 def _domain(job: JobRow) -> str:
@@ -161,6 +187,41 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         )
         return report.as_dict()
 
+    async def embeddings(job: JobRow) -> Mapping[str, Any]:
+        domain = _domain(job)
+        branches = job.payload.get("branches")
+        if branches is not None and (
+            not isinstance(branches, list) or not all(isinstance(b, str) for b in branches)
+        ):
+            raise PermanentJobError("`branches` must be a list of branch names")
+        resume = job.payload.get("resume")
+        if resume is not None and (
+            not isinstance(resume, list)
+            or len(resume) != 3
+            or not all(isinstance(part, str) for part in resume)
+        ):
+            raise PermanentJobError("`resume` must be [branch, kind id, key]")
+        reindex = bool(job.payload.get("reindex", False))
+        report = await context.embedding_pass().run(
+            domain,
+            branches=branches,
+            reindex=reindex,
+            resume=None if resume is None else (resume[0], resume[1], resume[2]),
+        )
+        result = report.as_dict()
+        if report.resume is not None:
+            async with context.sessions() as session, session.begin():
+                result["continuation"] = await enqueue_job(
+                    session,
+                    EMBEDDINGS_JOB,
+                    domain_id=domain,
+                    payload=embeddings_payload(
+                        branches=branches, reindex=reindex, resume=report.resume
+                    ),
+                    unique=True,
+                )
+        return result
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -168,6 +229,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         MATERIALIZE_JOB: materialize,
         GC_JOB: gc,
         EXTRACTION_JOB: extraction,
+        EMBEDDINGS_JOB: embeddings,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())
@@ -176,5 +238,9 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
     return {name: available[name] for name in chosen}
 
 
-PERMANENT_JOB_ERRORS: tuple[type[Exception], ...] = (*PERMANENT_ERRORS, *EXTRACTION_ERRORS)
+PERMANENT_JOB_ERRORS: tuple[type[Exception], ...] = (
+    *PERMANENT_ERRORS,
+    *EXTRACTION_ERRORS,
+    *EMBEDDING_ERRORS,
+)
 """Handler failures the worker fails at once instead of retrying."""

@@ -44,6 +44,9 @@ INDEX_JOB = "store.index"
 MATERIALIZE_JOB = "store.materialize"
 """Job type of an overlay promotion to a full copy; payload `{"branch": name}`
 (see `lorebase_store.materialize.overlay`)."""
+EMBEDDINGS_JOB = "embeddings"
+"""Job type of an embedding pass over a Domain's branches run by Scribe; payload from
+`embeddings_payload`."""
 
 _COLUMNS = "id, type, domain_id, payload, priority, attempts, run_after, locked_by, created_at"
 
@@ -161,6 +164,26 @@ def extraction_payload(
         "tiers": None if tiers is None else sorted(set(tiers)),
         "requested_by": requested_by,
     }
+
+
+def embeddings_payload(
+    *,
+    branches: Sequence[str] | None = None,
+    reindex: bool = False,
+    resume: tuple[str, str, str] | None = None,
+) -> dict[str, Any]:
+    """Payload of an `embeddings` job: the branches (`None`: every materialized branch),
+    whether every text is rendered again (`reindex`) and, for a continuation, the branch,
+    Kind id and key to resume after. The scheduler queues the default, `{}`, so identical
+    scheduled passes are recognized by `enqueue_job(unique)`."""
+    payload: dict[str, Any] = {}
+    if branches is not None:
+        payload["branches"] = sorted(set(branches))
+    if reindex:
+        payload["reindex"] = True
+    if resume is not None:
+        payload["resume"] = list(resume)
+    return payload
 
 
 def default_worker_id() -> str:

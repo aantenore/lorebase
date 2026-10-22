@@ -666,7 +666,9 @@ search:
   trigram_weight: 0.5            # weight of title similarity added to ts_rank_cd
   headline_options: "MaxWords=30, MinWords=10, MaxFragments=2"   # ts_headline of snippets
   semantic:
-    model: BAAI/bge-small-en-v1.5   # embedding model searched; equals inference.embeddings.model
+    model: BAAI/bge-small-en-v1.5   # embedding model searched: the name Scribe stores vectors
+                                    # under (inference.embeddings.model; `fake:<model>` for the
+                                    # fake provider)
   hybrid:                        # reciprocal rank fusion: w / (rrf_k + rank) per list
     rrf_k: 60
     lexical_weight: 1.0
@@ -802,6 +804,7 @@ scribe:
     gc_schedule: "0 3 * * *"     # cron (UTC) of the collection of every Domain; null disables
     gc_dry_run: false
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
+    embeddings_interval_s: 60.0  # embedding pass of every Domain; 0 disables
     domain_batch: 100            # Domains read per query
   sources:                       # Source synchronization (design 9.1)
     allowed_connections: []      # secret references a Source `connection` (or an http_json
@@ -874,3 +877,13 @@ scribe:
       cooccurrence_max: 0.7      # ceiling of Links from co-occurrence in a sentence
       heading: 0.6               # Links between a heading's Record and those of its section
       tier2: 0.8                 # facts from the chat model with verified evidence
+  embeddings:                    # embedding jobs (design 9.3); model: inference.embeddings
+    page_rows: 500               # Record rows read and rendered per query
+    batch_texts: 64              # texts per call of the embedding model
+    max_records_per_job: 20000   # rows one job reads; the rest goes to a continuation job
+    max_calls_per_second: 0.0    # model calls per second of one job; 0: no limit
+    max_text_chars: 8000         # rendered texts are cut to this length before hashing
+    retry:                       # retries of a failed call, after the provider's own retries
+      attempts: 2                # attempts per call, the first included
+      backoff_s: 2.0             # pause before the first retry; doubles each time
+      backoff_max_s: 60.0        # longest pause

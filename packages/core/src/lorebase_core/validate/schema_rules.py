@@ -19,6 +19,7 @@ from lorebase_core.model.derivation import (
     Derivation,
     ExpressionDerivation,
 )
+from lorebase_core.model.embedding import template_problems
 from lorebase_core.model.kind import Kind
 from lorebase_core.model.operation import (
     CreateLinkStep,
@@ -507,6 +508,14 @@ class _Checker:
                 f"title attribute {kind.title_attribute} is not an attribute of the Kind",
                 kind=kind.id,
                 attribute=kind.title_attribute,
+            )
+
+        for problem in template_problems(kind):
+            self.add(
+                IssueCode.SCHEMA_EMBEDDING_TEMPLATE_INVALID,
+                (*base, "search", "embedding_template"),
+                f"embedding template of Kind {kind.api_name!r}: {problem}",
+                kind=kind.id,
             )
 
         self.check_trait_implementations(kind)

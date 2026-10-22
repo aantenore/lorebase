@@ -184,6 +184,11 @@ the branch's 8,075 rows, and 271 in the overlay half. Warm calls of `lb_search` 
   session id (primary key, never the id), the principal (rows go with it), the provider subject
   and groups, the provider tokens encrypted by Keeper, and the activity, expiry and refresh
   times, indexed for the purge of expired rows ([deployment](deployment.md#web-sign-in)).
+- `embeddings.text_hash` and `embedding_cursors` (revision `0014`): the SHA-256 of the text
+  each vector was computed from (indexed with the Domain and model, so an identical text reuses
+  a vector), and per branch and model the head and template fingerprints of the last complete
+  embedding pass. `embedding_cursors` is Domain-scoped with row-level security and goes with its
+  branch ([scribe](scribe.md#embeddings)).
 - Plan T11 named an `rls.sql` file; the policies are inlined in revision `0001` instead, so that a
   released revision never changes.
 

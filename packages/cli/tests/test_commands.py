@@ -898,6 +898,25 @@ def test_search(http: respx.MockRouter) -> None:
     assert request_bodies(route)[0] == {"q": "seal", "kinds": ["Part"], "limit": 50}
 
 
+def test_search_with_a_query_vector(http: respx.MockRouter, tmp_path: Path) -> None:
+    route = http.post("/domains/supply/search").respond(
+        200, json={"revision": REV, "served_from": "materialized", "mode": "hybrid", "items": []}
+    )
+    embedded = tmp_path / "vector.json"
+    embedded.write_text(json.dumps({"model": "m", "dims": 3, "vector": [0.5, 0, -1]}))
+    assert run("search", "seal", "--vector-file", str(embedded), "-d", "supply").exit_code == 0
+    plain = tmp_path / "plain.json"
+    plain.write_text("[1, 2]")
+    assert run("search", "seal", "--vector-file", str(plain), "-d", "supply").exit_code == 0
+    bodies = request_bodies(route)
+    assert bodies[0]["query_vector"] == [0.5, 0.0, -1.0]
+    assert bodies[1]["query_vector"] == [1.0, 2.0]
+    plain.write_text('["x"]')
+    result = run("search", "seal", "--vector-file", str(plain), "-d", "supply")
+    assert result.exit_code != 0
+    assert "JSON array of numbers" in result.output
+
+
 # History ------------------------------------------------------------------------------------
 
 

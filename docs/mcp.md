@@ -167,6 +167,12 @@ example `Supplier/S-1001`.
 
 Read tools are annotated read-only; `lorebase_execute` is the only tool that can write.
 
+Herald never embeds text. For semantic or hybrid `lorebase_search`, the agent computes
+`query_vector` on its side with the model Scribe uses for the Domain (for example
+`lorebase-inference embed "text"` with the same `inference.embeddings` settings,
+[inference providers](inference-providers.md#embeddings-for-search)); a vector of another
+dimension is refused.
+
 **Resources.** `lorebase://{domain}/schema` (schema summary) and
 `lorebase://{domain}/{kind}/{key}` (one Record), for hosts that attach resources to the context.
 

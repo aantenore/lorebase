@@ -31,9 +31,15 @@ class TraitImplementation(Model):
 
 
 class KindSearch(Model):
-    """Search settings of a Kind. Full-text fields come from searchable Attributes."""
+    """Search settings of a Kind. Full-text fields come from searchable Attributes.
+
+    ``embedding_template`` opts the Kind into semantic search: Scribe embeds the text it
+    renders for each Record (``lorebase_core.model.embedding``). ``embedding_sensitive`` lets
+    the template name sensitive Attributes; unset, they are refused.
+    """
 
     embedding_template: str | None = None
+    embedding_sensitive: bool | None = None
 
 
 def check_attribute_keys(attributes: dict[str, Attribute], owner: str) -> None:

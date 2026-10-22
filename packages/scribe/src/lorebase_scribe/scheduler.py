@@ -11,6 +11,8 @@ Each tick of the leader:
 - queues a `webhook_delivery` pass every `webhook_interval_s` (an identical queued job is
   reused, so a backlog never piles up);
 - queues a `gc` job per Domain at each firing of `gc_schedule`;
+- queues an `embeddings` pass per Domain every `embeddings_interval_s` (an identical queued
+  pass is reused);
 - queues a `source_sync` job for each Source whose `schedule` fired, read from the schema of
   the Domain's default branch;
 - counts the waiting and running jobs for the `lorebase.jobs.queue_depth` gauge (reported by
@@ -42,8 +44,10 @@ from lorebase_scribe.telemetry import QUEUE_DEPTH, SCHEDULED, tracer
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import (
+    EMBEDDINGS_JOB,
     GC_JOB,
     SOURCE_SYNC_JOB,
+    embeddings_payload,
     enqueue_job,
     queue_depth,
     requeue_stale,
@@ -197,8 +201,17 @@ class Scheduler:
         anchor = last if last is not None else self._leader_since
         return anchor is None or fire > anchor
 
+    def _interval_due(self, name: str, interval: float, now: datetime) -> bool:
+        """Whether an interval job is due; marks it run when it is."""
+        last = self._last.get(name)
+        if interval <= 0 or (last is not None and (now - last).total_seconds() < interval):
+            return False
+        self._last[name] = now
+        return True
+
     async def _domains(self, session: AsyncSession, now: datetime) -> list[int]:
         gc = parse_cron(self._settings.gc_schedule) if self._settings.gc_schedule else None
+        embed = self._interval_due(EMBEDDINGS_JOB, self._settings.embeddings_interval_s, now)
         queued: list[int] = []
         after: str | None = None
         while True:
@@ -222,6 +235,16 @@ class Scheduler:
                                 unique=True,
                             )
                         )
+                if embed:
+                    queued.append(
+                        await enqueue_job(
+                            session,
+                            EMBEDDINGS_JOB,
+                            domain_id=domain.id,
+                            payload=embeddings_payload(),
+                            unique=True,
+                        )
+                    )
                 if self._settings.source_schedules:
                     queued.extend(
                         await self._sources(session, domain.id, domain.default_branch, now)

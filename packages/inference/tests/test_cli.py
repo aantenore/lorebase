@@ -7,6 +7,7 @@ import pytest
 from lorebase_inference import InferenceSettings, InvalidOutputError
 from lorebase_inference import cli as cli_module
 from lorebase_inference.cli import check_chat, check_embeddings, run_checks
+from lorebase_inference.fake import embed_text
 
 
 def fake_settings(**embeddings: object) -> InferenceSettings:
@@ -133,3 +134,42 @@ def test_main_reports_invalid_configuration(monkeypatch) -> None:
     with pytest.raises(SystemExit) as caught:
         cli_module.main(["check"])
     assert "max_retries" in str(caught.value)
+
+
+async def test_embed_query_returns_the_vector_of_the_configured_model() -> None:
+    found = await cli_module.embed_query(fake_settings(), "late deliveries")
+    assert found == {
+        "model": "fake:BAAI/bge-small-en-v1.5",
+        "dims": 8,
+        "vector": embed_text("late deliveries", 8),
+    }
+
+
+def test_main_embed_prints_json(monkeypatch, capsys) -> None:
+    code, out = run_main(
+        monkeypatch,
+        capsys,
+        "embed",
+        "late deliveries",
+        LOREBASE__INFERENCE__EMBEDDINGS__PROVIDER="fake",
+        LOREBASE__INFERENCE__EMBEDDINGS__DIMS="4",
+    )
+    assert code == 0
+    body = json.loads(out)
+    assert body["dims"] == 4
+    assert body["vector"] == embed_text("late deliveries", 4)
+
+
+def test_main_embed_fails_on_a_dimension_mismatch(monkeypatch) -> None:
+    class Wrong:
+        name = "m"
+        dims = 8
+
+        async def embed(self, texts):
+            return [[0.0] * 5 for _ in texts]
+
+    monkeypatch.setattr(cli_module, "create_embedding_model", lambda settings: Wrong())
+    monkeypatch.setenv("LOREBASE__INFERENCE__EMBEDDINGS__PROVIDER", "fake")
+    with pytest.raises(SystemExit) as caught:
+        cli_module.main(["embed", "x"])
+    assert "returned 5 dimensions" in str(caught.value)
