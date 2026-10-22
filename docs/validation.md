@@ -9,7 +9,7 @@ Every validation run of the project in one place: what was run, where, how, what
 | [End-to-end](#end-to-end) | The five-day scenario and the web app's Playwright suite |
 | [Security reviews](#security-reviews) | Each review round, its findings and what remains |
 | [Interop and connectors](#interop-and-connectors) | LinkML, SQL Sources, JSON, Parquet and HTTP JSON |
-| [Live model runs](#live-model-runs) | In progress |
+| [Live model runs](#live-model-runs) | Tier 2 extraction and schema suggestions with Claude Haiku 5.5 and LFM 2.5 8B, fastembed embeddings and hybrid search |
 | [Fresh-clone quickstart check](#fresh-clone-quickstart-check) | In progress |
 
 ## How to reproduce
@@ -295,7 +295,165 @@ Behavior these tests and the Scribe page pin down: MySQL and MariaDB sessions ar
 
 ## Live model runs
 
-In progress.
+**Date:** 2026-10-22. **Models:** `claude-haiku-5-5` through Anthropic's OpenAI-compatible
+endpoint, `lfm2.5:8b` (8.5B mixture of experts, Q4_K_M, 16k context) on Ollama 0.32.1, and
+`BAAI/bge-small-en-v1.5` (384 dimensions) with fastembed. Until then tier 2 and the embedding
+jobs had only run against the deterministic fake provider in tests.
+
+### Setup
+
+Everything ran in process against a scratch Postgres 16 with pgvector (the integration test
+harness: `LOREBASE_TEST_DATABASE_URL` pointing at a local `pgvector/pgvector:pg16`
+container), on an Apple M5 Pro laptop. The `supply` Domain was seeded like
+`packages/scribe/tests/integration/test_extraction.py` does: Suppliers, Parts, Plants and
+Contracts without C-3025, no `supplied_by` or `stocked_at` Links. The five documents were the
+four of `examples/supply/documents/` and `examples/five_day_demo/documents/contract-c-3099-*`,
+each stored as an upload and extracted by its own job. The runs used throwaway tests built on
+the fixtures of `packages/scribe/tests/integration/` and `packages/keeper/tests/integration/`
+that are not committed; the committed opt-in test
+`test_live_model_extracts_the_contract` (`LOREBASE_LIVE_LLM=1`, `LLM_BASE_URL`, `LLM_MODEL`)
+runs tier 2 on one contract against a model of your choice.
+
+Model settings, in a file outside the repository (the key and workspace id are file
+references, never values):
+
+```yaml
+inference:
+  llm:
+    base_url: https://api.anthropic.com/v1/
+    model: claude-haiku-5-5
+    api_key: secret://file//path/to/anthropic.key
+    headers: {anthropic-workspace-id: secret://file//path/to/anthropic.workspace}
+    temperature: null
+    json_schema_strict: true
+    extra_body: {thinking: {type: disabled}}
+    max_tokens: 4096
+---
+inference:
+  llm:
+    base_url: http://localhost:11434/v1
+    model: lfm25-bench-16k:latest      # lfm2.5:8b with num_ctx 16384
+    max_tokens: 4096
+    extra_body: {reasoning_effort: none}
+```
+
+Extraction ran with `scribe.extraction.tiers: [0, 2]` (the rules alone for the baseline),
+`auto_accept_threshold: 0.55`, schema discovery on (the default), tier 1 off. Embeddings ran
+with the defaults (`fastembed`, `BAAI/bge-small-en-v1.5`), with
+`search.embedding_template: "{name}. {summary} Category: {category}."` on Part, through
+Scribe's `EmbeddingPass` and Keeper's `POST /search`.
+
+What was measured:
+
+- **Schema compliance:** answers that parse and validate against the answer schema on the
+  first attempt, and after the repair call.
+- **Facts proposed:** records (one per record, plus each non-key value) and links in the
+  model's answers.
+- **Evidence verified:** facts whose quote is found in the chunk. **Kept:** facts that also
+  pass value grounding, type checks and entity resolution.
+- **Items:** Proposal items of the five jobs, and how many carry tier 2 provenance (tier 2
+  supersedes a tier 0 item for the same fact).
+- **Tokens** as reported by the endpoint, **time** per job end to end.
+
+### Extraction (tier 2)
+
+| | Rules only (tier 0) | `claude-haiku-5-5` | `lfm2.5:8b`, no reasoning |
+|---|---|---|---|
+| Structured output mode | n/a | prompt only (strict schema refused, see below) | `json_schema` |
+| Schema-valid answers, first attempt / after repair | n/a | 5 of 6 / 5 of 5 | 5 of 5 / 5 of 5 |
+| Facts proposed by the model | n/a | 168 | 67 |
+| Evidence verified | n/a | 98 % | 43 % |
+| Kept after grounding and resolution | n/a | 80 % | 37 % |
+| Proposal items (tier 2) | 17 (0) | 28 (22) | 17 (0) |
+| Records referred to by key and resolved | n/a | 33 of 33 | 1 not resolved |
+| Links proposed / not resolved | n/a | 30 / 10 | 3 / 3 |
+| Tokens in / out, five jobs | 0 | 42,856 / 12,500 | 6,377 / 7,853 |
+| Time per job | 0.1 to 0.2 s | 6.5 to 13.6 s | 5 to 37 s |
+| Cost of the five jobs | 0 | 0.011 USD | 0 |
+
+- **Haiku 5.5** added values the rules have no cue for (payment terms, Incoterm, currency,
+  quantities) and restated most of what the rules find, with correct dates and numbers. The
+  discarded facts were inferences the evidence check exists to stop: ISO country codes from
+  "Poland", Part names copied from the candidate list, statuses inferred from dates. Its
+  unresolved links point at purchase orders and Plants that the seeded Domain does not hold.
+  One answer was not valid JSON at first and the repair call fixed it. Input tokens are high
+  because in prompt-only mode the answer schema travels in the system prompt (about 5,000
+  tokens per call).
+- **LFM 2.5 8B** produced schema-valid JSON every time (Ollama constrains decoding with the
+  schema), but most of its evidence was not in the text: it paraphrased, merged sentences or
+  copied schema descriptions as quotes. Every such fact was discarded, so its jobs proposed
+  exactly what the rules proposed. With reasoning on, a job took 23 to 62 s, and the
+  answers were no better.
+- The rules baseline found 17 items in 0.7 s for all five documents; tier 2 is worth its cost
+  on prose only with a model that quotes faithfully.
+
+### Schema suggestions
+
+| | Rules only | `claude-haiku-5-5` | `lfm2.5:8b` |
+|---|---|---|---|
+| Suggestions over five documents | 8 | 19 | 8 |
+| From the model | n/a | 12 (one shared with the rules) | 0 |
+
+Haiku's suggestions were sensible Attributes of Contract and Supplier with correct quotes and
+samples: `termination_notice_days` (two documents, sample 30), `renewal_notice_days` (90),
+`defect_threshold_percent` (0.2), `replacement_lead_time_working_days` (15),
+`minimum_order_quantity_for_unit_price` (200), `requested_price_increase`. `buyer` was merged
+with the rules' observation into one suggestion with support 3. Weak points:
+
+- Near duplicates are not merged when the model names the same fact differently in two
+  documents: `renewal_notice_days` and `renewal_proposal_notice_days` (same sample, same
+  sentence shape), `termination_notice_days` and `termination_for_cause_notice_days`.
+- A Kind `Proposal` came from the sentence "open a Proposal to flag the supplier as high
+  risk", and a Kind `Buyer` duplicates the Attribute `buyer`.
+
+LFM's unlisted facts all failed evidence verification, so it added no suggestion.
+
+### Embeddings and hybrid search
+
+The embedding pass embedded the 40 Parts in one model call: 52 s on the first run, which
+includes downloading the model, then 1.4 s. Top results for Kind Part, limit 5, Keeper in
+process:
+
+| Query | Lexical | Semantic and hybrid, top 3 |
+|---|---|---|
+| electric drive motor | none | Servo motor 11 kW, Gear motor 11 kW, Servo motor 0.75 kW |
+| ring that stops oil leaking | none | O-ring NBR 70 30x3, O-ring FKM 90 18x2.5, O-ring 40x62x8 |
+| keeps dust out of compressed air | none | Air filter cartridge 10 micron, Air filter cartridge H-360, Air filter cartridge 10 micron |
+| measure heat | none | Temperature probe 0-250 bar, Temperature probe PT100 150 mm, Servo motor 0.75 kW |
+| screw fastener | none | Hex bolt M16, Flat washer M10x60, Hex bolt M6x30 |
+| filter 10 micron | 3 hits, Oil filter first | hybrid: Oil filter 10 micron, Air filter cartridge 10 micron (x2), then 25 micron filters |
+
+The ranking is sound: every semantic top result is the right product family. Lexical search
+needs every query word, so descriptive queries find nothing and hybrid search then equals
+the semantic ranking; on keyword queries hybrid keeps the exact matches first and fills up
+with semantic neighbours. Search answered in 30 to 110 ms after the first query (415 ms).
+
+### Tokens and cost
+
+All Anthropic calls of the validation, probes and the runs before the fixes included:
+184,278 input and 44,152 output tokens, 0.04 USD at 0.10 / 0.50 USD per million tokens.
+Requests the endpoint refused (HTTP 400) are not billed. Ollama and fastembed ran locally at
+no cost.
+
+### Problems found and fixed
+
+| Problem | Effect | Fix |
+|---|---|---|
+| Anthropic refuses keys not scoped to a workspace without an `anthropic-workspace-id` header | every request failed with HTTP 400 | `inference.llm.headers` (and per task), values may be secret references |
+| Haiku 5.5 refuses `temperature` | HTTP 400 on every call | `temperature: null` leaves the field out |
+| The endpoint requires `response_format.json_schema.strict: true` | `json_schema` refused, two wasted requests per job | `json_schema_strict` setting; schemas above 24 optional properties still step down, as documented |
+| Thinking (Haiku by default, LFM unless disabled) spends `max_tokens` before the answer | empty answers | `extra_body` passes `thinking` or `reasoning_effort` through; the error now says a reasoning model may have used the budget |
+| One chunk with an invalid answer failed the whole extraction job | the tier 0 items of the document were lost too | the chunk is skipped with a warning and counted as `model_invalid_answers`; its tokens still count |
+| Timestamps answered without an offset (`2024-01-23T00:00:00`) were discarded as invalid, and timestamps were grounded as text | `approved_at` never extracted | values without offset are read as UTC; timestamps are grounded by their day |
+
+Each fix has regression tests with recorded answers (`packages/inference/tests/test_chat_endpoint.py`,
+`packages/scribe/tests/test_extraction_rules.py`,
+`packages/scribe/tests/integration/test_extraction.py`).
+
+Not fixed, for later: near-duplicate suggestions with different names, links proposed by tier
+2 without required link Attributes (`stocked_at` without `quantity`, left pending with a
+warning), and the step-down that repeats once per extraction job instead of once per
+process.
 
 ## Fresh-clone quickstart check
 
