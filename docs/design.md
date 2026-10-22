@@ -1242,6 +1242,7 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
 | Sources | `GET/POST .../sources`, `POST .../sources/{s}/runs`, `GET .../sources/{s}/runs/{run}`, `POST /sources:infer` | |
 | Documents and extraction | `POST .../documents`, `GET .../documents/{doc}`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | |
 | Admin | `GET .../audit`, `GET/POST /principals`, `POST /api-keys`, `GET/POST .../grants` | |
+| Record history and lineage | `GET .../kinds/{kind}/records/{key}/history?values=&limit=&cursor=`, `GET .../kinds/{kind}/records/{key}/lineage` | read from `mat_history`, the provenance entries and Proposals at the branch head ([agents](agents.md#history-and-lineage)) |
 | Agent reads | `POST .../context`, `GET .../kinds/{kind}/records/{key}/explain` | one-call context pack within a token budget; why a Record is what it is ([agents](agents.md)) |
 | Change feed | `GET .../branches/{b}/events` (Server-Sent Events), `GET .../branches/{b}/changes?since=` | Revision events; resume with `Last-Event-ID` |
 | Webhooks | `GET/POST .../webhooks`, `DELETE .../webhooks/{id}` | HMAC-signed deliveries from the outbox |

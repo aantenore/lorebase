@@ -177,6 +177,8 @@ keyed by Revision, so commits never serve a stale pack.
 |------|------|
 | one Record, with Link counts and lineage | `GET /kinds/{kind}/records/{key}?links=true&lineage=true` |
 | the Links of a Record along a Relation | `GET /kinds/{kind}/records/{key}/links/{relation}` |
+| every change of one Record on a branch | `GET /kinds/{kind}/records/{key}/history` (section 3) |
+| where each current value of a Record came from | `GET /kinds/{kind}/records/{key}/lineage` (section 3) |
 | Records matching a filter | `POST /query` (design 8.2) |
 | a path of Relations | `POST /traverse` |
 | the graph around some Records | `POST /neighborhood` |
@@ -204,6 +206,30 @@ In 97ce9a2ce272 at 2026-10-01T08:00:03Z by usr_loader (import examples/supply): 
 | --- | --- | --- | --- | --- | --- | --- |
 | risk_score | 90 | f4d229169a37 | 2026-10-01T08:00:04Z | usr_editor | operation | Raise the risk of S-1001 |
 ```
+
+### History and lineage
+
+`GET /kinds/{kind}/records/{key}/history` lists the Revisions that changed the Record on the
+branch, newest first: author, time, message and origin of the Revision, whether it `created`,
+`updated` or `deleted` the Record, and the Attributes it changed with the provenance of each.
+`values=true` adds the values before and after. Pages hold `read.history.default_limit`
+changes (at most `max_limit`); follow `next_cursor`. A deleted Record keeps its history.
+
+`GET /kinds/{kind}/records/{key}/lineage` answers, per Attribute holding a value, where that
+value came from: the provenance entry (origin type, origin, actor, time), the Revision of its
+last change with its author and message, and what the provenance names: the Source
+(`source_sync`), the Operation (`operation`), the extraction evidence (document, span, model and
+prompt version) and the Proposal that brought it to the branch (merged in that Revision, or
+whose Conflict resolution set the value). A value merged from another branch keeps its original
+provenance; a resolved Conflict shows `merge_resolution`.
+
+Both read the branch history table, one index range per Record, so their cost follows the
+number of changes of the Record, not the length of the branch; lineage reads at most
+`read.history.lineage_max_changes` of the newest changes to find the Revision behind each
+value. Both are served at branch heads only (no `at`), authorized like a Record read (the
+Kind of the path must be readable; only that Kind's Attributes appear) and cached by Revision
+with an `ETag`. CLI: `lorebase record history|lineage KIND KEY`; MCP: `lorebase_history`,
+`lorebase_lineage`.
 
 ## 4. Write through Operations
 

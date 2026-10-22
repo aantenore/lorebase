@@ -6,9 +6,8 @@ Lorebase is pre-alpha. [v0.1.0](https://github.com/aantenore/lorebase/releases/t
 
 ## Next up
 
-1. Lineage and history endpoints (M1, T23).
-2. The performance baseline on the 1M-Record fixture (M1, T28).
-3. OIDC login with BFF sessions for the web app (M2).
+1. The performance baseline on the 1M-Record fixture (M1, T28).
+2. OIDC login with BFF sessions for the web app (M2).
 
 The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -40,7 +39,7 @@ Keeper REST API
 - [x] Records and Links, the query DSL, traversal, neighborhood, lexical search, time travel, ETags and conditional reads
 - [x] Revisions, branch log and diff
 - [x] Proposals, reviews, required approvals, merge and Conflict resolution API, scoped to what the caller may read
-- [ ] Lineage and history endpoints (a lineage summary is available on Record reads; per-Record lineage and history endpoints are not)
+- [x] Lineage and history endpoints: per-Record history and lineage over REST, client, CLI, MCP and the web Explorer
 - [x] Expressions (CEL) end to end: schema change sets type check them (`schema.expressions_enabled`), Keeper executes custom Operations with them and the materializer recomputes `expression` and `aggregate` Derivations
 
 Clients and operations

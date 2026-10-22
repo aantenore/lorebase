@@ -4,6 +4,10 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+### Added
+
+- Per-Record history and lineage: `GET /api/v1/domains/{domain}/kinds/{kind}/records/{key}/history` lists the Revisions that changed a Record on a branch, newest first, with the changed Attributes, their provenance and, with `values=true`, the values before and after; `GET .../records/{key}/lineage` tells per Attribute where the current value came from (provenance, Revision, Source, Operation, extraction evidence, Proposal). Both read one index range of the branch history, are authorized and cached like Record reads, and are bounded by the new `read.history` settings. Also in the Python client (`records.history`, `records.lineage`), the CLI (`lorebase record history|lineage`), the MCP server (`lorebase_history`, `lorebase_lineage`) and the History tab of the Explorer Record page.
+
 ### Changed
 
 - The web app Canvas lays large graphs out in a web worker instead of on the main thread: the graph is drawn at once and refined while it is on screen, the layout stops when it settles or at a time budget and can be paused, and large graphs use Barnes-Hut, hide edge labels and most node labels, and hide edges while panning. On a generated graph of 5,000 nodes and 10,000 edges the first render takes about 0.6 s instead of 1.7 s ([performance](docs/performance.md#web-app-canvas-5000-nodes-10000-edges)). The limits are configurable (`VITE_CANVAS_*`), and `pnpm perf:canvas` with `VITE_MOCK_PERF_NODES` measures a generated graph.
