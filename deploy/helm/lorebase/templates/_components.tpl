@@ -92,6 +92,23 @@ postgres
 {{- end }}
 {{- end -}}
 
+{{/* Guide: listener, Keeper address and the model settings Scribe gets. It holds no Keeper credential. */}}
+{{- define "lorebase.guideEnv" -}}
+- name: LOREBASE_CONFIG
+  value: /etc/lorebase/lorebase.yaml
+- name: LOREBASE__LOGGING__LEVEL
+  value: {{ .Values.logLevel | quote }}
+- name: LOREBASE__GUIDE__HOST
+  value: 0.0.0.0
+- name: LOREBASE__GUIDE__PORT
+  value: {{ .Values.guide.port | quote }}
+- name: LOREBASE__GUIDE__KEEPER__BASE_URL
+  value: {{ default (include "lorebase.keeperUrl" .) .Values.guide.keeperUrl | quote }}
+- name: LOREBASE__GUIDE__HTTP__ALLOWED_ORIGINS
+  value: {{ .Values.guide.allowedOrigins | toJson | quote }}
+{{- include "lorebase.scribeEnv" . }}
+{{- end -}}
+
 {{/* The lorebase.yaml ConfigMap, mounted read-only at /etc/lorebase. */}}
 {{- define "lorebase.configVolume" -}}
 - name: config
@@ -150,6 +167,12 @@ postgres
 {{- $keeper := urlParse (include "lorebase.webKeeperUrl" .) -}}
 {{- if and $keeper.scheme $keeper.host -}}
 {{- $connect = append $connect (printf "%s://%s" $keeper.scheme $keeper.host) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.web.config.guideUrl -}}
+{{- $guide := urlParse .Values.web.config.guideUrl -}}
+{{- if and $guide.scheme $guide.host -}}
+{{- $connect = append $connect (printf "%s://%s" $guide.scheme $guide.host) -}}
 {{- end -}}
 {{- end -}}
 {{- $connect = concat $connect .Values.web.security.connectSrc -}}

@@ -1,0 +1,18 @@
+# Exploration assistant overlay for the production profile: Guide next to Keeper, on its own
+# host, calling a hosted OpenAI-compatible model endpoint. The API key is a key of the Secret you
+# manage (secrets.existingSecret). The address range below is a documentation placeholder.
+secrets:
+  existingSecret: lorebase-secrets
+  keys:
+    llmApiKey: llm-api-key
+guide:
+  enabled: true
+  allowedOrigins: ["https://lorebase.example.com"]
+web:
+  config:
+    guideUrl: https://guide.lorebase.example.com
+networkPolicy:
+  egress:
+    model:
+      to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+      ports: [{protocol: TCP, port: 443}]

@@ -13,6 +13,10 @@ Keeper (REST API):
 
 Herald (MCP, streamable HTTP): service {{ include "lorebase.componentName" (dict "ctx" . "component" "herald") }}:{{ .Values.herald.service.port }}{{ .Values.herald.path }}
 {{- end }}
+{{- if .Values.guide.enabled }}
+
+Guide (exploration assistant): service {{ include "lorebase.componentName" (dict "ctx" . "component" "guide") }}:{{ .Values.guide.service.port }}
+{{- end }}
 {{- if .Values.web.enabled }}
 
 Web app: service {{ include "lorebase.componentName" (dict "ctx" . "component" "web") }}:{{ .Values.web.service.port }}

@@ -5,7 +5,7 @@ settings behave the same everywhere.
 
 Deployment input:
   ctx            root context
-  component      keeper | scribe | herald | web
+  component      keeper | scribe | herald | guide | web
   cfg            the component values
   image          image reference
   pullPolicy     image pull policy

@@ -1227,6 +1227,89 @@ Lorebase_context packs
 | `herald.changes.page_size` | `50` |  |
 | `herald.changes.max_pages` | `10` |  |
 
+## `guide`
+
+Guide, the optional exploration assistant (docs/guide.md): POST /embed and POST /explore. It holds no Keeper credential: every read carries the caller's own. Its chat model is the `inference.llm` model with the overrides of `inference.llm.tasks.<agent.task>`.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `guide.host` | `127.0.0.1` |  |
+| `guide.port` | `8095` |  |
+| `guide.readiness_timeout_s` | `3` | /readyz probes Keeper's /healthz |
+
+### `guide.keeper`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `guide.keeper.base_url` | `http://127.0.0.1:8080` |  |
+| `guide.keeper.api_prefix` | `/api/v1` |  |
+| `guide.keeper.timeout_s` | `30` |  |
+| `guide.keeper.max_retries` | `1` | resends after 429, 503 or no connection; 0 turns retries off |
+| `guide.keeper.retry_max_wait_s` | `3` |  |
+| `guide.keeper.verify_tls` | `true` | Keeper is reached directly; proxy variables are ignored |
+| `guide.keeper.user_agent` | `lorebase-guide` |  |
+
+### `guide.http`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `guide.http.allowed_origins` | `[]` | browser origins allowed (CORS and Origin check), e.g. [https://lorebase.example.com] |
+| `guide.http.credential_header` | `Authorization` |  |
+| `guide.http.session_cookie` | `""` | Keeper's session cookie name (e.g. __Host-lorebase_session) when Guide is served under the web app's origin; empty: off |
+| `guide.http.csrf_header` | `X-CSRF-Token` | must hold the session's token; checked against Keeper |
+| `guide.http.allow_anonymous` | `false` | true only with a Keeper in auth mode none, on a local stack |
+| `guide.http.max_body_bytes` | `16384` |  |
+
+### `guide.trace`
+
+Agent trace (docs/agent-trace.md)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `guide.trace.enabled` | `true` | session headers on every read, reasoning posted as notes |
+| `guide.trace.session_header` | `X-Lorebase-Session` |  |
+| `guide.trace.tool_header` | `X-Lorebase-Tool` |  |
+| `guide.trace.opt_in_header` | `X-Lorebase-Trace` |  |
+| `guide.trace.opt_in_value` | `"on"` | empty: no opt-in header (Keeper's trace settings decide) |
+| `guide.trace.notes` | `true` | post reasoning as session notes (a write to Keeper's trace store with the caller's credential); false: headers only |
+| `guide.trace.notes_path` | `/trace/sessions/{session}/notes` |  |
+| `guide.trace.max_note_chars` | `2000` |  |
+
+### `guide.agent`
+
+A request may lower these budgets, never raise them
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `guide.agent.task` | `explore` | inference.llm.tasks.explore overrides the chat model |
+| `guide.agent.max_steps` | `8` | tool calls; then one last turn to answer |
+| `guide.agent.max_tokens_per_call` | `1024` | completion cap of one model call |
+| `guide.agent.max_total_tokens` | `40000` | input + output tokens of one exploration |
+| `guide.agent.timeout_s` | `120` | wall clock of one exploration |
+| `guide.agent.max_question_chars` | `2000` |  |
+| `guide.agent.max_result_chars` | `6000` | tool result text shown to the model; longer is cut |
+| `guide.agent.max_value_chars` | `300` |  |
+| `guide.agent.max_items` | `20` |  |
+| `guide.agent.max_depth` | `2` |  |
+| `guide.agent.max_nodes` | `60` |  |
+| `guide.agent.max_context_tokens` | `3000` |  |
+| `guide.agent.max_answer_chars` | `4000` |  |
+| `guide.agent.temperature` | `null` | null: the chat model's own (inference.llm.temperature) |
+
+### `guide.limits`
+
+Per process; protects the model budget
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `guide.limits.max_concurrent` | `4` |  |
+| `guide.limits.max_concurrent_per_caller` | `1` |  |
+| `guide.limits.explorations_per_minute` | `6` | per credential |
+| `guide.limits.embeds_per_minute` | `120` | per credential |
+| `guide.limits.max_embed_chars` | `2000` |  |
+| `guide.limits.max_concurrent_verifications` | `16` | credential checks against Keeper at once; more: 429 |
+| `guide.limits.max_tracked_callers` | `10000` | callers counted by the rate windows; full: new callers 429 |
+
 ## `scribe`
 
 Scribe, the job worker (docs/scribe.md): Source synchronization, webhook delivery, queued per-Attribute index DDL (`store.index`, as database.maintenance_dsn when set) and garbage collection. Job retries and stale locks: store.jobs.

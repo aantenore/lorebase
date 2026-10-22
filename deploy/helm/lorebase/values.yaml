@@ -565,6 +565,86 @@ herald:
     minAvailable: null
     maxUnavailable: 1
 
+# -- Guide (exploration assistant) -------------------------------------------------------------
+
+guide:
+  # Optional assistant for exploring Domains: embeddings and streamed answers over Keeper reads.
+  # Each caller's own Authorization or session cookie is forwarded to Keeper, so Guide holds no
+  # Keeper credential. It calls the model endpoint of `config.inference` (LLM_API_KEY from
+  # `secrets.values.llmApiKey`; with `ollama.enabled` and `ollama.wireScribe`, the in-cluster Ollama).
+  # The default fastembed embeddings need an image built with UV_SYNC_ARGS="--extra fastembed";
+  # otherwise set config.inference.embeddings.provider to openai_compatible.
+  enabled: false
+  command: ["lorebase-guide"]
+  replicaCount: 1
+  # Container port (guide.port).
+  port: 8095
+  # Origin of Keeper as seen from Guide (guide.keeper.base_url). Empty: the in-cluster Keeper Service.
+  keeperUrl: ""
+  # Browser origins allowed to call Guide (guide.http.allowed_origins), e.g. ["https://lorebase.example.com"].
+  # Reach Guide through its own host or an Ingress path that strips its prefix: it serves /embed and /explore.
+  allowedOrigins: []
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 3
+    failureThreshold: 40
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 15
+    failureThreshold: 3
+  # Ready while Keeper is reachable.
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    periodSeconds: 10
+    failureThreshold: 3
+  terminationGracePeriodSeconds: 30
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    type: ClusterIP
+    port: 8095
+    annotations: {}
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: null
+    customMetrics: []
+    behavior: {}
+  pdb:
+    enabled: false
+    minAvailable: null
+    maxUnavailable: 1
+
 # -- Web app (nginx serving the built static files) -------------------------------------------
 
 web:
@@ -591,6 +671,10 @@ web:
     # Origin of Keeper as the browser sees it, without /api/v1. Empty with an enabled Ingress:
     # https:// plus the first host of `ingress.hosts` (http:// without `ingress.tls`).
     keeperBaseUrl: ""
+    # Origin of Guide as the browser sees it (VITE_GUIDE_URL), for the exploration assistant of the
+    # web app; added to connect-src. Empty: not set, the assistant is off in the app. Guide must
+    # list the app origin in `guide.allowedOrigins`.
+    guideUrl: ""
     # Further VITE_* values (for example VITE_PAGE_SIZE: "50"), written to config.js unchanged.
     extra: {}
   # Security headers of the web app. Always sent: X-Content-Type-Options, X-Frame-Options DENY and
@@ -774,6 +858,7 @@ networkPolicy:
     # Restrict egress per workload. Allowed then, and nothing else:
     #   Keeper: DNS, Postgres, the OTLP collector, `extra.keeper`
     #   Scribe: DNS, Postgres, the OTLP collector, the model endpoint, webhook receivers, `extra.scribe`
+    #   Guide: DNS, Keeper, the model endpoint, `extra.guide`
     #   Herald: DNS, Keeper, `extra.herald`; web app: `extra.web` only (static files)
     #   Ollama: DNS, `extra.ollama`; migration Job: DNS, Postgres; `helm test` pod: DNS, Keeper
     enabled: true
@@ -842,6 +927,7 @@ networkPolicy:
       keeper: []
       scribe: []
       herald: []
+      guide: []
       web: []
       ollama: []
       migrate: []

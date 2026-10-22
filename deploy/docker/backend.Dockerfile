@@ -4,6 +4,7 @@
 #   docker run lorebase python -m lorebase_keeper      # Keeper, the REST API (default)
 #   docker run lorebase lorebase-scribe                 # Scribe, the job worker and scheduler
 #   docker run lorebase lorebase-herald                 # Herald, the MCP server
+#   docker run lorebase lorebase-guide                  # Guide, the exploration assistant
 #
 # Build from the repository root:
 #   docker build -f deploy/docker/backend.Dockerfile -t lorebase .

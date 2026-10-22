@@ -1,4 +1,4 @@
-import { ConfigError, loadConfig, withRuntimeConfig } from './env';
+import { ConfigError, loadConfig, testConfig, withRuntimeConfig } from './env';
 
 describe('loadConfig', () => {
   it('requires an explicit API mode', () => {
@@ -27,6 +27,22 @@ describe('loadConfig', () => {
   it('takes a path on the app origin as the Keeper URL, for a proxied deployment', () => {
     const config = loadConfig({ VITE_API_MODE: 'live', VITE_KEEPER_BASE_URL: '/' });
     expect(config.keeperBaseUrl).toBe('');
+  });
+
+  it('leaves the Guide URL unset by default and normalizes it when given', () => {
+    expect(loadConfig({ VITE_API_MODE: 'mock' }).guideUrl).toBeNull();
+    expect(testConfig().guideUrl).toBeNull();
+    const mock = { VITE_API_MODE: 'mock', VITE_GUIDE_URL: ' https://guide.example.test:8095/ ' };
+    expect(loadConfig(mock).guideUrl).toBe('https://guide.example.test:8095');
+    expect(loadConfig({ ...mock, VITE_GUIDE_URL: '/guide/' }).guideUrl).toBe('/guide');
+  });
+
+  it('rejects a Guide URL that is not http, https or a path', () => {
+    const base = { VITE_API_MODE: 'mock' };
+    expect(() => loadConfig({ ...base, VITE_GUIDE_URL: 'not a url' })).toThrow(/VITE_GUIDE_URL/);
+    expect(() => loadConfig({ ...base, VITE_GUIDE_URL: 'ftp://guide.test' })).toThrow(
+      /VITE_GUIDE_URL must use http or https/,
+    );
   });
 
   it('reads the API token only in live mode', () => {
@@ -140,6 +156,9 @@ describe('withRuntimeConfig', () => {
       VITE_API_TOKEN: 'lbk_a',
     });
     expect(withRuntimeConfig({}, { token: ' lbk_b ' })['VITE_API_TOKEN']).toBe('lbk_b');
+    expect(withRuntimeConfig({}, { guideUrl: 'https://guide.test' })['VITE_GUIDE_URL']).toBe(
+      'https://guide.test',
+    );
   });
 
   it('passes VITE_ names through, stringifying plain numbers', () => {

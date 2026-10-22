@@ -82,6 +82,7 @@ Teams putting agents in front of real business processes hit the same wall:
 
 - A general data integration or ETL platform. Sources map data into Kinds; heavy transformation belongs upstream (dbt, Spark, SQL views).
 - An agent runtime, orchestration framework, or prompt management tool.
+- A chat or exploration assistant inside Keeper. The optional Guide service ([guide.md](guide.md)) runs a small read-only exploration agent outside Keeper, as one more client of its API with the caller's own credential; Keeper and Herald stay model-free and nothing in the read path changes when Guide is deployed or not.
 - BI dashboards and report builders.
 - Description logic reasoning (OWL entailment, classification). Lorebase validates constraints; it does not infer new classes.
 - Real-time CDC streaming ingestion in v1 (incremental sync by watermark is supported; CDC is a later connector).
@@ -90,7 +91,7 @@ Teams putting agents in front of real business processes hit the same wall:
 
 ### 2.3 Anti-goals (things Lorebase refuses to do)
 
-- **No LLM in the agent read path.** Not for query planning, not for answer synthesis, not for reranking.
+- **No LLM in the agent read path.** Not for query planning, not for answer synthesis, not for reranking. Guide, the optional exploration assistant, is a caller of the read path, never a part of it: Keeper answers its reads exactly as it answers any other client's.
 - **No direct LLM writes to protected branches.** Extraction produces Proposals. Always.
 - **No schemaless writes.** Every Record conforms to its Kind in the Revision it belongs to.
 - **No second required datastore.** No mandatory graph database, search cluster, queue broker or cache.
@@ -1616,6 +1617,7 @@ lorebase/
     inference/                # lorebase_inference: ChatModel, EmbeddingModel, SpanExtractor; OpenAI-compatible HTTP, fastembed, GLiNER, GLiREL adapters; fake provider
     scribe/                   # lorebase_scribe: job runner, connectors, extraction, embeddings, GC
     herald/                   # lorebase_herald: MCP server
+    guide/                    # lorebase_guide: optional exploration assistant and query embeddings
     client/                   # lorebase_client: typed HTTP client
     cli/                      # lorebase_cli: Typer CLI
   apps/
@@ -1636,7 +1638,7 @@ lorebase/
   .github/workflows/
 ```
 
-Dependency direction: `core` depends on nothing internal; `store` on `core` and `platform`; `inference` on `core` and `platform`; `keeper` and `scribe` on `store`; only `scribe` depends on `inference`; `client` on nothing internal; `cli` and `herald` on `client`. Enforced with import-linter in CI, including the contract that `keeper` and `herald` never import `inference`.
+Dependency direction: `core` depends on nothing internal; `store` on `core` and `platform`; `inference` on `core` and `platform`; `keeper` and `scribe` on `store`; only `scribe` and the optional `guide` depend on `inference`; `client` on nothing internal; `cli` and `herald` on `client`; `guide` on `platform`, `inference` and `client`, and nothing depends on it. Enforced with import-linter in CI, including the contract that `keeper` and `herald` never import `inference` or `guide`.
 
 ---
 
