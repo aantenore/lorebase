@@ -175,7 +175,27 @@ async def test_sensitive_attributes_and_values_are_withheld(
     contact = found[("attribute", "bank_contact")]
     assert contact.evidence is None
     assert contact.value is None
-    assert discovery.stats["suggestion_evidence_withheld"] == 1
+    assert discovery.evidence_withheld == 1
+    assert "suggestion_evidence_withheld" not in discovery.stats
+    assert found[("attribute", "audit_score")].value == "87"
+
+
+async def test_evidence_holding_a_vaulted_value_is_withheld(ontology: Ontology) -> None:
+    text = (
+        "# Supplier S-1025\n\n**Bank contact:** Ayla Demir, ayla@example.com\n**Audit score:** 87\n"
+    )
+    discovery, _, _ = await observe(ontology, text)
+    texts = discovery.evidence_texts()
+    vaulted = {t for t in texts if "ayla@example.com" in t}
+    assert vaulted
+
+    found = by_name(discovery.finish({}, vaulted))
+
+    contact = found[("attribute", "bank_contact")]
+    assert contact.evidence is None
+    assert contact.value is None
+    assert discovery.evidence_withheld == 1
+    assert "suggestion_evidence_withheld" not in discovery.stats
     assert found[("attribute", "audit_score")].value == "87"
 
 

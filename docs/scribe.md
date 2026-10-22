@@ -20,6 +20,7 @@ lorebase-scribe sync supply approved.suppliers    # synchronize one Source now, 
 lorebase-scribe sync supply approved.suppliers --dry-run
 lorebase-scribe embeddings supply                 # embed what lacks a vector now (backfill)
 lorebase-scribe embeddings supply --reindex --prune
+lorebase-scribe modes clear                       # forget the remembered structured output modes
 ```
 
 Configuration comes from the same layered settings as Keeper (`LOREBASE_CONFIG`, then

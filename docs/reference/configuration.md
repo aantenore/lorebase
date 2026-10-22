@@ -676,6 +676,13 @@ Tier 1, in-process on CPU; optional extra [local-extractors]
 | `inference.local_extractors.cooccurrence` | `{max_pairs_per_sentence: 200}` | relation_provider: cooccurrence (no model) |
 | `inference.local_extractors.spacy` | `{enabled: false, pipeline: en_core_web_sm}` |  |
 
+## `inference` (continued)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `inference.mode_memory_key` | `null` | secret keying the digests of remembered structured output modes, e.g. secret://env/LOREBASE_MODE_KEY (changing it forgets) |
+| `inference.mode_memory_ttl_s` | `604800` | seconds a remembered mode counts (7 days) |
+
 ### `inference.fake`
 
 Deterministic provider for tests and offline runs: set `provider: fake` in llm, embeddings and local_extractors. No network access is needed.
@@ -1328,6 +1335,8 @@ Guide, the optional exploration assistant (docs/guide.md): POST /embed and POST 
 | `guide.host` | `127.0.0.1` |  |
 | `guide.port` | `8095` |  |
 | `guide.readiness_timeout_s` | `3` | /readyz probes Keeper's /healthz |
+| `guide.data_dir` | `~/.local/state/lorebase/guide` | Guide's own state files |
+| `guide.mode_memory_file` | `structured_output_modes.json` | remembered structured output modes; null: off |
 
 ### `guide.keeper`
 
@@ -1611,6 +1620,10 @@ Schema suggestions: what the tiers see outside the schema
 | `scribe.extraction.discovery.field_confidence` | `0.6` | a field line or table column |
 | `scribe.extraction.discovery.heading_confidence` | `0.5` | a Kind named by a heading |
 | `scribe.extraction.discovery.max_value_chars` | `120` | sample values are cut to this length |
+| `scribe.extraction.discovery.vault_match_max_words` | `12` | longest quote word sequence compared with vault fingerprints |
+| `scribe.extraction.discovery.vault_match_max_text_words` | `400` | longer quotes are not compared: evidence withheld |
+| `scribe.extraction.discovery.vault_match_max_text_chars` | `4000` | same, by characters |
+| `scribe.extraction.discovery.vault_match_max_candidates` | `200000` | word sequences compared per job; past it, withheld |
 | `scribe.extraction.discovery.max_observations_per_job` | `1000` |  |
 
 ### `scribe.embeddings`

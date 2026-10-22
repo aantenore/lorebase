@@ -297,9 +297,14 @@ decreasing order of strength and validates the result locally, always:
 
 When the server answers HTTP 400 or 422 with an error that names the response format, the
 client steps down one mode (an unrelated 400, for example a context overflow, is not mistaken
-for missing support). The mode that works is remembered for the lifetime of the process, per
-`base_url`, model, `structured_output` and `json_schema_strict`, so the next extraction job
-starts there instead of being refused once more. An answer that is not JSON, or does not
+for missing support). The mode that works is remembered per `base_url`, model, `structured_output` and
+`json_schema_strict`, in the process and across restarts (Scribe: table `inference_endpoint_modes`; Guide: a file,
+see [guide](guide.md)), so the next extraction job starts there instead of being refused once
+more. Entries are keyed by an HMAC-SHA256 of those values (`inference.mode_memory_key` is mixed
+in when set; the address is never stored in the clear) and expire after
+`inference.mode_memory_ttl_s` (7 days), when the configured mode is tried again.
+`lorebase-scribe modes clear` and `lorebase-guide modes clear` forget them at once, for example
+after an endpoint was upgraded. An answer that is not JSON, or does not
 satisfy the schema, triggers up to `repair_attempts` (default 1) repair calls that show the
 model what was wrong; if the answer is still invalid, `InvalidOutputError` is raised and the
 caller discards and counts the item ([design 9.2](design.md#92-unstructured-extraction), step 6).

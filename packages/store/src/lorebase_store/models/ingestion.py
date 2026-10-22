@@ -141,6 +141,25 @@ class ExtractionCacheEntry(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
 
+class InferenceEndpointMode(Base):
+    """Structured output mode that a chat endpoint was found to need (`json_schema`: 0,
+    `json_mode`: 1, `prompt`: 2), so a restarted process does not retry the stronger ones.
+
+    `key` is the SHA-256 of the endpoint, model and output settings: no address is stored in
+    the clear (a keyed digest when `inference.mode_memory_key` is set). Holds no Domain data.
+    """
+
+    __tablename__ = "inference_endpoint_modes"
+    __table_args__ = (
+        h32_check("key"),
+        CheckConstraint("mode_index BETWEEN 0 AND 2", name="mode_index"),
+    )
+
+    key: Mapped[H32] = mapped_column(primary_key=True)
+    mode_index: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
 class SchemaSuggestion(Base):
     """A new Kind, Attribute or Relation that extraction found outside the schema, aggregated
     over documents by `fingerprint` (`lorebase_core.infer.suggestions`).

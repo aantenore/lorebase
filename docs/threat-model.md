@@ -225,6 +225,15 @@ Remaining:
    sampled out. Inherent: checkpoints cover the chains up to the latest one published
    (`interval_s`, one hour by default) (TB2, TB3, TB6).
 
+7. **Evidence withheld from schema suggestions is inferable.** Extraction drops the evidence and
+   samples of a suggestion whose quote holds a vaulted value of the Domain (compared by keyed
+   fingerprint, nothing opened), and the suggestion looks like one that never had evidence: no
+   flag, count or reason reaches the job report, the API or the logs, and operators see only an
+   aggregate counter. A reader of suggestions (`document.read`) who submits a document can still
+   infer that a quote they chose matched, from the evidence being absent, so the Domain's vault
+   can be probed by guessing values; submitting documents and reading suggestions are the
+   permissions that bound it (TB3).
+
 Fixed since this page was first published, in the order of the original list (each with tests,
 see the [security review](security-review.md#hardening-from-the-threat-model)):
 

@@ -59,6 +59,7 @@ DESIGN_TABLES = {
     "schema_suggestions",
     "vault",
     "vault_tombstones",
+    "inference_endpoint_modes",
     "vault_lineage",
     "installation_secrets",
     # 10.5 webhooks
@@ -113,4 +114,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_latest_migration() -> None:
-    assert head_revisions() == ("0033",)
+    assert head_revisions() == ("0034",)

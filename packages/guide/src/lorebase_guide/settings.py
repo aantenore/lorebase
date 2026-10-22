@@ -242,6 +242,17 @@ class GuideSettings(SectionModel):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     readiness_timeout_s: float = Field(default=3, gt=0, description="Keeper probe of /readyz.")
+    data_dir: str = Field(
+        default="~/.local/state/lorebase/guide",
+        min_length=1,
+        description="Directory of Guide's own state files (`~` is expanded).",
+    )
+    mode_memory_file: str | None = Field(
+        default="structured_output_modes.json",
+        description="File (relative to data_dir unless absolute) remembering, per chat endpoint, "
+        "the structured output mode it accepts, so a restart does not retry a refused mode; "
+        "null keeps it in the process only.",
+    )
 
     @model_validator(mode="after")
     def _per_caller_within_total(self) -> Self:

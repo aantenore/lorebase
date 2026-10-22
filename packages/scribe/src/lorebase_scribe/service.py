@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from lorebase_inference import inference_settings
+from lorebase_inference.chat import use_mode_memory
 from lorebase_platform.settings import Settings
 from lorebase_scribe.embeddings import EmbeddingModels, Templates
 from lorebase_scribe.jobs import PERMANENT_JOB_ERRORS, JobContext, build_handlers
@@ -21,6 +22,7 @@ from lorebase_scribe.sources.connectors import ConnectorFactory, default_connect
 from lorebase_scribe.worker import Worker
 from lorebase_store.db import create_engine
 from lorebase_store.embeddings import SchemaCache
+from lorebase_store.endpoint_modes import StoreModeMemory
 from lorebase_store.jobs import LINEAGE_BACKFILL_JOB, MATERIALIZE_JOB, default_worker_id
 from lorebase_store.materialize import queue_lineage_sweep, run_path_fanout_sweep
 from lorebase_store.runtime import StoreRuntime
@@ -92,6 +94,13 @@ async def open_scribe(
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     worker_name = worker_id or default_worker_id()
     inference = inference_settings(settings)
+    use_mode_memory(
+        StoreModeMemory(sessions),
+        secret=None
+        if inference.mode_memory_key is None
+        else inference.mode_memory_key.get_secret_value(),
+        max_age_s=inference.mode_memory_ttl_s,
+    )
     embedding_models = EmbeddingModels(inference, dims=runtime.settings.embeddings.dims)
     embedding_templates: SchemaCache[Templates] = SchemaCache(scribe.embeddings.template_cache_size)
     try:
@@ -130,6 +139,7 @@ async def open_scribe(
             )
             yield Scribe(engine, context, worker, scheduler, scribe)
     finally:
+        use_mode_memory(None)
         await embedding_models.aclose()
         await engine.dispose()
         if maintenance is not None:

@@ -47,6 +47,12 @@ EXTRACTION_ITEMS = meter.create_counter(
     unit="{item}",
     description="Items proposed by extraction jobs, by tier and initial decision.",
 )
+EVIDENCE_WITHHELD = meter.create_counter(
+    "lorebase.extraction.evidence_withheld",
+    unit="{observation}",
+    description="Schema suggestion observations kept without evidence because it held a "
+    "sensitive value. For operators only, without labels.",
+)
 EMBEDDING_RECORDS = meter.create_counter(
     "lorebase.scribe.embeddings.records",
     unit="{record}",

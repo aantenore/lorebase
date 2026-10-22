@@ -316,6 +316,18 @@ class InferenceSettings(SectionModel):
     embeddings: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     local_extractors: LocalExtractorSettings = Field(default_factory=LocalExtractorSettings)
     fake: FakeSettings = Field(default_factory=FakeSettings)
+    mode_memory_key: SecretValue | None = Field(
+        default=None,
+        description="Secret that keys the digests under which the structured output mode of "
+        "each chat endpoint is remembered across restarts, e.g. secret://env/LOREBASE_MODE_KEY; "
+        "without it the digests are keyed by a fixed label only. Changing it forgets the modes.",
+    )
+    mode_memory_ttl_s: float = Field(
+        default=7 * 24 * 3600,
+        gt=0,
+        description="Seconds a remembered structured output mode counts; after that the "
+        "endpoint is tried with the configured mode again.",
+    )
 
 
 register_section(SECTION, InferenceSettings, env_aliases=ENV_ALIASES)
