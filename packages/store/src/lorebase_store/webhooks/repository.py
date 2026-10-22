@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.auth.scope import new_id
 from lorebase_store.models import metadata
+from lorebase_store.webhooks.keys import StoredKey
 
 WEBHOOKS: Table = metadata.tables["webhooks"]
 WEBHOOK_DELIVERIES: Table = metadata.tables["webhook_deliveries"]
@@ -70,7 +71,7 @@ class WebhookRepository:
         description: str | None,
         event_types: Sequence[str],
         branches: Sequence[str] | None,
-        secret_hash: bytes,
+        signing_key: StoredKey,
         created_by: str,
     ) -> WebhookRow:
         result = await self._session.execute(
@@ -82,7 +83,8 @@ class WebhookRepository:
                 description=description,
                 event_types=list(event_types),
                 branches=None if branches is None else list(branches),
-                secret_hash=secret_hash,
+                secret_hash=signing_key.secret_hash,
+                sealed_key=signing_key.sealed_key,
                 created_by=created_by,
             )
             .returning(*_COLUMNS)

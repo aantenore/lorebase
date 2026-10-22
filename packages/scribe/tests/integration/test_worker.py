@@ -42,6 +42,7 @@ from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import JobSettings
 from lorebase_store.webhooks import WebhookRepository, WebhookSettings, signing_key
+from lorebase_store.webhooks.keys import StoredKey
 
 from .support import (
     DOMAIN,
@@ -264,7 +265,7 @@ async def test_webhook_delivery_job_end_to_end(
             description="tests",
             event_types=["revision.committed"],
             branches=None,
-            secret_hash=signing_key("secret"),
+            signing_key=StoredKey(signing_key("secret"), None),
             created_by="usr_admin",
         )
     kind = schema.kind_by_api_name("Supplier")

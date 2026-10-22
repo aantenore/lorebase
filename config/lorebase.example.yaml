@@ -723,6 +723,9 @@ webhooks:
   allow_private_targets: false   # refuse loopback, private and link-local targets
   max_per_domain: 20
   secret_bytes: 32               # random bytes of a new signing secret
+  encryption_key: null           # secret://... (32+ characters) encrypting signing keys at rest;
+                                 # same value for Keeper and Scribe; null stores them usable
+  previous_encryption_keys: []   # earlier keys, tried to open; keys are re-encrypted under the new
   signature_header: Lorebase-Signature   # t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">
   event_header: Lorebase-Event
   delivery_header: Lorebase-Delivery

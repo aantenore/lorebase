@@ -997,6 +997,8 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 | `webhooks.allow_private_targets` | `false` | refuse loopback, private and link-local targets |
 | `webhooks.max_per_domain` | `20` |  |
 | `webhooks.secret_bytes` | `32` | random bytes of a new signing secret |
+| `webhooks.encryption_key` | `null` | secret://... (32+ characters) encrypting signing keys at rest; same value for Keeper and Scribe; null stores them usable |
+| `webhooks.previous_encryption_keys` | `[]` | earlier keys, tried to open; keys are re-encrypted under the new |
 | `webhooks.signature_header` | `Lorebase-Signature` | t=&lt;unix&gt;,v1=&lt;hex HMAC-SHA256 of "&lt;t&gt;.&lt;body&gt;"&gt; |
 | `webhooks.event_header` | `Lorebase-Event` |  |
 | `webhooks.delivery_header` | `Lorebase-Delivery` |  |
