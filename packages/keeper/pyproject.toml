@@ -13,7 +13,6 @@ dependencies = [
   "asyncpg>=0.29",
   "httpx>=0.27",
   "PyJWT[crypto]>=2.8",
-  "cryptography>=42",  # AES-GCM and HKDF of web sessions; already required by PyJWT[crypto]
   "python-multipart>=0.0.9",  # form parser of Starlette: file uploads of POST schema:infer
 ]
 

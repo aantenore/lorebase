@@ -7,7 +7,8 @@ digest, which is also the HMAC key: receivers compute `sha256(secret)` once and 
 
 The timestamp lets receivers refuse replays older than their tolerance. Storing the digest
 keeps the secret itself out of the database; a leaked digest still allows forging signatures,
-so rotate a webhook (delete and create) when the database may have been exposed.
+so the digest is stored sealed when `webhooks.encryption_key` is set (`webhooks.keys`). Rotate
+a webhook (delete and create) when the database and that key may have been exposed.
 """
 
 from __future__ import annotations

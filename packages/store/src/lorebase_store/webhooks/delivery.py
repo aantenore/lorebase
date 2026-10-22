@@ -14,6 +14,11 @@ A pass, safe to run concurrently in several workers (rows are claimed with `SKIP
    second lookup (DNS rebinding) cannot redirect the request to an internal service;
 4. prune finished deliveries and handed-off events older than `retention_s`.
 
+Before these steps, with `encryption_key` set, up to `batch` signing keys stored usable (or
+under a previous encryption key) are sealed under it (`webhooks.keys`). A delivery whose key
+cannot be opened (sealed under a key that is no longer configured) fails its attempt with an
+error naming the setting.
+
 The store makes no HTTP calls itself: the caller (Scribe, or a test) passes the `Sender`.
 Reads span every Domain, so the pass runs with row-level security bypassed.
 """
@@ -43,6 +48,7 @@ from lorebase_store.commit.pipeline import COMMITTED_EVENT
 from lorebase_store.repositories.events import OutboxRepository, OutboxRow
 from lorebase_store.settings import WriteSettings
 from lorebase_store.telemetry import WEBHOOK_OUTCOMES
+from lorebase_store.webhooks.keys import SigningKeys, StoredKey, seal_stored_keys
 from lorebase_store.webhooks.repository import WEBHOOK_DELIVERIES, WEBHOOKS, webhook_row
 from lorebase_store.webhooks.settings import WebhookSettings
 from lorebase_store.webhooks.signing import signature
@@ -174,6 +180,7 @@ class DeliveryReport:
     retrying: int = 0
     dead: int = 0
     pruned: int = 0
+    sealed: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +188,8 @@ class _Claimed:
     domain_id: str
     id: int
     url: str
-    secret_hash: bytes
+    key: bytes | None
+    """The signing key; None when it is sealed under a key that is not configured."""
     event_type: str
     payload: dict[str, Any]
     attempts: int
@@ -272,7 +280,10 @@ async def _fan_out(
 
 
 async def _claim(
-    sessions: async_sessionmaker[AsyncSession], settings: WebhookSettings, now: datetime
+    sessions: async_sessionmaker[AsyncSession],
+    settings: WebhookSettings,
+    signing_keys: SigningKeys,
+    now: datetime,
 ) -> list[_Claimed]:
     d, w = WEBHOOK_DELIVERIES, WEBHOOKS
     async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
@@ -299,6 +310,7 @@ async def _claim(
                 d.c.id,
                 w.c.url,
                 w.c.secret_hash,
+                w.c.sealed_key,
                 d.c.event_type,
                 d.c.payload,
                 d.c.attempts,
@@ -307,18 +319,21 @@ async def _claim(
             .where(tuple_(d.c.domain_id, d.c.id).in_(keys))
             .order_by(d.c.id)
         )
-        return [
-            _Claimed(
-                row.domain_id,
-                row.id,
-                row.url,
-                bytes(row.secret_hash),
-                row.event_type,
-                row.payload,
-                row.attempts,
+        claimed = []
+        for row in result:
+            opened = signing_keys.open(StoredKey(row.secret_hash, row.sealed_key))
+            claimed.append(
+                _Claimed(
+                    row.domain_id,
+                    row.id,
+                    row.url,
+                    None if opened is None else opened.key,
+                    row.event_type,
+                    row.payload,
+                    row.attempts,
+                )
             )
-            for row in result
-        ]
+        return claimed
 
 
 async def _attempt(
@@ -328,13 +343,21 @@ async def _attempt(
     clock: Clock,
     resolve: Resolver,
 ) -> _Outcome:
+    if claimed.key is None:
+        return _Outcome(
+            claimed,
+            _after_failure(claimed, settings),
+            None,
+            "the signing key cannot be opened: it was sealed under a key that is neither "
+            "webhooks.encryption_key nor in webhooks.previous_encryption_keys",
+        )
     target = await check_target(claimed.url, settings, resolve)
     if target.problem is not None:
         return _Outcome(claimed, DEAD, None, f"target refused: {target.problem}")
     body = json.dumps(claimed.payload, ensure_ascii=False, separators=(",", ":")).encode()
     headers = {
         "Content-Type": "application/json",
-        settings.signature_header: signature(claimed.secret_hash, int(clock().timestamp()), body),
+        settings.signature_header: signature(claimed.key, int(clock().timestamp()), body),
         settings.event_header: claimed.event_type,
         settings.delivery_header: str(claimed.id),
     }
@@ -404,8 +427,12 @@ async def deliver_pending(
 ) -> DeliveryReport:
     """One delivery pass (see module doc); call it periodically."""
     report = DeliveryReport()
+    keys = SigningKeys.from_settings(settings)
+    if keys.sealing:
+        async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+            report.sealed = await seal_stored_keys(session, keys, limit=settings.batch)
     await _fan_out(sessions, settings, writes, clock(), report)
-    claimed = await _claim(sessions, settings, clock())
+    claimed = await _claim(sessions, settings, keys, clock())
     outcomes = [await _attempt(c, settings, send, clock, resolve) for c in claimed]
     if outcomes:
         await _record(sessions, outcomes, settings, clock())

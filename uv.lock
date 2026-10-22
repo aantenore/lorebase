@@ -1933,7 +1933,6 @@ version = "0.1.0"
 source = { editable = "packages/keeper" }
 dependencies = [
     { name = "asyncpg" },
-    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lorebase-platform" },
@@ -1953,7 +1952,6 @@ parquet = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
-    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lorebase-platform", editable = "packages/platform" },
@@ -2039,6 +2037,7 @@ source = { editable = "packages/store" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "cryptography" },
     { name = "lorebase-core" },
     { name = "lorebase-platform" },
     { name = "opentelemetry-api" },
@@ -2055,6 +2054,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "lorebase-core", editable = "packages/core" },
     { name = "lorebase-platform", editable = "packages/platform" },
     { name = "opentelemetry-api", specifier = ">=1.25" },

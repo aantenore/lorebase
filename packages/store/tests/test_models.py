@@ -98,4 +98,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_web_sessions_migration() -> None:
-    assert head_revisions() == ("0015",)
+    assert head_revisions() == ("0016",)

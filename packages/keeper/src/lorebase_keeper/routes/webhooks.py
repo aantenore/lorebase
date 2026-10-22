@@ -1,7 +1,8 @@
 """Webhooks of a Domain (design 10.5): create, list, delete.
 
 Managing webhooks needs `domain.settings` (the `admin` role). A new webhook's secret is
-returned once; only its digest is stored (`lorebase_store.webhooks.signing`). Every change is
+returned once; only its digest is stored (`lorebase_store.webhooks.signing`), sealed under
+`webhooks.encryption_key` when that is set (`lorebase_store.webhooks.keys`). Every change is
 written to the audit log (`webhook.create`, `webhook.delete`) without the secret or the full
 URL. Deliveries are made by `lorebase_store.webhooks.deliver_pending`, run by a worker.
 """
@@ -32,6 +33,7 @@ from lorebase_store.webhooks import (
     webhook_settings,
 )
 from lorebase_store.webhooks.delivery import scheme_problem
+from lorebase_store.webhooks.keys import SigningKeys
 
 router = APIRouter(tags=["webhooks"])
 
@@ -130,7 +132,7 @@ async def create_webhook(
             description=body.description,
             event_types=sorted(set(events)),
             branches=None if body.branches is None else sorted(set(body.branches)),
-            secret_hash=signing_key(secret),
+            signing_key=SigningKeys.from_settings(settings).store(signing_key(secret)),
             created_by=access.principal.id,
         )
     annotate(

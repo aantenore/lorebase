@@ -146,7 +146,7 @@ roles in [deployment](deployment.md#database-roles), policies in
 | E | Definer functions widening access | Fixed statement text, the Domain pinned as a literal in every predicate, counts bounded by `store.reads.definer_ceilings`, Domain required and in the transaction scope, `search_path` checked; migrations refuse to run while the application role can create objects in the schema (F12, F13) | The Helm chart runs migrations and services with one DSN; give that role neither `SUPERUSER` nor `BYPASSRLS` |
 | T | Editing or deleting audit entries | Hash chain per Domain (`packages/store/src/lorebase_store/auth/audit.py`); `python -m lorebase_keeper audit verify`, `GET .../audit/verify` and the daily `audit_verify` job report the first broken entry, and `LorebaseAuditChainBroken` alerts ([operations](operations.md#audit-chain-verification)); the log is append-only for every role but its owner: `UPDATE`, `DELETE` and `TRUNCATE` revoked from `PUBLIC`, the application role and any other holder (`packages/store/migrations/versions/0015_append_only_audit_log.py`, `deploy/compose/postgres/app-role.sh`) | The owner can still delete the newest entries of a chain, which is not detectable from the chain, or recompute a whole chain; where the services run as the owner (the Helm chart's single DSN) the revoke does not apply. Keep a recent `entry_hash` outside the database |
 | T | Tampering with history | Revisions, tree nodes and objects are content addressed: changing one changes its id; bundle import recomputes every id and hash | A database owner can rewrite content and refs consistently |
-| I | Database or backup theft | Only hashes of API keys and session ids; provider tokens encrypted; Source and model secrets are references, never stored | Webhook secrets are stored as `sha256(secret)`, which is the HMAC key: a database reader can sign deliveries. Documents and Domain content are stored in clear |
+| I | Database or backup theft | Only hashes of API keys and session ids; provider tokens encrypted; Source and model secrets are references, never stored; webhook signing keys (`sha256(secret)`, the HMAC key) encrypted with AES-256-GCM under `webhooks.encryption_key`, keys stored before encrypted by the delivery worker (`packages/store/src/lorebase_store/webhooks/keys.py`, revision `0016`) | Without `webhooks.encryption_key` (unset by default) signing keys are stored usable, and a database reader can sign deliveries. Documents and Domain content are stored in clear |
 | D | Long statements, lock contention | `statement_timeout_ms` per connection, advisory locks per branch and per audit chain | Garbage collection and index builds run on the maintenance role with their own timeouts |
 
 ## TB7: Webhooks
@@ -207,8 +207,9 @@ Code: `.github/workflows/*.yaml`, `deploy/docker/*.Dockerfile`, `uv.lock`,
    (`packages/keeper/src/lorebase_keeper/services/document_urls.py`) (TB4).
 5. **Rate limits per process.** A shared backend would make limits hold across Keeper replicas
    (TB2).
-6. **Webhook signing keys stored usable.** Encrypt them with a configured key, as provider tokens
-   are (TB6, TB7).
+6. **Webhook signing keys stored usable.** Fixed when `webhooks.encryption_key` is set: keys are
+   sealed with AES-256-GCM (`packages/store/src/lorebase_store/webhooks/keys.py`, revision
+   `0016`); it is unset by default (TB6, TB7).
 7. **Reads are not audited and sensitivity masking is not enforced.** Both are in the design
    ([13.6](design.md#136-threats-and-mitigations)) and not in the code; until then, use
    Kind-narrowed grants for sensitive Kinds (TB2, TB3).

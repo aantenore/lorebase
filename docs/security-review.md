@@ -331,6 +331,20 @@ without starting it, and turns a limit, a signal, a parser exception or a garble
 `packages/scribe/tests/test_parser_sandbox.py` with stand-in parsers
 (`packages/scribe/tests/sandbox_targets.py`) that sleep, spin, allocate, return a huge text,
 open sockets and kill themselves; real PDF and DOCX parse as before.
+**Webhook signing keys encrypted at rest** (`packages/store/src/lorebase_store/webhooks/keys.py`,
+`packages/store/migrations/versions/0016_sealed_webhook_keys.py`, `webhooks.encryption_key`
+and `previous_encryption_keys`). The keyring of web sessions moved to
+`packages/store/src/lorebase_store/keyring.py` with a namespace (Keeper's derived keys are
+unchanged), so Keeper, which stores keys, and Scribe, which signs with them, share it. With a
+key set, the signing key is sealed with AES-256-GCM in `webhooks.sealed_key` and `secret_hash`
+is null; revision `0016` makes `secret_hash` nullable with a check that exactly one column is
+set. Rows stored before keep working: each delivery pass seals up to `batch` of them, and keys
+sealed under a previous key are sealed again under the current one. A key that does not open
+fails the attempt with an error naming the setting. The downgrade refuses while sealed rows
+exist. Tests: `packages/store/tests/test_webhook_keys.py` (sealing, rotation, tampering,
+settings, unchanged session key derivation) and
+`packages/store/tests/test_webhook_keys_integration.py` (a webhook created before the key is
+sealed by the worker and still verifies at the receiver; rotation; an unknown key).
 
 ## Other observations
 
@@ -339,8 +353,8 @@ open sockets and kill themselves; real PDF and DOCX parse as before.
   the source by checked offsets. No extraction prompt builder exists yet in `packages/inference`;
   when it is added, document text must go in the user message as delimited data, never in the
   system prompt, and outputs must stay Proposals that need review.
-- **Webhook signing key.** The stored value is the HMAC key itself (documented); a database
-  reader can sign deliveries. Encrypting it with a configured key would close that.
+- **Webhook signing key.** The stored value is the HMAC key itself; with
+  `webhooks.encryption_key` set it is stored encrypted (see the hardening section above).
 - **Herald** forwards only the caller's credential in HTTP mode, never logs it, maps Keeper
   problems to short messages, and caps tool output except the context pack, which Keeper bounds
   by its token budget.

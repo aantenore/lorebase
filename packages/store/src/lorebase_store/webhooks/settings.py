@@ -6,9 +6,11 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
+from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel, Settings, register_section
 
 SECTION = "webhooks"
+MIN_ENCRYPTION_KEY_LENGTH = 32
 
 
 class WebhookSettings(SectionModel):
@@ -24,6 +26,19 @@ class WebhookSettings(SectionModel):
     )
     max_per_domain: int = Field(default=20, ge=1, description="Webhooks of one Domain.")
     secret_bytes: int = Field(default=32, ge=16, description="Random bytes of a new secret.")
+    encryption_key: SecretValue | None = Field(
+        default=None,
+        description="Key (at least 32 characters) that encrypts webhook signing keys in the "
+        "database, e.g. secret://env/LOREBASE_WEBHOOK_KEY; Keeper and Scribe need the same "
+        "value. Unset: signing keys are stored usable, as before. Once set, the delivery worker "
+        "encrypts the keys stored before.",
+    )
+    previous_encryption_keys: tuple[SecretValue, ...] = Field(
+        default=(),
+        description="Earlier encryption keys, tried when the current one does not open a "
+        "signing key; the worker encrypts such keys again under encryption_key. Remove one "
+        "once no webhook uses it.",
+    )
     signature_header: str = Field(default="Lorebase-Signature", min_length=1)
     event_header: str = Field(default="Lorebase-Event", min_length=1)
     delivery_header: str = Field(default="Lorebase-Delivery", min_length=1)
@@ -57,6 +72,16 @@ class WebhookSettings(SectionModel):
             raise ValueError("backoff_base_s cannot exceed backoff_max_s")
         if self.lease_s <= self.timeout_s:
             raise ValueError("lease_s must exceed timeout_s")
+        keys = [self.encryption_key, *self.previous_encryption_keys]
+        if any(
+            key is not None and len(key.get_secret_value()) < MIN_ENCRYPTION_KEY_LENGTH
+            for key in keys
+        ):
+            raise ValueError(
+                f"webhook encryption keys need at least {MIN_ENCRYPTION_KEY_LENGTH} characters"
+            )
+        if self.previous_encryption_keys and self.encryption_key is None:
+            raise ValueError("previous_encryption_keys need an encryption_key")
         return self
 
 

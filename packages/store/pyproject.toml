@@ -11,6 +11,7 @@ dependencies = [
   "alembic>=1.13",
   "pgvector>=0.3",
   "opentelemetry-api>=1.25",
+  "cryptography>=42",  # AES-GCM and HKDF of lorebase_store.keyring
 ]
 
 [dependency-groups]
