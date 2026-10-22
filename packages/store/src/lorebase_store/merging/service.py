@@ -472,6 +472,7 @@ class MergeService:
             expression_limits=self._runtime.schema.expression_limits,
             runtime=self._runtime,
             lineage_source=source.name if merged.result is MergeResult.FAST_FORWARD else None,
+            fast_forward_from=target.head if merged.result is MergeResult.FAST_FORWARD else None,
         )
         if target_schema is not None and prepared.schema_hash is not None:
             await queue_after_tagging(

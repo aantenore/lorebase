@@ -614,6 +614,8 @@ store:
     verify_max_divergences: 1000 # divergences listed by a verification report
     derivations_enabled: true    # recompute expression and aggregate Derivations on every
                                  # commit, merge and rebuild (derived column, not the tree)
+    fast_forward_history_max_revisions: 1000    # Revisions of a fast-forward written to the
+                                 # history one by one; longer: one row at the source head
     derivation_max_incremental_records: 10000   # Records one Derivation recomputes per
                                  # commit; above, every Record of its Kind
     branch_mode: copy            # default mode of new branches: copy (full rows) or overlay

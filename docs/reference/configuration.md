@@ -753,6 +753,7 @@ Storage engine. `layout` and `embeddings` are read once by the initial migration
 | `store.materialize.read_batch_rows` | `5000` | rows or object bodies per query in rebuild and verification |
 | `store.materialize.verify_max_divergences` | `1000` | divergences listed by a verification report |
 | `store.materialize.derivations_enabled` | `true` | recompute expression and aggregate Derivations on every commit, merge and rebuild (derived column, not the tree) |
+| `store.materialize.fast_forward_history_max_revisions` | `1000` | Revisions of a fast-forward written to the history one by one; longer: one row at the source head |
 | `store.materialize.derivation_max_incremental_records` | `10000` | Records one Derivation recomputes per commit; above, every Record of its Kind |
 | `store.materialize.branch_mode` | `copy` | default mode of new branches: copy (full rows) or overlay (only changed rows over the base, docs/store-schema-notes.md) |
 | `store.materialize.overlay_branch_prefixes` | `[agent/, extract/, source/]` | these default to overlay |

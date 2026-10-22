@@ -26,6 +26,17 @@ materialized Records, or in a branch's), the job also folds again the rows whose
 revisions name a merge Revision; the fold attributes a merge step only the values that differ
 from the branch's previous value (`rebuild.fold_history`). `python -m lorebase_store.jobs
 lineage-backfill [--domain D --branch B] [--recompute]` queues it.
+
+Recompute also corrects what fast-forwards wrote before they named the source's Revisions: one
+history row per element at the source head, and rows naming the source head for every value
+they changed. Under the branch lock, each history row of the branch's own that no changeset
+holds (same element, Revision and previous object) is such a row; the fast-forward's range
+(from the ref log: the head it moved from) is written again one Revision at a time, as a
+rebuild writes it, within
+`materialize.fast_forward_history_max_revisions` (a longer range is left as it is). The
+Records last updated by those fast-forwards are then folded again like the others, their
+lineage, lineage revisions and update Revision included. Finding those rows reads the
+branch's whole history once.
 """
 
 from __future__ import annotations
@@ -44,9 +55,10 @@ from lorebase_core.tree import kind_partition
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.jobs import LINEAGE_BACKFILL_JOB, JobRow, enqueue_job
 from lorebase_store.materialize.rebuild import fold_history
-from lorebase_store.materialize.rows import CREATED_KEY
+from lorebase_store.materialize.rows import CREATED_KEY, next_lineage
 from lorebase_store.objectstore import PgObjectStore
 from lorebase_store.repositories.materialized import MERGE_ORIGIN_TYPE, MaterializedRepository
+from lorebase_store.repositories.refs import RefRepository
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 
@@ -97,7 +109,8 @@ _NAMES_A_MERGE = f"""EXISTS (
 def _page(condition: str) -> TextClause:
     return text(
         f"""
-    SELECT m.kind_id, m.key, m.lineage_revisions FROM mat_records m
+    SELECT m.kind_id, m.key, m.lineage_revisions, m."values", m.lineage, m.updated_revision
+    FROM mat_records m
     WHERE m.domain_id = :domain AND m.branch = :branch AND NOT m.deleted AND {condition}
       AND (m.kind_id, m.key) > (:kind, :key)
     ORDER BY m.kind_id, m.key
@@ -107,7 +120,49 @@ def _page(condition: str) -> TextClause:
 
 
 _PAGE = _page(_INCOMPLETE)
-_RECOMPUTE_PAGE = _page(f"({_INCOMPLETE} OR {_NAMES_A_MERGE})")
+_RECOMPUTE_PAGE = _page(
+    f"({_INCOMPLETE} OR {_NAMES_A_MERGE} "
+    "OR m.updated_revision = ANY(CAST(:fast_forwards AS bytea[])))"
+)
+
+# Fast-forward history rows: the branch's own history rows that no changeset holds (a
+# fast-forward's row starts from the branch's previous object, not the source's), by
+# Revision, with the head the branch moved from to it (ref log).
+_FAST_FORWARDS = text(
+    """
+    SELECT DISTINCT h.revision_id,
+           (SELECT l.old_head FROM ref_log l
+            WHERE l.domain_id = h.domain_id AND l.ref_name = h.branch
+              AND l.new_head = h.revision_id
+            ORDER BY l.seq DESC LIMIT 1) AS old_head
+    FROM mat_history h
+    WHERE h.domain_id = :domain AND h.branch = :branch
+      AND NOT EXISTS (
+        SELECT 1 FROM changesets c
+        WHERE c.domain_id = h.domain_id AND c.revision_id = h.revision_id
+          AND c.partition = h.partition AND c.element_key = h.element_key
+          AND c.old_hash IS NOT DISTINCT FROM h.old_hash)
+    """
+)
+
+_DROP_HISTORY_AT = text(
+    "DELETE FROM mat_history WHERE domain_id = :domain AND branch = :branch "
+    "AND revision_id = :revision"
+)
+
+_REFOLD = text(
+    """
+    UPDATE mat_records m
+    SET lineage_revisions = v.revs, lineage = v.lineage,
+        updated_revision = decode(v.updated, 'hex'), updated_at = v.updated_at
+    FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS v(kind_id text, key text, revs jsonb,
+                                                        before jsonb, lineage jsonb,
+                                                        updated text, updated_at timestamptz)
+    WHERE m.domain_id = :domain AND m.branch = :branch
+      AND m.kind_id = v.kind_id AND m.key = v.key
+      AND m.lineage_revisions IS NOT DISTINCT FROM v.before
+    """
+)
 
 _WRITE = text(
     """
@@ -129,10 +184,12 @@ class LineageBackfill:
     batches: int = 0
     rows: int = 0
     written: int = 0
+    fast_forwards: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "branch": self.branch,
+            "fast_forwards": self.fast_forwards,
             "batches": self.batches,
             "rows": self.rows,
             "written": self.written,
@@ -193,15 +250,58 @@ async def backfill_lineage_revisions(
     doc)."""
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     report = LineageBackfill(branch)
+    fast_forwards: list[bytes] = []
+    if recompute:
+        async with sessions() as session, session.begin():
+            fast_forwards = await _repair_fast_forwards(session, domain_id, branch, runtime)
+        report.fast_forwards = len(fast_forwards)
     cursor = ("", "")
     while True:
         async with sessions() as session, session.begin():
             last = await _backfill_batch(
-                session, domain_id, branch, cursor, runtime, report, recompute=recompute
+                session,
+                domain_id,
+                branch,
+                cursor,
+                runtime,
+                report,
+                recompute=recompute,
+                fast_forwards=fast_forwards,
             )
         if last is None:
             return report
         cursor = last
+
+
+async def _repair_fast_forwards(
+    session: AsyncSession, domain_id: str, branch: str, runtime: StoreRuntime
+) -> list[bytes]:
+    """Write the history of the branch's earlier fast-forwards one Revision at a time
+    (module doc); returns the fast-forward targets it rewrote, whose Records need folding
+    again (a range it leaves as it is keeps its rows)."""
+    settings = runtime.settings
+    await scope_to_domain(session, domain_id)
+    await RefRepository(session, domain_id).lock(branch, timeout_ms=settings.commit.lock_timeout_ms)
+    found = (await session.execute(_FAST_FORWARDS, {"domain": domain_id, "branch": branch})).all()
+    repository = MaterializedRepository(session, domain_id, branch, writes=settings.writes)
+    targets: list[bytes] = []
+    for revision, old_head in found:
+        target = bytes(revision)
+        if old_head is None:
+            continue
+        forwarded = await repository.first_parent_range(
+            target,
+            bytes(old_head),
+            limit=settings.materialize.fast_forward_history_max_revisions,
+        )
+        if forwarded is None:
+            continue
+        await session.execute(
+            _DROP_HISTORY_AT, {"domain": domain_id, "branch": branch, "revision": target}
+        )
+        await repository.insert_chain_history(forwarded)
+        targets.append(target)
+    return targets
 
 
 async def _backfill_batch(
@@ -213,6 +313,7 @@ async def _backfill_batch(
     report: LineageBackfill,
     *,
     recompute: bool,
+    fast_forwards: list[bytes],
 ) -> tuple[str, str] | None:
     settings = runtime.settings
     await scope_to_domain(session, domain_id)
@@ -222,6 +323,7 @@ async def _backfill_batch(
         "kind": cursor[0],
         "key": cursor[1],
         "limit": settings.materialize.job_batch_rows,
+        "fast_forwards": fast_forwards,
     }
     page = (await session.execute(_RECOMPUTE_PAGE if recompute else _PAGE, params)).all()
     if not page:
@@ -230,25 +332,52 @@ async def _backfill_batch(
     objects = PgObjectStore(
         session, domain_id, writes=settings.writes, batch=settings.materialize.read_batch_rows
     )
-    by_kind: dict[str, list[tuple[str, dict[str, Any] | None]]] = defaultdict(list)
-    for kind_id, key, before in page:
-        by_kind[kind_id].append((key, before))
+    by_kind: dict[str, list[Any]] = defaultdict(list)
+    for row in page:
+        by_kind[row.kind_id].append(row)
     rows: list[dict[str, Any]] = []
+    refolded: list[dict[str, Any]] = []
     for kind_id, entries in by_kind.items():
         folded = await fold_history(
             repository,
             kind_partition(kind_id),
             batch=settings.materialize.read_batch_rows,
             objects=objects,
-            keys=[key for key, _ in entries],
+            keys=[entry.key for entry in entries],
         )
-        for key, before in entries:
+        for entry in entries:
+            key, before = entry.key, entry.lineage_revisions
             found = folded.get(key)
             revisions = {} if found is None else dict(sorted(found.revisions.items()))
+            if recompute and found is not None:
+                # As a rebuild writes the row (`rebuild.record_row`).
+                lineage = next_lineage(None, found.provenance, entry.values or {})
+                if (revisions, lineage, found.revision_id) != (
+                    before,
+                    entry.lineage,
+                    bytes(entry.updated_revision),
+                ):
+                    refolded.append(
+                        {
+                            "kind_id": kind_id,
+                            "key": key,
+                            "revs": revisions,
+                            "before": before,
+                            "lineage": lineage,
+                            "updated": found.revision_id.hex(),
+                            "updated_at": found.at.isoformat(),
+                        }
+                    )
+                continue
             if before is not None and not revisions:
                 continue
             if revisions != before:
                 rows.append({"kind_id": kind_id, "key": key, "revs": revisions, "before": before})
+    if refolded:
+        result = await session.execute(
+            _REFOLD, {"domain": domain_id, "branch": branch, "rows": json.dumps(refolded)}
+        )
+        report.written += int(getattr(result, "rowcount", 0) or 0)
     if rows:
         result = await session.execute(
             _WRITE, {"domain": domain_id, "branch": branch, "rows": json.dumps(rows)}
