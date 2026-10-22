@@ -19,6 +19,7 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 
 from lorebase_core.expr import ExprLimits
+from lorebase_core.infer.suggestions import SuggestionOptions
 from lorebase_core.validate import SchemaRules
 from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel, Settings, register_section
@@ -649,6 +650,12 @@ class SchemaSettings(SectionModel):
         description="Budget of one schema expression: compiled at validation, evaluated by "
         "the materializer for Derivations (source length, nesting depth, evaluation steps "
         "and time, sizes of built strings and lists, Record lookups, decimal precision).",
+    )
+    suggestions: SuggestionOptions = Field(
+        default_factory=SuggestionOptions,
+        description="Schema suggestions aggregated from document extraction: support needed "
+        "to list one, how many are listed, examples and samples kept, name matching against "
+        "the schema (docs/extraction.md#schema-suggestions).",
     )
 
     def rules(self) -> SchemaRules:

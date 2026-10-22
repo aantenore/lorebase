@@ -33,6 +33,7 @@ CheckStatus = Literal["passed", "failed", "pending"]
 ContextFormat = Literal["json", "markdown"]
 ItemDecisionValue = Literal["pending", "accepted", "rejected"]
 ItemType = Literal["record", "value", "link"]
+SuggestionType = Literal["kind", "attribute", "relation"]
 
 
 class Model(BaseModel):
@@ -1378,6 +1379,75 @@ class ItemsDecided(Model):
     checks: dict[str, JsonValue]
     items: list[ProposalItem]
     materialized: MaterializedItems
+
+
+class TypeGuess(Model):
+    """The type the samples of a suggested Attribute suggest."""
+
+    type: str
+    constraints: dict[str, JsonValue]
+    confidence: float
+    reasons: list[str]
+
+
+class SuggestionDuplicate(Model):
+    """The element of the current schema a suggestion duplicates."""
+
+    section: Literal["kinds", "attributes", "relations"]
+    api_name: str
+
+
+class SchemaSuggestion(Model):
+    """A Kind, Attribute or Relation extraction found outside the schema."""
+
+    id: str
+    type: SuggestionType
+    name: str
+    kind: str | None = None
+    target: str | None = None
+    labels: list[str]
+    support: int
+    documents: int
+    confidence: float
+    status: ItemDecisionValue
+    type_guess: TypeGuess | None = None
+    samples: list[str]
+    examples: list[dict[str, JsonValue]]
+    sources: list[str]
+    duplicate_of: SuggestionDuplicate | None = None
+    withheld: bool = False
+    proposal_id: str | None
+    branch: str | None
+    decided_by: str | None
+    decided_at: datetime | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class SuggestionDecision(RequestModel):
+    """A decision on one suggestion; `name` renames an accepted one."""
+
+    suggestion: str = Field(min_length=1)
+    decision: ItemDecisionValue
+    name: str | None = Field(default=None, max_length=100)
+
+
+class DecideSuggestions(RequestModel):
+    decisions: list[SuggestionDecision] = Field(min_length=1)
+
+
+class SuggestionProposal(Model):
+    """The Proposal opened for the accepted suggestions."""
+
+    id: str
+    title: str
+    branch: str
+    changes: list[ElementChange]
+
+
+class SuggestionsDecided(Model):
+    suggestions: list[SchemaSuggestion]
+    proposal: SuggestionProposal | None = None
 
 
 RecordItem.model_rebuild()

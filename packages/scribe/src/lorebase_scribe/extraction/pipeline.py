@@ -10,6 +10,8 @@
 5. Assemble the items. With at least one item: create branch `extract/<job id>` from the
    default branch, open the Proposal (origin `extraction`), store the items, commit the items
    accepted at once on the branch (with `extraction` Lineage) and compute the merge preview.
+6. Schema discovery: what the tiers saw outside the schema is folded into the Domain's schema
+   suggestions (`discovery`, `schema_suggestions`), whether or not the job proposes items.
 
 Nothing is written to the default branch: reviewers decide item by item and merge the
 Proposal. A tier 1 model that is not installed degrades to tier 0 with a warning in the job's
@@ -40,6 +42,7 @@ from lorebase_inference.interfaces import (
     ChatModel,
     Label,
     RelationExtractor,
+    Span,
     SpanExtractor,
     Usage,
 )
@@ -51,6 +54,7 @@ from lorebase_scribe.extraction.candidates import (
     Resolved,
     ValueCandidate,
 )
+from lorebase_scribe.extraction.discovery import Discovery
 from lorebase_scribe.extraction.matching import (
     Dictionary,
     Resolver,
@@ -102,6 +106,7 @@ from lorebase_store.repositories import (
     ProposalItemRepository,
     ProposalRepository,
     ProposalRow,
+    SchemaSuggestionRepository,
     scope_to_domain,
 )
 from lorebase_store.runtime import StoreRuntime
@@ -110,6 +115,7 @@ log = logging.getLogger("lorebase.scribe.extraction")
 
 JOB_PREFIX = "exj"
 PROPOSAL_PREFIX = "prp"
+SUGGESTION_PREFIX = "ssg"
 Clock = Callable[[], datetime]
 _TIER1_ERRORS = (
     NotImplementedError,
@@ -477,11 +483,26 @@ class ExtractionRun:
             dictionary,
         )
         found = _Found()
+        discovery = (
+            Discovery(ontology, self._settings.discovery, self._runtime.schema.suggestions)
+            if self._settings.discovery.enabled
+            else None
+        )
         for document in documents:
             await self._document(
-                document, ontology, dictionary, resolver, schema_hash, models, report, found
+                document,
+                ontology,
+                dictionary,
+                resolver,
+                schema_hash,
+                models,
+                report,
+                found,
+                discovery,
             )
         current = await self._current(domain.id, report.target, found)
+        if discovery is not None:
+            await self._suggest(discovery, current, report)
         assembled = assemble_items(
             ontology,
             found.mentions,
@@ -514,6 +535,7 @@ class ExtractionRun:
         models: ExtractionModels,
         report: ExtractionReport,
         found: _Found,
+        discovery: Discovery | None = None,
     ) -> None:
         domain_id = report.domain
         async with self._sessions() as session, session.begin():
@@ -568,10 +590,12 @@ class ExtractionRun:
                     )
                 )
             if models.spans is not None:
-                raw.extend(await self._spans(models, ontology, chunk, document.id))
+                raw.extend(await self._spans(models, ontology, chunk, document.id, discovery))
         mentions = non_overlapping(raw)
         resolved = disambiguate([await resolver.resolve(m) for m in mentions], sentences)
         report.count("mentions", len(resolved))
+        if discovery is not None and 0 in tiers:
+            discovery.rules(text, chunks, resolved, document_id=document.id)
         if 0 in tiers:
             found.values.extend(self._values(ontology, text, sentences, resolved))
             found.links.extend(
@@ -607,23 +631,51 @@ class ExtractionRun:
                         model=models.relation_model,
                     )
                 )
+        if models.relations is not None and discovery is not None:
+            for chunk in chunks:
+                await discovery.relations(
+                    models.relations,
+                    resolved,
+                    chunk,
+                    document_id=document.id,
+                    model=models.relation_model,
+                )
         found.mentions.extend(resolved)
         if models.chat is not None:
             await self._tier2(
-                models, ontology, resolver, chunks, resolved, document, schema_hash, report, found
+                models,
+                ontology,
+                resolver,
+                chunks,
+                resolved,
+                document,
+                schema_hash,
+                report,
+                found,
+                discovery,
             )
 
     async def _spans(
-        self, models: ExtractionModels, ontology: Ontology, chunk: Chunk, document_id: str
+        self,
+        models: ExtractionModels,
+        ontology: Ontology,
+        chunk: Chunk,
+        document_id: str,
+        discovery: Discovery | None = None,
     ) -> list[Mention]:
         assert models.spans is not None
         labels = [
             Label(name=view.label, description=view.describe()) for view in ontology.kinds.values()
         ]
+        if discovery is not None:
+            labels += [Label(name=name) for name in discovery.span_labels()]
         mentions: list[Mention] = []
-        for span in await models.spans.extract(chunk.text, labels):
+        unknown: list[Span] = []
+        spans = await models.spans.extract(chunk.text, labels)
+        for span in spans:
             view = ontology.kind_by_label(span.label)
             if view is None:
+                unknown.append(span)
                 continue
             mentions.append(
                 Mention(
@@ -639,6 +691,8 @@ class ExtractionRun:
                     document_id=document_id,
                 )
             )
+        if discovery is not None and unknown:
+            discovery.spans(unknown, chunk, document_id=document_id, model=models.span_model)
         return mentions
 
     def _values(
@@ -695,8 +749,10 @@ class ExtractionRun:
         schema_hash: bytes,
         report: ExtractionReport,
         found: _Found,
+        discovery: Discovery | None = None,
     ) -> None:
         assert models.chat is not None
+        discover = discovery is not None and self._settings.discovery.tier2
         budget = self._settings.max_tokens_per_job
         cache = StoreCache(self._sessions) if self._settings.cache else None
         for chunk in chunks:
@@ -716,6 +772,7 @@ class ExtractionRun:
                 model_key=models.chat_model,
                 settings=self._settings,
                 cache=cache,
+                discover=discover,
             )
             report.count("model_calls", 0 if result.cached else 1)
             report.count("cache_hits", 1 if result.cached else 0)
@@ -726,6 +783,8 @@ class ExtractionRun:
             found.mentions.extend(result.mentions)
             found.values.extend(result.values)
             found.links.extend(result.links)
+            if discovery is not None:
+                discovery.extend(result.observations)
 
     async def _current(self, domain_id: str, branch: str, found: _Found) -> CurrentState:
         keys: dict[str, set[str]] = defaultdict(set)
@@ -753,6 +812,29 @@ class ExtractionRun:
                 for pair in await rows.links(relation_id, relation_pairs):
                     links.add((relation_id, *pair))
         return CurrentState(records=records, links=frozenset(links))
+
+    async def _suggest(
+        self, discovery: Discovery, current: CurrentState, report: ExtractionReport
+    ) -> None:
+        """Fold the job's observations into the Domain's schema suggestions."""
+        observations = discovery.finish(current.records)
+        for name, count in discovery.stats.items():
+            report.count(name, count)
+        if not observations:
+            return
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, report.domain)
+            outcome = await SchemaSuggestionRepository(session, report.domain).record(
+                observations,
+                job_id=report.job_id,
+                options=self._runtime.schema.suggestions,
+                now=self._clock(),
+                new_id=lambda: f"{SUGGESTION_PREFIX}_{new_ulid()}",
+            )
+        report.count("suggestions_created", outcome.created)
+        report.count("suggestions_updated", outcome.updated)
+        if outcome.dropped:
+            report.count("suggestion_observations_untracked", outcome.dropped)
 
     # Proposal ---------------------------------------------------------------------------
 

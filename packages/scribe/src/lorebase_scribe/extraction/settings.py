@@ -128,6 +128,51 @@ class ParserSettings(SectionModel):
     )
 
 
+class DiscoverySettings(SectionModel):
+    """Schema suggestions (design 9.2 step 10): what extraction reports when it finds types,
+    fields or relations the schema does not have. How suggestions are aggregated, listed and
+    matched against the schema is set in `schema.suggestions`."""
+
+    enabled: bool = Field(
+        default=True, description="Record schema suggestions from extraction jobs."
+    )
+    rules: bool = Field(
+        default=True,
+        description="Tier 0: `**Label:** value` field lines and table columns no Attribute "
+        "matches, and headings naming a thing by a code no Kind's key pattern knows.",
+    )
+    span_labels: tuple[str, ...] = Field(
+        default=(),
+        description="Tier 1: extra labels for the span extractor; spans found with them "
+        "suggest a Kind of that name (e.g. certificate, warehouse).",
+    )
+    relation_labels: tuple[str, ...] = Field(
+        default=(),
+        description="Tier 1: extra labels for the relation extractor; relations found with "
+        "them between Records of known Kinds suggest a Relation of that name.",
+    )
+    tier2: bool = Field(
+        default=True,
+        description="Tier 2: the chat model may report facts outside the schema (`unlisted`) "
+        "with verified evidence, and its answers outside the schema are kept as observations.",
+    )
+    min_confidence: float = Field(
+        default=0.3, ge=0, le=1, description="Weaker observations are dropped."
+    )
+    field_confidence: float = Field(
+        default=0.6, ge=0, le=1, description="Confidence of a field line or table column."
+    )
+    heading_confidence: float = Field(
+        default=0.5, ge=0, le=1, description="Confidence of a Kind named by a heading."
+    )
+    max_value_chars: int = Field(
+        default=120, ge=8, description="Sample values are cut to this length."
+    )
+    max_observations_per_job: int = Field(
+        default=1000, ge=1, description="Observations beyond this many are dropped and counted."
+    )
+
+
 class ExtractionSettings(SectionModel):
     """Document extraction into reviewable Proposals (design 9.2)."""
 
@@ -184,3 +229,4 @@ class ExtractionSettings(SectionModel):
     chunking: ChunkSettings = Field(default_factory=ChunkSettings)
     matching: MatchSettings = Field(default_factory=MatchSettings)
     confidence: ConfidenceSettings = Field(default_factory=ConfidenceSettings)
+    discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)

@@ -149,10 +149,76 @@ The record's confidence is that of its weakest rule-found value, so it waits for
 accepting both items commits the Contract and its Link on `extract/<job id>` with Lineage
 pointing at the evidence offsets.
 
+## Schema suggestions
+
+Extraction also reports what it sees outside the schema. Each sighting is an observation; the
+Domain's observations aggregate by name and place into **schema suggestions**: a new Kind, a new
+Attribute of a Kind, or a new Relation, with a support count, the documents it came from,
+evidence examples, sample values and the techniques that saw it. Suggestions are only listed and
+reviewed: accepting them opens a schema change Proposal, never a direct schema change.
+
+| Tier | What is observed |
+|------|------------------|
+| 0 | A `**Label:** value` field line or a table column no Attribute of the described Record matches: an Attribute, or a Relation when the label names a Kind or the value names Records of another Kind. A heading naming a thing by a code no Kind's key pattern matches (`# Quality notice QN-2025-114`): a Kind, which then owns the fields of its section |
+| 1 | Spans of `discovery.span_labels` (a Kind of that name) and relations of `discovery.relation_labels` between Records of known Kinds (a Relation) |
+| 2 | The answer schema gains an `unlisted` list for facts the schema has no place for; records, values and links the model names outside the schema are observed too. Every one needs verified evidence, and an Attribute value must appear in its quote |
+
+The record a field describes is the one its section heading names; a table row describes the
+first Record it names. Observations are matched against the default branch's schema before they
+are kept: names are compared after `snake_case` normalization and singular, through synonym
+groups (`supplier`/`vendor`, `contract`/`agreement`, ...) and by similarity
+(`schema.suggestions.name_similarity`); a field named like its Kind's key (`Code` for
+`supplier_code`) or like another Kind (`Supplier:` on a Contract, which `with_supplier` already
+links) counts as known. Extracting a document again replaces its share of every suggestion, so
+support counts documents' observations once.
+
+**Sensitivity.** An observation that matches a sensitive Attribute (`pii`, `confidential`,
+`restricted`, carried through Derivations) is never kept, and an observation whose quote or
+sample holds a stored value of a sensitive Attribute of a Record the job read is kept without
+its evidence and sample. Listings compare suggestions with the current schema again: one that
+matches a sensitive Attribute the caller may not read (the same clearances as reads, see
+[design 10.2](design.md#102-rbac)) is listed without examples and samples (`withheld`).
+
+**Review.**
+
+- `GET /api/v1/domains/{d}/schema/suggestions` (permission `document.read`) lists suggestions,
+  the most supported first, with filters `status` (`pending`, `accepted`, `rejected`) and `type`
+  (`kind`, `attribute`, `relation`). Pending suggestions are listed from
+  `schema.suggestions.min_support` observations (`all=true` lists them all), at most
+  `max_suggestions` in all. An Attribute suggestion carries `type_guess`, the type schema
+  inference gives its samples (`date` for `2026-02-07`, `integer`, `string`, an enum...); a
+  suggestion the schema has meanwhile carries `duplicate_of`.
+- `POST /api/v1/domains/{d}/schema/suggestions:decide` with
+  `{"decisions": [{"suggestion": "ssg_...", "decision": "accepted", "name": "buyer_entity"}]}`
+  rejects, resets (`pending`) or accepts suggestions. The suggestions accepted by one request
+  become one schema change set, committed on a new branch
+  (`keeper.schema_suggestions.branch_prefix` and the first suggestion's id) and proposed into
+  the default branch; the answer names the Proposal and the element changes. New Kinds get a
+  key Attribute `<kind>_code` with a pattern from the sampled codes (or a `name` title when
+  there are none) and, like new Relations, are drafts a modeler describes and activates; new
+  Attributes of existing Kinds are typed from their samples. A Relation or Attribute of a
+  proposed Kind (`+QualityNotice`) needs that Kind accepted in the same request or merged
+  before. Accepting needs `schema.write` on the new branch, `branch.create` and
+  `proposal.create`; rejecting needs `schema.write`. An invalid change set is a 422 and nothing
+  is decided; an accepted suggestion cannot be decided again (409). Decisions are audited
+  (`schema.suggestions.decide`).
+
+The web app lists them in the Schema suggestions tab of Review; the Python client has
+`client.schema.suggestions(...)`, `iterate_suggestions(...)` and `decide_suggestions(...)`.
+
+On the four example documents, with the rules only and `min_support: 2`, the supplier review
+suggests an Attribute `ends` of Supplier (three table rows, typed `date`) and a Relation
+`sole_source_parts` from Supplier to Part; the quality notice suggests a Kind `QualityNotice`
+(key sample `QN-2025-114`) with Relations `part`, `supplier`, `received_at` (to Plant) and
+`purchase_order`, and the contract an Attribute `buyer` of Contract, each listed with `all=true`
+until another document supports it.
+
 ## Configuration
 
 `scribe.extraction` (tiers, auto-accept threshold, chunking, matching thresholds, confidence
-per technique, budgets, prompt version, cache) and `keeper.documents` (size limit, accepted
+per technique, budgets, prompt version, cache, `discovery`), `schema.suggestions` (support,
+listing, examples, name matching), `keeper.schema_suggestions` (review branch prefix) and
+`keeper.documents` (size limit, accepted
 suffixes, URL allowlist, extraction on upload, longest text served) are documented with their defaults in
 [config/lorebase.example.yaml](../config/lorebase.example.yaml). Models are configured in the
 `inference` section ([inference.md](inference.md)).
@@ -165,7 +231,11 @@ suffixes, URL allowlist, extraction on upload, longest text served) are document
   with minted keys get no new-Record candidates.
 - Co-occurrence and heading Links propose every Relation the endpoint Kinds allow; on a
   many-to-one Relation several candidates may compete and the reviewer picks.
-- Header-mapped tables, schema discovery (suggesting new Kinds or Attributes), embedding-based
+- Schema suggestions come from field lines, table columns, headings with codes, configured
+  tier 1 labels and tier 2 answers; free prose suggests nothing to tier 0. The
+  `inference.llm.tasks.schema_discovery` route is not used: tier 2 reports unlisted facts
+  in its extraction call.
+- Header-mapped tables, embedding-based
   entity resolution and OCR of scanned PDFs are not implemented.
 - Trigram matching scans the titles of the named Kinds under row-level security (no index), and
   dictionary matching loads at most `matching.dictionary_max_titles` titles per job.

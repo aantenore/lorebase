@@ -131,6 +131,12 @@ RESPONSES: dict[type[m.Model], str] = {
     m.Page[m.ProposalItem]: "Page_ItemOut_",
     m.MaterializedItems: "MaterializedOut",
     m.ItemsDecided: "DecideOut",
+    m.TypeGuess: "TypeGuessOut",
+    m.SuggestionDuplicate: "DuplicateOut",
+    m.SchemaSuggestion: "SuggestionOut",
+    m.Page[m.SchemaSuggestion]: "Page_SuggestionOut_",
+    m.SuggestionProposal: "SuggestionProposalOut",
+    m.SuggestionsDecided: "DecideSuggestionsOut",
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
     m.EraseRequest: "EraseIn",
@@ -165,6 +171,8 @@ REQUESTS: dict[type[m.RequestModel], str] = {
     m.ItemSelection: "ItemSelection",
     m.ItemDecision: "ItemDecisionIn",
     m.DecideItems: "DecideIn",
+    m.SuggestionDecision: "SuggestionDecisionIn",
+    m.DecideSuggestions: "DecideSuggestionsIn",
 }
 # Members the server accepts through a Python-only alias or computes; none today.
 IGNORED: dict[str, set[str]] = {}
@@ -325,6 +333,10 @@ def sample_calls() -> list[Any]:
         ep.get_document_text(d, "doc_1"),
         ep.list_proposal_items(d, "prp_1", status=["pending"], min_confidence=0.5),
         ep.decide_proposal_items(d, "prp_1", m.DecideItems()),
+        ep.list_schema_suggestions(d, status=["pending"], all=True),
+        ep.decide_schema_suggestions(
+            d, m.DecideSuggestions(decisions=[{"suggestion": "ssg_1", "decision": "rejected"}])
+        ),
     ]
 
 

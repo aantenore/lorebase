@@ -314,6 +314,10 @@ keeper:
       element_status: draft      # status of proposed Kinds and Relations
       id_seed: lorebase.infer    # same input and seed: same ids
       id_timestamp_ms: 0
+  schema_suggestions:            # GET /domains/{d}/schema/suggestions and :decide; thresholds
+                                 # in schema.suggestions (docs/extraction.md)
+    branch_prefix: schema-suggestions/   # accepted suggestions are applied on <prefix><id>
+    max_decisions: 100           # suggestions one request may decide
   operations:
     max_bulk_rows: 10000         # rows accepted by one import_records or import_links call
     import_batch_rows: 1000      # rows committed per Revision by bulk imports
@@ -634,6 +638,20 @@ schema:
     max_string_length: 65536
     max_record_lookups: 100
     decimal_precision: 34
+  suggestions:                   # schema suggestions from extraction (docs/extraction.md)
+    min_support: 2               # observations before a pending suggestion is listed
+    max_suggestions: 50          # listed at most, the best supported first
+    max_examples: 3              # evidence examples kept per suggestion
+    max_samples: 20              # distinct sample values kept per suggestion
+    max_labels: 5                # labels (as written) kept per suggestion
+    max_tracked: 2000            # suggestions kept per Domain; new ones beyond are dropped
+    name_similarity: 0.85        # least similarity of a name to an existing element's
+    synonyms: [[supplier, vendor], [contract, agreement], [part, component, item],
+               [plant, site, facility], [purchase_order, order], [customer, client],
+               [quantity, qty]]  # names meaning the same element (snake_case, singular)
+    # type_inference: options of schema inference (as keeper.schema_inference.options) that
+    # type new Attributes from their samples; defaults differ in min_support_values: 5,
+    # enum_min_values: 5 and propose_max_length: false
 
 # Read path of Keeper (design 8). Reads hit the materialized head of a branch; `at=<revision>`
 # reads go through the Revision tree.
@@ -947,6 +965,17 @@ scribe:
       cooccurrence_max: 0.7      # ceiling of Links from co-occurrence in a sentence
       heading: 0.6               # Links between a heading's Record and those of its section
       tier2: 0.8                 # facts from the chat model with verified evidence
+    discovery:                   # schema suggestions: what the tiers see outside the schema
+      enabled: true
+      rules: true                # tier 0: **Label:** fields, table columns, headings with codes
+      span_labels: []            # tier 1: extra span labels suggesting Kinds, e.g. [certificate]
+      relation_labels: []        # tier 1: extra relation labels suggesting Relations
+      tier2: true                # tier 2: the model lists `unlisted` facts (verified evidence)
+      min_confidence: 0.3        # weaker observations are dropped
+      field_confidence: 0.6      # a field line or table column
+      heading_confidence: 0.5    # a Kind named by a heading
+      max_value_chars: 120       # sample values are cut to this length
+      max_observations_per_job: 1000
   embeddings:                    # embedding jobs (design 9.3); model: inference.embeddings
     page_rows: 500               # Record rows read and rendered per query
     batch_texts: 64              # texts per call of the embedding model

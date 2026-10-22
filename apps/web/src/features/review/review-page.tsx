@@ -6,8 +6,10 @@ import { PlannedScreens } from '@/features/planned-screens';
 import { Select } from '@/ui/field';
 import { Badge, EmptyState, PageHeader, QueryBoundary, type BadgeTone } from '@/ui/layout';
 import { unresolvedOf } from './conflict-state';
-import { isStatusFilter, type StatusFilter } from './search';
+import { isStatusFilter, type ReviewTab, type StatusFilter } from './search';
+import { SuggestionsPanel } from './suggestions-panel';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
+import { Tabs } from '@/ui/tabs';
 
 export const STATUS_TONE: Record<ProposalStatus, BadgeTone> = {
   open: 'accent',
@@ -60,7 +62,15 @@ function ProposalRow({ domain, proposal }: { domain: string; proposal: Proposal 
 }
 
 /** Review: Proposals of the Domain with their Conflict counts. */
-export function ReviewPage({ status }: { status: StatusFilter }) {
+export function ReviewPage({
+  status,
+  tab,
+  onTab,
+}: {
+  status: StatusFilter;
+  tab: ReviewTab;
+  onTab: (tab: ReviewTab) => void;
+}) {
   const scope = useScope();
   const navigate = useNavigate();
   const scopeSearch = useScopeSearch();
@@ -72,54 +82,86 @@ export function ReviewPage({ status }: { status: StatusFilter }) {
         title="Review"
         description="Proposals waiting for review, with their Conflicts."
       />
-      <div className="mb-4 w-48">
-        <Select
-          label="Status"
-          value={status}
-          options={[
-            { value: 'open', label: 'Open' },
-            { value: 'merged', label: 'Merged' },
-            { value: 'closed', label: 'Closed' },
-            { value: 'all', label: 'All' },
-          ]}
-          onChange={(event) => {
-            const next = event.target.value;
-            void navigate({
-              to: '.',
-              search: { ...scopeSearch, status: isStatusFilter(next) ? next : 'open' },
-            });
-          }}
-        />
-      </div>
-      <QueryBoundary query={proposals}>
-        {(page) =>
-          page.items.length === 0 ? (
-            <EmptyState>No Proposals match this filter.</EmptyState>
-          ) : (
-            <Table caption="Proposals">
-              <THead>
-                <TR>
-                  <TH>Id</TH>
-                  <TH>Title</TH>
-                  <TH>Origin</TH>
-                  <TH>Branches</TH>
-                  <TH>Status</TH>
-                  <TH>Conflicts</TH>
-                </TR>
-              </THead>
-              <TBody>
-                {page.items.map((proposal) => (
-                  <ProposalRow key={proposal.id} domain={scope.domain} proposal={proposal} />
-                ))}
-              </TBody>
-            </Table>
-          )
-        }
-      </QueryBoundary>
+      <Tabs
+        label="Review"
+        value={tab}
+        onChange={(id) => {
+          onTab(id === 'suggestions' ? 'suggestions' : 'proposals');
+        }}
+        tabs={[
+          {
+            id: 'proposals',
+            label: 'Proposals',
+            content: (
+              <>
+                <div className="mb-4 w-48">
+                  <Select
+                    label="Status"
+                    value={status}
+                    options={[
+                      { value: 'open', label: 'Open' },
+                      { value: 'merged', label: 'Merged' },
+                      { value: 'closed', label: 'Closed' },
+                      { value: 'all', label: 'All' },
+                    ]}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      void navigate({
+                        to: '.',
+                        search: { ...scopeSearch, status: isStatusFilter(next) ? next : 'open' },
+                      });
+                    }}
+                  />
+                </div>
+                <QueryBoundary query={proposals}>
+                  {(page) =>
+                    page.items.length === 0 ? (
+                      <EmptyState>No Proposals match this filter.</EmptyState>
+                    ) : (
+                      <Table caption="Proposals">
+                        <THead>
+                          <TR>
+                            <TH>Id</TH>
+                            <TH>Title</TH>
+                            <TH>Origin</TH>
+                            <TH>Branches</TH>
+                            <TH>Status</TH>
+                            <TH>Conflicts</TH>
+                          </TR>
+                        </THead>
+                        <TBody>
+                          {page.items.map((proposal) => (
+                            <ProposalRow
+                              key={proposal.id}
+                              domain={scope.domain}
+                              proposal={proposal}
+                            />
+                          ))}
+                        </TBody>
+                      </Table>
+                    )
+                  }
+                </QueryBoundary>
+              </>
+            ),
+          },
+          {
+            id: 'suggestions',
+            label: 'Schema suggestions',
+            content: <SuggestionsPanel domain={scope.domain} />,
+          },
+        ]}
+      />
       <div className="mt-6">
         <PlannedScreens
           area="Review"
-          built={['Proposal list', 'Proposal detail', 'Extraction items', 'Conflict resolver']}
+          built={[
+            'Proposal list',
+            'Proposal detail',
+            'Extraction items',
+            'Conflict resolver',
+            'Schema suggestions',
+          ]}
         />
       </div>
     </>

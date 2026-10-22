@@ -276,8 +276,41 @@ def _record_schema(view: KindView) -> dict[str, Any]:
     }
 
 
-def fragment_schema(ontology: Ontology, kind_ids: Sequence[str]) -> dict[str, Any]:
-    """JSON schema of a tier 2 answer restricted to `kind_ids` and the Relations between them."""
+UNLISTED_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "description": "Facts the text states that the schema above has no place for",
+    "items": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "type": {"enum": ["kind", "attribute", "relation"]},
+            "name": {
+                "type": "string",
+                "description": "Name of the missing kind of thing, field or relationship",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Key or name of the record the field or relationship belongs "
+                "to; empty for a kind",
+            },
+            "value": {
+                "type": "string",
+                "description": "The field value, the key or name of the related record, or "
+                "the name of the thing of the missing kind",
+            },
+            "evidence": {"type": "string", "description": "Verbatim quote of the fact"},
+        },
+        "required": ["type", "name", "subject", "value", "evidence"],
+    },
+}
+"""Tier 2 `unlisted` answers: what the model saw outside the schema (schema discovery)."""
+
+
+def fragment_schema(
+    ontology: Ontology, kind_ids: Sequence[str], *, unlisted: bool = False
+) -> dict[str, Any]:
+    """JSON schema of a tier 2 answer restricted to `kind_ids` and the Relations between them;
+    with `unlisted`, the answer also lists facts outside the schema."""
     views = [ontology.kinds[k] for k in kind_ids if k in ontology.kinds]
     properties: dict[str, Any] = {
         "records": {"type": "array", "items": {"anyOf": [_record_schema(v) for v in views]}}
@@ -300,6 +333,9 @@ def fragment_schema(ontology: Ontology, kind_ids: Sequence[str]) -> dict[str, An
             },
         }
         required.append("links")
+    if unlisted:
+        properties["unlisted"] = UNLISTED_SCHEMA
+        required.append("unlisted")
     return {
         "type": "object",
         "additionalProperties": False,

@@ -260,6 +260,42 @@ def infer_schema_files(
     )
 
 
+def list_schema_suggestions(
+    domain: str,
+    *,
+    status: Sequence[m.ItemDecisionValue] | None = None,
+    type: Sequence[m.SuggestionType] | None = None,
+    all: bool | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.Page[m.SchemaSuggestion]]:
+    """Schema suggestions from extraction, the most supported first; `all` lists pending ones
+    below the configured support too."""
+    return Call(
+        "GET",
+        f"{_domain(domain)}/schema/suggestions",
+        parse_model(m.Page[m.SchemaSuggestion]),
+        params={
+            "status": list(status or ()),
+            "type": list(type or ()),
+            "all": all,
+            "limit": limit,
+            "cursor": cursor,
+        },
+        safe=True,
+    )
+
+
+def decide_schema_suggestions(domain: str, body: m.DecideSuggestions) -> Call[m.SuggestionsDecided]:
+    """Accepting opens a Proposal on a new branch: not safe to repeat blindly."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/schema/suggestions:decide",
+        parse_model(m.SuggestionsDecided),
+        body=body.payload(),
+    )
+
+
 # Operations -------------------------------------------------------------------------------
 
 

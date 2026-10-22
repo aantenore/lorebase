@@ -50,6 +50,7 @@ DESIGN_TABLES = {
     "document_chunks",
     "extraction_jobs",
     "extraction_cache",
+    "schema_suggestions",
     "vault",
     # 10.5 webhooks
     "webhooks",
@@ -102,5 +103,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_web_sessions_migration() -> None:
-    assert head_revisions() == ("0020",)
+def test_head_revision_is_the_schema_suggestions_migration() -> None:
+    assert head_revisions() == ("0021",)
