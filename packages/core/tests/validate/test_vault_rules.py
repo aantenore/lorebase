@@ -11,6 +11,7 @@ from lorebase_core.model import (
     AggregateDerivation,
     AggregateFunction,
     Attribute,
+    CreateRecordStep,
     KindSearch,
     Precondition,
     Record,
@@ -35,8 +36,11 @@ from ..model.supply import (
     PART,
     PLANT,
     PLANT_CITY,
+    PLANT_NAME,
     REASON,
+    RISK_FLAG,
     RISK_SCORE,
+    SEVERITY,
     SUPPLIED_BY,
     SUPPLIER,
     SUPPLIER_CITY,
@@ -288,7 +292,78 @@ def test_fields_resolve_against_the_kind_an_expression_addresses() -> None:
     precondition = Precondition(expression='record(supplier).city != ""', message="No city.")
     schema = _with_operation(sensitive, preconditions=(precondition,))
     assert not [i for i in validate_schema(schema, RULES) if i.is_error]
-    # An expression whose Kind cannot be told is matched by name, conservatively.
-    loose = Precondition(expression='[record(supplier)].exists(r, r.city != "")', message="x")
+    # An untyped value (a list mixing a Record and a map) is matched by name, conservatively.
+    loose = Precondition(
+        expression='[record(supplier), {"city": ""}].exists(r, r.city != "")', message="x"
+    )
     found = validate_schema(_with_operation(sensitive, preconditions=(loose,)), RULES)
     assert C.SCHEMA_SENSITIVITY_INHERITED in {i.code for i in found}
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        '[record(supplier)].exists(r, r.city != "")',
+        'links(supplier, "supplies").all(p, p.name != "")',
+        'links(supplier, "supplies").map(p, record(supplier)).all(s, s.city != "")',
+        'links(supplier, "supplies").filter(p, p.name != "").size() > 0',
+        '(size(links(supplier, "supplies")) > 0 ? record(supplier) : record(supplier)).city != ""',
+        'links(supplier, "supplies").exists(p, links(p.ref, "supplied_by")'
+        '.exists(s, s.city == ""))',
+    ],
+)
+def test_comprehensions_resolve_fields_against_the_inferred_kind(expression: str) -> None:
+    # Plant.city and Plant.name are personal data; the expression reads Supplier.city or
+    # Part.name only, through comprehension variables, a conditional and nested traversals.
+    sensitive = replace_attribute(supply_schema(), PLANT, PLANT_CITY, sensitivity=PII)
+    sensitive = replace_attribute(sensitive, PLANT, PLANT_NAME, sensitivity=PII)
+    precondition = Precondition(expression=expression, message="No.")
+    schema = _with_operation(sensitive, preconditions=(precondition,))
+    assert not [i for i in validate_schema(schema, RULES) if i.is_error]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        'links(supplier, "supplies").exists(p, links(p.ref, "made_at").exists(q, q.city == ""))',
+        'links(supplier, "supplies").map(p, links(p.ref, "made_at"))'
+        '.exists(l, size(l) > 0 && l[0].city == "")',
+        '[record(supplier)].all(s, links(s.ref, "supplies").all(p, p.preferred_plant == null'
+        ' || record(p.preferred_plant).city != ""))',
+    ],
+)
+def test_comprehensions_reading_a_sensitive_attribute_are_refused(expression: str) -> None:
+    sensitive = replace_attribute(supply_schema(), PLANT, PLANT_CITY, sensitivity=PII)
+    precondition = Precondition(expression=expression, message="No.")
+    found = validate_schema(_with_operation(sensitive, preconditions=(precondition,)), RULES)
+    assert [(i.code, i.path[-1]) for i in found if i.is_error] == [
+        (C.SCHEMA_SENSITIVITY_INHERITED, "expression")
+    ]
+
+
+def test_step_values_resolve_earlier_step_records_by_their_kind() -> None:
+    # `record($step[0])` is the RiskFlag the first step created: its reason is not the
+    # sensitive Supplier attribute of the same name.
+    operation = supply_schema(with_operation=True).operations[FLAG_SUPPLIER_RISK]
+    copying = CreateRecordStep(
+        kind=RISK_FLAG,
+        values={SEVERITY: '"low"', REASON: "[record($step[0])].map(f, f.reason)[0]"},
+    )
+    steps = (*operation.steps, copying)
+    reason = Attribute(
+        id=ident("att", 108),
+        api_name="reason",
+        type=TypeSpec.of("text"),
+        sensitivity=PII,
+        description="Why the supplier was chosen.",
+    )
+    sensitive = add_attribute(supply_schema(), SUPPLIER, reason)
+    found = validate_schema(_with_operation(sensitive, steps=steps), RULES)
+    assert not [i for i in found if i.is_error]
+    reading = copying.model_copy(
+        update={"values": {**copying.values, REASON: "record(params.supplier).reason"}}
+    )
+    found = validate_schema(_with_operation(sensitive, steps=(*operation.steps, reading)), RULES)
+    assert [(i.code, i.path[-1]) for i in found if i.is_error] == [
+        (C.SCHEMA_SENSITIVITY_INHERITED, REASON)
+    ]
