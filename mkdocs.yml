@@ -120,6 +120,7 @@ nav:
       - Performance: performance.md
       - Security review: security-review.md
       - Threat model: threat-model.md
+      - Validation record: validation.md
   - Reference:
       - REST API: reference/api.md
       - API stability: api-stability.md

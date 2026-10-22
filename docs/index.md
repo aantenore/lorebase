@@ -240,7 +240,7 @@ The pages are also in the [repository](https://github.com/aantenore/lorebase/tre
 
 - **Start**: this page, the [quickstart](quickstart.md), the [five-day demo](demo.md) and the [visual tour](tour.md).
 - **Concepts**: [why versioned knowledge](why.md), the [glossary](glossary.md), the [design](design.md), the [FAQ](faq.md) and the [comparison](comparison.md) with similar products.
-- **Guides**: [agents](agents.md), the [MCP server](mcp.md), [schema inference](inference.md), [inference providers](inference-providers.md), [document extraction](extraction.md), [Scribe](scribe.md), [operations](operations.md), [metrics](metrics.md), [deployment](deployment.md), [Kubernetes](kubernetes.md), [performance](performance.md) and the [security review](security-review.md).
+- **Guides**: [agents](agents.md), the [MCP server](mcp.md), [schema inference](inference.md), [inference providers](inference-providers.md), [document extraction](extraction.md), [Scribe](scribe.md), [operations](operations.md), [metrics](metrics.md), [deployment](deployment.md), [Kubernetes](kubernetes.md), [performance](performance.md), the [security review](security-review.md) and the [validation record](validation.md).
 - **Reference**: the [REST API](reference/api.md), the [command line](reference/cli.md) and the [configuration](reference/configuration.md).
 - **Project**: the [roadmap](roadmap.md), the [changelog](project/changelog.md), [contributing](project/contributing.md), the [security policy](project/security.md) and the [release process](release.md).
 
