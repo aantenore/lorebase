@@ -3279,10 +3279,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Revision id or tag to read at (time travel, served from the tree).",
+              "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.",
               "title": "At"
             },
-            "description": "Revision id or tag to read at (time travel, served from the tree)."
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           },
           {
             "name": "where",
@@ -3516,10 +3516,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Revision id or tag to read at (time travel, served from the tree).",
+              "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.",
               "title": "At"
             },
-            "description": "Revision id or tag to read at (time travel, served from the tree)."
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           },
           {
             "name": "limit",
@@ -3689,10 +3689,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Revision id or tag to read at (time travel, served from the tree).",
+              "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.",
               "title": "At"
             },
-            "description": "Revision id or tag to read at (time travel, served from the tree)."
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           },
           {
             "name": "links",
@@ -3782,7 +3782,7 @@
           "read"
         ],
         "summary": "History of a Record",
-        "description": "Revisions that changed the Record on the branch, newest first, with the Attributes each\nchanged and their provenance. Served at the branch head from the branch history.",
+        "description": "Revisions that changed the Record on the branch, newest first, with the Attributes each\nchanged and their provenance, from the branch history; with `at`, the changes up to that\nRevision.",
         "operationId": "get_record_history_api_v1_domains__domain_id__kinds__kind__records__key__history_get",
         "security": [
           {
@@ -3834,6 +3834,24 @@
               "title": "Branch"
             },
             "description": "Branch to read; default: the Domain's default branch."
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.",
+              "title": "At"
+            },
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           },
           {
             "name": "values",
@@ -4123,10 +4141,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Revision id or tag to read at (time travel, served from the tree).",
+              "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.",
               "title": "At"
             },
-            "description": "Revision id or tag to read at (time travel, served from the tree)."
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           },
           {
             "name": "from_key",
@@ -4654,6 +4672,24 @@
             "description": "Branch to examine; default: the Domain's default branch."
           },
           {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision id or tag to examine (time travel, served from a snapshot).",
+              "title": "At"
+            },
+            "description": "Revision id or tag to examine (time travel, served from a snapshot)."
+          },
+          {
             "name": "format",
             "in": "query",
             "required": false,
@@ -4704,16 +4740,6 @@
           },
           "404": {
             "description": "Domain, branch or Kind not found.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The branch has no materialized head.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4799,6 +4825,24 @@
             "description": "Branch to examine; default: the Domain's default branch."
           },
           {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision id or tag to examine (time travel, served from a snapshot).",
+              "title": "At"
+            },
+            "description": "Revision id or tag to examine (time travel, served from a snapshot)."
+          },
+          {
             "name": "format",
             "in": "query",
             "required": false,
@@ -4849,16 +4893,6 @@
           },
           "404": {
             "description": "Domain, branch or Kind not found.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The branch has no materialized head.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5043,6 +5077,24 @@
               "title": "Branch"
             },
             "description": "Branch to read; default: the Domain's default branch."
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision id or tag to read at (time travel, served from a snapshot).",
+              "title": "At"
+            },
+            "description": "Revision id or tag to read at (time travel, served from a snapshot)."
           },
           {
             "name": "format",
@@ -12096,6 +12148,18 @@
             "title": "Branch",
             "description": "Default: the Domain's default branch."
           },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id or tag to read at (time travel, served from a snapshot)."
+          },
           "refs": {
             "anyOf": [
               {
@@ -15461,6 +15525,18 @@
             ],
             "title": "Branch"
           },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
+          },
           "seeds": {
             "items": {
               "$ref": "#/components/schemas/RecordAddress"
@@ -17139,7 +17215,7 @@
               }
             ],
             "title": "At",
-            "description": "Revision id or tag; key-ordered Kind listings only."
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           }
         },
         "additionalProperties": false,
@@ -18817,6 +18893,18 @@
             ],
             "title": "Branch"
           },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
+          },
           "q": {
             "anyOf": [
               {
@@ -20113,6 +20201,18 @@
               }
             ],
             "title": "Branch"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
           },
           "start": {
             "$ref": "#/components/schemas/RecordAddress"

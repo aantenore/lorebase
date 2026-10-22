@@ -626,7 +626,8 @@ export interface paths {
         /**
          * History of a Record
          * @description Revisions that changed the Record on the branch, newest first, with the Attributes each
-         *     changed and their provenance. Served at the branch head from the branch history.
+         *     changed and their provenance, from the branch history; with `at`, the changes up to that
+         *     Revision.
          */
         get: operations["get_record_history_api_v1_domains__domain_id__kinds__kind__records__key__history_get"];
         put?: never;
@@ -2334,6 +2335,11 @@ export interface components {
              */
             branch?: string | null;
             /**
+             * At
+             * @description Revision id or tag to read at (time travel, served from a snapshot).
+             */
+            at?: string | null;
+            /**
              * Refs
              * @description Seed Records as `Kind/key` references.
              */
@@ -3728,6 +3734,11 @@ export interface components {
         NeighborhoodRequest: {
             /** Branch */
             branch?: string | null;
+            /**
+             * At
+             * @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.
+             */
+            at?: string | null;
             /** Seeds */
             seeds: components["schemas"]["RecordAddress"][];
             /**
@@ -4286,7 +4297,7 @@ export interface components {
             branch?: string | null;
             /**
              * At
-             * @description Revision id or tag; key-ordered Kind listings only.
+             * @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.
              */
             at?: string | null;
         };
@@ -4961,6 +4972,11 @@ export interface components {
             /** Branch */
             branch?: string | null;
             /**
+             * At
+             * @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.
+             */
+            at?: string | null;
+            /**
              * Q
              * @description Text query (web search syntax).
              */
@@ -5469,6 +5485,11 @@ export interface components {
         TraverseRequest: {
             /** Branch */
             branch?: string | null;
+            /**
+             * At
+             * @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.
+             */
+            at?: string | null;
             start: components["schemas"]["RecordAddress"];
             /** Path */
             path: components["schemas"]["TraverseStep"][];
@@ -7791,7 +7812,7 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
-                /** @description Revision id or tag to read at (time travel, served from the tree). */
+                /** @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision. */
                 at?: string | null;
                 /** @description DSL predicate as JSON (design 8.2). */
                 where?: string | null;
@@ -7872,7 +7893,7 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
-                /** @description Revision id or tag to read at (time travel, served from the tree). */
+                /** @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision. */
                 at?: string | null;
                 /** @description Page size. */
                 limit?: number | null;
@@ -7949,7 +7970,7 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
-                /** @description Revision id or tag to read at (time travel, served from the tree). */
+                /** @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision. */
                 at?: string | null;
                 /** @description Add Link counts per Relation. */
                 links?: boolean;
@@ -8025,6 +8046,8 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
+                /** @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision. */
+                at?: string | null;
                 /** @description Add the values before and after each change. */
                 values?: boolean;
                 /** @description Page size. */
@@ -8171,7 +8194,7 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
-                /** @description Revision id or tag to read at (time travel, served from the tree). */
+                /** @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision. */
                 at?: string | null;
                 /** @description Only Links from this key. */
                 from_key?: string | null;
@@ -8498,6 +8521,8 @@ export interface operations {
             query?: {
                 /** @description Branch to examine; default: the Domain's default branch. */
                 branch?: string | null;
+                /** @description Revision id or tag to examine (time travel, served from a snapshot). */
+                at?: string | null;
                 /** @description `markdown` renders the report as text. */
                 format?: "json" | "markdown";
             };
@@ -8544,15 +8569,6 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The branch has no materialized head. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
             /** @description Invalid request. */
             422: {
                 headers: {
@@ -8587,6 +8603,8 @@ export interface operations {
             query?: {
                 /** @description Branch to examine; default: the Domain's default branch. */
                 branch?: string | null;
+                /** @description Revision id or tag to examine (time travel, served from a snapshot). */
+                at?: string | null;
                 /** @description `markdown` renders the report as text. */
                 format?: "json" | "markdown";
             };
@@ -8627,15 +8645,6 @@ export interface operations {
             };
             /** @description Domain, branch or Kind not found. */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The branch has no materialized head. */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8747,6 +8756,8 @@ export interface operations {
             query?: {
                 /** @description Branch to read; default: the Domain's default branch. */
                 branch?: string | null;
+                /** @description Revision id or tag to read at (time travel, served from a snapshot). */
+                at?: string | null;
                 format?: "json" | "markdown";
             };
             header?: never;

@@ -1025,6 +1025,8 @@ POST /traverse and POST /neighborhood; a neighborhood is also bounded by store.t
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `read.time_travel.max_scan_entries` | `100000` | largest Kind or Relation partition listed at a Revision |
+| `read.time_travel.snapshot_max_entries` | `100000` | largest Revision (Records + Links) materialized for filters, search, traversal, history and health at it; larger refused |
+| `read.time_travel.snapshot_max_per_domain` | `4` | snapshots kept per Domain, oldest unused dropped first |
 
 ### `read.diff`
 
