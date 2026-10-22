@@ -89,7 +89,7 @@ def test_named_indexes_and_constraints() -> None:
         "ix_mat_records_branch_search",
         "ix_mat_records_values",
         "ix_mat_lexicon_branch_word",
-        "ix_mat_links_reverse",
+        "ix_mat_links_reverse_covering",
         "ix_revision_parents_domain_id_parent_id",
         "uq_operation_invocations_idempotency",
         "ix_jobs_claimable",
@@ -106,5 +106,5 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
     assert include_object(None, "ix_jobs_claimable", "index", True, None)
 
 
-def test_head_revision_is_the_snapshot_refs_migration() -> None:
-    assert head_revisions() == ("0025",)
+def test_head_revision_is_the_covering_reverse_links_migration() -> None:
+    assert head_revisions() == ("0026",)

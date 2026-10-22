@@ -2,7 +2,7 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
-The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)).
+The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except Record lineage against the budget proposed for it and, in that run, the 2-hop neighborhood on branches other than `main`, whose inbound Link hop reads the index alone since migration `0026` ([Covering reverse Link index](#covering-reverse-link-index-100k-records)); typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)).
 
 ## Dataset
 
@@ -249,6 +249,62 @@ nothing more. Plans: the OR query reads the same GIN index as the full match, an
 count reads `mat_records` by primary key (`Index Scan mat_records_p3_pkey`) for at most
 `search.partial.candidates` (100) Records, under row-level security too.
 
+## Covering reverse Link index (100k Records)
+
+Migration `0026` replaces `ix_mat_links_reverse` with `ix_mat_links_reverse_covering`: the
+same key `(domain_id, branch, relation_id, to_key)` with `INCLUDE (from_key, "values",
+object_hash, revision_generation, deleted)`. The inbound Link hop of the neighborhood, and
+Links of a Record, become index-only scans on `main`, on a copy and on both halves of an
+overlay (its lookup filters on `revision_generation` and `deleted`). Before, every Link the
+hop found was fetched from the heap, and the Links pointing at one Record lie on as many heap
+pages as there are Links, since each was written by the commit of the Record it comes from.
+In the index they are adjacent.
+
+Measured on 2026-10-22 on the 100k dataset above (scale 540, 4 extra Links per Part, the
+overlay and copy of [Overlay branches](#overlay-branches-milliseconds)), loaded once and
+copied (`CREATE DATABASE ... TEMPLATE`), so both sides read the same rows; the "after" copy got
+migration `0026`, then `VACUUM ANALYZE`. Same machine and container settings
+(`shared_buffers` 128MB). Blocks are the shared blocks (hit and read) of the statements run
+inside the read function, as `auto_explain` reports them with `log_analyze` and
+`log_buffers`, mean over 100 calls with the same random seeds; reads are the blocks not found
+in shared buffers, after 600 timed calls on each database of the same server.
+
+| 2-hop neighborhood | blocks before | blocks after | inbound Link hop before | after | reads before | reads after |
+|--------------------|--------------:|-------------:|------------------------:|------:|-------------:|------------:|
+| `main` | 765 | 675 | 205 | 112 | 122 | 118 |
+| copy | 757 | 667 | 205 | 113 | 159 | 107 |
+| overlay | 1,303 | 1,239 | 288 | 222 | 160 | 102 |
+
+The inbound hop (27 index scans and 126 Links per call) drops its 126 heap fetches: `Index
+Only Scan mat_links_p3_reverse_covering_idx`, 0 heap fetches. Blocks not found in shared
+buffers fall by a third on the copy and the overlay. Most of what is left is the hydration of
+about 134 Records by primary key (537 blocks on `main` and the copy, about one heap page per
+Record): it reads the Records the call returns, so no index can serve it.
+
+p50 / p95 in milliseconds; the laptop ran other work (load average above 20 on 15 cores), so
+both sides are slower than the baseline above:
+
+| 2-hop neighborhood | owner before | owner after | rls before | rls after |
+|--------------------|-------------:|------------:|-----------:|----------:|
+| `main` | 8.93 / 14.54 | 10.25 / 16.46 | 10.22 / 15.17 | 9.73 / 15.76 |
+| copy | 9.21 / 16.93 | 9.81 / 16.52 | 9.44 / 16.99 | 9.33 / 14.71 |
+| overlay | 8.91 / 16.07 | 10.26 / 18.07 | 10.19 / 15.67 | 10.76 / 16.73 |
+
+At this size the working set fits in memory and the read is bound by planning and CPU: the
+latency does not move beyond the run-to-run noise. The change is for the size where pages
+miss the cache. At 1M Records the neighborhood on branches measured 29 to 42 ms at p95 with
+the time in pages read from outside shared buffers, and the inbound hop's heap fetches were
+about a third of the distinct pages of a call; the 1M fixture was not loaded again for this
+change (about 33 minutes), so the expected effect there is the reduction of misses measured
+here, about a third on the copy and the overlay.
+
+The price is the index size: 117 MB against 19 MB per partition at this size (605,880 Link
+rows of `main`, the copy and the overlay, 161 MB of heap), because B-tree deduplication does not apply to an
+index with included columns. A commit writes as many entries into it as before, each wider.
+Rows written since the last vacuum are on pages not yet marked all-visible and are still
+fetched from the heap. `test_overlay_reads_keep_index_plans` checks the index-only scan on a
+copy and on an overlay, through the definer function and plain SQL.
+
 ## 1M Records
 
 The M1 fixture: the same harness at ten times the size, run on 2026-10-22.
@@ -361,7 +417,9 @@ was at 29.45 to 33.02 at p95 and typo-tolerant search at 149 to 168.
   repeated runs over the same keys
   fall from 23 to 14 ms at p50 as the cache warms. Nothing in the statement scales with the
   Domain; the budget holds when the working set is in memory, which the reference hardware of
-  design 6.14 (32 GB) gives and this VM does not.
+  design 6.14 (32 GB) gives and this VM does not. Since this run the inbound Link hop reads
+  the covering index of migration `0026` alone, which removes one heap page per inbound Link
+  walked ([Covering reverse Link index](#covering-reverse-link-index-100k-records)).
 - Typo-tolerant title search misses its budget in this run, at 1.4 to 3.4 times it at p95,
   on every branch and for both roles. Plain full-text search stays at 8 to 12 ms. With the
   word lexicon it is 7.6 to 14 ms ([1M Records: word lexicon](#1m-records-word-lexicon)).
@@ -390,8 +448,8 @@ triggers count the words).
 
 At p95 that is 7.6 to 14 ms against 116 to 123 ms for the whole-title trigram match (15 times
 less on `main`), and the overlay stays within 10% of the copy. The other reads stayed in the
-range of the first run (the neighborhood on branches 34 to 42 ms at p95, as before over its
-budget when the working set leaves memory), except the commit, measured right after the two
+range of the first run (the neighborhood on branches 34 to 42 ms at p95, before migration
+`0026`), except the commit, measured right after the two
 copies of 4 million rows each with the page cache full of them (5.5 s at p50). Measured again
 on a copy of the loaded fixture, warm, four commits of 1,000 Part updates per setting, twice:
 
@@ -431,6 +489,13 @@ statements are otherwise the same.
   deletions of large branches now run as jobs in batches, each well within the timeout
   ([Background branch copies and deletions](#background-branch-copies-and-deletions)); the
   1M-Record run has not been repeated since.
+- **2-hop neighborhood on branches** (addressed since this run). 29 to 42 ms at p95 on the
+  copy and the overlay across runs, against 30, with the time in pages read from outside
+  shared buffers. The inbound Link hop fetched every Link from the heap; it reads the covering
+  index of migration `0026` alone now, and on the 100k pair the blocks read from outside shared
+  buffers fell by a third on both branches
+  ([Covering reverse Link index](#covering-reverse-link-index-100k-records)). The 1M run has
+  not been repeated since.
 - Lineage has no budget in design 8.7; with the one proposed here it is at the limit on
   branches. Its statements are index lookups; fewer round trips (the head Revision and the
   Record in one statement) would give the margin.
