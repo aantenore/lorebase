@@ -149,12 +149,15 @@ class MatHistory(Base):
 
 
 class Embedding(Base):
-    """Vector of an object for one model; shared by all branches.
+    """Vector of an object for one model and embedding template; shared by all branches whose
+    template of the object's Kind has that fingerprint.
 
     The column is dimensionless so models of different sizes coexist; `dims` must match the
     vector and selects the per-dimension HNSW index. `text_hash` is the SHA-256 of the text
     that was embedded (revision 0014): an object whose text did not change keeps its vector,
-    and a new object with the text of another reuses that one's vector.
+    and a new object with the text of another reuses that one's vector. `fingerprint` is the
+    template fingerprint the text was rendered with (revision 0024); empty for a vector whose
+    template could not be told when the column was added.
     """
 
     __tablename__ = "embeddings"
@@ -167,6 +170,7 @@ class Embedding(Base):
     domain_id: Mapped[DomainKey]
     object_hash: Mapped[H32] = mapped_column(primary_key=True)
     model: Mapped[str] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(primary_key=True)
     dims: Mapped[int] = mapped_column(Integer)
     embedding: Mapped[list[float]] = mapped_column(VECTOR())
     text_hash: Mapped[H32 | None]

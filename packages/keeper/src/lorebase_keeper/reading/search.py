@@ -11,7 +11,8 @@
   `search.partial.term_bonus` per term held, corrections applied per term); each hit
   reports `match: all|partial`;
 - semantic: cosine distance between the caller's `query_vector` and the stored embedding of
-  each Record's object hash for the configured model (Keeper never computes vectors);
+  each Record's object hash for the configured model and the fingerprint of its Kind's
+  embedding template in the searched branch (Keeper never computes vectors);
 - hybrid: reciprocal rank fusion of both candidate lists, computed in SQL:
   `w_lex / (k + rank_lex) + w_sem / (k + rank_sem)`.
 
@@ -74,6 +75,7 @@ from lorebase_keeper.reading.views import (
     served,
 )
 from lorebase_keeper.tracing.explain import explain
+from lorebase_store.embeddings import fingerprint_of, template_fingerprints
 from lorebase_store.models import metadata
 from lorebase_store.reads import (
     Correction,
@@ -210,7 +212,11 @@ async def search(
         lists.append(
             (
                 _semantic(
-                    r, [*base, _embedded_readable(r, point, target)], request.query_vector, runtime
+                    r,
+                    [*base, _embedded_readable(r, point, target)],
+                    request.query_vector,
+                    runtime,
+                    target,
                 ),
                 settings.hybrid.semantic_weight,
             )
@@ -570,9 +576,17 @@ def _embedded_readable(r: Any, point: ReadPoint, target: Target) -> ColumnElemen
 
 
 def _semantic(
-    r: Any, base: list[ColumnElement[bool]], vector: list[float], runtime: ReadRuntime
+    r: Any,
+    base: list[ColumnElement[bool]],
+    vector: list[float],
+    runtime: ReadRuntime,
+    target: Target,
 ) -> Select[Any]:
+    """Records ranked by the vector stored for their object hash under the fingerprint of
+    their Kind's embedding template in the searched branch's schema: another branch's vector
+    for the same content, rendered by a different template, is never used."""
     dims = runtime.store_settings.embeddings.dims
+    fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
     e = EMBEDDINGS.alias("e")
     distance = cast(e.c.embedding, VECTOR(dims)).op("<=>", return_type=Float)(
         literal(vector, VECTOR(dims))
@@ -585,6 +599,7 @@ def _semantic(
                 e.c.domain_id == r.c.domain_id,
                 e.c.object_hash == r.c.object_hash,
                 e.c.model == literal(runtime.search.semantic.model),
+                e.c.fingerprint == fingerprint,
                 e.c.dims == literal(dims, literal_execute=True),
             ),
         )

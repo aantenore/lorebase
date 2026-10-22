@@ -13,13 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from lorebase_inference import inference_settings
 from lorebase_platform.settings import Settings
-from lorebase_scribe.embeddings import EmbeddingModels
+from lorebase_scribe.embeddings import EmbeddingModels, Templates
 from lorebase_scribe.jobs import PERMANENT_JOB_ERRORS, JobContext, build_handlers
 from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import ScribeSettings, scribe_settings
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
 from lorebase_scribe.worker import Worker
 from lorebase_store.db import create_engine
+from lorebase_store.embeddings import SchemaCache
 from lorebase_store.jobs import default_worker_id
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import database_settings
@@ -75,6 +76,7 @@ async def open_scribe(
     worker_name = worker_id or default_worker_id()
     inference = inference_settings(settings)
     embedding_models = EmbeddingModels(inference, dims=runtime.settings.embeddings.dims)
+    embedding_templates: SchemaCache[Templates] = SchemaCache(scribe.embeddings.template_cache_size)
     try:
         async with httpx.AsyncClient(trust_env=False) as http:
             context = JobContext(
@@ -89,6 +91,7 @@ async def open_scribe(
                 ddl_engine=maintenance,
                 inference=inference,
                 embedding_models=embedding_models,
+                embedding_templates=embedding_templates,
             )
             worker = Worker(
                 sessions,

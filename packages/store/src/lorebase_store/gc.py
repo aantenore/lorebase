@@ -11,7 +11,10 @@ is not descended into).
 
 Sweeping. Unmarked Revisions (with their parents, changesets and history rows), orphaned
 provenance entries, tree nodes and objects are deleted in batches, newest Revisions first so a
-child never outlives its parent. Before each batch of deletions the sweep takes, without
+child never outlives its parent. Vectors (`embeddings`) are kept while some materialized
+branch holds a Record of their object hash whose Kind's embedding template, in that branch's
+schema, has their fingerprint; the others (orphaned object hashes, templates no branch uses any
+more, any model) are deleted. Before each batch of deletions the sweep takes, without
 waiting, the advisory locks of every ref of the Domain (a commit holds its branch lock until
 it ends) and marks again from the current refs: a commit that landed after the first marking is
 protected, and a commit still in flight makes the batch wait. The grace period covers commits
@@ -41,11 +44,13 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 
-from sqlalchemy import ARRAY, BigInteger, LargeBinary, bindparam, text
+from sqlalchemy import ARRAY, BigInteger, LargeBinary, Text, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from lorebase_core.tree import BranchNode, LeafNode, NodeType, RootNode, decode_node
 from lorebase_store.bulk import chunks
+from lorebase_store.commit.schema import load_compiled
+from lorebase_store.embeddings import template_fingerprints
 from lorebase_store.jobs import JobRow
 from lorebase_store.repositories.domains import DomainNotFoundError
 from lorebase_store.repositories.refs import advisory_lock_key
@@ -112,6 +117,8 @@ _MARK_TABLES = (
     "lb_gc_dead",
     "lb_gc_prov",
     "lb_gc_vectors",
+    "lb_gc_schemas",
+    "lb_gc_templates",
 )
 
 _CREATE_MARK_TABLES = (
@@ -122,7 +129,12 @@ _CREATE_MARK_TABLES = (
     "CREATE TEMP TABLE IF NOT EXISTS lb_gc_dead (id bytea PRIMARY KEY, generation bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS lb_gc_dead_order ON lb_gc_dead (generation DESC, id DESC)",
     "CREATE TEMP TABLE IF NOT EXISTS lb_gc_prov (id text PRIMARY KEY)",
-    "CREATE TEMP TABLE IF NOT EXISTS lb_gc_vectors (hash bytea PRIMARY KEY)",
+    "CREATE TEMP TABLE IF NOT EXISTS lb_gc_vectors "
+    "(hash bytea NOT NULL, fingerprint text NOT NULL, PRIMARY KEY (hash, fingerprint))",
+    "CREATE TEMP TABLE IF NOT EXISTS lb_gc_schemas (schema_hash bytea PRIMARY KEY)",
+    "CREATE TEMP TABLE IF NOT EXISTS lb_gc_templates "
+    "(schema_hash bytea NOT NULL, kind_id text NOT NULL, fingerprint text NOT NULL, "
+    "PRIMARY KEY (schema_hash, kind_id))",
 )
 
 _ROOTS_REFS = text(
@@ -437,29 +449,55 @@ def _delete_unmarked(content: _Content) -> Any:
     ).bindparams(_bytea_array("hs"))
 
 
-_VECTORS_LIVE = text(
-    "INSERT INTO lb_gc_vectors (hash) SELECT DISTINCT object_hash FROM mat_records "
-    "WHERE domain_id = :d ON CONFLICT DO NOTHING"
+_SCHEMA_HASHES = text("SELECT DISTINCT schema_hash FROM mat_schema WHERE domain_id = :d")
+_SCHEMA_DOCUMENT = text(
+    "SELECT compiled FROM mat_schema WHERE domain_id = :d AND schema_hash = :h LIMIT 1"
 )
-"""Object hashes of the Records at the heads of the materialized branches: the vectors a search
-can reach. An overlay's inherited rows belong to its base branch, which is listed too."""
+_SCHEMA_KNOWN = text("INSERT INTO lb_gc_schemas (schema_hash) VALUES (:h) ON CONFLICT DO NOTHING")
+_TEMPLATE_FILL = text(
+    "INSERT INTO lb_gc_templates (schema_hash, kind_id, fingerprint) "
+    "SELECT :h, k, f FROM unnest(CAST(:kinds AS text[]), CAST(:fps AS text[])) AS t(k, f) "
+    "ON CONFLICT DO NOTHING"
+).bindparams(bindparam("kinds", type_=ARRAY(Text())), bindparam("fps", type_=ARRAY(Text())))
+_VECTORS_LIVE = text(
+    "INSERT INTO lb_gc_vectors (hash, fingerprint) "
+    "SELECT DISTINCT m.object_hash, t.fingerprint FROM mat_records m "
+    "JOIN mat_schema s ON s.domain_id = m.domain_id AND s.branch = m.branch "
+    "JOIN lb_gc_templates t ON t.schema_hash = s.schema_hash AND t.kind_id = m.kind_id "
+    "WHERE m.domain_id = :d ON CONFLICT DO NOTHING"
+)
+"""Object hashes of the Records at the heads of the materialized branches, with the template
+fingerprint of their Kind in the branch's schema: the vectors a search can reach. An overlay's
+inherited rows belong to its base branch, which is listed too."""
 _VECTORS_PAGE = text(
-    "SELECT DISTINCT e.object_hash FROM embeddings e WHERE e.domain_id = :d "
-    "AND e.object_hash > :last "
-    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v WHERE v.hash = e.object_hash) "
-    "ORDER BY e.object_hash LIMIT :n"
+    "SELECT e.object_hash, e.fingerprint FROM embeddings e WHERE e.domain_id = :d "
+    "AND (e.object_hash, e.fingerprint) > (:last, :last_fingerprint) "
+    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v "
+    "WHERE v.hash = e.object_hash AND v.fingerprint = e.fingerprint) "
+    "GROUP BY e.object_hash, e.fingerprint ORDER BY e.object_hash, e.fingerprint LIMIT :n"
 )
 _VECTORS_TOTAL = text(
     "SELECT count(*) FROM embeddings e WHERE e.domain_id = :d "
-    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v WHERE v.hash = e.object_hash)"
+    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v "
+    "WHERE v.hash = e.object_hash AND v.fingerprint = e.fingerprint)"
 )
 _VECTORS_DELETE = text(
-    "DELETE FROM embeddings e WHERE e.domain_id = :d "
-    "AND e.object_hash = ANY(CAST(:hs AS bytea[])) "
-    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v WHERE v.hash = e.object_hash) "
-    "AND NOT EXISTS (SELECT 1 FROM mat_records m WHERE m.domain_id = :d "
-    "AND m.object_hash = e.object_hash)"
-).bindparams(_bytea_array("hs"))
+    "DELETE FROM embeddings e "
+    "USING unnest(CAST(:hs AS bytea[]), CAST(:fs AS text[])) AS p(hash, fingerprint) "
+    "WHERE e.domain_id = :d AND e.object_hash = p.hash AND e.fingerprint = p.fingerprint "
+    "AND NOT EXISTS (SELECT 1 FROM lb_gc_vectors v "
+    "WHERE v.hash = e.object_hash AND v.fingerprint = e.fingerprint) "
+    "AND NOT EXISTS (SELECT 1 FROM mat_records m "
+    "LEFT JOIN mat_schema s ON s.domain_id = m.domain_id AND s.branch = m.branch "
+    "WHERE m.domain_id = :d AND m.object_hash = e.object_hash "
+    "AND (s.schema_hash IS NULL "
+    "OR NOT EXISTS (SELECT 1 FROM lb_gc_schemas k WHERE k.schema_hash = s.schema_hash) "
+    "OR EXISTS (SELECT 1 FROM lb_gc_templates t WHERE t.schema_hash = s.schema_hash "
+    "AND t.kind_id = m.kind_id AND t.fingerprint = e.fingerprint)))"
+).bindparams(_bytea_array("hs"), bindparam("fs", type_=ARRAY(Text())))
+"""Deletes the given vectors unless a Record holding their object hash was written since the
+marking under a schema whose templates were not read (or under a template of their
+fingerprint): such a Record may be waiting for exactly that vector."""
 
 
 class _Steps:
@@ -642,14 +680,37 @@ class _Collector:
     # Vectors ----------------------------------------------------------------------
 
     async def _sweep_vectors(self) -> None:
-        """Delete the embeddings no branch head references (any model).
+        """Delete the embeddings no branch head references (any model): those whose object hash
+        no branch holds, and those whose template fingerprint is not the one of the Kind of any
+        Record holding it, in that Record's branch schema.
 
-        The set of referenced object hashes is read once; each batch is deleted inside the
-        guard (branch locks held, so no commit changes `mat_records`) after checking the
-        hashes against `mat_records` again, so a Record written since is never affected.
+        The templates of each distinct schema and the set of referenced `(object hash,
+        fingerprint)` pairs are read once; each batch is deleted inside the guard (branch locks
+        held, so no commit changes `mat_records` or `mat_schema`) after checking the pairs
+        against `mat_records` again, so a Record written since is never affected.
         """
         domain = {"d": self._domain}
         async with self._step():
+            hashes = [
+                bytes(h) for h in (await self._conn.execute(_SCHEMA_HASHES, domain)).scalars()
+            ]
+            for schema_hash in hashes:
+                compiled = (
+                    await self._conn.execute(_SCHEMA_DOCUMENT, {**domain, "h": schema_hash})
+                ).scalar_one_or_none()
+                if compiled is None:
+                    continue
+                fingerprints = template_fingerprints(load_compiled(compiled).kinds.values())
+                await self._conn.execute(_SCHEMA_KNOWN, {"h": schema_hash})
+                if fingerprints:
+                    await self._conn.execute(
+                        _TEMPLATE_FILL,
+                        {
+                            "h": schema_hash,
+                            "kinds": list(fingerprints),
+                            "fps": list(fingerprints.values()),
+                        },
+                    )
             await self._conn.execute(_VECTORS_LIVE, domain)
         if self._dry:
             async with self._step():
@@ -657,24 +718,32 @@ class _Collector:
                     (await self._conn.execute(_VECTORS_TOTAL, domain)).scalar_one()
                 )
             return
-        last = b""
+        last: tuple[bytes, str] = (b"", "")
         while True:
             async with self._step():
                 page = [
-                    bytes(h)
-                    for h in (
+                    (bytes(h), str(f))
+                    for h, f in (
                         await self._conn.execute(
                             _VECTORS_PAGE,
-                            {**domain, "last": last, "n": self._cfg.sweep_batch_rows},
+                            {
+                                **domain,
+                                "last": last[0],
+                                "last_fingerprint": last[1],
+                                "n": self._cfg.sweep_batch_rows,
+                            },
                         )
-                    ).scalars()
+                    ).all()
                 ]
             if not page:
                 break
             last = page[-1]
 
-            async def delete(hashes: list[bytes] = page) -> None:
-                result = await self._conn.execute(_VECTORS_DELETE, {**domain, "hs": hashes})
+            async def delete(pairs: list[tuple[bytes, str]] = page) -> None:
+                result = await self._conn.execute(
+                    _VECTORS_DELETE,
+                    {**domain, "hs": [h for h, _ in pairs], "fs": [f for _, f in pairs]},
+                )
                 self.report.embeddings += int(result.rowcount)
 
             await self._guarded(delete)

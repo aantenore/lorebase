@@ -1597,6 +1597,7 @@ Embedding jobs (design 9.3); model: inference.embeddings
 | `scribe.embeddings.max_records_per_job` | `20000` | rows one job reads; the rest goes to a continuation job |
 | `scribe.embeddings.max_calls_per_second` | `0.0` | model calls per second of one job; 0: no limit |
 | `scribe.embeddings.max_text_chars` | `8000` | rendered texts are cut to this length before hashing |
+| `scribe.embeddings.template_cache_size` | `64` | schemas whose resolved templates are kept, by schema hash |
 
 #### `scribe.embeddings.retry`
 

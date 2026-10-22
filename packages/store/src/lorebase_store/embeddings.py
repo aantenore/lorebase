@@ -1,10 +1,13 @@
 """Storage side of the embedding job (design 9.3): what to embed, and writing vectors.
 
-Vectors live in `embeddings`, keyed by `(domain_id, object_hash, model)`: every branch and
-Revision holding the same Record content shares one vector, so an overlay branch or a branch
-forked from `main` adds work only for the Records it changed. `text_hash` (SHA-256 of the
-embedded text) lets a pass skip Records whose text did not change and copy the vector of an
-identical text instead of calling the model.
+Vectors live in `embeddings`, keyed by `(domain_id, object_hash, model, fingerprint)`, the
+fingerprint being that of the Kind's embedding template (`KindTemplate.fingerprint`): every
+branch and Revision holding the same Record content under the same template shares one vector,
+so an overlay branch or a branch forked from `main` adds work only for the Records it changed,
+while branches whose templates differ keep a vector each. Readers look a vector up with the
+fingerprint of the template of the branch they read (`template_fingerprints`). `text_hash`
+(SHA-256 of the embedded text) lets a pass skip Records whose text did not change and copy the
+vector of an identical text, whatever its template, instead of calling the model.
 
 `embedding_cursors` records, per branch and model, the head and the template fingerprints of
 the last complete pass, so a pass over an unchanged branch reads no Record rows.
@@ -17,7 +20,8 @@ in the Domain's row-level security scope (`scope_to_domain`).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Collection, Mapping, Sequence
+from collections import OrderedDict
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -26,8 +30,10 @@ from sqlalchemy import (
     ARRAY,
     LargeBinary,
     Table,
+    Text,
     and_,
     bindparam,
+    case,
     delete,
     literal,
     or_,
@@ -38,7 +44,8 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Schema
+from lorebase_core.model import Kind, Schema
+from lorebase_core.model.embedding import TemplateError, kind_template
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
@@ -53,19 +60,22 @@ _LOCK_SCOPE = b"lorebase.embeddings\x00"
 
 _REUSE = sql_text(
     """
-    INSERT INTO embeddings (domain_id, object_hash, model, dims, embedding, text_hash)
-    SELECT DISTINCT ON (t.object_hash) :domain, t.object_hash, e.model, e.dims, e.embedding,
-           e.text_hash
-    FROM unnest(CAST(:hashes AS bytea[]), CAST(:texts AS bytea[])) AS t(object_hash, text_hash)
+    INSERT INTO embeddings (domain_id, object_hash, model, fingerprint, dims, embedding,
+                            text_hash)
+    SELECT DISTINCT ON (t.object_hash, t.fingerprint) :domain, t.object_hash, e.model,
+           t.fingerprint, e.dims, e.embedding, e.text_hash
+    FROM unnest(CAST(:hashes AS bytea[]), CAST(:fingerprints AS text[]),
+                CAST(:texts AS bytea[])) AS t(object_hash, fingerprint, text_hash)
     JOIN embeddings e ON e.domain_id = :domain AND e.model = :model AND e.dims = :dims
                      AND e.text_hash = t.text_hash
-    ORDER BY t.object_hash
-    ON CONFLICT (domain_id, object_hash, model) DO UPDATE
+    ORDER BY t.object_hash, t.fingerprint
+    ON CONFLICT (domain_id, object_hash, model, fingerprint) DO UPDATE
       SET dims = EXCLUDED.dims, embedding = EXCLUDED.embedding, text_hash = EXCLUDED.text_hash
-    RETURNING object_hash
+    RETURNING object_hash, fingerprint
     """
 ).bindparams(
     bindparam("hashes", type_=ARRAY(LargeBinary())),
+    bindparam("fingerprints", type_=ARRAY(Text())),
     bindparam("texts", type_=ARRAY(LargeBinary())),
 )
 
@@ -79,6 +89,49 @@ def lock_key(domain_id: str) -> int:
 def text_hash(text: str) -> bytes:
     """SHA-256 of an embedded text."""
     return hashlib.sha256(text.encode("utf-8")).digest()
+
+
+def template_fingerprints(kinds: Iterable[Kind]) -> dict[str, str]:
+    """Fingerprint of the embedding template of each of `kinds` that has a usable one, by Kind
+    id: the fingerprint its vectors are stored and looked up under."""
+    found: dict[str, str] = {}
+    for kind in kinds:
+        try:
+            template = kind_template(kind)
+        except TemplateError:
+            continue
+        if template is not None:
+            found[kind.id] = template.fingerprint
+    return found
+
+
+class SchemaCache[V]:
+    """What was derived from a compiled schema (its embedding templates), by schema hash, for
+    the `size` schemas used last: branches sharing a schema, and passes over an unchanged one,
+    read and parse it once."""
+
+    def __init__(self, size: int) -> None:
+        if size < 1:
+            raise ValueError("a schema cache holds at least one schema")
+        self._size = size
+        self._entries: OrderedDict[bytes, V] = OrderedDict()
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, schema_hash: bytes) -> V | None:
+        found = self._entries.get(schema_hash)
+        if found is None:
+            self.misses += 1
+            return None
+        self.hits += 1
+        self._entries.move_to_end(schema_hash)
+        return found
+
+    def put(self, schema_hash: bytes, value: V) -> None:
+        self._entries[schema_hash] = value
+        self._entries.move_to_end(schema_hash)
+        while len(self._entries) > self._size:
+            self._entries.popitem(last=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,16 +153,19 @@ class Candidate:
     kind_id: str
     key: str
     object_hash: bytes
+    fingerprint: str
+    """Fingerprint of the template of the row's Kind on the branch."""
     values: Mapping[str, Any]
     text_hash: bytes | None
     """Text hash of the stored vector, None when there is none (or it predates 0014)."""
     embedded: bool
-    """A vector of the model exists for the row's object hash."""
+    """A vector of the model exists for the row's object hash and template fingerprint."""
 
 
 @dataclass(frozen=True, slots=True)
 class NewVector:
     object_hash: bytes
+    fingerprint: str
     text_hash: bytes
     vector: Sequence[float]
 
@@ -131,6 +187,18 @@ async def materialized_branches(
     if names is not None:
         query = query.where(REFS.c.name.in_(list(names)))
     return [BranchHead(name, bytes(head)) for name, head in (await session.execute(query)).all()]
+
+
+async def branch_schema_hash(session: AsyncSession, domain_id: str, branch: str) -> bytes | None:
+    """Hash of the schema materialized at the branch head (the compiled document is not read)."""
+    found = (
+        await session.execute(
+            select(MAT_SCHEMA.c.schema_hash).where(
+                MAT_SCHEMA.c.domain_id == domain_id, MAT_SCHEMA.c.branch == branch
+            )
+        )
+    ).scalar_one_or_none()
+    return None if found is None else bytes(found)
 
 
 async def branch_schema(session: AsyncSession, domain_id: str, branch: str) -> Schema | None:
@@ -195,25 +263,29 @@ async def candidates(
     *,
     model: str,
     dims: int,
-    kinds: Collection[str],
+    fingerprints: Mapping[str, str],
     rerender: Collection[str],
     after: tuple[str, str] | None,
     limit: int,
 ) -> list[Candidate]:
-    """The branch's own live rows of `kinds` in `(kind_id, key)` order after `after`: those
-    without a vector of the model, plus every row of the `rerender` Kinds (template changed
-    or a reindex), with the text hash of their stored vector."""
-    if not kinds:
+    """The branch's own live rows of the Kinds of `fingerprints` (Kind id to template
+    fingerprint) in `(kind_id, key)` order after `after`: those without a vector of the model
+    under their Kind's fingerprint, plus every row of the `rerender` Kinds (template changed or
+    a reindex), with the text hash of their stored vector."""
+    if not fingerprints:
         return []
+    kinds = sorted(fingerprints)
     r = MAT_RECORDS.alias("r")
     e = EMBEDDINGS.alias("e")
+    fingerprint = fingerprint_of(r.c.kind_id, fingerprints)
     missing = e.c.object_hash.is_(None)
-    wanted = [k for k in rerender if k in kinds]
+    wanted = [k for k in rerender if k in fingerprints]
     query = (
         select(
             r.c.kind_id,
             r.c.key,
             r.c.object_hash,
+            fingerprint.label("fingerprint"),
             r.c["values"],
             e.c.text_hash,
             e.c.object_hash.is_not(None).label("embedded"),
@@ -225,6 +297,7 @@ async def candidates(
                     e.c.domain_id == r.c.domain_id,
                     e.c.object_hash == r.c.object_hash,
                     e.c.model == model,
+                    e.c.fingerprint == fingerprint,
                     e.c.dims == dims,
                 ),
             )
@@ -233,7 +306,7 @@ async def candidates(
             r.c.domain_id == domain_id,
             r.c.branch == branch,
             r.c.deleted.is_(False),
-            r.c.kind_id.in_(sorted(kinds)),
+            r.c.kind_id.in_(kinds),
             or_(missing, r.c.kind_id.in_(wanted)) if wanted else missing,
         )
         .order_by(r.c.kind_id, r.c.key)
@@ -249,7 +322,8 @@ async def candidates(
             kind_id=row.kind_id,
             key=row.key,
             object_hash=bytes(row.object_hash),
-            values=row[3] or {},
+            fingerprint=str(row.fingerprint),
+            values=row[4] or {},
             text_hash=None if row.text_hash is None else bytes(row.text_hash),
             embedded=bool(row.embedded),
         )
@@ -263,10 +337,11 @@ async def reuse_vectors(
     *,
     model: str,
     dims: int,
-    wanted: Sequence[tuple[bytes, bytes]],
-) -> set[bytes]:
-    """Copy, for each `(object_hash, text_hash)`, a stored vector of the same text and model;
-    returns the object hashes served this way."""
+    wanted: Sequence[tuple[bytes, str, bytes]],
+) -> set[tuple[bytes, str]]:
+    """Copy, for each `(object_hash, fingerprint, text_hash)`, a stored vector of the same text
+    and model (whatever template rendered it); returns the `(object_hash, fingerprint)` pairs
+    served this way."""
     if not wanted:
         return set()
     result = await session.execute(
@@ -275,11 +350,12 @@ async def reuse_vectors(
             "domain": domain_id,
             "model": model,
             "dims": dims,
-            "hashes": [h for h, _ in wanted],
-            "texts": [t for _, t in wanted],
+            "hashes": [h for h, _, _ in wanted],
+            "fingerprints": [f for _, f, _ in wanted],
+            "texts": [t for _, _, t in wanted],
         },
     )
-    return {bytes(row[0]) for row in result.all()}
+    return {(bytes(row[0]), str(row[1])) for row in result.all()}
 
 
 async def store_vectors(
@@ -295,6 +371,7 @@ async def store_vectors(
                 "domain_id": domain_id,
                 "object_hash": v.object_hash,
                 "model": model,
+                "fingerprint": v.fingerprint,
                 "dims": len(v.vector),
                 "embedding": list(v.vector),
                 "text_hash": v.text_hash,
@@ -304,13 +381,23 @@ async def store_vectors(
     )
     await session.execute(
         statement.on_conflict_do_update(
-            index_elements=[e.c.domain_id, e.c.object_hash, e.c.model],
+            index_elements=[e.c.domain_id, e.c.object_hash, e.c.model, e.c.fingerprint],
             set_={
                 "dims": statement.excluded.dims,
                 "embedding": statement.excluded.embedding,
                 "text_hash": statement.excluded.text_hash,
             },
         )
+    )
+
+
+def fingerprint_of(kind_id: Any, fingerprints: Mapping[str, str]) -> Any:
+    """SQL expression of the template fingerprint of a row's Kind (`kind_id`), from
+    `fingerprints` (Kind id to fingerprint); NULL for other Kinds, which match no vector."""
+    if not fingerprints:
+        return literal(None, Text())
+    return case(
+        {kind: literal(f, Text()) for kind, f in sorted(fingerprints.items())}, value=kind_id
     )
 
 

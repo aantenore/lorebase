@@ -5,9 +5,13 @@ A pass covers the materialized branches of one Domain. For each branch:
 1. A branch whose schema has no embedding template is skipped without creating the model.
    A branch whose head equals the head of its last complete pass for the model is skipped
    too (`embedding_cursors`); a schema change moves the head, so templates are unchanged.
+   The templates of a schema are resolved once per schema hash and kept for the last
+   `template_cache_size` schemas, so branches sharing a schema and passes over an unchanged
+   one neither read nor parse it again.
 2. Otherwise its own live rows are read in `(kind, key)` order, page by page: rows whose
-   object hash has no vector of the model, and every row of the Kinds whose template
-   fingerprint differs from the last pass (or of every Kind with `reindex`).
+   object hash has no vector of the model under the fingerprint of their Kind's template,
+   and every row of the Kinds whose template fingerprint differs from the last pass (or of
+   every Kind with `reindex`).
 3. Each row's text is rendered from the Kind's template (`lorebase_core.model.embedding`)
    and hashed. A row whose stored vector has the same text hash is unchanged; a row whose
    text equals one already embedded copies that vector; the remaining texts go to the model
@@ -15,8 +19,10 @@ A pass covers the materialized branches of one Domain. For each branch:
    `retry.attempts` times. Empty texts get no vector.
 4. A complete pass records the head and the fingerprints.
 
-Vectors are keyed by object hash, so the rows a branch shares with another one (an overlay's
-inherited rows, the unchanged rows of a copy) are embedded once. A job reads at most
+Vectors are keyed by object hash and template fingerprint, so the rows a branch shares with
+another one under the same template (an overlay's inherited rows, the unchanged rows of a copy)
+are embedded once, and a branch whose template differs gets vectors of its own (copied without a
+model call when the rendered text is the same). A job reads at most
 `max_records_per_job` rows; the rest of the pass is left to a continuation that resumes after
 the last row read. One pass per Domain runs at a time (a session advisory lock); a second one
 returns at once with `busy`.
@@ -60,7 +66,9 @@ from lorebase_store.embeddings import (
     Candidate,
     Cursor,
     NewVector,
+    SchemaCache,
     branch_schema,
+    branch_schema_hash,
     candidates,
     lock_key,
     materialized_branches,
@@ -80,6 +88,8 @@ VERSION_KEY = "_rendering"
 """Fingerprint entry holding `RENDERING_VERSION`, so a new rendering rule reruns passes."""
 
 Sleep = Callable[[float], Awaitable[None]]
+Templates = dict[str, KindTemplate]
+"""Resolved embedding templates of a schema, by Kind id."""
 
 
 class EmbeddingConfigError(Exception):
@@ -257,7 +267,10 @@ class EmbeddingPass:
         clock: Callable[[], datetime] = utc_now,
         sleep: Sleep = asyncio.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        templates: SchemaCache[Templates] | None = None,
     ) -> None:
+        """`templates` is shared by the passes of a process; a pass without one keeps its
+        own, sized by `template_cache_size`."""
         self._engine = engine
         self._sessions = sessions
         self._models = models
@@ -266,6 +279,9 @@ class EmbeddingPass:
         self._clock = clock
         self._sleep = sleep
         self._pacer = _Pacer(settings.max_calls_per_second, sleep, monotonic)
+        self._templates = (
+            templates if templates is not None else SchemaCache(settings.template_cache_size)
+        )
 
     async def run(
         self,
@@ -344,10 +360,7 @@ class EmbeddingPass:
         budget: _Budget,
     ) -> tuple[str, str] | None:
         """Embed one branch; returns the last row read when the budget ran out first."""
-        async with self._sessions() as session, session.begin():
-            await scope_to_domain(session, domain_id)
-            schema = await branch_schema(session, domain_id, head.name)
-        templates = _templates(schema, domain_id, head.name)
+        templates = await self._branch_templates(domain_id, head.name)
         if not templates:
             report.skipped = report.complete = True
             return None
@@ -356,7 +369,8 @@ class EmbeddingPass:
             await scope_to_domain(session, domain_id)
             cursor = await read_cursor(session, domain_id, head.name, model_name)
         prefix = self._models.document_prefix
-        fingerprints = {kind: _fingerprint(t.fingerprint, prefix) for kind, t in templates.items()}
+        keys = {kind: t.fingerprint for kind, t in templates.items()}
+        fingerprints = {kind: _fingerprint(f, prefix) for kind, f in keys.items()}
         if (
             not reindex
             and cursor is not None
@@ -388,7 +402,7 @@ class EmbeddingPass:
                     head.name,
                     model=model_name,
                     dims=self._dims,
-                    kinds=templates.keys(),
+                    fingerprints=keys,
                     rerender=rerender,
                     after=after,
                     limit=min(self._settings.page_rows, budget.rows),
@@ -412,6 +426,21 @@ class EmbeddingPass:
         report.complete = True
         return None
 
+    async def _branch_templates(self, domain_id: str, branch: str) -> Templates:
+        """The templates of the branch's schema, from the cache when its hash is known."""
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, domain_id)
+            schema_hash = await branch_schema_hash(session, domain_id, branch)
+            if schema_hash is None:
+                return {}
+            cached = self._templates.get(schema_hash)
+            if cached is not None:
+                return cached
+            schema = await branch_schema(session, domain_id, branch)
+        templates = _templates(schema, domain_id, branch)
+        self._templates.put(schema_hash, templates)
+        return templates
+
     async def _embed_rows(
         self,
         domain_id: str,
@@ -420,7 +449,7 @@ class EmbeddingPass:
         report: BranchReport,
     ) -> None:
         counts = {"empty": 0, "unchanged": 0, "reused": 0, "embedded": 0}
-        pending: dict[bytes, tuple[bytes, str]] = {}
+        pending: dict[tuple[bytes, str], tuple[bytes, str]] = {}
         for row in rows:
             rendered = templates[row.kind_id].render(row.key, row.values)
             rendered = rendered[: self._settings.max_text_chars]
@@ -432,7 +461,7 @@ class EmbeddingPass:
             if row.embedded and row.text_hash == digest:
                 counts["unchanged"] += 1
                 continue
-            pending[row.object_hash] = (digest, rendered)
+            pending[(row.object_hash, row.fingerprint)] = (digest, rendered)
         try:
             if pending:
                 calls = await self._embed_pending(domain_id, pending, counts)
@@ -444,9 +473,13 @@ class EmbeddingPass:
                     EMBEDDING_RECORDS.add(count, {"outcome": outcome})
 
     async def _embed_pending(
-        self, domain_id: str, pending: dict[bytes, tuple[bytes, str]], counts: dict[str, int]
+        self,
+        domain_id: str,
+        pending: dict[tuple[bytes, str], tuple[bytes, str]],
+        counts: dict[str, int],
     ) -> int:
-        """Vectors for `pending` (object hash -> text hash and text); returns the model calls."""
+        """Vectors for `pending` (object hash and template fingerprint -> text hash and text);
+        returns the model calls."""
         model = await self._models.get()
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
@@ -455,15 +488,15 @@ class EmbeddingPass:
                 domain_id,
                 model=model.name,
                 dims=self._dims,
-                wanted=[(h, d) for h, (d, _) in pending.items()],
+                wanted=[(h, f, d) for (h, f), (d, _) in pending.items()],
             )
         counts["reused"] += len(reused)
         texts: dict[bytes, str] = {}
-        owners: dict[bytes, list[bytes]] = {}
-        for object_hash, (digest, rendered) in pending.items():
-            if object_hash not in reused:
+        owners: dict[bytes, list[tuple[bytes, str]]] = {}
+        for owner, (digest, rendered) in pending.items():
+            if owner not in reused:
                 texts[digest] = rendered
-                owners.setdefault(digest, []).append(object_hash)
+                owners.setdefault(digest, []).append(owner)
         digests = list(texts)
         calls = 0
         for start in range(0, len(digests), self._settings.batch_texts):
@@ -471,9 +504,9 @@ class EmbeddingPass:
             vectors = await self._call(model, [texts[d] for d in batch])
             calls += 1
             new = [
-                NewVector(object_hash, digest, vector)
+                NewVector(object_hash, fingerprint, digest, vector)
                 for digest, vector in zip(batch, vectors, strict=True)
-                for object_hash in owners[digest]
+                for object_hash, fingerprint in owners[digest]
             ]
             async with self._sessions() as session, session.begin():
                 await scope_to_domain(session, domain_id)
@@ -512,7 +545,7 @@ class EmbeddingPass:
         raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _templates(schema: Schema | None, domain_id: str, branch: str) -> dict[str, KindTemplate]:
+def _templates(schema: Schema | None, domain_id: str, branch: str) -> Templates:
     """Resolved templates of the Kinds that have one; an unusable template is logged and
     its Kind left out (static validation refuses such schemas)."""
     found: dict[str, KindTemplate] = {}

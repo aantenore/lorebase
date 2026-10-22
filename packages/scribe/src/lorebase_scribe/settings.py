@@ -349,6 +349,13 @@ class EmbeddingJobSettings(SectionModel):
         description="Rendered texts are cut to this many characters before they are hashed and "
         "embedded.",
     )
+    template_cache_size: int = Field(
+        default=64,
+        ge=1,
+        description="Schemas whose resolved embedding templates a Scribe process keeps, by "
+        "schema hash: branches sharing a schema, and passes over an unchanged one, do not read "
+        "and parse it again.",
+    )
     retry: EmbeddingRetrySettings = Field(default_factory=EmbeddingRetrySettings)
 
 
