@@ -344,6 +344,54 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         )
 
     @server.tool(
+        name="lorebase_history",
+        description="The changes of one Record, newest first: Revision, time, author, origin and "
+        "the attributes each change touched; `values` adds the value before and after. One page: "
+        "pass `next_cursor` as `cursor` for older changes.",
+        annotations=READ,
+        structured_output=False,
+    )
+    async def lorebase_history(
+        ctx: Context,
+        ref: RefArg,
+        values: Annotated[bool, Field(description="Include the value before and after.")] = False,
+        limit: Annotated[int, Field(ge=1, le=output.max_items)] = min(20, output.max_items),
+        cursor: CursorArg = None,
+        domain: DomainArg = None,
+        branch: BranchArg = None,
+        format: FormatArg = None,
+    ) -> str:
+        return await tools.history(
+            credential(ctx),
+            record=ref,
+            values=values,
+            limit=limit,
+            cursor=cursor,
+            domain=domain,
+            branch=branch,
+            fmt=format,
+        )
+
+    @server.tool(
+        name="lorebase_lineage",
+        description="Where the current values of a Record came from: for each attribute its "
+        "value, origin, actor, Revision, and the Source, operation, extraction evidence "
+        "(document and span) or Proposal behind it.",
+        annotations=READ,
+        structured_output=False,
+    )
+    async def lorebase_lineage(
+        ctx: Context,
+        ref: RefArg,
+        domain: DomainArg = None,
+        branch: BranchArg = None,
+        format: FormatArg = None,
+    ) -> str:
+        return await tools.lineage(
+            credential(ctx), record=ref, domain=domain, branch=branch, fmt=format
+        )
+
+    @server.tool(
         name="lorebase_changes",
         description="Revisions committed on a branch, newest first, back to (not including) "
         "`since`. Use it to catch up after a Revision you saw earlier; lorebase_diff shows "

@@ -91,6 +91,14 @@
     "error": false,
     "text": "Supplier/S-1001 \"Kavsen Alloys\" rev abababababababababababababababababababababababababababababababab\nsupplier_code: S-1001\ntier: 1\nlinks: purchase_orders=2"
   },
+  "history-text": {
+    "error": false,
+    "text": "Supplier/S-1001 rev abababababababababababababababababababababababababababababababab on main: 2 changes\nabababababababababababababababababababababababababababababababab 2026-10-01T08:00:03Z usr_loader [import] updated: Import the supply example data\n  tier\n  supplier_code\ncdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd 2026-10-01T08:00:03Z usr_loader [import] created: Import the supply example data\n  tier\n  supplier_code\nnext_cursor: h2"
+  },
+  "history-values-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"branch\":\"main\",\"ref\":\"Supplier/S-1001\",\"items\":[{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"at\":\"2026-10-01T08:00:03Z\",\"author\":\"usr_loader\",\"origin\":\"import\",\"change\":\"updated\",\"message\":\"Import the supply example data\",\"attributes\":[{\"name\":\"tier\",\"before\":null,\"after\":\"2\",\"origin_type\":\"import\"},{\"name\":\"supplier_code\",\"before\":null,\"after\":\"S-1001\"}]},{\"revision\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"at\":\"2026-10-01T08:00:03Z\",\"author\":\"usr_loader\",\"origin\":\"import\",\"change\":\"created\",\"message\":\"Import the supply example data\",\"attributes\":[{\"name\":\"tier\",\"before\":null,\"after\":\"2\",\"origin_type\":\"import\"},{\"name\":\"supplier_code\",\"before\":null,\"after\":\"S-1001\"}]}],\"next_cursor\":\"h2\"}"
+  },
   "idempotency-conflict": {
     "error": true,
     "text": "Error executing tool lorebase_execute: [idempotency-conflict] Key used with other parameters.\nnext: use a new idempotency_key for different parameters"
@@ -102,6 +110,14 @@
   "limit-exceeded": {
     "error": true,
     "text": "Error executing tool lorebase_neighborhood: [limit-exceeded] Too many nodes.\nnext: narrow the request"
+  },
+  "lineage-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"branch\":\"main\",\"ref\":\"Supplier/S-1001\",\"changes\":2,\"created\":{\"revision\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"at\":\"2026-10-01T08:00:03Z\",\"author\":\"usr_loader\",\"origin\":\"import\",\"change\":\"created\",\"message\":\"Import the supply example data\",\"attributes\":[{\"name\":\"tier\",\"origin_type\":\"import\"},{\"name\":\"supplier_code\"}]},\"attributes\":[{\"name\":\"tier\",\"value\":\"1\",\"origin_type\":\"extraction\",\"actor\":\"usr_loader\",\"at\":\"2026-10-01T08:00:03Z\",\"revision\":\"abababababababababababababababababababababababababababababababab\",\"author\":\"usr_loader\",\"extraction\":{\"job_id\":\"job_1\",\"document_id\":\"doc_1\",\"span_start\":10,\"span_end\":24,\"model_id\":\"m-1\",\"prompt_version\":\"v1\"},\"proposal\":{\"id\":\"prp_1\",\"title\":\"Raise risk\",\"status\":\"merged\",\"merged_revision\":\"abababababababababababababababababababababababababababababababab\"}},{\"name\":\"supplier_code\",\"value\":\"S-1001\"}],\"sources\":[\"erp\"],\"proposals\":[{\"id\":\"prp_1\",\"title\":\"Raise risk\",\"status\":\"merged\",\"merged_revision\":\"abababababababababababababababababababababababababababababababab\"}]}"
+  },
+  "lineage-text": {
+    "error": false,
+    "text": "Supplier/S-1001 rev abababababababababababababababababababababababababababababababab on main (2 changes)\ncreated <- usr_loader at 2026-10-01T08:00:03Z in cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\ntier = 1 <- extraction by usr_loader at 2026-10-01T08:00:03Z in abababababababababababababababababababababababababababababababab\n  extracted from document doc_1 [10:24] by m-1\nsupplier_code = S-1001 <- no recorded origin\nSOURCES: erp\nPROPOSAL prp_1 \"Raise risk\" merged in abababababababababababababababababababababababababababababababab"
   },
   "neighborhood-text": {
     "error": false,

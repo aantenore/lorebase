@@ -7,7 +7,8 @@ Lorebase is a versioned knowledge graph: typed Records (refs `Kind/key`) linked 
 on branches of immutable Revisions. Workflow:
 1. Orient: lorebase_context (records or a question) or lorebase_schema.
 2. Read narrowly: lorebase_get, lorebase_query, lorebase_search, lorebase_neighborhood;
-   lorebase_explain for where a value came from; lorebase_changes / lorebase_diff for history.
+   lorebase_explain / lorebase_lineage for where a value came from; lorebase_history for a
+   Record's changes; lorebase_changes / lorebase_diff for history.
 3. Write only with lorebase_execute: dry_run first (the default), then dry_run=false with
    expected_head. Some Operations need review: pass task and intent and Keeper opens the
    Proposal on a task branch for you.

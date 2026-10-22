@@ -266,6 +266,74 @@ EXPLAINED = {
 }
 
 
+PROVENANCE = {
+    "id": "prv_1",
+    "origin_type": "import",
+    "origin": {},
+    "actor": "usr_loader",
+    "at": "2026-10-01T08:00:03Z",
+}
+CHANGE = {
+    "revision": PARENT,
+    "generation": 1,
+    "at": "2026-10-01T08:00:03Z",
+    "author": "usr_loader",
+    "message": "Import the supply example data",
+    "origin": {"type": "import"},
+    "change": "created",
+    "attributes": [
+        {"name": "tier", "before": None, "after": "2", "provenance": PROVENANCE},
+        {"name": "supplier_code", "after": "S-1001"},
+    ],
+}
+HISTORY = {
+    "revision": REVISION,
+    "served_from": "tree",
+    "branch": "main",
+    "kind": "Supplier",
+    "key": "S-1001",
+    "items": [{**CHANGE, "revision": REVISION, "change": "updated"}, CHANGE],
+    "next_cursor": "h2",
+}
+LINEAGE = {
+    "revision": REVISION,
+    "served_from": "tree",
+    "branch": "main",
+    "kind": "Supplier",
+    "key": "S-1001",
+    "created": CHANGE,
+    "changes": 2,
+    "attributes": [
+        {
+            "name": "tier",
+            "value": "1",
+            "provenance": {**PROVENANCE, "origin_type": "extraction"},
+            "revision": REVISION,
+            "author": "usr_loader",
+            "extraction": {
+                "job_id": "job_1",
+                "document_id": "doc_1",
+                "span_start": 10,
+                "span_end": 24,
+                "model_id": "m-1",
+                "prompt_version": "v1",
+            },
+            "proposal": {
+                "id": "prp_1",
+                "title": "Raise risk",
+                "status": "merged",
+                "merged_revision": REVISION,
+            },
+        },
+        {"name": "supplier_code", "value": "S-1001"},
+    ],
+    "sources": ["erp"],
+    "proposals": [
+        {"id": "prp_1", "title": "Raise risk", "status": "merged", "merged_revision": REVISION}
+    ],
+}
+
+
 def branch_entry(name: str, head: str, *, default: bool, protected: bool) -> dict[str, Any]:
     return {
         "name": name,
