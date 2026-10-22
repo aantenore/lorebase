@@ -38,7 +38,15 @@ rules:
   # Whether the password Secret of a role exists yet; its content is never read.
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ .Values.database.appRole.passwordSecret | quote }}]
+    resourceNames:
+      - {{ .Values.database.appRole.passwordSecret | quote }}
+      {{- range .Values.postgresql.cluster.roles }}
+      {{- with .passwordSecret }}
+      {{- if and .name (ne .name $.Values.database.appRole.passwordSecret) }}
+      - {{ .name | quote }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
