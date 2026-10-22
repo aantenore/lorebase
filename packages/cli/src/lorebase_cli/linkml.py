@@ -30,6 +30,7 @@ JSON when the text is a JSON object or array.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from collections.abc import Iterable, Mapping
@@ -1187,3 +1188,219 @@ class _Missing:
 
 
 _MISSING: Any = _Missing()
+
+
+# Merge ----------------------------------------------------------------------------------------
+
+#: Fields of each element that a LinkML import sets; the others are kept from the current schema
+#: when the import does not carry them.
+_OWNED_KIND = frozenset(
+    {"id", "display_name", "description", "primary_key", "traits", "attributes"}
+)
+_OWNED_TRAIT = frozenset({"id", "display_name", "description", "attributes"})
+_OWNED_ATTRIBUTE = frozenset(
+    {
+        "id",
+        "display_name",
+        "description",
+        "type",
+        "required",
+        "unique",
+        "default",
+        "constraints",
+        "sensitivity",
+    }
+)
+_OWNED_RELATION = frozenset(
+    {
+        "id",
+        "display_name",
+        "description",
+        "from_kind",
+        "to_kind",
+        "inverse_api_name",
+        "cardinality",
+        "required_from",
+        "attributes",
+    }
+)
+_OWNED_CONSTRAINTS = frozenset(key for pair in (*_CONSTRAINT_SLOTS, *_LENGTH_SLOTS) for key in pair)
+
+
+def merge_into_current(current: Any, imported: Conversion, *, prune: bool = False) -> Conversion:
+    """The imported document laid over the current schema of a Domain.
+
+    The import owns Kinds, Attributes, Relations, Traits and enums. Everything else is kept:
+    Operations, Derivations and Sources, and the fields an element has that the import does not
+    carry (`derivation`, `authority`, `indexed`, `icon`, ...). Elements match by `id`, else by
+    name, and keep the current id. Kinds, Traits, Relations and Attributes the import leaves out
+    are kept with a warning, or removed with `prune`.
+    """
+    if not isinstance(current, Mapping):
+        raise LinkmlError("the current schema is not a mapping")
+    old = dict(current)
+    document = copy.deepcopy(imported.document)
+    warnings = list(imported.warnings)
+    merger = _Merger(prune, warnings)
+
+    document["domain"] = {**_mapping(old.get("domain"), "domain"), **document["domain"]}
+    for section in EXPORT_ONLY_SECTIONS:
+        if old.get(section):
+            document[section] = copy.deepcopy(old[section])
+    pruned: set[str] = set()
+    for section, owned in (("traits", _OWNED_TRAIT), ("kinds", _OWNED_KIND)):
+        merged, gone = merger.section(section, old, document, owned, set())
+        _put(document, section, merged)
+        if section == "kinds":
+            pruned = gone
+    merged, _ = merger.section("relations", old, document, _OWNED_RELATION, pruned)
+    _put(document, "relations", merged)
+    merger.restore_status(document, old)
+    return Conversion(document, merger.warnings)
+
+
+class _Merger:
+    def __init__(self, prune: bool, warnings: list[ConversionWarning]) -> None:
+        self.prune = prune
+        self.warnings = warnings
+
+    def note(self, path: str, message: str) -> None:
+        self.warnings.append(ConversionWarning(path, message))
+
+    def section(
+        self,
+        section: str,
+        old: Mapping[str, Any],
+        document: Mapping[str, Any],
+        owned: frozenset[str],
+        pruned_kinds: set[str],
+    ) -> tuple[dict[str, Any], set[str]]:
+        """The merged elements of a section and the names of current ones that are removed."""
+        before = _mapping(old.get(section), section)
+        merged: dict[str, Any] = {}
+        matched = _match(before, _mapping(document.get(section), section))
+        for name, item in _mapping(document.get(section), section).items():
+            previous = before.get(matched.get(name, ""))
+            if previous is None:
+                merged[name] = item
+                continue
+            merged[name] = self.element(f"{section}/{name}", previous, item, owned)
+        gone: set[str] = set()
+        for name, item in before.items():
+            if name in matched.values():
+                continue
+            path = f"{section}/{name}"
+            ends = {str(item.get("from_kind")), str(item.get("to_kind"))}
+            if self.prune:
+                gone.add(name)
+                self.note(path, "removed: not in the LinkML schema (--prune)")
+            elif ends & pruned_kinds:
+                gone.add(name)
+                self.note(path, "removed: it refers to a pruned Kind")
+            elif name in merged:
+                gone.add(name)
+                self.note(path, "removed: its name is taken by another element")
+            else:
+                merged[name] = copy.deepcopy(item)
+                self.note(path, "kept: not in the LinkML schema (--prune removes it)")
+        return merged, gone
+
+    def element(
+        self, path: str, previous: Mapping[str, Any], item: dict[str, Any], owned: frozenset[str]
+    ) -> dict[str, Any]:
+        """`item` with the id and the fields it does not own taken from `previous`."""
+        result = _inherit(previous, item, owned)
+        if "attributes" in owned and (item.get("attributes") or previous.get("attributes")):
+            attributes = self.attributes(
+                f"{path}/attributes",
+                _mapping(previous.get("attributes"), path),
+                _mapping(item.get("attributes"), path),
+            )
+            _put(result, "attributes", attributes)
+        return result
+
+    def attributes(
+        self, path: str, before: Mapping[str, Any], new: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        matched = _match(before, new)
+        merged: dict[str, Any] = {}
+        for name, item in new.items():
+            previous = before.get(matched.get(name, ""))
+            merged[name] = item if previous is None else self.attribute(previous, item)
+        for name, item in before.items():
+            if name in matched.values():
+                continue
+            if self.prune:
+                self.note(f"{path}/{name}", "removed: not in the LinkML schema (--prune)")
+            elif name in merged:
+                self.note(f"{path}/{name}", "removed: its name is taken by another attribute")
+            else:
+                merged[name] = copy.deepcopy(item)
+                self.note(f"{path}/{name}", "kept: not in the LinkML schema (--prune removes it)")
+        return merged
+
+    @staticmethod
+    def attribute(previous: Mapping[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+        result = _inherit(previous, item, _OWNED_ATTRIBUTE)
+        constraints = {
+            key: value
+            for key, value in _mapping(previous.get("constraints"), "constraints").items()
+            if key not in _OWNED_CONSTRAINTS
+        }
+        constraints.update(_mapping(item.get("constraints"), "constraints"))
+        _put(result, "constraints", constraints)
+        return result
+
+    def restore_status(self, document: dict[str, Any], old: Mapping[str, Any]) -> None:
+        """A Kind the import made a draft for lacking a title attribute or descriptions goes
+        back to its current status when the merge supplied what was missing."""
+        before = _mapping(old.get("kinds"), "kinds")
+        kinds = _mapping(document.get("kinds"), "kinds")
+        matched = _match(before, kinds)
+        for name, kind in kinds.items():
+            previous = before.get(matched.get(name, ""))
+            if previous is None or kind.get("status") != "draft":
+                continue
+            if previous.get("status") in (None, "draft") or not kind.get("title_attribute"):
+                continue
+            if all(a.get("description") for a in (kind.get("attributes") or {}).values()):
+                kind["status"] = previous["status"]
+                self.warnings = [
+                    w
+                    for w in self.warnings
+                    if not (
+                        w.message.startswith("imported as draft")
+                        and pascal_name(w.path.rsplit("/", 1)[-1]) == name
+                    )
+                ]
+
+
+def _match(before: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, str]:
+    """New name -> current name of the elements that are the same: same `id`, else same name."""
+    by_id = {
+        str(item["id"]): name
+        for name, item in before.items()
+        if isinstance(item, Mapping) and item.get("id")
+    }
+    matched: dict[str, str] = {}
+    for name, item in new.items():
+        wanted = item.get("id") if isinstance(item, Mapping) else None
+        found = by_id.get(str(wanted)) if wanted else None
+        if found is None and not wanted and name in before:
+            found = name
+        if found is not None and found not in matched.values():
+            matched[name] = found
+    return matched
+
+
+def _inherit(
+    previous: Mapping[str, Any], item: dict[str, Any], owned: frozenset[str]
+) -> dict[str, Any]:
+    """`item`, with the id of `previous` and the fields of `previous` it neither has nor owns."""
+    result = dict(item)
+    if previous.get("id") and not result.get("id"):
+        result = {"id": previous["id"], **result}
+    for key, value in previous.items():
+        if key not in owned and key not in result:
+            result[key] = copy.deepcopy(value)
+    return result

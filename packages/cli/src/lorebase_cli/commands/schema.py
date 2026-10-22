@@ -19,10 +19,12 @@ from lorebase_cli.linkml import (
     dump_yaml,
     from_linkml,
     load_yaml,
+    merge_into_current,
     to_linkml,
 )
 from lorebase_cli.options import AtOpt, BranchOpt, DomainOpt, JsonOpt
 from lorebase_cli.output import Column
+from lorebase_client import NotFoundError
 from lorebase_client import models as m
 
 schema_app = typer.Typer(
@@ -307,28 +309,50 @@ def schema_import(
         str | None,
         typer.Option("--expected-head", help="Fail unless the branch is at this Revision."),
     ] = None,
+    prune: Annotated[
+        bool,
+        typer.Option(
+            "--prune",
+            help="With --apply or --dry-run: also remove the Kinds, Attributes, Relations and "
+            "Traits of the Domain that the LinkML schema leaves out (otherwise kept, with a "
+            "warning).",
+        ),
+    ] = False,
     json_out: JsonOpt = False,
 ) -> None:
     """Translate a LinkML schema into a Lorebase schema document.
 
     Prints the document (or writes it with --output); warnings about what it leaves out go to
     standard error. --apply sends it to a branch like `schema apply`, --dry-run plans that. The
-    document replaces the whole schema: elements it leaves out, Operations, Derivations and
-    Sources included, are removed.
+    import is merged into the current schema of the Domain: the LinkML schema owns Kinds,
+    Attributes, Relations, Traits and enums; Operations, Derivations, Sources and the fields
+    LinkML cannot carry (`derivation`, `authority`, ...) are kept. Elements the LinkML schema
+    leaves out stay, with a warning, unless --prune removes them.
     """
     app = app_of(ctx, json_out)
     try:
         conversion = from_linkml(load_yaml(read_document(file)))
     except LinkmlError as error:
         raise CliError(str(error), exit_code=EXIT_INVALID) from error
-    for warning in conversion.warnings:
-        app.out.info(f"warning: {warning}")
     if not (apply or dry_run):
+        for warning in conversion.warnings:
+            app.out.info(f"warning: {warning}")
         _print_conversion(app, conversion, output)
         return
     name = app.domain(domain)
     conversion.document["domain"]["id"] = name
     target = _default_branch(app, name, branch)
+    try:
+        current = load_yaml(app.client().schema.get_yaml(name, branch=target))
+    except NotFoundError:
+        current = None  # a new Domain or branch: nothing to keep
+    if current:
+        try:
+            conversion = merge_into_current(current, conversion, prune=prune)
+        except LinkmlError as error:
+            raise CliError(str(error), exit_code=EXIT_INVALID) from error
+    for warning in conversion.warnings:
+        app.out.info(f"warning: {warning}")
     result = app.client().schema.apply(
         name,
         target,
