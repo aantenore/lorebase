@@ -8,6 +8,7 @@ from lorebase_store.merging.attempts import (
     complete_provenance,
     compute_attempt,
     decisions_of,
+    taken_provenance,
 )
 from lorebase_store.merging.lineage import BranchLineage
 from lorebase_store.merging.service import (
@@ -34,4 +35,5 @@ __all__ = [
     "complete_provenance",
     "compute_attempt",
     "decisions_of",
+    "taken_provenance",
 ]

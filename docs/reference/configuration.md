@@ -999,6 +999,8 @@ Per-Record history pages and lineage
 |---------|---------|-------------|
 | `read.history.default_limit` | `50` |  |
 | `read.history.max_limit` | `500` |  |
+| `read.history.lineage_scan_changes` | `1000` | newest changes searched for rows without lineage revisions |
+| `read.history.lineage_count_max` | `10000` | changes counted; beyond, changes_truncated is true |
 
 ## `read` (continued)
 

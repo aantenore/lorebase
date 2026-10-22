@@ -227,7 +227,11 @@ last change with its author and message, and what the provenance names: the Sour
 (`source_sync`), the Operation (`operation`), the extraction evidence (document, span, model and
 prompt version) and the Proposal that brought it to the branch (merged in that Revision, or
 whose Conflict resolution set the value). A value merged from another branch keeps its original
-provenance; a resolved Conflict shows `merge_resolution`.
+provenance and names the Revision that brought it to this branch: the merge Revision, or after a
+fast-forward the Revision of the source branch; values the merge left unchanged keep the
+Revision that set them. A resolved Conflict shows `merge_resolution`. `changes` counts the
+changes of the Record up to `read.history.lineage_count_max`; `changes_truncated` says there
+are more.
 
 Both read the branch history table, one index range per Record, so their cost follows the
 number of changes of the Record, not the length of the branch. Lineage is one statement: the

@@ -10,8 +10,12 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.model import new_ulid
 from lorebase_keeper.reading.record_history import RecordLineageOut
 from lorebase_store.materialize.branch import create_branch
+from lorebase_store.merging import MergeRequest, MergeService
+from lorebase_store.models.enums import ProposalOrigin, ProposalStatus
+from lorebase_store.repositories import ProposalRepository, ProposalRow, RefRepository
 from lorebase_store.runtime import StoreRuntime
 
 from .read_fixtures import Seeded, keeper, seeded_database
@@ -21,6 +25,8 @@ pytestmark = pytest.mark.integration
 
 BASE = f"/api/v1/domains/{DOMAIN}"
 SIDE = "lineage/side"
+MERGED = "lineage/merged"
+FORWARD = "lineage/forward"
 RENAMES = 12
 """Changes made to each Supplier after its risk score was set."""
 
@@ -38,6 +44,16 @@ async def seed(
     originals = {r["supplier_code"]: r for r in rows("supplier.csv")}
     keys = ("S-1001", "S-1002")
     revisions = {"data": data.revision_id.hex()}
+
+    async def change_one(key: str, message: str, **values: str) -> str:
+        result = await commit_changes(
+            session,
+            runtime,
+            clock,
+            [record_change(supplier, {**originals[key], **values})],
+            message=message,
+        )
+        return result.revision_id.hex()
 
     async def change(message: str, **values: str) -> str:
         result = await commit_changes(
@@ -78,6 +94,92 @@ async def seed(
     )
     revisions["side"] = side.revision_id.hex()
     revisions["final"] = await change("Final name", risk_score="90", legal_name="Final")
+
+    async def merge(source: str, title: str) -> tuple[str, str]:
+        now = clock()
+        proposal = ProposalRow(
+            id=f"prp_{new_ulid()}",
+            title=title,
+            description=None,
+            source_ref=source,
+            target_ref="main",
+            origin=ProposalOrigin.MANUAL,
+            status=ProposalStatus.OPEN,
+            author="usr_editor",
+            created_at=now,
+            checks={},
+            policies={},
+            updated_at=now,
+        )
+        await ProposalRepository(session, DOMAIN).insert(proposal)
+        result = await MergeService(session, DOMAIN, runtime=runtime, clock=clock).merge(
+            MergeRequest(proposal=proposal, actor="usr_maintainer")
+        )
+        assert result.merged
+        main = await RefRepository(session, DOMAIN).get("main")
+        assert main is not None
+        await session.commit()
+        return proposal.id, main.head.hex()
+
+    def supplier_row(key: str, **values: str) -> Any:
+        return record_change(supplier, {**originals[key], **values})
+
+    # A value changed on a side branch and merged into main (a merge Revision), and one
+    # fast-forwarded into main.
+    await create_branch(
+        session, DOMAIN, MERGED, created_by="usr_editor", runtime=runtime, clock=clock
+    )
+    merged_side = await commit_changes(
+        session,
+        runtime,
+        clock,
+        [supplier_row("S-1005", risk_score="77")],
+        message="Raise S-1005 on a side branch",
+        branch=MERGED,
+    )
+    revisions["merged_side"] = merged_side.revision_id.hex()
+    await change_one("S-1006", "Lower S-1006 on main", risk_score="11")
+    revisions["merge_proposal"], revisions["merge"] = await merge(MERGED, "Merge the side")
+    await create_branch(
+        session, DOMAIN, FORWARD, created_by="usr_editor", runtime=runtime, clock=clock
+    )
+    forward = await commit_changes(
+        session,
+        runtime,
+        clock,
+        [supplier_row("S-1007", risk_score="66")],
+        message="Raise S-1007 on a side branch",
+        branch=FORWARD,
+    )
+    revisions["forward"] = forward.revision_id.hex()
+    revisions["forward_proposal"], head = await merge(FORWARD, "Forward the side")
+    assert head == revisions["forward"]
+
+    # The change that created S-1003 names a Revision without a history row; S-1004 holds
+    # JSON that is not an object where maps are expected.
+    await session.execute(
+        text(
+            "UPDATE mat_records SET lineage_revisions = "
+            "jsonb_set(lineage_revisions, '{$created}', '\"00\"') "
+            "WHERE domain_id = :domain AND branch = 'main' AND key = 'S-1003'"
+        ),
+        {"domain": DOMAIN},
+    )
+    await session.execute(
+        text(
+            "UPDATE mat_records SET lineage = 'null'::jsonb, lineage_revisions = '[]'::jsonb "
+            "WHERE domain_id = :domain AND branch = 'main' AND key = 'S-1004'"
+        ),
+        {"domain": DOMAIN},
+    )
+    await session.execute(
+        text(
+            "UPDATE mat_history SET provenance = '\"text\"'::jsonb "
+            "WHERE domain_id = :domain AND branch = 'main' AND element_key = 'S-1004' "
+            "AND old_hash IS NULL"
+        ),
+        {"domain": DOMAIN},
+    )
     # Rows materialized before the lineage revisions were kept: readers use the history.
     await session.execute(
         text(
@@ -182,3 +284,85 @@ async def test_lineage_on_a_branch_and_of_its_revisions(
     main = await get_lineage(http, "S-1001")
     assert value_of(main, "risk_score") == "90"
     assert revision_of(main, "risk_score") == revisions["risk"]
+
+
+def by_name(lineage: RecordLineageOut) -> dict[str, Any]:
+    return {a.name: a for a in lineage.attributes}
+
+
+async def test_a_value_merged_into_main_names_the_revision_that_brought_it(
+    http: httpx.AsyncClient, seeded: Seeded
+) -> None:
+    revisions = seeded.revisions
+    side = by_name(await get_lineage(http, "S-1005", branch=MERGED))
+    assert side["risk_score"].revision == revisions["merged_side"]
+
+    # A merge Revision: the value keeps the provenance of the side change and names the merge
+    # Revision on main's first-parent chain, and the Proposal merged in it.
+    merged = by_name(await get_lineage(http, "S-1005"))
+    risk = merged["risk_score"]
+    assert risk.value == "77"
+    assert risk.revision == revisions["merge"]
+    assert risk.provenance is not None
+    assert risk.provenance.id == side["risk_score"].provenance.id
+    assert risk.provenance.origin_type == "operation"
+    assert risk.proposal is not None
+    assert risk.proposal.id == revisions["merge_proposal"]
+    assert risk.proposal.merged_revision == revisions["merge"]
+    # Values the merge left as they were keep the Revision that set them.
+    assert merged["supplier_code"].revision == revisions["data"]
+    assert merged["legal_name"].revision == revisions["data"]
+    assert merged["supplier_code"].proposal is None
+
+    # A fast-forward: main's chain is the side branch's, so the side Revision is named.
+    forward = by_name(await get_lineage(http, "S-1007"))
+    assert forward["risk_score"].value == "66"
+    assert forward["risk_score"].revision == revisions["forward"]
+    assert forward["risk_score"].proposal is not None
+    assert forward["risk_score"].proposal.id == revisions["forward_proposal"]
+    assert forward["supplier_code"].revision == revisions["data"]
+
+
+async def test_the_creating_change_falls_back_to_the_history(
+    http: httpx.AsyncClient, seeded: Seeded
+) -> None:
+    # `$created` names a Revision with no history row for the Record.
+    lineage = await get_lineage(http, "S-1003")
+    assert lineage.created is not None
+    assert lineage.created.revision == seeded.revisions["data"]
+    assert revision_of(lineage, "supplier_code") == seeded.revisions["data"]
+
+
+async def test_maps_that_are_not_objects_read_as_empty(
+    http: httpx.AsyncClient, seeded: Seeded
+) -> None:
+    lineage = await get_lineage(http, "S-1004")
+    assert value_of(lineage, "supplier_code") == "S-1004"
+    assert all(a.provenance is None and a.revision is None for a in lineage.attributes)
+    assert lineage.created is not None
+    assert lineage.created.revision == seeded.revisions["data"]
+    assert lineage.created.attributes
+    assert all(a.provenance is None for a in lineage.created.attributes)
+
+
+async def test_history_scans_and_counts_are_bounded(seeded: Seeded) -> None:
+    revisions = seeded.revisions
+    async with keeper(seeded.app_url) as http:
+        unbounded = await get_lineage(http, "S-1001")
+    assert (unbounded.changes, unbounded.changes_truncated) == (RENAMES + 3, False)
+
+    bounds = {"history": {"lineage_scan_changes": 3, "lineage_count_max": 5}}
+    async with keeper(seeded.app_url, read=bounds) as http:
+        # Stored lineage revisions need no scan.
+        stored = await get_lineage(http, "S-1001")
+        assert (stored.changes, stored.changes_truncated) == (5, True)
+        assert revision_of(stored, "risk_score") == revisions["risk"]
+        assert stored.created is not None
+        assert stored.created.revision == revisions["data"]
+        # Without them, only the newest three changes are searched.
+        fallback = await get_lineage(http, "S-1002")
+        assert (fallback.changes, fallback.changes_truncated) == (5, True)
+        assert revision_of(fallback, "legal_name") == revisions["final"]
+        assert revision_of(fallback, "risk_score") is None
+        assert by_name(fallback)["risk_score"].provenance is not None
+        assert fallback.created is None

@@ -1,8 +1,13 @@
 """Materialized heads (design 6.11): incremental apply, full rebuild, branch copy or overlay,
 promotion of overlays, background copies and deletions of large branches, rewrite of rows
-materialized before a sensitivity tag, verify."""
+materialized before a sensitivity tag, backfill of lineage revisions, verify."""
 
-from lorebase_store.jobs import BRANCH_DELETE_JOB, MATERIALIZE_JOB, SENSITIVITY_REFRESH_JOB
+from lorebase_store.jobs import (
+    BRANCH_DELETE_JOB,
+    LINEAGE_BACKFILL_JOB,
+    MATERIALIZE_JOB,
+    SENSITIVITY_REFRESH_JOB,
+)
 from lorebase_store.materialize.apply import MaterializedChange, apply_changeset, refresh_kind
 from lorebase_store.materialize.background import (
     BranchDeletion,
@@ -18,6 +23,12 @@ from lorebase_store.materialize.branch import (
     BranchMode,
     MaterializationMode,
     create_branch,
+)
+from lorebase_store.materialize.lineage_backfill import (
+    LineageBackfill,
+    backfill_lineage_revisions,
+    queue_lineage_sweep,
+    run_lineage_backfill_job,
 )
 from lorebase_store.materialize.overlay import (
     OverlayError,
@@ -48,6 +59,7 @@ from lorebase_store.materialize.verify import (
 
 __all__ = [
     "BRANCH_DELETE_JOB",
+    "LINEAGE_BACKFILL_JOB",
     "MATERIALIZE_JOB",
     "SENSITIVITY_REFRESH_JOB",
     "BranchCreation",
@@ -57,6 +69,7 @@ __all__ = [
     "BranchMode",
     "Divergence",
     "DivergenceReason",
+    "LineageBackfill",
     "MaterializationMode",
     "MaterializedChange",
     "OverlayError",
@@ -64,12 +77,14 @@ __all__ = [
     "StaleRefresh",
     "VerifyReport",
     "apply_changeset",
+    "backfill_lineage_revisions",
     "create_branch",
     "delete_branch",
     "materialize_revision",
     "promote",
     "promote_overlays_of",
     "queue_after_tagging",
+    "queue_lineage_sweep",
     "queue_materialization",
     "queue_stale_refresh",
     "rebuild",
@@ -79,6 +94,7 @@ __all__ = [
     "refresh_stale_paths",
     "refresh_stale_rows",
     "run_branch_delete_job",
+    "run_lineage_backfill_job",
     "run_materialize_job",
     "run_path_fanout_sweep",
     "run_sensitivity_refresh_job",

@@ -1189,6 +1189,7 @@ class RecordLineage(Served):
     key: str
     created: RecordChange | None = None
     changes: int
+    changes_truncated: bool = False
     attributes: list[ValueLineage]
     sources: list[str]
     proposals: list[LineageProposal]

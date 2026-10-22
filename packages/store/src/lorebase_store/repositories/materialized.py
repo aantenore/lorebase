@@ -164,6 +164,7 @@ class HistoryStep:
     at: datetime
     new_hash: bytes | None
     provenance: dict[str, str] | None
+    old_hash: bytes | None
 
 
 def search_vector(
@@ -813,6 +814,7 @@ class MaterializedRepository:
                 history.c.at,
                 history.c.new_hash,
                 history.c.provenance,
+                history.c.old_hash,
             )
             .join(
                 REVISIONS,

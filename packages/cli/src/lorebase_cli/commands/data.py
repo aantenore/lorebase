@@ -459,7 +459,7 @@ def record_lineage(
         pairs: list[tuple[str, Any]] = [
             ("kind", found.kind),
             ("key", found.key),
-            ("changes", found.changes),
+            ("changes", f"{found.changes}+" if found.changes_truncated else found.changes),
             ("sources", ", ".join(found.sources)),
             ("proposals", ", ".join(f"{p.title} ({p.status})" for p in found.proposals)),
             ("revision", short_id(found.revision)),

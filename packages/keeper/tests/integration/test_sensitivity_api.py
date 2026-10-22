@@ -187,6 +187,16 @@ async def seed(
             {"role": "viewer"},
             {"role": "pii-reader", "scope_type": GrantScope.KIND, "scope_ref": "Supplier"},
         )
+        kind_viewer = await _principal(
+            store,
+            "kind viewer",
+            {"role": "viewer", "scope_type": GrantScope.KIND, "scope_ref": "Supplier"},
+        )
+        part_viewer = await _principal(
+            store,
+            "part viewer",
+            {"role": "viewer", "scope_type": GrantScope.KIND, "scope_ref": "Part"},
+        )
         admin = await _principal(store, "admin", {"role": "admin"})
         editor = await _principal(store, "editor", {"role": "editor"})
         modeler = await _principal(store, "modeler", {"role": "modeler"})
@@ -203,6 +213,8 @@ async def seed(
         "viewer": viewer,
         "cleared": cleared,
         "kind": kind_cleared,
+        "kind_viewer": kind_viewer,
+        "part_viewer": part_viewer,
         "admin": admin,
         "editor": editor,
         "modeler": modeler,
@@ -295,6 +307,33 @@ async def test_viewers_see_masks_on_every_read_path(seeded: Seeded) -> None:
         assert refused.json()["code"] == "sensitive_attribute"
         ordered = await _get(http, key, "/kinds/Supplier/records", order_by="phone")
         assert ordered.status_code == 403
+
+
+async def test_lineage_masks_values_for_a_reader_narrowed_to_the_kind(seeded: Seeded) -> None:
+    facts = seeded.facts
+    revs = seeded.revisions
+    lineage = f"{RECORD}/lineage"
+    async with keeper(seeded.app_url, _section(), vault=VAULT) as http:
+        for at in (None, revs["first"]):
+            params = {} if at is None else {"at": at}
+            response = await _get(http, facts["kind_viewer"], lineage, **params)
+            _hidden(response)
+            body = response.json()
+            email = next(a for a in body["attributes"] if a["name"] == "email")
+            assert email["value"] == "***"
+            assert email["revision"] is not None
+            assert email["provenance"] is not None
+            # The creating change names the Attributes it set, never their values.
+            created = body["created"]
+            assert created is not None
+            assert created["attributes"]
+            assert all(a["before"] is None and a["after"] is None for a in created["attributes"])
+            # A grant narrowed to another Kind reads no lineage of this one.
+            refused = await _get(http, facts["part_viewer"], lineage, **params)
+            assert refused.status_code == 403, refused.text
+        cleared = await _get(http, facts["kind"], lineage)
+        email = next(a for a in cleared.json()["attributes"] if a["name"] == "email")
+        assert email["value"] == NEW_EMAIL
 
 
 async def test_clearance_unmasks_and_responses_are_kept_apart(seeded: Seeded) -> None:
