@@ -1,4 +1,4 @@
-import type { TraceStep } from '@/api/types';
+import type { Kind, TraceStep } from '@/api/types';
 import { edgeId } from '@/features/canvas/ref-graph';
 import { clockTime, countsSummary, parseResult, queryText } from './step-view';
 import { stepRefs, traceGraph } from './trace-graph';
@@ -64,6 +64,82 @@ describe('traceGraph', () => {
     const { data, highlight } = traceGraph(steps, 2, []);
     expect(highlight).toBeUndefined();
     expect(data.nodes).toHaveLength(2);
+  });
+
+  it('draws a timeline as Keeper returns it, colored by the Kinds of the schema', () => {
+    // Shape of `GET /trace/sessions/{id}` against the supply example: a call without refs, a
+    // note, and a neighborhood read whose Link names Records by Kind api name.
+    const live = [
+      {
+        step: 1,
+        seq: 41,
+        type: 'call',
+        at: '2026-10-22T15:14:46Z',
+        actor: 'anonymous',
+        domain_id: 'supply',
+        method: 'GET',
+        route: '/api/v1/domains/{domain_id}/schema',
+        status: 200,
+        query: { params: { format: 'json' } },
+        refs: null,
+        inferred: true,
+        withheld: false,
+      },
+      {
+        step: 2,
+        seq: 42,
+        type: 'note',
+        at: '2026-10-22T15:14:47Z',
+        actor: 'anonymous',
+        note: 'Neighborhood next.',
+        inferred: false,
+        withheld: false,
+      },
+      {
+        step: 3,
+        seq: 43,
+        type: 'call',
+        at: '2026-10-22T15:15:06Z',
+        actor: 'anonymous',
+        domain_id: 'supply',
+        route: '/api/v1/domains/{domain_id}/neighborhood',
+        result: { counts: { edges: 1, nodes: 3 }, truncated: false },
+        refs: {
+          records: [
+            rec('Supplier', 'S-1016'),
+            rec('PurchaseOrder', 'PO-200004'),
+            rec('Contract', 'C-3016'),
+          ],
+          links: [
+            {
+              relation: 'with_supplier',
+              from: rec('Contract', 'C-3016'),
+              to: rec('Supplier', 'S-1016'),
+            },
+          ],
+          truncated: false,
+        },
+        inferred: true,
+        withheld: false,
+      },
+    ] as TraceStep[];
+    const kinds = [
+      { api_name: 'Supplier', color: '#336699' },
+      { api_name: 'Contract', color: '#996633' },
+    ] as Kind[];
+    const { data, highlight } = traceGraph(live, 3, kinds);
+    expect(data.nodes.map((n) => [n.id, n.group])).toEqual([
+      ['Supplier/S-1016', 'Supplier'],
+      ['PurchaseOrder/PO-200004', 'PurchaseOrder'],
+      ['Contract/C-3016', 'Contract'],
+    ]);
+    expect(data.nodes[0]?.color).toBe('#336699');
+    expect(data.nodes[2]?.color).toBe('#996633');
+    expect(data.edges.map((e) => [e.source, e.target, e.label])).toEqual([
+      ['Contract/C-3016', 'Supplier/S-1016', 'with_supplier'],
+    ]);
+    expect([...(highlight?.nodes ?? [])]).toHaveLength(3);
+    expect(traceGraph(live, 2, kinds).data.nodes).toEqual([]);
   });
 
   it('draws nothing for a session without refs', () => {

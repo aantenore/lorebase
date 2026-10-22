@@ -244,6 +244,7 @@ def create_app(
                         keeper.trace.session_header,
                         keeper.trace.tool_header,
                         keeper.trace.opt_in_header,
+                        keeper.trace.client_header,
                     ]
                     if keeper.trace.enabled
                     else []

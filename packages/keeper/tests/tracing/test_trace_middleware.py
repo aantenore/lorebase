@@ -16,7 +16,7 @@ from starlette.datastructures import Headers
 from lorebase_keeper.app import create_app
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.tracing.config import TraceSettings
-from lorebase_keeper.tracing.middleware import fingerprint
+from lorebase_keeper.tracing.middleware import TraceMiddleware, fingerprint
 from lorebase_keeper.tracing.recorder import TraceRecorder, TraceSink
 from lorebase_platform.settings import ConfigError, Settings
 from lorebase_store.models.enums import PrincipalType
@@ -184,3 +184,42 @@ def test_fingerprints_separate_principals_credentials_and_agents() -> None:
     assert same != fingerprint(principal("svc_a", "key_1"), Headers({"user-agent": "x"}), None)
     web = principal("usr_a", None)
     assert fingerprint(web, agent, "cookie-1") != fingerprint(web, agent, "cookie-2")
+
+
+async def test_trace_all_leaves_out_the_web_app_unless_included() -> None:
+    web = {"X-Lorebase-Client": "Web"}
+    requests = (
+        {"method": "GET", "url": WHOAMI, "headers": web},
+        {"method": "GET", "url": WHOAMI, "headers": {**web, "X-Lorebase-Trace": "on"}},
+        {"method": "GET", "url": WHOAMI, "headers": {"X-Lorebase-Client": "herald"}},
+        {"method": "GET", "url": WHOAMI, "headers": {"X-Lorebase-Session": "guide-1"}},
+    )
+    sink = Sink()
+    steps = await steps_of(app_with(sink, trace_all=True), sink, *requests)
+    assert len(steps) == 3  # the opt-in, Herald and the named session; not the screens
+    sink = Sink()
+    steps = await steps_of(app_with(sink, trace_all=True, include_web=True), sink, *requests)
+    assert len(steps) == 4
+    sink = Sink()
+    listed = app_with(sink, principals=["anonymous"])
+    assert len(await steps_of(listed, sink, requests[0])) == 1  # listing is explicit
+
+
+def test_session_cookie_traffic_without_an_agent_session_is_the_web_app() -> None:
+    settings = TraceSettings(enabled=True, trace_all=True)
+    middleware = TraceMiddleware(FastAPI(), recorder=TraceRecorder(settings, Sink().sink()))
+
+    def user(method: Any) -> Principal:
+        return Principal(
+            id="usr_a",
+            type=PrincipalType.USER,
+            display_name="usr_a",
+            method=method,
+            subjects=("usr_a",),
+        )
+
+    assert not middleware._traced(user("session"), Headers({}), opted_in=False)
+    guide = Headers({"x-lorebase-session": "guide-1"})
+    assert middleware._traced(user("session"), guide, opted_in=False)
+    assert middleware._traced(user("oidc"), Headers({}), opted_in=False)
+    assert middleware._traced(user("session"), Headers({}), opted_in=True)

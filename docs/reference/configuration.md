@@ -540,11 +540,16 @@ Agent trace (docs/agent-trace.md): steps of agent sessions (query, counts, refs,
 | `keeper.trace.tool_header` | `X-Lorebase-Tool` | agent tool (MCP tool name) that made the request |
 | `keeper.trace.opt_in_header` | `X-Lorebase-Trace` | per request opt-in: `on`, or `debug` for query plans (callers holding trace.explain) |
 | `keeper.trace.allow_header_opt_in` | `true` |  |
-| `keeper.trace.trace_all` | `false` | trace every authenticated request |
+| `keeper.trace.trace_all` | `false` | trace every authenticated request, except the web app's own |
+| `keeper.trace.client_header` | `X-Lorebase-Client` | names the client of a request; the web app sends web_client |
+| `keeper.trace.web_client` | `web` | client_header value of the web app's requests |
+| `keeper.trace.include_web` | `false` | true: trace_all also traces the web app (requests marked with client_header, and browser session cookie requests that name no session) |
 | `keeper.trace.principals` | `[]` | principal ids whose requests are traced |
 | `keeper.trace.api_keys` | `[]` | API key ids whose requests are traced |
-| `keeper.trace.inferred_session_idle_s` | `300.0` | requests without a session id are grouped per principal and client (API key or web session, user agent) while they come within this gap; marked inferred |
-| `keeper.trace.capture_literals` | `false` | keep the values compared by filters; false: their type only |
+| `keeper.trace.inferred_session_idle_s` | `300.0` | requests without a session id are grouped per principal and client (API key or web session, user agent) while they come within this gap (either side); marked inferred |
+| `keeper.trace.capture_filter_values` | `non_sensitive` | filter values kept: non_sensitive (on fields not sensitive under the effective tags, through Traits and Derivations; key and title by their Attributes) or none |
+| `keeper.trace.max_filter_value_items` | `20` | items kept of a list compared by a filter |
+| `keeper.trace.capture_literals` | `false` | true: keep every filter value, sensitive ones included |
 | `keeper.trace.capture_search_text` | `true` | keep search text (q, search, match); false: its length only |
 | `keeper.trace.max_query_bytes` | `16384` | larger request bodies are recorded as truncated |
 | `keeper.trace.max_text_chars` | `500` | longest string kept in a recorded query |

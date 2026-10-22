@@ -7,9 +7,10 @@ and prunes steps older than the retention period. Each batch also keeps the sess
 row lock in the writing transaction, so it holds across Keepers) and
 `agent_trace_session_domains` summarizes them per Domain (sessions are listed from it);
 pruning lowers both by what it deletes. A step without a session id (`inferred`) joins the
-inferred session of its actor and client fingerprint that saw a step within the idle timeout,
-or starts a new one. Every statement runs with row-level security bypassed: what a caller may
-see is decided by `TraceVisibility`, which the caller builds from its permissions.
+inferred session of its actor and client fingerprint with a step within the idle timeout of
+it (before or after: concurrent requests finish out of order), or starts a new one. Every
+statement runs with row-level security bypassed: what a caller may see is decided by
+`TraceVisibility`, which the caller builds from its permissions.
 """
 
 from __future__ import annotations
@@ -330,36 +331,46 @@ class TraceRepository:
     async def _inferred_sessions(
         self, steps: Sequence[NewTraceStep], idle_s: float
     ) -> list[NewTraceStep]:
-        """`steps` with the session of each inferred one: the session of the newest inferred
-        step of the same actor and fingerprint at most `idle_s` before it (stored, or earlier
-        in the batch), or a new session id. Serialized per actor and fingerprint (locks
-        taken in sorted order), so Keepers writing at the same time agree."""
+        """`steps` with the session of each inferred one: the session of the inferred step of
+        the same actor and fingerprint nearest in time, at most `idle_s` before or after it
+        (stored, or earlier in the batch), or a new session id.
+
+        Steps are queued as their requests finish but carry the time their request started,
+        so a client sending requests concurrently produces steps out of time order, within a
+        batch and across batches; the window is looked at on both sides, and the batch is
+        resolved in time order. Serialized per actor and fingerprint (locks taken in sorted
+        order), so Keepers writing at the same time agree."""
         clients = sorted({(s.actor, s.fingerprint or "") for s in steps if s.inferred})
         for actor, fingerprint in clients:
             await self._session.execute(_INFERRED_LOCK, {"k": f"trace\x1f{actor}\x1f{fingerprint}"})
         idle = timedelta(seconds=idle_s)
         latest: dict[tuple[str, str | None], tuple[str, datetime]] = {}
-        out: list[NewTraceStep] = []
-        for step in steps:
-            if not step.inferred:
-                out.append(step)
-                continue
+        out = list(steps)
+        order = sorted(
+            (i for i, step in enumerate(steps) if step.inferred), key=lambda i: steps[i].at
+        )
+        for index in order:
+            step = steps[index]
             client = (step.actor, step.fingerprint)
             candidates = [await self._stored_inferred_session(step, idle)]
             seen = latest.get(client)
-            if seen is not None and step.at - idle <= seen[1] <= step.at:
+            if seen is not None and abs(step.at - seen[1]) <= idle:
                 candidates.append(seen)
-            found = max((c for c in candidates if c is not None), key=lambda c: c[1], default=None)
+            found = min(
+                (c for c in candidates if c is not None),
+                key=lambda c: abs(step.at - c[1]),
+                default=None,
+            )
             session_id = found[0] if found else f"{INFERRED_PREFIX}{uuid.uuid4().hex[:16]}"
             latest[client] = (session_id, step.at)
-            out.append(replace(step, session_id=session_id))
+            out[index] = replace(step, session_id=session_id)
         return out
 
     async def _stored_inferred_session(
         self, step: NewTraceStep, idle: timedelta
     ) -> tuple[str, datetime] | None:
-        """The session and time of the newest stored inferred step of the client of `step`
-        within `idle` before it; None when there is none."""
+        """The session and time of the stored inferred step of the client of `step` nearest
+        to it in time, within `idle` on either side; None when there is none."""
         t = AgentTraceStep
         found = (
             await self._session.execute(
@@ -369,9 +380,9 @@ class TraceRepository:
                     t.actor == step.actor,
                     t.fingerprint == step.fingerprint,
                     t.at >= step.at - idle,
-                    t.at <= step.at,
+                    t.at <= step.at + idle,
                 )
-                .order_by(t.at.desc(), t.seq.desc())
+                .order_by(func.abs(func.extract("epoch", t.at - step.at)), t.seq.desc())
                 .limit(1)
             )
         ).first()

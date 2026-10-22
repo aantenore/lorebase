@@ -111,7 +111,18 @@ function brevik(): TraceStep[] {
       query: {
         body: {
           start: { kind: 'Supplier', key: 'S-1001' },
-          path: [{ relation: 'supplies' }, { relation: 'supplied_by' }],
+          path: [
+            {
+              relation: 'supplies',
+              // Kept: single_sourced is not sensitive (keeper.trace.capture_filter_values).
+              where: { attr: 'single_sourced', op: 'eq', value: true },
+            },
+            {
+              relation: 'supplied_by',
+              // A sensitive Attribute: only the type of the value is kept.
+              where: { attr: 'contact_email', op: 'eq', value: redacted },
+            },
+          ],
         },
       },
       result: { counts: { items: 4, hops: 2 }, truncated: false },

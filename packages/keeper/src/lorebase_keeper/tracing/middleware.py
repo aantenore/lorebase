@@ -1,17 +1,24 @@
 """Records one trace step per traced request (`keeper.trace`, docs/agent-trace.md).
 
 A request is a candidate when it could be traced: it opts in with the opt-in header, or
-`trace_all`, `principals` or `api_keys` is set; a malformed session id rules it out. Its session
-is the one the session header names; without one the step is marked `inferred` with a client
-fingerprint (a digest of the principal, its API key or web session, and the user agent), and
-the store puts it in the inferred session of that fingerprint that saw a step within
-`inferred_session_idle_s`, or a new one. Fingerprints include the principal, so inferred sessions
-are never shared across principals. For a
-candidate the middleware keeps the request body (up to `max_query_bytes`) and the response
-body (up to `max_response_bytes`), streams both through unchanged, and after the response
-decides from the authenticated principal whether to record it. Unauthenticated requests are
+`trace_all`, `principals` or `api_keys` is set; a malformed session id rules it out.
+`trace_all` leaves out the web app's own requests unless `include_web`: those whose client
+header names the web app, and those authenticated by a browser session cookie that name no
+agent session (Guide forwards the cookie of the user it explores for, with a session id).
+
+A step's session is the one the session header names; without one the step is marked
+`inferred` with a client fingerprint (a digest of the principal, its API key or web session,
+and the user agent), and the store puts it in the inferred session of that fingerprint with a
+step within `inferred_session_idle_s` of it, or a new one. Fingerprints include the principal,
+so inferred sessions are never shared across principals. For a candidate the middleware keeps
+the request body (up to `max_query_bytes`) and the response body (up to `max_response_bytes`),
+streams both through unchanged, and after the response decides from the authenticated
+principal whether to record it. Unauthenticated requests are
 never recorded. For reads the query is kept (`capture`) and, when they succeed, the counts and
-refs of the response; for writes only the route, status and the Proposal they name.
+refs of the response; for writes only the route, status and the Proposal they name. With
+`capture_filter_values: non_sensitive` each field a read compares is reported with whether
+it is sensitive (`notes.note_field`), and the values filters compare on fields that are not
+sensitive are kept.
 
 Routes of the trace itself (`/trace/...`) are never traced.
 """
@@ -135,12 +142,16 @@ class TraceMiddleware:
             if message["type"] == "http.response.start":
                 status = message["status"]
                 media_type = Headers(raw=message.get("headers", [])).get("content-type", "")
-                self._size_response(scope, response_body, status, media_type, opted_in)
+                self._size_response(scope, headers, response_body, status, media_type, opted_in)
             elif message["type"] == "http.response.body":
                 response_body.add(message.get("body", b""))
             await send(message)
 
-        notes = TraceNotes(debug=opted_in and opt_in == "debug")
+        notes = TraceNotes(
+            debug=opted_in and opt_in == "debug",
+            filter_values=settings.capture_filter_values == "non_sensitive"
+            and not settings.capture_literals,
+        )
         notes.may_explain = self._explain_check(scope)
         with tracing(notes):
             try:
@@ -164,7 +175,13 @@ class TraceMiddleware:
                     self._recorder.offer(step)
 
     def _size_response(
-        self, scope: Scope, body: _Body, status: int, media_type: str, opted_in: bool
+        self,
+        scope: Scope,
+        headers: Headers,
+        body: _Body,
+        status: int,
+        media_type: str,
+        opted_in: bool,
     ) -> None:
         """Decide, once the answer starts, how much of it to keep: nothing unless it is a
         successful JSON answer to a principal who is traced; a read's answer up to
@@ -173,7 +190,7 @@ class TraceMiddleware:
         principal = _principal(scope)
         if (
             principal is None
-            or not self._traced(principal, opted_in)
+            or not self._traced(principal, headers, opted_in)
             or not 200 <= status < 300
             or not media_type.startswith("application/json")
         ):
@@ -201,14 +218,23 @@ class TraceMiddleware:
 
         return may_explain
 
-    def _traced(self, principal: Principal, opted_in: bool) -> bool:
+    def _traced(self, principal: Principal, headers: Headers, opted_in: bool) -> bool:
         settings = self._settings
         return (
             opted_in
-            or settings.trace_all
+            or (settings.trace_all and (settings.include_web or not self._web(principal, headers)))
             or principal.id in settings.principals
             or (principal.key_id is not None and principal.key_id in settings.api_keys)
         )
+
+    def _web(self, principal: Principal, headers: Headers) -> bool:
+        """Whether the request is the web app's own: its client header names the web app, or
+        a browser session cookie authenticated it and it names no agent session."""
+        settings = self._settings
+        client = headers.get(settings.client_header, "").strip().lower()
+        if client == settings.web_client.strip().lower():
+            return True
+        return principal.method == "session" and not headers.get(settings.session_header, "")
 
     def _route_template(self, scope: Scope) -> str:
         path = getattr(scope.get("route"), "path", None)
@@ -237,7 +263,7 @@ class TraceMiddleware:
         notes: TraceNotes,
     ) -> NewTraceStep | None:
         principal = _principal(scope)
-        if principal is None or not self._traced(principal, opted_in):
+        if principal is None or not self._traced(principal, headers, opted_in):
             return None
         route = self._route_template(scope)
         relative = route[len(self._api_prefix) :] if route.startswith(self._api_prefix) else route
@@ -258,6 +284,7 @@ class TraceMiddleware:
                 params=_query_params(scope),
                 body=request_body.bytes() if method == "POST" else None,
                 body_complete=request_body.complete,
+                plain=notes.plain if notes.filter_values else None,
             )
         document = (
             capture.parse_json(response_body.bytes())

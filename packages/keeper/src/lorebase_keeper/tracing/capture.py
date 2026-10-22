@@ -2,9 +2,11 @@
 
 - `query_of`: the query as structured data. The request body of a POST read, or the query
   parameters of a GET read. Values compared by filters (`attr` and `derived` predicates) are
-  replaced by their type unless `capture_literals`; search text (`q`, `search`, `match`) is
-  kept unless `capture_search_text` is off; query vectors are replaced by their dimension
-  and cursors dropped. Long strings are cut.
+  replaced by their type, except on fields the read found not sensitive (`plain`, with
+  `capture_filter_values: non_sensitive`), where scalars and lists of scalars are kept, cut
+  to `max_text_chars` and `max_filter_value_items`; `capture_literals` keeps them all. Search
+  text (`q`, `search`, `match`) is kept unless `capture_search_text` is off; query vectors
+  are replaced by their dimension and cursors dropped. Long strings are cut.
 - `result_of`: counts of the lists of a response, plus the search mode and corrections, the
   context pack budget and truncation flags. No values.
 - `refs_of`: the Records (Kind and key) and Links (Relation and both ends) a response
@@ -16,13 +18,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from lorebase_keeper.tracing.config import TraceSettings
 
 TEXT_MEMBERS = frozenset({"q", "search", "match"})
 SKIPPED_PARAMS = frozenset({"cursor"})
+COMPARED_FIELDS = ("attr", "derived")
 MAX_LIST_ITEMS = 100
 MAX_CORRECTIONS = 20
 MAX_DEPTH = 32
@@ -52,9 +55,42 @@ def _redacted(value: Any) -> dict[str, Any]:
     return out
 
 
+def _scalar(value: Any) -> bool:
+    return value is None or isinstance(value, bool | int | float | str)
+
+
 class _Redactor:
-    def __init__(self, settings: TraceSettings) -> None:
+    def __init__(self, settings: TraceSettings, plain: Callable[[str], bool] | None = None) -> None:
         self._settings = settings
+        self._plain = plain if settings.capture_filter_values == "non_sensitive" else None
+
+    def _plain_field(self, comparison: Mapping[str, Any]) -> bool:
+        """Whether a predicate compares a field the read reported as not sensitive (every
+        field it names, should it name both `attr` and `derived`)."""
+        plain = self._plain
+        fields = [comparison[name] for name in COMPARED_FIELDS if name in comparison]
+        return (
+            plain is not None
+            and bool(fields)
+            and all(isinstance(field, str) and plain(field) for field in fields)
+        )
+
+    def literal(self, value: Any) -> Any:
+        """A compared value as kept: a scalar (strings cut) or a list of scalars (cut to
+        `max_filter_value_items`); anything else by its type."""
+        if isinstance(value, str):
+            return self.text(value)
+        if _scalar(value):
+            return value
+        if isinstance(value, list) and all(_scalar(item) for item in value):
+            limit = self._settings.max_filter_value_items
+            items: list[Any] = [
+                self.text(item) if isinstance(item, str) else item for item in value[:limit]
+            ]
+            if len(value) > limit:
+                items.append({"truncated": len(value) - limit})
+            return items
+        return _redacted(value)
 
     def text(self, value: str) -> str:
         limit = self._settings.max_text_chars
@@ -75,15 +111,20 @@ class _Redactor:
         return value
 
     def mapping(self, value: Mapping[str, Any], depth: int) -> dict[str, Any]:
-        comparison = ("attr" in value or "derived" in value) and "value" in value
+        comparison = any(name in value for name in COMPARED_FIELDS) and "value" in value
         out: dict[str, Any] = {}
         for name, member in value.items():
             if name == "query_vector" and isinstance(member, list):
                 out[name] = {"dims": len(member)}
             elif name in SKIPPED_PARAMS:
                 continue
-            elif name == "value" and comparison and not self._settings.capture_literals:
-                out[name] = _redacted(member)
+            elif name == "value" and comparison:
+                if self._settings.capture_literals:
+                    out[name] = self.node(member, depth + 1)
+                elif self._plain_field(value):
+                    out[name] = self.literal(member)
+                else:
+                    out[name] = _redacted(member)
             elif name in TEXT_MEMBERS and isinstance(member, str):
                 out[name] = (
                     self.text(member)
@@ -108,9 +149,11 @@ def query_of(
     params: Iterable[tuple[str, str]],
     body: bytes | None,
     body_complete: bool,
+    plain: Callable[[str], bool] | None = None,
 ) -> dict[str, Any] | None:
-    """The recorded query of a read: `{"body": ...}` and/or `{"params": ...}`."""
-    redactor = _Redactor(settings)
+    """The recorded query of a read: `{"body": ...}` and/or `{"params": ...}`. `plain` tells
+    the fields whose compared values may be kept (see the module doc); None: none."""
+    redactor = _Redactor(settings, plain)
     out: dict[str, Any] = {}
     collected: dict[str, Any] = {}
     for name, value in params:
