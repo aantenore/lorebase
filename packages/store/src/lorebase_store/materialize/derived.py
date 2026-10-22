@@ -296,26 +296,7 @@ class DerivedValues:
 
     async def _links(self, hop: Hop, keys: Sequence[str]) -> dict[str, list[tuple[str, Any]]]:
         """`near key -> [(far key, link values)]` of the hop for `keys`."""
-        relation = hop.relation
-        forward = hop.direction is LinkDirection.FORWARD
-        out: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-        if relation.backing is RelationBacking.FOREIGN_KEY:
-            attribute = relation.foreign_key_attribute
-            if attribute is None:
-                return out
-            pairs = await self.repository.foreign_key_links(
-                relation.from_kind, attribute, keys=keys, by_target=not forward
-            )
-            for from_key, to_key in pairs:
-                near, far = (from_key, to_key) if forward else (to_key, from_key)
-                out[near].append((far, {}))
-            return out
-        found = await self.repository.linked_keys(
-            relation.id, near="from_key" if forward else "to_key", keys=keys
-        )
-        for near, far, values in found:
-            out[near].append((far, values))
-        return out
+        return await links_of(self.repository, hop.relation, hop.direction, keys)
 
     def _inputs(self, kind_id: str, row: RecordRow) -> dict[str, Any]:
         """Stored and derived values of a Record; derived ones from `expected` when not
@@ -429,6 +410,35 @@ class DerivedValues:
                     request.key, []
                 )
         return compute()
+
+
+async def links_of(
+    repository: MaterializedRepository,
+    relation: Relation,
+    direction: LinkDirection,
+    keys: Sequence[str],
+) -> dict[str, list[tuple[str, Any]]]:
+    """`near key -> [(far key, link values)]` of `relation` followed in `direction` from
+    `keys`: stored Links, or the Records holding the key of a foreign-key Relation."""
+    forward = direction is LinkDirection.FORWARD
+    out: dict[str, list[tuple[str, Any]]] = defaultdict(list)
+    if relation.backing is RelationBacking.FOREIGN_KEY:
+        attribute = relation.foreign_key_attribute
+        if attribute is None:
+            return out
+        pairs = await repository.foreign_key_links(
+            relation.from_kind, attribute, keys=keys, by_target=not forward
+        )
+        for from_key, to_key in pairs:
+            near, far = (from_key, to_key) if forward else (to_key, from_key)
+            out[near].append((far, {}))
+        return out
+    found = await repository.linked_keys(
+        relation.id, near="from_key" if forward else "to_key", keys=keys
+    )
+    for near, far, values in found:
+        out[near].append((far, values))
+    return out
 
 
 def aggregate(

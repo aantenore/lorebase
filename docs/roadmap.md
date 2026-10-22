@@ -80,7 +80,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 - [x] Proposal checks (merge, approvals) and required approvals
 - [x] Modeler with every editor: Kinds, Relations, Traits, Operations (with dry run), Derivations and Sources in one form and YAML document, with Keeper's validation and CEL type check next to the fields
 - [x] Conflict resolver against live data
-- [ ] Traits in queries (they work at branch heads; time-travel reads do not support them)
+- [x] Traits in queries, at branch heads and in time-travel reads (listings ordered by key, with the head's cursors)
 
 ## M4: Documents, extraction and semantic search
 
@@ -91,7 +91,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] OpenAI-compatible chat client, fastembed and OpenAI-compatible embeddings, compose profiles `local-models` and `litellm` ([inference providers](inference-providers.md))
 - [x] Extraction Proposal items and evidence Review UI (an Items tab in Review accepts, edits or rejects items one by one or by filter; the Documents viewer highlights the evidence)
 - [x] Embedding jobs and hybrid search: Kinds opt in with `search.embedding_template`; scheduled Scribe passes embed the Records that lack a vector of the configured model (content-hash keyed, shared across branches and overlays, batched, rate-limited, resumable), `lorebase-scribe embeddings` backfills and reindexes (migration `0014`, [scribe](scribe.md#embeddings)); query vectors are computed on the caller's side (`lorebase-inference embed`, `lorebase search --vector-file`). The model is advertised in `GET /schema` and `lorebase_schema`; prefixes for E5/BGE style models are settings; garbage collection deletes unreferenced vectors
-- [ ] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path Derivations are defined in the schema but not materialized)
+- [x] Derivations: expression, aggregate and path (expression and aggregate are recomputed in the materialized head; path Derivations are virtual Relations composed at read time with a bounded fan-out, or stored and kept current incrementally when `materialized`, see [design 5.8](design.md#58-derivation))
 
 ## M5: Enterprise hardening and 1.0
 

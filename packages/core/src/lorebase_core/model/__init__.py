@@ -68,6 +68,7 @@ from lorebase_core.model.operation import (
     builtin_link_operation_names,
     builtin_operation_names,
 )
+from lorebase_core.model.paths import PathHop, PathRelation
 from lorebase_core.model.record import (
     Link,
     LinkIdentity,
@@ -182,6 +183,8 @@ __all__ = [
     "OriginType",
     "PaginationType",
     "PathDerivation",
+    "PathHop",
+    "PathRelation",
     "PathStep",
     "Precondition",
     "ProvenanceEntry",

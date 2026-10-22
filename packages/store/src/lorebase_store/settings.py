@@ -210,8 +210,9 @@ class MaterializeSettings(SectionModel):
     )
     derivations_enabled: bool = Field(
         default=True,
-        description="Recompute derived Attributes (expression and aggregate Derivations) in "
-        "the materialized head on every commit, merge and rebuild.",
+        description="Recompute derived Attributes (expression and aggregate Derivations) and "
+        "the Links of materialized path Derivations in the materialized head on every commit, "
+        "merge and rebuild.",
     )
     derivation_max_incremental_records: int = Field(
         default=10000,
@@ -538,7 +539,8 @@ class ReadSettings(SectionModel):
 
 
 class TraverseSettings(SectionModel):
-    """Neighborhood traversal over `mat_links` (`lorebase_store.traverse`)."""
+    """Neighborhood traversal over `mat_links` (`lorebase_store.traverse`) and the fan-out of
+    path Derivations (`lorebase_core.model.paths`)."""
 
     max_depth: int = Field(default=3, ge=1, le=10, description="Deepest neighborhood, in hops.")
     max_seeds: int = Field(default=50, ge=1, description="Seed Records of one neighborhood.")
@@ -552,6 +554,13 @@ class TraverseSettings(SectionModel):
     )
     max_nodes: int = Field(
         default=200, ge=1, description="Records returned by one neighborhood, nearest first."
+    )
+    path_fanout: int = Field(
+        default=100,
+        ge=1,
+        description="Links a path Derivation follows from one intermediate Record (smallest "
+        "far keys first), at read time and when materialized; materialized paths take a new "
+        "value at their next full recompute (schema change or rebuild).",
     )
 
 

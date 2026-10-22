@@ -1,7 +1,8 @@
 """Record and Link reads: get, list and query, Links of a Record or a Relation.
 
 Reads at the branch head use the materialized rows and the query compiler; reads at another
-Revision go through `TreeReader` and support key lookups and listings ordered by key only.
+Revision go through `TreeReader` and support key lookups, listings of a Kind or a Trait ordered
+by key, and Links (path Derivations composed from the Links of their steps there).
 """
 
 from __future__ import annotations
@@ -14,7 +15,8 @@ from typing import Any
 from sqlalchemy import Select, and_, func, literal, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Kind, LinkDirection, Relation
+from lorebase_core.model import Kind, LinkDirection, PathRelation, Relation
+from lorebase_core.model.paths import walk
 from lorebase_core.model.relation import RelationBacking
 from lorebase_core.query import (
     KEY_FIELD,
@@ -92,6 +94,7 @@ def compiler_for(point: ReadPoint, runtime: ReadRuntime) -> Compiler:
         text_search_config=runtime.store_settings.materialize.text_search_config,
         indexes=plan_indexes(point.schema).by_attribute(),
         layout=point.layout,
+        path_fanout=runtime.store_settings.traverse.path_fanout,
     )
 
 
@@ -304,8 +307,6 @@ async def run_query(
     if not point.materialized:
         if plan.where is not None or plan.include or plan.aggregate or not _key_ordered(plan):
             raise tree_unsupported("Filtering, ordering, includes and aggregates")
-        if plan.target.trait is not None:
-            raise tree_unsupported("Querying a Trait")
         return await _tree_list(session, runtime, point, plan, shape, cursor_pointer)
     compiler = compiler_for(point, runtime)
     r = compiler.records("r")
@@ -416,27 +417,43 @@ async def _tree_list(
     shape: str,
     cursor_pointer: str,
 ) -> QueryPage:
-    kind = plan.target.kinds[0]
+    """A page of the target's Records at a Revision, in the order of the head's keyset
+    (`Compiler.sort_keys`): by key for one Kind; for a Trait by Kind id and key, or by key
+    and Kind id when ordered by key. Cursors carry the same positions as at the head."""
+    kinds = plan.target.kinds
+    by_key = len(kinds) == 1 or bool(plan.order)
     reader = TreeReader(session, runtime, point.domain.id, point.revision.root)
-    entries = await reader.entries(kind_partition(kind.id))
-    position = position_of(plan.cursor, shape, cursor_pointer)
-    if position is not None:
-        if len(position) != 1 or not isinstance(position[0], str):
+
+    def position(kind: Kind, key: str) -> list[str]:
+        if len(kinds) == 1:
+            return [key]
+        return [key, kind.id] if by_key else [kind.id, key]
+
+    entries = [
+        (position(kind, entry.key), kind, entry)
+        for kind in kinds
+        for entry in await reader.entries(kind_partition(kind.id))
+    ]
+    entries.sort(key=lambda item: item[0])
+    after_position = position_of(plan.cursor, shape, cursor_pointer)
+    if after_position is not None:
+        width = 1 if len(kinds) == 1 else 2
+        if len(after_position) != width or not all(isinstance(p, str) for p in after_position):
             raise invalid_cursor(cursor_pointer)
-        entries = [e for e in entries if e.key > position[0]]
+        entries = [item for item in entries if item[0] > after_position]
     page = entries[: plan.limit]
-    bodies = await reader.bodies(e.object_hash for e in page)
+    bodies = await reader.bodies(entry.object_hash for _, _, entry in page)
     items = [
         record_out(
             point.schema,
-            tree_record_row(kind, e.key, bodies[e.object_hash]),
+            tree_record_row(kind, entry.key, bodies[entry.object_hash]),
             masking=point.masking,
             select=plan.select,
         )
-        for e in page
+        for _, kind, entry in page
     ]
     more = len(entries) > plan.limit and plan.limit > 0
-    return QueryPage(items, issue(shape, [page[-1].key]) if more else None)
+    return QueryPage(items, issue(shape, page[-1][0]) if more else None)
 
 
 # Links ----------------------------------------------------------------------------------
@@ -448,7 +465,7 @@ def require_hop(point: ReadPoint, kind: Kind, name: str) -> Hop:
     hop = resolve_hop(point.schema, target, name)
     if isinstance(hop, str):
         raise not_found(f"Relation {name} of Kind {kind.api_name}")
-    point.scope.require([kind.api_name, *(k.api_name for k in hop.far.kinds)])
+    point.scope.require([kind.api_name, *sorted(hop.kinds_read)])
     return hop
 
 
@@ -492,7 +509,8 @@ async def record_links(
         items = [_link_out(point, hop, key, far, values) for far, values in page]
         more = len(pairs) > limit
         return LinkPageResult(items, issue(shape, [page[-1][0]]) if more and page else None)
-    if hop.direction is LinkDirection.INVERSE:
+    composed = hop.path is not None and not hop.path.materialized
+    if hop.direction is LinkDirection.INVERSE and not composed:
         return await _inbound_links(session, runtime, point, hop, key, limit, after_key, shape)
     compiler = compiler_for(point, runtime)
     source = compiler.link_source(hop)
@@ -570,6 +588,10 @@ async def _tree_links(
 ) -> list[tuple[str, Mapping[str, Any]]]:
     """`(far_key, link values)` of a Record's Links at a Revision, sorted by far key."""
     reader = TreeReader(session, runtime, point.domain.id, point.revision.root)
+    if hop.path is not None:
+        pairs = await _tree_path_pairs(reader, runtime, hop.path)
+        forward = hop.direction is LinkDirection.FORWARD
+        return sorted((t if forward else f, {}) for f, t in pairs if (f if forward else t) == key)
     relation = hop.relation
     forward = hop.direction is LinkDirection.FORWARD
     if hop.foreign_key:
@@ -612,6 +634,9 @@ async def relation_links(
 ) -> LinkPageResult:
     """Links of a Relation ordered by `(from_key, to_key)`, optionally from or to one key."""
     found = point.schema.relation_by_api_name(relation_name_)
+    along = point.schema.path_by_api_name(relation_name_)
+    if found is None and along is not None:
+        found = (along[0].relation, along[1])
     if found is None:
         raise not_found(f"Relation {relation_name_}")
     relation, _ = found
@@ -669,8 +694,16 @@ async def _tree_relation_links(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, hop: Hop
 ) -> list[tuple[str, str, Mapping[str, Any]]]:
     reader = TreeReader(session, runtime, point.domain.id, point.revision.root)
-    relation = hop.relation
-    if hop.foreign_key:
+    if hop.path is not None:
+        return [(f, t, {}) for f, t in sorted(await _tree_path_pairs(reader, runtime, hop.path))]
+    return await _tree_pairs(reader, hop.relation)
+
+
+async def _tree_pairs(
+    reader: TreeReader, relation: Relation
+) -> list[tuple[str, str, Mapping[str, Any]]]:
+    """Every Link of a Relation at a Revision as `(from_key, to_key, values)`, sorted."""
+    if relation.backing is RelationBacking.FOREIGN_KEY:
         attribute = relation.foreign_key_attribute
         assert attribute is not None
         entries = await reader.entries(kind_partition(relation.from_kind))
@@ -685,3 +718,23 @@ async def _tree_relation_links(
     bodies = await reader.bodies(e.object_hash for e in entries)
     out = [(*split_link_key(e.key), bodies[e.object_hash].get("values", {})) for e in entries]
     return sorted(out, key=lambda p: (p[0], p[1]))
+
+
+async def _tree_path_pairs(
+    reader: TreeReader, runtime: ReadRuntime, path: PathRelation
+) -> set[tuple[str, str]]:
+    """Every Link of a path Derivation at a Revision, composed from the Links of its steps
+    there (`lorebase_core.model.paths`; materialized or not, the tree holds no path Links)."""
+    maps: list[dict[str, list[str]]] = []
+    for step in path.steps:
+        forward = step.direction is LinkDirection.FORWARD
+        by_near: dict[str, list[str]] = defaultdict(list)
+        for from_key, to_key, _ in await _tree_pairs(reader, step.relation):
+            near, far = (from_key, to_key) if forward else (to_key, from_key)
+            by_near[near].append(far)
+        maps.append(by_near)
+    steps = [
+        (lambda keys, found=found: {k: found[k] for k in keys if k in found}) for found in maps
+    ]
+    reached = walk(sorted(maps[0]), steps, runtime.store_settings.traverse.path_fanout)
+    return {(start, far) for start, fars in reached.items() for far in fars}

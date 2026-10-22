@@ -3,8 +3,9 @@
 Content comes from the tree and the objects it references; history is the changesets of the
 head's first-parent chain; lineage and `updated_revision` are folded from that history with
 the same rules as the incremental path (`rows.next_lineage`), so both produce equal rows.
-Derived values are then computed for every Record with the evaluation the incremental path
-uses (`materialize.derived`).
+Derived values are then computed for every Record, and the Links of materialized path
+Derivations, with the evaluation the incremental path uses (`materialize.derived`,
+`materialize.paths`).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from lorebase_store.commit.schema import (
 from lorebase_store.indexes import BranchIndexes
 from lorebase_store.materialize.derived import DerivedValues
 from lorebase_store.materialize.overlay import promote_overlays_of
+from lorebase_store.materialize.paths import PathLinks
 from lorebase_store.materialize.rows import (
     PartitionType,
     next_lineage,
@@ -196,6 +198,13 @@ async def materialize_revision(
             max_incremental=settings.materialize.derivation_max_incremental_records,
         )
         await derived.recompute_all()
+        await PathLinks(
+            repository,
+            schema,
+            fanout=settings.traverse.path_fanout,
+            batch=batch,
+            max_incremental=settings.materialize.derivation_max_incremental_records,
+        ).recompute_all()
         for kind_id in sorted(derived.kinds):
             if derived.searchable(kind_id):
                 await repository.refresh_search(

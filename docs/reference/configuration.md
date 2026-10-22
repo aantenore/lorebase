@@ -796,7 +796,7 @@ Largest counts the definer functions accept (NULL and values outside 1..ceiling 
 
 ### `store.traverse`
 
-Neighborhood caps
+Neighborhood caps and path Derivation fan-out
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -805,6 +805,7 @@ Neighborhood caps
 | `store.traverse.max_fanout` | `50` | Links followed per Record and hop |
 | `store.traverse.max_links` | `2000` | Links walked, breadth first |
 | `store.traverse.max_nodes` | `200` | Records returned, nearest first |
+| `store.traverse.path_fanout` | `100` | Links a path Derivation follows per intermediate Record |
 
 ## `schema`
 

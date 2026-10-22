@@ -12,7 +12,9 @@ the GIN index on `values` serves it.
 
 `via` and `count` compile to correlated subqueries over the Links of the Relation. Relations
 backed by a foreign key Attribute have no stored Links; their Links are read from the `from`
-Records holding the Attribute.
+Records holding the Attribute. A path Derivation reads its stored Links when materialized and
+is composed from its steps otherwise (one lateral read per intermediate Record, bounded by the
+path fan-out).
 
 Ordering is keyset based: each ordering term sorts by `(value IS NULL, value)` so that absent
 values come last in both directions, then by Kind id (Trait targets) and key, which makes
@@ -55,7 +57,7 @@ from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB, REGCONFIG
 from sqlalchemy.sql.elements import KeyedColumnElement
 from sqlalchemy.types import TypeEngine
 
-from lorebase_core.model import LinkDirection
+from lorebase_core.model import LinkDirection, PathRelation, Relation, RelationBacking
 from lorebase_core.query import (
     Comparison,
     Condition,
@@ -75,6 +77,7 @@ from lorebase_core.query import (
 from lorebase_core.types import AttributeType, decode_value
 from lorebase_store.indexes import IndexMethod, IndexSpec
 from lorebase_store.layout import BranchLayout
+from lorebase_store.settings import TraverseSettings
 
 EARTH_RADIUS_M = 6_371_008.8
 """Mean Earth radius (IUGG) used by `near`."""
@@ -153,6 +156,8 @@ class Compiler:
     index predicate and expression so the partial index can serve them. `layout` gives the
     rows of the branch (`lorebase_store.layout`): the tables of a full branch, the resolved
     rows of an overlay, which keep the table's columns and report the overlay as `branch`.
+    `path_fanout` bounds path Derivations composed at read time
+    (`store.traverse.path_fanout`).
     """
 
     def __init__(
@@ -163,9 +168,11 @@ class Compiler:
         text_search_config: str,
         indexes: Mapping[tuple[str, str], IndexSpec] | None = None,
         layout: BranchLayout | None = None,
+        path_fanout: int | None = None,
     ) -> None:
         self.domain_id = domain_id
         self.branch = branch
+        self._path_fanout = path_fanout or TraverseSettings().path_fanout
         self.layout = layout or BranchLayout(domain_id, branch)
         self._config = text_search_config
         self._indexes = dict(indexes or {})
@@ -387,10 +394,18 @@ class Compiler:
     # Links ------------------------------------------------------------------------------
 
     def link_source(self, hop: Hop) -> LinkSource:
-        """Links of the hop's Relation with `near` on the side the hop starts from."""
-        relation = hop.relation
-        forward = hop.direction is LinkDirection.FORWARD
-        if hop.foreign_key:
+        """Links of the hop's Relation with `near` on the side the hop starts from.
+
+        A materialized path Derivation reads its stored Links like a Relation (its id is the
+        `relation_id`); any other path is composed from its steps (`_path_source`).
+        """
+        if hop.path is not None and not hop.path.materialized:
+            return self._path_source(hop.path, hop.direction)
+        return self._relation_source(hop.relation, hop.direction)
+
+    def _relation_source(self, relation: Relation, direction: LinkDirection) -> LinkSource:
+        forward = direction is LinkDirection.FORWARD
+        if relation.backing is RelationBacking.FOREIGN_KEY:
             assert relation.foreign_key_attribute is not None
             rows = self.layout.records_alias()
             attribute = relation.foreign_key_attribute
@@ -413,6 +428,41 @@ class Compiler:
             (links.c.from_key, links.c.to_key) if forward else (links.c.to_key, links.c.from_key)
         )
         return LinkSource(links, near, far, links.c["values"], scope)
+
+    def _path_source(self, path: PathRelation, direction: LinkDirection) -> LinkSource:
+        """The pairs of a path Derivation composed from its steps
+        (`lorebase_core.model.paths`): every Link of the first step, then per intermediate
+        Record a lateral read of at most `path_fanout` Links, smallest far keys first. The
+        pairs are computed forward whatever the direction, so both directions read the same
+        Links; the inverse direction swaps the columns."""
+        first = path.steps[0]
+        start = self._relation_source(first.relation, first.direction)
+        joined: FromClause = start.rows
+        reached: ColumnElement[str] = start.far
+        for index, step in enumerate(path.steps[1:], start=1):
+            source = self._relation_source(step.relation, step.direction)
+            hop = (
+                select(source.far.label("far"))
+                .select_from(source.rows)
+                .where(source.scope, source.near == reached)
+                .order_by(source.far)
+                .limit(self._path_fanout)
+                .lateral(f"path_step_{index}")
+            )
+            joined = joined.join(hop, true())
+            reached = hop.c.far
+        pairs = (
+            select(start.near.label("from_key"), reached.label("to_key"))
+            .select_from(joined)
+            .where(start.scope)
+            .distinct()
+            .subquery()
+        )
+        forward = direction is LinkDirection.FORWARD
+        near, far = (
+            (pairs.c.from_key, pairs.c.to_key) if forward else (pairs.c.to_key, pairs.c.from_key)
+        )
+        return LinkSource(pairs, near, far, _jsonb({}), true())
 
     def _far_join(self, far: FromClause, source: LinkSource, hop: Hop) -> ColumnElement[bool]:
         return and_(

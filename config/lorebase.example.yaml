@@ -606,12 +606,13 @@ store:
       fanout: 10000              # Links per Record and hop: >= traverse.max_fanout
       max_steps: 1000000         # Links walked plus seeds: >= traverse.max_links + max_seeds
       max_nodes: 100000          # Records of a neighborhood: >= traverse.max_nodes
-  traverse:                      # neighborhood caps
+  traverse:                      # neighborhood caps and path Derivation fan-out
     max_depth: 3                 # hops
     max_seeds: 50                # seed Records
     max_fanout: 50               # Links followed per Record and hop
     max_links: 2000              # Links walked, breadth first
     max_nodes: 200               # Records returned, nearest first
+    path_fanout: 100             # Links a path Derivation follows per intermediate Record
 
 # Static validation of schemas, shared by Keeper and the store: schema change sets, the commit
 # pipeline, merges and schema inference apply the same rules.

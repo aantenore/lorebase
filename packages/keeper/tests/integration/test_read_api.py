@@ -236,6 +236,57 @@ async def test_time_travel_reads_the_tree(http: httpx.AsyncClient, seeded: Seede
     assert unknown.status_code == 404
 
 
+async def _trait_pages(
+    http: httpx.AsyncClient, body: dict[str, Any], limit: int
+) -> tuple[list[tuple[str, str]], list[str | None]]:
+    """Every Record of a Trait query, page by page, and the cursors issued."""
+    found: list[tuple[str, str]] = []
+    cursors: list[str | None] = []
+    cursor = None
+    while True:
+        page = await post_ok(http, "/query", {**body, "limit": limit, "cursor": cursor})
+        found.extend((item["kind"], item["key"]) for item in page["items"])
+        cursor = page["next_cursor"]
+        cursors.append(cursor)
+        if cursor is None:
+            return found, cursors
+
+
+async def test_trait_queries_at_a_past_revision_match_the_head(
+    http: httpx.AsyncClient, seeded: Seeded
+) -> None:
+    at = seeded.revisions["data"]
+    everyone = sorted(
+        [("Supplier", r["supplier_code"]) for r in rows("supplier.csv")]
+        + [("Plant", r["plant_code"]) for r in rows("plant.csv")]
+    )
+    for order in ([], [{"attr": "key"}]):
+        body: dict[str, Any] = {"trait": "Located", "order_by": order, "select": ["country"]}
+        head, head_cursors = await _trait_pages(http, body, 7)
+        past, past_cursors = await _trait_pages(http, {**body, "at": at}, 7)
+        assert past == head
+        assert sorted(past) == everyone
+        assert past_cursors == head_cursors  # the same positions at the head and in the tree
+        if order:
+            assert [key for _, key in past] == sorted(key for _, key in past)
+
+    page = await post_ok(http, "/query", {"trait": "Located", "at": at, "limit": 3})
+    assert page["served_from"] == "tree"
+    assert all(
+        set(item["values"]) <= {"country", "city"} or item["values"] for item in page["items"]
+    )
+    refused = await http.post(
+        f"{BASE}/query",
+        json={
+            "trait": "Located",
+            "at": at,
+            "where": {"attr": "country", "op": "eq", "value": "IT"},
+        },
+    )
+    assert refused.status_code == 422
+    assert refused.json()["errors"][0]["code"] == "time_travel"
+
+
 async def test_list_with_where_order_select_and_cursor(http: httpx.AsyncClient) -> None:
     where = json.dumps({"attr": "country", "op": "in", "value": ["PL", "DE", "IT"]})
     seen: list[dict[str, Any]] = []
