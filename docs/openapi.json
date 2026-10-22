@@ -131,6 +131,226 @@
         ]
       }
     },
+    "/api/v1/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a browser sign-in",
+        "description": "Send the browser to the identity provider (authorization code flow with PKCE). The\nsign-in state travels in a short-lived, encrypted, HttpOnly cookie.",
+        "operationId": "login_api_v1_auth_login_get",
+        "parameters": [
+          {
+            "name": "return_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path on the web app's origin to return to after signing in.",
+              "title": "Return To"
+            },
+            "description": "Path on the web app's origin to return to after signing in."
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the identity provider."
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "return_to is not a path of the web app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Web sign-in is not enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a browser sign-in",
+        "description": "The provider's redirect after sign-in. Checks state, redeems the code with the PKCE\nverifier, verifies the ID token and its nonce, maps the user to a principal as for bearer\ntokens, and starts a session with a new id.",
+        "operationId": "callback_api_v1_auth_callback_get",
+        "responses": {
+          "302": {
+            "description": "Signed in: redirect to the return path with the session cookie. Failed: redirect to the app's error path with ?error=<code>."
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Web sign-in is not enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Describe the browser session",
+        "description": "Who is signed in, until when, and the CSRF token the web app sends with unsafe\nrequests. Requests authenticated by an API key or bearer token get 401.",
+        "operationId": "session_info_api_v1_auth_session_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session cookie.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Web sign-in is not enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign out of the browser session",
+        "description": "End the session of the cookie (CSRF token required), clear the cookie and return the\nprovider's end-session URL for RP-initiated logout. Without a session it only clears the\ncookie.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF check failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Web sign-in is not enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/api-keys": {
       "post": {
         "tags": [
@@ -13631,6 +13851,28 @@
         ],
         "title": "LogPage"
       },
+      "LogoutResult": {
+        "properties": {
+          "logout_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logout Url",
+            "description": "The provider's end-session URL; null when it offers none or no session was open."
+          }
+        },
+        "type": "object",
+        "required": [
+          "logout_url"
+        ],
+        "title": "LogoutResult",
+        "description": "Where to send the browser to sign out at the identity provider too."
+      },
       "MatchCondition": {
         "properties": {
           "match": {
@@ -17099,6 +17341,50 @@
           "tree"
         ],
         "title": "ServedFrom"
+      },
+      "SessionInfo": {
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "title": "Principal Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "csrf_header": {
+            "type": "string",
+            "title": "Csrf Header",
+            "description": "Header to send the CSRF token in on unsafe requests."
+          },
+          "csrf_token": {
+            "type": "string",
+            "title": "Csrf Token",
+            "description": "CSRF token of this session."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "End of the session's absolute lifetime."
+          },
+          "idle_timeout_s": {
+            "type": "integer",
+            "title": "Idle Timeout S",
+            "description": "The session ends after this long without use."
+          }
+        },
+        "type": "object",
+        "required": [
+          "principal_id",
+          "display_name",
+          "csrf_header",
+          "csrf_token",
+          "expires_at",
+          "idle_timeout_s"
+        ],
+        "title": "SessionInfo",
+        "description": "The browser session of the caller."
       },
       "SourceRunOut": {
         "properties": {

@@ -16,14 +16,17 @@ from lorebase_keeper.auth.config import AuthSettings
 from lorebase_keeper.auth.oidc import JwksCache, OidcVerifier
 from lorebase_keeper.auth.ports import AuthStore
 from lorebase_keeper.auth.principals import Authenticator
+from lorebase_keeper.auth.provider import ProviderClient
 from lorebase_keeper.auth.rbac import Authorizer
+from lorebase_keeper.auth.sessions import SessionManager
 
 logger = logging.getLogger("lorebase.keeper.auth")
 
 
 @dataclass
 class AuthRuntime:
-    """Authenticator, authorizer, key codec, audit writer and store of an application."""
+    """Authenticator, authorizer, key codec, audit writer, browser sessions and store of an
+    application."""
 
     settings: AuthSettings
     store: AuthStore | None
@@ -32,6 +35,7 @@ class AuthRuntime:
     codec: ApiKeyCodec | None
     audit_writer: AuditWriter | None
     clock: Callable[[], datetime]
+    sessions: SessionManager | None = None
     http: httpx.AsyncClient | None = None
     owns_http: bool = False
 
@@ -72,6 +76,15 @@ def build_runtime(
             http = httpx.AsyncClient(timeout=settings.oidc.http_timeout_s)
             owns_http = True
         verifier = OidcVerifier(settings.oidc, JwksCache(settings.oidc, http))
+    sessions: SessionManager | None = None
+    if settings.sessions.enabled and verifier and http and store is not None:
+        sessions = SessionManager(
+            settings.sessions,
+            store=store,
+            provider=ProviderClient(settings.sessions, settings.oidc, http),
+            verifier=verifier,
+            clock=clock,
+        )
 
     audit_writer = (
         AuditWriter(store, settings.audit, meter_provider)
@@ -86,6 +99,7 @@ def build_runtime(
             store=store,
             codec=codec,
             oidc=verifier,
+            sessions=sessions,
             clock=clock,
             meter_provider=meter_provider,
         ),
@@ -93,6 +107,7 @@ def build_runtime(
         codec=codec,
         audit_writer=audit_writer,
         clock=clock,
+        sessions=sessions,
         http=http,
         owns_http=owns_http,
     )

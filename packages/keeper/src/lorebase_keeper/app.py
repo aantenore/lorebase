@@ -36,6 +36,7 @@ from lorebase_keeper.readiness import (
 from lorebase_keeper.routes.admin import router as admin_router
 from lorebase_keeper.routes.documents import document_upload_path
 from lorebase_keeper.routes.domain_api import domain_routers
+from lorebase_keeper.routes.sessions import router as sessions_router
 from lorebase_keeper.routes.whoami import router as whoami_router
 from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import ConfigError, Settings, load_settings
@@ -165,6 +166,7 @@ def create_app(
     install_error_handlers(app, renderer)
     app.include_router(health_router)
     app.include_router(whoami_router, prefix=keeper.api_prefix)
+    app.include_router(sessions_router, prefix=keeper.api_prefix)
     app.include_router(admin_router, prefix=keeper.api_prefix)
     for router in domain_routers():  # last: branch routes match hierarchical names
         app.include_router(router, prefix=keeper.api_prefix)
@@ -190,7 +192,11 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(keeper.cors.allow_origins),
             allow_methods=list(keeper.cors.allow_methods),
-            allow_headers=[*keeper.cors.allow_headers, keeper.request_id_header],
+            allow_headers=[
+                *keeper.cors.allow_headers,
+                keeper.request_id_header,
+                *([keeper.auth.sessions.csrf_header] if keeper.auth.sessions.enabled else []),
+            ],
             expose_headers=[keeper.request_id_header, *EXPOSED_HEADERS],
             allow_credentials=keeper.cors.allow_credentials,
             max_age=keeper.cors.max_age_s,

@@ -54,7 +54,9 @@ async def current_principal(
     state = request.scope.setdefault("state", {})
     principal = state.get(_PRINCIPAL_KEY)
     if principal is None:
-        principal = await auth.authenticator.authenticate(request.headers, client_address(request))
+        principal = await auth.authenticator.authenticate(
+            request.headers, client_address(request), request.method
+        )
         state[_PRINCIPAL_KEY] = principal
     annotate(request, actor=principal.id)
     return cast(Principal, principal)
