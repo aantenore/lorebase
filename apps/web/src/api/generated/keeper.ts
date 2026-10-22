@@ -2890,10 +2890,18 @@ export interface components {
             attributes: string[];
             /** Groups */
             groups: components["schemas"]["DuplicateGroup"][];
-            /** Total Groups */
+            /**
+             * Total Groups
+             * @description Groups found, listed or not (`hidden` included).
+             */
             total_groups: number;
             /** Skipped */
             skipped?: ("too_many_records" | "disabled") | null;
+            /**
+             * Hidden
+             * @description Attributes with duplicates whose groups are not listed: the caller is not cleared for their values.
+             */
+            hidden?: components["schemas"]["HiddenDuplicates"][];
         };
         /** Edge */
         Edge: {
@@ -3322,6 +3330,30 @@ export interface components {
              */
             sampled_kinds: number;
         };
+        /**
+         * HiddenDuplicates
+         * @description Duplicates on an Attribute whose values the caller may not read: counted, not listed
+         *     (which Records share a value would tell that their values are equal).
+         */
+        HiddenDuplicates: {
+            /** Attribute */
+            attribute: string;
+            /**
+             * Unique
+             * @description The Attribute is unique: this is a violation, not a hint.
+             */
+            unique: boolean;
+            /**
+             * Groups
+             * @description Groups of Records sharing a value.
+             */
+            groups: number;
+            /**
+             * Records
+             * @description Records in those groups.
+             */
+            records: number;
+        };
         /** HistoryOut */
         HistoryOut: {
             /** Changes */
@@ -3350,7 +3382,7 @@ export interface components {
         IssueGroup: {
             /**
              * Code
-             * @description Validation issue code, e.g. value.required or value.pattern.
+             * @description Validation issue code, e.g. value.required or value.pattern; value.invalid for an Attribute whose values the caller may not read.
              */
             code: string;
             /**

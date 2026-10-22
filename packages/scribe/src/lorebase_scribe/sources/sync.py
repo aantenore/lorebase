@@ -24,6 +24,7 @@ records the counts without writing to any branch.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -118,9 +119,12 @@ PERMANENT_ERRORS: tuple[type[Exception], ...] = (
 # Watermarks -----------------------------------------------------------------------------------
 
 
+_LEGACY_BYTES = re.compile(r"b'.*'|b\".*\"", re.S)
+
+
 def encode_watermark(value: Any) -> dict[str, JsonValue]:
     """A watermark value as JSON with its type, so the next run binds the same native type."""
-    if isinstance(value, bytes | bytearray):
+    if isinstance(value, bytes | bytearray | memoryview):
         # SQL Server rowversion is binary(8): hex keeps it JSON-safe and bound back as bytes.
         return {"type": "bytes", "value": bytes(value).hex()}
     if isinstance(value, datetime):
@@ -144,6 +148,8 @@ def decode_watermark(stored: Any) -> Any:
     kind, text = stored.get("type"), str(stored["value"])
     if kind == "bytes":
         return bytes.fromhex(text)
+    if kind == "text" and _LEGACY_BYTES.fullmatch(text):
+        return None  # the repr of bytes stored by an older run: it cannot be bound, resync
     if kind == "timestamp":
         return datetime.fromisoformat(text)
     if kind == "date":
@@ -158,6 +164,7 @@ def decode_watermark(stored: Any) -> Any:
 
 
 def _later(current: Any, candidate: Any) -> Any:
+    candidate = bytes(candidate) if isinstance(candidate, bytearray | memoryview) else candidate
     if current is None:
         return candidate
     try:

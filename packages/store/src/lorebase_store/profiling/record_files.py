@@ -51,7 +51,7 @@ def _records_at(document: Any, path: str | None, name: str) -> list[Any]:
     """The array of records of a JSON document: the document itself, or the array at the dotted
     key ``path`` (``data.items``); null there is no records."""
     node = document
-    if path is not None:
+    if path is not None and not isinstance(document, list):
         for part in path.split("."):
             if not isinstance(node, dict) or part not in node:
                 raise RecordProfileError(f"{name}: no {path!r} in the document")

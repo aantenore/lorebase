@@ -356,6 +356,10 @@ POST /domains/{d}/schema:infer (docs/inference.md)
 | `keeper.schema_inference.file_formats` | `{.json: json, .jsonl: jsonl, .ndjson: jsonl, .parquet: parquet}` | how a suffix is read: json (array of objects), jsonl (one object per line), parquet (needs lorebase-keeper[parquet]); other accepted suffixes are CSV/TSV text |
 | `keeper.schema_inference.allowed_sources` | `[]` | secret references of Postgres URLs callers may name, e.g. secret://env/ERP_DSN; empty disables Postgres inference; the default of every Domain not in domain_sources |
 | `keeper.schema_inference.domain_sources` | `{}` | per-Domain lists replacing allowed_sources for that Domain, e.g. {supply: [secret://env/ERP_DSN], hr: []}; [] = none |
+| `keeper.schema_inference.allowed_schemas` | `{}` | MySQL / SQL Server sources: schemas a source may be profiled in, e.g. {"secret://env/ERP_DSN": [dbo]}; unlisted = any |
+| `keeper.schema_inference.preview_rows` | `20` | rows of a schema:preview when the request names none |
+| `keeper.schema_inference.preview_max_rows` | `200` | most rows a preview may ask for |
+| `keeper.schema_inference.preview_max_cell_chars` | `1000` | longest text returned per value of a preview |
 | `keeper.schema_inference.max_issues` | `500` | issues listed in one response |
 
 #### `keeper.schema_inference.options`
@@ -852,7 +856,9 @@ MySQL, MariaDB and SQL Server tables (drivers: keeper extras)
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `store.profiling.sql.sample_rows` | `10000` | rows read per table (LIMIT / TOP) |
-| `store.profiling.sql.max_tables` | `200` | tables profiled per request |
+| `store.profiling.sql.max_tables` | `50` | tables profiled per request |
+| `store.profiling.sql.total_timeout_s` | `120` | all the tables of a request |
+| `store.profiling.sql.max_value_chars` | `1000` | longer text is cut; unbounded binary and unknown types are skipped |
 | `store.profiling.sql.statement_timeout_ms` | `15000` |  |
 | `store.profiling.sql.connect_timeout_s` | `10.0` |  |
 | `store.profiling.sql.count_rows` | `true` | count(\*) per table so a partial sample is known as such |

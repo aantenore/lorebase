@@ -96,3 +96,9 @@ def test_a_wide_parquet_file_is_refused() -> None:
     data = _parquet([{"a": 1, "b": 2, "c": 3}])
     with pytest.raises(RecordProfileError, match="more than the 2 columns"):
         profile_parquet_bytes(data, "wide.parquet", RecordProfilingSettings(max_columns=2))
+
+
+def test_records_path_with_a_bare_array_uses_the_array() -> None:
+    data = json.dumps(ROWS).encode()
+    profile = profile_json_bytes(data, "s.json", RecordProfilingSettings(), "data.items")
+    assert profile.row_count == 2

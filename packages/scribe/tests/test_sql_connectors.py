@@ -28,7 +28,7 @@ from lorebase_scribe.sources import (
 from lorebase_scribe.sources import sql as sql_module
 from lorebase_scribe.sources.mapping import SourceDefinitionError
 from lorebase_scribe.sources.sql import mssql_orderable
-from lorebase_scribe.sources.sync import decode_watermark, encode_watermark
+from lorebase_scribe.sources.sync import _later, decode_watermark, encode_watermark
 from lorebase_store.settings import RecordProfilingSettings
 
 CONNECTION = "secret://env/TEST_SQL_DSN"
@@ -481,3 +481,47 @@ def test_rowversion_watermarks_round_trip_as_hex_bytes(supply_schema: Schema) ->
     assert parameters == {"since": since}
     assert isinstance(parameters["since"], bytes)
     assert "[rv] > :since ORDER BY [rv]" in sql
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        # Aliases and qualified names that look like clauses are not clauses.
+        (
+            "SELECT a AS top FROM t ORDER BY a",
+            "SELECT a AS top FROM t ORDER BY a\nOFFSET 0 ROWS",
+        ),
+        (
+            "SELECT a AS offset, b AS [for] FROM t ORDER BY a",
+            "SELECT a AS offset, b AS [for] FROM t ORDER BY a\nOFFSET 0 ROWS",
+        ),
+        ("SELECT t.top FROM t ORDER BY t.top", "SELECT t.top FROM t ORDER BY t.top\nOFFSET 0 ROWS"),
+        # TOP of a set operation's first SELECT does not cover the ORDER BY of the union.
+        (
+            "SELECT TOP 1 a FROM t UNION SELECT a FROM u ORDER BY a",
+            "SELECT TOP 1 a FROM t UNION SELECT a FROM u ORDER BY a\nOFFSET 0 ROWS",
+        ),
+        ("SELECT DISTINCT TOP 3 a FROM t ORDER BY a", "SELECT DISTINCT TOP 3 a FROM t ORDER BY a"),
+        ("SELECT a FROM t ORDER BY a FETCH FIRST 1 ROWS ONLY", None),
+        ("SELECT a FROM t ORDER BY a FOR XML AUTO", None),
+        # OPTION stays last.
+        (
+            "SELECT a FROM t ORDER BY a OPTION (MAXDOP 1)",
+            "SELECT a FROM t ORDER BY a\nOFFSET 0 ROWS OPTION (MAXDOP 1)",
+        ),
+        # An ORDER BY inside OVER (...) is not the query's.
+        ("SELECT ROW_NUMBER() OVER (ORDER BY a) AS n FROM t", None),
+    ],
+)
+def test_mssql_order_by_clause_detection(query: str, expected: str | None) -> None:
+    assert mssql_orderable(query) == (query if expected is None else expected)
+
+
+def test_watermarks_of_older_runs_and_buffers() -> None:
+    assert encode_watermark(memoryview(b"\x00\x01")) == {"type": "bytes", "value": "0001"}
+    assert encode_watermark(bytearray(b"\x00\x01")) == {"type": "bytes", "value": "0001"}
+    # A rowversion stored as the text of its Python repr cannot be bound: resync in full.
+    assert decode_watermark({"type": "text", "value": "b'\\x00\\x01'"}) is None
+    assert decode_watermark({"type": "text", "value": "2026-01-01"}) == "2026-01-01"
+    assert _later(None, memoryview(b"\x01")) == b"\x01"
+    assert _later(b"\x01", memoryview(b"\x02")) == b"\x02"

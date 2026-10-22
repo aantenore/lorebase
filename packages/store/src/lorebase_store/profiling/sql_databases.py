@@ -16,15 +16,28 @@ from __future__ import annotations
 import asyncio
 import importlib
 import math
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from sqlalchemy import URL, Connection, column, create_engine, func, inspect, make_url, select, text
+from sqlalchemy import (
+    URL,
+    ColumnElement,
+    Connection,
+    column,
+    create_engine,
+    func,
+    inspect,
+    make_url,
+    select,
+    text,
+)
 from sqlalchemy import table as sql_table
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
+from sqlalchemy.types import BINARY, VARBINARY, LargeBinary, NullType, String, TypeEngine
 
 from lorebase_core.infer import DeclaredForeignKey, TableProfile
 from lorebase_store.profiling.records import RecordProfileError, RecordProfiler
@@ -89,21 +102,61 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _check_schema(
+    inspector: Any, schema: str | None, allowed: Sequence[str] | None, max_chars: int = 128
+) -> None:
+    """Refuse a schema that is not a plain name of this database's catalog, or that is not
+    among the `allowed` ones (the connection's own schema when none is named)."""
+    if schema is not None:
+        if not schema or len(schema) > max_chars or "." in schema or not schema.isprintable():
+            raise SqlProfileError("the schema is not a plain schema name")
+        if schema not in inspector.get_schema_names():
+            raise SqlProfileError(f"unknown schema {schema!r}")
+    if allowed is not None:
+        effective = schema if schema is not None else inspector.default_schema_name
+        if effective not in allowed:
+            raise SqlProfileError("the schema is not allowed for this source")
+
+
+def _readable(column_name: str, sql_type: TypeEngine[Any], source: Any, limit: int) -> Any:
+    """The select item for a column, bounded: long or unbounded text is cut to `limit`
+    characters, binary columns without a small declared length and columns of unknown type
+    are not read (`None`)."""
+    found = source.c[column_name]
+    if isinstance(sql_type, NullType):
+        return None
+    if isinstance(sql_type, LargeBinary | BINARY | VARBINARY):
+        length = getattr(sql_type, "length", None)
+        return found if length is not None and length <= limit else None
+    if isinstance(sql_type, String):
+        length = sql_type.length
+        if length is None or length > limit:
+            return func.substring(found, 1, limit).label(column_name)
+    return found
+
+
 def _profile_tables(
     connection: Connection,
     schema: str | None,
     names: Sequence[str] | None,
     settings: SqlProfilingSettings,
     records: RecordProfilingSettings,
+    allowed_schemas: Sequence[str] | None = None,
 ) -> list[TableProfile]:
     inspector = inspect(connection)
+    _check_schema(inspector, schema, allowed_schemas)
+    wanted = set(names or ())
+    if len(wanted) > settings.max_tables:
+        raise SqlProfileError(
+            f"{len(wanted)} tables requested, more than the {settings.max_tables} allowed"
+        )
     available = sorted(inspector.get_table_names(schema=schema))
-    if names:
-        missing = sorted(set(names) - set(available))
+    if wanted:
+        missing = sorted(wanted - set(available))
         if missing:
             where = f"schema {schema!r}" if schema else "the database"
             raise SqlProfileError(f"unknown tables in {where}: {', '.join(missing)}")
-        chosen = [name for name in available if name in set(names)]
+        chosen = [name for name in available if name in wanted]
     else:
         chosen = available
     if len(chosen) > settings.max_tables:
@@ -111,12 +164,26 @@ def _profile_tables(
             f"{len(chosen)} tables requested, more than the {settings.max_tables} allowed"
         )
     profiles = []
+    deadline = time.monotonic() + settings.total_timeout_s
     for name in chosen:
+        if time.monotonic() > deadline:
+            raise SqlProfileError(
+                f"reading the tables took longer than the {settings.total_timeout_s:g} s allowed"
+            )
         info = inspector.get_columns(name, schema=schema)
-        columns = [str(item["name"]) for item in info]
-        source = sql_table(name, *(column(c) for c in columns), schema=schema)
+        source = sql_table(name, *(column(str(item["name"])) for item in info), schema=schema)
+        limit = settings.max_value_chars
+        items = [
+            (str(item["name"]), _readable(str(item["name"]), item["type"], source, limit))
+            for item in info
+        ]
+        read: list[tuple[str, ColumnElement[Any]]] = [(n, e) for n, e in items if e is not None]
+        if not read:
+            continue  # nothing readable: no columns, or only unreadable ones
+        columns = [n for n, _ in read]
         profiler = RecordProfiler(records)
-        for row in connection.execute(select(*source.columns).limit(settings.sample_rows)):
+        query = select(*(e for _, e in read)).select_from(source).limit(settings.sample_rows)
+        for row in connection.execute(query):
             profiler.add({c: _plain(value) for c, value in zip(columns, row, strict=True)})
         try:
             profile = profiler.profile(name, columns)
@@ -186,6 +253,7 @@ def _mssql_work(
     run: Callable[[Connection], list[TableProfile]],
     engine_factory: Callable[..., Any],
 ) -> list[TableProfile]:
+    # pymssql cannot send ApplicationIntent=ReadOnly: the login must be able to read only.
     timeout_ms = int(settings.statement_timeout_ms)
     engine = engine_factory(
         url,
@@ -212,15 +280,18 @@ async def profile_sql_database(
     *,
     schema: str | None = None,
     tables: Sequence[str] | None = None,
+    allowed_schemas: Sequence[str] | None = None,
     engine_factory: Callable[..., Any] | None = None,
 ) -> list[TableProfile]:
     """Profiles of ``tables`` (default: every table) of a MySQL, MariaDB or SQL Server database
-    named by the connection URL ``location``; ``schema`` defaults to the connection's own.
-    ``engine_factory`` replaces the engine constructor (tests)."""
+    named by the connection URL ``location``; ``schema`` defaults to the connection's own and
+    must be a plain name found in the catalog (and in ``allowed_schemas`` when given; the
+    connection's own schema is then checked too). ``engine_factory`` replaces the engine
+    constructor (tests)."""
     url = _url(dialect, location)
 
     def run(connection: Connection) -> list[TableProfile]:
-        return _profile_tables(connection, schema, tables, settings, records)
+        return _profile_tables(connection, schema, tables, settings, records, allowed_schemas)
 
     if dialect == "mysql":
         return await _profile_mysql(url, settings, run, engine_factory or create_async_engine)

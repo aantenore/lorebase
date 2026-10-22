@@ -43,6 +43,8 @@ MULTIPART = "multipart/form-data"
 #: Form fields besides the files: `options` and `records_path`.
 _MAX_FORM_FIELDS = 2
 SQL_KEYS: tuple[SqlDialect, ...] = ("mysql", "mssql")
+#: Most table names a request may list (the profiled tables are bounded by the settings).
+MAX_TABLE_NAMES = 1000
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks schema.write in the Domain."},
@@ -152,8 +154,10 @@ class PostgresSourceIn(BaseModel):
 
     dsn: str = Field(description="Secret reference, e.g. secret://env/ERP_DSN; never a URL.")
     schema_: str = Field(default="public", alias="schema", min_length=1, max_length=63)
-    tables: list[str] = Field(
-        default_factory=list, description="Tables to profile; empty: every table of the schema."
+    tables: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        default_factory=list,
+        max_length=MAX_TABLE_NAMES,
+        description="Tables to profile; empty: every table of the schema.",
     )
 
 
@@ -168,8 +172,10 @@ class SqlSourceIn(BaseModel):
         max_length=128,
         description="Schema (SQL Server) or database (MySQL); default: the connection's own.",
     )
-    tables: list[str] = Field(
-        default_factory=list, description="Tables to profile; empty: every table."
+    tables: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        default_factory=list,
+        max_length=MAX_TABLE_NAMES,
+        description="Tables to profile; empty: every table.",
     )
 
 
