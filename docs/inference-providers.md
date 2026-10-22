@@ -86,9 +86,13 @@ An Ollama already running on the host is reached at `http://host.docker.internal
 `--no-deps` so that the Ollama container is not started. A hosted key kept in a file goes through
 the overlay `deploy/compose/hosted-model.yaml` ([quickstart](quickstart.md#4-use-a-real-model)).
 
-The stock image has no local models. To run fastembed and the extractors in containers, build
-with `UV_SYNC_ARGS="--extra fastembed --extra local-extractors"` (set it in
-`.env`; see `.env.example`).
+The backend image has no local models. Scribe and Guide run on a second image, `lorebase-ml`
+(target `backend-ml` of `deploy/docker/backend.Dockerfile`, 391 MB larger), that carries fastembed
+and the embedding model `EMBEDDING_MODEL` (default `BAAI/bge-small-en-v1.5`) downloaded at build
+time: embeddings work in compose and Helm with no setting and no network at run time. A model other
+than the baked one downloads on first use into `embeddings.cache_dir`, which needs a writable
+volume (the root file system is read-only). The tier 1 extractors are still an extra: build with
+`UV_SYNC_ARGS="--extra local-extractors"` (set it in `.env`; see `.env.example`).
 
 ## Switch to a paid provider: configuration only
 

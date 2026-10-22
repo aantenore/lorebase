@@ -28,7 +28,7 @@ spec:
   "ctx" .
   "component" "guide"
   "cfg" .Values.guide
-  "image" (include "lorebase.backendImage" .)
+  "image" (include "lorebase.mlImage" .)
   "pullPolicy" .Values.image.pullPolicy
   "command" .Values.guide.command
   "port" .Values.guide.port

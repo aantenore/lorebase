@@ -33,6 +33,8 @@ governed writes through two Operations.
   link Attributes), `PurchaseOrder issued_to Supplier` (many to one, derived from the
   `supplier` Attribute), `PurchaseOrder for_part Part`, `PurchaseOrder delivered_to Plant`,
   `Contract with_supplier Supplier` and `RiskFlag flags Supplier` (many to one).
+- **Semantic search:** `Supplier` and `Part` have an embedding template (`search.embedding_template`),
+  so Scribe embeds them when the Domain is loaded (quickstart, `make up PROFILES=assistant`).
 - **Operations:** `flag_supplier_risk` (critical flags go to a Proposal) and `approve_contract`
   (contracts above 500000 go to a Proposal). Preconditions, step values and review policies are
   CEL source strings; static validation needs `SchemaRules(allow_expressions=True)` (Keeper and

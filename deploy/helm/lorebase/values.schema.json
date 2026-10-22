@@ -224,6 +224,21 @@
     "image": {
       "$ref": "#/definitions/image"
     },
+    "imageMl": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "imagePullSecrets": {
       "type": "array",
       "items": {

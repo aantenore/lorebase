@@ -255,6 +255,11 @@ and Proposal for all the ids), `reject ID...` and `merge`. The Python client has
 `client.schema.suggestions(...)`, `iterate_suggestions(...)`, `decide_suggestions(...)` and
 `merge_suggestions()`.
 
+A suggestion is listed from `min_support` observations, and one document counts once, so
+uploading a single document lists nothing (`--weak`, or `all=true`, shows the pending ones). The
+quickstart's `make example-documents` uploads the contract C-3099 and the four example documents
+with the rules tier so that suggestions appear ([quickstart](quickstart.md#27-guide-scribe-and-the-example-documents)).
+
 On the four example documents, with the rules only and `min_support: 2`, the supplier review
 suggests an Attribute `ends` of Supplier (three table rows, typed `date`) and a Relation
 `sole_source_parts` from Supplier to Part; the quality notice suggests a Kind `QualityNotice`

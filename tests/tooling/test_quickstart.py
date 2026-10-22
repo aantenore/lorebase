@@ -78,10 +78,66 @@ def test_env_keeps_set_values_and_fills_placeholders(tmp_path: Path) -> None:
 
 def test_up_starts_the_web_service_and_prints_its_url() -> None:
     text = SCRIPT.read_text()
-    assert "--wait postgres migrate keeper web" in text
+    assert "local args=(postgres migrate keeper web)" in text
     assert "LOREBASE_WEB_PORT" in text
     env = values(ROOT / ".env.example")
     assert env["LOREBASE_WEB_PORT"] != env["KEEPER_HOST_PORT"]
+
+
+def run_script(
+    *args: str, profiles: str | None = None, env_file: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    if shutil.which("bash") is None:
+        pytest.skip("bash not installed")
+    env = {"PATH": os.environ["PATH"]}
+    if profiles is not None:
+        env["PROFILES"] = profiles
+    if env_file is not None:
+        env["LOREBASE_ENV_FILE"] = str(env_file)
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_profiles_other_than_assistant_are_refused(tmp_path: Path) -> None:
+    result = run_script("up", profiles="assistant observability", env_file=tmp_path / ".env")
+    assert result.returncode == 2
+    assert "observability is not supported" in result.stderr
+
+
+def test_up_adds_guide_and_scribe_with_the_assistant_profile() -> None:
+    text = SCRIPT.read_text()
+    assert "if has_profile assistant; then args+=(guide scribe); fi" in text
+    assert "assistant.yaml" in text
+    assert (COMPOSE_FILE.parent / "assistant.yaml").is_file()
+
+
+def test_down_stops_every_profile_up_can_start() -> None:
+    text = SCRIPT.read_text()
+    down = text[text.index("  down)") : text.index("  clean)")]
+    assert 'compose --profile "*" down' in down
+
+
+def test_makefile_passes_profiles_to_up() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    assert 'PROFILES="$(PROFILES)" scripts/quickstart.sh up' in makefile
+    assert "up-assistant:" in makefile
+    assert "PROFILES=assistant scripts/quickstart.sh up" in makefile
+    assert "example-documents:" in makefile
+
+
+def test_example_documents_exist_and_share_a_suggestion() -> None:
+    text = SCRIPT.read_text()
+    for path in re.findall(r'"\$ROOT/(examples/[^"]+\.md)"', text):
+        assert (ROOT / path).is_file(), path
+    # `buyer` of C-3099 and C-3025 is what two documents support (schema.suggestions.min_support).
+    for name in ("five_day_demo/documents/contract-c-3099", "supply/documents/contract-c-3025"):
+        assert any((ROOT / "examples").glob(f"{name}*.md"))
 
 
 def test_unknown_command_prints_usage() -> None:
@@ -94,7 +150,7 @@ def test_unknown_command_prints_usage() -> None:
     assert "quickstart.sh data" in result.stderr
 
 
-def render(*files: Path) -> dict[str, Any]:
+def render(*files: Path, profiles: tuple[str, ...] = ("local-models",)) -> dict[str, Any]:
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("docker CLI not installed")
@@ -109,7 +165,7 @@ def render(*files: Path) -> dict[str, Any]:
         "LOREBASE_WEBHOOK_KEY": "w" * 64,
     }
     result = subprocess.run(
-        [*args, "--profile", "local-models", "config", "--format", "json"],
+        [*args, *(x for p in profiles for x in ("--profile", p)), "config", "--format", "json"],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -134,6 +190,26 @@ def test_hosted_model_overlay_reads_the_key_from_a_secret_file() -> None:
         # The rest of the model settings still come from the main file.
         assert service["environment"]["LLM_BASE_URL"] == "http://ollama:11434/v1"
     assert config["secrets"]["llm_api_key"]["file"] == str(ROOT / "secrets" / "llm_api_key")
+
+
+def test_scribe_and_guide_use_the_embedding_image() -> None:
+    services = render(COMPOSE_FILE, profiles=("assistant",))["services"]
+    for name in ("scribe", "guide"):
+        service = services[name]
+        assert service["build"]["target"] == "backend-ml"
+        assert service["image"] == "lorebase-ml:dev"
+    assert "target" not in services["keeper"]["build"]
+    assert services["keeper"]["image"] == "lorebase:dev"
+
+
+def test_assistant_overlay_points_the_web_app_at_guide() -> None:
+    config = render(
+        COMPOSE_FILE, ROOT / "deploy" / "compose" / "assistant.yaml", profiles=("assistant",)
+    )
+    env = config["services"]
+    assert env["web"]["environment"]["VITE_GUIDE_URL"] == "/guide"
+    anonymous = env["guide"]["environment"]["LOREBASE__GUIDE__HTTP__ALLOW_ANONYMOUS"]
+    assert anonymous == "true"
 
 
 def test_model_services_reach_a_model_server_on_the_host() -> None:

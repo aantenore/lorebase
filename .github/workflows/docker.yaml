@@ -39,6 +39,24 @@ jobs:
           test "$uid" != "0"
       - name: The Keeper package imports
         run: docker run --rm lorebase:ci python -c "import lorebase_keeper, lorebase_store"
+      - name: Build the embedding image (no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/docker/backend.Dockerfile
+          target: backend-ml
+          push: false
+          load: true
+          tags: lorebase-ml:ci
+          cache-from: type=gha,scope=backend-ml
+          cache-to: type=gha,scope=backend-ml,mode=max
+      - name: The embedding image embeds offline with a read-only file system
+        run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp lorebase-ml:ci python -c
+          "from lorebase_inference.settings import EmbeddingSettings; from fastembed import TextEmbedding;
+          s = EmbeddingSettings(); import os;
+          m = TextEmbedding(model_name=s.model, cache_dir=os.environ['FASTEMBED_CACHE_PATH']);
+          assert len(next(iter(m.embed(['probe'])))) == s.dims"
 
   compose-config:
     name: Validate compose file

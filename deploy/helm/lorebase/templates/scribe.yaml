@@ -10,7 +10,7 @@
   "ctx" .
   "component" "scribe"
   "cfg" .Values.scribe
-  "image" (include "lorebase.backendImage" .)
+  "image" (include "lorebase.mlImage" .)
   "pullPolicy" .Values.image.pullPolicy
   "command" .Values.scribe.command
   "port" 0

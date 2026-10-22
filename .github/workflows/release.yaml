@@ -79,6 +79,14 @@ jobs:
             sbom_artifact: sbom-python
             sbom_file: sbom-python.cdx.json
             build_args: ""
+          # Scribe and Guide: the backend image plus fastembed and a baked embedding model.
+          - name: backend-ml
+            image: ghcr.io/aantenore/lorebase-ml
+            dockerfile: deploy/docker/backend.Dockerfile
+            target: backend-ml
+            sbom_artifact: sbom-python
+            sbom_file: sbom-python.cdx.json
+            build_args: ""
           - name: web
             image: ghcr.io/aantenore/lorebase-web
             dockerfile: deploy/docker/web.Dockerfile
@@ -115,6 +123,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
