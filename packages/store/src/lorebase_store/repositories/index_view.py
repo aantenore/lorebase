@@ -24,7 +24,7 @@ from lorebase_core.model import Link, Record, RecordIdentity, RelationBacking, S
 from lorebase_core.model.record import LinkIdentity
 from lorebase_core.types import AttributeType, CanonicalValue
 from lorebase_core.validate import DataChange, LinkUpsert, RecordDelete, RecordUpsert
-from lorebase_store.bulk import chunks
+from lorebase_store.bulk import chunks, pairs_in
 from lorebase_store.layout import BranchLayout, load_layout_sync
 
 Side = Literal["from", "to"]
@@ -252,7 +252,7 @@ class MaterializedIndexView:
                 ).where(
                     self._scope(links),
                     links.c.relation_id == relation_id,
-                    tuple_(links.c.from_key, links.c.to_key).in_(chunk),
+                    pairs_in(links.c.from_key, links.c.to_key, chunk),
                 )
                 for from_key, to_key, values, lineage, digest in self._execute(query):
                     self._links[(relation_id, from_key, to_key)] = LinkState(
