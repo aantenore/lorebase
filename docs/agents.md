@@ -232,7 +232,8 @@ provenance; a resolved Conflict shows `merge_resolution`.
 Both read the branch history table, one index range per Record, so their cost follows the
 number of changes of the Record, not the length of the branch; lineage reads at most
 `read.history.lineage_max_changes` of the newest changes to find the Revision behind each
-value. Both are served at branch heads only (no `at`), authorized like a Record read (the
+value. History also takes `at`: the changes up to that Revision, read from a snapshot of it;
+lineage is served at branch heads only. Both are authorized like a Record read (the
 Kind of the path must be readable; only that Kind's Attributes appear) and cached by Revision
 with an `ETag`. CLI: `lorebase record history|lineage KIND KEY`; MCP: `lorebase_history`,
 `lorebase_lineage`.
@@ -510,8 +511,8 @@ clearances of a webhook are fixed when it is created, so delete and recreate it 
 
 `GET /health?branch=` and `GET /kinds/{kind}/health?branch=` (add `format=markdown` for text
 to paste into a prompt) say how sound the head of a branch is before you build on it. They are
-computed when asked, from the materialized rows, and cached under the Revision they describe.
-Per Kind:
+computed when asked, from the materialized rows, and cached under the Revision they describe;
+with `at` they describe an earlier Revision, read from a snapshot of it. Per Kind:
 
 - **records** and the **last change** (the latest Revision that touched the Kind);
 - **violations**: Records re-validated against the current schema (types, canonical form,

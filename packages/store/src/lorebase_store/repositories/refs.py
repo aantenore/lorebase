@@ -257,8 +257,10 @@ class RefRepository:
         base_branch: str | None = None,
         base_revision: bytes | None = None,
         base_generation: int | None = None,
+        log: bool = True,
     ) -> RefRow:
-        """Insert a ref at version 1 and log its creation (overlays name their base)."""
+        """Insert a ref at version 1 and, unless `log` is false, log its creation (overlays
+        name their base)."""
         row = RefRow(
             domain_id=self._domain,
             name=name,
@@ -289,7 +291,8 @@ class RefRepository:
                 base_generation=row.base_generation,
             )
         )
-        await self._append_log(name, None, head, reason=reason, actor=created_by, at=created_at)
+        if log:
+            await self._append_log(name, None, head, reason=reason, actor=created_by, at=created_at)
         return row
 
     async def overlays_of(self, base: str) -> list[RefRow]:

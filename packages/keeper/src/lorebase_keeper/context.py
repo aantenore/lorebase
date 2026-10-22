@@ -219,7 +219,7 @@ async def resolve_revision(
         if _REVISION_ID.match(at):
             return ResolvedRevision(await require_revision(session, domain.id, from_hex(at)), None)
         ref = await refs.get(at)
-        if ref is None:
+        if ref is None or ref.kind is RefKind.SNAPSHOT:
             raise ProblemError(NOT_FOUND, f"No Revision, tag or branch named {at!r}.")
         return ResolvedRevision(await require_revision(session, domain.id, ref.head), ref)
     ref = await require_branch(session, domain.id, branch or domain.default_branch)

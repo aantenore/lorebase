@@ -774,6 +774,9 @@ read:
     max_edges: 5000
   time_travel:
     max_scan_entries: 100000     # largest Kind or Relation partition listed at a Revision
+    snapshot_max_entries: 100000 # largest Revision (Records + Links) materialized for filters,
+                                 # search, traversal, history and health at it; larger refused
+    snapshot_max_per_domain: 4   # snapshots kept per Domain, oldest unused dropped first
   diff:
     max_changes: 100000          # larger diffs are refused; narrow them with kinds/relations
     page:

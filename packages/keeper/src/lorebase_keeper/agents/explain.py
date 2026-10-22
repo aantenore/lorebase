@@ -34,9 +34,9 @@ from lorebase_keeper.agents.pack import ordered_attributes, ordered_values
 from lorebase_keeper.agents.settings import ExplainSettings
 from lorebase_keeper.reading.history import REVISIONS
 from lorebase_keeper.reading.points import ReadPoint
-from lorebase_keeper.reading.problems import tree_unsupported
 from lorebase_keeper.reading.records import compiler_for, fetch_record
 from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import record_out, relation_name
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import metadata
@@ -240,7 +240,7 @@ async def _links(
                 far,
                 and_(
                     far.c.domain_id == literal(point.domain.id),
-                    far.c.branch == literal(point.branch),
+                    far.c.branch == literal(point.layout.branch),
                     far.c.kind_id == literal(hop.far.kind_ids[0]),
                     far.c.key == source.far,
                 ),
@@ -294,7 +294,7 @@ async def _link_creations(
         .join(r, (r.c.domain_id == h.c.domain_id) & (r.c.id == h.c.revision_id))
         .where(
             h.c.domain_id == point.domain.id,
-            h.c.branch == point.branch,
+            h.c.branch == point.layout.branch,
             h.c.old_hash.is_(None),
             tuple_(h.c.partition, h.c.element_key).in_(list(elements)),
         )
@@ -356,14 +356,13 @@ async def explain_record(
     settings: ExplainSettings,
 ) -> dict[str, Any]:
     """The explanation document of `kind/key` (see module doc)."""
-    if not point.materialized:
-        raise tree_unsupported("Explanations")
+    point = await with_rows(session, runtime, point, "Explanations")
     fetched = await fetch_record(session, runtime, point, kind, key)
     row = fetched.row
     record = record_out(point.schema, row, masking=point.masking)
     writes = runtime.store_settings.writes
     history = await MaterializedRepository(
-        session, point.domain.id, point.branch, writes=writes, layout=point.layout
+        session, point.domain.id, point.layout.branch, writes=writes, layout=point.layout
     ).history(kind_partition(kind.id), key)
     links, truncated = await _links(session, runtime, point, kind, key, row, settings.max_links)
     explicit = [

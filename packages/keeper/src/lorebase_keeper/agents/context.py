@@ -46,11 +46,12 @@ from lorebase_keeper.agents.settings import ContextSettings
 from lorebase_keeper.reading.compiler import record_columns
 from lorebase_keeper.reading.history import REVISIONS
 from lorebase_keeper.reading.points import ReadPoint, not_found
-from lorebase_keeper.reading.problems import invalid, tree_unsupported
+from lorebase_keeper.reading.problems import invalid
 from lorebase_keeper.reading.records import plan_query, require_kind, run_query
 from lorebase_keeper.reading.requests import SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.search import search
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import RecordOut, link_values, record_out
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY, PartitionType, parse_partition
 from lorebase_store.reads import Direction
@@ -151,7 +152,7 @@ async def fetch_rows(
         result = await session.execute(
             select(*record_columns(r)).where(
                 r.c.domain_id == point.domain.id,
-                r.c.branch == point.branch,
+                r.c.branch == point.layout.branch,
                 r.c.kind_id == kind_id,
                 r.c.key.in_(keys),
             )
@@ -355,7 +356,7 @@ async def recent_changes(
         .join(r, (r.c.domain_id == h.c.domain_id) & (r.c.id == h.c.revision_id))
         .where(
             h.c.domain_id == point.domain.id,
-            h.c.branch == point.branch,
+            h.c.branch == point.layout.branch,
             tuple_(h.c.partition, h.c.element_key).in_(list(elements)),
         )
         .order_by(r.c.generation.desc(), h.c.partition, h.c.element_key)
@@ -436,9 +437,7 @@ async def build_pack(
     settings: ContextSettings,
 ) -> tuple[bytes, str]:
     """The rendered pack and its media type."""
-    point = context.point
-    if not point.materialized:
-        raise tree_unsupported("Context packs")
+    point = await with_rows(session, runtime, context.point, "Context packs")
     bounds = effective(request, settings, runtime)
     addresses = await seed_addresses(session, runtime, point, request, settings)
     rows = await fetch_rows(session, point, addresses)

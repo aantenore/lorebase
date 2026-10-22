@@ -57,7 +57,7 @@ async def scan_branch(
     relations: Sequence[Relation],
 ) -> Findings:
     """Run every check for `kinds` and `relations` at the head of the point's branch."""
-    where = scan.Branch(point.domain.id, point.branch, point.layout)
+    where = scan.Branch(point.domain.id, point.layout.branch, point.layout)
     schema = point.schema
     await session.execute(
         select(func.set_config("statement_timeout", str(settings.statement_timeout_ms), True))

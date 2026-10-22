@@ -1,13 +1,14 @@
 """Read API (design 8, 11.1): Records, Links, query, traversal, neighborhoods and search.
 
-Every read takes `branch` (default: the Domain's default branch); Record and Link reads also
-take `at`, a Revision id or tag, served from the Revision tree. Responses carry the Revision
-they were served from in `revision` and in the `Lorebase-Revision` header, and `served_from`
+Every read takes `branch` (default: the Domain's default branch) and `at`, a Revision id or
+tag, served from the Revision tree (key reads and listings ordered by key) or from a snapshot
+of the Revision (everything else, `reading.snapshots`). Responses carry the Revision they were
+served from in `revision` and in the `Lorebase-Revision` header, and `served_from`
 (`materialized` or `tree`). GET reads carry an `ETag` bound to that Revision, answer
 `If-None-Match` with 304 and are cached per Revision (`reading.caching`); at a branch head
 the 304 is decided from the head Revision alone (`unchanged_head`), before the read point is
-resolved. POST reads carry an `ETag` too. The history and lineage of a Record
-(`reading.record_history`) are served at branch heads only.
+resolved. POST reads carry an `ETag` too. The lineage of a Record (`reading.record_history`)
+is served at branch heads only.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from lorebase_keeper.reading.points import (
 from lorebase_keeper.reading.problems import invalid, request_problem
 from lorebase_keeper.reading.record_history import RecordHistoryOut, RecordLineageOut
 from lorebase_keeper.reading.requests import (
+    AT,
     NeighborhoodRequest,
     QueryRequest,
     SearchRequest,
@@ -70,7 +72,7 @@ Branch = Annotated[
 ]
 At = Annotated[
     str | None,
-    Query(description="Revision id or tag to read at (time travel, served from the tree)."),
+    Query(description=AT),
 ]
 Limit = Annotated[int | None, Query(ge=1, description="Page size.")]
 Cursor = Annotated[str | None, Query(max_length=4096, description="Opaque page cursor.")]
@@ -289,6 +291,7 @@ async def get_record_history(
     session: ReadSessionDep,
     request: Request,
     branch: Branch = None,
+    at: At = None,
     values: Annotated[
         bool, Query(description="Add the values before and after each change.")
     ] = False,
@@ -296,10 +299,13 @@ async def get_record_history(
     cursor: Cursor = None,
 ) -> Response:
     """Revisions that changed the Record on the branch, newest first, with the Attributes each
-    changed and their provenance. Served at the branch head from the branch history."""
-    if unchanged := await unchanged_head(session, runtime, access, request, branch=branch):
+    changed and their provenance, from the branch history; with `at`, the changes up to that
+    Revision."""
+    if at is None and (
+        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    ):
         return unchanged
-    point = await resolve_point(session, runtime, access, branch=branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
     bounds = runtime.read.history
     effective = bounds.default_limit if limit is None else limit
@@ -446,7 +452,7 @@ async def traverse(
     session: ReadSessionDep,
 ) -> Response:
     """Follow a path of Relations, with a filter and a cap per hop (design 8.3)."""
-    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     result = await graph.traverse(session, runtime, point, body)
     return await _sent(session, runtime, point, body, result)
 
@@ -465,7 +471,7 @@ async def neighborhood(
     session: ReadSessionDep,
 ) -> Response:
     """Breadth-first expansion from seed Records within depth, node and edge caps."""
-    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     result = await graph.neighborhood(session, runtime, point, body)
     return await _sent(session, runtime, point, body, result)
 
@@ -481,6 +487,6 @@ async def search_records(
     session: ReadSessionDep,
 ) -> Response:
     """Lexical, semantic (caller-supplied vector) or hybrid search (design 8.4)."""
-    point = await resolve_point(session, runtime, access, branch=body.branch, at=None)
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     result = await search.search(session, runtime, point, body)
     return await _sent(session, runtime, point, body, result)

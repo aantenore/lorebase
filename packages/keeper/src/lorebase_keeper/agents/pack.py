@@ -39,6 +39,10 @@ class ContextRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     branch: str | None = Field(default=None, description="Default: the Domain's default branch.")
+    at: str | None = Field(
+        default=None,
+        description="Revision id or tag to read at (time travel, served from a snapshot).",
+    )
     refs: list[str] | None = Field(
         default=None, min_length=1, description="Seed Records as `Kind/key` references."
     )

@@ -62,11 +62,12 @@ from lorebase_core.model.embedding import TemplateError, kind_template
 from lorebase_core.query import QueryError, Target, condition_kinds, resolve_where
 from lorebase_keeper.reading.compiler import Compiler, json_text
 from lorebase_keeper.reading.points import ReadPoint
-from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupported
+from lorebase_keeper.reading.problems import invalid, query_problem
 from lorebase_keeper.reading.records import compiler_for
 from lorebase_keeper.reading.requests import SearchMode, SearchRequest, SearchTuning
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import Masking, condition_fields, require_comparable
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import (
     SearchCorrection,
     SearchHit,
@@ -134,8 +135,7 @@ def _target(point: ReadPoint, request: SearchRequest) -> Target:
 async def search(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, request: SearchRequest
 ) -> SearchResponse:
-    if not point.materialized:
-        raise tree_unsupported("Search")
+    point = await with_rows(session, runtime, point, "Search")
     runtime = tuned(runtime, request.tuning)
     settings = runtime.search
     mode = search_mode(request)
@@ -256,7 +256,7 @@ async def search(
             final,
             and_(
                 final.c.domain_id == literal(point.domain.id),
-                final.c.branch == literal(point.branch),
+                final.c.branch == literal(point.layout.branch),
                 final.c.kind_id == ranked.c.kind_id,
                 final.c.key == ranked.c.key,
             ),
@@ -412,7 +412,7 @@ async def _lexical_page(
         )
         query = select(hit.c.kind_id, hit.c.key, headline.label("snippet")).where(
             hit.c.domain_id == literal(point.domain.id),
-            hit.c.branch == literal(point.branch),
+            hit.c.branch == literal(point.layout.branch),
             tuple_(hit.c.kind_id, hit.c.key).in_([(h.kind_id, h.key) for h in hits]),
         )
         for row in (await session.execute(query)).mappings():

@@ -259,15 +259,15 @@ async def test_time_travel_reads_the_tree(http: httpx.AsyncClient, seeded: Seede
     )
     assert before_schema.status_code == 404  # no Supplier Kind yet
 
-    refused = await http.get(
-        f"{BASE}/kinds/Supplier/records",
-        params={
-            "at": seeded.revisions["data"],
-            "where": '{"attr":"country","op":"eq","value":"PL"}',
-        },
+    # a filter at a Revision reads a snapshot of it (test_time_travel_api)
+    filtered = await get_ok(
+        http,
+        "/kinds/Supplier/records",
+        at=seeded.revisions["data"],
+        where='{"attr":"country","op":"eq","value":"PL"}',
     )
-    assert refused.status_code == 422
-    assert refused.json()["errors"][0]["code"] == "time_travel"
+    assert filtered["served_from"] == "tree"
+    assert "S-1001" in [item["key"] for item in filtered["items"]]
     unknown = await http.get(f"{BASE}/kinds/Supplier/records/S-1001", params={"at": "f" * 64})
     assert unknown.status_code == 404
 
@@ -311,16 +311,13 @@ async def test_trait_queries_at_a_past_revision_match_the_head(
     assert all(
         set(item["values"]) <= {"country", "city"} or item["values"] for item in page["items"]
     )
-    refused = await http.post(
-        f"{BASE}/query",
-        json={
-            "trait": "Located",
-            "at": at,
-            "where": {"attr": "country", "op": "eq", "value": "IT"},
-        },
-    )
-    assert refused.status_code == 422
-    assert refused.json()["errors"][0]["code"] == "time_travel"
+    where = {"attr": "country", "op": "eq", "value": "IT"}
+    filtered = await post_ok(http, "/query", {"trait": "Located", "at": at, "where": where})
+    assert filtered == {
+        **await post_ok(http, "/query", {"trait": "Located", "where": where}),
+        "revision": at,
+        "served_from": "tree",
+    }
 
 
 async def test_list_with_where_order_select_and_cursor(http: httpx.AsyncClient) -> None:

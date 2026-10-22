@@ -2,7 +2,8 @@
 
 Traversal runs one set-based query per hop, capped per hop. A neighborhood is one statement
 of the store primitive `lorebase_store.traverse.neighborhood` (a recursive walk with fan-out,
-Link and node caps). Both read the materialized head; at another Revision they are refused.
+Link and node caps). Both read the materialized head, or at another Revision a snapshot of it
+(`reading.snapshots`).
 """
 
 from __future__ import annotations
@@ -22,11 +23,12 @@ from lorebase_core.query import (
     resolve_where,
 )
 from lorebase_keeper.reading.points import ReadPoint, not_found
-from lorebase_keeper.reading.problems import invalid, query_problem, tree_unsupported
+from lorebase_keeper.reading.problems import invalid, query_problem
 from lorebase_keeper.reading.records import compiler_for, get_record, require_kind
 from lorebase_keeper.reading.requests import NeighborhoodRequest, TraverseRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import condition_fields, require_comparable
+from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import (
     Edge,
     NeighborhoodResponse,
@@ -58,8 +60,7 @@ async def traverse(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, request: TraverseRequest
 ) -> TraverseResponse:
     """Follow `request.path` from the start Record; each hop keeps at most its limit."""
-    if not point.materialized:
-        raise tree_unsupported("Traversal")
+    point = await with_rows(session, runtime, point, "Traversal")
     caps = runtime.read.traverse
     if len(request.path) > caps.max_hops:
         raise invalid("/body/path", f"a path has at most {caps.max_hops} steps", "limit_exceeded")
@@ -127,8 +128,7 @@ async def neighborhood(
     smaller of `read.traverse` and `store.traverse`. Nodes come nearest first; each Link is
     reported once, by its forward name, from its `from` Record to its `to` Record.
     """
-    if not point.materialized:
-        raise tree_unsupported("Neighborhoods")
+    point = await with_rows(session, runtime, point, "Neighborhoods")
     caps, store = runtime.read.traverse, runtime.store_settings.traverse
     max_seeds = min(caps.max_seeds, store.max_seeds)
     if len(request.seeds) > max_seeds:
