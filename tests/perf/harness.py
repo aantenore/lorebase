@@ -19,12 +19,12 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -33,6 +33,11 @@ from lorebase_core.model import Link, Record, Schema, load_schema
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types import AttributeType, encode_value
 from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
+from lorebase_keeper.reading.points import KindScope, ReadPoint, ServedFrom
+from lorebase_keeper.reading.record_history import record_history, record_lineage
+from lorebase_keeper.reading.runtime import ReadRuntime
+from lorebase_keeper.reading.settings import ReadSettings, SearchSettings
+from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.definer import grant_read_functions
 from lorebase_store.indexes import BranchIndexes, run_index_jobs
@@ -49,7 +54,12 @@ from lorebase_store.reads import (
     query_by_attribute,
     search_records,
 )
-from lorebase_store.repositories import RefRepository, scope_to_domain
+from lorebase_store.repositories import (
+    DomainRepository,
+    RefRepository,
+    RevisionRepository,
+    scope_to_domain,
+)
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.traverse import neighborhood
 
@@ -87,7 +97,12 @@ TARGETS_MS = {
     "query by indexed attribute": 25.0,
     "full-text search": 50.0,
     "full-text search with typo-tolerant titles": 50.0,
+    "record history page": 10.0,
+    "record lineage": 10.0,
 }
+#: Reads without a budget in design 8.7: held to the budget of Links of a Record, the other
+#: per-Record index range read.
+PROPOSED_TARGETS = frozenset({"record history page", "record lineage"})
 #: Keeper's lexical search defaults (`search.trigram_threshold`, `search.trigram_weight`).
 TITLE_SIMILARITY = TitleSimilarity(threshold=0.3, weight=0.5)
 
@@ -121,6 +136,11 @@ class Measurement:
     def p95(self) -> float:
         ordered = sorted(self.samples_ms)
         return ordered[min(len(ordered) - 1, round(0.95 * (len(ordered) - 1)))]
+
+    @property
+    def p99(self) -> float:
+        ordered = sorted(self.samples_ms)
+        return ordered[min(len(ordered) - 1, round(0.99 * (len(ordered) - 1)))]
 
 
 # Data -------------------------------------------------------------------------------------------
@@ -158,14 +178,17 @@ def _typed(attribute: Any, raw: str) -> Any:
     return encode_value(attribute.type, raw)
 
 
-def build_changes(schema: Schema, scale: Scale) -> list[list[DataChange]]:
-    """Batches of changes, each a group of Records with the Links their Kind requires."""
+def build_changes(schema: Schema, scale: Scale) -> Iterator[list[DataChange]]:
+    """Batches of changes, each a group of Records with the Links their Kind requires.
+
+    Built lazily, one Kind at a time, so that only the generator's tables and one Kind's
+    changes are in memory at once.
+    """
     module = generator()
     tables = module.build_dataset(
         module.Settings(scale.factor, scale.seed, date.fromisoformat(module.DEFAULT_AS_OF))
     )
     _densify(tables, scale, random.Random(scale.seed))
-    batches: list[list[DataChange]] = []
     for stem, link_stems in GROUPS:
         kind = schema.kind_by_api_name(RECORD_FILES[stem])
         assert kind is not None
@@ -213,11 +236,11 @@ def build_changes(schema: Schema, scale: Scale) -> list[list[DataChange]]:
             batch.append(change)
             batch.extend(links_by_from.pop(change.record.key, []))
             if len(batch) >= scale.commit_batch:
-                batches.append(batch)
+                yield batch
                 batch = []
         if batch:
-            batches.append(batch)
-    return batches
+            yield batch
+        del tables[stem]
 
 
 def _densify(tables: dict[str, list[dict[str, str]]], scale: Scale, rng: random.Random) -> None:
@@ -269,8 +292,11 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
             origin=ORIGIN,
             runtime=runtime,
         )
-    batches = build_changes(schema, scale)
-    for batch in batches:
+    batches = 0
+    for batch in build_changes(schema, scale):
+        batches += 1
+        if batches % 10 == 0:
+            _progress(f"seed: {batches} commits, {time.perf_counter() - started:.0f} s")
         async with sessions() as session:
             await commit(
                 session,
@@ -282,9 +308,11 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
                 origin=ORIGIN,
                 runtime=runtime,
             )
+    _progress(f"seed: {batches} commits, building indexes")
     await build_indexes(engine, runtime)
     await _analyze(engine)
     seconds = time.perf_counter() - started
+    _progress(f"seed: done in {seconds:.0f} s")
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
         records = (
@@ -299,7 +327,11 @@ async def seed(engine: AsyncEngine, runtime: StoreRuntime, scale: Scale) -> Seed
                 {"d": DOMAIN},
             )
         ).scalar_one()
-    return SeedReport(int(records), int(links), seconds, len(batches) + 1)
+    return SeedReport(int(records), int(links), seconds, batches + 1)
+
+
+def _progress(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
 
 
 async def build_indexes(engine: AsyncEngine, runtime: StoreRuntime) -> None:
@@ -453,6 +485,52 @@ def read_operations(
             session, DOMAIN, branch, rng.choice(work.words), limit=20, runtime=runtime
         )
 
+    reading = ReadRuntime(
+        sessions=async_sessionmaker(),
+        read=ReadSettings(),
+        search=SearchSettings(),
+        store=runtime,
+    )
+    part = schema.kinds[work.part_kind]
+    name = branch.branch if isinstance(branch, BranchLayout) else branch
+
+    async def point(session: AsyncSession) -> ReadPoint:
+        """The read point Keeper resolves for a branch head (`reading.points`), without the
+        authorization of a caller: the Domain, the ref and its head Revision."""
+        domain = await DomainRepository(session).get(DOMAIN)
+        ref = await RefRepository(session, DOMAIN).get(name)
+        assert domain is not None
+        assert ref is not None
+        revision = await RevisionRepository(session, DOMAIN).require(ref.head)
+        scope = KindScope(cast(ReadGuard, None))
+        return ReadPoint(
+            domain, ref.name, revision, schema, ServedFrom.MATERIALIZED, scope, ref.layout
+        )
+
+    async def history(session: AsyncSession, rng: random.Random) -> Any:
+        key = rng.choice(work.parts)
+        return await record_history(
+            session,
+            reading,
+            await point(session),
+            part,
+            key,
+            limit=reading.read.history.default_limit,
+            cursor=None,
+            values=False,
+            shape=f"perf-{key}",
+        )
+
+    async def lineage(session: AsyncSession, rng: random.Random) -> Any:
+        return await record_lineage(
+            session,
+            reading,
+            await point(session),
+            part,
+            rng.choice(work.parts),
+            max_changes=reading.read.history.lineage_max_changes,
+        )
+
     async def search_titles(session: AsyncSession, rng: random.Random) -> Any:
         return await search_records(
             session,
@@ -472,6 +550,8 @@ def read_operations(
         "query by indexed attribute": by_attribute,
         "full-text search": search,
         "full-text search with typo-tolerant titles": search_titles,
+        "record history page": history,
+        "record lineage": lineage,
     }
 
 
@@ -500,6 +580,7 @@ async def measure_reads(
                 if index >= warmup:
                     measurement.samples_ms.append((time.perf_counter() - started) * 1000)
             results[name] = measurement
+            _progress(_summary(measurement, role))
     return results
 
 
@@ -528,7 +609,14 @@ async def measure_alternating(
                     await operation(session, rng)
                 if index >= warmup:
                     measurement.samples_ms.append((time.perf_counter() - started) * 1000)
+    for measurement in measurements:
+        _progress(_summary(measurement, role))
     return measurements
+
+
+def _summary(measurement: Measurement, role: str | None) -> str:
+    m = measurement
+    return f"{m.name} [{role or 'owner'}]: p50 {m.p50:.2f} p95 {m.p95:.2f} p99 {m.p99:.2f} ms"
 
 
 async def measure_branch_copy(
@@ -543,6 +631,7 @@ async def measure_branch_copy(
         async with sessions() as session:
             await create_branch(session, DOMAIN, name, created_by="usr_perf", runtime=runtime)
         measurement.samples_ms.append((time.perf_counter() - started) * 1000)
+        _progress(f"{measurement.name}: {measurement.samples_ms[-1]:.0f} ms")
         async with sessions() as session, session.begin():
             await scope_to_domain(session, DOMAIN)
             await RefRepository(session, DOMAIN).delete(name)
@@ -725,8 +814,13 @@ def hardware() -> dict[str, str]:
 
 
 async def server_notes(engine: AsyncEngine) -> dict[str, str]:
+    notes: dict[str, str] = {}
     async with engine.connect() as connection:
-        version = (await connection.execute(text("SHOW server_version"))).scalar_one()
-        buffers = (await connection.execute(text("SHOW shared_buffers"))).scalar_one()
-        memory = (await connection.execute(text("SHOW work_mem"))).scalar_one()
-    return {"postgres": str(version), "shared_buffers": str(buffers), "work_mem": str(memory)}
+        for name, setting in (
+            ("postgres", "server_version"),
+            ("shared_buffers", "shared_buffers"),
+            ("effective_cache_size", "effective_cache_size"),
+            ("work_mem", "work_mem"),
+        ):
+            notes[name] = str((await connection.execute(text(f"SHOW {setting}"))).scalar_one())
+    return notes

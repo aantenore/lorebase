@@ -5,29 +5,37 @@
 Postgres comes from `LOREBASE_TEST_DATABASE_URL` or a disposable container
 (`lorebase_store.testing`); the run uses a scratch database that is dropped afterwards.
 Small scales (`--scale 5`) finish in seconds and are what `pytest -m perf` runs.
+
+`--seed-database NAME` keeps the seeded dataset in database NAME of that server: the first run
+seeds it, later runs at the same scale copy it (`CREATE DATABASE ... TEMPLATE`) instead of
+loading it again, then apply the migrations missing from the copy. At 1M Records loading takes
+far longer than measuring.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import random
 import sys
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import harness
 
 from lorebase_store import migrations, testing
-from lorebase_store.db import create_engine
+from lorebase_store.db import async_url, create_engine
 from lorebase_store.layout import BranchLayout
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
@@ -98,6 +106,7 @@ class Options:
     commit_changes: int
     overlay_iterations: int
     overlay_changes: int
+    seed_database: str | None
     out: Path | None
 
 
@@ -131,6 +140,11 @@ def parse(argv: Sequence[str] | None = None) -> Options:
     parser.add_argument(
         "--overlay-changes", type=int, default=1000, help="Part updates on each side of the fork"
     )
+    parser.add_argument(
+        "--seed-database",
+        default=None,
+        help="keep the seeded dataset in this database and reuse it (see module doc)",
+    )
     parser.add_argument("--out", type=Path, default=None, help="write the markdown report here")
     args = parser.parse_args(argv)
     return Options(
@@ -143,6 +157,7 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         args.commit_changes,
         args.overlay_iterations,
         args.overlay_changes,
+        args.seed_database,
         args.out,
     )
 
@@ -177,12 +192,30 @@ def _scans(plan: dict[str, Any]) -> list[str]:
     return nodes
 
 
-async def benchmark(options: Options, url: str) -> Report:
+def _engine(url: str) -> AsyncEngine:
+    """Without a statement timeout: at 1M Records, copying a branch (one INSERT ... SELECT per
+    table) and deleting it take longer than the default `database.statement_timeout_ms`."""
+    return create_engine(DatabaseSettings(), url=url, statement_timeout_ms=0)
+
+
+async def seed_only(options: Options, url: str) -> harness.SeedReport:
     runtime = StoreRuntime.from_settings(StoreSettings())
-    engine = create_engine(DatabaseSettings(), url=url)
+    engine = _engine(url)
     try:
-        scale = harness.Scale(options.scale, options.extra_links)
-        seeded = await harness.seed(engine, runtime, scale)
+        return await harness.seed(
+            engine, runtime, harness.Scale(options.scale, options.extra_links)
+        )
+    finally:
+        await engine.dispose()
+
+
+async def benchmark(options: Options, url: str, seeded: harness.SeedReport | None) -> Report:
+    runtime = StoreRuntime.from_settings(StoreSettings())
+    engine = _engine(url)
+    try:
+        if seeded is None:
+            scale = harness.Scale(options.scale, options.extra_links)
+            seeded = await harness.seed(engine, runtime, scale)
         work = await harness.workload(engine, runtime)
         main = BranchLayout(harness.DOMAIN, "main")
         operations = harness.read_operations(work, runtime, main)
@@ -276,7 +309,7 @@ def render(report: Report) -> str:
         "",
         *(f"- {k}: {v}" for k, v in {**report.hardware, **report.server}.items()),
         f"- run: {datetime.now(UTC).strftime('%Y-%m-%d')}, Postgres in Docker on the same "
-        "machine, default container settings.",
+        "machine, container defaults except the settings above.",
         "",
         "## Reads (milliseconds)",
         "",
@@ -284,23 +317,31 @@ def render(report: Report) -> str:
         "`rls`: a role subject to the `domain_isolation` policies, like the application role "
         "in production.",
         "",
-        "| Operation | Target p95 | owner p50 | owner p95 | rls p50 | rls p95 |",
-        "|-----------|-----------:|----------:|----------:|--------:|--------:|",
+        "| Operation | Target p95 | owner p50 | owner p95 | owner p99 | rls p50 | rls p95 "
+        "| rls p99 |",
+        "|-----------|-----------:|----------:|----------:|----------:|--------:|--------:"
+        "|--------:|",
     ]
     for name, target in harness.TARGETS_MS.items():
         a, b = report.owner[name], report.reader[name]
+        mark = "\\*" if name in harness.PROPOSED_TARGETS else ""
         lines.append(
-            f"| {name} | {_ms(target)} | {_ms(a.p50)} | {_ms(a.p95)} | {_ms(b.p50)} "
-            f"| {_ms(b.p95)} |"
+            f"| {name} | {_ms(target)}{mark} | {_ms(a.p50)} | {_ms(a.p95)} | {_ms(a.p99)} "
+            f"| {_ms(b.p50)} | {_ms(b.p95)} | {_ms(b.p99)} |"
         )
+    lines += [
+        "",
+        "\\* No budget in design 8.7; held to the budget of Links of a Record, the other "
+        "per-Record index range read.",
+    ]
     lines += [
         "",
         "## Writes (milliseconds)",
         "",
-        "| Operation | Runs | p50 | p95 |",
-        "|-----------|-----:|----:|----:|",
+        "| Operation | Runs | p50 | p95 | p99 |",
+        "|-----------|-----:|----:|----:|----:|",
         *(
-            f"| {m.name} | {len(m.samples_ms)} | {_ms(m.p50)} | {_ms(m.p95)} |"
+            f"| {m.name} | {len(m.samples_ms)} | {_ms(m.p50)} | {_ms(m.p95)} | {_ms(m.p99)} |"
             for m in (report.branch, report.overlay_branch, report.commits)
         ),
         "",
@@ -348,26 +389,85 @@ def _overlay_section(report: Report) -> list[str]:
         f"copy {pair.copy_rows:,}. Reads alternate between the two branches call by call, "
         f"with the same random keys, {o.iterations} timed calls each.",
         "",
-        "| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | overhead p50 "
-        "| overhead p95 |",
-        "|-----------|------|---------:|------------:|---------:|------------:|-------------:"
-        "|-------------:|",
+        "| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | copy p99 "
+        "| overlay p99 | overhead p50 | overhead p95 |",
+        "|-----------|------|---------:|------------:|---------:|------------:|---------:"
+        "|------------:|-------------:|-------------:|",
     ]
     for name in harness.TARGETS_MS:
         for role in ("owner", "rls"):
             c, v = report.copy_reads[role][name], report.overlay_reads[role][name]
             lines.append(
                 f"| {name} | {role} | {_ms(c.p50)} | {_ms(v.p50)} | {_ms(c.p95)} | {_ms(v.p95)} "
+                f"| {_ms(c.p99)} | {_ms(v.p99)} "
                 f"| {_overhead(c.p50, v.p50)} | {_overhead(c.p95, v.p95)} |"
             )
     return [*lines, ""]
 
 
+async def _admin(server_url: str, statement: str, **params: Any) -> Any:
+    engine = create_async_engine(
+        async_url(server_url), poolclass=NullPool, isolation_level="AUTOCOMMIT"
+    )
+    try:
+        async with engine.connect() as connection:
+            result = await connection.execute(text(statement), params)
+            return result.scalar() if result.returns_rows else None
+    finally:
+        await engine.dispose()
+
+
+def _quoted(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _seeded_database(options: Options, server: str, name: str) -> harness.SeedReport:
+    """The seed report of database `name`, seeding it first when it does not exist."""
+    found = asyncio.run(
+        _admin(
+            server,
+            "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = :n",
+            n=name,
+        )
+    )
+    wanted = {"scale": options.scale, "extra_links": options.extra_links}
+    if found is not None:
+        kept = json.loads(found)
+        if kept["scale"] != wanted:
+            raise SystemExit(f"database {name} holds {kept['scale']}, not {wanted}")
+        return harness.SeedReport(**kept["seeded"])
+    asyncio.run(_admin(server, f"CREATE DATABASE {_quoted(name)}"))
+    url = async_url(server).set(database=name).render_as_string(hide_password=False)
+    migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
+    seeded = asyncio.run(seed_only(options, url))
+    note = json.dumps({"scale": wanted, "seeded": asdict(seeded)}).replace("'", "''")
+    asyncio.run(_admin(server, f"COMMENT ON DATABASE {_quoted(name)} IS '{note}'"))
+    return seeded
+
+
+@contextmanager
+def _copy_of(server: str, template: str) -> Iterator[str]:
+    """A scratch copy of database `template`, dropped afterwards."""
+    with testing.scratch_database(server) as url:
+        name = async_url(url).database
+        assert name is not None
+        asyncio.run(_admin(server, f"DROP DATABASE {_quoted(name)}"))
+        asyncio.run(_admin(server, f"CREATE DATABASE {_quoted(name)} TEMPLATE {_quoted(template)}"))
+        yield url
+
+
 def main(argv: Sequence[str] | None = None) -> Report:
     options = parse(argv)
-    with testing.postgres_server() as server, testing.scratch_database(server) as url:
-        migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
-        report = asyncio.run(benchmark(options, url))
+    with testing.postgres_server() as server:
+        seeded = None
+        if options.seed_database is not None:
+            seeded = _seeded_database(options, server, options.seed_database)
+            database = _copy_of(server, options.seed_database)
+        else:
+            database = testing.scratch_database(server)
+        with database as url:
+            migrations.upgrade(database=DatabaseSettings(), store=StoreSettings(), url=url)
+            report = asyncio.run(benchmark(options, url, seeded))
     markdown = render(report)
     print(markdown)
     if options.out is not None:

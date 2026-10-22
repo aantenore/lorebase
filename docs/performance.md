@@ -2,6 +2,8 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
+The sections from Dataset to Reading the results are the 100k-Record baseline of 2026-10-21. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except typo-tolerant title search, the 2-hop neighborhood on branches other than `main`, and Record lineage against the budget proposed for it.
+
 ## Dataset
 
 - `supply` Domain from `examples/supply/scripts/make_supply_data.py --scale 540`, plus 4 extra `supplied_by` and `stocked_at` Links per Part.
@@ -90,8 +92,8 @@ Scan nodes of the statements of one call of each read, statements run inside the
   measured, at p95 for that role, 28.06 ms for Links of a Record (inbound foreign-key Links
   filter every purchase order), 136.73 ms for the neighborhood and 68.14 ms for search (a scan
   of the Domain's partition).
-- Record history and lineage (`GET .../records/{key}/history`, `/lineage`) are not in the
-  harness yet. They read `mat_history` by its primary key prefix `(domain_id, branch,
+- Record history and lineage (`GET .../records/{key}/history`, `/lineage`) were added to the
+  harness after this run; their numbers are in [1M Records](#1m-records). They read `mat_history` by its primary key prefix `(domain_id, branch,
   partition, element_key)` joined to `revisions` by id: one index range per Record whose size
   is the number of changes of that Record, never a walk of the branch's Revisions. History
   pages are keyset pages on `(generation, revision)`; lineage reads at most
@@ -141,6 +143,155 @@ Regenerate with:
 ```sh
 uv run python tests/perf/bench.py --scale 540 --extra-links 4 --out docs/performance.md
 ```
+
+## 1M Records
+
+The M1 fixture: the same harness at ten times the size, run on 2026-10-22.
+
+### Method
+
+```sh
+LOREBASE_TEST_DATABASE_URL=postgresql://USER:PASSWORD@127.0.0.1:PORT/postgres \
+uv run python tests/perf/bench.py --scale 5406 --extra-links 4 --iterations 1000 --warmup 100 \
+  --branch-iterations 2 --seed-database perf_seed_1m
+```
+
+- 1,000,110 Records and 3,032,766 Links on `main`, loaded through the commit pipeline in 408
+  commits of up to 10,000 changes (batches above `write.copy_threshold_rows` go through `COPY`
+  into a staging table, as every large commit does): 1,961 s including the index builds and
+  `VACUUM ANALYZE`. The loader was not changed; the harness now builds the batches lazily, one
+  Kind at a time.
+- `--seed-database` keeps the loaded dataset in its own database; each run measures a copy of
+  it (`CREATE DATABASE ... TEMPLATE`) and drops the copy, so a run after a change does not
+  load again.
+- 1,000 timed calls per read and role after 100 warm-up calls, random keys; p50, p95 and p99.
+  Reads run first as `owner` (not subject to row-level security), then as `rls` (subject to
+  the `domain_isolation` policies, like the application role), so the `owner` pass also warms
+  the cache.
+- Record history (first page, `read.history.default_limit`) and lineage are timed as Keeper
+  serves them: resolving the branch head (Domain, ref, head Revision) and running
+  `reading.record_history`, without the HTTP layer and authorization.
+- Overlay reads: as in the baseline, an overlay (`agent/perf`) and a copy (`perf-copy`) of
+  `main` with the same commit of 1,000 Part updates, then 1,000 other updates on `main`; calls
+  alternate between the two branches with the same keys. The partition then holds `main`, the
+  copy (4,032,876 rows) and the overlay (2,000 rows).
+- The harness connects without a statement timeout: copying the branch takes longer than the
+  default `database.statement_timeout_ms` (see Open issues).
+
+### Environment
+
+Apple M5 Pro, 15 cores, 24 GiB, Darwin 25.6.0 arm64, Python 3.12.13. Postgres
+16.15 with pgvector (`pgvector/pgvector:pg16`) in Docker Desktop on the same machine; the
+Docker VM has 8 GiB of memory and the database is 13 GB after loading. Two runs: container
+defaults (`shared_buffers` 128MB), and `shared_buffers` 2GB with `effective_cache_size` 6GB
+(the tables below); `work_mem` 4MB in both. The laptop ran other work during both runs.
+
+### Reads (milliseconds)
+
+| Operation | Target p95 | owner p50 | owner p95 | owner p99 | rls p50 | rls p95 | rls p99 | 128MB: owner p95 | 128MB: rls p95 |
+|-----------|-----------:|----------:|----------:|----------:|--------:|--------:|--------:|-----------------:|---------------:|
+| get by key | 5.00 | 2.09 | 3.53 | 4.46 | 1.79 | 3.20 | 4.31 | 3.44 | 4.76 |
+| list page of 50 | 20.00 | 2.80 | 4.43 | 5.64 | 2.90 | 4.66 | 5.47 | 4.50 | 5.17 |
+| links of a record | 10.00 | 2.79 | 4.27 | 5.20 | 2.82 | 4.65 | 5.61 | 4.74 | 5.61 |
+| 2-hop neighborhood | 30.00 | 12.68 | 16.98 | 18.40 | 7.36 | 9.48 | 11.40 | 24.42 | 21.03 |
+| query by indexed attribute | 25.00 | 2.64 | 4.22 | 5.25 | 3.01 | 5.07 | 6.25 | 4.46 | 4.73 |
+| full-text search | 50.00 | 5.69 | 7.79 | 10.75 | 6.16 | 8.14 | 11.40 | 7.80 | 12.24 |
+| full-text search with typo-tolerant titles | 50.00 | 31.84 | **116.37** | 155.05 | 32.57 | **119.38** | 156.95 | **143.30** | **156.52** |
+| record history page | 10.00\* | 5.63 | 7.82 | 8.90 | 5.66 | 7.71 | 8.81 | 7.37 | 8.33 |
+| record lineage | 10.00\* | 7.12 | 9.36 | 10.54 | 7.23 | 9.33 | 10.26 | 9.81 | **10.98** |
+
+\* No budget in design 8.7. Held here to the budget of Links of a Record, the other per-Record
+index range read.
+
+### Writes (milliseconds)
+
+| Operation | Runs | p50 | p95 | 128MB: p50 |
+|-----------|-----:|----:|----:|-----------:|
+| branch creation (copy) | 2 | 84,529 | 86,178 | 94,825 |
+| branch creation (overlay) | 20 | 23.68 | 27.95 | 26.25 |
+| commit of 1000 changes | 5 | 2,367 | 4,276 | 1,357 |
+
+### Overlay branches (milliseconds)
+
+| Operation | Role | copy p50 | overlay p50 | copy p95 | overlay p95 | copy p99 | overlay p99 |
+|-----------|------|---------:|------------:|---------:|------------:|---------:|------------:|
+| get by key | owner | 1.98 | 2.16 | 3.60 | 3.87 | 4.49 | 4.76 |
+| get by key | rls | 1.84 | 1.86 | 3.55 | 3.49 | 4.33 | 4.41 |
+| list page of 50 | owner | 2.95 | 3.30 | 4.50 | 4.98 | 5.60 | 6.04 |
+| list page of 50 | rls | 4.19 | 3.67 | 6.29 | 5.48 | 7.43 | 6.28 |
+| links of a record | owner | 3.21 | 4.17 | 4.88 | 6.08 | 6.39 | 7.36 |
+| links of a record | rls | 4.11 | 4.46 | 6.14 | 6.42 | 7.30 | 7.88 |
+| 2-hop neighborhood | owner | 22.99 | 25.91 | 29.35 | **34.47** | 48.29 | 53.24 |
+| 2-hop neighborhood | rls | 26.19 | 24.27 | **33.47** | **30.03** | 36.59 | 33.10 |
+| query by indexed attribute | owner | 2.83 | 3.15 | 4.70 | 4.81 | 5.41 | 5.70 |
+| query by indexed attribute | rls | 3.05 | 3.42 | 4.92 | 5.32 | 6.16 | 6.52 |
+| full-text search | owner | 6.44 | 6.86 | 8.89 | 8.82 | 12.43 | 11.90 |
+| full-text search | rls | 6.91 | 7.54 | 9.00 | 9.40 | 12.25 | 12.75 |
+| full-text search with typo-tolerant titles | owner | 27.61 | 33.48 | **70.69** | **120.43** | 103.06 | 152.87 |
+| full-text search with typo-tolerant titles | rls | 28.25 | 35.19 | **70.81** | **122.66** | 103.24 | 159.41 |
+| record history page | owner | 5.69 | 5.73 | 7.66 | 7.90 | 9.03 | 9.13 |
+| record history page | rls | 6.03 | 5.97 | 8.90 | 8.52 | 10.62 | 10.79 |
+| record lineage | owner | 6.86 | 7.34 | **10.38** | **10.24** | 14.09 | 14.10 |
+| record lineage | rls | 6.86 | 7.20 | **10.41** | **10.57** | 13.64 | 14.53 |
+
+With 128MB of shared buffers the same table differs by a few milliseconds; the neighborhood
+was at 29.45 to 33.02 at p95 and typo-tolerant search at 149 to 168.
+
+### Reading the results
+
+- Key, page, Links, attribute and full-text reads stay index-driven and within their budgets
+  for both roles, on `main`, the copy and the overlay, with both memory settings; p99 is
+  under 16 ms for all of them. They grew by 2 to 10 ms at p95 from the 100k baseline, mostly
+  in pages read from outside shared buffers.
+- History and lineage read one primary-key range of `mat_history` per Record and are flat in
+  the size of the Domain. Lineage makes about eight statements (Domain, ref and head Revision,
+  then the Record, its history range, provenance and Proposals) and sits at its proposed
+  budget: 9.3 ms at p95 on `main` with 2GB of buffers, 9.8 to 11.0 on branches and with 128MB.
+- The 2-hop neighborhood is within budget on `main` (9.5 to 24.4 ms at p95) and over it on the
+  copy and the overlay (29 to 34 ms). The plans are the baseline's (index scans only, about
+  900 buffers per call for about 130 nodes and 130 Links); the time goes to the pages missing
+  from shared buffers and from the 8 GiB VM's page cache. The alternating measurement reads
+  two branches of a partition holding two full copies of the Domain, with random keys, and
+  repeated runs over the same keys
+  fall from 23 to 14 ms at p50 as the cache warms. Nothing in the statement scales with the
+  Domain; the budget holds when the working set is in memory, which the reference hardware of
+  design 6.14 (32 GB) gives and this VM does not.
+- Typo-tolerant title search misses its budget, at 1.4 to 3.4 times it at p95, on every
+  branch and for both roles. Plain full-text search stays at 8 to 12 ms. See Open issues.
+- Branch creation by copy grows with the Domain (85 to 95 s for 4 million rows); an overlay
+  takes 24 to 26 ms, as at 100k. A commit of 1,000 Part updates takes 1.4 to 2.4 s at p50
+  (0.36 s at 100k); the load committed 10,000 changes per Revision in about 4.8 s each, at the
+  5 s target of design 6.14.
+
+### Open issues
+
+- **Typo-tolerant title search** (`TitleSimilarity`, Keeper's lexical search with
+  `search.trigram_threshold`). `title % query` on the GIN trigram index `(domain_id, branch,
+  title gin_trgm_ops)` is lossy: the index keeps a row when it holds enough of the query's
+  trigrams (3 of 9 for `supplier` at 0.3), whatever the length of the title. On this fixture
+  the index returns 154,298 rows for `supplier` and every one fails the recheck: the sentence
+  titles of two Kinds (33 to 64 characters, 243,000 Records) contain the word but are never
+  30% similar to it. The bitmap build (60 to 100 ms) and the heap recheck dominate;
+  `LIMIT search_candidates` cannot stop a bitmap scan. Two alternatives were measured and not
+  adopted. A GiST trigram index rechecks exactly and stops at the limit when matches exist,
+  but a query without matches walks the index (100 ms for `supplier`). Bounding the title's
+  trigram count (a similarity of at least t needs at most |query| / t trigrams in the title)
+  with nested partial GIN indexes on `cardinality(show_trgm(title)) <= 16, 32, 48`, which the
+  security definer function would pick through a literal bound, took p50 from 49 to 9 ms and
+  p95 from 246 to 102 ms over 300 workload words: still twice the budget, for three more
+  indexes to maintain on every commit. The remaining options change behavior and need a design decision: match titles by word
+  (`<%`, `word_similarity`) instead of whole-title similarity; run trigram matching only when
+  full-text search finds fewer than `limit` matches; or keep a short name per Kind (the title
+  of name-like Kinds only) for trigram matching. Until then the budget is not met at 1M.
+- **Copy branches at 1M Records.** Creating a copy (`INSERT ... SELECT` of the Records, Links
+  and history of `main`) takes 85 to 95 s, and deleting it also takes longer than 30 s: both exceed the
+  default `database.statement_timeout_ms` (30 s), so `POST .../branches` with `mode: copy` and
+  branch deletion fail at this size with default settings. Overlay branches (the default for
+  `agent/`, `extract/` and `source/`) are not affected. Moving copies and deletions to a job
+  is a larger change and is not part of this run.
+- Lineage has no budget in design 8.7; with the one proposed here it is at the limit on
+  branches. Its statements are index lookups; fewer round trips (the head Revision and the
+  Record in one statement) would give the margin.
 
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
