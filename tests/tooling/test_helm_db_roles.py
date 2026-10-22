@@ -250,3 +250,94 @@ def test_role_setup_script_is_shipped(chart: Path) -> None:
     script = config["data"]["db-roles.py"]
     assert script.strip() == (CHART / "files" / "db-roles.py").read_text().strip()
     compile(script, "db-roles.py", "exec")
+
+
+def hooks(manifests: list[Manifest], component: str) -> dict[str, Manifest]:
+    return {
+        doc["kind"]: doc
+        for doc in manifests
+        if doc["metadata"].get("labels", {}).get("app.kubernetes.io/component") == component
+        and "helm.sh/hook" in doc["metadata"].get("annotations", {})
+    }
+
+
+def weight(doc: Manifest) -> int:
+    return int(doc["metadata"]["annotations"].get("helm.sh/hook-weight", "0"))
+
+
+def test_in_cluster_roles_are_declared_before_the_migration(chart: Path) -> None:
+    """One `helm upgrade` adds a role: the pg-roles hook runs before the migration Job."""
+    manifests = render(chart, "-f", str(PROFILES / "local-models-values.yaml"))
+    found = hooks(manifests, "pg-roles")
+    assert set(found) == {
+        "ServiceAccount",
+        "Role",
+        "RoleBinding",
+        "ConfigMap",
+        "NetworkPolicy",
+        "Job",
+    }
+    for doc in found.values():
+        annotations = doc["metadata"]["annotations"]
+        assert annotations["helm.sh/hook"] == "pre-upgrade"
+        assert "hook-succeeded" in annotations["helm.sh/hook-delete-policy"]
+    job = found.pop("Job")
+    assert all(weight(doc) < weight(job) for doc in found.values())
+    migration = [
+        doc
+        for doc in manifests
+        if doc["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "migrate"
+        and "pre-upgrade" in doc["metadata"].get("annotations", {}).get("helm.sh/hook", "")
+    ]
+    assert {doc["kind"] for doc in migration} == {"ConfigMap", "Job"}
+    assert all(weight(job) < weight(doc) for doc in migration)
+    spec = job["spec"]["template"]["spec"]
+    assert spec["serviceAccountName"] == "ci-lorebase-pg-roles"
+    assert spec["automountServiceAccountToken"] is True
+    settings = env(spec["containers"][0])
+    assert settings["CLUSTER"] == "ci-postgresql"
+    assert settings["APP_ROLE"] == "lorebase_app"
+    assert [role["name"] for role in yaml.safe_load(settings["ROLES"])] == ["lorebase_app"]
+    rules = found["Role"]["rules"]
+    assert {(rule["resources"][0], tuple(rule["resourceNames"])) for rule in rules} == {
+        ("clusters", ("ci-postgresql",)),
+        ("secrets", ("lorebase-db-app",)),
+    }
+    secrets = {verb for rule in rules if rule["resources"] == ["secrets"] for verb in rule["verbs"]}
+    assert secrets == {"get"}
+    script = found["ConfigMap"]["data"]["pg-roles.py"]
+    assert script.strip() == (CHART / "files" / "pg-roles.py").read_text().strip()
+    compile(script, "pg-roles.py", "exec")
+
+
+def test_role_setup_of_an_upgrade_starts_before_the_password_secret(chart: Path) -> None:
+    """The Secret of a role added by an upgrade is created after the hooks; the Job still starts."""
+    manifests = render(chart, "-f", str(PROFILES / "local-models-values.yaml"))
+    job = containers(pod(manifests, "Job", "migrate"))["db-roles"]
+    ref = next(e for e in job["env"] if e["name"] == "LOREBASE_DB_APP_PASSWORD")
+    assert ref["valueFrom"]["secretKeyRef"]["optional"] is True
+    keeper = pod(manifests, "Deployment", "keeper")["containers"][0]
+    ref = next(e for e in keeper["env"] if e["name"] == "LOREBASE_DB_APP_PASSWORD")
+    assert "optional" not in ref["valueFrom"]["secretKeyRef"]
+
+
+IN_CLUSTER = ["-f", str(PROFILES / "local-models-values.yaml")]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-f", str(PROFILES / "minimal-values.yaml")],
+        [*IN_CLUSTER, "--set", "database.setup.clusterRoles.enabled=false"],
+        [*IN_CLUSTER, "--set", "database.allowSharedRole=true"],
+        [*IN_CLUSTER, "--set", "migrate.hookEventsInCluster={post-install,post-upgrade}"],
+    ],
+)
+def test_role_hook_only_where_it_helps(chart: Path, args: list[str]) -> None:
+    assert not hooks(render(chart, *args), "pg-roles")
+
+
+def test_role_hook_needs_a_route_to_the_api_server(chart: Path) -> None:
+    result = helm(chart, *IN_CLUSTER, "--set", "networkPolicy.egress.kubernetesApi.to=null")
+    assert result.returncode != 0
+    assert "networkPolicy.egress.kubernetesApi.to" in result.stderr

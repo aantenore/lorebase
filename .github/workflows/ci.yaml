@@ -191,6 +191,7 @@ jobs:
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml"
           helm lint --strict "$CHART" -f "$CHART/ci/local-models-values.yaml"
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/sessions-values.yaml"
+          helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/guide-values.yaml"
       - name: helm template, every profile
         run: |
           mkdir -p build/helm
@@ -199,7 +200,18 @@ jobs:
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" > build/helm/scale-out.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/local-models-values.yaml" > build/helm/local-models.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/sessions-values.yaml" > build/helm/sessions.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/guide-values.yaml" > build/helm/guide.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" -f "$CHART/ci/local-models-values.yaml" > build/helm/all.yaml
+      - name: values.schema.json refuses a wrong type, value or key
+        run: |
+          test -f "$CHART/values.schema.json"
+          for bad in keeper.replicaCount=two logLevel=VERBOSE keeper.replicaCont=2 migrate.hookEvents=pre-everything; do
+            if helm template ci "$CHART" -f "$CHART/ci/minimal-values.yaml" --set "$bad" > /dev/null 2> build/schema.err; then
+              echo "the chart rendered with $bad" >&2
+              exit 1
+            fi
+            grep -q "schema" build/schema.err || { cat build/schema.err >&2; exit 1; }
+          done
       - name: The chart refuses an unsafe or incomplete configuration
         run: |
           if helm template ci "$CHART" > /dev/null 2>&1; then

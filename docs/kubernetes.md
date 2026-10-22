@@ -215,7 +215,8 @@ connects as the maintenance role and:
   must exist (created by an administrator): the Job waits for it up to `database.setup.waitSeconds`;
 - with the in-cluster database, waits for the role the operator creates from
   `postgresql.cluster.roles` (the chart declares it, with `passwordSecret` set to
-  `database.appRole.passwordSecret`);
+  `database.appRole.passwordSecret`; on an upgrade the `pg-roles` hook Job declares it on the Cluster
+  first, see below);
 - refuses a role with `SUPERUSER` or `BYPASSRLS`, or the same role as the maintenance DSN;
 - revokes `CREATE` on `public` from `PUBLIC`, grants `SELECT, INSERT, UPDATE, DELETE` on the tables,
   `USAGE, SELECT` on the sequences (present ones, and later ones through default privileges of the
@@ -252,9 +253,20 @@ operator's owner Secret): no role setup, and the services own the tables. Develo
 
 **Upgrading a release that used one DSN.** External database: add `db-maintenance-dsn` with the old
 DSN (the owner) and point `db-dsn` at the new application role; the next `helm upgrade` creates the
-role and grants it before the pods restart with it. In-cluster database: the role appears only when
-the upgraded Cluster is applied, after the `pre-upgrade` migration Job, so upgrade twice: first with
-`--set database.allowSharedRole=true` (the operator creates the role), then without it.
+role and grants it before the pods restart with it. In-cluster database: set
+`secrets.values.dbAppPassword` (or create the basic-auth Secret) and run one `helm upgrade`. Helm
+applies the upgraded Cluster only after the `pre-upgrade` hooks, so the `pg-roles` hook Job
+(`deploy/helm/lorebase/files/pg-roles.py`, `database.setup.clusterRoles.enabled`, on by default)
+runs first: it adds the roles of `postgresql.cluster.roles` to the Cluster through the Kubernetes API
+and waits up to `database.setup.waitSeconds` until the operator reports the application role
+reconciled. Then the migration Job grants the role, and the new pods connect with it. A password
+Secret that the same upgrade creates does not exist yet during the hooks: the role is declared
+without it, and the operator sets the password once Helm applies the Secret and the Cluster, before
+the new Keeper pods pass their readiness probe. The hook is idempotent and runs on every upgrade; its
+ServiceAccount, Role (`get`/`patch` on that Cluster, `get` on that Secret), RoleBinding, ConfigMap and
+NetworkPolicy are hooks too and are removed once the hooks succeed. With egress restricted it reaches
+the API server through `networkPolicy.egress.kubernetesApi` (default: the private IPv4 ranges, ports
+443 and 6443; narrow it to the control plane, or list the public endpoint of a managed control plane).
 
 ## Upgrade and migrations
 
@@ -271,6 +283,9 @@ created as hooks so that they exist before a first install.
   stay for inspection (`kubectl -n lorebase logs job/lorebase-migrate`); the next attempt replaces it.
 - **Rollback.** Migrations are forward-only and online-safe (expand, migrate, contract over releases), so
   the previous release runs against the new schema. `helm rollback` does not reverse a migration.
+- **In-cluster database.** Before the migration Job of an upgrade, the `pg-roles` hook Job declares the roles
+  of `postgresql.cluster.roles` on the Cluster and waits for the operator
+  ([database roles](#database-roles)), so a role added by the upgrade exists when the migration grants it.
 - **First install** with an external database uses `pre-install`. With `postgresql.enabled` the database
   does not exist yet, so the hook runs as `post-install` and waits for the database (`migrate.waitForDatabase`);
   do not combine that first install with `--wait`, because Keeper is not ready until the migration ran.
@@ -433,11 +448,19 @@ backup job for an external database; with the CloudNativePG subchart, configure 
 ## Validation status
 
 The chart is checked by `helm lint --strict`, `helm template` of every profile and `kubeconform --strict` in the
-`helm` job of CI; `tests/tooling/test_helm_network_policy.py` renders the profiles and checks the policies, and
-`tests/tooling/test_helm_db_roles.py` the database roles (both skipped without a `helm` binary). The database roles were
+`helm` job of CI. `values.schema.json` types every value of `values.yaml` (enumerations where the comments list
+the allowed values, unknown keys refused except under `config` and `postgresql`), so `helm lint`, `template`,
+`install` and `upgrade` refuse a misspelled key or a wrong type; CI checks that a bad value is refused.
+`tests/tooling/test_helm_network_policy.py` renders the profiles and checks the policies, and
+`tests/tooling/test_helm_db_roles.py` the database roles and the `pg-roles` hook ordering (both skipped without a
+`helm` binary). The database roles were
 installed on a kind cluster with an external Postgres (install, upgrade, `helm test`): Keeper and Scribe
 connected as `lorebase_app` (`rolsuper` and `rolbypassrls` false, no `CREATE` on `public`, no `UPDATE` or
-`DELETE` on `audit_log`), the tables stayed owned by the maintenance role; the CloudNativePG mode was not. Otherwise the chart has not been installed on a live cluster: the pieces that depend on a running
-cluster (the hook ordering, the Ollama sidecar, the CloudNativePG integration, NetworkPolicy behavior) follow the
+`DELETE` on `audit_log`), the tables stayed owned by the maintenance role. The CloudNativePG mode was installed on
+kind (operator chart 0.29.1, image `ghcr.io/cloudnative-pg/postgresql:16-standard-bookworm`) with one shared role,
+then upgraded to two roles with a single `helm upgrade`: the `pg-roles` hook Job declared `lorebase_app` and
+completed before the migration Job started, the operator set its password once Helm applied the Secret, and Keeper
+became ready as `lorebase_app`; a further upgrade was a no-op for the hook. Otherwise the chart has not been installed on a live cluster: the pieces that depend on a running
+cluster (the Ollama sidecar, NetworkPolicy behavior) follow the
 documented Kubernetes and Helm semantics but are untested end to end. The web image and a metrics endpoint
 on the services do not exist yet; the chart's switches for them are off. Scribe is off by default.

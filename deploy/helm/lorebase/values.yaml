@@ -208,6 +208,16 @@ database:
     enabled: true
     # How long the Job waits for a role it does not create (operator or administrator), in seconds.
     waitSeconds: 300
+    # In-cluster database (`postgresql.enabled`): the operator creates the roles of
+    # `postgresql.cluster.roles` only once Helm applies the Cluster, after the pre-upgrade hooks. With
+    # this on, a `pg-roles` hook Job runs before the migration Job of every upgrade: it adds the roles
+    # to the Cluster and waits (`waitSeconds`) until the operator created the application role, so one
+    # `helm upgrade` adds a role (a password Secret created by the same upgrade is applied by the
+    # operator right after the hooks). Idempotent.
+    # Needs pre-upgrade in `migrate.hookEventsInCluster` and, with egress restricted, access to the
+    # Kubernetes API (`networkPolicy.egress.kubernetesApi`).
+    clusterRoles:
+      enabled: true
   # Keeper gets the maintenance DSN too, as on compose: with it, schema commits queue their
   # per-Attribute index changes for Scribe, and the installation commands (`bootstrap`, `principal
   # create`) run in the pod. Keeper never connects with it while serving. false keeps the owner
@@ -861,6 +871,7 @@ networkPolicy:
     #   Guide: DNS, Keeper, the model endpoint, `extra.guide`
     #   Herald: DNS, Keeper, `extra.herald`; web app: `extra.web` only (static files)
     #   Ollama: DNS, `extra.ollama`; migration Job: DNS, Postgres; `helm test` pod: DNS, Keeper
+    #   `pg-roles` hook Job (in-cluster database, upgrades): `kubernetesApi` only
     enabled: true
     # Namespace and pods of the cluster DNS (CoreDNS and kube-dns both carry k8s-app: kube-dns).
     # NodeLocal DNSCache answers on a link-local address: add it to `rules` as an ipBlock.
@@ -913,6 +924,23 @@ networkPolicy:
       ports:
         - protocol: TCP
           port: 443
+    # Kubernetes API server, from the `pg-roles` hook Job of an upgrade (in-cluster database,
+    # `database.setup.clusterRoles`). Most CNIs match the API server endpoints after the Service
+    # address is translated: the control plane addresses, port 6443 (443 on some managed clusters).
+    # Default: the private IPv4 ranges; narrow it to the control plane.
+    kubernetesApi:
+      to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
     # Webhook receivers, from Scribe (webhook_delivery jobs). Targets are public addresses
     # (webhooks.allow_private_targets is false by default), so list their ranges. Empty: none.
     webhooks:
