@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, MutableMapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -98,14 +98,36 @@ def seeded_database(server_url: str, seed: Any) -> Iterator[Seeded]:
             asyncio.run(_execute(url, f"DROP OWNED BY {role}", f"DROP ROLE {role}"))
 
 
+def _observed(app: Any, on_send: Callable[[MutableMapping[str, Any]], None]) -> Any:
+    """`app` with `on_send` called for each message it sends to the client."""
+
+    async def wrapped(scope: Any, receive: Any, send: Any) -> None:
+        async def tap(message: MutableMapping[str, Any]) -> None:
+            on_send(message)
+            await send(message)
+
+        await app(scope, receive, tap)
+
+    return wrapped
+
+
 @asynccontextmanager
 async def keeper(
-    app_url: str, keeper_section: dict[str, Any] | None = None, **sections: Any
+    app_url: str,
+    keeper_section: dict[str, Any] | None = None,
+    *,
+    on_send: Callable[[MutableMapping[str, Any]], None] | None = None,
+    **sections: Any,
 ) -> AsyncIterator[httpx.AsyncClient]:
-    """A Keeper application on `app_url` (default auth mode none) and an HTTP client for it."""
+    """A Keeper application on `app_url` (default auth mode none) and an HTTP client for it.
+
+    `on_send` sees every ASGI message the application sends, as it is sent: the in-process
+    transport returns a response only when its body is complete, so this is how a test learns
+    that a streaming response has started."""
     settings = Settings(keeper=keeper_section or {}, database={"dsn": app_url}, **sections)
     app: FastAPI = create_app(settings)
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    served = app if on_send is None else _observed(app, on_send)
+    transport = httpx.ASGITransport(app=served, raise_app_exceptions=False)
     async with (
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=transport, base_url="http://keeper.test") as http,

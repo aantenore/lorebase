@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -405,12 +405,22 @@ async def _timed_stream(
         "reauthorize_interval_s": reauthorize_s,
         "max_connection_s": max_s,
     }
-    async with keeper(seeded.app_url, section, agents={"feed": feed}) as http:
+    # Keeper sends the 200 of a stream only after authorizing the caller. The in-process client
+    # returns the response when the stream ends, so the application's own send is the signal.
+    open_stream = asyncio.Event()
+
+    def stream_started(message: MutableMapping[str, Any]) -> None:
+        if message["type"] == "http.response.start" and message["status"] == 200:
+            open_stream.set()
+
+    async with keeper(
+        seeded.app_url, section, on_send=stream_started, agents={"feed": feed}
+    ) as http:
         started = time.monotonic()
         listening = asyncio.create_task(
             http.get(f"{BASE}/branches/main/events", headers={"Authorization": f"Bearer {token}"})
         )
-        await asyncio.sleep(0.5)  # connected and authorized
+        await asyncio.wait_for(open_stream.wait(), timeout=10)  # connected and authorized
         assert not listening.done()
         if during is not None:
             await during()
