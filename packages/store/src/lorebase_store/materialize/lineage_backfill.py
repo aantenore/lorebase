@@ -35,7 +35,8 @@ holds (same element, Revision and previous object) is such a row; the fast-forwa
 rebuild writes it, within
 `materialize.fast_forward_history_max_revisions` (a longer range is left as it is). The
 Records last updated by those fast-forwards are then folded again like the others, their
-lineage, lineage revisions and update Revision included. Finding those rows reads the
+lineage, lineage revisions and update Revision included, and so is the lineage of the Links
+those fast-forwards wrote. Finding those rows reads the
 branch's whole history once.
 """
 
@@ -51,11 +52,17 @@ from typing import Any
 from sqlalchemy import TextClause, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_core.tree import kind_partition
+from lorebase_core.tree import LINK_KEY_SEPARATOR, kind_partition
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.jobs import LINEAGE_BACKFILL_JOB, JobRow, enqueue_job
 from lorebase_store.materialize.rebuild import fold_history
-from lorebase_store.materialize.rows import CREATED_KEY, next_lineage
+from lorebase_store.materialize.rows import (
+    CREATED_KEY,
+    PartitionType,
+    next_lineage,
+    parse_partition,
+    split_link_key,
+)
 from lorebase_store.objectstore import PgObjectStore
 from lorebase_store.repositories.materialized import MERGE_ORIGIN_TYPE, MaterializedRepository
 from lorebase_store.repositories.refs import RefRepository
@@ -145,6 +152,20 @@ _FAST_FORWARDS = text(
     """
 )
 
+_ELEMENTS_AT = text(
+    "SELECT partition, element_key FROM mat_history "
+    "WHERE domain_id = :domain AND branch = :branch AND revision_id = :revision"
+)
+
+_LINK_LINEAGE = text(
+    """
+    UPDATE mat_links SET lineage = CAST(:lineage AS jsonb)
+    WHERE domain_id = :domain AND branch = :branch AND relation_id = :relation
+      AND from_key = :from_key AND to_key = :to_key
+      AND lineage IS DISTINCT FROM CAST(:lineage AS jsonb)
+    """
+)
+
 _DROP_HISTORY_AT = text(
     "DELETE FROM mat_history WHERE domain_id = :domain AND branch = :branch "
     "AND revision_id = :revision"
@@ -185,11 +206,13 @@ class LineageBackfill:
     rows: int = 0
     written: int = 0
     fast_forwards: int = 0
+    links: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "branch": self.branch,
             "fast_forwards": self.fast_forwards,
+            "links": self.links,
             "batches": self.batches,
             "rows": self.rows,
             "written": self.written,
@@ -253,7 +276,7 @@ async def backfill_lineage_revisions(
     fast_forwards: list[bytes] = []
     if recompute:
         async with sessions() as session, session.begin():
-            fast_forwards = await _repair_fast_forwards(session, domain_id, branch, runtime)
+            fast_forwards = await _repair_fast_forwards(session, domain_id, branch, runtime, report)
         report.fast_forwards = len(fast_forwards)
     cursor = ("", "")
     while True:
@@ -274,17 +297,23 @@ async def backfill_lineage_revisions(
 
 
 async def _repair_fast_forwards(
-    session: AsyncSession, domain_id: str, branch: str, runtime: StoreRuntime
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    runtime: StoreRuntime,
+    report: LineageBackfill,
 ) -> list[bytes]:
-    """Write the history of the branch's earlier fast-forwards one Revision at a time
-    (module doc); returns the fast-forward targets it rewrote, whose Records need folding
-    again (a range it leaves as it is keeps its rows)."""
+    """Write the history of the branch's earlier fast-forwards one Revision at a time and
+    fold again the lineage of the Links they wrote (module doc); returns the fast-forward
+    targets it rewrote, whose Records need folding again (a range it leaves as it is keeps
+    its rows)."""
     settings = runtime.settings
     await scope_to_domain(session, domain_id)
     await RefRepository(session, domain_id).lock(branch, timeout_ms=settings.commit.lock_timeout_ms)
     found = (await session.execute(_FAST_FORWARDS, {"domain": domain_id, "branch": branch})).all()
     repository = MaterializedRepository(session, domain_id, branch, writes=settings.writes)
     targets: list[bytes] = []
+    links: dict[str, set[str]] = {}
     for revision, old_head in found:
         target = bytes(revision)
         if old_head is None:
@@ -296,12 +325,59 @@ async def _repair_fast_forwards(
         )
         if forwarded is None:
             continue
-        await session.execute(
-            _DROP_HISTORY_AT, {"domain": domain_id, "branch": branch, "revision": target}
-        )
+        at = {"domain": domain_id, "branch": branch, "revision": target}
+        for partition, key in (await session.execute(_ELEMENTS_AT, at)).all():
+            if parse_partition(partition).type is PartitionType.RELATION:
+                links.setdefault(partition, set()).add(key)
+        await session.execute(_DROP_HISTORY_AT, at)
         await repository.insert_chain_history(forwarded)
         targets.append(target)
+    report.links += await _refold_links(session, repository, links, runtime)
     return targets
+
+
+async def _refold_links(
+    session: AsyncSession,
+    repository: MaterializedRepository,
+    links: Mapping[str, set[str]],
+    runtime: StoreRuntime,
+) -> int:
+    """Lineage of the branch's own Links among `links` (keys by partition) folded again
+    from the history, as a rebuild writes it (`rebuild.link_row`); returns how many changed."""
+    settings = runtime.settings
+    objects = PgObjectStore(
+        session,
+        repository.domain_id,
+        writes=settings.writes,
+        batch=settings.materialize.read_batch_rows,
+    )
+    written = 0
+    for partition, keys in sorted(links.items()):
+        relation_id = parse_partition(partition).element_id
+        folded = await fold_history(
+            repository,
+            partition,
+            batch=settings.materialize.read_batch_rows,
+            objects=objects,
+            keys=sorted(keys),
+        )
+        rows = await repository.links(relation_id, [split_link_key(key) for key in keys])
+        for (from_key, to_key), row in sorted(rows.items()):
+            found = folded.get(f"{from_key}{LINK_KEY_SEPARATOR}{to_key}")
+            lineage = next_lineage(None, None if found is None else found.provenance, row.values)
+            result = await session.execute(
+                _LINK_LINEAGE,
+                {
+                    "domain": repository.domain_id,
+                    "branch": repository.branch,
+                    "relation": relation_id,
+                    "from_key": from_key,
+                    "to_key": to_key,
+                    "lineage": json.dumps(lineage),
+                },
+            )
+            written += int(getattr(result, "rowcount", 0) or 0)
+    return written
 
 
 async def _backfill_batch(
