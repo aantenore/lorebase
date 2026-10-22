@@ -2048,12 +2048,19 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+mssql = [
+    { name = "pymssql" },
+]
+mysql = [
+    { name = "asyncmy" },
+]
 parquet = [
     { name = "pyarrow" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "asyncmy", marker = "extra == 'mysql'", specifier = ">=0.2.10" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
@@ -2063,10 +2070,11 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8" },
+    { name = "pymssql", marker = "extra == 'mssql'", specifier = ">=2.3" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["parquet"]
+provides-extras = ["parquet", "mysql", "mssql"]
 
 [[package]]
 name = "lorebase-platform"

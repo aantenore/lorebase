@@ -43,6 +43,7 @@ import {
 } from './live/suggestions';
 import { splitRecordRef } from './refs';
 import type { DocumentText, UploadDocumentInput } from './extraction-types';
+import type { FilePreview } from './inference-types';
 import type { SourceRun, SourceRunStatus } from './sources-types';
 import type {
   Branch,
@@ -79,10 +80,15 @@ function resolutionBody(resolution: Resolution) {
 }
 
 /** The multipart body of `schema:infer`: one `files` part per file, `options` as JSON text. */
-function inferForm(files: File[], options: Record<string, unknown> | undefined): FormData {
+function inferForm(
+  files: File[],
+  options: Record<string, unknown> | undefined,
+  recordsPath?: string,
+): FormData {
   const form = new FormData();
   for (const file of files) form.append('files', file, file.name);
   if (options !== undefined) form.append('options', JSON.stringify(options));
+  if (recordsPath !== undefined && recordsPath !== '') form.append('records_path', recordsPath);
   return form;
 }
 
@@ -543,11 +549,24 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
     inference: {
       infer: (domain, req) =>
         'files' in req
-          ? postForm(`${d(domain)}/schema:infer`, inferForm(req.files, req.options))
+          ? postForm(
+              `${d(domain)}/schema:infer`,
+              inferForm(req.files, req.options, req.recordsPath),
+            )
           : post(`${d(domain)}/schema:infer`, {
               postgres: req.postgres,
               ...(req.options === undefined ? {} : { options: req.options }),
             }),
+      preview: async (domain, file, options) => {
+        const rows = options?.rows === undefined ? '' : `?rows=${String(options.rows)}`;
+        const answer = await postForm<{ files: FilePreview[] }>(
+          `${d(domain)}/schema:preview${rows}`,
+          inferForm([file], undefined, options?.recordsPath),
+        );
+        const [first] = answer.files;
+        if (first === undefined) throw new Error('Keeper returned no preview.');
+        return first;
+      },
     },
 
     suggestions: {

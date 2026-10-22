@@ -7,6 +7,8 @@ import json
 import sys
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -356,3 +358,184 @@ async def test_an_empty_domain_override_refuses_every_source(
         response = await http.post(URL, json={"postgres": {"dsn": SOURCE}})
     assert response.status_code == 422, response.text
     assert response.json()["errors"][0]["pointer"] == "/body/postgres/dsn"
+
+
+# JSON documents with records under a key ----------------------------------------------------
+
+
+NESTED = json.dumps({"data": {"items": SUPPLIER_ROWS}, "total": 3}).encode()
+
+
+async def test_records_path_locates_the_records_of_a_json_upload(
+    client: httpx.AsyncClient,
+) -> None:
+    uploads = files(("supplier.json", NESTED))
+    refused = await client.post(URL, files=uploads)
+    assert refused.status_code == 422, refused.text
+    assert "give records_path" in refused.json()["errors"][0]["message"]
+    response = await client.post(URL, files=uploads, data={"records_path": "data.items"})
+    assert response.status_code == 200, response.text
+    (table,) = response.json()["tables"]
+    assert table["table"] == "supplier"
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [("data.rows", "no 'data.rows' in the document"), ("data..items", "dotted keys")],
+)
+async def test_invalid_records_path(client: httpx.AsyncClient, path: str, message: str) -> None:
+    response = await client.post(
+        URL, files=files(("supplier.json", NESTED)), data={"records_path": path}
+    )
+    assert response.status_code == 422, response.text
+    assert message in response.json()["errors"][0]["message"]
+
+
+# MySQL, MariaDB and SQL Server sources -------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["mysql", "mssql"])
+async def test_sql_source_gives_a_proposal(
+    make_app: Callable[..., FastAPI],
+    client_for: ClientFor,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+) -> None:
+    monkeypatch.setenv("TEST_ERP_DSN", f"{key}://reader@db.example.test/erp")
+    seen: dict[str, Any] = {}
+
+    async def fake_profile(
+        dialect: str, url: str, sql: object, records: object, *, schema: Any, tables: Any
+    ) -> list[TableProfile]:
+        seen.update(dialect=dialect, url=url, schema=schema, tables=tables)
+        csv = CsvProfilingSettings()
+        return [profile_file(SUPPLY_DATA / f"{name}.csv", csv) for name in ("supplier", "contract")]
+
+    monkeypatch.setattr(schema_inference, "profile_sql_database", fake_profile)
+    async with client_for(_source_app(make_app)) as http:
+        response = await http.post(
+            URL, json={key: {"dsn": SOURCE, "schema": "erp", "tables": ["supplier"]}}
+        )
+    assert response.status_code == 200, response.text
+    assert seen == {
+        "dialect": key,
+        "url": f"{key}://reader@db.example.test/erp",
+        "schema": "erp",
+        "tables": ("supplier",),
+    }
+    kinds = {k["api_name"] for k in response.json()["schema"]["kinds"].values()}
+    assert kinds == {"Contract", "Supplier"}
+
+
+@pytest.mark.parametrize(
+    ("body", "pointer"),
+    [
+        ({"mssql": {"dsn": "mssql://u:p@db/erp"}}, "/body/mssql/dsn"),
+        ({"mysql": {"dsn": "secret://env/OTHER"}}, "/body/mysql/dsn"),
+        ({"mysql": {"dsn": SOURCE}}, "/body/mysql/dsn"),  # not set in the environment
+        ({"mssql": {"dsn": SOURCE}, "mysql": {"dsn": SOURCE}}, "/body"),
+        ({"options": {}}, "/body"),
+    ],
+)
+async def test_invalid_sql_sources(
+    make_app: Callable[..., FastAPI], client_for: ClientFor, body: Any, pointer: str
+) -> None:
+    async with client_for(_source_app(make_app)) as http:
+        response = await http.post(URL, json=body)
+    assert response.status_code == 422, response.text
+    assert response.json()["errors"][0]["pointer"] == pointer
+    assert "mssql://" not in response.text
+
+
+async def test_sql_source_errors_do_not_leak_the_url(
+    make_app: Callable[..., FastAPI], client_for: ClientFor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_ERP_DSN", "mssql://reader:hunter2-long@db.example.test/erp")
+
+    async def unavailable(*_: Any, **__: Any) -> list[TableProfile]:
+        raise OSError("connection to mssql://reader:hunter2-long@db refused")
+
+    async def unknown(*_: Any, **__: Any) -> list[TableProfile]:
+        raise schema_inference.SqlProfileError("unknown tables in the database: nope")
+
+    async with client_for(_source_app(make_app)) as http:
+        monkeypatch.setattr(schema_inference, "profile_sql_database", unavailable)
+        down = await http.post(URL, json={"mssql": {"dsn": SOURCE}})
+        monkeypatch.setattr(schema_inference, "profile_sql_database", unknown)
+        missing = await http.post(URL, json={"mssql": {"dsn": SOURCE}})
+    assert down.status_code == 503, down.text
+    assert "hunter2" not in down.text
+    assert missing.status_code == 422, missing.text
+    assert missing.json()["errors"][0]["pointer"] == "/body/mssql"
+
+
+# Preview ----------------------------------------------------------------------------------
+
+PREVIEW = "/api/v1/domains/supply/schema:preview"
+
+
+async def test_preview_returns_the_first_rows_of_a_parquet_file(
+    client: httpx.AsyncClient,
+) -> None:
+    rows = [{"id": n, "day": date(2026, 1, n), "price": Decimal("1.50")} for n in range(1, 8)]
+    response = await client.post(
+        PREVIEW, files=files(("days.parquet", _parquet(rows))), params={"rows": 3}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["domain"] == "supply"
+    (preview,) = body["files"]
+    assert preview["name"] == "days.parquet"
+    assert preview["columns"] == ["id", "day", "price"]
+    assert preview["rows"] == [
+        {"id": n, "day": f"2026-01-0{n}", "price": "1.50"} for n in (1, 2, 3)
+    ]
+    assert (preview["row_count"], preview["truncated"]) == (7, True)
+
+
+async def test_preview_reads_text_formats_and_records_paths(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        PREVIEW, files=files(("supplier.csv", SUPPLIER), ("orders.jsonl", _jsonl(ORDER_ROWS)))
+    )
+    assert response.status_code == 200, response.text
+    csv, jsonl = response.json()["files"]
+    assert csv["rows"][0] == {"supplier_code": "S-1", "legal_name": "Kavsen", "country": "PL"}
+    assert jsonl["rows"][1] == ORDER_ROWS[1]
+    assert (csv["truncated"], jsonl["truncated"]) == (False, False)
+    nested = await client.post(
+        PREVIEW, files=files(("nested.json", NESTED)), data={"records_path": "data.items"}
+    )
+    assert nested.status_code == 200, nested.text
+    assert nested.json()["files"][0]["rows"][0] == SUPPLIER_ROWS[0]
+
+
+@pytest.mark.parametrize("rows", [0, 201])
+async def test_preview_rows_are_bounded(client: httpx.AsyncClient, rows: int) -> None:
+    response = await client.post(PREVIEW, files=small(), params={"rows": rows})
+    assert response.status_code == 422, response.text
+    assert response.json()["errors"][0]["pointer"] == "/query/rows"
+
+
+async def test_preview_obeys_the_upload_limits(
+    make_app: Callable[..., FastAPI], client_for: ClientFor
+) -> None:
+    app = make_app({"schema_inference": {"max_files": 1, "max_file_bytes": 1000}})
+    async with client_for(app) as http:
+        too_many = await http.post(PREVIEW, files=small())
+        too_big = await http.post(PREVIEW, files=files(("a.csv", b"x\n" + b"1\n" * 600)))
+        suffix = await http.post(PREVIEW, files=files(("a.xlsx", SUPPLIER)))
+        json_body = await http.post(PREVIEW, json={"postgres": {"dsn": SOURCE}})
+    assert too_many.status_code == 422
+    assert too_big.status_code == 413
+    assert suffix.status_code == 422
+    assert json_body.status_code == 422
+
+
+async def test_preview_without_pyarrow_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _parquet(SUPPLIER_ROWS)
+    monkeypatch.setitem(sys.modules, "pyarrow", None)
+    response = await client.post(PREVIEW, files=files(("supplier.parquet", data)))
+    assert response.status_code == 422, response.text
+    assert "lorebase-keeper[parquet]" in response.json()["errors"][0]["message"]

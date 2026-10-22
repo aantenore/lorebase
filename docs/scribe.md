@@ -293,8 +293,11 @@ DSN of the Lorebase database. Errors name the reference, never the value behind 
   is bundled, so no ODBC driver is needed). MySQL and MariaDB sessions are `READ ONLY` and
   bounded by `max_execution_time` (MariaDB: `max_statement_time`). SQL Server has no read-only
   transaction: the login must be able to read only. `query` is wrapped as
-  `SELECT * FROM (<query>) AS lorebase_source`, so SQL Server refuses an `ORDER BY` in it;
-  `datetime2` watermarks keep their microseconds. Locators are `<table>:<row>` or `query:<row>`.
+  `SELECT * FROM (<query>) AS lorebase_source`; SQL Server refuses an `ORDER BY` in a derived
+  table unless it has `TOP` or `OFFSET`, so a query whose top level ends in `ORDER BY` gets
+  `OFFSET 0 ROWS` appended (the rows and their order are unchanged). `datetime2` watermarks keep
+  their microseconds and a `rowversion` watermark is binary: it is stored in the run as
+  hexadecimal text and bound back as bytes. Locators are `<table>:<row>` or `query:<row>`.
 
 **Mapping.** Each mapped Attribute reads one column through a list of transforms: `trim`,
 `lower`, `upper`, `null_if` (`value` or `values`), `constant` (`value`), `concat` (`columns`,

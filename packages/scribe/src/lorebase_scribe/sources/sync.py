@@ -120,6 +120,9 @@ PERMANENT_ERRORS: tuple[type[Exception], ...] = (
 
 def encode_watermark(value: Any) -> dict[str, JsonValue]:
     """A watermark value as JSON with its type, so the next run binds the same native type."""
+    if isinstance(value, bytes | bytearray):
+        # SQL Server rowversion is binary(8): hex keeps it JSON-safe and bound back as bytes.
+        return {"type": "bytes", "value": bytes(value).hex()}
     if isinstance(value, datetime):
         return {"type": "timestamp", "value": value.isoformat()}
     if isinstance(value, date):
@@ -139,6 +142,8 @@ def decode_watermark(stored: Any) -> Any:
     if not isinstance(stored, dict) or "value" not in stored:
         return None
     kind, text = stored.get("type"), str(stored["value"])
+    if kind == "bytes":
+        return bytes.fromhex(text)
     if kind == "timestamp":
         return datetime.fromisoformat(text)
     if kind == "date":

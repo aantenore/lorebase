@@ -32,7 +32,7 @@ The suffix decides how a file is read (`keeper.schema_inference.file_formats`; o
 | Suffix | Read as |
 |--------|---------|
 | `.csv`, `.tsv`, `.txt` | CSV or TSV text: the first row is the header, values stay text (`store.profiling.csv`) |
-| `.json` | A UTF-8 JSON document holding an array of objects; a document that is not an array is refused |
+| `.json` | A UTF-8 JSON document holding an array of objects, or an object holding that array at the dotted keys of the `records_path` form field (`data.items`); otherwise a document that is not an array is refused |
 | `.jsonl`, `.ndjson` | JSON Lines: one UTF-8 object per line, blank lines skipped |
 | `.parquet` | A Parquet file, decoded `store.profiling.records.batch_rows` rows at a time; needs pyarrow, installed with `lorebase-keeper[parquet]`, and is refused with a 422 naming the extra without it |
 
@@ -44,10 +44,18 @@ booleans, dates from Parquet, nested objects and arrays as `json` values). Every
 `keeper.limits.max_request_body_bytes`; a file that cannot be read is refused with a 422
 pointing at it (`/body/files/<index>`).
 
-Or name a Postgres source. The connection is a secret reference that an administrator listed in
+Or name a database source: `postgres`, `mysql` (MySQL and MariaDB) or `mssql` (SQL Server),
+exactly one per request. The connection is a secret reference that an administrator listed in
 `keeper.schema_inference.allowed_sources`; callers never send connection strings, and the
-tables are read in a read-only transaction with a statement timeout. `allowed_sources` applies to
-every Domain, so `schema.write` in any Domain may profile those sources. To bind sources to
+tables are read in a read-only transaction with a statement timeout. MySQL and SQL Server
+tables are read through the record profiler (`store.profiling.sql`): `sample_rows` rows per
+table and, with `count_rows`, a `count(*)` so that the sample is known as partial, with the
+primary and foreign keys the catalog declares. MySQL sessions are `READ ONLY` and bounded by
+`max_execution_time` (MariaDB: `max_statement_time`); SQL Server has no read-only transaction, so
+the login must be able to read only. The drivers are the Keeper extras `lorebase-keeper[mysql]`
+and `lorebase-keeper[mssql]`, and a request without them is refused with a 422 naming the
+extra. `schema` is optional for those two (default: the connection's own). `allowed_sources`
+applies to every Domain, so `schema.write` in any Domain may profile those sources. To bind sources to
 Domains, list them in `keeper.schema_inference.domain_sources` (Domain id to secret references):
 a listed Domain may name only its own references (`[]` names none) and `allowed_sources` no
 longer applies to it. A refused source is reported without naming the sources of other Domains:
@@ -61,7 +69,15 @@ curl -X POST "$LOREBASE/api/v1/domains/supply/schema:infer" \
 The JSON answer holds `schema` (elements keyed by id), `yaml` (the same schema as a
 [schema document](design.md#513-schema-as-code)), `evidence` (one entry per element),
 `issues` and `tables` (what each table became). With `Accept: text/yaml` or `?format=yaml` the
-answer is the YAML document only. From Python:
+answer is the YAML document only.
+
+`POST /domains/{d}/schema:preview` takes the same uploads under the same permission and limits
+and returns the first rows of each file as records (`rows` query parameter, default
+`keeper.schema_inference.preview_rows`, at most `preview_max_rows`) instead of a proposal:
+`{"files": [{"name", "columns", "rows", "row_count", "truncated"}]}`. Nothing is stored; dates
+and decimals come as text. The web Source preview uses it for Parquet files.
+
+From Python:
 
 ```python
 from lorebase_core.infer import infer_schema
@@ -81,8 +97,9 @@ synchronization ([scribe.md](scribe.md#sources)). Every row is read and counted,
 `store.profiling.records` decides which are kept, and the columns are the connector's header
 followed by every other key seen; values keep their native types (numbers, dates and nested
 objects from JSON or Parquet). The MySQL and SQL Server drivers are optional extras
-(`lorebase-scribe[mysql]`, `lorebase-scribe[mssql]`); the Keeper endpoint above names Postgres
-tables only, so those databases are profiled through their Source, not by DSN:
+(`lorebase-scribe[mysql]`, `lorebase-scribe[mssql]`). The Keeper endpoint above also names
+MySQL, MariaDB and SQL Server by secret reference; profiling a configured Source through its
+connector reads every row and takes the Source's own settings and mapping rules:
 
 ```python
 from lorebase_scribe.settings import scribe_settings
@@ -206,9 +223,8 @@ patterned strings) and all seven Relations with their cardinality; see
   referenced keys; declared constraints are the only certainty.
 - Tell apart day-month and month-day dates (`date_formats` is explicit), or values that are
   coincidentally unique in small tables.
-- Read records nested inside a JSON upload (`{"data": [...]}`) or flatten nested objects into
-  columns: upload the array itself, or profile the file as a Source with `records_path` and
-  `flatten_separator` through Scribe (`profile_source`). Spreadsheets other than CSV/TSV
+- Flatten nested objects into columns: they stay `json` values, or profile the file as a Source
+  with `flatten_separator` through Scribe (`profile_source`). Spreadsheets other than CSV/TSV
   exports are not read.
 - Produce Source mappings: the proposal is a schema; mapping the tables as Sources is a later
   step.

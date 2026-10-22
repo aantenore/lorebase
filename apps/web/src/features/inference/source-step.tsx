@@ -17,15 +17,27 @@ export interface SourceStepProps {
 function FileSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'onRun'>) {
   const { inference } = useConfig();
   const [files, setFiles] = useState<File[]>([]);
+  const [recordsPath, setRecordsPath] = useState('');
   return (
     <div className="flex flex-col gap-4">
       <FileDrop files={files} caps={inference} onChange={setFiles} />
+      <Input
+        label="Records path (JSON documents)"
+        value={recordsPath}
+        placeholder="data.items"
+        hint="Dotted keys of the array of records, for JSON documents that hold it under a key. Leave empty when the document is the array."
+        onChange={(event) => {
+          setRecordsPath(event.target.value);
+        }}
+      />
       <div>
         <Button
           variant="primary"
           disabled={files.length === 0 || pending}
           onClick={() => {
-            onRun({ files });
+            onRun(
+              recordsPath.trim() === '' ? { files } : { files, recordsPath: recordsPath.trim() },
+            );
           }}
         >
           {pending ? 'Inferring...' : 'Run inference'}

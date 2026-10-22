@@ -57,7 +57,32 @@ export interface PostgresSourceRef {
   tables?: string[];
 }
 
-/** CSV or TSV files (the file name is the table name), or a Postgres source reference. */
+/**
+ * Data files (the file name is the table name; `recordsPath` locates the records array of the
+ * JSON documents that hold it under a key), or a Postgres source reference.
+ */
 export type InferRequest =
-  | { files: File[]; options?: Record<string, unknown> }
+  | { files: File[]; options?: Record<string, unknown>; recordsPath?: string }
   | { postgres: PostgresSourceRef; options?: Record<string, unknown> };
+
+/**
+ * The first rows of an uploaded file (`POST /domains/{d}/schema:preview`): the way to show a
+ * format the browser cannot read, such as Parquet. Nothing is stored. Dates and decimals come
+ * as text.
+ */
+export interface FilePreview {
+  name: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  /** Rows in the file. */
+  row_count: number;
+  /** The file has more rows than were returned. */
+  truncated: boolean;
+}
+
+export interface PreviewOptions {
+  /** Rows to return; Keeper's default and cap apply otherwise. */
+  rows?: number;
+  /** Dotted path of the records array of a JSON document. */
+  recordsPath?: string;
+}

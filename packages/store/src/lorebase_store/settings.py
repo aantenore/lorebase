@@ -467,12 +467,35 @@ class PostgresProfilingSettings(SectionModel):
     )
 
 
+class SqlProfilingSettings(SectionModel):
+    """Reading MySQL, MariaDB and SQL Server tables for schema inference: catalog reflection
+    plus a bounded SELECT per table, profiled as records. The drivers are optional extras
+    (`lorebase-keeper[mysql]`, `lorebase-keeper[mssql]`)."""
+
+    sample_rows: int = Field(default=10000, ge=1, description="Rows read per table (LIMIT/TOP).")
+    max_tables: int = Field(default=200, ge=1, description="Tables profiled per request.")
+    statement_timeout_ms: int = Field(
+        default=15000,
+        ge=1,
+        description="Longest execution of each query: max_execution_time (MySQL), "
+        "max_statement_time (MariaDB, whole seconds), the driver timeout and LOCK_TIMEOUT "
+        "(SQL Server).",
+    )
+    connect_timeout_s: float = Field(default=10.0, gt=0, description="Connection timeout.")
+    count_rows: bool = Field(
+        default=True,
+        description="count(*) each table so that inference knows the sample is partial; false "
+        "takes the sampled rows as the whole table.",
+    )
+
+
 class ProfilingSettings(SectionModel):
     """Profilers that feed schema inference (design 9.1)."""
 
     csv: CsvProfilingSettings = Field(default_factory=CsvProfilingSettings)
     records: RecordProfilingSettings = Field(default_factory=RecordProfilingSettings)
     postgres: PostgresProfilingSettings = Field(default_factory=PostgresProfilingSettings)
+    sql: SqlProfilingSettings = Field(default_factory=SqlProfilingSettings)
 
 
 class IndexSettings(SectionModel):

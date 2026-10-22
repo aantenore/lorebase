@@ -43,6 +43,25 @@ def test_json_document() -> None:
     assert list(profile.columns[2].values) == [{"city": "Gdansk"}, None]
 
 
+def test_json_document_with_records_under_a_key() -> None:
+    data = json.dumps({"data": {"items": ROWS}, "total": 2}).encode()
+    settings = RecordProfilingSettings()
+    profile = profile_json_bytes(data, "suppliers.json", settings, "data.items")
+    assert profile.row_count == 2
+    assert list(profile.columns[0].values) == [1, 2]
+    empty = json.dumps({"data": {"items": None}}).encode()
+    assert profile_json_bytes(empty, "e.json", settings, "data.items").row_count == 0
+    for path, message in [
+        ("data.rows", "no 'data.rows' in the document"),
+        ("total", "'total' is not an array of records"),
+        ("data.items.id", "no 'data.items.id' in the document"),
+    ]:
+        with pytest.raises(RecordProfileError, match=message):
+            profile_json_bytes(data, "s.json", settings, path)
+    with pytest.raises(RecordProfileError, match="give records_path"):
+        profile_json_bytes(data, "s.json", settings)
+
+
 def test_json_lines_skip_blank_lines() -> None:
     data = b"\n".join(json.dumps(row).encode() for row in ROWS) + b"\n\n"
     profile = profile_jsonl_bytes(data, "suppliers.jsonl", RecordProfilingSettings())

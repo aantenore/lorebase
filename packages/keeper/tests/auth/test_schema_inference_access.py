@@ -49,3 +49,20 @@ async def test_modelers_get_a_proposal_and_an_audit_entry(
     assert entry.details["permission"] == "schema.write"
     assert entry.details["source"] == "csv"
     assert entry.details["kinds"] == 1
+
+
+async def test_previews_need_the_same_permission_and_are_audited(
+    auth_app: Callable[..., FastAPI], client_for: ClientFor, store: Any, codec: Any
+) -> None:
+    url = "/api/v1/domains/acme/schema:preview"
+    async with client_for(auth_app(API_KEYS)) as http:
+        refused = await http.post(url, files=FILES, headers=_headers(store, codec, "viewer"))
+        allowed = await http.post(url, files=FILES, headers=_headers(store, codec, "modeler"))
+        anonymous = await http.post(url, files=FILES)
+    assert refused.status_code == 403
+    assert refused.json()["permission"] == "schema.write"
+    assert allowed.status_code == 200, allowed.text
+    assert anonymous.status_code == 401
+    entry = next(row for row in store.audit_rows if row.action == "schema.preview")
+    assert entry.actor == "svc_modeler"
+    assert entry.details["source"] == "csv"

@@ -12,8 +12,10 @@ time. Locators are `table:<row number>` (the table name), or `query:<row number>
   SQL Server has no read-only transaction, so the login must only be able to read. The
   connection value is `mssql://user:password@host:1433/database`.
 
-A `query` is wrapped as `SELECT * FROM (<query>) AS lorebase_source`: SQL Server refuses an
-`ORDER BY` inside it, and a trailing `;` is removed.
+A `query` is wrapped as `SELECT * FROM (<query>) AS lorebase_source` and a trailing `;` is
+removed. SQL Server refuses an `ORDER BY` in a derived table unless it has `TOP` or `OFFSET`, so
+a query of that kind whose top level ends in `ORDER BY` without either gets `OFFSET 0 ROWS`
+appended (valid from SQL Server 2012, and it does not limit the rows).
 """
 
 from __future__ import annotations
@@ -50,6 +52,48 @@ def quote_identifier(name: str, opening: str = '"', closing: str = '"') -> str:
     if not parts or any(_IDENTIFIER.fullmatch(part) is None for part in parts):
         raise SourceDefinitionError(f"not a plain SQL identifier: {name!r}")
     return ".".join(f"{opening}{part}{closing}" for part in parts)
+
+
+_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_$#@]*")
+_OPAQUE = re.compile(
+    r"'(?:[^']|'')*'|\[(?:[^\]]|\]\])*\]|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?\*/", re.S
+)
+
+
+def top_level_words(query: str) -> list[str]:
+    """Upper-cased keywords of `query` outside parentheses, string literals, quoted
+    identifiers and comments."""
+    words: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(query):
+        quoted = _OPAQUE.match(query, index)
+        if quoted is not None:
+            index = quoted.end()
+            continue
+        char = query[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and (word := _WORD.match(query, index)) is not None:
+            words.append(word.group().upper())
+            index = word.end()
+            continue
+        index += 1
+    return words
+
+
+def mssql_orderable(query: str) -> str:
+    """`query` made valid as a derived table: a top-level trailing `ORDER BY` with no `TOP`,
+    `OFFSET` or `FOR` clause gets `OFFSET 0 ROWS`, which keeps the order and all the rows."""
+    words = top_level_words(query)
+    if "TOP" in words or "OFFSET" in words or "FOR" in words:
+        return query
+    for position in range(len(words) - 1, 0, -1):
+        if words[position] == "BY" and words[position - 1] == "ORDER":
+            return f"{query}\nOFFSET 0 ROWS"
+    return query
 
 
 def _require_driver(module: str, extra: str, label: str) -> None:
@@ -111,6 +155,10 @@ class _SqlConnector:
     def _quote(self, name: str) -> str:
         return quote_identifier(name, self.opening, self.closing)
 
+    def _derived(self, query: str) -> str:
+        """The query as the body of a derived table (unchanged unless a dialect needs more)."""
+        return query
+
     def statement(self, since: Any) -> tuple[str, dict[str, Any], str]:
         """SQL text, parameters and the relation name used in row locators."""
         source = self.source
@@ -118,7 +166,7 @@ class _SqlConnector:
             query = (source.query or "").strip().rstrip(";").rstrip()
             if not query:
                 raise SourceDefinitionError(f"{self.query_type.value} Sources need a query")
-            body = f"SELECT * FROM ({query}) AS lorebase_source"
+            body = f"SELECT * FROM ({self._derived(query)}) AS lorebase_source"
             name = "query"
         else:
             name = source.table or source.api_name.rsplit(".", 1)[-1]
@@ -204,6 +252,9 @@ class MssqlConnector(_SqlConnector):
     driver = "pymssql"
     schemes = frozenset({"mssql", "sqlserver", "mssql+pymssql"})
     engine_factory = staticmethod(lambda url, **options: create_engine(url, **options))
+
+    def _derived(self, query: str) -> str:
+        return mssql_orderable(query)
 
     def statement(self, since: Any) -> tuple[str, dict[str, Any], str]:
         sql, parameters, name = super().statement(since)

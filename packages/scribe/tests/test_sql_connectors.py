@@ -27,6 +27,8 @@ from lorebase_scribe.sources import (
 )
 from lorebase_scribe.sources import sql as sql_module
 from lorebase_scribe.sources.mapping import SourceDefinitionError
+from lorebase_scribe.sources.sql import mssql_orderable
+from lorebase_scribe.sources.sync import decode_watermark, encode_watermark
 from lorebase_store.settings import RecordProfilingSettings
 
 CONNECTION = "secret://env/TEST_SQL_DSN"
@@ -422,3 +424,60 @@ async def test_a_sql_source_is_profiled_for_inference(
     assert profile.name == "purchase_orders"
     assert profile.row_count == 5
     assert [column.name for column in profile.columns] == ["po_number", "total"]
+
+
+@pytest.mark.parametrize(
+    ("query", "ordered"),
+    [
+        ("SELECT a FROM t ORDER BY a", True),
+        ("select a from t order by a desc, b", True),
+        ("SELECT a FROM t UNION SELECT a FROM u ORDER BY a", True),
+        ("SELECT a FROM t ORDER BY a -- newest first", True),
+        ("SELECT TOP 5 a FROM t ORDER BY a", False),
+        ("SELECT a FROM t ORDER BY a OFFSET 5 ROWS", False),
+        ("SELECT a FROM t", False),
+        ("SELECT a FROM (SELECT a FROM t ORDER BY a OFFSET 0 ROWS) x", False),
+        ("SELECT 'order by' AS [order by] FROM t -- ORDER BY x", False),
+        ("SELECT a FROM t /* ORDER BY a */", False),
+    ],
+)
+def test_mssql_order_by_gets_offset(query: str, ordered: bool) -> None:
+    assert mssql_orderable(query) == (query + "\nOFFSET 0 ROWS" if ordered else query)
+
+
+def test_mssql_query_statement_with_order_by(supply_schema: Schema) -> None:
+    base = supply_schema.source_by_api_name("erp.purchase_orders")
+    assert base is not None
+    source = base.model_copy(
+        update={
+            "type": SourceType.MSSQL_QUERY,
+            "query": "SELECT po_number FROM dbo.po ORDER BY po_number;",
+            "scope_filter": None,
+            "watermark_column": None,
+            "sync_mode": SyncMode.SNAPSHOT,
+        }
+    )
+    sql, _, _ = MssqlConnector(source, MssqlSourceSettings()).statement(None)
+    assert sql == (
+        "SELECT * FROM (SELECT po_number FROM dbo.po ORDER BY po_number\nOFFSET 0 ROWS)"
+        " AS lorebase_source"
+    )
+    mysql = source.model_copy(update={"type": SourceType.MYSQL_QUERY})
+    sql, _, _ = MysqlConnector(mysql, MysqlSourceSettings()).statement(None)
+    assert "OFFSET" not in sql
+
+
+def test_rowversion_watermarks_round_trip_as_hex_bytes(supply_schema: Schema) -> None:
+    stored = encode_watermark(bytes.fromhex("00000000000007d1"))
+    assert stored == {"type": "bytes", "value": "00000000000007d1"}
+    since = decode_watermark(stored)
+    assert since == b"\x00\x00\x00\x00\x00\x00\x07\xd1"
+    base = supply_schema.source_by_api_name("erp.purchase_orders")
+    assert base is not None
+    source = base.model_copy(
+        update={"type": SourceType.MSSQL_TABLE, "table": "dbo.po", "watermark_column": "rv"}
+    )
+    sql, parameters, _ = MssqlConnector(source, MssqlSourceSettings()).statement(since)
+    assert parameters == {"since": since}
+    assert isinstance(parameters["since"], bytes)
+    assert "[rv] > :since ORDER BY [rv]" in sql

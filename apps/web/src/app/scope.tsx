@@ -89,6 +89,11 @@ export function useScope(): Scope {
   return scope;
 }
 
+/** The Domain scope when under a Domain route, `null` elsewhere. */
+export function useOptionalScope(): Scope | null {
+  return use(ScopeContext);
+}
+
 /** Branch and Revision context from the URL, to carry along when linking to another screen. */
 export function useScopeSearch(): ScopeSearch {
   const raw: Record<string, unknown> = useSearch({ strict: false });

@@ -662,6 +662,12 @@ store:
       max_tables: 200            # tables profiled per request
       statement_timeout_ms: 15000
       exact_row_count: false     # true: count(*) per table; false: planner estimate
+    sql:                         # MySQL, MariaDB and SQL Server tables (drivers: keeper extras)
+      sample_rows: 10000         # rows read per table (LIMIT / TOP)
+      max_tables: 200            # tables profiled per request
+      statement_timeout_ms: 15000
+      connect_timeout_s: 10.0
+      count_rows: true           # count(*) per table so a partial sample is known as such
 
   indexes:                       # per-Attribute partial indexes on mat_records
     enabled: true                # false: an administrator manages them. A commit role that does
