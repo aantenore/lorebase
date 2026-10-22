@@ -4,8 +4,9 @@ Budgets (from `guide.agent`, lowered per request, never raised):
 
 - `max_steps` tool calls; when they are used up the model gets one last turn to answer;
 - `max_tokens_per_call` completion tokens per model call;
-- `max_total_tokens` input plus output tokens over the whole exploration; the next call is
-  only made while tokens remain, and its completion cap never exceeds what remains;
+- `max_total_tokens` input plus output tokens over the whole exploration; before each call the
+  input is estimated from the text length, and the call is only made when that estimate fits in
+  what remains, with a completion cap of at most what is left after it;
 - `timeout_s` wall-clock time from the start, covering model calls and Keeper reads alike.
 
 The loop yields `Event`s that the HTTP layer streams as server-sent events. Logs and metrics
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable
@@ -35,6 +37,8 @@ from lorebase_guide.trace import TraceSession
 from lorebase_inference import ChatModel, ChatOptions, InferenceError, Message
 
 logger = logging.getLogger("lorebase.guide.agent")
+
+_CHARS_PER_TOKEN = 4  # input estimate before a call; same ratio as the inference package
 
 
 @dataclass(frozen=True)
@@ -125,7 +129,13 @@ class Explorer:
         ]
         yield Event(
             "session",
-            {"session_id": trace.session_id, "domain": domain, "branch": branch},
+            {
+                "session_id": trace.session_id,
+                "domain": domain,
+                "branch": branch,
+                "model": getattr(self._chat, "model", None),
+                "max_steps": budget.max_steps,
+            },
         )
         final: dict[str, Any] | None = None
         try:
@@ -194,7 +204,11 @@ class Explorer:
     async def _turn(
         self, messages: list[Message], budget: Budget, state: Exploration, deadline: float
     ) -> dict[str, Any]:
-        remaining = budget.max_total_tokens - state.usage.total
+        schema = prompts.turn_schema()
+        chars = len(json.dumps(schema)) + sum(len(m.content) for m in messages)
+        remaining = (
+            budget.max_total_tokens - state.usage.total - math.ceil(chars / _CHARS_PER_TOKEN)
+        )
         if remaining <= 0:
             raise _StopError("budget", "the token budget of this exploration is used up")
         options = ChatOptions(
@@ -205,7 +219,7 @@ class Explorer:
         try:
             with tracer.start_as_current_span("guide.model"):
                 result = await _bounded(
-                    self._chat.complete_json(messages, prompts.turn_schema(), options), deadline
+                    self._chat.complete_json(messages, schema, options), deadline
                 )
         except InferenceError as exc:
             logger.warning("model call failed", extra={"error": type(exc).__name__})

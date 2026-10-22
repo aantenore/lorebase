@@ -227,6 +227,18 @@ async def test_step_budget_forces_a_final_turn(keeper: FakeKeeper) -> None:
     assert named(stream, "done")[0]["steps"] == 2
 
 
+async def test_session_event_names_the_model_and_effective_steps(keeper: FakeKeeper) -> None:
+    chat = ScriptedChat([answer("x", found=False)])
+    stream = await explore(keeper, chat, body={**QUESTION, "max_steps": 3})
+    session = named(stream, "session")[0]
+    assert session["model"] == "explore"
+    assert session["max_steps"] == 3
+    stream = await explore(
+        keeper, ScriptedChat([answer("x", found=False)]), body={**QUESTION, "max_steps": 40}
+    )
+    assert named(stream, "session")[0]["max_steps"] == 8
+
+
 async def test_request_cannot_raise_the_step_budget(keeper: FakeKeeper) -> None:
     chat = ScriptedChat([tool("search", q="acme") for _ in range(5)])
     stream = await explore(keeper, chat, body={**QUESTION, "max_steps": 40}, agent={"max_steps": 1})
@@ -242,17 +254,40 @@ async def test_token_budget_stops_the_exploration(keeper: FakeKeeper) -> None:
     ]
     assert named(stream, "answer")[0]["found"] is False
     assert named(stream, "done")[0]["outcome"] == "budget"
-    assert len(chat.calls) == 1
+    assert chat.calls == []
 
 
 async def test_completion_cap_never_exceeds_the_remaining_budget(keeper: FakeKeeper) -> None:
     chat = ScriptedChat([tool("search", q="acme"), answer("Acme.", "Supplier/S-1")])
     await explore(keeper, chat, agent={"max_tokens_per_call": 4000, "max_total_tokens": 1500})
     caps = [o.max_tokens for o in chat.options if o is not None]
-    assert caps[0] == 1500
+    assert caps[0] is not None
+    assert caps[0] < 1500
     assert all(c is not None and c <= 1500 for c in caps)
     assert caps[1] is not None
-    assert caps[1] < 1500
+    assert caps[1] < caps[0]
+
+
+async def test_call_that_would_exceed_the_budget_is_not_made(keeper: FakeKeeper) -> None:
+    chat = ScriptedChat([tool("search", q="acme"), answer("Acme.", "Supplier/S-1")])
+    stream = await explore(keeper, chat, agent={"max_total_tokens": 500})
+
+    assert chat.calls == []
+    assert named(stream, "error")[0]["code"] == "budget"
+    assert named(stream, "answer")[0]["found"] is False
+    done = named(stream, "done")[0]
+    assert done["outcome"] == "budget"
+    assert done["tokens"] == {"input": 0, "output": 0}
+
+
+async def test_estimated_input_of_later_calls_is_capped(keeper: FakeKeeper) -> None:
+    chat = ScriptedChat([tool("search", q="acme") for _ in range(6)])
+    stream = await explore(keeper, chat, agent={"max_total_tokens": 1500})
+
+    done = named(stream, "done")[0]
+    assert done["outcome"] == "budget"
+    assert len(chat.calls) < 6
+    assert done["tokens"]["input"] + done["tokens"]["output"] <= 1500
 
 
 class SlowChat:

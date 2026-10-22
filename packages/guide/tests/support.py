@@ -185,6 +185,10 @@ class ScriptedChat:
         self.options: list[ChatOptions | None] = []
         self._llm = LlmSettings(provider="fake", model="explore")
 
+    @property
+    def model(self) -> str:
+        return self._llm.model
+
     async def complete_json(
         self, messages: Sequence[Message], schema: JsonSchema, options: ChatOptions | None = None
     ) -> ChatResult:

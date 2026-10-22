@@ -56,7 +56,7 @@ server-sent events, each a JSON object:
 
 | Event | Data |
 |-------|------|
-| `session` | `session_id` of the agent trace, `domain`, `branch` |
+| `session` | `session_id` of the agent trace, `domain`, `branch`, `model` (the configured chat model; null when the provider does not name one), `max_steps` (effective step budget of this run) |
 | `thought` | `step`, `text`: the model's short reasoning note before its next action |
 | `tool_call` | `step`, `tool`, `args`: one Keeper read |
 | `tool_result` | `step`, `tool`, `ok`, `summary`, `refs` (Records the read returned) |
@@ -161,7 +161,7 @@ explorations instead, so it can be tried without Guide.
 | Setting | Default | Bounds |
 |---------|---------|--------|
 | `guide.agent.max_steps` | 8 | tool calls; then one last turn to answer |
-| `guide.agent.max_tokens_per_call` | 1024 | completion cap of one model call, never above what remains of the total |
+| `guide.agent.max_tokens_per_call` | 1024 | completion cap of one model call, never above what remains of the total after the estimated input |
 | `guide.agent.max_total_tokens` | 40000 | input plus output tokens of one exploration |
 | `guide.agent.timeout_s` | 120 | wall clock of one exploration, model calls and Keeper reads alike |
 | `guide.limits.explorations_per_minute` | 6 | per credential |
@@ -169,7 +169,11 @@ explorations instead, so it can be tried without Guide.
 | `guide.limits.max_concurrent` | 4 | per process |
 | `guide.limits.embeds_per_minute` | 120 | per credential |
 
-When a budget runs out the stream ends with an `error` event, a `Not found in the graph.` answer
+Before each model call Guide estimates the input (prompt, accumulated messages and tool results,
+about 4 characters per token) and makes the call only if used plus estimated input still fits in
+`max_total_tokens`; otherwise the exploration ends as below without calling the model. The
+completion cap is cut to what remains after the estimate, so the total stays within the budget up
+to the estimate's error. When a budget runs out the stream ends with an `error` event, a `Not found in the graph.` answer
 and `done`. Rate windows and concurrency slots are keyed on the principal Keeper reported, so
 several keys of one principal share them, and unverified credentials never enter them; the
 window table holds at most `guide.limits.max_tracked_callers` callers, and while it is full of
