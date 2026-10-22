@@ -20,12 +20,14 @@ from lorebase_store.vault.transfer import (
     Holder,
     KeyLinks,
     LineageEntry,
+    TombstoneEntry,
     VaultEntry,
     VaultTransferError,
     holders_problem,
     parse_entry,
     parse_lineage,
     parse_tombstone,
+    resolved_legacy,
 )
 
 KIND = "knd_01JB8Z00000000000000000001"
@@ -139,10 +141,32 @@ def test_lineage_and_tombstones_of_a_bundle_are_checked() -> None:
     with pytest.raises(VaultTransferError, match="token key '1/2'"):
         parse_tombstone(tombstone, {"7"})
     for changed, reason in (
-        ({"fingerprint_key": None}, "token key None"),
+        ({"fingerprint_key": None}, "does not say which token key"),
         ({"fingerprint_key": "1"}, "token key '1'"),
         ({"fingerprint": "ab"}, "malformed fingerprint"),
         ({"record_key": ""}, "record_key"),
     ):
         with pytest.raises(VaultTransferError, match=reason):
             parse_tombstone({**tombstone, **changed}, {"1"})
+
+    # A legacy tombstone (no fingerprint_key) is exported under the current token key, scheme 1.
+    legacy = TombstoneEntry(KIND, EMAIL, "P-1", bytes(32), None)
+    assert resolved_legacy(legacy, "4").fingerprint_key == "4/1"
+    assert parse_tombstone(resolved_legacy(legacy, "4").as_json(), {"4"}).record_key == "P-1"
+
+
+def test_moved_entries_and_oversized_lineage_groups() -> None:
+    moved = parse_entry(_entry(moved_to="P-2"))
+    assert moved.moved_to == "P-2"
+    assert moved.as_json()["moved_to"] == "P-2"
+    assert "moved_to" not in parse_entry(_entry()).as_json()
+    for value in ("P-1", "", 3):
+        with pytest.raises(VaultTransferError, match="moved_to"):
+            parse_entry(_entry(moved_to=value))
+
+    links = KeyLinks()
+    for index in range(3):
+        links.link(LineageEntry(KIND, f"P-{index + 1}", f"P-{index}"))
+    links.link(LineageEntry(KIND, "Q-1", "Q-0"))
+    assert links.oversized(3) == 1  # P-0..P-3 (4 keys); Q-0, Q-1 stay below
+    assert links.oversized(4) == 0

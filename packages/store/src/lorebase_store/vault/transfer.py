@@ -8,9 +8,13 @@ A bundle exported with its vault values holds three sections:
   Record holding it. The values are plain text; only an explicit export writes them.
 - **lineage**: the key changes of `vault_lineage`. A key change on an erased reference keeps
   the token, so the Records before and after it both hold it; `KeyLinks` links their keys.
+  An entry carries the row's `moved_to` (the key a key change took the token over to), which
+  import accepts only along a key change of the bundle.
 - **tombstones**: the fingerprints erasures recorded (`vault_tombstones`), with the token key
   they were made under (`fingerprint_key`, `<token_key_id>/<scheme>`). They hold no value and
-  cannot be made again, so a target only takes them when it has that token key id.
+  cannot be made again, so a target only takes them when it has that token key id. Legacy
+  tombstones without a `fingerprint_key` are exported as made under the current token key with
+  the first scheme (`resolved_legacy`); import refuses one that still has none.
 
 `holders_problem` checks that the Records holding a token in a bundle hold it in the bound Kind
 and Attribute, under the bound key or one linked to it. `restore_entries` seals values again
@@ -23,14 +27,14 @@ or stored). Erased entries become erased rows. Tokens the target already holds a
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
 from pydantic import JsonValue
-from sqlalchemy import Table, select
+from sqlalchemy import Table, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,14 +46,23 @@ from lorebase_core.validate import check_values
 from lorebase_store.models import metadata
 from lorebase_store.vault.keys import VaultKeys
 from lorebase_store.vault.settings import ErasedValues
-from lorebase_store.vault.store import Lineage, VaultRow, insert_lineage, insert_rows
+from lorebase_store.vault.store import (
+    Lineage,
+    VaultRow,
+    insert_lineage,
+    insert_rows,
+)
 
 _VAULT: Table = metadata.tables["vault"]
 _TOMBSTONES: Table = metadata.tables["vault_tombstones"]
 _LINEAGE: Table = metadata.tables["vault_lineage"]
 _CHUNK = 1000
 _FINGERPRINT_BYTES = 32
-_ENTRY_FIELDS = frozenset({"token", "kind", "attribute", "record_key", "value", "erased"})
+_ENTRY_FIELDS = frozenset(
+    {"token", "kind", "attribute", "record_key", "value", "erased", "moved_to"}
+)
+LEGACY_SCHEME = 1
+"""Fingerprint scheme of tombstones recorded before rows kept their `fingerprint_key`."""
 _LINEAGE_FIELDS = frozenset({"kind", "record_key", "previous_key"})
 _TOMBSTONE_FIELDS = frozenset({"kind", "attribute", "record_key", "fingerprint", "fingerprint_key"})
 
@@ -60,7 +73,8 @@ class VaultTransferError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class VaultEntry:
-    """A token, its binding and its value (`erased`: no value)."""
+    """A token, its binding and its value (`erased`: no value). `moved_to`: the key a key
+    change took the token over to."""
 
     token: str
     kind_id: str
@@ -68,6 +82,7 @@ class VaultEntry:
     record_key: str
     value: JsonValue = None
     erased: bool = False
+    moved_to: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -80,6 +95,8 @@ class VaultEntry:
             out["erased"] = True
         else:
             out["value"] = self.value
+        if self.moved_to is not None:
+            out["moved_to"] = self.moved_to
         return out
 
 
@@ -142,6 +159,8 @@ class KeyLinks:
         return node
 
     def link(self, entry: LineageEntry) -> None:
+        for key in (entry.record_key, entry.previous_key):
+            self._parent.setdefault((entry.kind_id, key), (entry.kind_id, key))
         a = self._root((entry.kind_id, entry.record_key))
         b = self._root((entry.kind_id, entry.previous_key))
         if a != b:
@@ -149,6 +168,11 @@ class KeyLinks:
 
     def linked(self, kind_id: str, key: str, other: str) -> bool:
         return key == other or self._root((kind_id, key)) == self._root((kind_id, other))
+
+    def oversized(self, limit: int) -> int:
+        """Groups of linked keys with more than `limit` keys."""
+        sizes = Counter(self._root(node) for node in list(self._parent))
+        return sum(1 for size in sizes.values() if size > limit)
 
 
 def holders_problem(
@@ -191,12 +215,18 @@ async def read_entries(
                 v.c.record_key,
                 v.c.value_ciphertext,
                 v.c.key_id,
+                v.c.moved_to,
             ).where(v.c.domain_id == domain_id, v.c.id.in_(ordered[start : start + _CHUNK]))
         )
         for row in rows:
             if row.value_ciphertext is None or row.key_id is None:
                 out[row.id] = VaultEntry(
-                    row.id, row.kind_id, row.attribute_id, row.record_key, erased=True
+                    row.id,
+                    row.kind_id,
+                    row.attribute_id,
+                    row.record_key,
+                    erased=True,
+                    moved_to=row.moved_to,
                 )
                 continue
             opened = keys.open(domain_id, row.id, row.key_id, bytes(row.value_ciphertext))
@@ -206,9 +236,23 @@ async def read_entries(
                     "(vault.previous_keys)"
                 )
             out[row.id] = VaultEntry(
-                row.id, row.kind_id, row.attribute_id, row.record_key, json.loads(opened)
+                row.id,
+                row.kind_id,
+                row.attribute_id,
+                row.record_key,
+                json.loads(opened),
+                moved_to=row.moved_to,
             )
     return out
+
+
+def resolved_legacy(tombstone: TombstoneEntry, token_key_id: str) -> TombstoneEntry:
+    """A tombstone recorded before tombstones kept their `fingerprint_key` holds a fingerprint
+    of the first scheme under the token key of the installation: it is exported as made under
+    the current one (`<token_key_id>/1`), which the manifest says."""
+    if tombstone.fingerprint_key is not None:
+        return tombstone
+    return replace(tombstone, fingerprint_key=f"{token_key_id}/{LEGACY_SCHEME}")
 
 
 def unknown_entry(token: str, holders: Collection[Holder]) -> VaultEntry:
@@ -291,7 +335,12 @@ def parse_entry(line: Mapping[str, Any]) -> VaultEntry:
     value = line.get("value")
     if has_value and (value is None or looks_like_reference(value)):
         raise VaultTransferError(f"{token}: the value is empty or a vault reference")
-    return VaultEntry(token, kind_id, attribute_id, record_key, value, erased)
+    moved_to = line.get("moved_to")
+    if moved_to is not None and (
+        not isinstance(moved_to, str) or not moved_to or moved_to == record_key
+    ):
+        raise VaultTransferError(f"{token}: moved_to must be another Record key")
+    return VaultEntry(token, kind_id, attribute_id, record_key, value, erased, moved_to)
 
 
 def parse_lineage(line: Mapping[str, Any]) -> LineageEntry:
@@ -320,6 +369,11 @@ def parse_tombstone(line: Mapping[str, Any], token_key_ids: Collection[str]) -> 
     if len(fingerprint) != _FINGERPRINT_BYTES:
         raise VaultTransferError(f"tombstone: malformed fingerprint {raw!r}")
     fingerprint_key = line.get("fingerprint_key")
+    if fingerprint_key is None:
+        raise VaultTransferError(
+            "a tombstone does not say which token key made it (a bundle of an earlier "
+            "release); export the Domain again, which records it"
+        )
     key_id = fingerprint_key.partition("/")[0] if isinstance(fingerprint_key, str) else None
     if key_id is None or "/" not in str(fingerprint_key) or key_id not in token_key_ids:
         raise VaultTransferError(
@@ -493,4 +547,12 @@ async def restore_entries(
             )
         )
     await insert_rows(session, domain_id, rows, at=at)
+    for e in entries:
+        if e.moved_to is not None:
+            # Restored as exported: no chain to follow, every row carries its own moved_to.
+            await session.execute(
+                update(_VAULT)
+                .where(_VAULT.c.domain_id == domain_id, _VAULT.c.id == e.token)
+                .values(moved_to=e.moved_to)
+            )
     return len(tombstoned)

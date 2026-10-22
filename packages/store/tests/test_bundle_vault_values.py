@@ -18,9 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import vault_token
 from lorebase_core.validate import RecordDelete
+from lorebase_store import bundle as bundle_module
 from lorebase_store.bundle import (
     EXPORT_PLAIN_ACTION,
     EXPORT_PLAIN_STARTED_ACTION,
+    IMPORT_VAULT_ACTION,
     BundleError,
     DomainNotEmptyError,
     VaultNotConfiguredError,
@@ -277,19 +279,149 @@ async def test_a_key_change_of_an_erased_value_travels(
     bundle = tmp_path / "renamed"
     report = await export_domain(engine, DOMAIN, bundle, runtime=runtime, include_vault_values=True)
     assert (report.vault_erased, report.vault_lineage) == (1, 1)
-    assert section(bundle, "vault") == [
-        {"token": token, "kind": SUPPLIER, "attribute": EMAIL, "record_key": "S-1", "erased": True}
-    ]
+    entry = {
+        "token": token,
+        "kind": SUPPLIER,
+        "attribute": EMAIL,
+        "record_key": "S-1",
+        "erased": True,
+    }
+    # An erased reference carries no value: the key change does not mark it moved.
+    assert section(bundle, "vault") == [entry]
 
     # Without the key change the second holder is refused.
     unlinked = rewritten(bundle, tmp_path / "unlinked", "vault_lineage", [])
     with pytest.raises(BundleError, match="'S-9'"):
         await import_bundle(target, unlinked, runtime=runtime)
+    # L3: a moved_to no key change leads to is refused.
+    elsewhere = rewritten(bundle, tmp_path / "elsewhere", "vault", [{**entry, "moved_to": "S-1"}])
+    with pytest.raises(BundleError, match="moved_to"):
+        await import_bundle(target, elsewhere, runtime=runtime)
+    astray = rewritten(bundle, tmp_path / "astray", "vault", [{**entry, "moved_to": "S-7"}])
+    with pytest.raises(BundleError, match="no key change of the bundle leads there"):
+        await import_bundle(target, astray, runtime=runtime)
+    # L4: a key change must link Records the bundle holds.
+    lineage = section(bundle, "vault_lineage")
+    invented = [*lineage, {"kind": SUPPLIER, "record_key": "S-404", "previous_key": "S-9"}]
+    forged = rewritten(bundle, tmp_path / "invented", "vault_lineage", invented)
+    with pytest.raises(BundleError, match="no Record 'S-404'"):
+        await import_bundle(target, forged, runtime=runtime)
 
-    imported = await import_bundle(target, bundle, runtime=runtime)
+    imported = await import_bundle(target, bundle, runtime=runtime, actor="usr_restore")
     assert (imported.vault_erased, imported.vault_lineage) == (1, 1)
     assert await opened(target, runtime, token) == {token: (VaultState.ERASED, None)}
     assert await count(target, "vault_lineage") == 1
+    assert await moved_to(target, token) is None
+    [(actor, _, details)] = await audit_entries(target, IMPORT_VAULT_ACTION)
+    assert actor == "usr_restore"
+    assert details == {
+        "values": 0,
+        "erased": 1,
+        "tombstones": 1,
+        "lineage_edges": 1,
+        "oversized_lineage_groups": 0,
+    }
+
+
+async def test_oversized_lineage_groups_are_counted_in_the_import_audit(
+    engine: AsyncEngine,
+    target: AsyncEngine,
+    sessions: Sessions,
+    store: StoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L4: a group of linked keys larger than MAX_LINKED_KEYS is flagged in the audit entry."""
+    runtime = plain_runtime(store, VAULT)
+    await write(sessions, runtime, person("S-1", "ada@example.com"))
+    held = await stored_email(sessions, "S-1")
+    await write(sessions, runtime, RecordDelete(kind=SUPPLIER, key="S-1"), person("S-2", held))
+    bundle = tmp_path / "renamed"
+    await export_domain(engine, DOMAIN, bundle, runtime=runtime, include_vault_values=True)
+    monkeypatch.setattr(bundle_module, "MAX_LINKED_KEYS", 1)
+    await import_bundle(target, bundle, runtime=runtime)
+    [(_, _, details)] = await audit_entries(target, IMPORT_VAULT_ACTION)
+    assert (details["lineage_edges"], details["oversized_lineage_groups"]) == (1, 1)
+
+
+async def test_legacy_tombstones_travel_under_the_current_token_key(
+    engine: AsyncEngine,
+    target: AsyncEngine,
+    sessions: Sessions,
+    store: StoreSettings,
+    tmp_path: Path,
+) -> None:
+    """L5: a tombstone without fingerprint_key is exported as `<token_key_id>/1`, said in the
+    manifest, and imported under the token key rule; one still without a key is refused."""
+    runtime = plain_runtime(store, VAULT)
+    await prepared(sessions, runtime)
+    async with sessions() as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        await session.execute(text("UPDATE vault_tombstones SET fingerprint_key = NULL"))
+    bundle = tmp_path / "legacy"
+    report = await export_domain(engine, DOMAIN, bundle, runtime=runtime, include_vault_values=True)
+    assert report.vault_legacy_tombstones == 1
+    [tombstone] = section(bundle, "vault_tombstones")
+    assert tombstone["fingerprint_key"] == f"{VAULT.token_key_id}/1"
+    notes = read_manifest(bundle)["vault_notes"]
+    assert (notes["legacy_tombstones"], notes["legacy_fingerprint_key"]) == (1, "1/1")
+
+    keyless = rewritten(
+        bundle, tmp_path / "keyless", "vault_tombstones", [{**tombstone, "fingerprint_key": None}]
+    )
+    with pytest.raises(BundleError, match="does not say which token key"):
+        await import_bundle(target, keyless, runtime=runtime)
+    with pytest.raises(BundleError, match="token key '1/1'"):
+        await import_bundle(target, bundle, runtime=with_vault(runtime, token_key_id="9"))
+    await import_bundle(target, bundle, runtime=runtime)
+    assert await count(target, "vault_tombstones") == 1
+
+
+async def test_export_lets_the_vault_lock_go_once_its_snapshot_exists(
+    engine: AsyncEngine,
+    sessions: Sessions,
+    store: StoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L6: while the export writes files, an erasure can take the vault lock."""
+    runtime = plain_runtime(store, VAULT)
+    await prepared(sessions, runtime)
+    free: list[bool] = []
+    export_nodes = bundle_module._export_nodes
+
+    async def probing(*args: Any) -> int:
+        async with engine.connect() as probe:
+            free.append(
+                bool(
+                    (
+                        await probe.execute(
+                            text(
+                                "SELECT pg_try_advisory_xact_lock("
+                                "hashtextextended('lorebase.vault/' || :d, 0))"
+                            ),
+                            {"d": DOMAIN},
+                        )
+                    ).scalar_one()
+                )
+            )
+        return await export_nodes(*args)
+
+    monkeypatch.setattr(bundle_module, "_export_nodes", probing)
+    await export_domain(
+        engine, DOMAIN, tmp_path / "plain", runtime=runtime, include_vault_values=True
+    )
+    assert free == [True]
+
+
+async def moved_to(engine: AsyncEngine, token: str) -> str | None:
+    async with async_sessionmaker(engine)() as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        found = await session.execute(
+            text("SELECT moved_to FROM vault WHERE id = :t"), {"t": token}
+        )
+        value = found.scalar_one()
+        return None if value is None else str(value)
 
 
 async def test_tombstones_need_the_token_key_they_were_made_under(
