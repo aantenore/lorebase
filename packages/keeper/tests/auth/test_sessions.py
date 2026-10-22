@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import AsyncIterator, Callable
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -41,9 +42,11 @@ from fake_oidc import (
     with_session,
 )
 from fastapi import FastAPI
+from starlette.requests import Request
 
 from lorebase_keeper.auth.config import AuthSettings, is_local_path
 from lorebase_keeper.auth.keyring import Keyring
+from lorebase_keeper.ratelimit.enforce import route_path
 from lorebase_keeper.settings import keeper_settings
 from lorebase_platform.settings import ConfigError, Settings
 from lorebase_store.models.enums import PrincipalType
@@ -665,3 +668,65 @@ def test_keyring_separates_purposes_and_detects_tampering() -> None:
     assert keys.open("a", sealed[:-1] + bytes([sealed[-1] ^ 1])) is None
     assert keys.open("a", b"") is None
     assert keys.mac("a", b"m") != keys.mac("b", b"m")
+
+
+async def test_sign_in_routes_are_limited_per_client_address(
+    make_app: Callable[..., FastAPI], store: Any, server: OidcServer, clock: Any
+) -> None:
+    keeper = {
+        "auth": session_auth(),
+        "limits": {"rate": {"reads": {"requests_per_minute": 0.001, "burst": 2}}},
+    }
+    app = make_app(keeper, auth_store=store, http_client=server.http, clock=clock)
+    async with keeper_client(app) as http:
+        statuses = [(await http.get(LOGIN)).status_code for _ in range(2)]
+        stale = cookie_header(**{SESSION_COOKIE: "w" * 43})
+        limited = await http.get(LOGIN, headers=stale)
+    assert statuses == [302, 302]
+    assert limited.status_code == 429  # refused by address, before any session lookup
+    assert "retry-after" in limited.headers
+
+
+def test_route_path_drops_the_api_prefix() -> None:
+    state = SimpleNamespace(keeper_settings=SimpleNamespace(api_prefix="/api/v1"))
+    app = SimpleNamespace(state=state)
+
+    def request(template: str) -> Request:
+        route = SimpleNamespace(path=template)
+        return Request({"type": "http", "path": template, "route": route, "app": app})
+
+    assert route_path(request("/api/v1/auth/login")) == "/auth/login"
+    assert route_path(request("/auth/login")) == "/auth/login"
+    assert route_path(request("/api/v10/x")) == "/api/v10/x"
+    assert route_path(request("/healthz")) == "/healthz"
+
+
+async def test_forged_requests_never_reach_the_session(
+    http: httpx.AsyncClient, server: OidcServer, clock: Any, store: Any
+) -> None:
+    session_id = await session_cookie(http, server)
+    [before] = store.session_rows.values()
+    calls = len(server.token_requests)
+    clock.advance(seconds=301)  # touch and refresh would both be due
+    forged = await http.post(LOGOUT, headers=with_session(session_id))
+    elsewhere = await http.post(
+        "/api/v1/domains/acme/grants",
+        json={"subject": "usr_x", "role": "viewer"},
+        headers=with_session(session_id),
+    )
+    assert (forged.status_code, elsewhere.status_code) == (403, 403)
+    assert elsewhere.json()["reason"] == "csrf"
+    assert store.session_rows[before.id_hash] == before
+    assert len(server.token_requests) == calls
+
+
+async def test_refreshed_id_token_must_repeat_the_sign_in_nonce(
+    http: httpx.AsyncClient, server: OidcServer, clock: Any
+) -> None:
+    session_id = await session_cookie(http, server)
+    server.refresh_id_token_nonce = server.last_nonce
+    clock.advance(seconds=301)
+    assert (await http.get(WHOAMI, headers=with_session(session_id))).status_code == 200
+    server.refresh_id_token_nonce = "another-nonce"
+    clock.advance(seconds=301)
+    assert (await http.get(WHOAMI, headers=with_session(session_id))).status_code == 401

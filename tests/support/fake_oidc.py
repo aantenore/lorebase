@@ -58,6 +58,8 @@ class OidcServer:
         self.expires_in = 300
         self.groups: list[str] = []
         self.refresh_id_token_subject: str | None = None
+        self.refresh_id_token_nonce: str | None = None
+        self.last_nonce: str | None = None
         self.http = httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -111,6 +113,7 @@ class OidcServer:
         assert query["code_challenge_method"] == "S256"
         assert "openid" in query["scope"].split()
         code = secrets.token_urlsafe(16)
+        self.last_nonce = query["nonce"]
         self.codes[code] = {
             "subject": subject,
             "nonce": query["nonce"],
@@ -143,7 +146,9 @@ class OidcServer:
             if found is None:
                 return httpx.Response(400, json={"error": "invalid_grant"})
             subject = found
-            id_token = self.id_token(self.refresh_id_token_subject or subject)
+            id_token = self.id_token(
+                self.refresh_id_token_subject or subject, self.refresh_id_token_nonce
+            )
         else:
             return httpx.Response(400, json={"error": "unsupported_grant_type"})
         refresh_token = secrets.token_urlsafe(16)
