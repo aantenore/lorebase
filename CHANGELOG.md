@@ -35,6 +35,16 @@ What changed in each release, newest first. The notes are written for the person
 - Webhook signing keys can be stored encrypted: with `webhooks.encryption_key` (a `secret://` reference to at least 32 characters, the same for Keeper and Scribe) new keys are sealed with AES-256-GCM, the delivery worker seals the keys stored before, and `previous_encryption_keys` lets the key change without breaking deliveries. Receivers change nothing. Migration `0016` adds `webhooks.sealed_key`; its downgrade refuses while sealed keys exist ([agents](docs/agents.md#webhooks)).
 - Supply chain: the base images of the backend and web images (and the compose proxy image) are pinned by digest with the tag kept readable, and moved by hand ([release](docs/release.md#base-images)); the build arguments `PYTHON_TAG`, `NODE_TAG` and `NGINX_TAG` are replaced by `PYTHON_IMAGE`, `NODE_IMAGE` and `NGINX_IMAGE`. A CI workflow (`audit.yaml`) runs pip-audit on the locked Python dependencies and `pnpm audit --prod` on every pull request and weekly, failing on advisories not accepted in `.github/audit-allowlist.yaml`; `make security` uses the same check.
 
+### Not done yet
+
+- Rate limits shared across Keeper replicas, auditing of reads, sensitivity masking in reads and an anchor of the audit chain outside the database remain open ([threat model](docs/threat-model.md#residual-risks-by-priority)).
+
+### Upgrade notes
+
+- Run the migrations before restarting Keeper and Scribe: `0015` (audit log append-only for the application role) and `0016` (sealed webhook keys). On compose, `db-roles` keeps `UPDATE` and `DELETE` on `audit_log` revoked on every start; elsewhere, run the migration with `database.application_role` set, or revoke them yourself.
+- To encrypt webhook signing keys, set the same `webhooks.encryption_key` for Keeper and Scribe; existing webhooks keep working and are encrypted by the next delivery passes.
+- Web image: a `VITE_KEEPER_BASE_URL` given only as a build argument does not reach the Content Security Policy; set it at run time or list the Keeper origin in `LOREBASE_WEB_CSP_CONNECT_SRC`.
+
 ## 0.1.0 - 2026-10-21
 
 First release. Lorebase keeps a typed ontology in Postgres and lets teams change it on branches, review the change in a Proposal and merge schema and data together, with Conflicts resolved per Attribute. Agents read through a REST API that never calls a model, or through the MCP server, and write only through Operations; a write that needs review becomes a task branch and a Proposal. Documents are extracted into Proposals whose items reviewers accept or reject. Pre-alpha and pre-1.0: `/api/v1` is not frozen and interfaces may change in a minor version. The database schema is at migration `0012`. The lines of this first section link the documentation of each feature; from the next release they link the pull request or issue.
