@@ -24,12 +24,14 @@ from lorebase_keeper.auth.config import ApiKeySettings
 from lorebase_store.auth import (
     ApiKeyRecord,
     AuditRecord,
+    ChainVerification,
     GrantRecord,
     NewAuditEntry,
     PrefixTakenError,
     PrincipalRecord,
     SessionRecord,
     UsageRecord,
+    entry_digest,
 )
 from lorebase_store.models.enums import GrantScope, PrincipalType
 
@@ -220,19 +222,53 @@ class MemAudit:
             await asyncio.sleep(self.s.audit_delay)
         if self.s.audit_failure is not None:
             raise self.s.audit_failure
+        chain = [r for r in self.s.audit_rows if r.domain_id == entry.domain_id]
+        prev_hash = chain[-1].entry_hash if chain else None
+        content: dict[str, Any] = {
+            "domain_id": entry.domain_id,
+            "at": entry.at or self.s.tick(),
+            "actor": entry.actor,
+            "action": entry.action,
+            "target": entry.target,
+            "details": dict(entry.details),
+        }
         record = AuditRecord(
             seq=len(self.s.audit_rows) + 1,
-            domain_id=entry.domain_id,
-            at=entry.at or self.s.tick(),
-            actor=entry.actor,
-            action=entry.action,
-            target=entry.target,
-            details=dict(entry.details),
-            prev_hash=None,
-            entry_hash=bytes(32),
+            prev_hash=prev_hash,
+            entry_hash=entry_digest(prev_hash, **content),
+            **content,
         )
         self.s.audit_rows.append(record)
         return record
+
+    async def verify(self, *, after_seq: int = 0, domain_id: str | None) -> ChainVerification:
+        """The walk of `AuditRepository.verify` over one chain of the in-memory rows."""
+        rows = [r for r in self.s.audit_rows if r.domain_id == domain_id and r.seq > after_seq]
+        head = rows[0].prev_hash if rows and after_seq > 0 else None
+        last: int | None = None
+        for checked, row in enumerate(rows):
+            digest = entry_digest(
+                row.prev_hash,
+                domain_id=row.domain_id,
+                at=row.at,
+                actor=row.actor,
+                action=row.action,
+                target=row.target,
+                details=row.details,
+            )
+            reason = (
+                "chain link broken"
+                if row.prev_hash != head
+                else "entry content changed"
+                if digest != row.entry_hash
+                else None
+            )
+            if reason is not None:
+                return ChainVerification(
+                    checked, row.seq, reason, chains=1, last_seq=last, bad_domain_id=domain_id
+                )
+            head, last = row.entry_hash, row.seq
+        return ChainVerification(len(rows), chains=1 if rows else 0, last_seq=last)
 
     async def list(
         self, *, domain_id: str | None, limit: int, before_seq: int | None = None

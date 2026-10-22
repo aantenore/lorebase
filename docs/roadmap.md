@@ -101,7 +101,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] Garbage collection of unreachable objects ([operations](operations.md)); landed early
 - [x] Observability: a catalogue of every metric with explicit histogram buckets, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks and the OpenTelemetry Collector configuration, in compose and the Helm chart ([metrics](metrics.md), [operations](operations.md#dashboards-and-alerts)); landed early
 - [ ] Performance targets of design 6.14 met at 10M Records, with a published benchmark harness
-- [ ] Backup and restore guide, audit chain verification, signed images (Domain export and import bundles and their guide are in [operations](operations.md); the release workflow signs the images with cosign, [release](release.md); the audit chain check exists in the store, `AuditRepository.verify`, but no command or endpoint runs it)
+- [x] Backup and restore guide, audit chain verification, signed images (Domain bundles and `pg_dump` in [operations](operations.md#backup-and-restore-of-a-domain); `python -m lorebase_keeper audit verify`, `GET .../audit/verify`, `lorebase audit verify` and a daily Scribe job with an alert, [operations](operations.md#audit-chain-verification); images signed with cosign by the release workflow, [release](release.md))
 - [x] HTTP JSON Source with cursor, page, offset and Link header pagination ([scribe](scribe.md#sources)); landed early
 - [ ] LinkML schema import and export
 - [x] Documentation site at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/), built with `mkdocs build --strict` (`make docs`) and published by the Docs workflow

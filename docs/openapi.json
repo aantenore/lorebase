@@ -1154,6 +1154,97 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/audit/verify": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Verify the audit chain",
+        "description": "Recompute the hash chain of the Domain's audit log and report the first broken entry.\n\nEntries are read in batches, so a long chain costs time, not memory. The answer is 200\nwhether the chain is intact or not; `intact` and `first_broken` tell which.",
+        "operationId": "verify_audit_api_v1_domains__domain_id__audit_verify_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Start after this entry, trusting it as the anchor (a `last_seq` of an earlier verification); 0 verifies the whole chain.",
+              "default": 0,
+              "title": "After Seq"
+            },
+            "description": "Start after this entry, trusting it as the anchor (a `last_seq` of an earlier verification); 0 verifies the whole chain."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerificationOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission named in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains": {
       "post": {
         "tags": [
@@ -9993,6 +10084,26 @@
         ],
         "title": "AttributeLineageOut"
       },
+      "AuditBreakOut": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "`chain link broken` (an entry was removed, reordered or inserted) or `entry content changed` (an entry was edited)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "seq",
+          "reason"
+        ],
+        "title": "AuditBreakOut",
+        "description": "The first audit entry of a chain that does not verify."
+      },
       "AuditEntryOut": {
         "properties": {
           "seq": {
@@ -10057,6 +10168,61 @@
         ],
         "title": "AuditEntryOut",
         "description": "An audit log entry."
+      },
+      "AuditVerificationOut": {
+        "properties": {
+          "domain_id": {
+            "type": "string",
+            "title": "Domain Id"
+          },
+          "intact": {
+            "type": "boolean",
+            "title": "Intact",
+            "description": "Every entry in the range verified."
+          },
+          "checked": {
+            "type": "integer",
+            "title": "Checked",
+            "description": "Entries that verified, before the first broken one."
+          },
+          "after_seq": {
+            "type": "integer",
+            "title": "After Seq",
+            "description": "Entries up to this `seq` were not read."
+          },
+          "last_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seq",
+            "description": "`seq` of the last entry that verified; pass it as `after_seq` later to verify only what was appended since."
+          },
+          "first_broken": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditBreakOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain_id",
+          "intact",
+          "checked",
+          "after_seq",
+          "last_seq"
+        ],
+        "title": "AuditVerificationOut",
+        "description": "Result of recomputing a Domain's audit chain."
       },
       "BranchCreate": {
         "properties": {

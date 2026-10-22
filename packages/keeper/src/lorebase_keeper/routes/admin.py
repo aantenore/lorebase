@@ -1,8 +1,9 @@
 """Administration: API keys, principals, grants and the audit log (design 11.1, 10.2, 13.2).
 
 Domain administration (`apikey.manage`, `grant.manage`, `audit.read`) is allowed to holders of
-the `admin` role in that Domain. Listing principals is installation-level. Every change is
-written to the audit log with a precise action name; secrets never are.
+the `admin` role in that Domain; `audit.read` also covers verifying the Domain's audit chain.
+Listing principals is installation-level. Every change is written to the audit log with a
+precise action name; secrets never are.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from lorebase_keeper.pagination import (
 from lorebase_store.auth import (
     ApiKeyRecord,
     AuditRecord,
+    ChainVerification,
     GrantRecord,
     PrincipalRecord,
 )
@@ -162,6 +164,30 @@ class AuditEntryOut(BaseModel):
     entry_hash: str
 
 
+class AuditBreakOut(BaseModel):
+    """The first audit entry of a chain that does not verify."""
+
+    seq: int
+    reason: str = Field(
+        description="`chain link broken` (an entry was removed, reordered or inserted) or "
+        "`entry content changed` (an entry was edited)."
+    )
+
+
+class AuditVerificationOut(BaseModel):
+    """Result of recomputing a Domain's audit chain."""
+
+    domain_id: str
+    intact: bool = Field(description="Every entry in the range verified.")
+    checked: int = Field(description="Entries that verified, before the first broken one.")
+    after_seq: int = Field(description="Entries up to this `seq` were not read.")
+    last_seq: int | None = Field(
+        description="`seq` of the last entry that verified; pass it as `after_seq` later to "
+        "verify only what was appended since."
+    )
+    first_broken: AuditBreakOut | None = None
+
+
 def _invalid(pointer: str, message: str) -> ProblemError:
     return ProblemError(
         VALIDATION_FAILED,
@@ -217,6 +243,24 @@ def _audit_out(entry: AuditRecord) -> AuditEntryOut:
         target=entry.target,
         details=dict(entry.details),
         entry_hash=entry.entry_hash.hex(),
+    )
+
+
+def _verification_out(
+    domain_id: str, after_seq: int, result: ChainVerification
+) -> AuditVerificationOut:
+    broken = (
+        None
+        if result.bad_seq is None
+        else AuditBreakOut(seq=result.bad_seq, reason=result.reason or "")
+    )
+    return AuditVerificationOut(
+        domain_id=domain_id,
+        intact=result.ok,
+        checked=result.checked,
+        after_seq=after_seq,
+        last_seq=result.last_seq,
+        first_broken=broken,
     )
 
 
@@ -521,3 +565,33 @@ async def list_audit(
         rows = await unit.audit.list(domain_id=domain_id, limit=params.limit + 1, before_seq=before)
     items, next_cursor = _slice(rows, params.limit, _audit_out, lambda row: {"before": row.seq})
     return Page[AuditEntryOut](items=items, next_cursor=next_cursor)
+
+
+@router.get(
+    "/domains/{domain_id}/audit/verify",
+    summary="Verify the audit chain",
+    responses=_ERRORS,
+)
+async def verify_audit(
+    domain_id: str,
+    auth: AuthDep,
+    access: Annotated[Access, Depends(require(Permission.AUDIT_READ))],
+    after_seq: Annotated[
+        int,
+        Query(
+            ge=0,
+            description="Start after this entry, trusting it as the anchor (a `last_seq` of an "
+            "earlier verification); 0 verifies the whole chain.",
+        ),
+    ] = 0,
+) -> AuditVerificationOut:
+    """Recompute the hash chain of the Domain's audit log and report the first broken entry.
+
+    Entries are read in batches, so a long chain costs time, not memory. The answer is 200
+    whether the chain is intact or not; `intact` and `first_broken` tell which.
+    """
+    require_store(auth)
+    assert auth.store is not None
+    async with auth.store.unit() as unit:
+        result = await unit.audit.verify(after_seq=after_seq, domain_id=domain_id)
+    return _verification_out(domain_id, after_seq, result)

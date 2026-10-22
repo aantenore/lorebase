@@ -807,6 +807,7 @@ scribe:
     gc_dry_run: false
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
     embeddings_interval_s: 60.0  # embedding pass of every Domain; 0 disables
+    audit_verify_interval_s: 86400.0   # verification of every audit hash chain; 0 disables
     domain_batch: 100            # Domains read per query
   sources:                       # Source synchronization (design 9.1)
     allowed_connections: []      # secret references a Source `connection` (or an http_json

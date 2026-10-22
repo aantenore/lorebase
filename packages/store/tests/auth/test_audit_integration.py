@@ -13,7 +13,13 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_store.auth import AuditRepository, NewAuditEntry, SqlAuthStore, entry_digest
+from lorebase_store.auth import (
+    AuditRepository,
+    Chains,
+    NewAuditEntry,
+    SqlAuthStore,
+    entry_digest,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -162,6 +168,30 @@ async def test_verify_can_start_after_a_checkpoint(
     async with auth_store.unit() as unit:
         assert (await unit.audit.verify(after_seq=seqs[1])).ok
         assert (await unit.audit.verify()).bad_seq == seqs[0]
+
+
+async def test_verify_walks_one_chain_when_asked(
+    auth_store: SqlAuthStore, engine: AsyncEngine, seed_domain: SeedDomain
+) -> None:
+    for domain in ("acme", "globex"):
+        await seed_domain(domain)
+    seqs = [await append(auth_store, n, d) for n, d in enumerate(("acme", "globex", None) * 2)]
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE audit_log SET actor = 'usr_evil' WHERE seq = :seq"), {"seq": seqs[4]}
+        )
+    async with auth_store.unit() as unit:
+        acme = await unit.audit.verify(domain_id="acme", batch_size=1)
+        installation = await unit.audit.verify(domain_id=None)
+        globex = await unit.audit.verify(domain_id="globex")
+        everything = await unit.audit.verify(domain_id=Chains.ALL)
+        missing = await unit.audit.verify(domain_id="initech")
+    assert (acme.ok, acme.checked, acme.chains, acme.last_seq) == (True, 2, 1, seqs[3])
+    assert (installation.ok, installation.checked, installation.last_seq) == (True, 2, seqs[5])
+    assert (globex.bad_seq, globex.bad_domain_id, globex.checked) == (seqs[4], "globex", 1)
+    assert globex.last_seq == seqs[1]
+    assert (everything.bad_seq, everything.chains, everything.checked) == (seqs[4], 3, 4)
+    assert (missing.ok, missing.checked, missing.chains, missing.last_seq) == (True, 0, 0, None)
 
 
 async def test_list_filters_by_domain_and_pages_newest_first(

@@ -1057,6 +1057,54 @@ def test_apikey_commands(http: respx.MockRouter) -> None:
     assert json.loads(run("apikey", "list", "-d", "supply", "--json").stdout)[0]["id"] == "key_1"
 
 
+def test_audit_verify_reports_an_intact_chain(http: respx.MockRouter) -> None:
+    verify = http.get("/domains/supply/audit/verify").respond(
+        200,
+        json={
+            "domain_id": "supply",
+            "intact": True,
+            "checked": 12,
+            "after_seq": 40,
+            "last_seq": 77,
+            "first_broken": None,
+        },
+    )
+    result = run("audit", "verify", "-d", "supply", "--after-seq", "40")
+    assert result.exit_code == 0
+    assert "intact: 12 entries verified" in result.stdout
+    assert "77" in result.stdout
+    assert verify.calls.last.request.url.params["after_seq"] == "40"
+
+
+def test_audit_verify_exits_2_on_a_broken_chain(http: respx.MockRouter) -> None:
+    http.get("/domains/supply/audit/verify").respond(
+        200,
+        json={
+            "domain_id": "supply",
+            "intact": False,
+            "checked": 3,
+            "after_seq": 0,
+            "last_seq": 9,
+            "first_broken": {"seq": 11, "reason": "chain link broken"},
+        },
+    )
+    result = run("audit", "verify", "-d", "supply")
+    assert result.exit_code == 2
+    assert "broken at seq 11: chain link broken" in result.stdout
+    as_json = run("audit", "verify", "-d", "supply", "--json")
+    assert as_json.exit_code == 2
+    assert json.loads(as_json.stdout)["first_broken"]["seq"] == 11
+
+
+def test_audit_verify_refused_for_a_non_admin(http: respx.MockRouter) -> None:
+    http.get("/domains/supply/audit/verify").mock(
+        return_value=problem(403, "forbidden", "Missing permission audit.read.")
+    )
+    result = run("audit", "verify", "-d", "supply")
+    assert result.exit_code == 3
+    assert "audit.read" in result.stderr
+
+
 def test_apikey_create_and_list_show_allowed_networks(http: respx.MockRouter) -> None:
     key = {
         "id": "key_2",

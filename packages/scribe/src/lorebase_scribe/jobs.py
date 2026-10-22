@@ -9,6 +9,7 @@
 | `store.materialize` | `{"branch"}`, Domain set | `materialize.run_materialize_job` |
 | `extraction` | `{"documents", "tiers", "requested_by"}`, Domain set | `ExtractionRun.run` |
 | `embeddings` | `{"branches", "reindex", "resume"}` optional, Domain set | `EmbeddingPass.run` |
+| `audit_verify` | none | `lorebase_store.auth.AuditRepository.verify` over every chain |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -16,12 +17,17 @@ An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 An `embeddings` job that reads `scribe.embeddings.max_records_per_job` rows before its pass is
 complete queues its continuation (same payload plus `resume`) and succeeds.
 
+An `audit_verify` job succeeds whether the chains verify or not: its result and the
+`lorebase.audit.verifications` counter (outcome `intact` or `broken`) carry the answer, and a
+broken chain is logged at error level.
+
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -39,8 +45,10 @@ from lorebase_scribe.settings import ScribeSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
 from lorebase_scribe.sources.sync import utc_now
+from lorebase_scribe.telemetry import AUDIT_VERIFICATIONS
 from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
+from lorebase_store.auth import AuditRepository, Chains
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
@@ -59,6 +67,9 @@ from lorebase_store.runtime import StoreRuntime
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
 WEBHOOK_DELIVERY_JOB = "webhook_delivery"
+AUDIT_VERIFY_JOB = "audit_verify"
+
+log = logging.getLogger("lorebase.scribe.jobs")
 
 JOB_TYPES = (
     SOURCE_SYNC_JOB,
@@ -68,6 +79,7 @@ JOB_TYPES = (
     GC_JOB,
     EXTRACTION_JOB,
     EMBEDDINGS_JOB,
+    AUDIT_VERIFY_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -222,6 +234,25 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                 )
         return result
 
+    async def audit_verify(job: JobRow) -> Mapping[str, Any]:
+        async with context.sessions() as session, session.begin():
+            result = await AuditRepository(session).verify(domain_id=Chains.ALL)
+        AUDIT_VERIFICATIONS.add(1, {"outcome": "intact" if result.ok else "broken"})
+        report: dict[str, Any] = {
+            "intact": result.ok,
+            "checked": result.checked,
+            "chains": result.chains,
+            "last_seq": result.last_seq,
+        }
+        if not result.ok:
+            report["first_broken"] = {
+                "seq": result.bad_seq,
+                "domain_id": result.bad_domain_id,
+                "reason": result.reason,
+            }
+            log.error("audit chain broken", extra=report["first_broken"])
+        return report
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -230,6 +261,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         GC_JOB: gc,
         EXTRACTION_JOB: extraction,
         EMBEDDINGS_JOB: embeddings,
+        AUDIT_VERIFY_JOB: audit_verify,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())

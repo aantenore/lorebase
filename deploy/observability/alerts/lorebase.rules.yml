@@ -187,3 +187,16 @@ groups:
           summary: "No garbage collection has completed in 3 days"
           description: "Scribe is scheduling work but no garbage collection completed in the last 3 days. Unreferenced objects, tree nodes and Revisions pile up."
           runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebasegcnotrun"
+
+      # A scheduled audit_verify job found an entry that does not verify. The window spans the
+      # default interval (scribe.scheduler.audit_verify_interval_s, one day), so the alert keeps
+      # firing while the chain stays broken.
+      - alert: LorebaseAuditChainBroken
+        expr: sum(increase(lorebase_audit_verifications_total{outcome="broken"}[25h])) > 0
+        labels:
+          severity: critical
+          component: scribe
+        annotations:
+          summary: "The audit log hash chain is broken"
+          description: "An audit_verify job found an audit entry that does not verify: an entry was edited, removed or reordered. The job result names the first broken entry."
+          runbook_url: "https://github.com/aantenore/lorebase/blob/main/docs/operations.md#lorebaseauditchainbroken"

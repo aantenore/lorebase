@@ -56,6 +56,7 @@ Exit codes: 0 success, 1 usage or configuration error (also not found), 2 valida
 * `record`: Read Records.
 * `revision`: Inspect Revisions.
 * `apikey`: Manage the API keys of a Domain.
+* `audit`: Check the audit log of a Domain.
 * `proposal`: Propose, review and merge changes between...
 * `sources`: Synchronize the Sources of a Domain.
 * `documents`: Upload documents and follow their extraction.
@@ -1012,6 +1013,44 @@ $ lorebase apikey revoke [OPTIONS] {KEY_ID}
 **Options**:
 
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+### `lorebase audit`
+
+Check the audit log of a Domain.
+
+**Usage**:
+
+```console
+$ lorebase audit [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `verify`: Recompute the audit hash chain of a Domain...
+
+#### `lorebase audit verify`
+
+Recompute the audit hash chain of a Domain and report the first broken entry.
+
+Needs the audit.read permission (the admin role). Exits with 2 when an entry does not
+verify.
+
+**Usage**:
+
+```console
+$ lorebase audit verify [OPTIONS]
+```
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--after-seq <int range>`: Start after this entry, trusting it (the last seq of an earlier run).  [x&gt;=0]
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 

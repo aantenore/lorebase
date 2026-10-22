@@ -88,6 +88,13 @@ class SchedulerSettings(SectionModel):
         description="Queue an embedding pass of every Domain this often; on a branch whose "
         "head did not move a pass reads its schema and one key. 0 disables it.",
     )
+    audit_verify_interval_s: float = Field(
+        default=86400.0,
+        ge=0,
+        description="Queue a verification of every audit hash chain this often; a broken chain "
+        "counts in `lorebase.audit.verifications` with outcome `broken`. The pass reads the "
+        "whole audit log in batches. 0 disables it.",
+    )
     domain_batch: int = Field(default=100, ge=1, description="Domains read per query.")
 
     @field_validator("gc_schedule")

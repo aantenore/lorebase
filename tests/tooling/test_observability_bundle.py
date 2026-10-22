@@ -62,6 +62,7 @@ EXPECTED_ALERTS = {
     "LorebaseJobQueueStalled",
     "LorebaseWebhookDeliveryFailing",
     "LorebaseGcNotRun",
+    "LorebaseAuditChainBroken",
 }
 
 

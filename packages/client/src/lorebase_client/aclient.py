@@ -893,6 +893,10 @@ class Audit(_Resource):
     def iterate(self, domain: str, *, page_size: int | None = None) -> AsyncIterator[m.AuditEntry]:
         return self._c.iterate(ep.list_audit(domain, limit=page_size))
 
+    async def verify(self, domain: str, *, after_seq: int | None = None) -> m.AuditVerification:
+        """Recompute the Domain's audit hash chain; `intact` and `first_broken` tell the result."""
+        return await self._c.send(ep.verify_audit(domain, after_seq=after_seq))
+
 
 class Proposals(_Resource):
     async def create(

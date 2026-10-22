@@ -434,8 +434,8 @@ Revision `0002` adds what the merge API needs (design 6.10, 11.1):
   chain: a commit holds its chain lock until the commit transaction ends, and a global lock
   would serialize every commit and every audited request of the installation behind it. Lock
   order is branch lock, then audit lock; Keeper writes take only the audit lock, so no cycle.
-- `verify` walks the whole log in `seq` order and checks each entry against the previous entry
-  of its own chain. With `after_seq`, the first entry of each chain in the range is trusted as
+- `verify` walks the whole log, or one chain (`domain_id`), in `seq` order, `batch_size`
+  entries per query, and checks each entry against the previous entry of its own chain. With `after_seq`, the first entry of each chain in the range is trusted as
   the anchor. Truncating the tail of a chain is not detectable from the chain alone.
 - Appends and verification run with the RLS bypass; listing a Domain's entries is scoped to it.
 
