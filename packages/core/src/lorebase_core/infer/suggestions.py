@@ -143,6 +143,19 @@ class SuggestionOptions(BaseModel):
         "is listed for review; a Kind seen once without fields is noise more often than not. "
         "0 lists every Kind.",
     )
+    kind_independent_instances: int = Field(
+        default=2,
+        ge=0,
+        description="Distinct codes or names of things (samples) a Kind suggestion needs to "
+        "count as an independent entity, which is then kept although an Attribute has its name "
+        "(a Kind `Buyer` with the codes B-1 and B-2). 0 turns this criterion off.",
+    )
+    kind_independent_attributes: int = Field(
+        default=2,
+        ge=0,
+        description="Distinct Attribute suggestions owned by a proposed Kind that make it an "
+        "independent entity (see `kind_independent_instances`). 0 turns this criterion off.",
+    )
     type_inference: InferenceOptions = Field(
         default_factory=_type_inference,
         description="Options of the column analysis that types new Attributes from samples.",
@@ -307,13 +320,56 @@ def merge_attributes(
     return merged
 
 
-def kind_is_noise(name: str, attribute_names: Collection[str], options: SuggestionOptions) -> bool:
+def kind_is_independent(instances: int, fields: int, options: SuggestionOptions) -> bool:
+    """Whether the evidence of a Kind suggestion shows an entity of its own: ``instances``
+    distinct codes or names seen for it, or ``fields`` Attribute suggestions it owns, reach
+    ``kind_independent_instances`` or ``kind_independent_attributes`` (0 turns one off)."""
+    by_instances = options.kind_independent_instances > 0 and (
+        instances >= options.kind_independent_instances
+    )
+    by_fields = options.kind_independent_attributes > 0 and (
+        fields >= options.kind_independent_attributes
+    )
+    return by_instances or by_fields
+
+
+def kind_is_noise(
+    name: str,
+    attribute_names: Collection[str],
+    options: SuggestionOptions,
+    *,
+    independent: bool = False,
+) -> bool:
     """Whether a Kind suggestion is a generic word (``kind_stoplist``) or only names a field
-    (an Attribute called ``attribute_names``: a Kind ``Buyer`` beside the Attribute ``buyer``)."""
+    (an Attribute called ``attribute_names``: a Kind ``Buyer`` beside the Attribute ``buyer``).
+    An ``independent`` Kind (``kind_is_independent``) is not dropped for naming a field."""
     canonical = _canonical(name)
     if canonical in {_canonical(w) for w in options.kind_stoplist}:
         return True
+    if independent:
+        return False
     return canonical in {_canonical(n) for n in attribute_names}
+
+
+def dangling_reference_names(schema: Schema) -> list[str]:
+    """Api names of the Attributes that hold a reference as free text and point to nothing:
+    ``string`` or ``text`` Attributes that no Relation of their Kind is named like. A Kind
+    suggestion named like one of these only restates the field; a ``ref`` Attribute, a typed
+    Attribute (date, number...) or a field a Relation models is not one."""
+    names: list[str] = []
+    for kind in schema.kinds.values():
+        linked = {
+            _canonical(n)
+            for relation in schema.relations_of(kind.id)
+            for n in (relation.api_name, relation.inverse_api_name)
+        }
+        names.extend(
+            a.api_name
+            for a in kind.attributes.values()
+            if a.type.name in (AttributeType.STRING, AttributeType.TEXT)
+            and _canonical(a.api_name) not in linked
+        )
+    return names
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,10 +692,12 @@ __all__ = [
     "SuggestionError",
     "SuggestionOptions",
     "SuggestionType",
+    "dangling_reference_names",
     "existing_match",
     "field_name",
     "fingerprint",
     "infer_attribute",
+    "kind_is_independent",
     "kind_is_noise",
     "kind_name",
     "merge_attributes",

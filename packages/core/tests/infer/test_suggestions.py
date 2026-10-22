@@ -11,10 +11,12 @@ from lorebase_core.infer.suggestions import (
     SuggestionError,
     SuggestionOptions,
     SuggestionType,
+    dangling_reference_names,
     existing_match,
     field_name,
     fingerprint,
     infer_attribute,
+    kind_is_independent,
     kind_is_noise,
     kind_name,
     merge_attributes,
@@ -221,3 +223,32 @@ def test_noise_kinds_are_recognized() -> None:
     assert kind_is_noise(kind_name("Buyer"), ["buyer", "renewal_notice_days"], OPTIONS)
     assert not kind_is_noise(kind_name("Quality notice"), ["buyer"], OPTIONS)
     assert not kind_is_noise("Proposal", [], SuggestionOptions(kind_stoplist=()))
+
+
+def test_a_kind_with_an_entity_of_its_own_is_not_dropped_for_naming_a_field() -> None:
+    assert kind_is_independent(2, 0, OPTIONS)  # two distinct codes
+    assert kind_is_independent(0, 2, OPTIONS)  # two Attributes of its own
+    assert not kind_is_independent(1, 1, OPTIONS)
+    name = kind_name("Buyer")
+    assert kind_is_noise(name, ["buyer"], OPTIONS, independent=False)
+    assert not kind_is_noise(name, ["buyer"], OPTIONS, independent=True)
+    # A generic word stays noise whatever the evidence says.
+    assert kind_is_noise(kind_name("Section"), [], OPTIONS, independent=True)
+
+
+def test_the_independence_criteria_are_configurable() -> None:
+    strict = SuggestionOptions(kind_independent_instances=5, kind_independent_attributes=0)
+    assert not kind_is_independent(4, 9, strict)
+    assert kind_is_independent(5, 0, strict)
+    off = SuggestionOptions(kind_independent_instances=0, kind_independent_attributes=0)
+    assert not kind_is_independent(100, 100, off)
+
+
+def test_only_free_text_fields_pointing_to_nothing_name_a_dropped_kind(schema: Schema) -> None:
+    names = dangling_reference_names(schema)
+    assert "country" in names
+    assert "approved_by" in names
+    assert "supplier" not in names  # a ref Attribute points to a Kind
+    assert "risk_score" not in names
+    assert "onboarded_on" not in names
+    assert "status" not in names  # an enum

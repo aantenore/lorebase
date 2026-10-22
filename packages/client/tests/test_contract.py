@@ -348,6 +348,7 @@ def sample_calls() -> list[Any]:
         ep.list_proposal_items(d, "prp_1", status=["pending"], min_confidence=0.5),
         ep.decide_proposal_items(d, "prp_1", m.DecideItems()),
         ep.list_schema_suggestions(d, status=["pending"], all=True),
+        ep.merge_schema_suggestions(d),
         ep.decide_schema_suggestions(
             d, m.DecideSuggestions(decisions=[{"suggestion": "ssg_1", "decision": "rejected"}])
         ),

@@ -10,7 +10,9 @@ dropped and counted.
 
 Variants of one Attribute (`renewal_notice_days`, `renewal_proposal_notice_days`) are folded
 into the best supported suggestion of the Kind (`merge_attributes`), their labels kept; a Kind
-that only names a field or a generic word is not recorded (`kind_is_noise`).
+that only names a field or a generic word is not recorded (`kind_is_noise`) unless its evidence
+shows an entity of its own (`kind_is_independent`). `merge_variants` folds variants that were
+stored before they could be merged on arrival.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, func, literal, or_, select, update
+from sqlalchemy import Table, delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +33,7 @@ from lorebase_core.infer.suggestions import (
     Observation,
     SuggestionOptions,
     SuggestionType,
+    kind_is_independent,
     kind_is_noise,
     merge_attributes,
 )
@@ -86,6 +89,14 @@ class RecordOutcome:
     created: int = 0
     updated: int = 0
     dropped: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MergeOutcome:
+    """What `merge_variants` did: suggestions folded away and suggestions that absorbed them."""
+
+    merged: int = 0
+    kept: int = 0
 
 
 def _bounded(items: Iterable[Any], limit: int) -> list[Any]:
@@ -150,6 +161,47 @@ def fold(
     }
 
 
+def combine(
+    kept: Mapping[Any, Any], others: Sequence[Mapping[Any, Any]], options: SuggestionOptions
+) -> dict[str, Any]:
+    """Column values of the suggestion `kept` after absorbing the suggestions `others` (variants
+    of it): each document's share is summed, examples, samples, labels (the absorbed names
+    included) and sources are united, each within its bound."""
+    shares: dict[str, dict[str, float]] = {
+        d: dict(v) for d, v in (kept.get("observations") or {}).items()
+    }
+    for other in others:
+        for document, share in (other.get("observations") or {}).items():
+            into = shares.setdefault(document, {"n": 0, "c": 0.0})
+            into["n"] = int(into["n"]) + int(share["n"])
+            into["c"] = round(float(into["c"]) + float(share["c"]), 6)
+    support = sum(int(v["n"]) for v in shares.values())
+    total = sum(float(v["c"]) for v in shares.values())
+    every = [kept, *others]
+    examples: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for row in every:
+        for example in row.get("examples") or []:
+            key = (example.get("document_id"), example.get("start"), example.get("end"))
+            examples.setdefault(key, example)
+    return {
+        "observations": shares,
+        "support": support,
+        "confidence": round(total / support, 4) if support else 0.0,
+        "examples": list(examples.values())[: options.max_examples],
+        "samples": _bounded(
+            (v for r in every for v in r.get("samples") or []), options.max_samples
+        ),
+        "labels": _bounded(
+            [
+                *(kept.get("labels") or []),
+                *(x for r in others for x in (r["name"], *(r.get("labels") or []))),
+            ],
+            options.max_labels,
+        ),
+        "sources": _bounded((v for r in every for v in r.get("sources") or []), MAX_SOURCES),
+    }
+
+
 def consolidate(
     observations: Sequence[Observation],
     stored: Sequence[Mapping[Any, Any]],
@@ -157,9 +209,15 @@ def consolidate(
 ) -> tuple[dict[str, list[Observation]], dict[str, str]]:
     """Observations grouped by the fingerprint of the suggestion they count for, and the name
     of each group. Attribute variants join the best supported suggestion of their Kind,
-    among the pending ``stored`` ones and the job's; noise Kinds are left out."""
+    among the pending ``stored`` ones and the job's; noise Kinds are left out, unless the
+    evidence (the job's and the ``stored`` Kind and Attribute suggestions) shows an
+    independent entity."""
     sightings: dict[str, AttributeSighting] = {}
+    kinds: dict[str, Mapping[Any, Any]] = {}
     for row in stored:
+        if row.get("suggestion_type", SuggestionType.ATTRIBUTE.value) == SuggestionType.KIND.value:
+            kinds[row["fingerprint"]] = row
+            continue
         sightings[row["fingerprint"]] = AttributeSighting(
             row["fingerprint"],
             row["name"],
@@ -190,7 +248,13 @@ def consolidate(
         groups[merged.get(key, key)].extend(group)
     fields_known = [s.name for s in sightings.values()]
     for key in [k for k, g in groups.items() if g[0].type is SuggestionType.KIND]:
-        if kind_is_noise(groups[key][0].name, fields_known, options):
+        name = groups[key][0].name
+        owned = f"{PROPOSED}{name}"
+        instances = {o.value for o in groups[key] if o.value}
+        instances.update((kinds[key].get("samples") or []) if key in kinds else [])
+        fields = {s.key for s in sightings.values() if s.kind == owned}
+        independent = kind_is_independent(len(instances), len(fields), options)
+        if kind_is_noise(name, fields_known, options, independent=independent):
             del groups[key]
     return groups, {k: names.get(k, groups[k][0].name) for k in groups}
 
@@ -216,10 +280,10 @@ class SchemaSuggestionRepository:
     ) -> RecordOutcome:
         """Fold a job's observations into the stored suggestions (see module doc)."""
         table = SUGGESTIONS
-        refs = sorted(
-            {o.kind for o in observations if o.type is SuggestionType.ATTRIBUTE and o.kind}
-        )
-        pending = []
+        refs = {o.kind for o in observations if o.type is SuggestionType.ATTRIBUTE and o.kind}
+        kind_keys = {o.fingerprint for o in observations if o.type is SuggestionType.KIND}
+        refs.update(f"{PROPOSED}{o.name}" for o in observations if o.type is SuggestionType.KIND)
+        pending: list[Any] = []
         if refs:
             pending = list(
                 (
@@ -228,7 +292,17 @@ class SchemaSuggestionRepository:
                             self._scoped(),
                             table.c.suggestion_type == SuggestionType.ATTRIBUTE.value,
                             table.c.status == PENDING,
-                            table.c.kind_ref.in_(refs),
+                            table.c.kind_ref.in_(sorted(refs)),
+                        )
+                    )
+                ).mappings()
+            )
+        if kind_keys:
+            pending += list(
+                (
+                    await self._session.execute(
+                        select(table).where(
+                            self._scoped(), table.c.fingerprint.in_(sorted(kind_keys))
                         )
                     )
                 ).mappings()
@@ -306,6 +380,49 @@ class SchemaSuggestionRepository:
             room -= 1
             created += 1
         return RecordOutcome(created, updated, dropped)
+
+    async def merge_variants(self, *, options: SuggestionOptions, now: datetime) -> MergeOutcome:
+        """Fold the pending Attribute suggestions that are variants of one another
+        (`merge_attributes`) into the best supported one of each set, as `record` does for new
+        observations: support, documents, examples, samples and labels are united and the
+        absorbed rows deleted. Decided suggestions are left alone."""
+        table = SUGGESTIONS
+        rows = {
+            row["fingerprint"]: row
+            for row in (
+                await self._session.execute(
+                    select(table)
+                    .where(
+                        self._scoped(),
+                        table.c.suggestion_type == SuggestionType.ATTRIBUTE.value,
+                        table.c.status == PENDING,
+                    )
+                    .order_by(table.c.id)
+                    .with_for_update()
+                )
+            ).mappings()
+        }
+        sightings = [
+            AttributeSighting(
+                key, r["name"], r["kind_ref"], tuple(r["samples"] or ()), int(r["support"])
+            )
+            for key, r in rows.items()
+        ]
+        folded: dict[str, list[str]] = defaultdict(list)
+        for key, kept in merge_attributes(sightings, options).items():
+            if key != kept:
+                folded[kept].append(key)
+        for kept, absorbed in sorted(folded.items()):
+            others = [rows[k] for k in sorted(absorbed)]
+            await self._session.execute(
+                update(table)
+                .where(self._scoped(), table.c.id == rows[kept]["id"])
+                .values(**combine(rows[kept], others, options), updated_at=now)
+            )
+            await self._session.execute(
+                delete(table).where(self._scoped(), table.c.id.in_([o["id"] for o in others]))
+            )
+        return MergeOutcome(merged=sum(len(v) for v in folded.values()), kept=len(folded))
 
     async def count(self, status: str | None = None) -> int:
         query = select(func.count()).select_from(SUGGESTIONS).where(self._scoped())

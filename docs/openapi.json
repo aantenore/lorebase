@@ -2043,6 +2043,74 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/schema/suggestions:merge": {
+      "post": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Merge stored variants of schema suggestions",
+        "description": "Fold pending Attribute suggestions that are variants of one another, with the same\nsimilarity rules as new observations (idempotent).",
+        "operationId": "merge_suggestions_api_v1_domains__domain_id__schema_suggestions_merge_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeSuggestionsOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or suggestion not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/schema": {
       "get": {
         "tags": [
@@ -15625,6 +15693,26 @@
         ],
         "title": "MergeOut",
         "description": "A merged Proposal."
+      },
+      "MergeSuggestionsOut": {
+        "properties": {
+          "merged": {
+            "type": "integer",
+            "title": "Merged",
+            "description": "Suggestions folded into another and removed."
+          },
+          "kept": {
+            "type": "integer",
+            "title": "Kept",
+            "description": "Suggestions that absorbed others."
+          }
+        },
+        "type": "object",
+        "required": [
+          "merged",
+          "kept"
+        ],
+        "title": "MergeSuggestionsOut"
       },
       "NeighborhoodRequest": {
         "properties": {

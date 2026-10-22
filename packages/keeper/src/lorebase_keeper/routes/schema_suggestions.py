@@ -4,6 +4,7 @@
 |-----------------|------------|-------|
 | `GET .../schema/suggestions` | `document.read` | `status`, `type`, `all` |
 | `POST .../schema/suggestions:decide` | `schema.write` | accepting: see below |
+| `POST .../schema/suggestions:merge` | `schema.write` | folds stored variants |
 
 Suggestions quote their documents, so listing them needs `document.read` (Domain-wide). Pending
 suggestions are listed once they reach `schema.suggestions.min_support` observations, the most
@@ -16,6 +17,10 @@ default branch: the answer names the Proposal, which reviewers merge as any othe
 needs `schema.write` on that branch, `branch.create` and `proposal.create`; when the change set
 is invalid the answer is 422 with the issues and nothing is decided. An accepted suggestion
 cannot be decided again. Decisions are audited (`schema.suggestions.decide`).
+
+`:merge` folds the pending Attribute suggestions stored before variants were merged on arrival
+into the best supported one of each set (`schema.suggestions.merge_similarity`); it is safe to
+repeat and audited (`schema.suggestions.merge`).
 """
 
 from __future__ import annotations
@@ -128,6 +133,11 @@ class DecideSuggestionsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decisions: list[SuggestionDecisionIn] = Field(min_length=1)
+
+
+class MergeSuggestionsOut(BaseModel):
+    merged: int = Field(description="Suggestions folded into another and removed.")
+    kept: int = Field(description="Suggestions that absorbed others.")
 
 
 class SuggestionProposalOut(BaseModel):
@@ -290,3 +300,29 @@ async def decide_suggestions(
             ],
         )
     return DecideSuggestionsOut(suggestions=[_out(v) for v in outcome.views], proposal=proposal)
+
+
+@router.post(
+    SUGGESTIONS + ":merge",
+    summary="Merge stored variants of schema suggestions",
+    responses={k: v for k, v in _ERRORS.items() if k in (403, 404)},
+)
+async def merge_suggestions(
+    domain_id: str,
+    request: Request,
+    principal: PrincipalDep,
+    auth: AuthDep,
+    store: StoreDep,
+) -> MergeSuggestionsOut:
+    """Fold pending Attribute suggestions that are variants of one another, with the same
+    similarity rules as new observations (idempotent)."""
+    await authorize(request, auth, principal, Permission.SCHEMA_WRITE, domain_id)
+    outcome = await service.merge_variants(store, domain_id)
+    annotate(
+        request,
+        action="schema.suggestions.merge",
+        target=domain_id,
+        merged=outcome.merged,
+        kept=outcome.kept,
+    )
+    return MergeSuggestionsOut(merged=outcome.merged, kept=outcome.kept)

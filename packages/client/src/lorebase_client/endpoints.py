@@ -336,6 +336,16 @@ def decide_schema_suggestions(domain: str, body: m.DecideSuggestions) -> Call[m.
     )
 
 
+def merge_schema_suggestions(domain: str) -> Call[m.SuggestionsMerged]:
+    """Fold stored variants of Attribute suggestions; repeating it changes nothing."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/schema/suggestions:merge",
+        parse_model(m.SuggestionsMerged),
+        safe=True,
+    )
+
+
 # Operations -------------------------------------------------------------------------------
 
 

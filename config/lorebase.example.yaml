@@ -736,6 +736,9 @@ schema:
                                  # generic words never suggested as a Kind
     kind_min_attributes: 2       # Attribute suggestions (or observations) a new Kind needs
                                  # before it is listed; 0 lists every Kind
+    kind_independent_instances: 2   # distinct codes that make a Kind an entity of its own, kept
+                                 # although an Attribute has its name; 0 turns it off
+    kind_independent_attributes: 2  # Attributes owned by a proposed Kind with the same effect
     # type_inference: options of schema inference (as keeper.schema_inference.options) that
     # type new Attributes from their samples; defaults differ in min_support_values: 5,
     # enum_min_values: 5 and propose_max_length: false
@@ -1135,6 +1138,8 @@ scribe:
       span_labels: []            # tier 1: extra span labels suggesting Kinds, e.g. [certificate]
       relation_labels: []        # tier 1: extra relation labels suggesting Relations
       tier2: true                # tier 2: the model lists `unlisted` facts (verified evidence)
+      llm_pass: false            # a dedicated call per chunk through the schema_discovery route
+      llm_max_items: 20          # proposals of each list that call may return
       min_confidence: 0.3        # weaker observations are dropped
       field_confidence: 0.6      # a field line or table column
       heading_confidence: 0.5    # a Kind named by a heading

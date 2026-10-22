@@ -944,6 +944,8 @@ Schema suggestions from extraction (docs/extraction.md)
 | `schema.suggestions.merge_similarity` | `0.6` | least word overlap (Jaccard) for two Attribute suggestions of one Kind with samples of one value type to count as one |
 | `schema.suggestions.kind_stoplist` | `[section, clause, article, paragraph, chapter, annex, appendix, schedule, exhibit, attachment, page, table, figure, document, proposal]` |  |
 | `schema.suggestions.kind_min_attributes` | `2` | generic words never suggested as a Kind Attribute suggestions (or observations) a new Kind needs before it is listed; 0 lists every Kind |
+| `schema.suggestions.kind_independent_instances` | `2` | distinct codes that make a Kind an entity of its own, kept although an Attribute has its name; 0 turns it off |
+| `schema.suggestions.kind_independent_attributes` | `2` | Attributes owned by a proposed Kind with the same effect |
 
 Example:
 
@@ -1582,6 +1584,8 @@ Schema suggestions: what the tiers see outside the schema
 | `scribe.extraction.discovery.span_labels` | `[]` | tier 1: extra span labels suggesting Kinds, e.g. [certificate] |
 | `scribe.extraction.discovery.relation_labels` | `[]` | tier 1: extra relation labels suggesting Relations |
 | `scribe.extraction.discovery.tier2` | `true` | tier 2: the model lists `unlisted` facts (verified evidence) |
+| `scribe.extraction.discovery.llm_pass` | `false` | a dedicated call per chunk through the schema_discovery route |
+| `scribe.extraction.discovery.llm_max_items` | `20` | proposals of each list that call may return |
 | `scribe.extraction.discovery.min_confidence` | `0.3` | weaker observations are dropped |
 | `scribe.extraction.discovery.field_confidence` | `0.6` | a field line or table column |
 | `scribe.extraction.discovery.heading_confidence` | `0.5` | a Kind named by a heading |

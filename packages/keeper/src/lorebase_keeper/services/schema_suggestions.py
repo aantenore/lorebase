@@ -49,6 +49,7 @@ from lorebase_keeper.services.errors import Finding, violations_problem
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.repositories import (
     MaterializedRepository,
+    MergeOutcome,
     SchemaSuggestionRepository,
     SuggestionRow,
 )
@@ -204,6 +205,16 @@ async def page(
         last = rows[-1]
         following = {"support": last.support, "id": last.id, "listed": listed + len(rows)}
     return SuggestionPage([view_of(r, schema, options, masking) for r in rows], following)
+
+
+async def merge_variants(store: StoreAccess, domain_id: str) -> MergeOutcome:
+    """Fold the pending Attribute suggestions already stored that are variants of one another
+    (`schema.suggestions.merge_similarity`) into the best supported one of each set."""
+    async with store.sessions() as session, session.begin():
+        await require_domain(session, domain_id)
+        return await SchemaSuggestionRepository(session, domain_id).merge_variants(
+            options=store.runtime.schema.suggestions, now=store.clock()
+        )
 
 
 async def decide(

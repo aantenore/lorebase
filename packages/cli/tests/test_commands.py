@@ -2201,3 +2201,124 @@ def test_health_of_an_unreadable_kind_exits_three(http: respx.MockRouter) -> Non
         return_value=problem(403, "forbidden", "Missing permission on Kind Plant.")
     )
     assert run("health", "Plant", "-d", "supply").exit_code == 3
+
+
+# Schema suggestions -------------------------------------------------------------------------
+
+
+def suggestion(id_: str = "ssg_1", **extra: Any) -> dict[str, Any]:
+    return {
+        "id": id_,
+        "type": "attribute",
+        "name": "buyer",
+        "kind": "Contract",
+        "target": None,
+        "labels": ["Buyer"],
+        "support": 3,
+        "documents": 2,
+        "confidence": 0.6,
+        "status": "pending",
+        "samples": ["Corvane", "Acme"],
+        "examples": [],
+        "sources": ["rules"],
+        "proposal_id": None,
+        "branch": None,
+        "decided_by": None,
+        "decided_at": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+        **extra,
+    }
+
+
+def test_schema_suggestions_list_filters_and_renders(http: respx.MockRouter) -> None:
+    route = http.get("/domains/supply/schema/suggestions").respond(
+        200, json={"items": [suggestion(), suggestion("ssg_2", name="ends")], "next_cursor": None}
+    )
+    result = run(
+        "schema",
+        "suggestions",
+        "list",
+        "-d",
+        "supply",
+        "--status",
+        "pending",
+        "--type",
+        "attribute",
+        "--weak",
+    )
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].split() == [
+        "id",
+        "type",
+        "name",
+        "of",
+        "support",
+        "docs",
+        "status",
+        "samples",
+    ]
+    assert "ssg_2" in result.stdout
+    assert "Corvane, Acme" in result.stdout
+    params = route.calls.last.request.url.params
+    assert (params["status"], params["type"], params["all"]) == ("pending", "attribute", "true")
+    listed = run("schema", "suggestions", "list", "-d", "supply", "-n", "1", "--json")
+    assert [s["id"] for s in json.loads(listed.stdout)] == ["ssg_1"]
+
+
+def test_schema_suggestions_accept_reports_the_proposal(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/schema/suggestions:decide").respond(
+        200,
+        json={
+            "suggestions": [suggestion(status="accepted", proposal_id="prp_9")],
+            "proposal": {
+                "id": "prp_9",
+                "title": "Schema suggestions: buyer",
+                "branch": "suggest/ssg_1",
+                "changes": [
+                    {"op": "update", "section": "kinds", "id": "k", "api_name": "Contract"}
+                ],
+            },
+        },
+    )
+    result = run(
+        "schema", "suggestions", "accept", "ssg_1", "-d", "supply", "--name", "buyer_entity"
+    )
+    assert result.exit_code == 0
+    assert "prp_9" in result.stdout
+    assert "suggest/ssg_1" in result.stdout
+    assert request_bodies(route) == [
+        {"decisions": [{"suggestion": "ssg_1", "decision": "accepted", "name": "buyer_entity"}]}
+    ]
+    renamed_twice = run("schema", "suggestions", "accept", "a", "b", "-d", "supply", "--name", "x")
+    assert renamed_twice.exit_code == 2
+    assert len(route.calls) == 1
+
+
+def test_schema_suggestions_reject_sends_every_id(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/schema/suggestions:decide").respond(
+        200,
+        json={
+            "suggestions": [suggestion(status="rejected"), suggestion("ssg_2", status="rejected")],
+            "proposal": None,
+        },
+    )
+    result = run("schema", "suggestions", "reject", "ssg_1", "ssg_2", "-d", "supply")
+    assert result.exit_code == 0
+    assert [(d["suggestion"], d["decision"]) for d in request_bodies(route)[0]["decisions"]] == [
+        ("ssg_1", "rejected"),
+        ("ssg_2", "rejected"),
+    ]
+    assert "prp_" not in result.stdout
+
+
+def test_schema_suggestions_merge_reports_counts(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/schema/suggestions:merge").respond(
+        200, json={"merged": 3, "kept": 2}
+    )
+    result = run("schema", "suggestions", "merge", "-d", "supply")
+    assert result.exit_code == 0
+    assert "merged 3 suggestions into 2" in result.stdout
+    assert route.called
+    as_json = run("schema", "suggestions", "merge", "-d", "supply", "--json")
+    assert json.loads(as_json.stdout) == {"merged": 3, "kept": 2}

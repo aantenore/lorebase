@@ -401,6 +401,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/schema/suggestions:merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge stored variants of schema suggestions
+         * @description Fold pending Attribute suggestions that are variants of one another, with the same
+         *     similarity rules as new observations (idempotent).
+         */
+        post: operations["merge_suggestions_api_v1_domains__domain_id__schema_suggestions_merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/schema": {
         parameters: {
             query?: never;
@@ -3726,6 +3747,19 @@ export interface components {
             source_deleted: boolean;
             /** Replayed */
             replayed: boolean;
+        };
+        /** MergeSuggestionsOut */
+        MergeSuggestionsOut: {
+            /**
+             * Merged
+             * @description Suggestions folded into another and removed.
+             */
+            merged: number;
+            /**
+             * Kept
+             * @description Suggestions that absorbed others.
+             */
+            kept: number;
         };
         /**
          * NeighborhoodRequest
@@ -7167,6 +7201,55 @@ export interface operations {
             };
             /** @description A branch is locked by another writer. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    merge_suggestions_api_v1_domains__domain_id__schema_suggestions_merge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeSuggestionsOut"];
+                };
+            };
+            /** @description The caller lacks the permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or suggestion not found. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

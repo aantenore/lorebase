@@ -10,8 +10,10 @@
 5. Assemble the items. With at least one item: create branch `extract/<job id>` from the
    default branch, open the Proposal (origin `extraction`), store the items, commit the items
    accepted at once on the branch (with `extraction` Lineage) and compute the merge preview.
-6. Schema discovery: what the tiers saw outside the schema is folded into the Domain's schema
-   suggestions (`discovery`, `schema_suggestions`), whether or not the job proposes items.
+6. Schema discovery: what the tiers saw outside the schema, and what the optional dedicated
+   discovery pass (`discovery.llm_pass`, task route `schema_discovery`) proposes, is folded
+   into the Domain's schema suggestions (`discovery`, `schema_suggestions`), whether or not
+   the job proposes items.
 
 Nothing is written to the default branch: reviewers decide item by item and merge the
 Proposal. A tier 1 model that is not installed degrades to tier 0 with a warning in the job's
@@ -57,6 +59,8 @@ from lorebase_scribe.extraction.candidates import (
     ValueCandidate,
 )
 from lorebase_scribe.extraction.discovery import Discovery
+from lorebase_scribe.extraction.llm_discovery import TASK as DISCOVERY_TASK
+from lorebase_scribe.extraction.llm_discovery import run_llm_discovery
 from lorebase_scribe.extraction.matching import (
     Dictionary,
     Resolver,
@@ -156,6 +160,8 @@ class ExtractionModels:
     chat: ChatModel | None = None
     chat_model: str = ""
     warnings: tuple[str, ...] = ()
+    discovery_chat: ChatModel | None = None
+    discovery_model: str = ""
 
     def describe(self) -> str:
         parts = ["rules", self.span_model, self.relation_model, self.chat_model]
@@ -196,8 +202,25 @@ def build_models(
         except (NotImplementedError, UnknownProviderError, ValueError) as error:
             raise ExtractionError(f"tier 2 chat model unavailable: {error}") from None
         chat_model = f"{llm.provider}:{llm.model}"
+    discovery_chat: ChatModel | None = None
+    discovery_model = ""
+    if settings.discovery.enabled and settings.discovery.llm_pass:
+        llm = inference.llm.for_task(DISCOVERY_TASK)
+        try:
+            discovery_chat = lorebase_inference.create_chat_model(inference, task=DISCOVERY_TASK)
+        except (NotImplementedError, UnknownProviderError, ValueError) as error:
+            raise ExtractionError(f"schema discovery chat model unavailable: {error}") from None
+        discovery_model = f"{llm.provider}:{llm.model}"
     return ExtractionModels(
-        spans, span_model, relations, relation_model, chat, chat_model, tuple(warnings)
+        spans,
+        span_model,
+        relations,
+        relation_model,
+        chat,
+        chat_model,
+        tuple(warnings),
+        discovery_chat,
+        discovery_model,
     )
 
 
@@ -643,6 +666,10 @@ class ExtractionRun:
                     model=models.relation_model,
                 )
         found.mentions.extend(resolved)
+        if discovery is not None and models.discovery_chat is not None:
+            await self._llm_discovery(
+                models, ontology, chunks, document, schema_hash, report, discovery
+            )
         if models.chat is not None:
             await self._tier2(
                 models,
@@ -796,6 +823,51 @@ class ExtractionRun:
             found.links.extend(result.links)
             if discovery is not None:
                 discovery.extend(result.observations)
+
+    async def _llm_discovery(
+        self,
+        models: ExtractionModels,
+        ontology: Ontology,
+        chunks: Sequence[Chunk],
+        document: DocumentRow,
+        schema_hash: bytes,
+        report: ExtractionReport,
+        discovery: Discovery,
+    ) -> None:
+        """The dedicated discovery pass over the chunks of one document, within the budget."""
+        assert models.discovery_chat is not None
+        budget = self._settings.max_tokens_per_job
+        cache = StoreCache(self._sessions) if self._settings.cache else None
+        for chunk in chunks:
+            used = report.usage["input_tokens"] + report.usage["output_tokens"]
+            if budget and used >= budget:
+                report.count("chunks_over_budget")
+                continue
+            try:
+                result = await run_llm_discovery(
+                    models.discovery_chat,
+                    ontology,
+                    chunk,
+                    document_id=document.id,
+                    schema_hash=schema_hash,
+                    model_key=models.discovery_model,
+                    settings=self._settings,
+                    cache=cache,
+                )
+            except InvalidOutputError as error:
+                report.count("discovery_calls")
+                report.count("discovery_invalid_answers")
+                report.usage["input_tokens"] += error.usage.input_tokens
+                report.usage["output_tokens"] += error.usage.output_tokens
+                report.warnings.append(f"{document.id}: chunk {chunk.seq}: discovery: {error}")
+                continue
+            report.count("discovery_calls", 0 if result.cached else 1)
+            report.count("discovery_cache_hits", 1 if result.cached else 0)
+            report.usage["input_tokens"] += result.usage.input_tokens
+            report.usage["output_tokens"] += result.usage.output_tokens
+            for reason, count in result.discarded.items():
+                report.count(f"discovery_discarded_{reason}", count)
+            discovery.extend(result.observations)
 
     async def _current(self, domain_id: str, branch: str, found: _Found) -> CurrentState:
         keys: dict[str, set[str]] = defaultdict(set)
