@@ -257,7 +257,7 @@ Before, 100 ForceAtlas2 iterations ran on the main thread before the first draw 
 - **Environment:** the stack is its own compose project, `lorebase-demo`, with Keeper on port 18080 and Postgres on 15432. Every model task uses the deterministic fake provider, so no model is downloaded and no secret is used.
 - **Method:** `make demo`. Each day ends with assertions printed as `check ok: ...`; a failed one prints `assertion failed: ...` and exits with code 1, as does a failing CLI command. The run ends with a table of seconds per day, also on failure.
 - **Timings recorded in the demo page** (a laptop, undated): building the image and starting the stack 374 s on the first build, dominated by pulling base images; the five days 45 s, document and checks included. With the image cached, only Postgres, the migrations and Keeper have to start.
-- **Checks:** `examples/five_day_demo/demo.py` has 63 call sites of its `check` function; the repository records no total for a run, so no count of checks is given here.
+- **Checks:** the scenario runs 79 checks. In CI the first pass (run 39738332331) took about 3 min 13 s on a cold cache; locally a run takes about 41 s once the stack is up. The scenario also builds the `lorebase-ml` image, and that run is green (run 39808555188).
 
 What each day asserts:
 
@@ -290,8 +290,8 @@ Documents: [security review](security-review.md) (findings, fixes, tool results)
 | First pass and second pass | 2026-10-21 | The trust boundaries of `keeper`, `store`, `scribe`, `inference` and `herald`, `deploy/` and the workflows, at commit `4bd2d26` | 23 findings, all fixed |
 | Web sign-in (OIDC, Keeper as backend-for-frontend) | 2026-10-22 | The session cookie boundary | Threats tabulated with mitigations; one hardening commit after the first implementation |
 | Threat model and its hardening | 2026-10-22 | All nine trust boundaries by STRIDE | Residual risks ranked; twelve fixed since |
-| Sensitivity masking and PII vault | 2026-10-22 | Reads, history, erasure | Fixed; residual risks 2 to 7 of the threat model |
-| Outbox and Operation events | 2026-10-22 | Delivery state, sensitive values in events | Fixed in the change; no separate findings list |
+| Sensitivity masking and PII vault | 2026-10-22 | Reads, history, erasure, bundles | Four rounds, then a vault and bundle review and its re-review; every High and Medium fixed ([rounds](#pii-vault-and-sensitivity-masking)); residual risks 2 to 7 of the threat model |
+| Outbox and Operation events | 2026-10-22 | Delivery state, sensitive values in events | Three High findings, all fixed ([details](#outbox-and-operation-events)) |
 | Shared rate limits, read audit, off-database anchor | 2026-10-22 | Rate limiting, audit | Fixed; a follow-up commit adds outage and freshness handling |
 | Helm database roles | 2026-10-22 | The chart's database connections | Installed on a kind cluster |
 
@@ -321,11 +321,24 @@ The threat model covers nine boundaries (browser, API clients, authorization ins
 
 ### PII vault and sensitivity masking
 
-Values of `pii`, `confidential` and `restricted` Attributes are masked on every read path unless the caller holds the matching clearance; filters, ordering and grouping on them need it too; they stay out of search vectors, the lexicon, snippets and titles. Attributes with `vault: true` store an encrypted value in the vault and a token in the Record, and erasure by Record key or value clears it for every Revision and is audited in the same transaction. The residual risks recorded in the threat model are the repository's list of what the review rounds left open: inline sensitive values and Record keys stay in history; erasure misses tokens held under an earlier key and matches the canonical value exactly; vault keys sit in the services' configuration and `vault.token_key` cannot be rotated; small value oracles remain (the plain SHA-256 parameter digest of Operation invocations without the vault keys, Kind health listing which Records share a sensitive value, validation codes revealing a format); branches forked before a tag keep stale titles and search vectors until rewritten, which verification reports as `sensitivity_stale`; the Operation analysis is conservative; and `lorebase admin erase --value V` puts the value in the shell history unless `--value -` is used. The repository does not record how many review rounds this feature went through or a finding count per round.
+Values of `pii`, `confidential` and `restricted` Attributes are masked on every read path unless the caller holds the matching clearance; filters, ordering and grouping on them need it too; they stay out of search vectors, the lexicon, snippets and titles. Attributes with `vault: true` store an encrypted value in the vault and a token in the Record, and erasure by Record key or value clears it for every Revision and is audited in the same transaction. The residual risks recorded in the threat model are the repository's list of what the review rounds left open: inline sensitive values and Record keys stay in history; erasure misses tokens held under an earlier key and matches the canonical value exactly; vault keys sit in the services' configuration and `vault.token_key` cannot be rotated; small value oracles remain (the plain SHA-256 parameter digest of Operation invocations without the vault keys, Kind health listing which Records share a sensitive value, validation codes revealing a format); branches forked before a tag keep stale titles and search vectors until rewritten, which verification reports as `sensitivity_stale`; the Operation analysis is conservative; and `lorebase admin erase --value V` puts the value in the shell history unless `--value -` is used.
+
+The feature went through four security review rounds, then a later review of the vault and of bundles, and a re-review of that. Every High and Medium finding was fixed, with a test that fails without the fix.
+
+| Round | High | Medium | Findings |
+|-------|-----:|-------:|----------|
+| 1 | 5 | 3 | High: masking taken from a schema the caller chose; derived copies of sensitive values; extraction items exposing values; plaintext outside the vault; bundle import bypassing tokenization. Medium: conflict maps failing open; sensitive keys; a unique-value oracle |
+| 2 | 1 | 4 | High: branch-local tag removal combined with a derived copy. Medium: search text, Kind health, recorded parameters, key and unique checks on branch tags. Fixed at the root with effective tags: the tags of the default branch are unioned with the branch's own, so a branch cannot lift a protection |
+| 3 | 2 | several | High: title filtering; Operation target, from and to expressions and error messages that quoted values. Medium: stale Operations, migration messages, a tag-removal race, cache keys |
+| 4 | 0 | several | Medium: snippets with hidden titles, agent writes, field resolution by Kind, an early 304 |
+| Vault and bundle review | 1 | 6 | High: erasure missed a concurrent key change. Medium: unlimited takeovers; erasure denial of service through lineage; an import oracle, closed by the new `pii.import` permission; export with erased renames; lineage and tombstones missing from bundles; tombstones ignored on import |
+| Re-review | n/a | n/a | One finding: an extraction bypass of `pii.import`, fixed |
+
+Round 3 and round 4 counts of Medium findings are not given: the fixes and their tests are in the commit history, the finding-by-finding list is not.
 
 ### Outbox and Operation events
 
-A committed Operation execution writes its `operation.<name>` events in the transaction of its Revision, invocation record and audit entry, so an event exists exactly when the execution committed. Each outbox consumer owns its pending rows (filled by a trigger in the writing transaction; migration `0020`), so consumers no longer take events from each other and a late commit is not skipped. Sensitive values reach a webhook only when it was created with matching clearances, vault values are opened when the delivery is sent (an erased one arrives as `webhooks.erased_value`), and every attempt carries an idempotency key: delivery is at least once and unordered. This change is recorded as a single commit with its tests; no separate findings list exists.
+A committed Operation execution writes its `operation.<name>` events in the transaction of its Revision, invocation record and audit entry, so an event exists exactly when the execution committed. Each outbox consumer owns its pending rows (filled by a trigger in the writing transaction; migration `0020`), so consumers no longer take events from each other and a late commit is not skipped. Sensitive values reach a webhook only when it was created with matching clearances, vault values are opened when the delivery is sent (an erased one arrives as `webhooks.erased_value`), and every attempt carries an idempotency key: delivery is at least once and unordered. A security review of the outbox found three High issues, all fixed: a forged `$sensitive` wrapper in event data, agent task writes that emitted events before review, and strict name checks that broke stored schemas.
 
 ### Rate limits, read audit and audit anchors
 

@@ -17,11 +17,11 @@ keywords: versioned knowledge graph, open-source ontology platform, knowledge ba
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha.** The versioning and merge engine and the Keeper REST API, Proposals included, run today, and so do the MCP server (Herald), the Python client and the `lorebase` CLI. Source syncs run, documents are extracted into Proposals that people review item by item, and agent writes that need review become Proposals. Scribe embeds the Records of Kinds with an embedding template, and semantic search ranks those vectors against a vector the caller supplies. [Status and roadmap](#status-and-roadmap) says exactly what is done.
+> **Pre-alpha, v0.2.1.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](quickstart.md) is the place to start and the [validation record](validation.md) the place to check the claims.
 
 ## What it is
 
-Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. Teams model what the company knows as a typed ontology (Kinds, Attributes, Relations, Operations), keep it in Postgres, and change it the way developers change code: on a branch, reviewed, merged, traceable. It brings git-like branching and merging for knowledge, covering the schema and the data together, with three-way conflicts resolved per attribute. Agents live outside Lorebase, in any framework. They read through a REST API that never calls a language model, so answers are deterministic and arrive in milliseconds, and they write only through governed Operations. Lorebase is MCP-native by design: the MCP server (Herald) wraps the REST API for any MCP host. It is meant as an open-source alternative to proprietary ontology platforms, small enough to run on a laptop with `docker compose`.
+Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. You model what your organization knows as a typed ontology (Kinds, Attributes, Relations, Operations) and change it the way developers change code: on a branch, reviewed, merged, traceable. Schema and data branch and merge together, with three-way Conflicts resolved per Attribute. Agents live outside Lorebase, in any framework. They read through a REST API or the MCP server, neither of which calls a language model, so answers are deterministic and fast, and they write only through governed Operations and Proposals. It is meant as an open-source alternative to proprietary ontology platforms and runs on a laptop with `docker compose`.
 
 ![Lorebase web app: Explorer, a Record, the Canvas graph and the Review conflict resolver](images/tour.gif)
 
@@ -79,36 +79,24 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 
 ## Features
 
-| Area | Feature | Status | Milestone |
-|------|---------|--------|-----------|
-| Modeling | Typed ontology as YAML: Kinds, Attributes, Relations with cardinality, Traits, Operations, Derivations, Sources, with static validation | Done | M1 |
-| Modeling | Expressions (CEL) in Operations and Derivations: type checked when a schema is applied, Operations executed with preconditions, steps and review policies, `expression` and `aggregate` Derivations recomputed in the materialized head, `path` Derivations as virtual Relations (composed at read time or materialized) | Done | M3, M4 |
-| Versioning | Content-addressed Revisions, branches, tags, diff, time travel reads | Done | M1 |
-| Versioning | Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies (`prefer`, cascade, defaults) | Done | M1 |
-| Versioning | Proposals, reviews, required approvals, merge and Conflict resolution over REST | Done | M1 |
-| Reads | Records, Links, query DSL, traversal, neighborhood, lexical search, log and diff over REST, with ETags | Done | M1 |
-| Reads | Per-Attribute indexes, one-statement read primitives, performance harness and a 100k-Record baseline ([performance.md](performance.md)) | Done; the 1M-Record baseline is not | M1 |
-| Reads | Semantic and hybrid search with caller-supplied vectors, embeddings computed by Scribe jobs ([scribe](scribe.md#embeddings)) | Done | M4 |
-| Governance | Built-in Operations (create, update, delete, link, unlink, bulk import) with dry run and idempotency | Done | M1 |
-| Governance | API keys, OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log | Done | M1 |
-| Governance | Custom Operations, review policies, sensitivity masking | Partly: custom Operations run with CEL preconditions, steps and review policies, and sensitive values are masked without clearance; events declared by Operations are planned (signed webhooks on Revision events exist) | M3 |
-| Operations | Docker compose, CI, CodeQL, Scorecard, SBOM, OpenTelemetry | Done | M1 |
-| Operations | Observability bundle: metrics catalogue, Grafana dashboards for Keeper, Store and Scribe, Prometheus alert rules with runbooks, OpenTelemetry Collector to Prometheus and Jaeger or Tempo, in compose and the Helm chart ([metrics.md](metrics.md), [operations.md](operations.md#dashboards-and-alerts)) | Done | M1 |
-| Operations | Several Keepers and Postgres read replicas with a freshness guard | Done, endpoints adopt it incrementally | M1 |
-| Operations | Garbage collection, Domain backup and restore bundles, a Postgres job queue ([operations.md](operations.md)) | Done | M5, landed early |
-| Agent access | Context packs within a token budget (JSON or markdown), Record explanations, change feed (Server-Sent Events and polling) and signed webhooks ([agents.md](agents.md)) | Done | M3, landed early |
-| Agent access | Python client (sync and async) and the `lorebase` CLI over the REST API, Proposals, context packs and explanations included; the OpenAPI document is committed as [openapi.json](openapi.json) | Done | M1 |
-| Agent access | MCP server (Herald) on stdio and Streamable HTTP ([mcp.md](mcp.md)) | Done | M3, landed early |
-| Agent access | Agent writes that need review run on a task branch and open a Proposal, merged automatically only for roles the Domain allows and with the required approvals ([agents.md](agents.md#writes-that-need-review)) | Done | M3 |
-| Ingestion | Schema inference from CSV, JSON, JSON Lines and Parquet files and Postgres tables (`POST .../schema:infer`, [inference.md](inference.md)) | Done | M2 |
-| Ingestion | CSV, JSON, JSON Lines, Parquet, HTTP JSON and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([scribe.md](scribe.md)) | Done | M2 |
-| Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([inference-providers.md](inference-providers.md)) | Done | M4 |
-| Ingestion | Document extraction into reviewable Proposals: intake of Markdown, text, PDF and DOCX, rules, local span and relation models, any LLM with JSON schema output, verified evidence, item review over REST, CLI and in the web app, schema suggestions accepted as schema change Proposals ([extraction.md](extraction.md)) | Done | M4 |
-| Web app | Explorer with Record history and lineage, Canvas, Modeler with Operation, Derivation and Source editors and their previews, a Start from data wizard, Review with Conflict resolver, extraction Items and schema suggestions, Documents, Sources, Agent activity, Retrieval lab, Admin basics; domain-agnostic, with all copy in one messages module | Done; runs on the mock API or on Keeper, with end-to-end tests against a real Keeper for browsing, Branches, schema changes, Review and Settings | M2, M3 |
-| Operations | Helm chart: Keeper, migration hook, optional Scribe, Herald, web app, Ollama, Ingress, HPA, read replica DSNs ([kubernetes.md](kubernetes.md)) | Done, checked by lint, template and kubeconform; not yet run on a live cluster | M5, landed early |
-| Scale | Overlay branches that store only the rows they change, created in milliseconds whatever the size of the Domain ([store-schema-notes.md](store-schema-notes.md#overlay-branches)) | Done | M5, landed early |
-| Project | Documentation site with generated CLI, configuration and REST API reference ([aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/)) | Done | M5, landed early |
-| Scale | PII vault, 10M-Record performance | Partly: the PII vault and erasure work; 10M-Record performance is planned | M5 |
+| Area | What is there |
+|------|---------------|
+| Modeling | Typed ontology as YAML: Kinds, Attributes, Relations with cardinality, Traits, Operations, Derivations and Sources, validated statically. CEL expressions in Operations and Derivations are type checked when a schema is applied. [LinkML](linkml.md) schemas import and export. |
+| Derivations | Expression and aggregate Derivations recomputed in the materialized head; path Derivations composed from Relations at read time, or stored and kept current when `materialized` ([design 5.8](design.md#58-derivation)). |
+| Versioning | Content-addressed Revisions, branches, tags, diff, three-way merge of schema and data with the full Conflict taxonomy and merge policies, and time travel reads at any Revision. Overlay branches store only the rows they change and are created in milliseconds. |
+| Review | Proposals with reviews, required approvals, branch protection and Conflict resolution over REST, CLI and the web app. Agent writes that need review run on a task branch and open a Proposal ([agents](agents.md#writes-that-need-review)). |
+| Reads | Records, Links, query DSL, traversal, neighborhood, lexical and typo-tolerant search, hybrid search over embeddings computed by Scribe, Record history and lineage, all with ETags. Context packs within a token budget and Record explanations ([agents](agents.md)). |
+| Governance | API keys and OIDC, role grants per Domain, Kind, Operation and branch, a hash-chained audit log with signed checkpoints, shared rate limits, signed webhooks and a change feed. |
+| PII vault | Attributes tagged `pii`, `confidential` or `restricted` are masked without clearance on every read path and kept out of search. `vault: true` Attributes store encrypted values that `lorebase admin erase` removes from every Revision ([design 13.5](design.md#135-personal-data-and-erasure)). |
+| Connectors | CSV, JSON, JSON Lines, Parquet, HTTP JSON, Postgres, MySQL/MariaDB and SQL Server Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage ([Scribe](scribe.md#sources)). Schema inference from files and tables ([inference](inference.md)). |
+| Documents | Markdown, text, PDF and DOCX extracted into reviewable Proposals by rules, local span and relation models, or any LLM with JSON schema output, with verified evidence and schema suggestions ([extraction](extraction.md)). Any OpenAI-compatible endpoint or local model, chosen by configuration ([providers](inference-providers.md)). |
+| Agent access | Herald, the MCP server, on stdio and Streamable HTTP ([MCP](mcp.md)). Python client (sync and async) and CLI, checked against the committed [OpenAPI document](openapi.json). |
+| Guide and Explore | An optional assistant answers questions about a Domain by reading it through Keeper, streamed step by step with links to the cited Records ([guide](guide.md)). |
+| Agent trace | The steps of an agent session and the Records it touched are recorded and shown on the Canvas ([agent trace](agent-trace.md)). |
+| Retrieval lab | Two search settings compared side by side, with the resulting context pack ([retrieval lab](retrieval-lab.md)). |
+| Web app | Explorer, Canvas, Modeler, Review, Documents, Sources, Explore, Agent activity, Retrieval lab and Admin basics, on a mock API or on Keeper ([tour](tour.md)). |
+| Storage profiles | `compact`, `balanced` and `fast` decide which secondary indexes exist and how lineage is stored; `python -m lorebase_store.storage apply` switches a running install ([performance](performance.md#working-set)). |
+| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI with CodeQL and signed images ([operations](operations.md), [Kubernetes](kubernetes.md)). |
 
 The milestone breakdown with checkboxes is in the [roadmap](roadmap.md).
 
@@ -126,7 +114,7 @@ p95 latency in milliseconds of the agent reads on a materialized head of 99,900 
 | Full-text search | 50 | 2.58 | 2.75 |
 | Full-text search, typo-tolerant titles | 50 | 22.32 | 22.64 |
 
-Under row-level security Postgres cannot use non-leakproof operators (`->>`, casts, `@@`) as index conditions, so search, incoming Links, neighborhoods and attribute queries run inside security definer functions that pin the Domain they are given ([store schema notes](store-schema-notes.md#security-definer-read-functions)), and search reads an index scoped by Domain and branch (migration `0011`). Every read of both roles is within its budget; as plain SQL the `rls` role measured 28 ms, 137 ms and 68 ms for Links of a Record, the neighborhood and search. Reads on an overlay branch stay within 30% of a full copy at p50. The 1M-Record baseline is still to do.
+Under row-level security Postgres cannot use non-leakproof operators (`->>`, casts, `@@`) as index conditions, so search, incoming Links, neighborhoods and attribute queries run inside security definer functions that pin the Domain they are given ([store schema notes](store-schema-notes.md#security-definer-read-functions)), and search reads an index scoped by Domain and branch (migration `0011`). Every read of both roles is within its budget; as plain SQL the `rls` role measured 28 ms, 137 ms and 68 ms for Links of a Record, the neighborhood and search. Reads on an overlay branch stay within 30% of a full copy at p50. At 1M Records every read on `main` is within budget; the neighborhood on other branches is just over it when the working set does not fit in memory. The 1M and 10M runs, with the storage profiles, are in the [validation record](validation.md#performance-baselines).
 
 ## See it
 
@@ -232,11 +220,17 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 ## Status and roadmap
 
-Pre-alpha. [v0.2.1](https://github.com/aantenore/lorebase/releases/tag/v0.2.1) is the current pre-alpha release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)) ([CHANGELOG](project/changelog.md), [release process](release.md)); interfaces may change, and before 1.0 any minor version may change them. M1 (engine and API) is nearly done: the engine, the REST API (Proposals included), the Python client and the CLI are done; the per-Record history and lineage endpoints are done too; the 1M-Record performance baseline is not.
+Pre-alpha. [v0.2.1](https://github.com/aantenore/lorebase/releases/tag/v0.2.1) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](project/changelog.md) and the [release process](release.md). Interfaces may change, and before 1.0 any minor version may change them.
 
-Done on `main`: the core engine (canonical JSON and hashing, type system, schema models, HAMT trees, Revisions, diff, three-way merge with the Conflict taxonomy); schema as YAML; CEL expressions end to end (schema validation, custom Operations, derived values in the materialized head); the Postgres store with materialized heads, row-level security and per-Attribute indexes; the Keeper REST API for Domains, branches, schema change sets, schema inference, Operations, Proposals with reviews, merge and Conflict resolution, Records, Links, query, traversal, neighborhood, search, log, Revisions and diff; authentication with API keys and OIDC, roles and audit log; Postgres read replicas with a freshness guard; context packs, Record explanations, the change feed and signed webhooks for agents; Herald, the MCP server over the REST API; the Python client and the `lorebase` CLI, checked against the committed OpenAPI document; garbage collection, Domain bundles and a job queue; document intake and tiered extraction into Proposals with item review; agent writes that turn a refused Operation into a task branch and a Proposal; overlay branches; a performance harness with a 100k-Record baseline; docker compose and a Helm chart; metrics, Grafana dashboards and Prometheus alert rules; CI with CodeQL, a release workflow with signed images and SBOMs; a security review of the trust boundaries with all 23 findings fixed ([security-review.md](security-review.md)); the five-day demo (`make demo`); the documentation site; the web app on the mock API or a live Keeper.
+What runs on `main` is described above. The [validation record](validation.md) lists the runs behind it: performance at 100k, 1M and 10M Records, the five-day scenario (79 checks in CI), the security reviews and live runs with language models.
 
-Next: the 1M-Record baseline.
+Open:
+
+- Performance targets of design 6.14 on the 32 GB reference hardware. On a shared laptop with an 8 GiB Docker VM, 10M Records meet the budget for key, page, Link and attribute reads but not for the 2-hop neighborhood, full-text search, history and lineage.
+- Kind-scoped invisibility in queries, the last part of full RBAC.
+- API stability guarantees for `/api/v1`: the policy is written ([API stability](api-stability.md)) and binds from 1.0.
+
+Next up: the benchmark run on reference hardware, then Kind-scoped invisibility.
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|
@@ -244,7 +238,7 @@ Next: the 1M-Record baseline.
 | M2 | Structured ingestion and exploration | Postgres, CSV and Parquet Sources, schema inference, Explorer, Canvas, Review basics |
 | M3 | Governance and agents | Custom Operations, full RBAC, Herald MCP server, Modeler, Conflict resolver UI |
 | M4 | Documents and semantic search | Offline extraction into Proposals with evidence, entity resolution, embeddings, hybrid search |
-| M5 | Enterprise hardening, 1.0 | Overlay branches, PII vault, Helm chart, 10M-Record performance, LinkML import and export |
+| M5 | Enterprise hardening, 1.0 | Overlay branches, PII vault, Helm chart, storage profiles, LinkML import and export, 10M-Record performance, API stability |
 
 The public [roadmap](roadmap.md) tracks every item. The reasoning behind the project is in [why.md](why.md), common questions in the [FAQ](faq.md).
 
