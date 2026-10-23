@@ -7,21 +7,24 @@ BM25 index on `mat_records` and Keeper's `search.backend: bm25` ranks lexical se
 with a top-k scan of that index, so common terms cost about as much as rare ones.
 
 - The index (`INDEX`) holds, per row, `lb_search_terms(search)` (revision 0037): the lexemes
-  of the existing search vector, tokenized on whitespace (field `terms`). It matches what
-  full-text search matches, with the same configuration, Attributes and exclusions. Domain,
+  of the existing search vector, tokenized on whitespace without folding case (field `terms`).
+  It matches what full-text search matches, with the same configuration, Attributes and
+  exclusions. Domain,
   branch, Kind and key are literal fields, `revision_generation` and `deleted` fast fields,
   so the scope of a search is part of the index query.
 - `translate` turns the tsquery of a query (its text form) into a BM25 query over `terms`:
-  words are `term` queries, `&` / `|` / `!` boolean clauses, `<->` chains of words phrases.
-  What has no exact equivalent (other distances, a phrase of groups, a negated phrase) becomes
-  a superset; the definer function then ranks the superset's first candidates and rechecks
-  them against the search vector.
+  words are `term` queries, `&` / `|` / `!` boolean clauses. What has no exact equivalent
+  becomes a superset: a phrase matches all its words, the rows with the words in sequence
+  ranked first (an optional phrase clause: the index text can put a lexeme between two words
+  the vector has side by side when they share a position), a negated phrase matches anything;
+  the definer function then ranks the superset's first candidates and rechecks them against
+  the search vector.
 - `status` says whether the database can serve BM25 search (extension and valid index);
   `ready` caches the answer per process for `STATUS_TTL_S`.
 
 BM25 statistics (document frequencies, lengths) are those of the whole index, across Domains
-and branches: scores, and the order of hits of several terms, depend on other Domains' text
-(docs/search.md#bm25-ranking).
+and branches: the order of hits of several terms depends on other Domains' text, so the
+definer functions return scores relative to the best hit (docs/search.md#bm25-ranking).
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 SearchBackend = Literal["postgres", "bm25"]
 
@@ -57,7 +60,7 @@ COLUMNS = (
     "(kind_id::pdb.literal)",
     "revision_generation",
     "deleted",
-    f"(lb_search_terms(search)::pdb.whitespace('alias={FIELD}'))",
+    f"(lb_search_terms(search)::pdb.whitespace('alias={FIELD}', 'lowercase=false'))",
 )
 """Indexed columns; `key` first, the field `pdb.score` is called with."""
 
@@ -88,20 +91,27 @@ class Bm25Status:
 _STATUS = text(
     "SELECT (SELECT extversion FROM pg_extension WHERE extname = :extension), "
     "(SELECT x.indisvalid FROM pg_index x WHERE x.indexrelid = to_regclass(:index)), "
-    "EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = :extension)"
+    "EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = :extension), "
+    "EXISTS (SELECT 1 FROM pg_settings WHERE name LIKE 'paradedb.%')"
 )
+"""The last column: the library is loaded in this backend (its settings exist), which it is
+in every backend when preloaded. `shared_preload_libraries` itself is hidden from roles
+without `pg_read_all_settings`."""
 
 
 async def status(connection: AsyncConnection | AsyncSession) -> Bm25Status:
-    """Whether `pg_search` is installed and the BM25 index valid (catalog reads only)."""
+    """Whether this server can serve BM25 search: `pg_search` installed and preloaded, the
+    BM25 index valid (catalog and settings reads only). A standby answers for itself."""
     row = (await connection.execute(_STATUS, {"extension": EXTENSION, "index": INDEX})).one()
-    version, valid, available = row
+    version, valid, available, preloaded = row
     if version is None:
         if not available:
             return Bm25Status(False, "the pg_search extension is not available on this server")
         return Bm25Status(
             False, "the pg_search extension is not installed (storage apply with bm25_index)"
         )
+    if not preloaded:
+        return Bm25Status(False, "pg_search is not in shared_preload_libraries of this server")
     if valid is None:
         return Bm25Status(
             False, f"the index {INDEX} does not exist (storage apply with bm25_index)"
@@ -111,24 +121,27 @@ async def status(connection: AsyncConnection | AsyncSession) -> Bm25Status:
     return Bm25Status(True)
 
 
-_cached: tuple[float, bool] | None = None
+_cached: dict[str, tuple[float, bool]] = {}
 
 
 async def ready(session: AsyncSession) -> bool:
-    """`status(...).ready`, looked up again after `STATUS_TTL_S`."""
-    global _cached
+    """`status(...).ready` of the server the session reads from (the primary or a replica),
+    looked up again after `STATUS_TTL_S`."""
+    bind = session.bind
+    engine = bind if bind is None or isinstance(bind, AsyncEngine) else bind.engine
+    server = "" if engine is None else engine.url.render_as_string(hide_password=True)
     now = time.monotonic()
-    if _cached is not None and now - _cached[0] < STATUS_TTL_S:
-        return _cached[1]
+    cached = _cached.get(server)
+    if cached is not None and now - cached[0] < STATUS_TTL_S:
+        return cached[1]
     found = (await status(session)).ready
-    _cached = (now, found)
+    _cached[server] = (now, found)
     return found
 
 
 def forget() -> None:
     """Drop the cached availability (tests, and after `storage apply` in the same process)."""
-    global _cached
-    _cached = None
+    _cached.clear()
 
 
 # Translation --------------------------------------------------------------------------------------
@@ -277,7 +290,13 @@ def _json(node: _Node) -> Json:
     if node.kind == "term":
         return {"term": {"field": FIELD, "value": node.value}}
     if node.kind == "phrase":
-        return {"phrase": {"field": FIELD, "phrases": [c.value for c in node.children], "slop": 0}}
+        words = [c.value for c in node.children]
+        return {
+            "boolean": {
+                "must": [_json(c) for c in node.children],
+                "should": [{"phrase": {"field": FIELD, "phrases": words, "slop": 0}}],
+            }
+        }
     if node.kind == "not":
         return {"boolean": {"must": [dict(_ALL)], "must_not": [_json(node.children[0])]}}
     if node.kind == "or":

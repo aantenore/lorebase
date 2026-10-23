@@ -198,17 +198,22 @@ class SearchBackendCheck:
 
     name = "search_backend"
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], *, definer: bool) -> None:
         self._sessions = sessions
+        self._definer = definer
 
     async def __call__(self) -> CheckResult:
-        async with self._sessions() as session:
-            found = await bm25.status(session)
-        if found.ready:
-            return CheckResult(CheckStatus.OK, "bm25")
+        if not self._definer:
+            reason = "store.reads.use_definer_functions is false"
+        else:
+            async with self._sessions() as session:
+                found = await bm25.status(session)
+            if found.ready:
+                return CheckResult(CheckStatus.OK, "bm25")
+            reason = str(found.reason)
         return CheckResult(
             CheckStatus.DEGRADED,
-            f"search.backend is bm25 but {found.reason}; lexical search ranks with postgres",
+            f"search.backend is bm25 but {reason}; lexical search ranks with postgres",
         )
 
 

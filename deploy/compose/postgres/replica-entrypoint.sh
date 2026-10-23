@@ -3,7 +3,8 @@
 #
 # First start (empty data directory): take a base backup from the primary through a dedicated
 # replication slot, which also writes standby.signal and the connection settings (-R). Later
-# starts keep the data directory and resume streaming. Then run Postgres as a hot standby.
+# starts keep the data directory and resume streaming. Then run Postgres as a hot standby,
+# with the arguments of the service's command added (overlays add settings that way).
 #
 # Environment: PGDATA, PRIMARY_HOST, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB,
 # REPLICATION_USER, REPLICATION_PASSWORD, REPLICATION_SLOT.
@@ -25,4 +26,4 @@ SQL
   chmod 0700 "$PGDATA"
 fi
 
-exec postgres -c hot_standby=on
+exec postgres -c hot_standby=on "$@"

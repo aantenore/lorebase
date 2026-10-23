@@ -63,6 +63,7 @@ from lorebase_keeper.tracing.recorder import TraceRecorder, TraceSink
 from lorebase_keeper.tracing.recorder import database_sink as trace_database_sink
 from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import Telemetry
+from lorebase_store.settings import store_settings
 
 logger = logging.getLogger("lorebase.keeper")
 
@@ -140,7 +141,8 @@ def create_app(
     # it; /readyz reports that as degraded, and the start logs it.
     search_check = None
     if database is not None and search_settings(settings).backend == "bm25":
-        search_check = SearchBackendCheck(database.sessions)
+        definer = store_settings(settings).reads.use_definer_functions
+        search_check = SearchBackendCheck(database.sessions, definer=definer)
         if readiness_checks is None:
             checks.append(search_check)
     store = auth_store or (database.auth_store if database else None)

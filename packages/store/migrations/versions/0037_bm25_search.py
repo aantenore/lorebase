@@ -14,15 +14,18 @@ BM25 index itself is built by `python -m lorebase_store.storage apply` with
   stemming, the searchable Attributes only, sensitive values left out as in the vector), with
   their frequencies and order for phrases.
 - `lb_bm25_query_valid(query)`: whether a JSON search query uses only what the store sends:
-  `term` and `phrase` on the field `terms`, `boolean` (`must`, `should`, `must_not`) and `all`,
-  at most 32 levels deep.
+  `term` and `phrase` on the field `terms`, `boolean` (`must`, `should`, `must_not`, none
+  empty) and `all`, at most 32 levels deep.
 - `lb_search_bm25` and `lb_search_bm25_overlay`: security definer search, with the options,
   checks and grants of revisions 0008 and 0018 (count ceilings, a Domain in the transaction
   scope, a fixed search_path). The caller translates the query as written (`p_match`) and the
   hits that match only through typo corrections (`p_fixed`) into BM25 queries; a query that is
   not translated exactly (`p_*_exact` false: phrases, a negated phrase) is a superset, ranked
-  for its first `p_candidates` matches and rechecked against the search vector. Each scan is a
-  top-k scan of the index ordered by BM25 score, ties by Kind and key (bytewise). On an overlay
+  for its first `p_candidates` matches and rechecked against the search vector. A query that
+  matches everything but some words (`all`) leaves out rows without a search vector, as `@@`
+  does. Each scan is a top-k scan of the index ordered by BM25 score, ties by Kind and key
+  (bytewise); `score` is relative to the best row returned (1), so that it does not carry the
+  index-wide term statistics the raw BM25 score is built from. On an overlay
   the overlay's own rows and the base's rows as of the fork point are scanned apart; the base's
   scan reads as many more rows as the overlay holds of the searched Kinds (at most
   `p_candidates` more), so the rows it shadows cannot push a match out. `truncated` is true on
@@ -116,12 +119,13 @@ BEGIN
            AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_value -> 'phrases') AS p(x)
                            WHERE jsonb_typeof(p.x) <> 'string')
            AND v_value -> 'slop' IN ('0'::jsonb, '1'::jsonb);
-    ELSIF v_key <> 'boolean' OR jsonb_typeof(v_value) <> 'object' THEN
+    ELSIF v_key <> 'boolean' OR jsonb_typeof(v_value) <> 'object'
+          OR NOT EXISTS (SELECT 1 FROM jsonb_object_keys(v_value)) THEN
         RETURN false;
     END IF;
     FOR v_clause, v_items IN SELECT e.key, e.value FROM jsonb_each(v_value) AS e LOOP
         IF v_clause NOT IN ('must', 'should', 'must_not') OR jsonb_typeof(v_items) <> 'array'
-           OR jsonb_array_length(v_items) > 256 THEN
+           OR jsonb_array_length(v_items) NOT BETWEEN 1 AND 256 THEN
             RETURN false;
         END IF;
         IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_items) AS i(x)
@@ -168,6 +172,7 @@ DECLARE
     v_branch text;
     v_filter text;
     v_limit bigint;
+    v_present text;
 BEGIN
     IF cardinality(p_words) IS DISTINCT FROM cardinality(p_replacements) THEN
         RAISE EXCEPTION 'p_words and p_replacements must have the same length'
@@ -203,6 +208,10 @@ BEGIN
         v_exact := CASE WHEN v_arm = 1 THEN p_match_exact ELSE p_fixed_exact END;
         v_param := CASE WHEN v_arm = 1 THEN '$6' ELSE '$7' END;
         v_label := CASE WHEN v_arm = 1 THEN 'true' ELSE 'false' END;
+        -- `all` matches rows without a search vector too; `search @@` never does.
+        v_present := CASE WHEN jsonb_path_exists(CASE WHEN v_arm = 1 THEN p_match
+                                                      ELSE p_fixed END, '$.**."all"')
+                          THEN ' AND m.search IS NOT NULL' ELSE '' END;
         v_recheck := CASE WHEN v_exact THEN 'true'
                           WHEN v_arm = 1 THEN 'h.search @@ $4'
                           ELSE 'h.search @@ $5 AND NOT h.search @@ $4' END;
@@ -232,12 +241,12 @@ BEGIN
             v_halves := v_halves || format(
                 'h%1$s AS MATERIALIZED (SELECT m.kind_id, m.key, m.title, %2$s AS search, '
                 'CAST(pdb.score(m.key) AS real) AS raw FROM mat_records m '
-                'WHERE m.domain_id = %3$L AND %4$s%5$s '
+                'WHERE m.domain_id = %3$L AND %4$s%5$s%8$s '
                 'AND m.key OPERATOR(pg_catalog.@@@) CAST(%6$s AS paradedb.searchqueryinput) '
                 'ORDER BY pdb.score(m.key) DESC, m.kind_id COLLATE "C", m.key COLLATE "C" '
                 'LIMIT %7$s)',
                 v_n, CASE WHEN v_exact THEN 'CAST(NULL AS tsvector)' ELSE 'm.search' END,
-                p_domain, v_branch, v_kinds, v_param, v_limit);
+                p_domain, v_branch, v_kinds, v_param, v_limit, v_present);
             v_rows := v_rows || format(
                 'SELECT h.kind_id, h.key, h.title, h.raw, %1$s AS exact FROM h%2$s h '
                 'WHERE %3$s', v_label, v_n, v_filter);
@@ -255,12 +264,14 @@ BEGIN
         || ', s AS (' || array_to_string(v_stats, ' UNION ALL ') || ')'
         || ', t AS (SELECT r.kind_id, r.key, r.title, r.raw, r.exact, '
         || 'CAST(CASE WHEN r.exact THEN r.raw ELSE $8 * r.raw END AS real) AS score FROM r '
-        || 'ORDER BY r.exact DESC, score DESC, r.kind_id COLLATE "C", r.key COLLATE "C" '
-        || 'LIMIT $9) '
-        || 'SELECT t.kind_id, t.key, t.title, t.score, t.exact, EXISTS (SELECT 1 FROM s '
-        || 'WHERE s.filled AND ((SELECT count(*) FROM t x WHERE x.exact OR NOT s.exact) < $9 '
+        || 'ORDER BY r.exact DESC, score DESC, r.raw DESC, r.kind_id COLLATE "C", '
+        || 'r.key COLLATE "C" LIMIT $9) '
+        || 'SELECT t.kind_id, t.key, t.title, '
+        || 'CAST(coalesce(t.score / nullif(max(t.score) OVER (), 0), 0) AS real), t.exact, '
+        || 'EXISTS (SELECT 1 FROM s WHERE s.filled AND ((SELECT count(*) FROM t x '
+        || 'WHERE x.exact OR NOT s.exact) < $9 '
         || 'OR (SELECT min(x.raw) FROM t x WHERE x.exact = s.exact) < s.floor)) '
-        || 'FROM t ORDER BY t.exact DESC, t.score DESC, t.kind_id COLLATE "C", '
+        || 'FROM t ORDER BY t.exact DESC, t.score DESC, t.raw DESC, t.kind_id COLLATE "C", '
         || 't.key COLLATE "C"'
     USING p_domain, p_branch, p_kinds, v_ts, v_fix, p_match, p_fixed, p_weight, p_limit;
 END
@@ -311,5 +322,7 @@ def downgrade() -> None:
     op.execute(f"DROP INDEX IF EXISTS {INDEX}")
     for signature in reversed(SIGNATURES):
         op.execute(f"DROP FUNCTION IF EXISTS {signature}")
-    for signature in HELPERS:
-        op.execute(f"DROP FUNCTION IF EXISTS {signature}")
+    op.execute(f"DROP FUNCTION IF EXISTS {HELPERS[0]}")
+    # CASCADE: partition indexes of an interrupted build, never attached to INDEX, use it too.
+    # The extension stays; an administrator drops it.
+    op.execute(f"DROP FUNCTION IF EXISTS {HELPERS[1]} CASCADE")

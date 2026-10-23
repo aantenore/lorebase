@@ -41,6 +41,17 @@ services:
     tmpfs:
       - /docker-entrypoint-initdb.d
 
+  # The standby of profile scale-out runs the same image and preloads pg_search, so that it
+  # serves BM25 search too (a standby without it makes its readers keep the default ranking).
+  replica-prep:
+    image: ${POSTGRES_BM25_IMAGE:-paradedb/paradedb:0.26.3-pg16@sha256:c5dc31626136f47afb30096b59e78c78de3016a830d77e10a24ee9ea4d25eba4}
+
+  postgres-replica:
+    image: ${POSTGRES_BM25_IMAGE:-paradedb/paradedb:0.26.3-pg16@sha256:c5dc31626136f47afb30096b59e78c78de3016a830d77e10a24ee9ea4d25eba4}
+    command:
+      - -c
+      - shared_preload_libraries=pg_search${POSTGRES_PRELOAD_LIBRARIES:+,${POSTGRES_PRELOAD_LIBRARIES}}
+
   keeper:
     environment: *bm25
 

@@ -295,6 +295,9 @@ def test_bm25_overlay_runs_postgres_on_paradedb_with_pg_search_preloaded() -> No
     assert postgres["image"].startswith("paradedb/paradedb:0.26.3-pg16@sha256:")
     assert "shared_preload_libraries=pg_search,pg_prewarm" in postgres["command"]
     assert "/docker-entrypoint-initdb.d" in postgres["tmpfs"]
+    replica = found["postgres-replica"]
+    assert replica["image"] == postgres["image"] == found["replica-prep"]["image"]
+    assert replica["command"] == ["-c", "shared_preload_libraries=pg_search,pg_prewarm"]
     for name in ("keeper", "keeper-2", "storage"):
         environment = found[name]["environment"]
         assert environment["LOREBASE__SEARCH__BACKEND"] == "bm25", name
