@@ -2,6 +2,12 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
+## Unreleased
+
+### Added
+
+- Built-in bulk delete `delete_records` (`kind`, `keys`, optional `skip_missing`): deletes many Records of one Kind in one Operation execution, one Revision and one `writes` rate-limit token, instead of one `delete_{kind}` call (and Revision) per Record. It is governed like the other built-ins: protected branches and review, `dry_run`, `expected_head`, `Idempotency-Key`, and Kind-scoped grants as for `delete_{kind}`; it needs the Kind's `delete` built-in enabled. Links of the deleted Records follow each Relation's `on_delete` (cascade or restrict) as a single delete does. Unknown keys fail the call (`record.not_found` per key) unless `skip_missing` leaves them out with warnings. At most `keeper.operations.max_bulk_delete_keys` keys per call (default 1000). Python client `operations.delete_records`, CLI `lorebase record delete KIND [KEY]... [--keys-file FILE] [--skip-missing]`, and Herald lists it among the generic Operations ([design 5.7](docs/design.md), [operations](docs/operations.md#rate-limits-and-quotas)).
+
 ## 0.2.2 - 2026-10-23
 
 Kind-scoped invisibility completes full RBAC: a caller whose grants are narrowed to Kinds no longer learns of the other Kinds, and gets 404 or 422 where it got 403 (`keeper.auth.authz.invisible_kinds: false` keeps the earlier answers). Lexical search can rank with BM25 through ParadeDB `pg_search`, opt-in and off by default. Seven fixes for running Lorebase locally: compose rebuilds its images and `migrate` refuses a database ahead of the code, Keeper settings forwarded from `.env`, a clear message for reserved Attribute names, `herald.http.allow_anonymous`, Herald as the compose profile `mcp` on `127.0.0.1:8091`, CORS `expose_headers` and an additive `allow_headers`, and the web app README for live mode. Migration `0037` adds functions only.

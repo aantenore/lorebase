@@ -339,6 +339,10 @@ use a bucket of their own.
   lasts; raise `burst` if that matters more than the database load, or set
   `per_key_prefix_enabled: false` to keep only the per-address bucket. Client addresses come from
   `keeper.trusted_proxies` (see below).
+- A request takes one token whatever it carries: a bulk import (`import_records`,
+  `import_links`, `import_batch`) or a bulk delete (`delete_records`, up to
+  `keeper.operations.max_bulk_delete_keys` keys in one Revision) is one `writes` token. Reset a
+  Domain's Records with `delete_records` rather than one `delete_{kind}` call per Record.
 - The limit counts `lorebase.http.rate_limited{class}` (OpenTelemetry) per refusal.
 - A principal refused `throttle_audit.threshold` times within `window_s` produces one audit
   entry `rate_limit.throttled` (actor, Domain, API key as target, `refusals`, `reason`); the

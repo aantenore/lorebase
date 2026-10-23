@@ -391,6 +391,69 @@ def record_get(
     app.out.emit(found, human)
 
 
+@record_app.command("delete")
+def record_delete(
+    ctx: typer.Context,
+    kind: Annotated[str, typer.Argument(help="Kind api name.", metavar="KIND")],
+    keys: Annotated[
+        list[str] | None, typer.Argument(help="Record keys.", metavar="[KEY]...")
+    ] = None,
+    keys_file: Annotated[
+        str | None,
+        typer.Option("--keys-file", help="File with one key per line; `-` reads standard input."),
+    ] = None,
+    skip_missing: Annotated[
+        bool,
+        typer.Option("--skip-missing", help="Leave out keys that do not exist (warnings)."),
+    ] = False,
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    dry_run: DryRunOpt = False,
+    message: Annotated[
+        str | None, typer.Option("--message", "-m", help="Revision message.")
+    ] = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Delete Records of a Kind by key in one Revision (the `delete_records` Operation).
+
+    Links of the deleted Records follow each Relation's on_delete policy, as for
+    `delete_{kind}`. Unknown keys fail the call unless --skip-missing. At most
+    `keeper.operations.max_bulk_delete_keys` keys per call.
+    """
+    app = app_of(ctx, json_out)
+    wanted = list(keys or [])
+    if keys_file is not None:
+        text = sys.stdin.read() if keys_file == sources.STDIN else Path(keys_file).read_text()
+        wanted.extend(line.strip() for line in text.splitlines() if line.strip())
+    if not wanted:
+        raise CliError("give at least one KEY or --keys-file")
+    result = app.client().operations.delete_records(
+        app.domain(domain),
+        kind,
+        wanted,
+        skip_missing=skip_missing,
+        branch=app.branch(branch),
+        dry_run=dry_run,
+        message=message,
+    )
+
+    def human() -> None:
+        for warning in result.warnings:
+            app.out.info(f"warning: {warning.get('message', warning)}")
+        app.out.pairs(
+            [
+                ("kind", kind),
+                ("branch", result.branch),
+                ("mode", "dry run" if result.status == "dry_run" else "committed"),
+                ("keys", len(wanted)),
+                ("edits", result.edit_count),
+                ("revisions", [short_id(r) for r in result.revisions]),
+            ]
+        )
+
+    app.out.emit(result, human)
+
+
 @record_app.command("history")
 def record_history(
     ctx: typer.Context,

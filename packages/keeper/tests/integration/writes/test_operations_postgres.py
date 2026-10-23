@@ -374,3 +374,113 @@ async def test_import_the_supply_example_with_required_links(
         assert report.ok, report
     finally:
         await engine.dispose()
+
+
+async def test_delete_records_removes_many_records_in_one_revision(
+    keeper: Any, installation_admin: Any, role_key: Any, database_url: str
+) -> None:
+    admin = installation_admin.headers
+    async with keeper(operations={"max_bulk_delete_keys": 4}) as http:
+        assert (
+            await http.post(f"{API}/domains", json={"id": "supply"}, headers=admin)
+        ).status_code == 201
+        modeler = await role_key(http, "supply", "modeler")
+        editor = await role_key(http, "supply", "editor")
+        viewer = await role_key(http, "supply", "viewer")
+        assert (
+            await http.post(f"{DOMAIN}/branches", json={"name": "load"}, headers=editor)
+        ).status_code == 201
+        applied = await http.post(
+            f"{DOMAIN}/branches/load/schema/changes", json={"yaml": supply_yaml()}, headers=modeler
+        )
+        assert applied.status_code == 200, applied.text
+        suppliers = csv_rows("supplier")
+        parts = csv_rows("part")
+        for kind, rows in (("Supplier", suppliers), ("Part", parts)):
+            loaded = await http.post(
+                execute("import_records"),
+                json={"branch": "load", "parameters": {"kind": kind, "rows": rows}},
+                headers=editor,
+            )
+            assert loaded.status_code == 200, loaded.text
+        codes = [s["supplier_code"] for s in suppliers]
+        part_numbers = [p["part_number"] for p in parts]
+        # cascade Links (supplied_by's default on_delete) go with the deleted Suppliers
+        links = [
+            {"from": part_numbers[0], "to": codes[0]},
+            {"from": part_numbers[1], "to": codes[1]},
+        ]
+        linked = await http.post(
+            execute("import_links"),
+            json={"branch": "load", "parameters": {"relation": "supplied_by", "rows": links}},
+            headers=editor,
+        )
+        assert linked.status_code == 200, linked.text
+
+        def body(keys: list[str], **extra: Any) -> dict[str, Any]:
+            return {"branch": "load", "parameters": {"kind": "Supplier", "keys": keys}, **extra}
+
+        head = (await http.get(f"{DOMAIN}/branches/load", headers=viewer)).json()["head"]
+        dry = await http.post(
+            execute("delete_records"), json=body(codes[:3], dry_run=True), headers=editor
+        )
+        assert dry.status_code == 200, dry.text
+        assert dry.json()["status"] == "dry_run"
+        assert dry.json()["edit_count"] == 3
+        assert (await http.get(f"{DOMAIN}/branches/load", headers=viewer)).json()["head"] == head
+
+        missing = await http.post(
+            execute("delete_records"), json=body([codes[0], "S-0000"]), headers=editor
+        )
+        assert missing.status_code == 422, missing.text
+        assert missing.json()["issues"][0]["code"] == "record.not_found"
+        too_many = await http.post(
+            execute("delete_records"), json=body([*codes[:4], "S-0000"]), headers=editor
+        )
+        assert too_many.status_code == 422
+        assert too_many.json()["issues"][0]["code"] == "parameter.limit_exceeded"
+        stale = await http.post(
+            execute("delete_records"), json=body(codes[:3], expected_head="0" * 64), headers=editor
+        )
+        assert stale.status_code == 409
+        denied = await http.post(execute("delete_records"), json=body(codes[:3]), headers=viewer)
+        assert denied.status_code == 403
+
+        keyed = {**editor, "Idempotency-Key": "reset-1"}
+        reset = body([*codes[:3], "S-0000"])
+        reset["parameters"]["skip_missing"] = True
+        deleted = await http.post(execute("delete_records"), json=reset, headers=keyed)
+        assert deleted.status_code == 200, deleted.text
+        assert len(deleted.json()["revisions"]) == 1  # one Revision, cascaded Links included
+        assert [w["key"] for w in deleted.json()["warnings"]] == ["S-0000"]
+        assert deleted.json()["edit_count"] == 3
+        replayed = await http.post(execute("delete_records"), json=reset, headers=keyed)
+        assert replayed.json()["replayed"] is True
+        for code in codes[:3]:
+            gone = await http.get(
+                f"{DOMAIN}/kinds/Supplier/records/{code}", params={"branch": "load"}, headers=viewer
+            )
+            assert gone.status_code == 404
+        kept = await http.get(
+            f"{DOMAIN}/kinds/Supplier/records/{codes[3]}", params={"branch": "load"}, headers=viewer
+        )
+        assert kept.status_code == 200
+
+        # main is protected: the bulk delete goes through a Proposal like any built-in
+        review = await http.post(
+            execute("delete_records"),
+            json={"parameters": {"kind": "Supplier", "keys": codes[:1]}},
+            headers=editor,
+        )
+        assert review.status_code == 409
+        assert review.json()["code"] == "review-required"
+
+    engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+    try:
+        async with async_sessionmaker(engine)() as session, session.begin():
+            report = await verify(
+                session, "supply", "load", runtime=StoreRuntime.from_settings(StoreSettings())
+            )
+        assert report.ok, report
+    finally:
+        await engine.dispose()

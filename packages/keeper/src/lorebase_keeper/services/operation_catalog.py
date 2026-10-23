@@ -1,8 +1,9 @@
 """Built-in Operations (design 5.7): definitions, parameter binding and the edits they make.
 
 For every Kind with the built-in enabled: `create_{kind}`, `update_{kind}`, `delete_{kind}`;
-for every explicit Relation: `link_{relation}`, `unlink_{relation}`; and the bulk upserts
-`import_records`, `import_links` and `import_batch`. Their parameters are derived from the
+for every explicit Relation: `link_{relation}`, `unlink_{relation}`; the bulk upserts
+`import_records`, `import_links` and `import_batch`; and the bulk delete `delete_records`.
+Their parameters are derived from the
 schema, so a definition always matches the Revision it is read from:
 
 | Operation | Parameters |
@@ -15,6 +16,7 @@ schema, so a definition always matches the Revision it is read from:
 | `import_records` | `kind` (api name), `rows` (objects keyed by Attribute api name; `links`) |
 | `import_links` | `relation` (forward api name), `rows` (`from`, `to` and link Attributes) |
 | `import_batch` | `records` (Record rows with `kind`), `links` (Link rows with `relation`) |
+| `delete_records` | `kind` (api name), `keys` (Record keys), `skip_missing` (optional boolean) |
 
 A Record row's `links` maps a Relation name (forward from the Record's Kind, or inverse when the
 Kind is its `to` end) to the key at the other end, an object with `key` and link Attributes, or
@@ -23,6 +25,12 @@ units, so a Relation that is `required_from` is satisfied in the Revision that c
 Record. Units of Records without Links come first, then Records with Links, then Links of
 Records not in the import, so Links usually point to Records committed in an earlier or the
 same batch.
+
+`delete_records` deletes Records of one Kind whose `delete` built-in is enabled, all in one
+Revision (it is not an import: no batching). Keys that do not exist fail the call, or with
+`skip_missing` are left out and reported as warnings. Links of the deleted Records follow each
+Relation's `on_delete` policy as for `delete_{kind}`. A `delete_{kind}` of a Kind whose snake
+case name is `records` takes precedence over the bulk delete.
 
 Everything here is pure: reads of existing Records go through `RecordReader`.
 """
@@ -49,6 +57,7 @@ from lorebase_core.model import (
     builtin_operation_names,
     new_ulid,
     record_key,
+    snake_case,
 )
 from lorebase_core.types import AttributeType, TypeSpec, TypeSystemError, encode_value
 from lorebase_core.types.encoding import normalize_key
@@ -66,7 +75,10 @@ from lorebase_keeper.services.errors import Finding
 IMPORT_RECORDS = "import_records"
 IMPORT_LINKS = "import_links"
 IMPORT_BATCH = "import_batch"
+DELETE_RECORDS = "delete_records"
 KEY = "key"
+KEYS = "keys"
+SKIP_MISSING = "skip_missing"
 FROM = "from"
 TO = "to"
 LINKS = "links"
@@ -92,6 +104,7 @@ class Action(StrEnum):
     IMPORT_RECORDS = "import_records"
     IMPORT_LINKS = "import_links"
     IMPORT_BATCH = "import_batch"
+    DELETE_RECORDS = "delete_records"
 
 
 @dataclass(frozen=True)
@@ -143,6 +156,7 @@ class BuiltinOperation:
 
 
 _STRING = TypeSpec.of(AttributeType.STRING)
+_BOOLEAN = TypeSpec.of(AttributeType.BOOLEAN)
 
 
 def _stored(attributes: Mapping[str, Attribute]) -> list[Attribute]:
@@ -212,6 +226,23 @@ def builtin_definition(schema: Schema, name: str) -> BuiltinOperation | None:
             parameters = [key]
             text = f"Delete a {kind.api_name} Record and, per Relation policy, its Links."
         return BuiltinOperation(name, action, text, tuple(parameters), kind=kind)
+    if name == DELETE_RECORDS:
+        return BuiltinOperation(
+            name,
+            Action.DELETE_RECORDS,
+            "Delete many Records of one Kind in one Revision and, per Relation policy, their "
+            "Links. Unknown keys fail the call unless `skip_missing` is true.",
+            (
+                Parameter(KIND, _STRING, True, "Kind api name."),
+                Parameter(KEYS, None, True, "Keys of the Records to delete."),
+                Parameter(
+                    SKIP_MISSING,
+                    _BOOLEAN,
+                    False,
+                    "Leave out keys that do not exist (reported as warnings) instead of failing.",
+                ),
+            ),
+        )
     for relation in schema.relations.values():
         if relation.backing is not RelationBacking.EXPLICIT:
             continue
@@ -303,6 +334,7 @@ class Plan:
     changes: list[DataChange] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     units: list[int] = field(default_factory=list)
+    warnings: list[Finding] = field(default_factory=list)
 
 
 def _values(
@@ -403,6 +435,66 @@ def _link_edit(
     plan.changes.append(
         LinkUpsert(link=Link(relation=relation.id, from_key=from_key, to_key=to_key, values=values))
     )
+
+
+# Bulk delete ----------------------------------------------------------------------------------
+
+
+async def delete_keys(
+    schema: Schema, bound: Mapping[str, JsonValue], read: RecordReader, *, max_keys: int
+) -> Plan:
+    """The deletes of `delete_records`, one per distinct key, or the findings of bad keys."""
+    plan = Plan()
+    kind = schema.kind_by_api_name(str(bound.get(KIND)))
+    if kind is None:
+        plan.findings.append(Finding(PARAMETER_INVALID, "unknown Kind", ("parameters", KIND)))
+        return plan
+    if f"{Action.DELETE.value}_{snake_case(kind.api_name)}" not in builtin_operation_names(kind):
+        plan.findings.append(
+            Finding(
+                PARAMETER_INVALID,
+                f"the delete built-in is not enabled for {kind.api_name}",
+                ("parameters", KIND),
+                kind=kind.id,
+            )
+        )
+        return plan
+    raw = bound.get(KEYS)
+    if not isinstance(raw, list) or not raw:
+        plan.findings.append(
+            Finding(PARAMETER_INVALID, "must be a non-empty list of keys", ("parameters", KEYS))
+        )
+        return plan
+    if len(raw) > max_keys:
+        plan.findings.append(
+            Finding(LIMIT_EXCEEDED, f"at most {max_keys} keys per call", ("parameters", KEYS))
+        )
+        return plan
+    keys: dict[str, int] = {}
+    for index, text in enumerate(raw):
+        key = _key(text, ("parameters", KEYS, index), plan)
+        if key is not None:
+            keys.setdefault(key, index)
+    if plan.findings:
+        return plan
+    found = await read(kind.id, list(keys))
+    skip = bound.get(SKIP_MISSING) is True
+    for key, index in keys.items():
+        if key in found:
+            plan.changes.append(RecordDelete(kind=kind.id, key=key))
+            continue
+        missing = Finding(
+            IssueCode.RECORD_NOT_FOUND.value,
+            f"no {kind.api_name} Record {key!r}" + (" (skipped)" if skip else ""),
+            ("parameters", KEYS, index),
+            severity="warning" if skip else "error",
+            kind=kind.id,
+            key=key,
+        )
+        (plan.warnings if skip else plan.findings).append(missing)
+    if plan.findings:
+        plan.changes = []
+    return plan
 
 
 # Bulk imports ---------------------------------------------------------------------------------

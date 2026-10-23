@@ -127,6 +127,7 @@ from lorebase_keeper.services.operation_catalog import (
     batches,
     bind,
     builtin_definition,
+    delete_keys,
     edit_document,
     import_rows,
     plan_edits,
@@ -383,7 +384,9 @@ def _provenance(
     return ProvenanceEntry(id=new_id(IdPrefix.PROVENANCE), origin=origin, actor=principal.id, at=at)
 
 
-def _permission(resolved: _Resolved, branch: str) -> tuple[Permission, AccessContext]:
+def _permission(
+    resolved: _Resolved, branch: str, schema: Schema, parameters: Mapping[str, JsonValue]
+) -> tuple[Permission, AccessContext]:
     if resolved.custom is not None:
         return Permission.OPERATION_EXECUTE_CUSTOM, AccessContext(
             operation=resolved.name, branch=branch
@@ -391,6 +394,10 @@ def _permission(resolved: _Resolved, branch: str) -> tuple[Permission, AccessCon
     builtin = resolved.builtin
     assert builtin is not None
     kind = None if builtin.kind is None else builtin.kind.api_name
+    if builtin.action is Action.DELETE_RECORDS and isinstance(parameters.get("kind"), str):
+        # A bulk delete is scoped to its Kind, as `delete_{kind}` is.
+        named = schema.kind_by_api_name(str(parameters["kind"]))
+        kind = None if named is None else named.api_name
     return Permission.OPERATION_EXECUTE, AccessContext(
         kind=kind, operation=resolved.name, branch=branch
     )
@@ -510,7 +517,7 @@ async def _execute(
     cached = await head_schema(session, domain_id, branch, runtime=store.runtime)
     schema = cached.schema if cached is not None else load_compiled(compiled.compiled)
     resolved = resolve(schema, request.operation)
-    permission, context = _permission(resolved, branch)
+    permission, context = _permission(resolved, branch, schema, request.parameters)
     await check(permission, context)
     if resolved.builtin is not None and import_rows_vault_attributes(
         schema, resolved.builtin, request.parameters
@@ -590,6 +597,7 @@ async def _execute(
         redact=_redactor(schema, masking, resolved.custom, settings.expression_limits),
     )
     changes, findings = planned.changes, planned.findings
+    outcome.warnings.extend(planned.warnings)
     if planned.review and not needs_review and not request.reviewed_by_proposal:
         outcome.review_required = True
         if not request.dry_run:
@@ -882,9 +890,13 @@ async def _plan(
         return PlannedEdits(findings=bound.findings)
     if builtin.is_import:
         plan = import_rows(schema, builtin, bound.values, max_rows=settings.max_bulk_rows)
+    elif builtin.action is Action.DELETE_RECORDS:
+        plan = await delete_keys(schema, bound.values, read, max_keys=settings.max_bulk_delete_keys)
     else:
         plan = await plan_edits(builtin, bound.values, read)
-    return PlannedEdits(changes=plan.changes, findings=plan.findings, units=plan.units)
+    return PlannedEdits(
+        changes=plan.changes, findings=plan.findings, units=plan.units, warnings=plan.warnings
+    )
 
 
 # Stored Operations with expressions ------------------------------------------------------------
@@ -902,6 +914,7 @@ class PlannedEdits:
     review: bool = False
     preconditions_failed: bool = False
     units: list[int] = field(default_factory=list)
+    warnings: list[Finding] = field(default_factory=list)
 
 
 def _false_precondition(program: CompiledExpression, index: int, message: str) -> Finding:

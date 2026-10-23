@@ -279,6 +279,30 @@ async def test_async_import_batch(http: respx.MockRouter, sleeps: Sleeps) -> Non
     assert body["dry_run"] is True
 
 
+def test_delete_records_sends_kind_and_keys(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.post("/domains/supply/operations/delete_records/execute").respond(
+        200, json=_execution()
+    )
+    with make(sleeps) as client:
+        client.operations.delete_records("supply", "Supplier", ["S-1", "S-2"], branch="work")
+        client.operations.delete_records("supply", "Supplier", ("S-3",), skip_missing=True)
+    first, second = (json.loads(call.request.content) for call in route.calls)
+    assert first["parameters"] == {"kind": "Supplier", "keys": ["S-1", "S-2"]}
+    assert first["branch"] == "work"
+    assert second["parameters"] == {"kind": "Supplier", "keys": ["S-3"], "skip_missing": True}
+
+
+async def test_async_delete_records(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.post("/domains/supply/operations/delete_records/execute").respond(
+        200, json=_execution()
+    )
+    async with amake(sleeps) as client:
+        await client.operations.delete_records("supply", "Plant", ["P-1"], dry_run=True)
+    body = json.loads(route.calls.last.request.content)
+    assert body["parameters"] == {"kind": "Plant", "keys": ["P-1"]}
+    assert body["dry_run"] is True
+
+
 def test_execute_as_agent_returns_the_proposal_of_a_202(
     http: respx.MockRouter, sleeps: Sleeps
 ) -> None:

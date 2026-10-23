@@ -994,6 +994,7 @@ $ lorebase record [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `get`: Show one Record with its values.
+* `delete`: Delete Records of a Kind by key in one...
 * `history`: Show the changes of one Record, newest...
 * `lineage`: Show where each value of one Record came...
 * `list`: List the Records of a Kind.
@@ -1020,6 +1021,36 @@ $ lorebase record get [OPTIONS] {KIND} {KEY}
 * `--at <str>`: Revision id or tag to read at (time travel).
 * `--links`: Add Link counts per Relation.
 * `--lineage`: Add where each value came from.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase record delete`
+
+Delete Records of a Kind by key in one Revision (the `delete_records` Operation).
+
+Links of the deleted Records follow each Relation&#x27;s on_delete policy, as for
+`delete_{kind}`. Unknown keys fail the call unless --skip-missing. At most
+`keeper.operations.max_bulk_delete_keys` keys per call.
+
+**Usage**:
+
+```console
+$ lorebase record delete [OPTIONS] {KIND} [KEY]...
+```
+
+**Arguments**:
+
+* `KIND`: Kind api name.  [required]
+* `[KEY]...`: Record keys.
+
+**Options**:
+
+* `--keys-file <str>`: File with one key per line; `-` reads standard input.
+* `--skip-missing`: Leave out keys that do not exist (warnings).
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--dry-run`: Validate and compute; write nothing.
+* `-m, --message <str>`: Revision message.
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
 

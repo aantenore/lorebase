@@ -104,6 +104,11 @@ class OperationSettings(SectionModel):
     import_batch_rows: int = Field(
         default=1000, ge=1, description="Rows committed per Revision by bulk imports."
     )
+    max_bulk_delete_keys: int = Field(
+        default=1000,
+        ge=1,
+        description="Keys accepted by one delete_records call (all deleted in one Revision).",
+    )
     dry_run_max_edits: int = Field(
         default=1000, ge=1, description="Edits listed in a response; longer lists are cut."
     )
