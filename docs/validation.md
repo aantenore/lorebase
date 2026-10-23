@@ -200,6 +200,25 @@ search, typo tolerance and partial matching within budget (14 to 37 ms at p95 on
 the neighborhood 20 ms at p95 warm and 65 to 77 ms on the copy and the overlay, get by key 7.5
 to 8.3 ms. Detail: [performance](performance.md#1m-records-run-with-the-10m-harness).
 
+**Focused comparisons, 2026-10-23** (`tests/perf/focus.py`, seeds with realistic Zipf text;
+load average 21 to 29 during the 1M runs and 41 to 48 during the 10M run, so only the paired
+columns of one run compare):
+
+- Search sized by the word lexicon: with the first defaults (`search.common_term_docs` 20,000,
+  `common_term_candidates` 5,000) title-word search cut 50 truncated rankings of 300 to 5 at
+  1M, but p95 went from 316 to 1,067 ms (1M) and from 745 to 3,280 ms (10M). The defaults are
+  now 2,000 and 1,000: 16.2 against 13.9 ms at p50 and 54 against 48 at p95 for a title word
+  at 1M, truncated rankings 50 to 29 (misspelled words 38 to 18). Very common words stay over
+  budget at 10M with or without it (250 ms at p50): the GIN bitmap is built before ranking.
+- `values: false` on the 2-hop neighborhood: responses 68% smaller (100 KB to 32 KB at 1M),
+  time unchanged within noise (-3 to +4 ms at p50) cold and warm, on `main` and on an overlay, at 1M and at 10M (cold 239 to 253 ms at p50 at 10M either way).
+- A narrower `mat_history` index for history and lineage was evaluated at 10M and not
+  adopted: the history range reads two pages from outside memory (index leaf and heap), and
+  an index that saved the heap page would carry the row's payload, about as large as the
+  table, for about 1 ms of the 17 to 28 ms at p95.
+
+Detail: [performance](performance.md#search-on-very-common-terms).
+
 ### Canvas, 5,000 nodes and 10,000 edges
 
 - **Date:** 2026-10-22, median of 3 runs.

@@ -2,7 +2,7 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
-The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a shared laptop; the neighborhood, full-text search, history and lineage are over it.
+The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a shared laptop; the neighborhood, full-text search, history and lineage are over it. Focused comparisons of 2026-10-23 on datasets with realistic text follow it: [Search on very common terms](#search-on-very-common-terms), [Headers-only neighborhoods](#headers-only-neighborhoods) and [a narrower history index](#record-history-and-lineage-a-narrower-index).
 
 ## Dataset
 
@@ -728,9 +728,127 @@ None of them brings a cold neighborhood within 30 ms on this machine, and each c
 API or adds an index to every branch, so none was adopted. The budget holds when the pages a
 neighborhood touches are in memory, which the reference hardware of design 6.14 (32 GB) gives
 for 1M Records and this 8 GiB VM does not; at 10M Records (58 GB of tables and indexes) only
-the hot part of the graph fits on either. Recommendation, left open: an opt-in
-`values: false` on `POST /neighborhood` for agents that only need the structure, with the
-covering index, measured on the reference hardware first.
+the hot part of the graph fits on either. The opt-in `values: false` on `POST /neighborhood`
+now exists without the covering index; it shrinks the response to a third and leaves the time
+unchanged ([Headers-only neighborhoods](#headers-only-neighborhoods)).
+
+## Search on very common terms
+
+Measured on 2026-10-23 with `tests/perf/focus.py` on the seed databases with realistic text
+(`--vocabulary zipf`: names and descriptions drawn from 40,000 terms with Zipf frequencies),
+`perf_seed_1m_zipf` (1,000,110 Records) and `perf_seed_10m_zipf` (10,001,100 Records). The
+30 most common words of the workload match 27,063 to 268,883 Records at 1M and 270,630 to
+2,688,830 at 10M. Each query is run twice in turn, alternating which goes first: "before"
+ranks at most `store.reads.search_candidates` (1,000) matches whatever the terms
+(`search.common_term_docs: 0`), "lexicon" sizes the ranking from the word lexicon. Search as
+Keeper's lexical search calls it (all Kinds, typo corrections, partial matching), plain store
+calls as `owner`. "Truncated" counts the calls of 300 (100 at 10M) whose candidates were cut.
+
+The machine was shared with other workloads throughout (load average 21 to 29 on 15 cores
+during the 1M runs, 41 to 48 during the 10M run), so the absolute times vary by a factor of 2
+to 3 between runs: compare the two columns of one run, not runs with each other.
+
+1M Records, p50 / p95 in milliseconds:
+
+| Settings (`docs` / `candidates`) | Query | before | lexicon | truncated, before / lexicon |
+|---|---|---:|---:|---:|
+| 2,000 / 1,000 | title word | 13.9 / 48.3 | 16.2 / 53.8 | 50 / 29 |
+| 2,000 / 1,000 | common word | 35.9 / 74.9 | 36.5 / 73.5 | 300 / 300 |
+| 2,000 / 1,000 | two common words | 28.9 / 82.0 | 32.9 / 74.1 | 251 / 251 |
+| 2,000 / 1,000 | title word and a common one | 12.8 / 39.4 | 14.7 / 45.6 | 43 / 43 |
+| 2,000 / 1,000 | misspelled title word | 23.5 / 50.2 | 25.7 / 61.2 | 38 / 18 |
+| 5,000 / 1,000 | title word | 13.7 / 49.5 | 16.3 / 63.1 | 50 / 17 |
+| 5,000 / 1,000 | misspelled title word | 26.8 / 81.6 | 29.3 / 86.4 | 38 / 8 |
+| 20,000 / 5,000 | title word | 41.2 / 315.9 | 51.7 / 1,066.6 | 50 / 5 |
+| 20,000 / 5,000 | common word | 66.3 / 196.5 | 146.8 / 732.1 | 300 / 300 |
+| 20,000 / 5,000 | two common words | 48.9 / 153.4 | 133.8 / 413.5 | 251 / 148 |
+| 20,000 / 5,000 | title word and a common one | 18.1 / 63.7 | 21.4 / 133.6 | 43 / 38 |
+| 20,000 / 5,000 | misspelled title word | 28.2 / 88.7 | 33.9 / 139.4 | 38 / 3 |
+
+10M Records, p50 / p95 in milliseconds:
+
+| Settings | Query | before | lexicon | truncated, before / lexicon |
+|---|---|---:|---:|---:|
+| 2,000 / 1,000 | title word | 42.1 / 186.5 | 47.9 / 237.8 | 144 / 115 |
+| 2,000 / 1,000 | common word | 248.3 / 506.2 | 251.7 / 511.0 | 300 / 300 |
+| 2,000 / 1,000 | misspelled title word | 73.7 / 401.3 | 86.3 / 526.7 | 141 / 101 |
+| 5,000 / 1,000 | title word | 67.9 / 343.1 | 102.6 / 861.5 | 144 / 68 |
+| 20,000 / 5,000 | title word | 147.0 / 744.5 | 495.3 / 3,279.6 | 55 / 13 |
+| 20,000 / 5,000 | common word | 352.8 / 748.1 | 526.6 / 1,238.8 | 100 / 100 |
+| 20,000 / 5,000 | two common words | 269.5 / 640.3 | 954.1 / 2,266.0 | 100 / 91 |
+| 20,000 / 5,000 | title word and a common one | 81.0 / 455.5 | 87.1 / 1,378.1 | 29 / 14 |
+| 20,000 / 5,000 | misspelled title word | 166.0 / 521.3 | 365.6 / 2,791.3 | 52 / 7 |
+
+(The 2,000 and 5,000 runs at 10M used 300 calls per case, the 20,000 run 100.)
+
+- With the first defaults (20,000 and 5,000) almost every title-word search ranked every
+  match, but p95 grew 1.6 to 3.7 times at 1M and 1.7 to 5.4 times at 10M: ranking 5,000
+  candidates of a common word, and every match of a word in up to 20,000 Records, reads their
+  rows and search vectors. The defaults are now 2,000 and 1,000: common-term queries rank as
+  many candidates as before, rare terms (within 2,000 Records) have every match ranked, and
+  the cost is 0.6 to 4 ms at p50 at 1M and 3 to 13 ms at 10M. Raise `search.common_term_docs` where the
+  hardware keeps the search vectors in memory.
+- Searches of very common words stay over budget at 10M either way: the GIN bitmap of a word
+  in 270,000 to 2.7 million Records is built before any ranking. Narrowing the query (a Kind,
+  a filter, a less common word) is what brings them down; `truncated_candidates` tells the
+  caller when to.
+
+## Headers-only neighborhoods
+
+`values: false` on `POST /neighborhood` returns Record headers and Link endpoints. Measured on
+2026-10-23 in the same runs (`tests/perf/focus.py`, Keeper in process with the read cache
+off, 2-hop neighborhood of a random Part, `main` and an overlay branch created for the run).
+Cold: every call on a new random Part, the two variants on different Parts, alternating
+which goes first. Warm: one Part read once, then by both variants in turn.
+
+1M Records (load average 21 to 29), 300 calls per case, p50 / p95 in milliseconds and median
+response size:
+
+| Branch | Pages | values | `values: false` | bytes, values / headers |
+|---|---|---:|---:|---:|
+| `main` | cold | 126.7 / 270.7 | 125.5 / 296.7 | 100,720 / 32,424 |
+| `main` | warm | 55.4 / 123.6 | 53.7 / 121.5 | 100,192 / 32,398 |
+| overlay | cold | 110.2 / 266.1 | 109.2 / 229.3 | 101,374 / 32,644 |
+| overlay | warm | 59.8 / 151.9 | 57.0 / 156.2 | 101,877 / 32,938 |
+
+10M Records (load average 38 to 48, peaking above 200 at the end of the overlay pass), 100
+calls per case:
+
+| Branch | Pages | values | `values: false` | bytes, values / headers |
+|---|---|---:|---:|---:|
+| `main` | cold | 238.9 / 413.1 | 243.1 / 430.9 | 103,271 / 33,932 |
+| `main` | warm | 52.1 / 130.7 | 56.2 / 137.4 | 104,067 / 33,896 |
+| overlay | cold | 252.5 / 459.7 | 246.5 / 475.9 | 100,116 / 32,294 |
+| overlay | warm | 49.7 / 101.9 | 49.8 / 138.9 | 100,871 / 32,726 |
+
+- The response is a third of the size (68% smaller), which is what an agent's context pays
+  for. The time is the same within noise: the store reads the same Record and Link rows
+  either way (the covering index evaluated in
+  [2-hop neighborhood on branches](#2-hop-neighborhood-on-branches) was not added), and
+  dropping the values saves only their serialization, within the noise of these runs (-3 to +4 ms at p50).
+- The covering index stays not adopted: it would cut the hydration's page reads by about two
+  thirds for the headers-only variant only, at the cost of a second index on every branch of
+  every partition, and the cold neighborhood would still be over budget on this machine.
+
+## Record history and lineage: a narrower index
+
+Evaluated on 2026-10-23 at 10M Records and not adopted. The history range of a Record is read
+through the primary key of `mat_history` `(domain_id, branch, partition, element_key,
+revision_id)` (6.4 GB at 10M, table 15 GB, 40,012,160 rows) and joined to `revisions` (409
+rows, always in memory). `EXPLAIN (ANALYZE, BUFFERS)` of the first history page for 30 random
+Records of the 10M fixture (load average about 47): one history row per Record (median), 2
+pages read from outside shared buffers for it (median, 5 at most): the leaf of the primary key
+and the heap page, 2.0 ms of I/O at the median, 3.7 ms per statement at p50 and 10.7 at p95.
+
+- A narrower or covering index can save at most the heap page of those two: the payload of a
+  row (hashes and the provenance JSON, about 400 bytes) would have to move into the index,
+  which would then be about as large as the table and maintained on every history row of
+  every commit. The upper levels of the primary key are already in memory.
+- The rest of the 17 to 28 ms at p95 of the harness is outside this statement: resolving the
+  branch head, the Record row, the Revisions' provenance and the object bodies of the change,
+  each a page from disk at this size, plus this machine's load. A narrower history index does
+  not touch them, so its gain (about 1 ms) is below the noise of the run and does not justify a
+  second index on the largest table of a commit; the commit cost was therefore not measured.
 
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
