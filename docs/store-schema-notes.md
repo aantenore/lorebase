@@ -235,7 +235,8 @@ bytes at 10M Records) while a few hundred distinct maps repeat over millions of 
   previous version still read the columns as maps, so an existing install switches with
   `storage apply` once every process runs this version. The rewrite locks its rows with `FOR
   UPDATE SKIP LOCKED` and never waits for a commit; rows it skipped, and references copied
-  into pages already rewritten, are found by the next run's sample and rewritten again. The
+  into pages already rewritten, are found by the next run's sample (0.1% of the pages) and
+  rewritten again; a few may stay in the other form, which readers accept. The
   downgrade writes every map back into its rows (partition by partition, writes locked out)
   and refuses to drop the maps while a reference remains. The functions
   run as the caller, under its privileges and row-level security; only the trigger functions

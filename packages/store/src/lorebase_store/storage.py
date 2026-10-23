@@ -649,6 +649,20 @@ async def _hnsw(
     other: Precision = "full" if wanted == "half" else "half"
     if state.hnsw.get(wanted) and not state.hnsw.get(other):
         return
+    if state.hnsw.get(wanted) and state.hnsw.get(other):
+        # Both valid (an interrupted switch): searches use the newest, so the wanted one is
+        # built again when it is the older.
+        newest = await ddl.scalar(
+            text(
+                "SELECT relname FROM pg_class WHERE relname IN (:a, :b) ORDER BY oid DESC LIMIT 1"
+            ),
+            {"a": hnsw_index_name(dims, wanted), "b": hnsw_index_name(dims, other)},
+        )
+        if newest != hnsw_index_name(dims, wanted):
+            await ddl.exec_driver_sql(
+                f"DROP INDEX CONCURRENTLY IF EXISTS {hnsw_index_name(dims, wanted)}"
+            )
+            state.hnsw[wanted] = False
     if not state.hnsw.get(wanted):
         name = hnsw_index_name(dims, wanted)
         valid = await ddl.scalar(
@@ -940,7 +954,12 @@ async def apply(
     else:
         report.add("lineage rows", "deferred", "triggers not switched yet")
     if compact_tables:
-        await compact(engine, settings, report, reindex=reindex, max_batches=max_batches)
+        # Garbage collection deletes history rows without the branch lock unless it guards
+        # every branch (`gc.guard_branch_locks`): a moved row could then escape its delete.
+        tables = COMPACTED if store.gc.guard_branch_locks else ("mat_records", "mat_links")
+        await compact(
+            engine, settings, report, tables=tables, reindex=reindex, max_batches=max_batches
+        )
     if choices.prewarm:
         warmed = await prewarm(engine, settings)
         report.add(
