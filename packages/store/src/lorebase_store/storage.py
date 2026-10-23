@@ -431,6 +431,26 @@ def _map_columns_condition(columns: Sequence[str], *, shared: bool) -> str:
     return " OR ".join(one.format(c=c) for c in columns)
 
 
+async def _watermark(connection: AsyncConnection) -> int:
+    """The oldest transaction id still running now: every row written from here on has a
+    transaction id at or after it (modulo wraparound, as `age` compares them)."""
+    value = await connection.scalar(
+        text("SELECT (pg_snapshot_xmin(pg_current_snapshot())::text::bigint % 4294967296)")
+    )
+    return int(value or 0)
+
+
+def _since(condition: str, watermark: int | None) -> str:
+    """`condition` limited to rows written since `watermark`. The transaction id is tested
+    first, without reading the map columns, which are large and TOASTed."""
+    if watermark is None:
+        return condition
+    return (
+        f"CASE WHEN age(xmin) <= age(CAST('{int(watermark)}' AS xid)) "
+        f"THEN ({condition}) ELSE false END"
+    )
+
+
 async def _rewrite_range(
     engine: AsyncEngine,
     settings: StorageSettings,
@@ -471,12 +491,21 @@ async def _rewrite_lineage(
     *,
     max_batches: int | None,
     leftovers: Mapping[str, Mapping[str, int]] | None = None,
+    verify: bool = False,
 ) -> None:
     """Rewrite the map columns of every row, page range by page range, from the first page
     to the last page the table had when the pass started (rows a concurrent write puts after
     it are written by the trigger, or are already inline). Ranges with rows a commit held are
     rewritten again after the pass, `RETRY_PASSES` times; ranges still held stay in the task
-    and the step is deferred, so a later run finishes them. Resumes where it stopped."""
+    and the step is deferred, so a later run finishes them. Resumes where it stopped.
+
+    A pass that ends with no row of the other form left marks the table `complete` and keeps
+    the `watermark` it started at. While the triggers are in the state the profile wants,
+    every writer stores the wanted form (the triggers convert maps to references; with them
+    off, nothing writes a reference), so a later run with the same target only looks at the
+    rows written since the watermark, without reading their maps, and moves the watermark
+    on; a hit starts a pass limited to those rows. `verify` ignores all that and scans
+    every row."""
     mode = "shared" if shared else "inline"
     async with engine.connect() as probe:
         work = [
@@ -491,10 +520,30 @@ async def _rewrite_lineage(
         # Rows of the other form found after a finished pass (copies of rows written before
         # the triggers switched) start the pass again.
         stale = bool((leftovers or {}).get(table, {}).get("shared" if not shared else "inline"))
+        condition = _map_columns_condition(columns, shared=shared)
         async with engine.begin() as connection:
             state = await _task(connection, name)
-            if state.get("mode") == mode and state.get("done") and not stale:
-                continue
+            since: int | None = None
+            if state.get("mode") == mode and state.get("done") and not verify:
+                mark = state.get("watermark")
+                if mark is not None and state.get("complete") and not stale:
+                    now = await _watermark(connection)
+                    changed = int(
+                        await connection.scalar(
+                            text(
+                                f"SELECT count(*) FROM {partition} "
+                                f"WHERE {_since(condition, int(mark))}"
+                            )
+                        )
+                        or 0
+                    )
+                    if not changed:
+                        await _save_task(connection, name, {**state, "watermark": now})
+                        report.add(
+                            f"lineage {partition}", "skipped", "complete; no rows to rewrite"
+                        )
+                        continue
+                    since = int(mark)
             if state.get("mode") != mode or state.get("done"):
                 state = {
                     "mode": mode,
@@ -503,6 +552,9 @@ async def _rewrite_lineage(
                     "rows": 0,
                     "retry": [],
                     "done": False,
+                    "complete": False,
+                    "watermark": await _watermark(connection),
+                    "since": since,
                 }
                 await _save_task(connection, name, state)
             per_page = await _rows_per_page(connection, partition)
@@ -511,7 +563,7 @@ async def _rewrite_lineage(
             assignments = ", ".join(f"{c} = {c}" for c in columns)
         else:
             assignments = ", ".join(f"{c} = lb_lineage(domain_id, {c})" for c in columns)
-        condition = _map_columns_condition(columns, shared=shared)
+        condition = _since(condition, state.get("since"))
         in_range = "ctid >= CAST(:lo AS tid) AND ctid < CAST(:hi AS tid)"
         # Rows a commit holds are skipped, never waited for: the rewrite cannot deadlock with
         # commits, which lock rows in key order. The rows of the range still in the other
@@ -563,7 +615,9 @@ async def _rewrite_lineage(
             )
             continue
         async with engine.begin() as connection:
-            await _save_task(connection, name, {**state, "done": True})
+            await _save_task(
+                connection, name, {**state, "done": True, "complete": True, "since": None}
+            )
         if int(state["rows"]) == 0:
             continue
         report.add(
@@ -968,6 +1022,7 @@ async def apply(
     reindex: bool = False,
     max_batches: int | None = None,
     dry_run: bool = False,
+    verify: bool = False,
     switch_wait_s: float = PRECISION_TTL_S + 1,
 ) -> ApplyReport:
     """Bring the database in line with the storage profile (see the module documentation)."""
@@ -996,7 +1051,13 @@ async def apply(
         await ddl.close()
     if triggers_ok:
         await _rewrite_lineage(
-            engine, settings, shared, report, max_batches=max_batches, leftovers=state.lineage_rows
+            engine,
+            settings,
+            shared,
+            report,
+            max_batches=max_batches,
+            leftovers=state.lineage_rows,
+            verify=verify,
         )
     else:
         report.add("lineage rows", "deferred", "triggers not switched yet")
@@ -1217,6 +1278,11 @@ def _parser() -> argparse.ArgumentParser:
         "--reindex", action="store_true", help="With --compact: rebuild indexes concurrently."
     )
     run.add_argument(
+        "--verify",
+        action="store_true",
+        help="Scan every row of the lineage maps even when a finished pass is recorded.",
+    )
+    run.add_argument(
         "--max-batches", type=int, default=None, help="Stop after this many batches (resumable)."
     )
     warm = commands.add_parser("prewarm", help="Load the hot relations into shared buffers.")
@@ -1246,6 +1312,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             reindex=args.reindex,
             max_batches=args.max_batches,
             dry_run=args.dry_run,
+            verify=args.verify,
         )
         return report.as_dict()
     finally:

@@ -1122,6 +1122,7 @@ Record rows twice as large (`fast`, which saves the lookup of the map, a buffer 
 python -m lorebase_store.storage status                    # choices, what the database has, hot sizes
 python -m lorebase_store.storage apply [--dry-run]          # bring the database in line
 python -m lorebase_store.storage apply --compact --reindex  # and give free space back
+python -m lorebase_store.storage apply --verify             # scan every lineage row again
 python -m lorebase_store.storage prewarm [--fraction 0.8]   # load the hot relations
 ```
 
@@ -1134,6 +1135,17 @@ whichever HNSW index exists and work without the optional indexes. `apply` build
 values index), deferring the step to the next run otherwise; reads go on throughout. Run it as
 the maintenance role (the owner of the tables). It exits with status 3 while a step is
 deferred.
+
+A lineage rewrite that ends with no row left in the other form is recorded per partition in
+`storage_tasks` (`lineage:<partition>`: `complete` and the `watermark`, the oldest running
+transaction when the pass started). A later `apply` with the same target skips the full scan
+(13.5 minutes at 10M Records, even with nothing to rewrite): once the triggers are in the state
+the profile wants, every writer stores the wanted form (shared: the triggers turn maps into
+references; inline: nothing writes a reference), so it only looks at the rows written since the
+watermark, by transaction id, without reading their maps, and moves the watermark on. Rows it
+finds start a pass limited to them. Rows written while the triggers were off out of band, or
+frozen by `VACUUM` before a run looked at them, are not seen: `--verify` scans every row and
+resets what is recorded.
 
 Upgrading to revision `0036`: the migration leaves an existing install's lineage maps inline
 (processes of the previous version may still be running); once every process runs the new

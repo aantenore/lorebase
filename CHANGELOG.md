@@ -4,6 +4,10 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+### Changed
+
+- `storage apply` no longer scans every lineage map row again once a rewrite has finished: it records the pass per partition with a watermark, and a later run with the same profile only looks at the rows written since, and `--verify` forces the full pass ([performance](docs/performance.md#switching)).
+
 ### Fixed
 
 - `storage apply` no longer leaves lineage map rows a commit held during the rewrite in the other form: the page ranges they are in are rewritten again after the pass, and while rows stay held the step is deferred (exit status 3) and the next run finishes them ([performance](docs/performance.md#switching)).
