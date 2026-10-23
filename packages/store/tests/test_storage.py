@@ -418,6 +418,108 @@ async def test_rows_a_commit_holds_are_rewritten_by_a_later_run(
     assert (await counts(sessions, REFERENCES))[0] == 0
 
 
+def count_range_rewrites(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    """Page ranges `storage` rewrites from here on."""
+    calls: list[tuple[int, int]] = []
+    original = storage._rewrite_range
+
+    async def counting(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args[4])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(storage, "_rewrite_range", counting)
+    return calls
+
+
+async def lineage_tasks(engine: AsyncEngine) -> dict[str, dict[str, Any]]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text("SELECT name, state FROM storage_tasks WHERE name LIKE 'lineage:%'")
+        )
+        return {str(name): dict(value) for name, value in rows}
+
+
+@pytest.mark.integration
+async def test_a_finished_pass_is_not_scanned_again_unless_verified(
+    engine: AsyncEngine, sessions: Sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = count_range_rewrites(monkeypatch)
+    settings = StoreSettings()
+    first = await storage.apply(engine, settings, switch_wait_s=0)
+    assert first.complete
+    assert calls
+    tasks = await lineage_tasks(engine)
+    assert tasks
+    assert all(t["done"] and t["complete"] and t["watermark"] is not None for t in tasks.values())
+
+    calls.clear()
+    second = await storage.apply(engine, settings, switch_wait_s=0)
+    assert calls == []
+    skipped = [s for s in second.steps if s.step.startswith("lineage ")]
+    assert skipped
+    assert {s.status for s in skipped} == {"skipped"}
+
+    forced = await storage.apply(engine, settings, switch_wait_s=0, verify=True)
+    assert forced.complete
+    assert calls
+
+    # A new target profile is a new pass, whatever was recorded for the other one.
+    calls.clear()
+    await apply(engine, profile="fast")
+    assert calls
+    assert all(t["mode"] == "inline" for t in (await lineage_tasks(engine)).values())
+
+
+@pytest.mark.integration
+async def test_rows_written_after_the_watermark_are_covered(
+    engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row a writer left in the other form (triggers off for a moment) is found by the
+    scan limited to rows written since the watermark and rewritten, with no full pass."""
+    await apply(engine)
+    before = await lineage_tasks(engine)
+    async with sessions() as session:
+        await commit(
+            session,
+            DOMAIN,
+            "main",
+            [supplier("S-8", "Late Works", vat="IT8")],
+            author=AUTHOR,
+            message="after the watermark",
+            origin=ORIGIN,
+            runtime=runtime,
+        )
+    trigger = storage.LINEAGE_TRIGGER
+    async with engine.begin() as connection:
+        await connection.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        await connection.execute(text(f"ALTER TABLE mat_records DISABLE TRIGGER {trigger}"))
+        await connection.execute(
+            text(
+                "UPDATE mat_records SET lineage = lb_lineage(domain_id, lineage), "
+                "lineage_revisions = lb_lineage(domain_id, lineage_revisions) "
+                "WHERE domain_id = :d AND key = 'S-8'"
+            ),
+            {"d": DOMAIN},
+        )
+        await connection.execute(text(f"ALTER TABLE mat_records ENABLE TRIGGER {trigger}"))
+    shared, total = await counts(sessions, REFERENCES)
+    assert shared == total - 1
+
+    calls = count_range_rewrites(monkeypatch)
+    report = await storage.apply(engine, StoreSettings(), switch_wait_s=0)
+    assert report.complete
+    assert calls
+    assert (await counts(sessions, REFERENCES))[0] == total
+    for name, task in (await lineage_tasks(engine)).items():
+        assert task["complete"]
+        assert task["since"] is None
+        assert task["watermark"] != before[name]["watermark"]
+
+    calls.clear()
+    await storage.apply(engine, StoreSettings(), switch_wait_s=0)
+    assert calls == []
+
+
 WAITING = text(
     "SELECT count(*) FROM pg_locks WHERE relation = CAST('mat_links' AS regclass) AND NOT granted"
 )
