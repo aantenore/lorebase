@@ -98,6 +98,13 @@ class HttpSettings(SectionModel):
         description="Request header carrying the caller's credential (`Bearer <api key>`), "
         "forwarded to Keeper unchanged.",
     )
+    allow_anonymous: bool = Field(
+        default=False,
+        description="Forward calls that carry no credential to Keeper without one instead of "
+        "refusing them. Only for a local stack whose Keeper runs with auth mode none: Keeper "
+        "still authenticates every call, so under any other mode they fail as unauthorized. "
+        "Calls that carry a credential forward it as always.",
+    )
 
 
 class OutputSettings(SectionModel):

@@ -58,6 +58,16 @@ HTTP, every call forwards the caller's `Authorization: Bearer <api key>` header 
 fails with `[unauthorized]` without one; the configured key is never used, so one Herald can
 serve many agents, each with its own grants.
 
+**Local stacks without authentication.** When Keeper runs with `keeper.auth.mode: none` (the
+example configuration of the compose quickstart), set `herald.http.allow_anonymous: true`
+(`LOREBASE__HERALD__HTTP__ALLOW_ANONYMOUS=true`) and agents may call Streamable HTTP without a
+header: Herald forwards those calls to Keeper without a credential, as the web app does, and
+Keeper accepts them as it accepts every request in that mode. Calls that carry a header still
+forward it. Herald does not decide on its own: under any other Keeper mode the same calls fail
+with `[unauthorized]`, so the setting never opens a secured Keeper. It is off by default; keep
+it off for anything but a laptop, because whoever reaches Herald then reaches Keeper as its
+anonymous administrator.
+
 ## MCP host configuration
 
 ### Generic stdio configuration

@@ -1009,6 +1009,8 @@ herald:
     allowed_hosts: []            # e.g. [herald.example.com]; empty: SDK default for the host
     allowed_origins: []
     credential_header: Authorization
+    allow_anonymous: false       # true: calls without a credential go to Keeper without one;
+                                 # local stacks with keeper.auth.mode none only (Keeper decides)
   output:
     default_format: text         # text (compact) or json
     max_chars: 12000             # longer outputs are cut with a [truncated ...] marker

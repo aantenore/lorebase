@@ -241,6 +241,46 @@ def test_http_forwards_the_callers_credential_and_never_the_configured_key() -> 
         credentials(None, "t")
 
 
+def test_http_refuses_calls_without_credential_by_default() -> None:
+    configured = make_settings(transport="streamable_http")
+    assert configured.http.allow_anonymous is False
+    with pytest.raises(Exception, match=r"\[unauthorized\]"):
+        Credentials(configured)(_Ctx({}), "t")  # type: ignore[arg-type]
+
+
+def test_http_anonymous_forwards_no_credential_and_never_the_configured_key() -> None:
+    credentials = Credentials(
+        make_settings(transport="streamable_http", http={"allow_anonymous": True})
+    )
+    assert credentials(_Ctx({}), "t") is None  # type: ignore[arg-type]
+    assert credentials(None, "t") is None
+    forwarded = credentials(_Ctx({"authorization": "Bearer lbk_caller_secret"}), "t")  # type: ignore[arg-type]
+    assert forwarded == "Bearer lbk_caller_secret"
+
+
+async def test_http_anonymous_calls_reach_keeper_without_authorization(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    # Keeper in auth mode none answers them.
+    fake.on("GET", f"{API}/schema", SCHEMA)
+    async with connect(transport="streamable_http", http={"allow_anonymous": True}) as client:
+        result = await client.call_tool("lorebase_schema", {})
+    assert not result.is_error
+    assert "authorization" not in fake.last().headers
+
+
+async def test_http_anonymous_calls_fail_when_keeper_requires_authentication(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    # Keeper in any other mode refuses them; Herald does not let them through.
+    fake.on("GET", f"{API}/schema", problem(401, "unauthorized", "Authentication required."))
+    message = await _error(
+        connect, "lorebase_schema", {}, transport="streamable_http", http={"allow_anonymous": True}
+    )
+    assert "authorization" not in fake.last().headers
+    assert "[unauthorized]" in message
+
+
 async def test_every_call_carries_the_agent_key(connect: Connect, fake: FakeKeeper) -> None:
     fake.on("GET", f"{API}/schema", problem(403, "forbidden", "No schema.read."))
     message = await _error(connect, "lorebase_schema", {})
