@@ -82,7 +82,8 @@ Keeper, the REST API service. Environment: LOREBASE__KEEPER__PORT, LOREBASE__KEE
 |---------|---------|-------------|
 | `keeper.cors.allow_origins` | `[]` | browser origins allowed to call the API; empty disables CORS |
 | `keeper.cors.allow_methods` | `[GET, POST, PUT, PATCH, DELETE, OPTIONS]` |  |
-| `keeper.cors.allow_headers` | `[Authorization, Content-Type, Idempotency-Key]` |  |
+| `keeper.cors.allow_headers` | `[]` | further request headers; Authorization, Content-Type, Idempotency-Key, If-None-Match, the request id, CSRF and trace headers are always allowed |
+| `keeper.cors.expose_headers` | `[ETag, Lorebase-Revision]` | readable by scripts (always: these, the request id and the rate limit headers) |
 | `keeper.cors.allow_credentials` | `false` | cannot be combined with the "\*" origin |
 | `keeper.cors.max_age_s` | `600` |  |
 

@@ -31,6 +31,20 @@ from lorebase_platform.settings import SectionModel, Settings, register_section
 SECTION = "keeper"
 
 
+REQUIRED_CORS_REQUEST_HEADERS = (
+    "Authorization",
+    "Content-Type",
+    "Idempotency-Key",
+    "If-None-Match",
+)
+"""Request headers the clients send, always allowed cross-origin (plus the request id, session
+CSRF and agent trace headers Keeper is configured with)."""
+
+REQUIRED_CORS_RESPONSE_HEADERS = ("ETag", "Lorebase-Revision")
+"""Response headers always readable cross-origin (plus the request id and rate limit headers):
+the web app revalidates reads with the ETag and follows the Revision a read was served from."""
+
+
 class CorsSettings(SectionModel):
     """Cross-origin access for browser clients. Disabled while `allow_origins` is empty."""
 
@@ -38,7 +52,18 @@ class CorsSettings(SectionModel):
         default=(), description="Allowed origins, e.g. https://lorebase.example.com. Empty: off."
     )
     allow_methods: tuple[str, ...] = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-    allow_headers: tuple[str, ...] = ("Authorization", "Content-Type", "Idempotency-Key")
+    allow_headers: tuple[str, ...] = Field(
+        default=(),
+        description="Further request headers to allow. Always allowed besides them: "
+        "Authorization, Content-Type, Idempotency-Key, If-None-Match, the request id header, "
+        "the session CSRF header and the agent trace headers.",
+    )
+    expose_headers: tuple[str, ...] = Field(
+        default=REQUIRED_CORS_RESPONSE_HEADERS,
+        description="Response headers readable by cross-origin scripts. ETag and "
+        "Lorebase-Revision (conditional reads), the request id and the rate limit headers are "
+        "always exposed.",
+    )
     allow_credentials: bool = False
     max_age_s: int = Field(default=600, ge=0, description="Preflight cache lifetime.")
 

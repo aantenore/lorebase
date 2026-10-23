@@ -275,7 +275,7 @@ Keeper takes a change set as a document, not as commands: `POST .../branches/{b}
 `VITE_API_MODE=live` makes the app talk to Keeper over `/api/v1`; `VITE_KEEPER_BASE_URL` says where. Two ways to reach it from a browser:
 
 - **Same origin, through the dev proxy (recommended).** Set `VITE_KEEPER_BASE_URL=/` and start the app with `LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev` (or `pnpm preview`). The browser only talks to the app's origin, no CORS setup is needed, and the `ETag` header of Keeper is readable, so reads are conditional (below).
-- **Cross origin.** Set `VITE_KEEPER_BASE_URL=http://localhost:8080` and let Keeper allow the app's origin: `keeper.cors.allow_origins: [http://localhost:5173]` and `keeper.cors.allow_headers` with `If-None-Match` added. Keeper does not expose `ETag` to cross-origin scripts, so conditional reads do not happen then (every read is a plain 200); everything else works.
+- **Cross origin.** Set `VITE_KEEPER_BASE_URL=http://localhost:8080` and let Keeper allow the app's origin: `keeper.cors.allow_origins: [http://localhost:5173]`. Keeper always allows the headers the app sends (`Authorization`, `Content-Type`, `Idempotency-Key`, `If-None-Match`, `X-Lorebase-Client`) and exposes `ETag` and `Lorebase-Revision` (`keeper.cors.expose_headers`), so conditional reads (304) work cross-origin too.
 
 To try it against the compose stack of `docs/quickstart.md`: start Postgres and Keeper, load a Domain with the `lorebase` CLI (the quickstart's steps 6 and 7), then
 
