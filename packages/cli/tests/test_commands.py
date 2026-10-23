@@ -855,6 +855,32 @@ def test_record_get_and_list(http: respx.MockRouter) -> None:
     assert listing.calls[1].request.url.params["cursor"] == "c1"
 
 
+def test_record_delete_sends_one_bulk_delete(http: respx.MockRouter, tmp_path: Path) -> None:
+    route = http.post("/domains/supply/operations/delete_records/execute").respond(
+        200,
+        json=execution(
+            operation="delete_records",
+            warnings=[{"code": "record.not_found", "message": "no Part Record 'P-9' (skipped)"}],
+        ),
+    )
+    listed = tmp_path / "keys.txt"
+    listed.write_text("P-2\n\nP-9\n")
+    done = run(
+        "record", "delete", "Part", "P-1", "--keys-file", str(listed),
+        "-d", "supply", "-b", "work", "--skip-missing",
+    )  # fmt: skip
+    assert done.exit_code == 0, done.stderr
+    assert "P-9" in done.stderr
+    (body,) = request_bodies(route)
+    assert body["parameters"] == {
+        "kind": "Part",
+        "keys": ["P-1", "P-2", "P-9"],
+        "skip_missing": True,
+    }
+    assert body["branch"] == "work"
+    assert run("record", "delete", "Part", "-d", "supply").exit_code == 1
+
+
 def test_record_history_and_lineage(http: respx.MockRouter) -> None:
     served = {
         "revision": REV,

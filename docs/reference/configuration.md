@@ -440,6 +440,7 @@ GET /domains/{d}/schema/suggestions and :decide; thresholds in schema.suggestion
 |---------|---------|-------------|
 | `keeper.operations.max_bulk_rows` | `10000` | rows accepted by one import_records or import_links call |
 | `keeper.operations.import_batch_rows` | `1000` | rows committed per Revision by bulk imports |
+| `keeper.operations.max_bulk_delete_keys` | `1000` | keys accepted by one delete_records call (one Revision) |
 | `keeper.operations.dry_run_max_edits` | `1000` | edits listed in a response; longer lists are cut |
 | `keeper.operations.max_issues` | `200` | violations listed in one response |
 | `keeper.operations.side_effect_max_edits` | `100` | edits listed in an Operation side effect event; longer lists are cut |

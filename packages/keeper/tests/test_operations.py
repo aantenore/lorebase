@@ -31,6 +31,7 @@ from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.services.config import OperationSettings
 from lorebase_keeper.services.operation_catalog import (
+    DELETE_RECORDS,
     IMPORT_BATCH,
     IMPORT_LINKS,
     IMPORT_RECORDS,
@@ -42,6 +43,7 @@ from lorebase_keeper.services.operation_catalog import (
     batches,
     bind,
     builtin_definition,
+    delete_keys,
     edit_document,
     import_rows,
     plan_edits,
@@ -175,6 +177,85 @@ async def test_delete_link_and_unlink(schema: Schema) -> None:
     assert isinstance(linked.changes[0], LinkUpsert)
     unlinked = await plan_edits(unlink, bind(unlink, {"from": "P-1", "to": "S-1"}).values, reader)
     assert isinstance(unlinked.changes[0], LinkDelete)
+
+
+async def test_delete_records_deletes_existing_keys_once(schema: Schema) -> None:
+    definition = builtin_definition(schema, DELETE_RECORDS)
+    assert definition is not None
+    assert definition.action is Action.DELETE_RECORDS
+    assert not definition.is_import  # one Revision, no import batching
+    supplier = schema.kind_by_api_name("Supplier")
+    assert supplier is not None
+    reader = FakeRecords({(supplier.id, "S-1"): {}, (supplier.id, "S-2"): {}})
+    bound = bind(definition, {"kind": "Supplier", "keys": ["S-1", "S-2", "S-1"]})
+    assert not bound.findings
+    plan = await delete_keys(schema, bound.values, reader, max_keys=10)
+    assert not plan.findings
+    assert [(c.kind, c.key) for c in plan.changes if isinstance(c, RecordDelete)] == [
+        (supplier.id, "S-1"),
+        (supplier.id, "S-2"),
+    ]
+
+
+async def test_delete_records_reports_or_skips_unknown_keys(schema: Schema) -> None:
+    definition = builtin_definition(schema, DELETE_RECORDS)
+    assert definition is not None
+    supplier = schema.kind_by_api_name("Supplier")
+    assert supplier is not None
+    reader = FakeRecords({(supplier.id, "S-1"): {}})
+    params: dict[str, JsonValue] = {"kind": "Supplier", "keys": ["S-1", "S-9"]}
+    failed = await delete_keys(schema, bind(definition, params).values, reader, max_keys=10)
+    assert [(f.code, f.path, f.key) for f in failed.findings] == [
+        ("record.not_found", ("parameters", "keys", 1), "S-9")
+    ]
+    assert failed.changes == []
+    skipping = bind(definition, {**params, "skip_missing": True}).values
+    skipped = await delete_keys(schema, skipping, reader, max_keys=10)
+    assert not skipped.findings
+    assert [w.key for w in skipped.warnings] == ["S-9"]
+    assert skipped.warnings[0].severity == "warning"
+    assert len(skipped.changes) == 1
+
+
+async def test_delete_records_refuses_bad_parameters(schema: Schema) -> None:
+    definition = builtin_definition(schema, DELETE_RECORDS)
+    assert definition is not None
+    reader = FakeRecords()
+
+    async def codes(params: dict[str, JsonValue], max_keys: int = 10) -> list[tuple[str, Any]]:
+        bound = bind(definition, params)
+        if bound.findings:
+            return [(f.code, f.path) for f in bound.findings]
+        plan = await delete_keys(schema, bound.values, reader, max_keys=max_keys)
+        return [(f.code, f.path) for f in plan.findings]
+
+    assert await codes({"kind": "Supplier"}) == [(PARAMETER_REQUIRED, ("parameters", "keys"))]
+    assert await codes({"kind": "Nope", "keys": ["a"]}) == [
+        (PARAMETER_INVALID, ("parameters", "kind"))
+    ]
+    assert await codes({"kind": "Supplier", "keys": []}) == [
+        (PARAMETER_INVALID, ("parameters", "keys"))
+    ]
+    assert await codes({"kind": "Supplier", "keys": ["a", "b"]}, max_keys=1) == [
+        ("parameter.limit_exceeded", ("parameters", "keys"))
+    ]
+    assert await codes({"kind": "Supplier", "keys": ["a", 7]}) == [
+        (PARAMETER_INVALID, ("parameters", "keys", 1))
+    ]
+
+
+async def test_delete_records_needs_the_delete_builtin() -> None:
+    document: dict[str, Any] = yaml.safe_load(SUPPLY_SCHEMA.read_text())
+    del document["operations"]
+    del document["derivations"]["single_sourced"]
+    del document["kinds"]["Part"]["attributes"]["single_sourced"]
+    document["kinds"]["Plant"]["operations_builtin"] = ["create", "update"]
+    restricted = load_schema(yaml.safe_dump(document))
+    definition = builtin_definition(restricted, DELETE_RECORDS)
+    assert definition is not None
+    bound = bind(definition, {"kind": "Plant", "keys": ["PL-1"]}).values
+    plan = await delete_keys(restricted, bound, FakeRecords(), max_keys=10)
+    assert [f.path for f in plan.findings] == [("parameters", "kind")]
 
 
 def test_import_rows_locate_bad_rows(schema: Schema) -> None:
