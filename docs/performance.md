@@ -2,7 +2,7 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
-The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a shared laptop; the neighborhood, full-text search, history and lineage are over it. Focused comparisons of 2026-10-23 on datasets with realistic text follow it: [Search on very common terms](#search-on-very-common-terms), [Headers-only neighborhoods](#headers-only-neighborhoods) and [a narrower history index](#record-history-and-lineage-a-narrower-index).
+The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a shared laptop; the neighborhood, full-text search, history and lineage are over it. Focused comparisons of 2026-10-23 on datasets with realistic text follow it: [Search on very common terms](#search-on-very-common-terms), [BM25 search](#bm25-search) (optional `pg_search` backend), [Headers-only neighborhoods](#headers-only-neighborhoods) and [a narrower history index](#record-history-and-lineage-a-narrower-index).
 
 ## Dataset
 
@@ -794,6 +794,93 @@ to 3 between runs: compare the two columns of one run, not runs with each other.
   a filter, a less common word) is what brings them down; `truncated_candidates` tells the
   caller when to.
 
+## BM25 search
+
+Measured on 2026-10-23 with `tests/perf/bm25.py` on `perf_seed_1m_zipf` (1,000,110 Records,
+Zipf text as in [search on very common terms](#search-on-very-common-terms)), the perf Postgres
+on the ParadeDB image (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`: Postgres 16.15,
+`pg_search` 0.26.3, `shared_buffers` 6GB) in a Docker VM of 16 GiB on an Apple M5 Pro shared
+with other work (load average about 9). Search as Keeper's lexical search calls it (typo
+corrections, partial matching, ranking sized by the word lexicon for `postgres`), owner role,
+200 timed calls per case after 20, both backends called in turn with the same queries; cold: a
+new random query per call, warm: the same twenty queries in turn
+([search](search.md#bm25-ranking) describes the backend).
+
+Reproduce:
+
+```sh
+make perf-up PERF_VM=16g PERF_SEARCH=bm25
+LOREBASE_TEST_DATABASE_URL=postgresql://perf:perf@127.0.0.1:55410/postgres \
+  uv run python tests/perf/bm25.py --database perf_seed_1m_zipf --out build/perf/bm25-1m.md
+```
+
+Index: built in 15 to 19 s (concurrently, partition by partition), 75 to 99 MB depending on
+the segments it ends with; the GIN search index of the same rows is 96 MB, the table 1,958 MB.
+
+`main`, after `VACUUM`, p50 / p95 in milliseconds:
+
+| Query | Calls | postgres | bm25 | truncated, postgres / bm25 (of 200) |
+|---|---|---:|---:|---:|
+| title word | cold | 9.1 / 21.1 | 12.3 / 17.8 | 19 / 0 |
+| title word | warm | 9.8 / 16.2 | 12.8 / 18.9 | 0 / 0 |
+| common word | cold | 23.2 / 48.7 | 15.7 / 27.3 | 200 / 0 |
+| common word | warm | 19.2 / 34.8 | 13.8 / 19.8 | 200 / 0 |
+| two common words | cold | 19.4 / 40.1 | 14.4 / 32.6 | 164 / 0 |
+| two common words | warm | 20.7 / 39.8 | 15.9 / 39.3 | 170 / 0 |
+| title word and a common one | cold | 8.6 / 24.5 | 11.2 / 25.4 | 29 / 0 |
+| title word and a common one | warm | 8.1 / 17.3 | 10.8 / 21.8 | 20 / 0 |
+| misspelled title word | cold | 13.0 / 25.1 | 19.2 / 27.9 | 9 / 0 |
+| misspelled title word | warm | 16.4 / 31.5 | 22.0 / 40.0 | 10 / 0 |
+| phrase of two common words | cold | 18.5 / 42.2 | 21.0 / 55.4 | 33 / 0 |
+| phrase of two common words | warm | 15.5 / 35.0 | 17.8 / 43.6 | 40 / 0 |
+
+`main` while another connection commits 100 Part updates every second (15 commits during the
+run), cold:
+
+| Query | postgres | bm25 |
+|---|---:|---:|
+| title word | 9.5 / 22.4 | 21.6 / 36.6 |
+| common word | 20.8 / 40.2 | 20.5 / 38.5 |
+
+An overlay with 108 rows of its own (100 Part updates on it, 100 on `main` after the fork):
+
+| Query | Calls | postgres | bm25 |
+|---|---|---:|---:|
+| title word | cold | 9.9 / 19.9 | 28.6 / 39.6 |
+| common word | cold | 21.9 / 40.6 | 35.7 / 52.9 |
+| two common words | cold | 21.1 / 42.6 | 36.7 / 71.1 |
+| misspelled title word | cold | 21.9 / 44.9 | 65.8 / 95.4 |
+| phrase of two common words | cold | 27.5 / 74.0 | 64.8 / 176.4 |
+
+Commits of 100 Part updates on `main` (20 timed after 20 untimed, each a value no commit wrote
+before): 244 / 611 ms at p50 / p95 without the index, 223 / 359 with it; within the noise of a
+shared machine, so maintaining the index costs no measurable time at this size.
+
+- Every match is ranked: no BM25 answer was truncated, against every common-word query and
+  most two-word queries of the default ranking. Very common words are 20 to 35% faster at p50
+  and up to 45% at p95; rare words are about 3 ms slower: a top-k scan of `pg_search` costs 2
+  to 4 ms whatever the term, where a rare word costs the GIN index about a millisecond.
+- **Writes slow BM25 down until `VACUUM`.** The index keeps the versions of updated rows until
+  `VACUUM` marks them deleted, and each scan then checks more of them: right after 5 commits of
+  100 updates a rare-word scan took 15 to 16 ms instead of 3 to 4, back to 3 to 4 ms after
+  `VACUUM` of the partition. Under the steady writes above a rare word costs 22 ms at p50
+  instead of 12. Where BM25 is on and Records change often, have autovacuum visit
+  `mat_records` sooner than its default 20% of changed rows, for example
+  `ALTER TABLE mat_records_p<n> SET (autovacuum_vacuum_scale_factor = 0.01,
+  autovacuum_vacuum_threshold = 1000)` on the partitions (open: not applied by
+  `storage apply`, not measured at scale).
+- **Overlays cost more with BM25.** The overlay's rows and the base's are two scans per query
+  arm, each paying the fixed cost of a scan, and the base's reads one more row for each row the
+  overlay holds; typo corrections add an arm, so a misspelled word on an overlay is four scans.
+  Before the functions turned parallel workers off, the planner started two workers for the
+  overlay's own rows (19 ms of a 33 ms call). Keep `search.backend: postgres` where most
+  searches run on overlays.
+- Phrases of two common words: every row holding both words is a candidate, the rows with them
+  in sequence ranked first; the recheck of four times the page answered every call exactly.
+- **Not measured:** 10M Records (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`, then the command
+  above with `--database perf_seed_10m_zipf`), the role subject to row-level security, and
+  Keeper over HTTP.
+
 ## Headers-only neighborhoods
 
 `values: false` on `POST /neighborhood` returns Record headers and Link endpoints. Measured on
@@ -1110,6 +1197,7 @@ keeps besides the rows. Every feature works in every profile; each other key of
 | TOAST compression | pglz | lz4 | lz4 |
 | `mat_records` fill factor | 100 | 100 | 90 |
 | prewarm after `storage apply` | off | off | on |
+| BM25 index of search (`bm25_index`, needs `pg_search`) | off | off | off |
 
 What leaving something out costs: an equality filter on an Attribute without an index scans its
 Kind (`compact`), typo corrections compare the lexicon's words of the searched Kinds

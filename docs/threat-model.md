@@ -234,6 +234,13 @@ Remaining:
    infer that a quote they chose matched, from the evidence being absent, so the Domain's vault
    can be probed by guessing values; submitting documents and reading suggestions are the
    permissions that bound it (TB3).
+8. **BM25 statistics span every Domain (opt-in backend only).** With `search.backend: bm25`
+   the BM25 index ranks with term statistics of the whole database. Scores come back relative
+   to the best hit, so a one-word search says nothing about other Domains, but the order of the
+   hits of a several-word search follows how rare each word is everywhere: a caller can learn
+   something about the text of Domains and Kinds it cannot read, never which Records exist.
+   Keep the default ranking, or separate databases, for Domains of mutually distrustful
+   parties ([search](search.md#bm25-ranking)) (TB3).
 
 8. **What people write is not projected.** A caller whose grants are narrowed to Kinds never
    sees the other Kinds in structured data (TB3). Record history, lineage, explanations and

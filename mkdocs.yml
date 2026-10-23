@@ -111,6 +111,7 @@ nav:
       - Exploration assistant: guide.md
       - Agent trace: agent-trace.md
       - Retrieval lab: retrieval-lab.md
+      - Search ranking: search.md
       - Schema inference: inference.md
       - LinkML: linkml.md
       - Inference providers: inference-providers.md

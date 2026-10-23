@@ -274,6 +274,38 @@ real replica, 40 commits each followed by a read-your-writes read always saw the
 WAL replay paused on the replica for 10 of them, 9 of those reads fell back to the primary
 (`primary/stale`) and every other read was served by the replica.
 
+## BM25 search overlay
+
+`deploy/compose/search-bm25.yaml` runs Postgres on the ParadeDB image, whose `pg_search`
+extension ranks lexical search by BM25 ([search](search.md#bm25-ranking)). It is optional:
+`pg_search` is licensed under AGPL-3.0, unlike Lorebase (Apache-2.0); read the
+[licence note](search.md#licence) before you use it. The default stack never pulls the image.
+
+```bash
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  -f deploy/compose/search-bm25.yaml up -d
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+  -f deploy/compose/search-bm25.yaml --profile maintenance run --rm storage apply
+curl -s http://127.0.0.1:8080/readyz     # "search_backend": {"status": "ok", "detail": "bm25"}
+```
+
+(`make up COMPOSE_OVERLAYS=deploy/compose/search-bm25.yaml` for the first command.) The overlay:
+
+- runs `postgres` on `paradedb/paradedb:0.26.3-pg16`, pinned by digest (`POSTGRES_BM25_IMAGE`
+  replaces it), with `pg_search` first in `shared_preload_libraries` (`POSTGRES_PRELOAD_LIBRARIES`
+  adds others, `pg_prewarm` for example), and hides the image's own initialization scripts,
+  which create extensions Lorebase does not use;
+- sets `search.backend: bm25` on the Keepers and `store.storage.bm25_index: true` on the
+  `storage` service, whose `apply` creates the extension and builds the index;
+- with profile `scale-out`, runs the standby on the same image with `pg_search` preloaded, so
+  that reads routed to it are ranked by BM25 too.
+
+Until `storage apply` has built the index, and after the overlay is removed, search ranks the
+default way and `/readyz` reports `search_backend` as `degraded` (the service stays ready). The
+ParadeDB image is built on a newer Debian release than `pgvector/pgvector:pg16`: start it on a
+new volume, or move an existing database with `pg_dump` and `pg_restore`, rather than pointing
+it at a volume the default image initialized ([search](search.md#operations)).
+
 ## Kubernetes
 
 The Helm chart in `deploy/helm/lorebase` runs this topology on a cluster: stateless Keeper

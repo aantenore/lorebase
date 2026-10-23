@@ -7,16 +7,24 @@ What changed in each release, newest first. The notes are written for the person
 ### Added
 
 - Kind-scoped invisibility, the last part of full RBAC. A caller whose grants are narrowed to Kinds no longer learns of the other Kinds: `GET /schema` (JSON and YAML) and schema elements return the schema without them and without the Relations, path Derivations, derived and `ref` Attributes, Traits, Operations and Sources that would tell about them, and every request naming one of them answers with the 404 or 422 of a name that does not exist, never a 403. Counts, Link summaries, neighborhoods, search hits and typo corrections, health reports, context packs and agent trace refs cover the visible Kinds only. Such callers can now read the Domain, its branches and tags, so the web app, Herald and the Guide work for them. On by default; `keeper.auth.authz.invisible_kinds: false` keeps the 403 naming the Kind ([design 13.3](docs/design.md#133-authorization-enforcement), [threat model](docs/threat-model.md#tb3-authorization-inside-keeper)).
+- Optional BM25 ranking of lexical search through ParadeDB `pg_search`, for searches of very common terms on large Domains: `search.backend: bm25` ranks with a BM25 index of the existing search vectors, built by `python -m lorebase_store.storage apply` with `store.storage.bm25_index: true` on a server that preloads `pg_search`. Matches, typo corrections, partial matching, Kind filters and masking are those of the default ranking; scores are relative to the best hit. Without the extension or a valid index search keeps the default ranking and `/readyz` reports `search_backend: degraded`. `pg_search` is licensed under AGPL-3.0 and runs only where you choose its image: the compose overlay `deploy/compose/search-bm25.yaml` and the Helm values file `ci/search-bm25-values.yaml` set it up; the default stack, chart and images are unchanged. At 1M Records very common words are 20 to 35% faster at p50 and never truncated; rare words are about 3 ms slower, overlays slower, and scans slow down after writes until `VACUUM` ([search](docs/search.md#bm25-ranking), [performance](docs/performance.md#bm25-search)).
+- Migration `0037`: `lb_search_terms`, `lb_bm25_query_valid` and the security definer functions `lb_search_bm25` and `lb_search_bm25_overlay`, granted to the application role like the other read functions. They need nothing of the extension until it is installed.
+- `make perf-up PERF_SEARCH=bm25` runs the perf Postgres on the ParadeDB image, and `tests/perf/bm25.py` compares both rankings, the index build and the commit cost on a seeded database.
 
 ### Changed
 
 - Kind-narrowed callers get 404 or 422 instead of 403 for Kinds they may not read, see the cache entries and `ETag`s of their own projection, and no longer see a Kind whose keys reference an invisible Kind or whose titles or full-text index are computed from one (a searchable count of its Records); derived Attributes reading an invisible Kind, such as `supplier_count` and `single_sourced` for a reader of Parts only, are left out of their Records and of Derivation previews. Agent trace steps of other principals no longer carry result counts, query plans or a `truncated` flag for them, Proposal extraction checks no longer count items for callers who do not see every Conflict, and resolving a Conflict outside their Kinds answers 404 like an unknown one. Branch responses leave out the progress of background copies for them. Proposal Conflicts about a reference to an invisible Kind are left out for them, and Record history, lineage, explanations and context packs leave out origins, messages and Proposal titles naming something invisible and the changes that touched only what is left out.
-
 - Documentation: the validation record gains the five-day scenario's CI figures, the rounds and findings of the PII vault and outbox security reviews; the README and the documentation landing page describe v0.2.1; the roadmap keeps open only the reference-hardware benchmark and the API stability guarantees ([validation](docs/validation.md), [roadmap](docs/roadmap.md)).
+- The standby of the compose profile `scale-out` passes the arguments of its service command to Postgres, so an overlay can add settings to it.
+
+### Not done yet
+
+- BM25 search at 10M Records is not measured (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`, then `tests/perf/bm25.py --database perf_seed_10m_zipf`), and `storage apply` does not tune autovacuum for it: with BM25 on and frequent writes, set a lower `autovacuum_vacuum_scale_factor` on the `mat_records` partitions yourself ([performance](docs/performance.md#bm25-search)).
 
 ### Upgrade notes
 
 - Clients of Kind-narrowed principals that relied on 403 to tell a forbidden Kind from an unknown one now get 404 or 422 for both. Set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers.
+- Migration `0037` creates functions only and runs on any Postgres; apply it as usual. Search is unchanged unless you set `search.backend: bm25` and build the index.
 
 ## 0.2.1 - 2026-10-23
 
