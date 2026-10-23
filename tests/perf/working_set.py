@@ -636,7 +636,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--commits", type=int, default=0, help="also time this many commits (writes the Domain)"
     )
     parser.add_argument("--commit-changes", type=int, default=1000, help="Part updates each")
+    parser.add_argument(
+        "--seed", type=int, default=SEED, help="random keys; change it to read keys not read before"
+    )
     args = parser.parse_args(argv)
+    globals()["SEED"] = args.seed
     with testing.postgres_server() as server:
         url = async_url(server).set(database=args.database).render_as_string(hide_password=False)
         if args.migrate:

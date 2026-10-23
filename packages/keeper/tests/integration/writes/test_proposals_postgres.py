@@ -17,11 +17,12 @@ from lorebase_core.model.yaml_schema import load_schema
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types import encode_value
 from lorebase_core.validate import RecordUpsert
+from lorebase_store import storage
 from lorebase_store.commit import SchemaUpsert, commit
 from lorebase_store.db import create_engine
 from lorebase_store.materialize import verify
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import DatabaseSettings, StoreSettings
+from lorebase_store.settings import DatabaseSettings, StorageSettings, StoreSettings
 
 pytestmark = pytest.mark.integration
 
@@ -62,9 +63,9 @@ def supplier(row: dict[str, str], **changes: str) -> RecordUpsert:
 class Loader:
     """Writes through the store commit pipeline directly, as the superuser."""
 
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(self, engine: AsyncEngine, store: StoreSettings | None = None) -> None:
         self.engine = engine
-        self.runtime = StoreRuntime.from_settings(StoreSettings())
+        self.runtime = StoreRuntime.from_settings(store or StoreSettings())
         self.rows = supplier_rows()
 
     @asynccontextmanager
@@ -111,11 +112,16 @@ class Loader:
         assert report.ok, report
 
 
-@pytest.fixture
-async def loader(database_url: str) -> AsyncIterator[Loader]:
+@pytest.fixture(params=["compact", "balanced", "fast"])
+async def loader(database_url: str, request: pytest.FixtureRequest) -> AsyncIterator[Loader]:
+    """The writer of each test, on a database in each storage profile (`storage apply`): merges,
+    Conflicts and lineage policies read the same in all of them."""
     engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
+    store = StoreSettings(storage=StorageSettings(profile=request.param))
     try:
-        yield Loader(engine)
+        report = await storage.apply(engine, store, switch_wait_s=0)
+        assert report.complete, report.as_dict()
+        yield Loader(engine, store)
     finally:
         await engine.dispose()
 
@@ -315,7 +321,7 @@ async def test_merge_with_conflicts_end_to_end(
     assert other == "Lodz"
     origin = await loader.scalar(
         "SELECT p.origin_type FROM mat_records r JOIN provenance p "
-        "ON p.domain_id = r.domain_id AND p.id = r.lineage ->> :city "
+        "ON p.domain_id = r.domain_id AND p.id = lb_lineage(r.domain_id, r.lineage) ->> :city "
         "WHERE r.domain_id = 'supply' AND r.branch = 'main' AND r.key = 'S-1001'",
         city=CITY,
     )
