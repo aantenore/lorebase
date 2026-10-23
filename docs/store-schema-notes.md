@@ -230,7 +230,14 @@ bytes at 10M Records) while a few hundred distinct maps repeat over millions of 
   Maps of at most 64 bytes (`{}`, a Link with one entry) stay inline: a reference is as large.
 - The storage profile decides whether the triggers are enabled (`store.storage.lineage_maps`,
   `shared` except with `fast`); `python -m lorebase_store.storage apply` switches them and
-  rewrites the rows in batches either way, so readers always see both forms. The functions
+  rewrites the rows in batches either way, so readers always see both forms. The migration
+  enables them only on a database without Records: during a rolling upgrade processes of the
+  previous version still read the columns as maps, so an existing install switches with
+  `storage apply` once every process runs this version. The rewrite locks its rows with `FOR
+  UPDATE SKIP LOCKED` and never waits for a commit; rows it skipped, and references copied
+  into pages already rewritten, are found by the next run's sample and rewritten again. The
+  downgrade writes every map back into its rows (partition by partition, writes locked out)
+  and refuses to drop the maps while a reference remains. The functions
   run as the caller, under its privileges and row-level security; only the trigger functions
   have `EXECUTE` revoked from `PUBLIC`.
 
@@ -255,7 +262,14 @@ earlier in the table (`DELETE ... RETURNING` into `INSERT` on the partition, one
 time under the branch lock that commits take, so no commit changes a row being moved), then
 lets `VACUUM` truncate the emptied pages; `--reindex` rebuilds the indexes of those tables with
 `REINDEX TABLE CONCURRENTLY`. Moving rows on the partition does not fire the statement-level
-lexicon triggers of the parent: the words do not change.
+lexicon triggers of the parent: the words do not change. A moved row is a new tuple, so a
+concurrent `UPDATE` or `DELETE` that does not hold the branch lock would miss it: every writer
+of these tables holds it (commits, background copies and deletions, stale refreshes, the
+lineage backfill, promotions; the garbage collector takes the locks of every ref before it
+deletes history rows), and copy-on-write inserts with `ON CONFLICT DO NOTHING`. A new writer
+must keep that invariant. Index validity is read from `pg_index`: an interrupted concurrent
+build is rebuilt, a switch of the HNSW precision drops the old index only once the new one is
+valid and `PRECISION_TTL_S` has passed (searches use the newest valid index).
 
 ## Row-level security
 

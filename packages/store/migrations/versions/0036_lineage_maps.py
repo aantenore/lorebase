@@ -22,7 +22,11 @@ its canonical text.
   either direction.
 - `storage_tasks(name, state)`: progress of the resumable steps of `storage apply`.
 
-Existing rows keep their maps until `storage apply` runs: readers accept both forms. The
+The triggers start enabled only on a database without materialized Records (a new install):
+on an existing one, processes of the previous version may still run during a rolling upgrade
+and read the columns as maps, so they stay disabled until `storage apply` runs once every
+process has the code of this revision. Existing rows keep their maps until then; readers of
+this revision accept both forms. The
 downgrade writes every map back into its rows (one statement per table) before dropping the
 objects.
 
@@ -76,7 +80,7 @@ CREATE FUNCTION lb_lineage(p_domain text, p_value jsonb) RETURNS jsonb
 LANGUAGE sql STABLE PARALLEL SAFE AS $fn$
     SELECT CASE
         WHEN jsonb_typeof(p_value) = 'object' AND p_value ? '{MAP_KEY}' THEN coalesce(
-            (SELECT m.map FROM {MAPS} m
+            (SELECT m.map FROM __MAPS__ m
              WHERE m.domain_id = p_domain AND m.id = decode(p_value ->> '{MAP_KEY}', 'hex')),
             lb_lineage_missing(p_domain, p_value ->> '{MAP_KEY}'))
         ELSE p_value
@@ -95,9 +99,9 @@ BEGIN
         RETURN p_map;
     END IF;
     v_id := substr(sha256(convert_to(p_map::text, 'UTF8')), 1, 16);
-    PERFORM 1 FROM {MAPS} WHERE domain_id = p_domain AND id = v_id;
+    PERFORM 1 FROM __MAPS__ WHERE domain_id = p_domain AND id = v_id;
     IF NOT FOUND THEN
-        INSERT INTO {MAPS} (domain_id, id, map) VALUES (p_domain, v_id, p_map)
+        INSERT INTO __MAPS__ (domain_id, id, map) VALUES (p_domain, v_id, p_map)
         ON CONFLICT DO NOTHING;
     END IF;
     RETURN jsonb_build_object('{MAP_KEY}', encode(v_id, 'hex'));
@@ -154,12 +158,35 @@ def _application_role() -> str | None:
 
 
 def _shared() -> bool:
-    """Whether the configured storage profile shares lineage maps: `store.storage.lineage_maps`,
-    else every profile but `fast` (as `lorebase_store.storage.PROFILES` when this was written)."""
+    """Whether the triggers start enabled: on a database without materialized Records (a new
+    install, where no process of an earlier version can read the references) when the profile
+    shares lineage maps (`store.storage.lineage_maps`, else every profile but `fast`, as
+    `lorebase_store.storage.PROFILES` when this was written). An existing install keeps its
+    maps inline until `storage apply` runs, once every process reads references."""
     storage = _attribute("store_settings").storage  # type: ignore[attr-defined]
     if storage.lineage_maps is not None:
-        return bool(storage.lineage_maps == "shared")
-    return bool(storage.profile != "fast")
+        wanted = bool(storage.lineage_maps == "shared")
+    else:
+        wanted = bool(storage.profile != "fast")
+    if not wanted:
+        return False
+    op.execute("SELECT set_config('lorebase.bypass_rls', 'on', true)")
+    found = op.get_bind().execute(sa.text("SELECT 1 FROM mat_records LIMIT 1")).first()
+    op.execute("SELECT set_config('lorebase.bypass_rls', '', true)")
+    return found is None
+
+
+def _maps_name() -> str:
+    """`mat_lineage_maps` qualified with the schema the migration runs in: the functions run
+    with the caller's search_path (`lb_lineage` must stay inlinable, so it has no SET)."""
+    name: str = (
+        op.get_bind()
+        .execute(
+            sa.text("SELECT quote_ident(current_schema()) || '.' || quote_ident(:t)"), {"t": MAPS}
+        )
+        .scalar_one()
+    )
+    return name
 
 
 def _quoted(role: str) -> str:
@@ -216,8 +243,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("name", name=op.f("pk_storage_tasks")),
     )
     _grant(TASKS)
+    maps = _maps_name()
     for statement in (LINEAGE_MISSING, LINEAGE, LINEAGE_SHARE, RECORD_TRIGGER, LINK_TRIGGER):
-        op.execute(statement)
+        op.execute(statement.replace("__MAPS__", maps))
     # Trigger functions are not called directly. The others run as their caller (no SECURITY
     # DEFINER), under its table privileges and row-level security, so every role may call them.
     for signature in TRIGGER_FUNCTIONS:
@@ -234,13 +262,29 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("SELECT set_config('lorebase.bypass_rls', 'on', true)")
+    bind = op.get_bind()
     for table, _, columns in TABLES:
         op.execute(f"DROP TRIGGER IF EXISTS {TRIGGER} ON {table}")
+        # Lock out writers that would copy references meanwhile (reads go on).
+        op.execute(f"LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE")
         assignments = ", ".join(f"{c} = lb_lineage(domain_id, {c})" for c in columns)
         references = " OR ".join(
             f"(jsonb_typeof({c}) = 'object' AND {c} ? '{MAP_KEY}')" for c in columns
         )
-        op.execute(f"UPDATE {table} SET {assignments} WHERE {references}")
+        # Partition by partition: the statement-level triggers of the parent (lexicon) do not
+        # run for these rows, whose words do not change.
+        partitions = bind.execute(
+            sa.text(
+                "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
+                "WHERE i.inhparent = CAST(:t AS regclass) ORDER BY c.relname"
+            ),
+            {"t": table},
+        ).scalars().all() or [table]
+        for partition in partitions:
+            op.execute(f"UPDATE {partition} SET {assignments} WHERE {references}")
+        left = bind.execute(sa.text(f"SELECT 1 FROM {table} WHERE {references} LIMIT 1")).first()
+        if left is not None:
+            raise RuntimeError(f"{table} still holds lineage map references; not dropping maps")
     op.execute("SELECT set_config('lorebase.bypass_rls', '', true)")
     for signature in FUNCTIONS:
         op.execute(f"DROP FUNCTION IF EXISTS {signature}")
