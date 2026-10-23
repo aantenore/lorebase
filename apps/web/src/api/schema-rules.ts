@@ -1,7 +1,7 @@
 /**
  * Structural rules of a schema (design 5), checked the same way by the Modeler while a
  * person edits and by the mock adapter before it accepts a change set. Issues carry a
- * path in the layout of the YAML document: `kinds/Supplier/attributes/tier/type`.
+ * path in the layout of the YAML document: `kinds/Asset/attributes/status/type`.
  */
 import type { Attribute, Derivation, JsonValue, Schema, Sensitivity, Source } from './types';
 import { templateProblems } from './embedding-template';

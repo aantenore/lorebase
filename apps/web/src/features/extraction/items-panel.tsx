@@ -11,8 +11,10 @@ import { useKeeperApi } from '@/api/provider';
 import { useBranchSchema, useProposalItems } from '@/api/queries';
 import type { ProposalDetail } from '@/api/types';
 import { useConfig } from '@/config/context';
+import { extraction as extractionMessages } from '@/messages/extraction';
 import { Button } from '@/ui/button';
 import { Badge, EmptyState, QueryBoundary } from '@/ui/layout';
+import { LearnMore } from '@/ui/learn-more';
 import { useToast } from '@/ui/toast';
 import { BulkBar, FilterBar } from './item-filters';
 import { ItemDetail } from './item-detail';
@@ -35,19 +37,24 @@ import {
 } from './item-state';
 import { ItemTable } from './item-table';
 
-/** What Keeper did with the decisions: the counts of the re-materialized Branch. */
+const text = extractionMessages;
+
+/** What the decisions did: the counts of the updated Branch. */
 function Outcome({ result }: { result: DecideItemsResult }) {
   const { materialized } = result;
   const skipped = Object.entries(materialized.skipped);
   return (
     <section
-      aria-label="Last applied decisions"
+      aria-label={text.outcome.label}
       className="flex flex-col gap-1 rounded-md border border-success p-3 text-sm"
     >
       <p role="status">
-        Decisions applied: {materialized.applied} item(s) on the branch, {materialized.changes}{' '}
-        change(s), {skipped.length} skipped
-        {materialized.revision === null ? '' : `, Revision ${materialized.revision.slice(0, 12)}`}.
+        {text.outcome.applied(
+          materialized.applied,
+          materialized.changes,
+          skipped.length,
+          materialized.revision === null ? null : materialized.revision.slice(0, 12),
+        )}
       </p>
       {skipped.length > 0 && (
         <ul className="list-disc pl-5 text-warning">
@@ -74,10 +81,10 @@ function Refusal({ error, onSelect }: { error: unknown; onSelect: (item: string)
   return (
     <section
       role="alert"
-      aria-label="Keeper refused the decisions"
+      aria-label={text.refusal.label}
       className="flex flex-col gap-2 rounded-md border border-danger p-3 text-sm text-danger"
     >
-      <p>{error.message} Nothing changed: fix the staged decisions and apply again.</p>
+      <p>{text.refusal.nothingChanged(error.message)}</p>
       <ul className="list-disc pl-5">
         {error.issues.map((issue, index) => {
           const item = issue.path?.[0] === 'items' ? issue.path[1] : undefined;
@@ -92,7 +99,7 @@ function Refusal({ error, onSelect }: { error: unknown; onSelect: (item: string)
                     onSelect(item);
                   }}
                 >
-                  Show item
+                  {text.refusal.showItem}
                 </button>
               )}
             </li>
@@ -141,7 +148,7 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
       setResult(decided);
       setDraft(new Map());
       toast.notify(
-        `${decided.items.length.toString()} decision(s) applied: ${decided.materialized.changes.toString()} change(s) on ${proposal.source_ref}.`,
+        text.outcome.toast(decided.items.length, decided.materialized.changes, proposal.source_ref),
         'success',
       );
       await queryClient.invalidateQueries({ queryKey: ['keeper'] });
@@ -186,24 +193,28 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          <progress aria-label="Decided items" max={total} value={decided} className="h-2 w-40" />
-          <span>
-            {decided} of {total} decided
-          </span>
-          <Badge tone="success">{counts.accepted} accepted</Badge>
-          <Badge tone="warning">{counts.pending} pending</Badge>
-          <Badge>{counts.rejected} rejected</Badge>
+          <progress
+            aria-label={text.summary.decidedLabel}
+            max={total}
+            value={decided}
+            className="h-2 w-40"
+          />
+          <span>{text.summary.decided(decided, total)}</span>
+          <Badge tone="success">{text.summary.accepted(counts.accepted)}</Badge>
+          <Badge tone="warning">{text.summary.pending(counts.pending)}</Badge>
+          <Badge>{text.summary.rejected(counts.rejected)}</Badge>
           <span className="text-muted">
-            mean confidence{' '}
-            {percent(
-              total === 0 ? null : items.reduce((sum, i) => sum + (i.confidence ?? 0), 0) / total,
+            {text.summary.meanConfidence(
+              percent(
+                total === 0 ? null : items.reduce((sum, i) => sum + (i.confidence ?? 0), 0) / total,
+              ),
             )}
           </span>
         </div>
         {!readOnly && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span role="status" className="text-sm text-muted">
-              {draft.size === 0 ? 'Nothing staged.' : `${draft.size.toString()} staged.`}
+              {draft.size === 0 ? text.summary.nothingStaged : text.summary.staged(draft.size)}
             </span>
             <Button
               disabled={draft.size === 0 || apply.isPending}
@@ -212,7 +223,7 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
                 apply.reset();
               }}
             >
-              Discard staged
+              {text.summary.discard}
             </Button>
             <Button
               variant="primary"
@@ -221,7 +232,7 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
                 apply.mutate();
               }}
             >
-              Apply decisions ({draft.size})
+              {text.summary.apply(draft.size)}
             </Button>
           </div>
         )}
@@ -241,11 +252,9 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
       )}
 
       {shown.length === 0 ? (
-        <EmptyState>
-          {isFiltering(filter) ? 'No item matches the filters.' : 'This Proposal has no items.'}
-        </EmptyState>
+        <EmptyState>{isFiltering(filter) ? text.noMatch : text.noneInProposal}</EmptyState>
       ) : (
-        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)]">
+        <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)]">
           <ItemTable
             items={shown}
             draft={draft}
@@ -274,10 +283,7 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
       )}
       {!readOnly && (
         <p className="text-xs text-muted">
-          Keys in the table: arrow keys or j and k move between items, Home and End jump to the
-          first and last, a accepts, r rejects, u puts the item back to pending. Decisions are
-          staged; nothing changes on the extraction branch until you apply them. A new Record with a
-          required Link needs the Link accepted in the same step.
+          {text.keys} <LearnMore path={text.docs} />
         </p>
       )}
     </div>
@@ -285,7 +291,7 @@ function ItemsBody({ domain, proposal, items, selected, onSelect }: BodyProps) {
 }
 
 /**
- * Extraction items of a Proposal (design 12.3, Review: extraction items): a table grouped by
+ * Extraction items of a Proposal: a table grouped by
  * Records, values and Links with filters, confidence bars, evidence and its document, a
  * candidate picker for ambiguous matches, inline edits, accept and reject per item or in
  * bulk, and "Apply decisions", which sends the staged decisions to Keeper in one request.
@@ -306,7 +312,7 @@ export function ItemsPanel({
     <QueryBoundary query={items}>
       {(data) =>
         data.length === 0 ? (
-          <EmptyState>This Proposal has no extraction items.</EmptyState>
+          <EmptyState>{text.noItems}</EmptyState>
         ) : (
           <ItemsBody
             key={proposal.id}

@@ -1,5 +1,6 @@
 import type { SourceRun, SourceRunStatus } from '@/api/sources-types';
 import type { Schema } from '@/api/types';
+import { sources as sourcesMessages } from '@/messages/sources';
 import { Button } from '@/ui/button';
 import { Badge, type BadgeTone } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
@@ -26,17 +27,17 @@ export interface SourcesTableProps {
 /** The Sources of the schema with their mapping, policy, schedule and last run. */
 export function SourcesTable({ schema, runs, syncing, onSync }: SourcesTableProps) {
   return (
-    <Table caption="Sources">
+    <Table caption={sourcesMessages.table.caption}>
       <THead>
         <TR>
-          <TH>Source</TH>
-          <TH>Type</TH>
-          <TH>Mapping</TH>
-          <TH>Policy</TH>
-          <TH>Schedule</TH>
-          <TH>Last run</TH>
-          <TH>Last run counts</TH>
-          <TH>Actions</TH>
+          <TH>{sourcesMessages.table.source}</TH>
+          <TH>{sourcesMessages.table.type}</TH>
+          <TH>{sourcesMessages.table.mapping}</TH>
+          <TH>{sourcesMessages.table.policy}</TH>
+          <TH>{sourcesMessages.table.schedule}</TH>
+          <TH>{sourcesMessages.table.lastRun}</TH>
+          <TH>{sourcesMessages.table.lastRunCounts}</TH>
+          <TH>{sourcesMessages.table.actions}</TH>
         </TR>
       </THead>
       <TBody>
@@ -51,12 +52,12 @@ export function SourcesTable({ schema, runs, syncing, onSync }: SourcesTableProp
               <TD>{source.type}</TD>
               <TD>{mappingSummary(source, schema)}</TD>
               <TD>{policyLabel(source)}</TD>
-              <TD>{source.schedule ?? 'manual'}</TD>
+              <TD>{source.schedule ?? sourcesMessages.table.manual}</TD>
               <TD>
                 {runs === undefined ? (
-                  <span className="text-muted">n/a</span>
+                  <span className="text-muted">{sourcesMessages.table.unavailable}</span>
                 ) : last === undefined ? (
-                  <span className="text-muted">never run</span>
+                  <span className="text-muted">{sourcesMessages.table.neverRun}</span>
                 ) : (
                   <>
                     <Badge tone={RUN_TONE[last.status]}>{last.status}</Badge>
@@ -69,7 +70,7 @@ export function SourcesTable({ schema, runs, syncing, onSync }: SourcesTableProp
                   '-'
                 ) : (
                   <>
-                    {last.rows_read} rows
+                    {sourcesMessages.table.rows(last.rows_read)}
                     <div className="font-mono text-xs text-muted">{changesLabel(last)}</div>
                   </>
                 )}
@@ -78,13 +79,15 @@ export function SourcesTable({ schema, runs, syncing, onSync }: SourcesTableProp
                 <Button
                   size="sm"
                   className="whitespace-nowrap"
-                  aria-label={`Sync ${source.api_name} now`}
+                  aria-label={sourcesMessages.table.syncLabel(source.api_name)}
                   disabled={syncing !== null}
                   onClick={() => {
                     onSync(source.api_name);
                   }}
                 >
-                  {syncing === source.api_name ? 'Syncing...' : 'Sync now'}
+                  {syncing === source.api_name
+                    ? sourcesMessages.table.syncing
+                    : sourcesMessages.table.sync}
                 </Button>
               </TD>
             </TR>

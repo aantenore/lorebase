@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import type { Schema } from '@/api/types';
-import { useScope } from '@/app/scope';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { Button } from '@/ui/button';
 import { Section } from '@/ui/layout';
 import { ChangeSetPanel } from './change-set-panel';
@@ -21,7 +21,7 @@ const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
  * issues with paths, and the change set the edits add up to.
  */
 export function SchemaEditor({ base }: { base: Schema }) {
-  const scope = useScope();
+  const t = modelerMessages.editor;
   const editor = useSchemaEditor(base);
   const [jump, setJump] = useState<Jump | null>(null);
 
@@ -34,10 +34,10 @@ export function SchemaEditor({ base }: { base: Schema }) {
   } = useChangeCheck(editor.changes, editor.document, documentIsValid && hasChanges);
 
   let blocked = checkBlocked;
-  if (editor.syntaxIssues.length > 0) blocked = 'Fix the YAML syntax errors first.';
-  else if (editor.issues.length > 0) blocked = 'Fix the validation issues first.';
+  if (editor.syntaxIssues.length > 0) blocked = t.blockedSyntax;
+  else if (editor.issues.length > 0) blocked = t.blockedIssues;
 
-  // Keeper's findings (its CEL type check among them) sit next to the fields they are about.
+  // The Branch's findings (its CEL type check among them) sit next to the fields they are about.
   const formIssues = remote.length === 0 ? editor.issues : [...editor.issues, ...remote];
   const savedOperation = (name: string) => {
     const saved = editor.baseDocument.operations?.[name];
@@ -56,16 +56,14 @@ export function SchemaEditor({ base }: { base: Schema }) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">
-          Form and YAML edit the same document. Changes stay local until saved.
-        </p>
+        <p className="text-sm text-muted">{t.intro}</p>
         <Button disabled={!hasChanges && editor.syntaxIssues.length === 0} onClick={editor.reset}>
-          Reset to {scope.branch}
+          {t.reset}
         </Button>
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-2">
-        <Section title="Form" className="mb-0 min-w-0">
+        <Section title={t.formTitle} className="mb-0 min-w-0">
           <FormEditor
             document={editor.document}
             issues={formIssues}
@@ -76,18 +74,18 @@ export function SchemaEditor({ base }: { base: Schema }) {
             savedDerivation={savedDerivation}
           />
         </Section>
-        <Section title="YAML" className="mb-0 min-w-0">
+        <Section title={t.yamlTitle} className="mb-0 min-w-0">
           <Suspense
             fallback={
-              <p role="status" className="text-muted">
-                Loading editor...
+              <p role="status" className="text-sm text-muted">
+                {t.loadingEditor}
               </p>
             }
           >
             <YamlEditor
               value={editor.text}
               onChange={editor.setText}
-              label="Schema YAML"
+              label={t.yamlLabel}
               jump={jump}
             />
           </Suspense>

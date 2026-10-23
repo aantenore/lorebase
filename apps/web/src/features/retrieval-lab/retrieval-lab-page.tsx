@@ -1,13 +1,15 @@
+import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent } from 'react';
 import { useContextPack, useSchema, useSearch } from '@/api/queries';
-import { useScope } from '@/app/scope';
+import { useScope, useScopeSearch } from '@/app/scope';
 import { useConfig } from '@/config/context';
+import { ExampleQuestions, useDomainExamples } from '@/features/explore/domain-examples';
 import { useGuideAuth } from '@/features/explore/guide-auth';
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
 import { Button } from '@/ui/button';
 import { Input, Textarea } from '@/ui/field';
-import { PageHeader, QueryBoundary, Section } from '@/ui/layout';
-import { ExplorePanelSlot } from './explore-panel-slot';
+import { FormAction, FormRow, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { embed, parseVector } from './guide-client';
 import { LabCanvas } from './lab-canvas';
 import { involvedRefs } from './lab-graph';
@@ -17,6 +19,8 @@ import { defaultParams, needsVector, toRequest, type LabParams } from './params'
 import { compareResults } from './result-diff';
 import { ResultsColumn } from './results-column';
 
+const T = retrievalLabMessages;
+
 /** A set that wants a vector searches by words while there is none. */
 const effective = (params: LabParams, vector: number[] | null): LabParams =>
   needsVector(params.mode) && vector === null ? { ...params, mode: 'lexical' } : params;
@@ -24,7 +28,7 @@ const effective = (params: LabParams, vector: number[] | null): LabParams =>
 /**
  * Retrieval lab: ask a question, compare two parameter sets of the Keeper's search side by side,
  * and see the context pack an agent would receive for it, with the Records involved on a Canvas.
- * The query vector for semantic and hybrid search comes from the optional guide service
+ * The query vector for semantic and hybrid search comes from the optional assistant
  * (`guideUrl`, see `guide-client.ts`) or is pasted by hand; the app itself never embeds text.
  */
 export function RetrievalLabPage({
@@ -37,6 +41,8 @@ export function RetrievalLabPage({
   onAsk: (question: string, budget: number | undefined) => void;
 }) {
   const scope = useScope();
+  const scopeSearch = useScopeSearch();
+  const examples = useDomainExamples();
   const { guideUrl, searchLimit } = useConfig();
   const guideAuth = useGuideAuth();
   const schema = useSchema(scope);
@@ -95,67 +101,85 @@ export function RetrievalLabPage({
   return (
     <>
       <PageHeader
-        title="Retrieval lab"
-        description={`Try the search of ${scope.domainInfo.display_name} with two parameter sets, and see the context an agent would get.`}
+        title={T.title}
+        description={T.description}
+        docs={T.docs}
+        actions={
+          guideUrl === null ? undefined : (
+            <Link
+              to="/$domain/explore"
+              params={{ domain: scope.domain }}
+              search={scopeSearch}
+              className="text-sm text-accent hover:underline"
+            >
+              {T.askGuide}
+            </Link>
+          )
+        }
       />
 
-      <form onSubmit={submit} className="mb-4 flex flex-wrap items-end gap-3">
-        <Input
-          label="Question"
-          value={text}
-          placeholder="Which suppliers deliver bearings to Torino?"
-          onChange={(event) => {
-            setText(event.target.value);
-          }}
-          className="min-w-80 flex-1"
+      <div className="mb-6">
+        <ExampleQuestions
+          examples={examples}
+          label={T.question.examples}
+          className="mb-3"
+          onPick={setText}
         />
-        <Input
-          label="Pack budget (tokens)"
-          hint="Empty: Keeper's default"
-          inputMode="numeric"
-          value={budgetText}
-          onChange={(event) => {
-            setBudgetText(event.target.value);
-          }}
-          className="w-44"
-        />
-        <Button type="submit" variant="primary">
-          Ask
-        </Button>
-      </form>
+        <form onSubmit={submit}>
+          <FormRow>
+            <Input
+              label={T.question.label}
+              value={text}
+              placeholder={T.question.placeholder}
+              onChange={(event) => {
+                setText(event.target.value);
+              }}
+              className="min-w-0 flex-1 basis-64"
+            />
+            <Input
+              label={T.budget.label}
+              hint={T.budget.hint}
+              inputMode="numeric"
+              value={budgetText}
+              onChange={(event) => {
+                setBudgetText(event.target.value);
+              }}
+              className="w-44"
+            />
+            <FormAction>
+              <Button type="submit" variant="primary">
+                {T.question.ask}
+              </Button>
+            </FormAction>
+          </FormRow>
+        </form>
+      </div>
 
-      <Section title="Query vector">
+      <Section title={T.vector.title}>
         {guideUrl === null ? (
           <p className="mb-2 text-sm text-muted">
-            No guide service is configured (guideUrl), so the question is searched by words only.
-            Semantic and hybrid search need a query vector
-            {embeddingInfo == null
-              ? '.'
-              : ` of ${embeddingInfo.model} (${embeddingInfo.dims.toString()} dimensions).`}{' '}
-            Paste one to use them.
+            {T.vector.manual(embeddingInfo?.model ?? null, embeddingInfo?.dims ?? null)}
           </p>
         ) : embedding.isError ? (
           <p role="alert" className="mb-2 text-sm text-danger">
-            {embedding.error.message} Paste a vector to use semantic and hybrid search.
+            {T.vector.failed(embedding.error.message)}
           </p>
         ) : (
           <p role="status" className="mb-2 text-sm text-muted">
             {waiting
-              ? 'Asking the guide service to embed the question...'
+              ? T.vector.embedding
               : embedding.data === undefined
-                ? 'The guide service embeds the question when you ask.'
-                : `Embedded by the guide service${embedding.data.model === undefined ? '' : ` (${embedding.data.model})`}: ${embedding.data.vector.length.toString()} dimensions.`}
+                ? T.vector.embedsOnAsk
+                : T.vector.embedded(embedding.data.model, embedding.data.vector.length)}
           </p>
         )}
         {(guideUrl === null || embedding.isError) && (
           <Textarea
-            label="Query vector (JSON array)"
+            label={T.vector.pasteLabel}
             value={pasted}
             error={manual.error ?? undefined}
-            hint={
-              manual.vector === null ? undefined : `${manual.vector.length.toString()} dimensions`
-            }
-            placeholder="[0.12, -0.03, 0.4]"
+            hint={manual.vector === null ? undefined : T.vector.dimensions(manual.vector.length)}
+            placeholder={T.vector.pastePlaceholder}
             onChange={(event) => {
               setPasted(event.target.value);
             }}
@@ -182,11 +206,15 @@ export function RetrievalLabPage({
         />
       </div>
 
-      <Section title="Results">
+      <Section title={T.results.title}>
         {comparison !== null && (
           <p role="status" className="mb-2 text-sm">
-            {comparison.shared} in both, {comparison.onlyA} only in A, {comparison.onlyB} only in B,{' '}
-            {comparison.reordered} at a different rank.
+            {T.results.summary(
+              comparison.shared,
+              comparison.onlyA,
+              comparison.onlyB,
+              comparison.reordered,
+            )}
           </p>
         )}
         <div className="grid gap-4 lg:grid-cols-2">
@@ -195,17 +223,15 @@ export function RetrievalLabPage({
         </div>
       </Section>
 
-      <Section title="Context pack">
+      <Section title={T.pack.title}>
         <PackPanel domain={scope.domain} question={question} query={pack} />
       </Section>
 
-      <Section title="Records involved">
+      <Section title={T.involved.title}>
         <QueryBoundary query={schema}>
           {(data) => <LabCanvas involved={involved} kinds={data.kinds} />}
         </QueryBoundary>
       </Section>
-
-      <ExplorePanelSlot />
     </>
   );
 }

@@ -2,6 +2,7 @@ import { useId, useRef, useState, type DragEvent } from 'react';
 import { Button } from '@/ui/button';
 import { cn } from '@/ui/cn';
 import { addFiles, formatBytes, type Rejected, type UploadCaps } from './files';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 /** What the drop zone says; the defaults are those of the data file upload of "Start from data". */
 export interface FileDropWording {
@@ -16,10 +17,10 @@ export interface FileDropWording {
 }
 
 const DATA_FILE_WORDING: FileDropWording = {
-  zoneLabel: 'Drop zone for data files',
-  prompt: 'Drop CSV, TSV, JSON, JSON Lines or Parquet files here, or',
-  inputLabel: 'Upload data files',
-  note: 'The file name is the table name.',
+  zoneLabel: inferenceMessages.drop.zoneLabel,
+  prompt: inferenceMessages.drop.prompt,
+  inputLabel: inferenceMessages.drop.inputLabel,
+  note: inferenceMessages.drop.note,
 };
 
 export interface FileDropProps {
@@ -74,7 +75,7 @@ export function FileDrop({ files, caps, onChange, wording = DATA_FILE_WORDING }:
             input.current?.click();
           }}
         >
-          Choose files
+          {inferenceMessages.drop.choose}
         </Button>
         <input
           ref={input}
@@ -90,15 +91,22 @@ export function FileDrop({ files, caps, onChange, wording = DATA_FILE_WORDING }:
           }}
         />
         <p id={hintId} className="text-xs text-muted">
-          {wording.note} Up to {caps.maxFiles} files, {formatBytes(caps.maxFileBytes)} each
-          {Number.isFinite(caps.maxTotalBytes) &&
-            ` and ${formatBytes(caps.maxTotalBytes)} together`}{' '}
-          ({caps.fileSuffixes.join(', ')}).
+          {wording.note}{' '}
+          {inferenceMessages.drop.caps(
+            caps.maxFiles,
+            formatBytes(caps.maxFileBytes),
+            Number.isFinite(caps.maxTotalBytes) ? formatBytes(caps.maxTotalBytes) : null,
+            caps.fileSuffixes.join(', '),
+          )}
         </p>
       </div>
 
       {rejected.length > 0 && (
-        <ul role="alert" aria-label="Rejected files" className="text-sm text-danger">
+        <ul
+          role="alert"
+          aria-label={inferenceMessages.drop.rejectedLabel}
+          className="text-sm text-danger"
+        >
           {rejected.map((item) => (
             <li key={item.name}>
               {item.name}: {item.reason}
@@ -109,7 +117,10 @@ export function FileDrop({ files, caps, onChange, wording = DATA_FILE_WORDING }:
 
       {files.length > 0 && (
         <>
-          <ul aria-label="Selected files" className="flex flex-col gap-1 text-sm">
+          <ul
+            aria-label={inferenceMessages.drop.selectedLabel}
+            className="flex flex-col gap-1 text-sm"
+          >
             {files.map((file) => (
               <li key={file.name} className="flex items-center gap-3">
                 <span className="font-medium">{file.name}</span>
@@ -117,18 +128,18 @@ export function FileDrop({ files, caps, onChange, wording = DATA_FILE_WORDING }:
                 <Button
                   size="sm"
                   variant="ghost"
-                  aria-label={`Remove ${file.name}`}
+                  aria-label={inferenceMessages.drop.removeFile(file.name)}
                   onClick={() => {
                     onChange(files.filter((f) => f !== file));
                   }}
                 >
-                  Remove
+                  {inferenceMessages.drop.remove}
                 </Button>
               </li>
             ))}
           </ul>
           <p className="text-xs text-muted">
-            {files.length} {files.length === 1 ? 'file' : 'files'}, {formatBytes(total)}
+            {inferenceMessages.drop.count(files.length, formatBytes(total))}
           </p>
         </>
       )}

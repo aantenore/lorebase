@@ -1,5 +1,6 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useBranches, useDomain } from '@/api/queries';
+import { shell as shellMessages } from '@/messages/shell';
 import { Badge } from '@/ui/layout';
 import { Select } from '@/ui/field';
 import { NewBranch } from './new-branch';
@@ -26,10 +27,11 @@ export function BranchSwitcher({ domain, search }: { domain: string; search: Sco
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <Select
-        label="Branch"
+        label={shellMessages.branch}
         hideLabel
+        className="w-48"
         value={current ?? ''}
         options={options}
         onChange={(event) => {
@@ -45,12 +47,12 @@ export function BranchSwitcher({ domain, search }: { domain: string; search: Sco
       />
       <NewBranch domain={domain} from={current} defaultBranch={defaultBranch} />
       {selected !== undefined && (
-        <Badge tone="accent">Revision {selected.head.slice(0, SHORT_REVISION_LENGTH)}</Badge>
+        <Badge tone="accent">
+          {shellMessages.revision(selected.head.slice(0, SHORT_REVISION_LENGTH))}
+        </Badge>
       )}
       {selected !== undefined && selected.behind_default > 0 && defaultBranch !== undefined && (
-        <Badge tone="warning">
-          behind {defaultBranch} by {selected.behind_default}
-        </Badge>
+        <Badge tone="warning">{shellMessages.behind(defaultBranch, selected.behind_default)}</Badge>
       )}
       {search.at !== undefined && (
         <Link
@@ -58,7 +60,7 @@ export function BranchSwitcher({ domain, search }: { domain: string; search: Sco
           search={(prev: ScopeSearch) => ({ ...prev, at: undefined })}
           className="text-xs underline"
         >
-          At {search.at.slice(0, SHORT_REVISION_LENGTH)} (back to head)
+          {shellMessages.atRevision(search.at.slice(0, SHORT_REVISION_LENGTH))}
         </Link>
       )}
     </div>

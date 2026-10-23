@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Input } from '@/ui/field';
+import { modeler as modelerMessages } from '@/messages/modeler';
 
 /** A key name; the rename applies while the typed name is free, as typed. */
 export function KeyInput({
@@ -14,7 +15,8 @@ export function KeyInput({
   onRename: (name: string) => void;
 }) {
   const [typed, setTyped] = useState<string | null>(null);
-  const problem = typed !== null && taken(typed) ? `${typed} is set already.` : undefined;
+  const problem =
+    typed !== null && taken(typed) ? modelerMessages.elements.keyTaken(typed) : undefined;
   return (
     <Input
       label={label}

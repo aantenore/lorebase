@@ -3,7 +3,6 @@ import { stringify } from 'yaml';
 import { diffSchemas } from '@/api/schema-changes';
 import { validateSchema, type SchemaIssue } from '@/api/schema-rules';
 import type { Schema } from '@/api/types';
-import { useScope } from '@/app/scope';
 import {
   documentToSchema,
   schemaToDocument,
@@ -15,6 +14,7 @@ import { IssuesPanel } from '@/features/modeler/issues-panel';
 import { useChangeCheck } from '@/features/modeler/use-change-check';
 import { parseSchemaYaml, type Position } from '@/features/modeler/yaml';
 import type { Jump } from '@/features/modeler/yaml-editor';
+import { sources as sourcesMessages } from '@/messages/sources';
 import { Button } from '@/ui/button';
 
 const YamlEditor = lazy(() => import('@/features/modeler/yaml-editor'));
@@ -39,7 +39,7 @@ function readSection(text: string) {
         {
           path: '',
           code: 'yaml_section',
-          message: `Only the ${SECTION}: section is edited here, as a mapping of Source names.`,
+          message: sourcesMessages.editor.onlySection(SECTION),
           line: 1,
           col: 1,
         },
@@ -55,7 +55,6 @@ function readSection(text: string) {
  * schema rules and saved as a schema change set (same path as the Modeler editor).
  */
 export function SourcesEditor({ base }: { base: Schema }) {
-  const scope = useScope();
   const [ids] = useState(memoizedIds);
   const initial = useMemo(() => sectionText(base), [base]);
   const [text, setText] = useState(initial);
@@ -85,8 +84,8 @@ export function SourcesEditor({ base }: { base: Schema }) {
   const valid = section.syntax.length === 0 && issues.length === 0;
   const { check, remote, blocked: checkBlocked } = useChangeCheck(changes, document, valid);
   let blocked = checkBlocked;
-  if (section.syntax.length > 0) blocked = 'Fix the YAML errors first.';
-  else if (issues.length > 0) blocked = 'Fix the validation issues first.';
+  if (section.syntax.length > 0) blocked = sourcesMessages.editor.fixYaml;
+  else if (issues.length > 0) blocked = sourcesMessages.editor.fixIssues;
 
   const goTo = (position: Position) => {
     setJump((previous) => ({ ...position, nonce: (previous?.nonce ?? 0) + 1 }));
@@ -95,27 +94,29 @@ export function SourcesEditor({ base }: { base: Schema }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">
-          The mapping editor is planned; until then Sources are edited as YAML. Connections are
-          secret references, never literals.
-        </p>
+        <p className="text-sm text-muted">{sourcesMessages.editor.hint}</p>
         <Button
           disabled={text === initial}
           onClick={() => {
             setText(initial);
           }}
         >
-          Reset to {scope.branch}
+          {sourcesMessages.editor.reset}
         </Button>
       </div>
       <Suspense
         fallback={
           <p role="status" className="text-muted">
-            Loading editor...
+            {sourcesMessages.editor.loading}
           </p>
         }
       >
-        <YamlEditor value={text} onChange={setText} label="Sources YAML" jump={jump} />
+        <YamlEditor
+          value={text}
+          onChange={setText}
+          label={sourcesMessages.editor.yamlLabel}
+          jump={jump}
+        />
       </Suspense>
       <IssuesPanel
         text={text}
@@ -131,7 +132,7 @@ export function SourcesEditor({ base }: { base: Schema }) {
         document={document}
         blocked={blocked}
         check={{ pending: check.isFetching, result: check.data }}
-        defaultMessage="Change the Sources"
+        defaultMessage={sourcesMessages.editor.defaultMessage}
       />
     </div>
   );

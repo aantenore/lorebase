@@ -16,9 +16,9 @@ export function AppShell({
   return (
     <div className="flex h-full flex-col">
       <TopBar domain={domain} search={search} />
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <SideNav domain={domain} />
-        <main className="min-w-0 flex-1 overflow-auto p-6">
+        <main className="min-h-0 min-w-0 flex-1 overflow-auto p-4 md:p-6">
           <ScopeProvider domain={domain} search={search}>
             {children}
           </ScopeProvider>

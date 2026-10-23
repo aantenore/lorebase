@@ -1,4 +1,5 @@
 import type { InferenceConfig } from '@/config/env';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export type UploadCaps = Pick<
   InferenceConfig,
@@ -44,15 +45,17 @@ export function addFiles(current: File[], incoming: File[], caps: UploadCaps): F
   for (const file of incoming) {
     const refuse = (reason: string) => rejected.push({ name: file.name, reason });
     if (!caps.fileSuffixes.includes(suffixOf(file.name))) {
-      refuse(`Only ${caps.fileSuffixes.join(', ')} files are accepted.`);
+      refuse(inferenceMessages.files.suffixes(caps.fileSuffixes.join(', ')));
     } else if (files.some((f) => f.name === file.name)) {
-      refuse('A file with this name is already added.');
+      refuse(inferenceMessages.files.duplicate);
     } else if (files.length >= caps.maxFiles) {
-      refuse(`At most ${caps.maxFiles.toString()} files per run.`);
+      refuse(inferenceMessages.files.tooMany(caps.maxFiles));
     } else if (file.size > caps.maxFileBytes) {
-      refuse(`Larger than ${formatBytes(caps.maxFileBytes)} (${formatBytes(file.size)}).`);
+      refuse(
+        inferenceMessages.files.tooLarge(formatBytes(caps.maxFileBytes), formatBytes(file.size)),
+      );
     } else if (total + file.size > caps.maxTotalBytes) {
-      refuse(`The files together would exceed ${formatBytes(caps.maxTotalBytes)}.`);
+      refuse(inferenceMessages.files.tooLargeTogether(formatBytes(caps.maxTotalBytes)));
     } else {
       files.push(file);
       total += file.size;

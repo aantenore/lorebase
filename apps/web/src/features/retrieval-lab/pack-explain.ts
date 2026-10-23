@@ -1,4 +1,7 @@
 import type { ContextPack } from '@/api/types';
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
+
+const P = retrievalLabMessages.pack;
 
 /** A Record of a context pack with the reason it is there, worked out from the pack itself. */
 export interface PackEntry {
@@ -52,21 +55,18 @@ export function explainPack(pack: ContextPack, question: string): PackEntry[] {
     title: seed.title ?? seed.ref,
     role: 'seed',
     depth: 0,
-    why: `Matched the search "${question}"`,
+    why: P.matched(question),
     valuesTrimmed: false,
   }));
   const neighbors = pack.neighbors.map<PackEntry>((neighbor) => {
     const hop = hopTo(pack, neighbor.ref, neighbor.depth, depths);
-    const reached =
-      hop === null
-        ? 'its Link is not in the pack'
-        : `reached via ${hop.inverse ? 'inverse of ' : ''}${hop.relation} from ${hop.from}`;
+    const reached = hop === null ? P.notInPack : P.reachedVia(hop.relation, hop.from, hop.inverse);
     return {
       ref: neighbor.ref,
       title: neighbor.title ?? neighbor.ref,
       role: 'neighbor',
       depth: neighbor.depth,
-      why: `Depth ${neighbor.depth.toString()}, ${reached}`,
+      why: P.depth(neighbor.depth, reached),
       valuesTrimmed: neighbor.values == null,
     };
   });
@@ -105,10 +105,10 @@ export function budgetReport(budget: ContextPack['budget']): BudgetReport {
       tokens,
       share: used <= 0 ? 0 : tokens / used,
     })),
-    trimmed: budget.trimmed.map((t) => `${t.step}: ${t.removed.toString()} removed`),
+    trimmed: budget.trimmed.map((t) => P.removed(t.step, t.removed)),
     omitted: Object.entries(budget.omitted)
       .filter(([, count]) => count > 0)
-      .map(([section, count]) => `${section}: ${count.toString()} left out`),
+      .map(([section, count]) => P.leftOut(section, count)),
     overBudget: budget.over_budget,
     capped: budget.capped,
   };

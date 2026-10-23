@@ -1,22 +1,27 @@
 import { Link } from '@tanstack/react-router';
 import { useConfig } from '@/config/context';
+import { shell as shellMessages } from '@/messages/shell';
 import { cn } from '@/ui/cn';
 import { useScopeSearch } from './scope';
 
+const NAV = shellMessages.nav;
 const ITEMS = [
-  { to: '/$domain/explorer', label: 'Explorer' },
-  { to: '/$domain/canvas', label: 'Canvas' },
-  { to: '/$domain/modeler', label: 'Modeler' },
-  { to: '/$domain/review', label: 'Review' },
-  { to: '/$domain/sources', label: 'Sources' },
-  { to: '/$domain/agent-activity', label: 'Agent activity' },
-  { to: '/$domain/retrieval-lab', label: 'Retrieval lab' },
-  { to: '/$domain/explore', label: 'Explore' },
-  { to: '/$domain/documents', label: 'Documents' },
-  { to: '/$domain/settings', label: 'Settings' },
+  { to: '/$domain/explorer', label: NAV.explorer },
+  { to: '/$domain/canvas', label: NAV.canvas },
+  { to: '/$domain/modeler', label: NAV.modeler },
+  { to: '/$domain/review', label: NAV.review },
+  { to: '/$domain/sources', label: NAV.sources },
+  { to: '/$domain/agent-activity', label: NAV.agentActivity },
+  { to: '/$domain/retrieval-lab', label: NAV.retrievalLab },
+  { to: '/$domain/explore', label: NAV.explore },
+  { to: '/$domain/documents', label: NAV.documents },
+  { to: '/$domain/settings', label: NAV.settings },
 ] as const;
 
-/** Left navigation. Branch and Revision context in the URL survive navigation. */
+/**
+ * Main navigation: a column on the left from tablet width up, a scrolling row under the top bar
+ * on phones. Branch and Revision context in the URL survive navigation.
+ */
 export function SideNav({ domain }: { domain: string }) {
   const scopeSearch = useScopeSearch();
   const { apiMode, guideUrl } = useConfig();
@@ -25,8 +30,11 @@ export function SideNav({ domain }: { domain: string }) {
     (item) => item.to !== '/$domain/explore' || apiMode === 'mock' || guideUrl !== null,
   );
   return (
-    <nav aria-label="Main" className="w-44 shrink-0 border-r border-line bg-surface p-2">
-      <ul className="flex flex-col gap-1">
+    <nav
+      aria-label={NAV.label}
+      className="shrink-0 overflow-x-auto border-b border-line bg-surface p-2 md:w-44 md:overflow-x-visible md:border-r md:border-b-0"
+    >
+      <ul className="flex gap-1 md:flex-col">
         {items.map((item) => (
           <li key={item.to}>
             <Link
@@ -35,7 +43,7 @@ export function SideNav({ domain }: { domain: string }) {
               search={scopeSearch}
               activeProps={{ 'aria-current': 'page', className: 'bg-surface-2 text-ink' }}
               inactiveProps={{ className: 'text-muted hover:bg-surface-2 hover:text-ink' }}
-              className={cn('block rounded-md px-3 py-2 text-sm font-medium')}
+              className={cn('block rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap')}
             >
               {item.label}
             </Link>

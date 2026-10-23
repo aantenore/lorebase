@@ -3,6 +3,7 @@ import type { SchemaIssue } from '@/api/schema-rules';
 import type { AttributeConstraints } from '@/api/types';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import type { AttributeDocument } from './document';
 import {
   enumValuesOf,
@@ -18,7 +19,7 @@ import {
 
 export interface AttributesEditorProps {
   attributes: Record<string, AttributeDocument>;
-  /** Document path of the `attributes` mapping, for example `kinds/Supplier/attributes`. */
+  /** Document path of the `attributes` mapping, for example `kinds/Asset/attributes`. */
   path: string;
   issues: SchemaIssue[];
   kindNames: string[];
@@ -28,13 +29,16 @@ export interface AttributesEditorProps {
 }
 
 const NUMBER_CONSTRAINTS = ['min', 'max', 'min_length', 'max_length'] as const;
+const t = modelerMessages.attributes;
 
 function Check({
   label,
+  name,
   checked,
   onChange,
 }: {
   label: string;
+  name: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
@@ -47,8 +51,8 @@ function Check({
           onChange(event.target.checked);
         }}
       />
-      <span className="sr-only">{label}</span>
-      <span aria-hidden>{label.split(':')[0]}</span>
+      <span className="sr-only">{t.flagOf(label, name)}</span>
+      <span aria-hidden>{label}</span>
     </label>
   );
 }
@@ -72,12 +76,12 @@ function Constraints({
   };
   return (
     <details open={error !== undefined}>
-      <summary className="cursor-pointer text-xs text-muted">Constraints of {name}</summary>
+      <summary className="cursor-pointer text-xs text-muted">{t.constraintsOf(name)}</summary>
       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {NUMBER_CONSTRAINTS.map((key) => (
           <Input
             key={key}
-            label={`${key} of ${name}`}
+            label={t.constraintOf(t.constraints[key], name)}
             type="number"
             value={value[key] ?? ''}
             onChange={(event) => {
@@ -86,7 +90,7 @@ function Constraints({
           />
         ))}
         <Input
-          label={`pattern of ${name}`}
+          label={t.constraintOf(t.constraints.pattern, name)}
           value={value.pattern ?? ''}
           onChange={(event) => {
             set('pattern', event.target.value);
@@ -134,7 +138,7 @@ function AttributeRow({
   const shown = typed ?? name;
   const nameProblem =
     typed !== null && typed !== name && taken(typed)
-      ? `${typed} is already an Attribute here.`
+      ? modelerMessages.elements.attributeExists(typed)
       : undefined;
   const rowPath = `${path}/${name}`;
 
@@ -142,7 +146,7 @@ function AttributeRow({
     <li className="flex flex-col gap-2 rounded-md border border-line bg-surface p-3">
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-start">
         <Input
-          label={`Name of ${name}`}
+          label={t.nameOf(name)}
           value={shown}
           error={nameProblem ?? errorAt(issues, rowPath)}
           onChange={(event) => {
@@ -155,7 +159,7 @@ function AttributeRow({
           }}
         />
         <Select
-          label={`Type of ${name}`}
+          label={t.typeOf(name)}
           value={label}
           error={errorAt(issues, `${rowPath}/type`)}
           options={typeOptions(kindNames, label).map((value) => ({ value, label: value }))}
@@ -165,8 +169,8 @@ function AttributeRow({
         />
         {isEnum ? (
           <Input
-            label={`Enum values of ${name}`}
-            hint="Comma separated."
+            label={t.enumValuesOf(name)}
+            hint={modelerMessages.elements.commaSeparated}
             value={values.join(', ')}
             onChange={(event) => {
               update({ type: typeFromLabel(label, listOfText(event.target.value)) });
@@ -174,7 +178,7 @@ function AttributeRow({
           />
         ) : (
           <Input
-            label={`Description of ${name}`}
+            label={t.descriptionOf(name)}
             value={attribute.description ?? ''}
             onChange={(event) => {
               update({ description: event.target.value === '' ? undefined : event.target.value });
@@ -182,32 +186,34 @@ function AttributeRow({
           />
         )}
         <Button
-          size="sm"
           variant="ghost"
-          aria-label={`Remove ${name}`}
+          aria-label={t.removeNamed(name)}
           onClick={onRemove}
           className="sm:mt-5"
         >
-          Remove
+          {t.remove}
         </Button>
       </div>
       <div className="flex flex-wrap gap-4">
         <Check
-          label={`Required: ${name}`}
+          label={t.required}
+          name={name}
           checked={attribute.required === true}
           onChange={(checked) => {
             update({ required: checked });
           }}
         />
         <Check
-          label={`Unique: ${name}`}
+          label={t.unique}
+          name={name}
           checked={attribute.unique === true}
           onChange={(checked) => {
             update({ unique: checked });
           }}
         />
         <Check
-          label={`Indexed: ${name}`}
+          label={t.indexed}
+          name={name}
           checked={attribute.indexed === true}
           onChange={(checked) => {
             update({ indexed: checked });
@@ -238,7 +244,7 @@ export function AttributesEditor({
 }: AttributesEditorProps) {
   return (
     <div className="flex flex-col gap-2">
-      <ul className="flex flex-col gap-2" aria-label={`Attributes at ${path}`}>
+      <ul className="flex flex-col gap-2" aria-label={t.listLabel(path)}>
         {Object.entries(attributes).map(([name, attribute]) => (
           <AttributeRow
             key={attribute.id ?? name}
@@ -268,7 +274,7 @@ export function AttributesEditor({
             onChange({ ...attributes, [name]: attribute });
           }}
         >
-          Add Attribute
+          {t.add}
         </Button>
       </div>
     </div>

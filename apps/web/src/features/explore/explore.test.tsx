@@ -2,8 +2,11 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMockApi } from '@/api/mock/adapter';
 import { testConfig, type AppConfig } from '@/config/env';
+import { messages } from '@/messages';
 import { urlOf } from '@/test/fetch';
 import { renderApp } from '@/test/render';
+
+const examplesLabel = messages.explore.examples;
 
 const options = { pageSize: 50, searchLimit: 20, maxNodes: 200 };
 
@@ -56,8 +59,8 @@ describe('Explore', () => {
   it('plays a scripted exploration in mock mode, with links to the cited Records', async () => {
     const user = userEvent.setup();
     renderApp('/supply/explore', mockConfig());
-    const presets = await screen.findByRole('group', { name: 'Preset questions' });
-    await user.click(within(presets).getByRole('button', { name: 'Typo search "bering"' }));
+    const examples = await screen.findByRole('group', { name: examplesLabel });
+    await user.click(within(examples).getByRole('button', { name: 'Typo search "bering"' }));
 
     const answer = await screen.findByRole('region', { name: 'Answer' });
     expect(within(answer).getByText(/Bearings come from Brevik Bearings/)).toBeInTheDocument();
@@ -76,10 +79,13 @@ describe('Explore', () => {
     expect(screen.getByText(/Done in 2 steps/)).toBeInTheDocument();
   });
 
-  it('offers the preset questions on the supply Domain only', async () => {
+  it('offers the example questions the schema declares, and none for a Domain without', async () => {
+    const { unmount } = renderApp('/supply/explore', mockConfig());
+    expect(await screen.findByRole('group', { name: examplesLabel })).toBeInTheDocument();
+    unmount();
     renderApp('/hr/explore', mockConfig());
     expect(await screen.findByLabelText('Question for the guide')).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Preset questions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: examplesLabel })).not.toBeInTheDocument();
   });
 
   it('renders streamed text as plain text and links only valid citations', async () => {
@@ -189,10 +195,10 @@ describe('Explore', () => {
       await screen.findByText(/too often in the last minute\. Try again in (29|30) s\./),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Explore' })).toBeDisabled();
-    for (const preset of within(
-      screen.getByRole('group', { name: 'Preset questions' }),
-    ).getAllByRole('button')) {
-      expect(preset).toBeDisabled();
+    for (const example of within(screen.getByRole('group', { name: examplesLabel })).getAllByRole(
+      'button',
+    )) {
+      expect(example).toBeDisabled();
     }
   });
 

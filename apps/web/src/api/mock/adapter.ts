@@ -344,6 +344,9 @@ export function createMockApi(options: MockOptions): KeeperApi {
           branch: scope.branch ?? domain.domain.default_branch,
           revision,
           ...data.schema,
+          ...(domain.examples === undefined
+            ? {}
+            : { domain_info: { examples: domain.examples.map((e) => ({ ...e })) } }),
         };
         return Promise.resolve(schema);
       },

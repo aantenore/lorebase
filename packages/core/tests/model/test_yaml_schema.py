@@ -271,6 +271,41 @@ def test_missing_domain_and_type_are_reported() -> None:
     assert ("kinds", "Part", "attributes", "name", "type") in problems
 
 
+def test_domain_examples_round_trip_and_stay_absent_when_empty() -> None:
+    document = base_document()
+    document["domain"]["examples"] = [{"label": "Overview", "question": "What is in the graph?"}]
+    schema = schema_from_document(document)
+    assert schema.domain.examples is not None
+    assert [e.label for e in schema.domain.examples] == ["Overview"]
+    assert load_schema(dump_schema(schema)) == schema
+    assert schema.content()["domain"]["examples"] == [
+        {"label": "Overview", "question": "What is in the graph?"}
+    ]
+
+    document["domain"]["examples"] = []
+    empty = schema_from_document(document)
+    assert empty.domain.examples is None
+    assert "examples" not in empty.content()["domain"]
+    assert "examples" not in schema_to_document(empty)["domain"]
+
+
+def test_invalid_domain_examples_are_reported() -> None:
+    document = base_document()
+    document["domain"]["examples"] = [
+        {"label": "", "question": "What is in the graph?"},
+        {"label": "Same", "question": "One?", "extra": 1},
+    ]
+    problems = problems_of(document)
+    assert ("domain", "examples", 0, "label") in problems
+    assert ("domain", "examples", 1, "extra") in problems
+
+    document["domain"]["examples"] = [
+        {"label": "Same", "question": "One?"},
+        {"label": "Same", "question": "Two?"},
+    ]
+    assert "duplicate example labels" in problems_of(document)[("domain", "examples")]
+
+
 def test_ids_must_have_the_right_prefix_and_be_unique() -> None:
     document = base_document()
     document["kinds"]["Part"]["id"] = "rel_01JB8Z00000000000000000001"

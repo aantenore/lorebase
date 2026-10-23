@@ -2,8 +2,11 @@ import { Link } from '@tanstack/react-router';
 import { useRecords, useSchema } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { useConfig } from '@/config/context';
+import { explorer as explorerMessages } from '@/messages/explorer';
 import { EmptyState, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { RecordsTable } from './records-table';
+
+const t = explorerMessages.kind;
 
 export interface KindTableSearch {
   sort?: string | undefined;
@@ -27,24 +30,20 @@ export function KindTablePage({ kind, search }: { kind: string; search: KindTabl
 
   return (
     <>
-      <PageHeader title={kind} description="Records of this Kind." />
+      <PageHeader title={kind} description={t.description} />
       <QueryBoundary query={schema}>
         {(data) => {
           const definition = data.kinds.find((k) => k.api_name === kind);
           if (definition === undefined) {
-            return (
-              <EmptyState>
-                Kind {kind} does not exist on {scope.branch}.
-              </EmptyState>
-            );
+            return <EmptyState>{t.missing(kind)}</EmptyState>;
           }
           return (
-            <Section title={`${definition.display_name} Records`}>
+            <Section title={t.sectionTitle(definition.display_name)}>
               <QueryBoundary query={records}>
                 {(page) => (
                   <>
                     {page.rows.length === 0 ? (
-                      <EmptyState>No {kind} Records.</EmptyState>
+                      <EmptyState>{t.noRecords(kind)}</EmptyState>
                     ) : (
                       <RecordsTable
                         domain={scope.domain}
@@ -61,7 +60,7 @@ export function KindTablePage({ kind, search }: { kind: string; search: KindTabl
                           search={{ ...scopeSearch, ...search, cursor: page.next_cursor }}
                           className="text-accent hover:underline"
                         >
-                          Next page
+                          {t.nextPage}
                         </Link>
                       </p>
                     )}

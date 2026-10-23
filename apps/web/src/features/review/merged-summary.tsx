@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
 import { useRevision } from '@/api/queries';
 import type { MergeAttempt, RevisionId } from '@/api/types';
+import { review as reviewMessages } from '@/messages/review';
 import { Badge, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { CODE_LABEL, locationOf, partitionName, policyReason, type Names } from './conflict-meta';
 import { countByChoice } from './conflict-state';
+
+const text = reviewMessages.summary;
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -30,30 +33,30 @@ export function MergedSummary({
   const revision = useRevision(domain, revisionId);
   return (
     <section
-      aria-label="Merged Revision"
-      className="mb-4 flex flex-col gap-3 rounded-md border border-success bg-surface p-4"
+      aria-label={text.label}
+      className="flex min-w-0 flex-col gap-4 rounded-md border border-success bg-surface p-4"
     >
       <h3 className="flex items-center gap-2 text-sm font-semibold">
-        Merged Revision <Badge tone="success">merged</Badge>
+        {text.title} <Badge tone="success">{text.badge}</Badge>
       </h3>
       <QueryBoundary query={revision}>
         {(data) => (
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Fact label="Revision">{data.id}</Fact>
-            <Fact label="Parents">
+            <Fact label={text.revision}>{data.id}</Fact>
+            <Fact label={text.parents}>
               {data.parents
                 .map((parent) =>
                   parent === attempt.ours
-                    ? `${parent} (target)`
+                    ? `${parent} (${text.target})`
                     : parent === attempt.theirs
-                      ? `${parent} (source)`
+                      ? `${parent} (${text.source})`
                       : parent,
                 )
                 .join(', ')}
             </Fact>
-            <Fact label="Author">{data.author.principal}</Fact>
-            <Fact label="Changes">
-              {data.stats.changes} in {data.stats.partitions_changed} partitions
+            <Fact label={text.author}>{data.author.principal}</Fact>
+            <Fact label={text.changes}>
+              {text.changeStats(data.stats.changes, data.stats.partitions_changed)}
             </Fact>
           </dl>
         )}
@@ -61,23 +64,23 @@ export function MergedSummary({
 
       <div className="flex flex-wrap gap-2 text-sm">
         {countByChoice(attempt).map(([choice, count]) => (
-          <Badge key={choice}>
-            {count} {choice}
-          </Badge>
+          <Badge key={choice}>{text.count(count, choice)}</Badge>
         ))}
         {attempt.auto_resolutions.length > 0 && (
-          <Badge tone="accent">{attempt.auto_resolutions.length} by policy</Badge>
+          <Badge tone="accent">
+            {reviewMessages.attempt.byPolicy(attempt.auto_resolutions.length)}
+          </Badge>
         )}
       </div>
 
       {attempt.conflicts.length > 0 && (
-        <Table caption="Resolutions applied">
+        <Table caption={text.caption}>
           <THead>
             <TR>
-              <TH>Conflict</TH>
-              <TH>Location</TH>
-              <TH>Choice</TH>
-              <TH>Resolver</TH>
+              <TH>{text.columns.conflict}</TH>
+              <TH>{text.columns.location}</TH>
+              <TH>{text.columns.choice}</TH>
+              <TH>{text.columns.resolver}</TH>
             </TR>
           </THead>
           <TBody>
@@ -91,8 +94,8 @@ export function MergedSummary({
                     {conflict.kind} {CODE_LABEL[conflict.kind]}
                   </TD>
                   <TD className="font-mono text-xs">{locationOf(conflict, names)}</TD>
-                  <TD>{stored?.choice ?? '-'}</TD>
-                  <TD>{stored?.resolver ?? '-'}</TD>
+                  <TD>{stored?.choice ?? text.none}</TD>
+                  <TD>{stored?.resolver ?? text.none}</TD>
                 </TR>
               );
             })}

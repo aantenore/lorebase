@@ -10,8 +10,23 @@ const isTest = process.env['VITEST'] !== undefined;
 // Optional same-origin proxy to a Keeper, for `vite` and `vite preview`: the browser then
 // talks to the app's own origin (VITE_KEEPER_BASE_URL=/), so no CORS setup is needed and
 // Keeper's ETag header is readable. Server-side only; never part of the bundle.
+// LOREBASE_GUIDE_PROXY does the same for a guide service under /guide (VITE_GUIDE_URL=/guide).
 const keeperProxy = process.env['LOREBASE_KEEPER_PROXY'];
-const proxy = keeperProxy === undefined ? undefined : { '/api': { target: keeperProxy } };
+const guideProxy = process.env['LOREBASE_GUIDE_PROXY'];
+const proxyEntries = {
+  ...(keeperProxy === undefined ? {} : { '/api': { target: keeperProxy } }),
+  // Guide checks the Origin against its allowed origins: present the proxied calls as its own.
+  ...(guideProxy === undefined
+    ? {}
+    : {
+        '/guide': {
+          target: guideProxy,
+          changeOrigin: true,
+          headers: { origin: new URL(guideProxy).origin },
+        },
+      }),
+};
+const proxy = Object.keys(proxyEntries).length === 0 ? undefined : proxyEntries;
 
 // Vendor groups, one chunk each. A group only loads where its code is imported, so the
 // editor and graph libraries stay out of the first load: they are reached through dynamic

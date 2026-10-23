@@ -28,6 +28,7 @@ import {
   type DecisionCounts,
   type EvidenceIndex,
 } from './proposal-model';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export interface ProposalDraft {
   /** The proposal with the reviewer's edits; every element, accepted or not. */
@@ -66,7 +67,7 @@ export function useProposalDraft(proposal: SchemaProposalDraft, base: Schema): P
     if (!result.ok) {
       return {
         document: {},
-        error: result.issues[0]?.message ?? 'Invalid YAML.',
+        error: result.issues[0]?.message ?? inferenceMessages.invalidYaml,
       };
     }
     return { document: withIds(result.document ?? {}, ids), error: null };

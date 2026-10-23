@@ -1,5 +1,6 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 
 const PATH = '/supply/review?tab=suggestions';
@@ -29,7 +30,7 @@ describe('Review: schema suggestions', () => {
     expect(within(table).getByText('withheld')).toBeInTheDocument();
     expect(within(table).queryByText('Memo')).not.toBeInTheDocument();
 
-    await user.click(screen.getByLabelText('Include below min support'));
+    await user.click(screen.getByLabelText(messages.review.suggestions.lowSupport));
     expect(await within(await tableOf()).findByText('Memo')).toBeInTheDocument();
   });
 
@@ -80,7 +81,9 @@ describe('Review: schema suggestions', () => {
     const table = await tableOf();
     await user.click(within(table).getByLabelText('Select part'));
     await user.click(screen.getByRole('button', { name: 'Accept selected' }));
-    const alert = await screen.findByRole('alert', { name: 'Keeper refused the decisions' });
+    const alert = await screen.findByRole('alert', {
+      name: messages.review.suggestions.refusedLabel,
+    });
     expect(alert).toHaveTextContent('which is not accepted in this request');
     expect(alert).toHaveTextContent('/decisions/0/suggestion');
     expect(within(await tableOf()).getByText('part')).toBeInTheDocument();
@@ -92,7 +95,7 @@ describe('Review: schema suggestions', () => {
     const table = await tableOf();
     await user.click(within(table).getByLabelText('Select ends'));
     await user.click(screen.getByRole('button', { name: 'Reject selected' }));
-    expect(await screen.findByText('1 suggestion(s) decided.')).toBeInTheDocument();
+    expect(await screen.findByText(messages.review.suggestions.decided(1))).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('Status'), 'rejected');
     expect(await within(await tableOf()).findByText('ends')).toBeInTheDocument();

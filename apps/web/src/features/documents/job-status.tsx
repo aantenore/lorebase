@@ -1,4 +1,5 @@
 import type { ExtractionJob } from '@/api/extraction-types';
+import { documents as documentsMessages } from '@/messages/documents';
 import { Badge, type BadgeTone } from '@/ui/layout';
 
 const TONE: Record<string, BadgeTone> = {
@@ -11,12 +12,12 @@ const TONE: Record<string, BadgeTone> = {
 /** The sentence a failed job carries in its `error`, or a generic one. */
 export function jobError(job: ExtractionJob): string {
   const message = job.error?.['message'];
-  return typeof message === 'string' ? message : 'The extraction failed.';
+  return typeof message === 'string' ? message : documentsMessages.jobs.failed;
 }
 
 /** Status of an extraction job as a badge; `none` for a document nobody queued a job for. */
 export function JobBadge({ job }: { job: ExtractionJob | undefined }) {
-  if (job === undefined) return <Badge>not extracted</Badge>;
+  if (job === undefined) return <Badge>{documentsMessages.jobs.notExtracted}</Badge>;
   return (
     <span title={job.status === 'failed' ? jobError(job) : undefined}>
       <Badge tone={TONE[job.status] ?? 'neutral'}>{job.status}</Badge>

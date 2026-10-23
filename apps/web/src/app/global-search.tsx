@@ -1,5 +1,6 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
+import { shell as shellMessages } from '@/messages/shell';
 import { Button } from '@/ui/button';
 import { Dialog } from '@/ui/dialog';
 import { Input } from '@/ui/field';
@@ -45,28 +46,30 @@ export function GlobalSearch({ domain, search }: { domain: string; search: Scope
         }}
         aria-haspopup="dialog"
       >
-        Search
-        <kbd className="rounded border border-line px-1 text-xs text-muted">Ctrl K</kbd>
+        {shellMessages.search.open}
+        <kbd className="hidden rounded border border-line px-1 text-xs text-muted sm:inline">
+          {shellMessages.search.shortcut}
+        </kbd>
       </Button>
       <Dialog
         open={open}
         onClose={() => {
           setOpen(false);
         }}
-        title="Search Records"
+        title={shellMessages.search.title}
       >
         <form onSubmit={submit} className="flex flex-col gap-3">
           <Input
-            label="Search query"
+            label={shellMessages.search.query}
             hideLabel
-            placeholder="Search by name, code or text"
+            placeholder={shellMessages.search.placeholder}
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
             }}
           />
           <Button type="submit" variant="primary">
-            Search
+            {shellMessages.search.submit}
           </Button>
         </form>
       </Dialog>

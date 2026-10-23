@@ -1,3 +1,7 @@
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
+
+const V = retrievalLabMessages.vector;
+
 /**
  * Client of the optional guide service (`guideUrl` in the app configuration).
  *
@@ -19,14 +23,14 @@ export function parseVector(text: string): { vector: number[] | null; error: str
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { vector: null, error: 'Not valid JSON. Paste an array of numbers, like [0.1, -0.2].' };
+    return { vector: null, error: V.notJson };
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
     !parsed.every((n) => typeof n === 'number' && Number.isFinite(n))
   ) {
-    return { vector: null, error: 'A vector is a non-empty JSON array of numbers.' };
+    return { vector: null, error: V.notVector };
   }
   return { vector: parsed as number[], error: null };
 }
@@ -36,7 +40,7 @@ export function readEmbedAnswer(body: unknown): EmbedAnswer {
   const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
   const { vector, error } = parseVector(JSON.stringify(record['vector'] ?? null));
   if (vector === null) {
-    throw new Error(error ?? 'The guide service sent no vector.');
+    throw new Error(error ?? V.noVector);
   }
   const model = record['model'];
   const dims = record['dims'];
@@ -79,10 +83,10 @@ export async function embed(
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new Error('The guide service could not be reached.', { cause: error });
+    throw new Error(V.unreachable, { cause: error });
   }
   if (!response.ok) {
-    throw new Error(`The guide service answered ${response.status.toString()} to /embed.`);
+    throw new Error(V.answered(response.status));
   }
   return readEmbedAnswer(await response.json());
 }

@@ -1,5 +1,6 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 
 describe('Modeler', () => {
@@ -25,7 +26,7 @@ describe('Modeler', () => {
 
   it('explains that a protected Branch is edited through another Branch', async () => {
     renderApp('/supply/modeler');
-    expect(await screen.findByText(/main is protected/)).toBeInTheDocument();
+    expect(await screen.findByText(messages.modeler.protectedNotice)).toBeInTheDocument();
   });
 
   it('moves between tabs with the keyboard', async () => {

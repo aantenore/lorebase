@@ -1,34 +1,29 @@
-import type { Citation, ExploreEvent } from './events';
-import type { ExploreRequest, ExploreTransport } from './explore-client';
-import { PRESETS } from './presets';
+import type { DomainExample } from '../../types';
+import type { ExploreScript } from '../explore';
 
 /**
- * Scripted explorations for the mock API (development and screenshots): the events Guide would
- * stream for the preset questions over the sample `supply` Domain. Any other question gets a
- * short search that finds nothing. No model and no network are involved.
+ * Sample questions of the `supply` Domain (the mock serves them as `domain.examples`, like
+ * examples/supply/schema.yaml does) and the steps the scripted guide plays for each.
  */
+export const SUPPLY_EXAMPLES: readonly DomainExample[] = [
+  {
+    label: 'Single-source risk',
+    question: 'Which parts depend on a single supplier, and how risky is that supplier?',
+  },
+  {
+    label: 'Tier-1 high risk with open orders',
+    question: 'Which tier-1 suppliers have a high risk score and open purchase orders?',
+  },
+  {
+    label: 'What if S-1007 stops',
+    question: 'What is the impact if supplier S-1007 stops delivering?',
+  },
+  { label: 'History of C-3013', question: 'What is the history of contract C-3013?' },
+  { label: 'Typo search "bering"', question: 'Who supplies bering parts?' },
+];
 
-/** A session of the mock trace, so "View trace" opens a timeline in mock mode too. */
-const MOCK_SESSION = 'sess_20261020_brevik';
-const MOCK_MODEL = 'scripted (mock)';
-
-type Step =
-  | { thought: string }
-  | { tool: string; args: Record<string, unknown>; summary: string; refs?: string[]; ok?: boolean };
-
-interface Script {
-  steps: Step[];
-  answer: string | null;
-  cite?: string[];
-}
-
-const cite = (ref: string): Citation => {
-  const index = ref.indexOf('/');
-  return { ref, kind: ref.slice(0, index), key: ref.slice(index + 1) };
-};
-
-const SCRIPTS: Readonly<Record<string, Script>> = {
-  'single-source': {
+const BY_LABEL: Readonly<Record<string, ExploreScript>> = {
+  'Single-source risk': {
     steps: [
       { thought: 'Part.single_sourced marks parts with one supplier; query those first.' },
       {
@@ -62,7 +57,7 @@ const SCRIPTS: Readonly<Record<string, Script>> = {
       'Supplier/S-1001',
     ],
   },
-  'tier1-risk': {
+  'Tier-1 high risk with open orders': {
     steps: [
       { thought: 'Look for tier-1 suppliers with a high risk score.' },
       {
@@ -76,7 +71,7 @@ const SCRIPTS: Readonly<Record<string, Script>> = {
     ],
     answer: null,
   },
-  'what-if': {
+  'What if S-1007 stops': {
     steps: [
       { thought: 'Read Supplier S-1007 and the parts it supplies.' },
       {
@@ -93,7 +88,7 @@ const SCRIPTS: Readonly<Record<string, Script>> = {
     ],
     answer: null,
   },
-  history: {
+  'History of C-3013': {
     steps: [
       { thought: 'Read the contract, then its change history.' },
       {
@@ -119,7 +114,7 @@ const SCRIPTS: Readonly<Record<string, Script>> = {
       'C-3013 is the framework supply agreement with Wexrix Filtration (S-1013). It was created from the ERP import and changed once since, when Amendment 2 was extracted from its document.',
     cite: ['Contract/C-3013', 'Supplier/S-1013'],
   },
-  typo: {
+  'Typo search "bering"': {
     steps: [
       { thought: '"bering" is likely a typo of bearing; lexical search corrects close words.' },
       {
@@ -148,101 +143,10 @@ const SCRIPTS: Readonly<Record<string, Script>> = {
   },
 };
 
-const FALLBACK: Script = {
-  steps: [
-    { thought: 'Search the Domain for the words of the question.' },
-    { tool: 'search', args: { mode: 'lexical' }, summary: '0 hits (lexical)' },
-  ],
-  answer: null,
-};
-
-function scriptFor(request: ExploreRequest): Script {
-  const preset = (PRESETS[request.domain] ?? []).find((p) => p.question === request.question);
-  return (preset === undefined ? undefined : SCRIPTS[preset.id]) ?? FALLBACK;
-}
-
-/** The events of a script, cut to `max_steps` tool calls like Guide does. */
-export function scriptedEvents(request: ExploreRequest): ExploreEvent[] {
-  const script = scriptFor(request);
-  const events: ExploreEvent[] = [
-    {
-      type: 'session',
-      session_id: MOCK_SESSION,
-      domain: request.domain,
-      branch: request.branch,
-      model: MOCK_MODEL,
-    },
-  ];
-  const maxSteps = request.max_steps ?? Number.POSITIVE_INFINITY;
-  let step = 0;
-  for (const item of script.steps) {
-    if ('thought' in item) {
-      events.push({ type: 'thought', step, text: item.thought });
-      continue;
-    }
-    if (step >= maxSteps) break;
-    step += 1;
-    events.push({
-      type: 'tool_call',
-      step,
-      tool: item.tool,
-      args: {
-        ...item.args,
-        ...(item.tool === 'search' && !('q' in item.args) ? { q: request.question } : {}),
-      },
-    });
-    events.push({
-      type: 'tool_result',
-      step,
-      tool: item.tool,
-      ok: item.ok ?? true,
-      summary: item.summary,
-      refs: item.refs ?? [],
-    });
-  }
-  const found = script.answer !== null;
-  events.push({
-    type: 'answer',
-    text: script.answer ?? 'Not found in the graph.',
-    citations: found ? (script.cite ?? []).map(cite) : [],
-    found,
-  });
-  events.push({
-    type: 'done',
-    session_id: MOCK_SESSION,
-    steps: step,
-    outcome: found ? 'answered' : 'not_found',
-    tokens: { input: 1800 * step + 900, output: 160 * step + 120 },
-    elapsed_ms: 900 * step + 600,
-    model: MOCK_MODEL,
-  });
-  return events;
-}
-
-function pause(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new DOMException('Aborted', 'AbortError'));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-/** Plays the script with `stepMs` between two events. */
-export function mockTransport(stepMs: number): ExploreTransport {
-  return async function* explore(request, signal) {
-    for (const event of scriptedEvents(request)) {
-      await pause(stepMs, signal);
-      yield event;
-    }
-  };
-}
+/** The scripts of the sample questions, by question text. */
+export const SUPPLY_SCRIPTS: Readonly<Record<string, ExploreScript>> = Object.fromEntries(
+  SUPPLY_EXAMPLES.flatMap((example) => {
+    const script = BY_LABEL[example.label];
+    return script === undefined ? [] : [[example.question, script]];
+  }),
+);

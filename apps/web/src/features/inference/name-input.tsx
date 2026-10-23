@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
 import type { Decision } from './proposal-model';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export interface NameInputProps {
   label: string;
@@ -33,7 +34,11 @@ export function NameInput({ label, value, taken, error, onCommit }: NameInputPro
       setDraft(value);
       setRefusal(undefined);
     } else if (name === '' || taken.includes(name)) {
-      setRefusal(name === '' ? 'A name is required.' : `${name} is already used.`);
+      setRefusal(
+        name === ''
+          ? inferenceMessages.decision.nameRequired
+          : inferenceMessages.decision.nameTaken(name),
+      );
       setDraft(value);
     } else {
       setRefusal(undefined);
@@ -65,7 +70,7 @@ export function DecisionButtons({
   onDecide,
   lockDrop,
 }: {
-  /** Name of the element, for the accessible labels: "Accept Supplier.tier". */
+  /** Name of the element, for the accessible labels: "Accept Asset.tier". */
   what: string;
   decision: Decision | undefined;
   onDecide: (value: Decision | null) => void;
@@ -73,30 +78,30 @@ export function DecisionButtons({
   lockDrop?: string;
 }) {
   return (
-    <div className="flex gap-1" role="group" aria-label={`Decision for ${what}`}>
+    <div className="flex gap-1" role="group" aria-label={inferenceMessages.decision.group(what)}>
       <Button
         size="sm"
         variant={decision === 'accepted' ? 'primary' : 'secondary'}
         aria-pressed={decision === 'accepted'}
-        aria-label={`Accept ${what}`}
+        aria-label={inferenceMessages.decision.acceptLabel(what)}
         onClick={() => {
           onDecide(decision === 'accepted' ? null : 'accepted');
         }}
       >
-        Accept
+        {inferenceMessages.decision.accept}
       </Button>
       <Button
         size="sm"
         variant={decision === 'dropped' ? 'danger' : 'secondary'}
         aria-pressed={decision === 'dropped'}
-        aria-label={`Drop ${what}`}
+        aria-label={inferenceMessages.decision.dropLabel(what)}
         disabled={lockDrop !== undefined}
         title={lockDrop}
         onClick={() => {
           onDecide(decision === 'dropped' ? null : 'dropped');
         }}
       >
-        Drop
+        {inferenceMessages.decision.drop}
       </Button>
     </div>
   );

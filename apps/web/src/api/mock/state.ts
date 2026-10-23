@@ -5,6 +5,7 @@ import type {
   BranchName,
   Conflict,
   Domain,
+  DomainExample,
   ProposalDetail,
   RecordRef,
   Resolution,
@@ -69,6 +70,8 @@ export interface DomainData {
   proposals: Map<string, ProposalState>;
   /** The document library; Domains without one have none. */
   documents?: MockDocument[];
+  /** Sample questions, served as `domain.examples` of the schema; absent when there are none. */
+  examples?: readonly DomainExample[];
 }
 
 export interface MockSeed {

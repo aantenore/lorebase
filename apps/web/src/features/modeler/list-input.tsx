@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Input } from '@/ui/field';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { listOfText } from './form-helpers';
 
 /**
@@ -11,7 +12,7 @@ export function ListInput({
   value,
   onChange,
   error,
-  hint = 'Comma separated.',
+  hint = modelerMessages.elements.commaSeparated,
   className,
 }: {
   label: string;

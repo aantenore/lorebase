@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import type { Conflict, JsonValue } from '@/api/types';
+import { review as reviewMessages } from '@/messages/review';
 import { cn } from '@/ui/cn';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { namePath, type Names } from './conflict-meta';
+
+const text = reviewMessages.sides;
 
 type Side = 'base' | 'ours' | 'theirs';
 const SIDES: Side[] = ['base', 'ours', 'theirs'];
@@ -28,7 +31,7 @@ const same = (a: JsonValue | undefined, b: JsonValue | undefined) =>
   JSON.stringify(a) === JSON.stringify(b);
 
 function show(value: JsonValue | undefined): string {
-  if (value === undefined) return 'absent';
+  if (value === undefined) return text.absent;
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
@@ -69,7 +72,7 @@ export function diffRows(conflict: Pick<Conflict, Side>): DiffRow[] {
   });
 }
 
-const SIDE_TITLE: Record<Side, string> = { base: 'Base', ours: 'Ours', theirs: 'Theirs' };
+const SIDE_TITLE: Record<Side, string> = { base: text.base, ours: text.ours, theirs: text.theirs };
 
 function Cell({ row, side }: { row: DiffRow; side: Side }) {
   const value = row[side];
@@ -84,7 +87,7 @@ function Cell({ row, side }: { row: DiffRow; side: Side }) {
         value === undefined && 'text-muted italic',
       )}
     >
-      {changed && <span className="sr-only">changed: </span>}
+      {changed && <span className="sr-only">{text.changed}</span>}
       {show(value)}
     </TD>
   );
@@ -97,10 +100,10 @@ function MemberTable({ conflict }: { conflict: Conflict }) {
       ? (raw as Record<string, JsonValue>)
       : {};
   return (
-    <Table caption={`Members of ${conflict.kind}`}>
+    <Table caption={text.membersCaption(conflict.kind)}>
       <THead>
         <TR>
-          <TH>Member</TH>
+          <TH>{text.member}</TH>
           {SIDES.map((side) => (
             <TH key={side}>{SIDE_TITLE[side]}</TH>
           ))}
@@ -144,10 +147,10 @@ export function SideBySide({ conflict, names }: { conflict: Conflict; names: Nam
   const visible = all ? rows : rows.filter((r) => r.changed.ours || r.changed.theirs);
   return (
     <div className="flex flex-col gap-2">
-      <Table caption="Base, ours and theirs">
+      <Table caption={text.caption}>
         <THead>
           <TR>
-            <TH>Path</TH>
+            <TH>{text.path}</TH>
             {SIDES.map((side) => (
               <TH key={side}>{SIDE_TITLE[side]}</TH>
             ))}
@@ -157,7 +160,7 @@ export function SideBySide({ conflict, names }: { conflict: Conflict; names: Nam
           {visible.map((row) => (
             <TR key={row.path}>
               <TH scope="row" className="font-mono text-xs font-medium">
-                {row.path === '' ? 'value' : namePath(row.path, names)}
+                {row.path === '' ? text.value : namePath(row.path, names)}
               </TH>
               {SIDES.map((side) => (
                 <Cell key={side} row={row} side={side} />
@@ -175,7 +178,7 @@ export function SideBySide({ conflict, names }: { conflict: Conflict; names: Nam
               setAll(event.target.checked);
             }}
           />
-          Show unchanged paths
+          {text.showUnchanged}
         </label>
       ) : null}
     </div>

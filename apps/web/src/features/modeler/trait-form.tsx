@@ -2,7 +2,8 @@ import { useState } from 'react';
 import type { SchemaIssue } from '@/api/schema-rules';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { Section } from '@/ui/layout';
+import { modeler as modelerMessages } from '@/messages/modeler';
+import { FormAction, FormRow, Section } from '@/ui/layout';
 import type { SchemaDocument, TraitDocument } from './document';
 import {
   addTrait,
@@ -17,6 +18,8 @@ import {
   type ElementIds,
 } from './form-helpers';
 import { NewName } from './kind-form';
+
+const t = modelerMessages.traits;
 
 interface Props {
   document: SchemaDocument;
@@ -51,10 +54,10 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3">
+      <FormRow>
         {name !== undefined && (
           <Select
-            label="Trait"
+            label={t.trait}
             value={name}
             options={names.map((n) => ({ value: n, label: n }))}
             onChange={(event) => {
@@ -63,8 +66,8 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
           />
         )}
         <NewName
-          label="New Trait name"
-          button="Add Trait"
+          label={t.newTrait}
+          button={t.addTrait}
           taken={(candidate) => candidate in traits}
           onAdd={(added) => {
             edit((draft) => {
@@ -74,25 +77,27 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
           }}
         />
         {name !== undefined && (
-          <Button
-            variant="danger"
-            onClick={() => {
-              edit((draft) => {
-                draft.traits = removeKey(draft.traits, name);
-              });
-              onSelect(undefined);
-            }}
-          >
-            Remove Trait
-          </Button>
+          <FormAction>
+            <Button
+              variant="danger"
+              onClick={() => {
+                edit((draft) => {
+                  draft.traits = removeKey(draft.traits, name);
+                });
+                onSelect(undefined);
+              }}
+            >
+              {t.removeTrait}
+            </Button>
+          </FormAction>
         )}
-      </div>
+      </FormRow>
 
       {name === undefined || trait === undefined ? null : (
         <div className="flex flex-col gap-4" key={trait.id ?? name}>
           <div className="grid gap-3 sm:grid-cols-2">
             <Input
-              label="Trait name"
+              label={t.traitName}
               value={typed ?? name}
               error={errorAt(issues, `traits/${name}`)}
               onChange={(event) => {
@@ -112,7 +117,7 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
               }}
             />
             <Input
-              label="Trait description"
+              label={t.traitDescription}
               value={trait.description ?? ''}
               onChange={(event) => {
                 const value = event.target.value;
@@ -124,15 +129,15 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
             />
           </div>
 
-          <Section title="Trait Attributes">
-            <ul className="flex flex-col gap-2" aria-label="Trait Attributes">
+          <Section title={t.attributes}>
+            <ul className="flex flex-col gap-2" aria-label={t.attributes}>
               {Object.entries(trait.attributes ?? {}).map(([attribute, definition]) => (
                 <li
                   key={definition.id ?? attribute}
                   className="grid gap-2 rounded-md border border-line bg-surface p-3 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-start"
                 >
                   <Input
-                    label={`Name of ${attribute}`}
+                    label={t.nameOf(attribute)}
                     value={attribute}
                     error={errorAt(issues, `traits/${name}/attributes/${attribute}`)}
                     onChange={(event) => {
@@ -144,7 +149,7 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
                     }}
                   />
                   <Select
-                    label={`Type of ${attribute}`}
+                    label={t.typeOf(attribute)}
                     value={typeLabel(definition.type)}
                     error={errorAt(issues, `traits/${name}/attributes/${attribute}/type`)}
                     options={typeOptions([], typeLabel(definition.type)).map((v) => ({
@@ -173,20 +178,19 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
                         });
                       }}
                     />
-                    Required: {attribute}
+                    {t.requiredOf(attribute)}
                   </label>
                   <Button
-                    size="sm"
                     variant="ghost"
                     className="sm:mt-5"
-                    aria-label={`Remove ${attribute}`}
+                    aria-label={t.removeNamed(attribute)}
                     onClick={() => {
                       change((target) => {
                         target.attributes = removeKey(target.attributes, attribute);
                       });
                     }}
                   >
-                    Remove
+                    {t.remove}
                   </Button>
                 </li>
               ))}
@@ -208,14 +212,14 @@ export function TraitsForm({ document, issues, edit, ids, selected, onSelect }: 
                   });
                 }}
               >
-                Add Trait Attribute
+                {t.addAttribute}
               </Button>
             </div>
           </Section>
 
-          <Section title="Implemented by">
+          <Section title={t.implementedBy}>
             <p className="text-sm text-muted">
-              {implementers(document, name).join(', ') || 'No Kind implements this Trait yet.'}
+              {implementers(document, name).join(', ') || t.noImplementers}
             </p>
           </Section>
         </div>

@@ -1,20 +1,28 @@
+import { explore as exploreMessages } from '@/messages/explore';
 import { useConfig } from '@/config/context';
 import { EmptyState, PageHeader } from '@/ui/layout';
+import { LearnMore } from '@/ui/learn-more';
 import { ExplorePanel } from './explore-panel';
 
-/** The Explore screen: the panel on its own, next to the Retrieval lab in the navigation. */
+const T = exploreMessages;
+
+/** The Explore screen: questions to the optional assistant, streamed step by step. */
 export function ExplorePage() {
   const { apiMode, guideUrl } = useConfig();
   if (apiMode === 'live' && guideUrl === null) {
     return (
       <>
-        <PageHeader title="Explore" />
+        <PageHeader title={T.title} />
         <EmptyState>
-          No guide service is configured (guideUrl), so there is nobody to ask. See docs/guide.md to
-          turn the assistant on.
+          {T.noGuide} <LearnMore path={T.noGuideDocs} />
         </EmptyState>
       </>
     );
   }
-  return <ExplorePanel headingLevel={1} />;
+  return (
+    <>
+      <PageHeader title={T.title} description={T.description} docs={T.docs} />
+      <ExplorePanel />
+    </>
+  );
 }

@@ -1,5 +1,6 @@
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import { DerivationsForm } from './derivation-form';
 import type { SchemaDocument } from './document';
 import { celView, renderForm, typeCel } from './form-harness';
@@ -105,7 +106,9 @@ describe('Derivation editor', () => {
       'supplied_by',
     );
     expect(screen.getByRole('combobox', { name: 'Path step 2 Relation' })).toHaveValue('feeds');
-    await user.click(screen.getByRole('checkbox', { name: 'Materialized' }));
+    await user.click(
+      screen.getByRole('checkbox', { name: messages.modelerEditors.derivation.stored }),
+    );
     expect(current().derivations?.['single_sourced']?.['definition']).toEqual({
       variant: 'path',
       x_engine: 'kept',

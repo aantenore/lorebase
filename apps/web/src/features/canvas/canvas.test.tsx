@@ -24,11 +24,4 @@ describe('Canvas', () => {
       await screen.findByRole('img', { name: 'Schema graph: 4 nodes, 3 edges' }),
     ).toBeInTheDocument();
   });
-
-  it('keeps the diff overlay as a planned view', async () => {
-    const user = userEvent.setup();
-    renderApp('/supply/canvas');
-    await user.click(await screen.findByRole('tab', { name: 'Diff overlay' }));
-    expect(await screen.findByText('Planned')).toBeInTheDocument();
-  });
 });

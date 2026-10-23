@@ -70,7 +70,7 @@ export function countsSummary(counts: ResultView['counts']): string {
   return counts.map(({ name, value }) => `${name} ${value.toString()}`).join(', ');
 }
 
-/** `beerings -> bearings, bearing`. */
+/** `wrod -> word, wood`. */
 export function correctionText(correction: SearchCorrection): string {
   return `${correction.word} -> ${correction.replacements.join(', ')}`;
 }

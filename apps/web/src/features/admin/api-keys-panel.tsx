@@ -4,15 +4,19 @@ import type { ApiKey, ApiKeyCreated } from '@/api/admin-types';
 import { useKeeperApi } from '@/api/provider';
 import { useApiKeys } from '@/api/queries';
 import { useScope } from '@/app/scope';
+import { admin as adminMessages } from '@/messages/admin';
+import { common as commonMessages } from '@/messages/common';
 import { Button } from '@/ui/button';
 import { Dialog } from '@/ui/dialog';
 import { Input, Select } from '@/ui/field';
-import { Badge, EmptyState, QueryBoundary, Section } from '@/ui/layout';
+import { Badge, EmptyState, FormAction, FormRow, QueryBoundary, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
 import { useToast } from '@/ui/toast';
 import { usePrincipalNames } from './principal-names';
 import { DEFAULT_KEY_ROLE, ROLES } from './roles';
+
+const T = adminMessages.keys;
 
 type KeyStatus = 'active' | 'revoked' | 'expired';
 
@@ -27,10 +31,10 @@ const STATUS_TONE = { active: 'success', revoked: 'neutral', expired: 'warning' 
 function NewKeyNotice({ created, onDone }: { created: ApiKeyCreated; onDone: () => void }) {
   return (
     <section
-      aria-label="New API key"
+      aria-label={T.notice.label}
       className="flex flex-col gap-2 rounded-md border border-warning bg-surface p-3"
     >
-      <p className="text-sm font-medium">Copy the key now. It is shown only once.</p>
+      <p className="text-sm font-medium">{T.notice.warning}</p>
       <code className="font-mono text-sm break-all">{created.key}</code>
       <div className="flex gap-2">
         <Button
@@ -39,10 +43,10 @@ function NewKeyNotice({ created, onDone }: { created: ApiKeyCreated; onDone: () 
             void navigator.clipboard?.writeText(created.key).catch(() => undefined);
           }}
         >
-          Copy key
+          {T.notice.copy}
         </Button>
         <Button size="sm" variant="primary" onClick={onDone}>
-          I have copied it
+          {T.notice.done}
         </Button>
       </div>
     </section>
@@ -76,9 +80,7 @@ function CreateKeyForm({ onCreated }: { onCreated: (key: ApiKeyCreated) => void 
 
   const lifetime = Number(days);
   const lifetimeError =
-    days !== '' && (!Number.isInteger(lifetime) || lifetime < 1)
-      ? 'Whole days, at least 1.'
-      : undefined;
+    days !== '' && (!Number.isInteger(lifetime) || lifetime < 1) ? T.form.lifetimeError : undefined;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -86,52 +88,51 @@ function CreateKeyForm({ onCreated }: { onCreated: (key: ApiKeyCreated) => void 
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="flex flex-wrap items-start gap-3"
-      aria-label="Create an API key"
-    >
-      <div className="w-56">
-        <Input
-          label="Name of the service principal"
-          value={name}
-          maxLength={120}
-          onChange={(event) => {
-            setName(event.target.value);
-          }}
-        />
-      </div>
-      <div className="w-44">
-        <Select
-          label="Role in this Domain"
-          value={role}
-          options={ROLES.map((value) => ({ value, label: value }))}
-          onChange={(event) => {
-            setRole(event.target.value);
-          }}
-        />
-      </div>
-      <div className="w-40">
-        <Input
-          label="Lifetime in days"
-          type="number"
-          min={1}
-          value={days}
-          placeholder="default"
-          error={lifetimeError}
-          onChange={(event) => {
-            setDays(event.target.value);
-          }}
-        />
-      </div>
-      <Button
-        type="submit"
-        variant="primary"
-        className="mt-5"
-        disabled={name.trim() === '' || lifetimeError !== undefined || create.isPending}
-      >
-        Create key
-      </Button>
+    <form onSubmit={submit} aria-label={T.form.label}>
+      <FormRow>
+        <div className="w-56">
+          <Input
+            label={T.form.name}
+            value={name}
+            maxLength={120}
+            onChange={(event) => {
+              setName(event.target.value);
+            }}
+          />
+        </div>
+        <div className="w-44">
+          <Select
+            label={T.form.role}
+            value={role}
+            options={ROLES.map((value) => ({ value, label: value }))}
+            onChange={(event) => {
+              setRole(event.target.value);
+            }}
+          />
+        </div>
+        <div className="w-40">
+          <Input
+            label={T.form.lifetime}
+            type="number"
+            min={1}
+            value={days}
+            placeholder={T.form.lifetimePlaceholder}
+            error={lifetimeError}
+            onChange={(event) => {
+              setDays(event.target.value);
+            }}
+          />
+        </div>
+        <FormAction>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={name.trim() === '' || lifetimeError !== undefined || create.isPending}
+          >
+            {T.form.submit}
+          </Button>
+        </FormAction>
+      </FormRow>
     </form>
   );
 }
@@ -150,7 +151,7 @@ export function ApiKeysPanel() {
   const revoke = useMutation({
     mutationFn: (key: ApiKey) => api.admin.apiKeys.revoke(scope.domain, key.id),
     onSuccess: async (_result, key) => {
-      toast.notify(`API key ${key.prefix} revoked.`, 'success');
+      toast.notify(T.revoked(key.prefix), 'success');
       setRevoking(null);
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'api-keys'] });
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'audit'] });
@@ -160,7 +161,7 @@ export function ApiKeysPanel() {
   const now = new Date();
   return (
     <>
-      <Section title="Create an API key">
+      <Section title={T.createTitle}>
         <div className="flex flex-col gap-3">
           {created !== null && (
             <NewKeyNotice
@@ -174,24 +175,24 @@ export function ApiKeysPanel() {
         </div>
       </Section>
 
-      <Section title={`API keys of ${scope.domainInfo.display_name}`}>
+      <Section title={T.listTitle}>
         <QueryBoundary query={keys}>
           {(page) =>
             page.items.length === 0 ? (
-              <EmptyState>No API keys in this Domain.</EmptyState>
+              <EmptyState>{T.none}</EmptyState>
             ) : (
-              <Table caption="API keys">
+              <Table caption={T.caption}>
                 <THead>
                   <TR>
-                    <TH>Key</TH>
-                    <TH>Principal</TH>
-                    <TH>Scopes</TH>
-                    <TH>Created</TH>
-                    <TH>Expires</TH>
-                    <TH>Last used</TH>
-                    <TH>Status</TH>
+                    <TH>{T.columns.key}</TH>
+                    <TH>{T.columns.principal}</TH>
+                    <TH>{T.columns.scopes}</TH>
+                    <TH>{T.columns.created}</TH>
+                    <TH>{T.columns.expires}</TH>
+                    <TH>{T.columns.lastUsed}</TH>
+                    <TH>{T.columns.status}</TH>
                     <TH>
-                      <span className="sr-only">Actions</span>
+                      <span className="sr-only">{T.columns.actions}</span>
                     </TH>
                   </TR>
                 </THead>
@@ -204,22 +205,22 @@ export function ApiKeysPanel() {
                         <TD>{nameOf(key.principal_id)}</TD>
                         <TD>{key.scopes.join(', ')}</TD>
                         <TD>{shortTime(key.created_at)}</TD>
-                        <TD>{key.expires_at === null ? 'never' : shortTime(key.expires_at)}</TD>
+                        <TD>{key.expires_at === null ? T.never : shortTime(key.expires_at)}</TD>
                         <TD>{shortTime(key.last_used_at)}</TD>
                         <TD>
-                          <Badge tone={STATUS_TONE[status]}>{status}</Badge>
+                          <Badge tone={STATUS_TONE[status]}>{T.status[status]}</Badge>
                         </TD>
                         <TD>
                           {status !== 'revoked' && (
                             <Button
                               size="sm"
                               variant="danger"
-                              aria-label={`Revoke ${key.prefix}`}
+                              aria-label={T.revokeLabel(key.prefix)}
                               onClick={() => {
                                 setRevoking(key);
                               }}
                             >
-                              Revoke
+                              {T.revoke}
                             </Button>
                           )}
                         </TD>
@@ -235,7 +236,7 @@ export function ApiKeysPanel() {
 
       <Dialog
         open={revoking !== null}
-        title="Revoke API key"
+        title={T.dialog.title}
         onClose={() => {
           setRevoking(null);
         }}
@@ -243,9 +244,8 @@ export function ApiKeysPanel() {
         {revoking !== null && (
           <div className="flex flex-col gap-3">
             <p className="text-sm">
-              Revoke <code className="font-mono">{revoking.prefix}</code> held by{' '}
-              {nameOf(revoking.principal_id)}? Whatever uses the key stops working at once, and this
-              cannot be undone.
+              {T.revoke} <code className="font-mono">{revoking.prefix}</code>{' '}
+              {T.dialog.heldBy(nameOf(revoking.principal_id))}
             </p>
             <div className="flex justify-end gap-2">
               <Button
@@ -253,7 +253,7 @@ export function ApiKeysPanel() {
                   setRevoking(null);
                 }}
               >
-                Cancel
+                {commonMessages.cancel}
               </Button>
               <Button
                 variant="danger"
@@ -262,7 +262,7 @@ export function ApiKeysPanel() {
                   revoke.mutate(revoking);
                 }}
               >
-                Revoke key
+                {T.dialog.confirm}
               </Button>
             </div>
           </div>

@@ -197,6 +197,7 @@ Lorebase uses its own vocabulary consistently in code, API, UI and docs. The ful
 | display_name, description | string | |
 | default_branch | string | default `main` |
 | settings | object | search language, materialization policy, extraction defaults, merge policies |
+| examples | list of `{label, question}` | optional sample questions that clients offer as ready-made prompts (the web app's Explore and Retrieval lab); at most 20, labels unique, label up to 80 and question up to 500 characters; absent when empty |
 | created_at, created_by | | |
 
 A Domain is the unit of isolation for data, permissions, storage scoping (object hashes are scoped per Domain) and deletion. Cross-Domain Relations are not supported in v1; cross-Domain reads are done by agents calling both Domains. **[Architect call AC-04]**
@@ -361,6 +362,16 @@ A Domain schema is also a YAML document, read and written by `lorebase_core.mode
 - **Keys are api names.** Elements are keyed by api name (a relation by its forward name, a source by its dotted name such as `erp.vendors`) and refer to each other by api name: `primary_key`, `from_kind`, `authority`, trait `attribute_map`, Derivation and Source targets. Model fields keep their model names, except `derivation` and `trait`, which hold api names instead of the ids of `derivation_id` and `trait_id`. Defaults are omitted from dumps. Expressions are CEL source strings.
 - **Ids.** Every element and Attribute has a stable `id` (5.1). On load, an explicit `id` wins; an element without one reuses the id of the element with the same api name in the optional `base` schema; otherwise a new id is minted. Dumps always write ids.
 - **Rename rule.** Renaming is changing the key and keeping the `id`. A renamed key without an `id` is a new element (new id) unless the `base` schema has that api name, so keep the `id` when renaming. This is what lets a rename on one branch merge cleanly with an edit on another (AC-01).
+- **Domain examples.** The optional `domain.examples` list holds sample questions about the Domain, each a `label` (the button text) and a `question`. Keeper serves them in the `domain` block of `GET /domains/{d}/schema`; clients show them only when present, so the app carries no dataset-specific questions. An empty list is the same as none and is not written. Changing them is a schema change of the Domain element, like its display name.
+
+  ```yaml
+  domain:
+    id: supply
+    display_name: Supply chain
+    examples:
+      - label: Single-source risk
+        question: Which parts depend on a single supplier, and how risky is that supplier?
+  ```
 - **Type syntax.** Scalars by name (`string`, `integer`, `date`); parameters in parentheses (`decimal(12,2)`, `ref(Supplier)`); `array<string>`; and a one-key mapping for enums and for arrays of complex types: `{enum: [low, high]}`, `{array: {enum: [a, b]}}`.
 
 Excerpt of `examples/supply/schema.yaml`:

@@ -2,11 +2,11 @@ import { useNavigate } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { useConfig } from '@/config/context';
 import { useScope, useScopeSearch } from '@/app/scope';
+import { settings as settingsMessages } from '@/messages/settings';
 import { AccessPanel } from '@/features/admin/access-panel';
 import { ApiKeysPanel } from '@/features/admin/api-keys-panel';
 import { AuditPanel } from '@/features/admin/audit-panel';
 import { ConnectionSection } from './connection-section';
-import { PlannedScreens } from '@/features/planned-screens';
 import { Select } from '@/ui/field';
 import { PageHeader, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
@@ -14,12 +14,7 @@ import { Tabs } from '@/ui/tabs';
 import { useTheme, type ThemeChoice } from '@/ui/theme';
 import { isSettingsSection, SETTINGS_SECTIONS, type SettingsSection } from './search';
 
-const SECTION_LABEL: Record<SettingsSection, string> = {
-  general: 'General',
-  keys: 'API keys',
-  access: 'Principals and grants',
-  audit: 'Audit log',
-};
+const T = settingsMessages;
 
 function Row({ name, value }: { name: string; value: string | number }) {
   return (
@@ -34,7 +29,7 @@ function Row({ name, value }: { name: string; value: string | number }) {
 
 const searchLanguage = (settings: Record<string, unknown>): string => {
   const language = settings['search_language'];
-  return typeof language === 'string' ? language : 'default';
+  return typeof language === 'string' ? language : T.domain.defaultLanguage;
 };
 
 function General() {
@@ -45,15 +40,15 @@ function General() {
 
   return (
     <>
-      <Section title="Appearance">
+      <Section title={T.appearance.title}>
         <div className="w-48">
           <Select
-            label="Theme"
+            label={T.appearance.theme}
             value={theme}
             options={[
-              { value: 'system', label: 'System' },
-              { value: 'light', label: 'Light' },
-              { value: 'dark', label: 'Dark' },
+              { value: 'system', label: T.appearance.system },
+              { value: 'light', label: T.appearance.light },
+              { value: 'dark', label: T.appearance.dark },
             ]}
             onChange={(event) => {
               setTheme(event.target.value as ThemeChoice);
@@ -64,54 +59,48 @@ function General() {
 
       <ConnectionSection />
 
-      <Section title="Domain">
-        <Table caption="Domain settings">
+      <Section title={T.domain.title}>
+        <Table caption={T.domain.caption}>
           <THead>
             <TR>
-              <TH>Setting</TH>
-              <TH>Value</TH>
+              <TH>{T.table.setting}</TH>
+              <TH>{T.table.value}</TH>
             </TR>
           </THead>
           <TBody>
-            <Row name="Domain id" value={domainInfo.id} />
-            <Row name="Default Branch" value={domainInfo.default_branch} />
-            <Row name="Created by" value={domainInfo.created_by} />
-            <Row name="Search language" value={searchLanguage(domainInfo.settings)} />
+            <Row name={T.domain.id} value={domainInfo.id} />
+            <Row name={T.domain.defaultBranch} value={domainInfo.default_branch} />
+            <Row name={T.domain.createdBy} value={domainInfo.created_by} />
+            <Row name={T.domain.searchLanguage} value={searchLanguage(domainInfo.settings)} />
           </TBody>
         </Table>
       </Section>
 
-      <Section title="Runtime configuration">
-        <Table caption="Runtime configuration">
+      <Section title={T.runtime.title}>
+        <Table caption={T.runtime.caption}>
           <THead>
             <TR>
-              <TH>Setting</TH>
-              <TH>Value</TH>
+              <TH>{T.table.setting}</TH>
+              <TH>{T.table.value}</TH>
             </TR>
           </THead>
           <TBody>
-            <Row name="Data source" value={config.apiMode} />
+            <Row name={T.runtime.dataSource} value={config.apiMode} />
             <Row
-              name="Keeper base URL"
+              name={T.runtime.keeperBaseUrl}
               value={
                 config.keeperBaseUrl === ''
-                  ? 'this origin'
-                  : (config.keeperBaseUrl ?? 'not used in mock mode')
+                  ? T.runtime.thisOrigin
+                  : (config.keeperBaseUrl ?? T.runtime.notUsedInMock)
               }
             />
-            <Row name="Page size" value={config.pageSize} />
-            <Row name="Search limit" value={config.searchLimit} />
-            <Row name="Canvas depth" value={config.canvas.depth} />
-            <Row name="Canvas node cap" value={config.canvas.maxNodes} />
+            <Row name={T.runtime.pageSize} value={config.pageSize} />
+            <Row name={T.runtime.searchLimit} value={config.searchLimit} />
+            <Row name={T.runtime.canvasDepth} value={config.canvas.depth} />
+            <Row name={T.runtime.canvasNodeCap} value={config.canvas.maxNodes} />
           </TBody>
         </Table>
       </Section>
-
-      <PlannedScreens area="History" />
-      <PlannedScreens
-        area="Admin"
-        built={['Members and roles', 'API keys and service principals', 'Audit log']}
-      />
     </>
   );
 }
@@ -130,12 +119,9 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
 
   return (
     <>
-      <PageHeader
-        title="Settings"
-        description="Appearance, runtime configuration, and who can do what in the Domain."
-      />
+      <PageHeader title={T.title} description={T.description} />
       <Tabs
-        label="Settings sections"
+        label={T.tabs}
         value={section}
         onChange={(id) => {
           void navigate({
@@ -145,7 +131,7 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
         }}
         tabs={SETTINGS_SECTIONS.map((id) => {
           const Content = CONTENT[id];
-          return { id, label: SECTION_LABEL[id], content: <Content /> };
+          return { id, label: T.sections[id], content: <Content /> };
         })}
       />
     </>

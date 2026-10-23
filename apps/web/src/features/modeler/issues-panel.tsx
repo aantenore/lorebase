@@ -1,4 +1,5 @@
 import type { SchemaIssue } from '@/api/schema-rules';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { Button } from '@/ui/button';
 import { Badge } from '@/ui/layout';
 import { locateIssue, type Position, type SyntaxIssue } from './yaml';
@@ -28,19 +29,19 @@ function Item({
   return (
     <li className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
       <Badge tone="danger">{code}</Badge>
-      {path !== '' && <code className="font-mono text-xs">{path}</code>}
-      <span>{message}</span>
+      {path !== '' && <code className="font-mono text-xs break-all">{path}</code>}
+      <span className="min-w-0 break-words">{message}</span>
       {position !== null && (
         <Button
           size="sm"
           variant="ghost"
           className="ml-auto"
-          aria-label={`Go to line ${position.line}: ${message}`}
+          aria-label={modelerMessages.issues.goTo(position.line, message)}
           onClick={() => {
             onJump(position);
           }}
         >
-          Line {position.line}
+          {modelerMessages.issues.line(position.line)}
         </Button>
       )}
     </li>
@@ -53,13 +54,13 @@ export function IssuesPanel({ text, syntaxIssues, issues, remote = [], onJump }:
   if (total === 0) {
     return (
       <p role="status" className="text-sm text-success">
-        No validation issues.
+        {modelerMessages.issues.none}
       </p>
     );
   }
   return (
-    <section aria-label="Validation issues">
-      <h3 className="mb-1 text-sm font-semibold">Validation issues ({total})</h3>
+    <section aria-label={modelerMessages.issues.label}>
+      <h3 className="mb-2 text-sm font-semibold">{modelerMessages.issues.heading(total)}</h3>
       <ul className="divide-y divide-line rounded-md border border-line bg-surface">
         {syntaxIssues.map((issue, index) => (
           <Item

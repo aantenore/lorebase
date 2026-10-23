@@ -5,6 +5,8 @@ import { useScope } from '@/app/scope';
 import { useConfig } from '@/config/context';
 import { fromNeighborhood } from '@/features/canvas/graph-model';
 import { LazyGraphCanvas } from '@/features/canvas/lazy-graph-canvas';
+import { common as commonMessages } from '@/messages/common';
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
 import { EmptyState } from '@/ui/layout';
 import { labHighlight } from './lab-graph';
 
@@ -12,8 +14,8 @@ import { labHighlight } from './lab-graph';
 export function LabCanvas({
   involved,
   kinds,
-  label = 'Involved Records',
-  caption = 'Records involved (search hits of both sets and the pack), drawn with their neighbors.',
+  label = retrievalLabMessages.involved.label,
+  caption = retrievalLabMessages.involved.caption,
 }: {
   involved: string[];
   kinds: Kind[];
@@ -37,7 +39,7 @@ export function LabCanvas({
     [data, involved],
   );
 
-  if (seeds.length === 0) return <EmptyState>No Records involved yet.</EmptyState>;
+  if (seeds.length === 0) return <EmptyState>{retrievalLabMessages.involved.none}</EmptyState>;
   if (neighborhood.isError) {
     return (
       <p role="alert" className="text-danger">
@@ -48,7 +50,7 @@ export function LabCanvas({
   if (data === null) {
     return (
       <p role="status" className="text-muted">
-        Loading...
+        {commonMessages.loading}
       </p>
     );
   }

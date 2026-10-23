@@ -2,9 +2,12 @@ import { useState } from 'react';
 import type { ExtractionItem, ItemEdits } from '@/api/extraction-types';
 import type { Attribute, JsonValue, Schema } from '@/api/types';
 import { validateValue, parseAttributeType, type ValueSpec } from '@/api/values';
+import { extraction as extractionMessages } from '@/messages/extraction';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
 import { ValueInput } from '@/ui/value-input';
+
+const text = extractionMessages.editor;
 
 type Typed = { value: JsonValue | undefined; parseError: string | null };
 
@@ -74,10 +77,10 @@ export function ItemEditor({
   }
   for (const name of names) {
     const problem = problemOf(specOf(attributeOf(name)), typed[name]);
-    if (problem !== null) problems.push(`${name}: ${problem}`);
+    if (problem !== null) problems.push(text.problem(name, problem));
   }
   if (item.type === 'link' && (from.trim() === '' || to.trim() === '')) {
-    problems.push('Both ends of a Link need a key.');
+    problems.push(text.linkNeedsKeys);
   }
 
   const stage = () => {
@@ -101,7 +104,7 @@ export function ItemEditor({
 
   return (
     <form
-      aria-label="Edit the proposal"
+      aria-label={text.label}
       className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
@@ -109,9 +112,9 @@ export function ItemEditor({
       }}
     >
       {item.type === 'link' && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Input
-            label={`From (${item.relation ?? 'Record'} key)`}
+            label={text.from(item.relation)}
             value={from}
             disabled={disabled}
             onChange={(event) => {
@@ -119,7 +122,7 @@ export function ItemEditor({
             }}
           />
           <Input
-            label="To (Record key)"
+            label={text.to}
             value={to}
             disabled={disabled}
             onChange={(event) => {
@@ -130,7 +133,7 @@ export function ItemEditor({
       )}
       {item.type === 'value' && (
         <ValueInput
-          label={`Value of ${item.attribute ?? 'the Attribute'}`}
+          label={text.valueOf(item.attribute)}
           spec={valueSpec}
           value={one === undefined ? item.value : one.value}
           error={one === undefined ? null : problemOf(valueSpec, one)}
@@ -160,7 +163,7 @@ export function ItemEditor({
         })}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" disabled={disabled || problems.length > 0}>
-          Stage edits
+          {text.stage}
         </Button>
         {problems.length > 0 && <span className="text-xs text-danger">{problems[0]}</span>}
       </div>

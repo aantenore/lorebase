@@ -4,13 +4,15 @@ import { useHistory, useLineage, useRecord, useRecordLinks, useSchema } from '@/
 import type { AttributeLineage, Kind, RecordChange, Relation, Schema } from '@/api/types';
 import { RecordLink } from '@/app/record-link';
 import { useScope, useScopeSearch } from '@/app/scope';
+import { record as recordMessages } from '@/messages/record';
 import { Button } from '@/ui/button';
 import {
   Badge,
   type BadgeTone,
+  Card,
+  CardGrid,
   EmptyState,
   PageHeader,
-  PlaceholderSection,
   QueryBoundary,
   Section,
 } from '@/ui/layout';
@@ -18,6 +20,8 @@ import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { Tabs } from '@/ui/tabs';
 import { shortTime } from '@/ui/time';
 import { ValueView } from './value-view';
+
+const t = recordMessages;
 
 interface RelationEnd {
   /** Name to request links with: forward or inverse api name. */
@@ -48,19 +52,16 @@ function LinkedGroup({
   return (
     <QueryBoundary query={links}>
       {(data) => (
-        <section
-          aria-label={`${end.name} links`}
-          className="rounded-md border border-line bg-surface p-3"
-        >
-          <h3 className="text-sm font-medium">
+        <Card as="section" aria-label={t.links.groupLabel(end.name)}>
+          <h3 className="text-sm font-medium break-words">
             {end.name} <Badge>{data.links.length}</Badge>
           </h3>
           {data.links.length === 0 ? (
-            <p className="mt-1 text-xs text-muted">No linked Records.</p>
+            <p className="mt-1 text-xs text-muted">{t.links.none}</p>
           ) : (
             <ul className="mt-2 flex flex-col gap-1">
               {data.links.map((l) => (
-                <li key={l.ref}>
+                <li key={l.ref} className="min-w-0 break-words">
                   <RecordLink domain={domain} recordRef={l.ref}>
                     {l.title}
                   </RecordLink>
@@ -73,7 +74,7 @@ function LinkedGroup({
               ))}
             </ul>
           )}
-        </section>
+        </Card>
       )}
     </QueryBoundary>
   );
@@ -91,45 +92,52 @@ function ShortRevision({ id }: { id: string | null | undefined }) {
 /** Source, Operation, extraction evidence and Proposal behind one value. */
 function LineageDetail({ entry }: { entry: AttributeLineage }) {
   const parts: ReactNode[] = [];
-  if (entry.source != null) parts.push(<span key="source">Source {entry.source}</span>);
-  if (entry.operation != null) parts.push(<span key="operation">Operation {entry.operation}</span>);
+  if (entry.source != null) parts.push(<span key="source">{t.lineage.source(entry.source)}</span>);
+  if (entry.operation != null)
+    parts.push(<span key="operation">{t.lineage.operation(entry.operation)}</span>);
   if (entry.extraction != null) {
     const e = entry.extraction;
     parts.push(
       <span key="extraction">
-        Extraction job {e.job_id}, document {e.document_id} [{e.span_start}-{e.span_end}], model{' '}
-        {e.model_id}, prompt {e.prompt_version}
+        {t.lineage.extraction({
+          jobId: e.job_id,
+          documentId: e.document_id,
+          start: e.span_start,
+          end: e.span_end,
+          model: e.model_id,
+          prompt: e.prompt_version,
+        })}
       </span>,
     );
   }
   if (entry.proposal != null) {
     parts.push(
       <span key="proposal">
-        Proposal {entry.proposal.title} <Badge>{entry.proposal.status}</Badge>
+        {t.lineage.proposal(entry.proposal.title)} <Badge>{entry.proposal.status}</Badge>
       </span>,
     );
   }
   if (parts.length === 0) return <Dash />;
-  return <div className="flex flex-col gap-0.5 text-xs">{parts}</div>;
+  return <div className="flex min-w-48 flex-col gap-0.5 text-xs break-words">{parts}</div>;
 }
 
 function LineageSection({ kind, recordKey }: { kind: string; recordKey: string }) {
   const scope = useScope();
   const lineage = useLineage(scope, kind, recordKey);
   return (
-    <Section title="Lineage">
+    <Section title={t.lineage.title}>
       <QueryBoundary query={lineage}>
         {(data) => (
-          <Table caption="Lineage of each value">
+          <Table caption={t.lineage.caption}>
             <THead>
               <TR>
-                <TH>Attribute</TH>
-                <TH>Origin</TH>
-                <TH>Value</TH>
-                <TH>Detail</TH>
-                <TH>Revision</TH>
-                <TH>Author</TH>
-                <TH>At</TH>
+                <TH>{t.lineage.columnAttribute}</TH>
+                <TH>{t.lineage.columnOrigin}</TH>
+                <TH>{t.lineage.columnValue}</TH>
+                <TH>{t.lineage.columnDetail}</TH>
+                <TH>{t.lineage.columnRevision}</TH>
+                <TH>{t.lineage.columnAuthor}</TH>
+                <TH>{t.lineage.columnAt}</TH>
               </TR>
             </THead>
             <TBody>
@@ -176,7 +184,7 @@ function ChangeItem({ change }: { change: RecordChange }) {
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={CHANGE_TONE[change.change]}>{change.change}</Badge>
         <ShortRevision id={change.revision} />
-        <span>{change.message}</span>
+        <span className="min-w-0 break-words">{change.message}</span>
         <span className="text-muted">{change.author}</span>
         <time dateTime={change.at} className="ml-auto text-xs text-muted">
           {shortTime(change.at)}
@@ -184,14 +192,14 @@ function ChangeItem({ change }: { change: RecordChange }) {
       </div>
       {change.attributes.length > 0 && (
         <ul
-          aria-label={`Attributes changed in ${change.revision.slice(0, 8)}`}
+          aria-label={t.history.changedAttributes(change.revision.slice(0, 8))}
           className="mt-1 text-xs"
         >
           {change.attributes.map((attribute) => (
             <li key={attribute.name}>
               <span className="font-medium">{attribute.name}</span>:{' '}
               <ValueView value={attribute.before} />
-              <span aria-label="changed to"> {'\u2192'} </span>
+              <span aria-label={t.history.changedTo}> {'\u2192'} </span>
               <ValueView value={attribute.after} />
             </li>
           ))}
@@ -205,15 +213,15 @@ function HistoryTab({ kind, recordKey }: { kind: string; recordKey: string }) {
   const scope = useScope();
   const history = useHistory(scope, kind, recordKey);
   return (
-    <Section title="History">
+    <Section title={t.history.title}>
       <QueryBoundary query={history}>
         {(data) => {
           const changes = data.pages.flatMap((page) => page.items);
-          if (changes.length === 0) return <EmptyState>No changes on this Branch.</EmptyState>;
+          if (changes.length === 0) return <EmptyState>{t.history.empty}</EmptyState>;
           return (
             <>
               <ol
-                aria-label="Changes, newest first"
+                aria-label={t.history.listLabel}
                 className="divide-y divide-line rounded-md border border-line bg-surface"
               >
                 {changes.map((change) => (
@@ -228,7 +236,7 @@ function HistoryTab({ kind, recordKey }: { kind: string; recordKey: string }) {
                       void history.fetchNextPage();
                     }}
                   >
-                    Load more
+                    {t.history.loadMore}
                   </Button>
                 </div>
               )}
@@ -258,7 +266,7 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
               <>
                 <PageHeader
                   title={row.title}
-                  description={`${row.ref} on ${scope.branch}`}
+                  description={row.ref}
                   actions={
                     <Link
                       to="/$domain/canvas"
@@ -266,27 +274,27 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                       search={{ ...scopeSearch, seed: row.ref }}
                       className="text-accent hover:underline"
                     >
-                      Open in Canvas
+                      {t.openInCanvas}
                     </Link>
                   }
                 />
                 <Tabs
-                  label="Record sections"
+                  label={t.tabsLabel}
                   value={tab}
                   onChange={setTab}
                   tabs={[
                     {
                       id: 'details',
-                      label: 'Details',
+                      label: t.tabDetails,
                       content: (
                         <>
-                          <Section title="Attributes">
-                            <Table caption="Attributes">
+                          <Section title={t.attributes.title}>
+                            <Table caption={t.attributes.caption}>
                               <THead>
                                 <TR>
-                                  <TH>Attribute</TH>
-                                  <TH>Value</TH>
-                                  <TH>Type</TH>
+                                  <TH>{t.attributes.columnAttribute}</TH>
+                                  <TH>{t.attributes.columnValue}</TH>
+                                  <TH>{t.attributes.columnType}</TH>
                                 </TR>
                               </THead>
                               <TBody>
@@ -303,7 +311,7 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                                         {attribute.display_name}
                                         {derived && (
                                           <span className="ml-2">
-                                            <Badge tone="accent">derived</Badge>
+                                            <Badge tone="accent">{t.attributes.derived}</Badge>
                                           </span>
                                         )}
                                       </TH>
@@ -318,12 +326,12 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                             </Table>
                           </Section>
 
-                          <Section title="Linked Records">
+                          <Section title={t.links.title}>
                             {definition === undefined ||
                             relationsOf(schemaData, definition).length === 0 ? (
-                              <EmptyState>This Kind has no Relations.</EmptyState>
+                              <EmptyState>{t.links.noRelations}</EmptyState>
                             ) : (
-                              <div className="grid gap-3 md:grid-cols-2">
+                              <CardGrid minWidth="20rem">
                                 {relationsOf(schemaData, definition).map((end) => (
                                   <LinkedGroup
                                     key={end.name}
@@ -333,25 +341,17 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                                     end={end}
                                   />
                                 ))}
-                              </div>
+                              </CardGrid>
                             )}
                           </Section>
 
                           <LineageSection kind={kind} recordKey={recordKey} />
-
-                          <Section title="Run Operation">
-                            <PlaceholderSection
-                              area="Explorer"
-                              screen="Run Operation panel"
-                              content="Forms built from Operation parameters, with dry run before commit."
-                            />
-                          </Section>
                         </>
                       ),
                     },
                     {
                       id: 'history',
-                      label: 'History',
+                      label: t.tabHistory,
                       content: <HistoryTab kind={kind} recordKey={recordKey} />,
                     },
                   ]}

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { SchemaIssue } from '@/api/schema-rules';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { Tabs } from '@/ui/tabs';
 import { DerivationsForm } from './derivation-form';
 import type { SchemaDocument } from './document';
@@ -12,14 +13,7 @@ import { TraitsForm } from './trait-form';
 
 type FormTab = 'kinds' | 'relations' | 'traits' | 'operations' | 'derivations' | 'sources';
 
-const LABEL: Record<FormTab, string> = {
-  kinds: 'Kinds',
-  relations: 'Relations',
-  traits: 'Traits',
-  operations: 'Operations',
-  derivations: 'Derivations',
-  sources: 'Sources',
-};
+const LABEL: Record<FormTab, string> = modelerMessages.form.tabs;
 
 export interface FormEditorProps {
   document: SchemaDocument;
@@ -47,7 +41,8 @@ export function FormEditor({
 }: FormEditorProps) {
   const [tab, setTab] = useState<FormTab>('kinds');
   const [selected, setSelected] = useState<Partial<Record<FormTab, string>>>({});
-  const badge = (prefix: string) => (hasIssuesUnder(issues, prefix) ? ' (!)' : '');
+  const badge = (prefix: string) =>
+    hasIssuesUnder(issues, prefix) ? modelerMessages.form.issueMark : '';
   const props = (key: FormTab) => ({
     document,
     issues,
@@ -80,15 +75,14 @@ export function FormEditor({
 
   return (
     <fieldset disabled={locked} className="min-w-0">
-      <legend className="sr-only">Form editor</legend>
+      <legend className="sr-only">{modelerMessages.form.legend}</legend>
       {locked && (
         <p role="status" className="mb-3 rounded-md border border-warning p-2 text-sm text-warning">
-          The YAML has syntax errors. The form shows the last valid version and is read only until
-          they are fixed.
+          {modelerMessages.form.locked}
         </p>
       )}
       <Tabs
-        label="Schema form"
+        label={modelerMessages.form.tabsLabel}
         value={tab}
         onChange={(id) => {
           setTab(id as FormTab);

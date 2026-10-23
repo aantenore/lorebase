@@ -2,8 +2,11 @@ import { Link } from '@tanstack/react-router';
 import type { Attribute, Kind, RecordRow } from '@/api/types';
 import { RecordLink } from '@/app/record-link';
 import { useScopeSearch } from '@/app/scope';
+import { explorer as explorerMessages } from '@/messages/explorer';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { ValueView } from './value-view';
+
+const t = explorerMessages.kind;
 
 export interface SortState {
   attr: string;
@@ -30,7 +33,7 @@ export function RecordsTable({
   const attributes = attributesOf(kind);
 
   return (
-    <Table caption={`${kind.api_name} Records`}>
+    <Table caption={t.tableCaption(kind.api_name)}>
       <THead>
         <TR>
           {attributes.map((attribute) => {
@@ -48,7 +51,7 @@ export function RecordsTable({
                   className="hover:text-ink"
                 >
                   {attribute.display_name}
-                  {active ? (sort.dir === 'asc' ? ' (asc)' : ' (desc)') : ''}
+                  {active ? (sort.dir === 'asc' ? t.sortedAsc : t.sortedDesc) : ''}
                 </Link>
               </TH>
             );

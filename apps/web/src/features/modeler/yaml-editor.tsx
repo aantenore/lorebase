@@ -4,6 +4,7 @@ import { defaultHighlightStyle, indentOnInput, syntaxHighlighting } from '@codem
 import { Annotation, EditorState } from '@codemirror/state';
 import { EditorView, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { editorTheme } from './codemirror-theme';
 
 export interface Jump {
@@ -104,7 +105,7 @@ export default function YamlEditor({
     <div
       ref={host}
       role="group"
-      aria-label={`${label} editor`}
+      aria-label={modelerMessages.yaml.editorGroup(label)}
       className={`${className} min-h-0`}
     />
   );

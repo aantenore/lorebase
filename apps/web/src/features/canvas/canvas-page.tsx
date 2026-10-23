@@ -5,30 +5,34 @@ import type { Schema } from '@/api/types';
 import { RecordLink } from '@/app/record-link';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { useConfig } from '@/config/context';
-import { Badge, EmptyState, PageHeader, PlaceholderSection, QueryBoundary } from '@/ui/layout';
+import { canvas as canvasMessages } from '@/messages/canvas';
+import { common as commonMessages } from '@/messages/common';
+import { Badge, Card, EmptyState, PageHeader, QueryBoundary } from '@/ui/layout';
 import { Tabs } from '@/ui/tabs';
 import { GraphCanvas } from './graph-canvas';
 import { isCanvasView, type CanvasView } from './search';
 import { fromNeighborhood, fromSchema, type GraphData } from './graph-model';
 
+const t = canvasMessages;
+
 function GraphLists({ data }: { data: GraphData }) {
   const { listMaxEdges } = useConfig().canvas.detail;
   const shown = data.edges.slice(0, listMaxEdges);
   return (
-    <details className="mt-3 rounded-md border border-line bg-surface p-3">
+    <details className="mt-4 rounded-md border border-line bg-surface p-4">
       <summary className="cursor-pointer text-sm font-medium">
-        List view: {data.nodes.length} nodes, {data.edges.length} edges
+        {t.list.summary(data.nodes.length, data.edges.length)}
       </summary>
       <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
         {shown.map((edge) => (
-          <li key={edge.id}>
+          <li key={edge.id} className="min-w-0 break-all">
             {edge.source} <span className="text-muted">{edge.label}</span> {edge.target}
           </li>
         ))}
       </ul>
       {shown.length < data.edges.length && (
         <p className="mt-2 text-xs text-muted">
-          Showing the first {shown.length} of {data.edges.length} edges.
+          {t.list.truncated(shown.length, data.edges.length)}
         </p>
       )}
     </details>
@@ -49,19 +53,16 @@ function SelectionPanel({
   const scopeSearch = useScopeSearch();
   const node = data.nodes.find((n) => n.id === selected);
   return (
-    <aside
-      aria-label="Selection"
-      className="mt-3 rounded-md border border-line bg-surface p-3 text-sm"
-    >
+    <Card as="aside" aria-label={t.selection.label} className="mt-4 text-sm">
       {node === undefined ? (
-        <p className="text-muted">Select a node to see details.</p>
+        <p className="text-muted">{t.selection.empty}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{node.label}</span>
+          <span className="min-w-0 font-medium break-all">{node.label}</span>
           <Badge>{node.group}</Badge>
           {mode === 'records' ? (
             <RecordLink domain={domain} recordRef={node.id}>
-              Open Record
+              {t.selection.openRecord}
             </RecordLink>
           ) : (
             <Link
@@ -70,12 +71,12 @@ function SelectionPanel({
               search={{ ...scopeSearch, tab: 'kinds' }}
               className="text-accent hover:underline"
             >
-              Open in Modeler
+              {t.selection.openInModeler}
             </Link>
           )}
         </div>
       )}
-    </aside>
+    </Card>
   );
 }
 
@@ -106,8 +107,7 @@ function GraphExplorer({ schema, seed }: { schema: Schema; seed: string | undefi
     [neighborhood.data, schema.kinds],
   );
 
-  if (ready && seeds.length === 0)
-    return <EmptyState>No Records to draw on this Branch.</EmptyState>;
+  if (ready && seeds.length === 0) return <EmptyState>{t.noRecords}</EmptyState>;
   if (data === null) {
     return neighborhood.isError ? (
       <p role="alert" className="text-danger">
@@ -115,17 +115,15 @@ function GraphExplorer({ schema, seed }: { schema: Schema; seed: string | undefi
       </p>
     ) : (
       <p role="status" className="text-muted">
-        Loading...
+        {commonMessages.loading}
       </p>
     );
   }
   return (
     <>
-      <GraphCanvas data={data} label="Records graph" onSelectNode={setSelected} />
+      <GraphCanvas data={data} label={t.graphLabel} onSelectNode={setSelected} />
       {neighborhood.data?.truncated === true && (
-        <p className="mt-2 text-xs text-warning">
-          Showing the first {config.canvas.maxNodes} nodes; the neighborhood is larger.
-        </p>
+        <p className="mt-2 text-xs text-warning">{t.truncated(config.canvas.maxNodes)}</p>
       )}
       <SelectionPanel data={data} selected={selected} domain={scope.domain} mode="records" />
       <GraphLists data={data} />
@@ -139,7 +137,7 @@ function SchemaGraph({ schema }: { schema: Schema }) {
   const data = useMemo(() => fromSchema(schema), [schema]);
   return (
     <>
-      <GraphCanvas data={data} label="Schema graph" onSelectNode={setSelected} />
+      <GraphCanvas data={data} label={t.schemaLabel} onSelectNode={setSelected} />
       <SelectionPanel data={data} selected={selected} domain={scope.domain} mode="schema" />
       <GraphLists data={data} />
     </>
@@ -155,14 +153,11 @@ export function CanvasPage({ view, seed }: { view: CanvasView; seed: string | un
 
   return (
     <>
-      <PageHeader
-        title="Canvas"
-        description={`Graph of ${scope.domainInfo.display_name} on ${scope.branch}.`}
-      />
+      <PageHeader title={t.title} description={t.description} docs={t.docs} />
       <QueryBoundary query={schema}>
         {(data) => (
           <Tabs
-            label="Canvas views"
+            label={t.tabsLabel}
             value={view}
             onChange={(id) => {
               void navigate({
@@ -173,21 +168,10 @@ export function CanvasPage({ view, seed }: { view: CanvasView; seed: string | un
             tabs={[
               {
                 id: 'graph',
-                label: 'Graph explorer',
+                label: t.tabGraph,
                 content: <GraphExplorer schema={data} seed={seed} />,
               },
-              { id: 'schema', label: 'Schema graph', content: <SchemaGraph schema={data} /> },
-              {
-                id: 'diff',
-                label: 'Diff overlay',
-                content: (
-                  <PlaceholderSection
-                    area="Canvas"
-                    screen="Diff overlay"
-                    content="Compare two refs: added, removed and modified nodes and edges colored."
-                  />
-                ),
-              },
+              { id: 'schema', label: t.tabSchema, content: <SchemaGraph schema={data} /> },
             ]}
           />
         )}

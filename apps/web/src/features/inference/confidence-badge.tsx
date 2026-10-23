@@ -1,5 +1,6 @@
 import type { InferenceEvidence } from '@/api/inference-types';
 import { Badge, type BadgeTone } from '@/ui/layout';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 /** Distance below the threshold at which a confidence turns from caution to alarm. */
 const CAUTION_BAND = 0.15;
@@ -19,10 +20,10 @@ export function ConfidenceBadge({
   evidence: InferenceEvidence | undefined;
   threshold: number;
 }) {
-  if (evidence === undefined) return <Badge>no evidence</Badge>;
+  if (evidence === undefined) return <Badge>{inferenceMessages.evidence.none}</Badge>;
   return (
     <Badge tone={toneOf(evidence.confidence, threshold)}>
-      <span className="sr-only">Confidence </span>
+      <span className="sr-only">{inferenceMessages.evidence.confidence}</span>
       {percent(evidence.confidence)}
     </Badge>
   );
@@ -31,7 +32,7 @@ export function ConfidenceBadge({
 /** Reasons and sample values behind an element, behind a disclosure. */
 export function EvidenceDetails({
   evidence,
-  label = 'Why',
+  label = inferenceMessages.evidence.why,
 }: {
   evidence: InferenceEvidence | undefined;
   label?: string;
@@ -45,7 +46,7 @@ export function EvidenceDetails({
           <li key={`${index.toString()}-${reason}`}>{reason}</li>
         ))}
       </ul>
-      <p className="mt-1 text-muted">From {evidence.source}</p>
+      <p className="mt-1 text-muted">{inferenceMessages.evidence.from(evidence.source)}</p>
     </details>
   );
 }

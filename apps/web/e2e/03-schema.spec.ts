@@ -20,7 +20,7 @@ test.describe('schema change on a protected Branch', () => {
     // Keeper's document goes through the editor and back without a difference.
     await expect(page.getByText('No validation issues.')).toBeVisible();
     await expect(page.getByRole('heading', { name: /^Change set\s*0$/ })).toBeVisible();
-    await expect(page.getByText('No pending schema changes on main.')).toBeVisible();
+    await expect(page.getByText('No pending schema changes.')).toBeVisible();
   });
 
   test('add an Attribute, open a Proposal, review it and merge it', async ({ page }) => {
@@ -28,7 +28,9 @@ test.describe('schema change on a protected Branch', () => {
     expect(await supplierAttributes('main')).not.toContain('internal_notes');
 
     await page.goto(screen('modeler', 'main') + '&view=edit');
-    await expect(page.getByText('main is protected', { exact: false })).toBeVisible();
+    await expect(
+      page.getByText('This Branch is protected', { exact: false }).first(),
+    ).toBeVisible();
 
     // Form: pick the Kind, add an Attribute and name it.
     await page.getByLabel('Kind', { exact: true }).selectOption('Supplier');
@@ -59,11 +61,11 @@ test.describe('schema change on a protected Branch', () => {
     await page.getByRole('button', { name: 'Open Proposal' }).click();
 
     // The Proposal page: nothing merges until the target Branch has its approval.
-    await expect(page.getByText(/Proposal #prp_.* opened from schema\//)).toBeVisible();
+    await expect(page.getByText(/Proposal #prp_.* opened\./)).toBeVisible();
     await expect(
       page.getByRole('heading', { name: /Add internal_notes to Supplier/, level: 1 }),
     ).toBeVisible();
-    await expect(page.getByText('0 of 1 approval(s)', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('0 of 1 approvals', { exact: false }).first()).toBeVisible();
     await expect(page.getByText('waiting')).toBeVisible();
 
     await page.getByRole('button', { name: 'Merge' }).click();

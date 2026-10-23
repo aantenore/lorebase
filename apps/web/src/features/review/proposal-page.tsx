@@ -4,6 +4,8 @@ import { useKeeperApi } from '@/api/provider';
 import { useProposal, useProposalDiff } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { ItemsPanel } from '@/features/extraction/items-panel';
+import { common as commonMessages } from '@/messages/common';
+import { review as reviewMessages } from '@/messages/review';
 import { Button } from '@/ui/button';
 import { Badge, EmptyState, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { Tabs } from '@/ui/tabs';
@@ -16,22 +18,24 @@ import { STATUS_TONE } from './review-page';
 
 const CHECK_TONE = { passed: 'success', failed: 'danger', pending: 'warning' } as const;
 
+const text = reviewMessages.proposal;
+
 function DiffSection({ domain, proposal }: { domain: string; proposal: string }) {
   const diff = useProposalDiff(domain, proposal);
   return (
-    <Section title="Data diff by Kind">
+    <Section title={text.diff.title}>
       <QueryBoundary query={diff}>
         {(data) =>
           Object.keys(data.summary).length === 0 ? (
-            <EmptyState>No differences.</EmptyState>
+            <EmptyState>{text.diff.empty}</EmptyState>
           ) : (
-            <Table caption="Changes by Kind">
+            <Table caption={text.diff.caption}>
               <THead>
                 <TR>
-                  <TH>Kind or Relation</TH>
-                  <TH>Added</TH>
-                  <TH>Modified</TH>
-                  <TH>Removed</TH>
+                  <TH>{text.diff.columns.target}</TH>
+                  <TH>{text.diff.columns.added}</TH>
+                  <TH>{text.diff.columns.modified}</TH>
+                  <TH>{text.diff.columns.removed}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -87,13 +91,9 @@ export function ProposalPage({
     mutationFn: () => api.proposals.merge(scope.domain, proposalId),
     onSuccess: (outcome) => {
       if (outcome.status === 'conflicts') {
-        const open = unresolvedOf(outcome.attempt).length;
-        toast.notify(
-          `${open} ${open === 1 ? 'Conflict still needs' : 'Conflicts still need'} a resolution.`,
-          'error',
-        );
+        toast.notify(text.conflictsRemain(unresolvedOf(outcome.attempt).length), 'error');
       } else {
-        toast.notify(`Proposal #${proposalId} merged.`, 'success');
+        toast.notify(text.merged(proposalId), 'success');
       }
       return refresh();
     },
@@ -101,7 +101,7 @@ export function ProposalPage({
   const close = useMutation({
     mutationFn: () => api.proposals.close(scope.domain, proposalId),
     onSuccess: () => {
-      toast.notify(`Proposal #${proposalId} closed.`);
+      toast.notify(text.closed(proposalId));
       return refresh();
     },
   });
@@ -111,9 +111,9 @@ export function ProposalPage({
       {(detail) => {
         const overview = (
           <>
-            <Section title="Checks">
+            <Section title={text.checks.title}>
               {detail.checks.length === 0 ? (
-                <EmptyState>No checks have run.</EmptyState>
+                <EmptyState>{text.checks.empty}</EmptyState>
               ) : (
                 <ul className="divide-y divide-line rounded-md border border-line bg-surface">
                   {detail.checks.map((check) => (
@@ -121,7 +121,7 @@ export function ProposalPage({
                       <Badge tone={CHECK_TONE[check.status]}>{check.status}</Badge>
                       <span>{check.name}</span>
                       {typeof check.message === 'string' && (
-                        <span className="text-muted">{check.message}</span>
+                        <span className="min-w-0 break-words text-muted">{check.message}</span>
                       )}
                     </li>
                   ))}
@@ -129,9 +129,9 @@ export function ProposalPage({
               )}
             </Section>
 
-            <Section title="Reviews">
+            <Section title={text.reviews.title}>
               {detail.reviews.length === 0 ? (
-                <EmptyState>No reviews yet.</EmptyState>
+                <EmptyState>{text.reviews.empty}</EmptyState>
               ) : (
                 <ul className="divide-y divide-line rounded-md border border-line bg-surface">
                   {detail.reviews.map((review) => (
@@ -162,8 +162,9 @@ export function ProposalPage({
             <PageHeader
               title={`#${detail.id} ${detail.title}`}
               description={detail.description ?? undefined}
+              docs={text.docs}
               actions={
-                <div className="flex items-center gap-2">
+                <>
                   <Badge tone={STATUS_TONE[detail.status]}>{detail.status}</Badge>
                   {detail.status === 'open' && (
                     <>
@@ -174,7 +175,7 @@ export function ProposalPage({
                           merge.mutate();
                         }}
                       >
-                        Merge
+                        {text.merge}
                       </Button>
                       <Button
                         disabled={close.isPending}
@@ -182,38 +183,37 @@ export function ProposalPage({
                           close.mutate();
                         }}
                       >
-                        Close
+                        {commonMessages.close}
                       </Button>
                     </>
                   )}
-                </div>
+                </>
               }
             />
-            <p className="mb-4 text-sm text-muted">
-              {detail.origin} Proposal by {detail.author}: {detail.source_ref} into{' '}
-              {detail.target_ref}.{' '}
+            <p className="-mt-3 mb-6 text-sm text-muted">
+              {text.byline(detail.origin, detail.author, detail.source_ref, detail.target_ref)}{' '}
               <Link
                 to="/$domain/review"
                 params={{ domain: scope.domain }}
                 search={scopeSearch}
                 className="text-accent hover:underline"
               >
-                Back to the list
+                {text.backToList}
               </Link>
             </p>
 
             {detail.origin === 'extraction' ? (
               <Tabs
-                label="Proposal sections"
+                label={text.tabsLabel}
                 value={tab}
                 onChange={(id) => {
                   onTab(id === 'items' ? 'items' : 'overview');
                 }}
                 tabs={[
-                  { id: 'overview', label: 'Overview', content: overview },
+                  { id: 'overview', label: text.tabOverview, content: overview },
                   {
                     id: 'items',
-                    label: 'Items',
+                    label: text.tabItems,
                     content: (
                       <ItemsPanel
                         domain={scope.domain}

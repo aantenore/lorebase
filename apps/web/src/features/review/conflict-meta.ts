@@ -8,27 +8,12 @@ import type {
   Schema,
 } from '@/api/types';
 import { parseAttributeType, type ValueSpec } from '@/api/values';
+import { review as reviewMessages } from '@/messages/review';
 
-/** Display names of the Conflict codes (design 6.9). */
-export const CODE_LABEL: Record<ConflictCode, string> = {
-  DV1: 'Attribute value',
-  DV2: 'Delete or modify',
-  DV3: 'Add or add',
-  SC1: 'Schema property',
-  SC2: 'Schema delete or modify',
-  SC3: 'Naming collision',
-  XS1: 'Orphaned data',
-  XS2: 'Orphaned value',
-  XS3: 'Type coercion',
-  XS4: 'Missing value',
-  XS5: 'Constraint',
-  XS6: 'Cardinality',
-  XS7: 'Required relation',
-  XS8: 'Uniqueness',
-  XS9: 'Dangling Link',
-  XS10: 'Trait conformance',
-  XS11: 'Broken reference',
-};
+const text = reviewMessages.choices;
+
+/** Display names of the Conflict codes. */
+export const CODE_LABEL: Record<ConflictCode, string> = reviewMessages.conflictCodes;
 
 export const isGrouped = (conflict: Conflict) => GROUPED_KINDS.has(conflict.kind);
 
@@ -47,27 +32,27 @@ export function choiceLabel(conflict: Conflict, choice: ResolutionChoice): strin
     case 'theirs': {
       const absent = conflict[choice] === null;
       if (conflict.kind === 'DV2' || conflict.kind === 'SC2') {
-        return absent ? `Keep deleted (${choice})` : `Keep modified (${choice})`;
+        return absent ? text.keepDeleted(choice) : text.keepModified(choice);
       }
-      return absent ? `Take ${choice} (absent)` : `Take ${choice}`;
+      return absent ? text.takeAbsent(choice) : text.take(choice);
     }
     case 'base':
-      return 'Revert to base';
+      return text.base;
     case 'custom':
-      return 'Custom value';
+      return text.custom;
     case 'drop':
-      return conflict.kind === 'XS9' ? 'Drop the Links' : 'Drop the data';
+      return conflict.kind === 'XS9' ? text.dropLinks : text.dropData;
     case 'restore':
-      return conflict.kind === 'XS9' ? 'Restore the Record' : 'Restore what was removed';
+      return conflict.kind === 'XS9' ? text.restoreRecord : text.restoreRemoved;
     case 'relax':
-      return 'Relax the rule';
+      return text.relax;
   }
 }
 
 export function choiceHint(conflict: Conflict, choice: ResolutionChoice): string | undefined {
   if (choice !== 'relax') return undefined;
   const relaxed = conflict.details['relaxed'];
-  return relaxed === undefined ? undefined : `Sets the rule to ${JSON.stringify(relaxed)}.`;
+  return relaxed === undefined ? undefined : text.relaxHint(JSON.stringify(relaxed));
 }
 
 /** Display names for element ids, taken from the schema the Conflicts are shown against. */
@@ -125,7 +110,7 @@ export function messageOf(conflict: Conflict, names: Names): string {
   return conflict.message.replace(ELEMENT_ID, (id) => names.get(id) ?? id);
 }
 
-/** One line locating a Conflict: `Supplier/S-1003 · tier` or `Supplier · attributes.risk_score.description`. */
+/** One line locating a Conflict: `Asset/A-100 · status` or `Asset · attributes.status.description`. */
 export function locationOf(conflict: Conflict, names: Names): string {
   const key = conflict.key === null ? null : (names.get(conflict.key) ?? conflict.key);
   const partition = partitionName(conflict.partition, names);
@@ -188,16 +173,16 @@ export function policyReason(auto: AutoResolution): string | null {
   const loser = winner === 'ours' ? 'theirs' : 'ours';
   if (auto.resolver === 'policy:authority') {
     const won = asText(details[`${winner}_origin`]);
-    const lost = asText(details[`${loser}_origin`]) ?? 'an unranked origin';
-    return won === null ? null : `${won} outranks ${lost}`;
+    const lost = asText(details[`${loser}_origin`]) ?? reviewMessages.policy.unrankedOrigin;
+    return won === null ? null : reviewMessages.policy.outranks(won, lost);
   }
   if (auto.resolver === 'policy:newest_wins') {
     const won = asText(details[`${winner}_at`]);
     const lost = asText(details[`${loser}_at`]);
     if (won === null || lost === null) return null;
     return details.tie_break === undefined
-      ? `changed ${won}, after ${lost}`
-      : `same time ${won}, greater provenance id`;
+      ? reviewMessages.policy.changedAfter(won, lost)
+      : reviewMessages.policy.sameTime(won);
   }
   return null;
 }

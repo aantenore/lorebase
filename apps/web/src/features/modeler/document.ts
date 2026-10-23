@@ -22,6 +22,7 @@ import type {
   Trait,
 } from '@/api/types';
 import { parseAttributeType } from '@/api/values';
+import { modeler as modelerMessages } from '@/messages/modeler';
 
 export const SCHEMA_FORMAT = 'lorebase.schema/v1';
 
@@ -445,14 +446,14 @@ class Reader {
   map(value: unknown, path: string): Doc {
     if (value === undefined || value === null) return {};
     if (isMap(value)) return value;
-    this.fail(path, 'Must be a mapping.');
+    this.fail(path, modelerMessages.document.mustBeMapping);
     return {};
   }
 
   list(value: unknown, path: string): unknown[] {
     if (value === undefined || value === null) return [];
     if (Array.isArray(value)) return value;
-    this.fail(path, 'Must be a list.');
+    this.fail(path, modelerMessages.document.mustBeList);
     return [];
   }
 
@@ -460,7 +461,7 @@ class Reader {
     const value = doc[key];
     if (value === undefined || value === null) return fallback;
     if (typeof value === 'string') return value;
-    this.fail(`${path}/${key}`, 'Must be text.');
+    this.fail(`${path}/${key}`, modelerMessages.document.mustBeText);
     return fallback;
   }
 
@@ -468,7 +469,7 @@ class Reader {
     const value = doc[key];
     if (value === undefined || value === null) return null;
     if (typeof value === 'string') return value;
-    this.fail(`${path}/${key}`, 'Must be text.');
+    this.fail(`${path}/${key}`, modelerMessages.document.mustBeText);
     return null;
   }
 
@@ -476,7 +477,7 @@ class Reader {
     const value = doc[key];
     if (value === undefined || value === null) return fallback;
     if (typeof value === 'boolean') return value;
-    this.fail(`${path}/${key}`, 'Must be true or false.');
+    this.fail(`${path}/${key}`, modelerMessages.document.mustBeBoolean);
     return fallback;
   }
 
@@ -484,14 +485,14 @@ class Reader {
     const value = doc[key];
     if (value === undefined || value === null) return null;
     if (typeof value === 'boolean') return value;
-    this.fail(`${path}/${key}`, 'Must be true or false.');
+    this.fail(`${path}/${key}`, modelerMessages.document.mustBeBoolean);
     return null;
   }
 
   strings(value: unknown, path: string): string[] {
     return this.list(value, path).filter((item, index): item is string => {
       if (typeof item === 'string') return true;
-      this.fail(`${path}/${index}`, 'Must be text.');
+      this.fail(`${path}/${index}`, modelerMessages.document.mustBeText);
       return false;
     });
   }
@@ -542,12 +543,12 @@ interface Typed {
 
 function typeFromDocument(value: unknown, reader: Reader, path: string): Typed {
   const fail = (): Typed => {
-    reader.fail(path, 'Must be a type such as string, decimal(12,2), ref(Kind), {enum: [...]}.');
+    reader.fail(path, modelerMessages.document.mustBeType);
     return { type: 'string', enumValues: null };
   };
   if (typeof value === 'string') {
     return parseAttributeType(value) === null && value !== ''
-      ? (reader.fail(path, `Unknown type ${value}.`, 'unknown_type'),
+      ? (reader.fail(path, modelerMessages.document.unknownType(value), 'unknown_type'),
         { type: 'string', enumValues: null })
       : { type: value as AttributeType, enumValues: null };
   }
@@ -587,7 +588,7 @@ function attributeFromDocument(
 ): Attribute | null {
   const { reader } = ctx;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const known = Object.values(baseOwner?.attributes ?? {}).find((a) => a.api_name === name)?.id;
@@ -646,7 +647,7 @@ function ref(
 ): string {
   const id = ids.get(name);
   if (id !== undefined) return id;
-  reader.fail(path, `${what} ${name} does not exist.`, 'unknown_reference');
+  reader.fail(path, modelerMessages.document.unknownReference(what, name), 'unknown_reference');
   return '';
 }
 
@@ -660,7 +661,7 @@ function kindFromDocument(
   const { reader } = ctx;
   const path = `kinds/${name}`;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const id = ctx.ids.kinds.get(name) ?? '';
@@ -676,7 +677,7 @@ function kindFromDocument(
   const attributeRef = (attribute: string, at: string) => {
     const found = byName.get(attribute);
     if (found === undefined) {
-      reader.fail(at, `Attribute ${attribute} does not exist.`, 'unknown_attribute');
+      reader.fail(at, modelerMessages.document.unknownAttribute(attribute), 'unknown_attribute');
       return '';
     }
     return found;
@@ -691,13 +692,17 @@ function kindFromDocument(
   const implementations = reader.list(value['traits'], `${path}/traits`).flatMap((raw, index) => {
     const at = `${path}/traits/${index}`;
     if (!isMap(raw)) {
-      reader.fail(at, 'Must be a mapping.');
+      reader.fail(at, modelerMessages.document.mustBeMapping);
       return [];
     }
     const traitName = reader.string(raw, 'trait', at, '');
     const trait = traits.find((t) => t.api_name === traitName);
     if (trait === undefined) {
-      reader.fail(`${at}/trait`, `Trait ${traitName} does not exist.`, 'unknown_reference');
+      reader.fail(
+        `${at}/trait`,
+        modelerMessages.document.unknownTrait(traitName),
+        'unknown_reference',
+      );
       return [];
     }
     const map: Record<string, string> = {};
@@ -708,7 +713,7 @@ function kindFromDocument(
       if (traitAttribute === undefined) {
         reader.fail(
           `${at}/attribute_map`,
-          `Trait ${traitName} has no Attribute ${from}.`,
+          modelerMessages.document.traitWithoutAttribute(traitName, from),
           'unknown_attribute',
         );
       } else if (typeof to === 'string') {
@@ -757,7 +762,7 @@ function relationFromDocument(
   const { reader } = ctx;
   const path = `relations/${name}`;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const id = ctx.ids.relations.get(name) ?? '';
@@ -811,7 +816,7 @@ function traitFromDocument(
   const { reader } = ctx;
   const path = `traits/${name}`;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const id = ctx.ids.traits.get(name) ?? '';
@@ -820,7 +825,7 @@ function traitFromDocument(
     ([attributeName, raw]) => {
       const at = `${path}/attributes/${attributeName}`;
       if (!isMap(raw)) {
-        reader.fail(at, 'Must be a mapping.');
+        reader.fail(at, modelerMessages.document.mustBeMapping);
         return [];
       }
       const known = baseTrait?.attributes.find((a) => a.name === attributeName)?.id;
@@ -856,7 +861,7 @@ function parameterFromDocument(
   reader: Reader,
 ): OperationParameter | null {
   if (!isMap(raw)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const type = raw['type'];
@@ -882,7 +887,7 @@ function operationFromDocument(name: string, value: unknown, ctx: ReadContext): 
   const { reader } = ctx;
   const path = `operations/${name}`;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const policy = value['review_policy'];
@@ -918,7 +923,7 @@ function operationFromDocument(name: string, value: unknown, ctx: ReadContext): 
       })),
     steps: reader.list(value['steps'], `${path}/steps`).flatMap((raw, index) => {
       if (!isMap(raw)) {
-        reader.fail(`${path}/steps/${index}`, 'Must be a mapping.');
+        reader.fail(`${path}/steps/${index}`, modelerMessages.document.mustBeMapping);
         return [];
       }
       const { step, ...rest } = raw;
@@ -937,7 +942,7 @@ function derivationFromDocument(name: string, value: unknown, ctx: ReadContext):
   const { reader } = ctx;
   const path = `derivations/${name}`;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const { variant, kind, attribute, ...rest } = reader.map(
@@ -1000,7 +1005,7 @@ function sourceFromDocument(
   const { reader } = ctx;
   const path = `sources/${name}`;
   if (!isMap(value)) {
-    reader.fail(path, 'Must be a mapping.');
+    reader.fail(path, modelerMessages.document.mustBeMapping);
     return null;
   }
   const targetName = reader.string(value, 'target_kind', path, '');
@@ -1016,7 +1021,7 @@ function sourceFromDocument(
     if (attribute === undefined) {
       reader.fail(
         `${path}/attribute_mapping/${attributeName}`,
-        `Attribute ${attributeName} does not exist.`,
+        modelerMessages.document.unknownAttribute(attributeName),
         'unknown_attribute',
       );
     } else if (isMap(mapping)) {
@@ -1027,7 +1032,7 @@ function sourceFromDocument(
   reader.list(value['relation_mapping'], `${path}/relation_mapping`).forEach((mapping, index) => {
     const at = `${path}/relation_mapping/${index}`;
     if (!isMap(mapping)) {
-      reader.fail(at, 'Must be a mapping.');
+      reader.fail(at, modelerMessages.document.mustBeMapping);
       return;
     }
     const relationName = reader.string(mapping, 'relation', at, '');

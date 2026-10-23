@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { useGrants, usePrincipals } from '@/api/queries';
 import { useScope } from '@/app/scope';
+import { admin as adminMessages } from '@/messages/admin';
 import { Select } from '@/ui/field';
 import { EmptyState, QueryBoundary, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
 import { usePrincipalNames } from './principal-names';
+
+const T = adminMessages.access;
 
 const TYPE_FILTERS = ['all', 'user', 'service', 'api_key'] as const;
 type TypeFilter = (typeof TYPE_FILTERS)[number];
@@ -23,14 +26,14 @@ export function AccessPanel() {
 
   return (
     <>
-      <Section title="Principals">
+      <Section title={T.principals}>
         <div className="mb-3 w-48">
           <Select
-            label="Type"
+            label={T.type}
             value={type}
             options={TYPE_FILTERS.map((value) => ({
               value,
-              label: value === 'all' ? 'All types' : value,
+              label: value === 'all' ? T.allTypes : value,
             }))}
             onChange={(event) => {
               if (isTypeFilter(event.target.value)) setType(event.target.value);
@@ -40,16 +43,16 @@ export function AccessPanel() {
         <QueryBoundary query={principals}>
           {(page) =>
             page.items.length === 0 ? (
-              <EmptyState>No principals of this type.</EmptyState>
+              <EmptyState>{T.noPrincipals}</EmptyState>
             ) : (
-              <Table caption="Principals">
+              <Table caption={T.principalsCaption}>
                 <THead>
                   <TR>
-                    <TH>Name</TH>
-                    <TH>Type</TH>
-                    <TH>Id</TH>
-                    <TH>External subject</TH>
-                    <TH>Created</TH>
+                    <TH>{T.principalColumns.name}</TH>
+                    <TH>{T.principalColumns.type}</TH>
+                    <TH>{T.principalColumns.id}</TH>
+                    <TH>{T.principalColumns.externalSubject}</TH>
+                    <TH>{T.principalColumns.created}</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -69,20 +72,20 @@ export function AccessPanel() {
         </QueryBoundary>
       </Section>
 
-      <Section title={`Grants in ${scope.domainInfo.display_name}`}>
+      <Section title={T.grants}>
         <QueryBoundary query={grants}>
           {(page) =>
             page.items.length === 0 ? (
-              <EmptyState>No grants in this Domain.</EmptyState>
+              <EmptyState>{T.noGrants}</EmptyState>
             ) : (
-              <Table caption="Grants">
+              <Table caption={T.grantsCaption}>
                 <THead>
                   <TR>
-                    <TH>Subject</TH>
-                    <TH>Role</TH>
-                    <TH>Scope</TH>
-                    <TH>Granted by</TH>
-                    <TH>Granted</TH>
+                    <TH>{T.grantColumns.subject}</TH>
+                    <TH>{T.grantColumns.role}</TH>
+                    <TH>{T.grantColumns.scope}</TH>
+                    <TH>{T.grantColumns.grantedBy}</TH>
+                    <TH>{T.grantColumns.granted}</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -94,7 +97,7 @@ export function AccessPanel() {
                       </TD>
                       <TD>
                         {grant.scope_type === 'domain'
-                          ? 'whole Domain'
+                          ? T.wholeDomain
                           : `${grant.scope_type} ${grant.scope_ref ?? ''}`}
                       </TD>
                       <TD>{nameOf(grant.created_by)}</TD>

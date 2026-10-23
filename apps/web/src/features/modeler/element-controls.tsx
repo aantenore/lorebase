@@ -2,9 +2,12 @@ import { useState } from 'react';
 import type { SchemaIssue } from '@/api/schema-rules';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
+import { FormAction, FormRow } from '@/ui/layout';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { errorAt } from './form-helpers';
 import { NewName } from './kind-form';
 
+const t = modelerMessages.elements;
 const STATUSES = ['draft', 'active', 'deprecated'];
 
 /** Choose an element of a section, add one by name, remove the chosen one. */
@@ -25,7 +28,7 @@ export function ElementPicker({
   onRemove: (name: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end gap-3">
+    <FormRow>
       {selected !== undefined && (
         <Select
           label={what}
@@ -37,8 +40,8 @@ export function ElementPicker({
         />
       )}
       <NewName
-        label={`New ${what} name`}
-        button={`Add ${what}`}
+        label={t.newName(what)}
+        button={t.add(what)}
         taken={(candidate) => names.includes(candidate)}
         onAdd={(added) => {
           onAdd(added);
@@ -46,17 +49,19 @@ export function ElementPicker({
         }}
       />
       {selected !== undefined && (
-        <Button
-          variant="danger"
-          onClick={() => {
-            onRemove(selected);
-            onSelect(undefined);
-          }}
-        >
-          Remove {what}
-        </Button>
+        <FormAction>
+          <Button
+            variant="danger"
+            onClick={() => {
+              onRemove(selected);
+              onSelect(undefined);
+            }}
+          >
+            {t.remove(what)}
+          </Button>
+        </FormAction>
       )}
-    </div>
+    </FormRow>
   );
 }
 
@@ -82,9 +87,9 @@ export function ElementName({
   const taken = typed !== null && typed !== name && names.includes(typed);
   return (
     <Input
-      label={`${what} name`}
+      label={t.nameOf(what)}
       value={typed ?? name}
-      error={taken ? `${typed} exists already.` : errorAt(issues, path)}
+      error={taken ? t.exists(typed) : errorAt(issues, path)}
       onChange={(event) => {
         const next = event.target.value;
         setTyped(next);
@@ -115,7 +120,7 @@ export function StatusAndDescription({
   return (
     <>
       <Select
-        label="Status"
+        label={t.status}
         value={status}
         options={STATUSES.map((s) => ({ value: s, label: s }))}
         onChange={(event) => {
@@ -124,7 +129,7 @@ export function StatusAndDescription({
         }}
       />
       <Input
-        label={`${what} description`}
+        label={t.descriptionOf(what)}
         className="sm:col-span-2"
         value={description}
         onChange={(event) => {

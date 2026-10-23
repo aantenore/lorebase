@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMockApi } from '@/api/mock/adapter';
 import { testConfig } from '@/config/env';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 
 const SESSION = 'sess_20261020_brevik';
@@ -36,9 +37,7 @@ describe('Agent activity', () => {
         sessions: () => Promise.resolve({ enabled: false, items: [], next_cursor: null }),
       },
     });
-    expect(
-      await screen.findByText(/Tracing is off \(keeper\.trace\.enabled\)/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(messages.agentActivity.tracingOff)).toBeInTheDocument();
     expect(await screen.findByText('No agent sessions match.')).toBeInTheDocument();
   });
 

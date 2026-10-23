@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useSchema, useTraceSessions, useTraceTimeline } from '@/api/queries';
 import { useScope } from '@/app/scope';
+import { agentActivity as agentActivityMessages } from '@/messages/agent-activity';
+import { common as commonMessages } from '@/messages/common';
 import { Button } from '@/ui/button';
-import { Badge, EmptyState, PageHeader, QueryBoundary, Section } from '@/ui/layout';
+import { Badge, EmptyState, FormAction, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { INFERRED_NOTE, InferredBadge } from './proposal-link';
 import { SessionsList, ActorFilter } from './sessions-list';
 import { Timeline } from './timeline';
@@ -24,7 +26,7 @@ function SessionTimeline({
   const schema = useSchema(scope);
 
   return (
-    <Section title={`Session ${session}`}>
+    <Section title={agentActivityMessages.timeline.title(session)}>
       <QueryBoundary query={timeline}>
         {(data) => {
           const last = data.steps[data.steps.length - 1]?.step ?? 1;
@@ -39,11 +41,11 @@ function SessionTimeline({
               )}
               {data.truncated && (
                 <p className="mb-2 text-xs text-warning">
-                  The session has more steps than are shown.
+                  {agentActivityMessages.timeline.truncated}
                 </p>
               )}
               {data.steps.length === 0 ? (
-                <EmptyState>This session has no visible steps.</EmptyState>
+                <EmptyState>{agentActivityMessages.timeline.empty}</EmptyState>
               ) : (
                 <div className="grid gap-4 xl:grid-cols-2">
                   <Timeline steps={data.steps} domain={scope.domain} current={selected} />
@@ -96,32 +98,35 @@ export function AgentActivityPage({
   return (
     <>
       <PageHeader
-        title="Agent activity"
-        description="What agents asked of Keeper: each session step by step, with the Records and Links it touched."
-        actions={<Badge tone="accent">All Domains</Badge>}
+        title={agentActivityMessages.title}
+        description={agentActivityMessages.description}
+        docs={agentActivityMessages.docs}
+        actions={<Badge tone="accent">{agentActivityMessages.allDomains}</Badge>}
       />
       {!enabled && (
         <p role="status" className="mb-4 rounded-md border border-warning p-3 text-sm text-warning">
-          Tracing is off (keeper.trace.enabled). Sessions recorded earlier are still listed.
+          {agentActivityMessages.tracingOff}
         </p>
       )}
-      <Section title="Sessions">
-        <div className="flex flex-wrap items-end gap-4">
+      <Section title={agentActivityMessages.sessions.title}>
+        <div className="mb-3 flex flex-wrap items-start gap-x-4 gap-y-3">
           <ActorFilter key={actor ?? ''} actor={actor} onActor={onActor} />
-          <label className="mb-3 flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={thisDomain}
-              onChange={(event) => {
-                setThisDomain(event.target.checked);
-              }}
-            />
-            Only steps in {scope.domain}
-          </label>
+          <FormAction>
+            <label className="flex h-9 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={thisDomain}
+                onChange={(event) => {
+                  setThisDomain(event.target.checked);
+                }}
+              />
+              {agentActivityMessages.sessions.thisDomain}
+            </label>
+          </FormAction>
         </div>
         {sessions.isPending ? (
           <p role="status" className="text-muted">
-            Loading...
+            {commonMessages.loading}
           </p>
         ) : sessions.isError ? (
           <p role="alert" className="text-danger">
@@ -138,14 +143,14 @@ export function AgentActivityPage({
                   void sessions.fetchNextPage();
                 }}
               >
-                Load more
+                {agentActivityMessages.loadMore}
               </Button>
             )}
           </>
         )}
       </Section>
       {session === undefined ? (
-        <p className="text-sm text-muted">Pick a session to see its timeline.</p>
+        <p className="text-sm text-muted">{agentActivityMessages.pickSession}</p>
       ) : (
         <SessionTimeline session={session} actor={actor} step={step} onStep={onStep} />
       )}

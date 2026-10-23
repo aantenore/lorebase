@@ -1,6 +1,7 @@
 import { useId, type KeyboardEvent } from 'react';
 import type { ExtractionItem, ItemDecision } from '@/api/extraction-types';
 import { Button } from '@/ui/button';
+import { extraction as extractionMessages } from '@/messages/extraction';
 import { cn } from '@/ui/cn';
 import { Badge, type BadgeTone } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
@@ -8,6 +9,8 @@ import { ConfidenceBar } from './confidence-bar';
 import { EvidenceLink } from './evidence-link';
 import { groupByType, neighbor, TYPE_LABEL, tableOrder, type Draft } from './item-state';
 import { MatchBadge } from './match-badge';
+
+const text = extractionMessages;
 
 export const DECISION_TONE: Record<ItemDecision, BadgeTone> = {
   pending: 'warning',
@@ -18,12 +21,18 @@ export const DECISION_TONE: Record<ItemDecision, BadgeTone> = {
 /** What an item proposes, in a few words: the Record, the value change or the Link. */
 export function describeItem(item: ExtractionItem): string {
   if (item.type === 'link') {
-    return `${item.relation ?? 'link'}: ${item.from ?? '?'} to ${item.to ?? '?'}`;
+    return text.describe.link(item.relation, item.from, item.to);
   }
   if (item.type === 'value') {
-    return `${item.kind ?? ''} ${item.key ?? ''}: ${item.attribute ?? ''} ${JSON.stringify(item.current)} to ${JSON.stringify(item.value)}`;
+    return text.describe.value(
+      item.kind,
+      item.key,
+      item.attribute,
+      JSON.stringify(item.current),
+      JSON.stringify(item.value),
+    );
   }
-  return `${item.kind ?? ''} ${item.key ?? ''}`;
+  return text.describe.record(item.kind, item.key);
 }
 
 export interface ItemTableProps {
@@ -76,7 +85,7 @@ export function ItemTable({
 
   return (
     <Table
-      caption="Extraction items"
+      caption={text.table.caption}
       role="grid"
       tabIndex={0}
       aria-activedescendant={active === undefined ? undefined : idOf(active)}
@@ -85,13 +94,13 @@ export function ItemTable({
     >
       <THead>
         <TR>
-          <TH>Decision</TH>
-          <TH>Proposal</TH>
-          <TH>Confidence</TH>
-          <TH>Match</TH>
-          <TH>Evidence</TH>
-          <TH>
-            <span className="sr-only">Actions</span>
+          <TH>{text.table.columns.decision}</TH>
+          <TH>{text.table.columns.change}</TH>
+          <TH>{text.table.columns.confidence}</TH>
+          <TH>{text.table.columns.match}</TH>
+          <TH>{text.table.columns.evidence}</TH>
+          <TH className="relative">
+            <span className="sr-only">{text.table.columns.actions}</span>
           </TH>
         </TR>
       </THead>
@@ -99,7 +108,7 @@ export function ItemTable({
         {groupByType(items).flatMap((group) => [
           <TR key={`group-${group.type}`} className="bg-surface-2/60 hover:bg-surface-2/60">
             <TH colSpan={6} scope="colgroup" className="text-xs">
-              {TYPE_LABEL[group.type]} ({group.items.length})
+              {text.table.group(TYPE_LABEL[group.type], group.items.length)}
             </TH>
           </TR>,
           ...group.items.map((item) => {
@@ -121,7 +130,7 @@ export function ItemTable({
               >
                 <TD>
                   <Badge tone={DECISION_TONE[item.decision]}>{item.decision}</Badge>
-                  {staged && <span className="ml-1 text-xs text-muted">staged</span>}
+                  {staged && <span className="ml-1 text-xs text-muted">{text.table.staged}</span>}
                 </TD>
                 <TD className="max-w-xs break-words">{label}</TD>
                 <TD>
@@ -139,25 +148,25 @@ export function ItemTable({
                     <span className="flex gap-1">
                       <Button
                         size="sm"
-                        aria-label={`Accept ${label}`}
+                        aria-label={text.table.accept(label)}
                         disabled={item.decision === 'accepted'}
                         onClick={(event) => {
                           event.stopPropagation();
                           onDecide(item, 'accepted');
                         }}
                       >
-                        Accept
+                        {text.accept}
                       </Button>
                       <Button
                         size="sm"
-                        aria-label={`Reject ${label}`}
+                        aria-label={text.table.reject(label)}
                         disabled={item.decision === 'rejected'}
                         onClick={(event) => {
                           event.stopPropagation();
                           onDecide(item, 'rejected');
                         }}
                       >
-                        Reject
+                        {text.reject}
                       </Button>
                     </span>
                   )}

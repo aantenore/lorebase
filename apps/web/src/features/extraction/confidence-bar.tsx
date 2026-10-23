@@ -1,5 +1,6 @@
 import { toneOf } from '@/features/inference/confidence-badge';
 import type { BadgeTone } from '@/ui/layout';
+import { extraction as extractionMessages } from '@/messages/extraction';
 import { cn } from '@/ui/cn';
 import { percent } from './item-state';
 
@@ -18,13 +19,14 @@ const FILL: Record<BadgeTone, string> = {
 export function ConfidenceBar({
   confidence,
   threshold,
-  label = 'Confidence',
+  label = extractionMessages.confidence.label,
 }: {
   confidence: number | null;
   threshold: number;
   label?: string;
 }) {
-  if (confidence === null) return <span className="text-xs text-muted">no score</span>;
+  if (confidence === null)
+    return <span className="text-xs text-muted">{extractionMessages.confidence.none}</span>;
   const tone = toneOf(confidence, threshold);
   return (
     <div className="flex items-center gap-2">

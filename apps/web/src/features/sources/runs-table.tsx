@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import type { SourceRun } from '@/api/sources-types';
 import { useScopeSearch } from '@/app/scope';
+import { sources as sourcesMessages } from '@/messages/sources';
 import { Badge } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
@@ -11,18 +12,18 @@ import { RUN_TONE } from './sources-table';
 export function RunsTable({ domain, runs }: { domain: string; runs: readonly SourceRun[] }) {
   const scopeSearch = useScopeSearch();
   return (
-    <Table caption="Run history">
+    <Table caption={sourcesMessages.runs.caption}>
       <THead>
         <TR>
-          <TH>Run</TH>
-          <TH>Source</TH>
-          <TH>Status</TH>
-          <TH>Trigger</TH>
-          <TH>Started</TH>
-          <TH>Rows read</TH>
-          <TH>Changes</TH>
-          <TH>Branch</TH>
-          <TH>Proposal</TH>
+          <TH>{sourcesMessages.runs.run}</TH>
+          <TH>{sourcesMessages.runs.source}</TH>
+          <TH>{sourcesMessages.runs.status}</TH>
+          <TH>{sourcesMessages.runs.trigger}</TH>
+          <TH>{sourcesMessages.runs.started}</TH>
+          <TH>{sourcesMessages.runs.rowsRead}</TH>
+          <TH>{sourcesMessages.runs.changes}</TH>
+          <TH>{sourcesMessages.runs.branch}</TH>
+          <TH>{sourcesMessages.runs.proposal}</TH>
         </TR>
       </THead>
       <TBody>
@@ -41,7 +42,7 @@ export function RunsTable({ domain, runs }: { domain: string; runs: readonly Sou
             <TD>{run.branch ?? '-'}</TD>
             <TD>
               {run.proposal === null ? (
-                <span className="text-muted">none</span>
+                <span className="text-muted">{sourcesMessages.runs.noProposal}</span>
               ) : (
                 <Link
                   to="/$domain/review/$proposal"

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { KeeperApi } from '@/api/client';
 import { useOptionalKeeperApi } from '@/api/provider';
 import { useOptionalScope } from '@/app/scope';
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
 import type { SchemaDocument } from './document';
 import { asText, isRecord, typeLabel } from './form-helpers';
 import {
@@ -13,6 +14,8 @@ import {
   type Sample,
 } from './source-preview';
 import { ExpressionFeed, type ExpressionEvaluation } from './expression-feed';
+
+const t = modelerEditorsMessages.source.preview;
 
 /** Rows shown, and the part of the file read to find them. */
 const PREVIEW_ROWS = 5;
@@ -43,13 +46,13 @@ async function readParquet(
   flattenSeparator: string,
 ): Promise<Sample> {
   if (api === null || domain === undefined) {
-    return { rows: [], error: 'Parquet files are read by Keeper, which this view is not using.' };
+    return { rows: [], error: t.parquetNotRead };
   }
   try {
     const preview = await api.inference.preview(domain, file, { rows: PREVIEW_ROWS });
     return { rows: preview.rows.map((row) => flatten(row, flattenSeparator)) };
   } catch (error) {
-    return { rows: [], error: error instanceof Error ? error.message : 'Keeper cannot read it.' };
+    return { rows: [], error: error instanceof Error ? error.message : t.cannotRead };
   }
 }
 
@@ -114,16 +117,11 @@ export function SourcePreview({
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted">
-        Pick a sample of the data (CSV, TSV, JSON, JSON Lines or Parquet) to see its first{' '}
-        {PREVIEW_ROWS} rows mapped onto {kind === '' ? 'the target Kind' : kind} by the mapping
-        above, as edited. CSV, TSV and JSON files are read in this browser and not uploaded; a
-        Parquet file is sent to Keeper, which returns its first rows and stores nothing
-        {withExpressions
-          ? '. To evaluate the expressions of the mapping, Keeper receives the sample rows shown below, and nothing else.'
-          : '.'}
+        {t.intro(PREVIEW_ROWS, kind === '' ? null : kind)}
+        {withExpressions && ` ${t.expressionsNote}`}
       </p>
       <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-        Sample file for {name}
+        {t.file(name)}
         <input
           type="file"
           accept=".csv,.tsv,.json,.jsonl,.ndjson,.parquet"
@@ -149,16 +147,16 @@ export function SourcePreview({
       )}
       {expressions?.error !== undefined && (
         <p role="alert" className="text-sm text-danger">
-          Keeper could not evaluate the expressions: {expressions.error}
+          {t.expressionsFailed(expressions.error)}
         </p>
       )}
       {loaded !== null && loaded.sample.error === undefined && (
         <div className="overflow-x-auto">
-          <table aria-label={`Sample rows of ${name}`} className="w-full text-sm">
+          <table aria-label={t.table(name)} className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-muted">
                 <th scope="col" className="py-1 pr-4 font-medium">
-                  Key
+                  {t.key}
                 </th>
                 {columns.map((attribute) => (
                   <th key={attribute} scope="col" className="py-1 pr-4 font-medium">
@@ -182,9 +180,7 @@ export function SourcePreview({
               ))}
             </tbody>
           </table>
-          {rows.length === 0 && (
-            <p className="text-sm text-muted">{loaded.fileName} has no rows.</p>
-          )}
+          {rows.length === 0 && <p className="text-sm text-muted">{t.noRows(loaded.fileName)}</p>}
         </div>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { explore as exploreMessages } from '@/messages/explore';
 import type { ExploreEvent } from './events';
 import { GuideError, type ExploreRequest, type ExploreTransport } from './explore-client';
 
@@ -97,7 +98,7 @@ export function useExploration(transport: ExploreTransport | null, timeoutMs: nu
             ? {
                 ...current,
                 status: 'failed',
-                failure: { message: 'The stream ended before an answer.', retryAt: null },
+                failure: { message: exploreMessages.errors.streamEnded, retryAt: null },
               }
             : { ...current, status: 'done' },
         );
@@ -121,7 +122,7 @@ export function useExploration(transport: ExploreTransport | null, timeoutMs: nu
               ? Date.now() + error.retryAfterS * 1000
               : null;
           const message =
-            error instanceof GuideError ? error.message : 'The exploration failed unexpectedly.';
+            error instanceof GuideError ? error.message : exploreMessages.errors.unexpected;
           update((current) => ({ ...current, status: 'failed', failure: { message, retryAt } }));
         }
       } finally {

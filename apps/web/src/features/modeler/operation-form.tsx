@@ -7,7 +7,8 @@ import {
 } from '@/api/schema-rules';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { Section } from '@/ui/layout';
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
+import { FormAction, FormRow, Section } from '@/ui/layout';
 import { CelField } from './cel-field';
 import type { SchemaDocument, TypeDocument } from './document';
 import { ElementName, ElementPicker, StatusAndDescription } from './element-controls';
@@ -39,6 +40,9 @@ import {
 } from './form-helpers';
 import { ListInput } from './list-input';
 import { OperationDryRun } from './operation-dry-run';
+
+const t = modelerEditorsMessages.operation;
+const actions = modelerEditorsMessages.actions;
 
 type Doc = Record<string, unknown>;
 
@@ -77,7 +81,7 @@ function Parameters({
   };
   return (
     <div className="flex flex-col gap-3">
-      {parameters.length === 0 && <p className="text-sm text-muted">No parameters.</p>}
+      {parameters.length === 0 && <p className="text-sm text-muted">{t.parameters.none}</p>}
       <ol className="flex flex-col gap-3">
         {parameters.map((parameter, index) => {
           const n = index + 1;
@@ -91,7 +95,7 @@ function Parameters({
               className="grid gap-2 rounded-md border border-line bg-surface p-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-start"
             >
               <Input
-                label={`Parameter ${n} name`}
+                label={t.parameters.name(n)}
                 value={asText(parameter['name'])}
                 error={errorsAt(
                   issues,
@@ -106,7 +110,7 @@ function Parameters({
                 }}
               />
               <Select
-                label={`Parameter ${n} type`}
+                label={t.parameters.type(n)}
                 value={label}
                 error={errorAt(issues, `${at}/type`)}
                 options={typeOptions(kindNames, label).map((v) => ({ value: v, label: v }))}
@@ -119,7 +123,7 @@ function Parameters({
               />
               {isEnum ? (
                 <ListInput
-                  label={`Parameter ${n} enum values`}
+                  label={t.parameters.enumValues(n)}
                   value={enumValuesOf(type)}
                   onChange={(values) => {
                     update(index, (p) => {
@@ -129,7 +133,7 @@ function Parameters({
                 />
               ) : (
                 <Input
-                  label={`Parameter ${n} description`}
+                  label={t.parameters.description(n)}
                   value={asText(parameter['description'])}
                   onChange={(event) => {
                     const value = event.target.value;
@@ -139,7 +143,7 @@ function Parameters({
                   }}
                 />
               )}
-              <div className="flex items-center gap-3 sm:mt-5">
+              <FormAction>
                 <label className="flex items-center gap-1.5 text-sm">
                   <input
                     type="checkbox"
@@ -152,12 +156,11 @@ function Parameters({
                       });
                     }}
                   />
-                  Parameter {n} required
+                  {t.parameters.required(n)}
                 </label>
                 <Button
-                  size="sm"
                   variant="ghost"
-                  aria-label={`Remove parameter ${n}`}
+                  aria-label={t.parameters.remove(n)}
                   onClick={() => {
                     change((target) => {
                       target['parameters'] = asList(target['parameters']).filter(
@@ -166,9 +169,9 @@ function Parameters({
                     });
                   }}
                 >
-                  Remove
+                  {actions.remove}
                 </Button>
-              </div>
+              </FormAction>
             </li>
           );
         })}
@@ -189,7 +192,7 @@ function Parameters({
             });
           }}
         >
-          Add parameter
+          {t.parameters.add}
         </Button>
       </div>
     </div>
@@ -216,7 +219,7 @@ function Preconditions({
   };
   return (
     <div className="flex flex-col gap-3">
-      {preconditions.length === 0 && <p className="text-sm text-muted">No preconditions.</p>}
+      {preconditions.length === 0 && <p className="text-sm text-muted">{t.preconditions.none}</p>}
       <ol className="flex flex-col gap-3">
         {preconditions.map((precondition, index) => {
           const n = index + 1;
@@ -227,39 +230,40 @@ function Preconditions({
               className="flex flex-col gap-2 rounded-md border border-line bg-surface p-3"
             >
               <CelField
-                label={`Precondition ${n} expression`}
-                hint="CEL, true when the Operation may run."
+                label={t.preconditions.expression(n)}
+                hint={t.preconditions.hint}
                 value={asText(precondition['expression'])}
                 error={errorsAt(issues, `${at}/expression`, at)}
-                placeholder='record(params.contract).status == "draft"'
+                placeholder={t.preconditions.placeholder}
                 onChange={(text) => {
                   update(index, 'expression', text);
                 }}
               />
-              <div className="flex flex-wrap items-end gap-2">
+              <FormRow>
                 <Input
-                  label={`Precondition ${n} message`}
+                  label={t.preconditions.message(n)}
                   className="min-w-64 flex-1"
                   value={asText(precondition['message'])}
                   onChange={(event) => {
                     update(index, 'message', event.target.value);
                   }}
                 />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Remove precondition ${n}`}
-                  onClick={() => {
-                    change((target) => {
-                      target['preconditions'] = asList(target['preconditions']).filter(
-                        (_, i) => i !== index,
-                      );
-                    });
-                  }}
-                >
-                  Remove
-                </Button>
-              </div>
+                <FormAction>
+                  <Button
+                    variant="ghost"
+                    aria-label={t.preconditions.remove(n)}
+                    onClick={() => {
+                      change((target) => {
+                        target['preconditions'] = asList(target['preconditions']).filter(
+                          (_, i) => i !== index,
+                        );
+                      });
+                    }}
+                  >
+                    {actions.remove}
+                  </Button>
+                </FormAction>
+              </FormRow>
             </li>
           );
         })}
@@ -275,7 +279,7 @@ function Preconditions({
             });
           }}
         >
-          Add precondition
+          {t.preconditions.add}
         </Button>
       </div>
     </div>
@@ -303,12 +307,12 @@ function StepValues({
   const choice = unset.includes(adding) ? adding : (unset[0] ?? '');
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-xs font-medium text-muted">Step {n} values</legend>
+      <legend className="mb-1 text-xs font-medium text-muted">{t.steps.values(n)}</legend>
       {Object.entries(values).map(([attribute, expression]) => (
-        <div key={attribute} className="flex items-start gap-2">
+        <FormRow key={attribute}>
           <CelField
-            className="flex-1"
-            label={`Step ${n} value of ${attribute}`}
+            className="min-w-0 flex-1"
+            label={t.steps.valueOf(n, attribute)}
             value={asText(expression)}
             error={errorAt(issues, `${at}/values/${attribute}`)}
             onChange={(text) => {
@@ -317,42 +321,44 @@ function StepValues({
               });
             }}
           />
-          <Button
-            size="sm"
-            variant="ghost"
-            className="mt-5"
-            aria-label={`Remove value of ${attribute} from step ${n}`}
-            onClick={() => {
-              update((s) => {
-                const next = child(s, 'values');
-                delete next[attribute];
-              });
-            }}
-          >
-            Remove
-          </Button>
-        </div>
+          <FormAction>
+            <Button
+              variant="ghost"
+              aria-label={t.steps.removeValue(n, attribute)}
+              onClick={() => {
+                update((s) => {
+                  const next = child(s, 'values');
+                  delete next[attribute];
+                });
+              }}
+            >
+              {actions.remove}
+            </Button>
+          </FormAction>
+        </FormRow>
       ))}
       {unset.length > 0 && (
-        <div className="flex flex-wrap items-end gap-2">
+        <FormRow>
           <Select
-            label={`Step ${n} Attribute to set`}
+            label={t.steps.attributeToSet(n)}
             value={choice}
             options={unset.map((a) => ({ value: a, label: a }))}
             onChange={(event) => {
               setAdding(event.target.value);
             }}
           />
-          <Button
-            onClick={() => {
-              update((s) => {
-                child(s, 'values')[choice] = '';
-              });
-            }}
-          >
-            Set Attribute
-          </Button>
-        </div>
+          <FormAction>
+            <Button
+              onClick={() => {
+                update((s) => {
+                  child(s, 'values')[choice] = '';
+                });
+              }}
+            >
+              {t.steps.setAttribute}
+            </Button>
+          </FormAction>
+        </FormRow>
       )}
     </fieldset>
   );
@@ -384,7 +390,7 @@ function Steps({
     change((target) => {
       moveStep(target, from, to);
     });
-    setAnnouncement(`Step ${from + 1} moved to position ${to + 1} of ${steps.length}.`);
+    setAnnouncement(t.steps.moved(from + 1, to + 1, steps.length));
   };
   // After a move by button, keep the focus on the same button of the step that moved.
   useEffect(() => {
@@ -402,11 +408,8 @@ function Steps({
   });
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted">
-        The effects of the Operation, in order. <code>$step[n]</code> is the Record step n wrote (n
-        counts from 0); moving a step renumbers the references to it.
-      </p>
-      <p role="status" aria-label="Step order" className="sr-only">
+      <p className="text-xs text-muted">{t.steps.intro}</p>
+      <p role="status" aria-label={t.steps.orderLabel} className="sr-only">
         {announcement}
       </p>
       {errorAt(issues, `${path}/steps`) !== undefined && (
@@ -437,7 +440,7 @@ function Steps({
                   ? 'border-accent'
                   : 'border-line'
               } ${dragging === index ? 'opacity-50' : ''}`}
-              aria-label={`Step ${n}`}
+              aria-label={t.steps.item(n)}
               onDragOver={(event) => {
                 if (dragging === null) return;
                 event.preventDefault();
@@ -451,26 +454,28 @@ function Steps({
                 setOver(null);
               }}
             >
-              <div className="flex flex-wrap items-end gap-2">
-                <span
-                  draggable
-                  aria-hidden="true"
-                  title="Drag to reorder"
-                  className="mb-1 cursor-grab px-1 text-muted select-none"
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = 'move';
-                    event.dataTransfer.setData('text/plain', String(index));
-                    setDragging(index);
-                  }}
-                  onDragEnd={() => {
-                    setDragging(null);
-                    setOver(null);
-                  }}
-                >
-                  &#x2807;&#x2807;
-                </span>
+              <FormRow>
+                <FormAction>
+                  <span
+                    draggable
+                    aria-hidden="true"
+                    title={t.steps.drag}
+                    className="cursor-grab px-1 text-muted select-none"
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', String(index));
+                      setDragging(index);
+                    }}
+                    onDragEnd={() => {
+                      setDragging(null);
+                      setOver(null);
+                    }}
+                  >
+                    &#x2807;&#x2807;
+                  </span>
+                </FormAction>
                 <Select
-                  label={`Step ${n} action`}
+                  label={t.steps.action(n)}
                   value={action ?? asText(step['step'])}
                   error={errorAt(issues, at)}
                   options={[
@@ -489,7 +494,7 @@ function Steps({
                 />
                 {fields.includes('kind') && (
                   <Select
-                    label={`Step ${n} Kind`}
+                    label={t.steps.kind(n)}
                     value={kind}
                     error={errorAt(issues, `${at}/kind`)}
                     options={(kinds.includes(kind) ? kinds : [kind, ...kinds]).map((k) => ({
@@ -506,7 +511,7 @@ function Steps({
                 )}
                 {fields.includes('relation') && (
                   <Select
-                    label={`Step ${n} Relation`}
+                    label={t.steps.relation(n)}
                     value={relation}
                     error={errorAt(issues, `${at}/relation`)}
                     options={(relations.includes(relation)
@@ -521,52 +526,51 @@ function Steps({
                     }}
                   />
                 )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-move={`up-${index}`}
-                  aria-label={`Move step ${n} up`}
-                  disabled={index === 0}
-                  onClick={() => {
-                    move(index, index - 1);
-                    refocus.current = { index: index - 1, direction: 'up' };
-                  }}
-                >
-                  Up
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-move={`down-${index}`}
-                  aria-label={`Move step ${n} down`}
-                  disabled={index === steps.length - 1}
-                  onClick={() => {
-                    move(index, index + 1);
-                    refocus.current = { index: index + 1, direction: 'down' };
-                  }}
-                >
-                  Down
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Remove step ${n}`}
-                  onClick={() => {
-                    change((target) => {
-                      target['steps'] = asList(target['steps']).filter((_, i) => i !== index);
-                    });
-                  }}
-                >
-                  Remove
-                </Button>
-              </div>
+                <FormAction>
+                  <Button
+                    variant="ghost"
+                    data-move={`up-${index}`}
+                    aria-label={t.steps.moveUp(n)}
+                    disabled={index === 0}
+                    onClick={() => {
+                      move(index, index - 1);
+                      refocus.current = { index: index - 1, direction: 'up' };
+                    }}
+                  >
+                    {actions.up}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    data-move={`down-${index}`}
+                    aria-label={t.steps.moveDown(n)}
+                    disabled={index === steps.length - 1}
+                    onClick={() => {
+                      move(index, index + 1);
+                      refocus.current = { index: index + 1, direction: 'down' };
+                    }}
+                  >
+                    {actions.down}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    aria-label={t.steps.remove(n)}
+                    onClick={() => {
+                      change((target) => {
+                        target['steps'] = asList(target['steps']).filter((_, i) => i !== index);
+                      });
+                    }}
+                  >
+                    {actions.remove}
+                  </Button>
+                </FormAction>
+              </FormRow>
               {(['target', 'from', 'to'] as const)
                 .filter((key) => fields.includes(key))
                 .map((key) => (
                   <CelField
                     key={key}
-                    label={`Step ${n} ${key}`}
-                    hint="CEL, a Record reference such as params.supplier or $step[0]."
+                    label={t.steps.reference(n, key)}
+                    hint={t.steps.referenceHint}
                     value={asText(step[key])}
                     error={errorAt(issues, `${at}/${key}`)}
                     onChange={(text) => {
@@ -601,7 +605,7 @@ function Steps({
             });
           }}
         >
-          Add step
+          {t.steps.add}
         </Button>
       </div>
     </div>
@@ -632,13 +636,13 @@ function Governance({
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Select
-        label="Review policy"
+        label={t.governance.reviewPolicy}
         value={policy.mode}
         error={policy.mode === 'expression' ? undefined : errorAt(issues, `${path}/review_policy`)}
         options={[
-          { value: 'never', label: 'never: commit directly' },
-          { value: 'always', label: 'always: open a Proposal' },
-          { value: 'expression', label: 'expression: Proposal when true' },
+          { value: 'never', label: t.governance.never },
+          { value: 'always', label: t.governance.always },
+          { value: 'expression', label: t.governance.expression },
         ]}
         onChange={(event) => {
           const mode = event.target.value as ReviewMode;
@@ -649,8 +653,8 @@ function Governance({
       />
       {policy.mode === 'expression' && (
         <CelField
-          label="Review expression"
-          hint="CEL, true sends the edits to a Proposal."
+          label={t.governance.reviewExpression}
+          hint={t.governance.reviewExpressionHint}
           value={policy.expression}
           error={errorsAt(issues, `${path}/review_policy/expression`, `${path}/review_policy`)}
           onChange={(text) => {
@@ -661,7 +665,7 @@ function Governance({
         />
       )}
       <ListInput
-        label="Permissions"
+        label={t.governance.permissions}
         value={asList(operation['permissions']).map(String)}
         error={errorAt(issues, `${path}/permissions`)}
         onChange={(values) => {
@@ -671,7 +675,7 @@ function Governance({
         }}
       />
       <ListInput
-        label="Side effects"
+        label={t.governance.sideEffects}
         value={asList(operation['side_effects']).map(String)}
         error={errorAt(issues, `${path}/side_effects`)}
         onChange={(values) => {
@@ -681,7 +685,7 @@ function Governance({
         }}
       />
       <Input
-        label="Rate limit: calls"
+        label={t.governance.rateCalls}
         type="number"
         min={1}
         value={typeof limit['max_calls'] === 'number' ? limit['max_calls'] : ''}
@@ -691,7 +695,7 @@ function Governance({
         }}
       />
       <Input
-        label="Rate limit: per seconds"
+        label={t.governance.rateSeconds}
         type="number"
         min={1}
         value={typeof limit['per_seconds'] === 'number' ? limit['per_seconds'] : ''}
@@ -713,7 +717,7 @@ export function OperationsForm({ document, issues, edit, ids, selected, onSelect
   return (
     <div className="flex flex-col gap-4">
       <ElementPicker
-        what="Operation"
+        what={t.kind}
         names={names}
         selected={name}
         onSelect={onSelect}
@@ -729,7 +733,7 @@ export function OperationsForm({ document, issues, edit, ids, selected, onSelect
         }}
       />
       {name === undefined || operation === undefined ? (
-        <p className="text-sm text-muted">No custom Operations.</p>
+        <p className="text-sm text-muted">{t.none}</p>
       ) : (
         <OperationEditor
           key={asText(operation['id']) || name}
@@ -775,7 +779,7 @@ function OperationEditor({
     <div className="flex flex-col gap-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <ElementName
-          what="Operation"
+          what={t.kind}
           name={name}
           names={Object.keys(document.operations ?? {})}
           issues={issues}
@@ -788,7 +792,7 @@ function OperationEditor({
           onRenamed={onSelect}
         />
         <StatusAndDescription
-          what="Operation"
+          what={t.kind}
           element={operation}
           onChange={(key, value) => {
             change((target) => {
@@ -797,7 +801,7 @@ function OperationEditor({
           }}
         />
       </div>
-      <Section title="Parameters">
+      <Section title={t.parameters.title}>
         <Parameters
           operation={operation}
           path={path}
@@ -806,10 +810,10 @@ function OperationEditor({
           change={change}
         />
       </Section>
-      <Section title="Preconditions">
+      <Section title={t.preconditions.title}>
         <Preconditions operation={operation} path={path} issues={issues} change={change} />
       </Section>
-      <Section title="Steps">
+      <Section title={t.steps.title}>
         <Steps
           operation={operation}
           path={path}
@@ -818,16 +822,14 @@ function OperationEditor({
           change={change}
         />
       </Section>
-      <Section title="Review and limits">
+      <Section title={t.governance.title}>
         <Governance operation={operation} path={path} issues={issues} change={change} />
       </Section>
-      <Section title="Dry run">
+      <Section title={t.dryRun.title}>
         {canDryRun ? (
           <OperationDryRun name={name} parameters={asList(operation['parameters'])} />
         ) : (
-          <p className="text-sm text-muted">
-            Save the change set first: a dry run runs the Operation as saved on the Branch.
-          </p>
+          <p className="text-sm text-muted">{t.dryRun.saveFirst}</p>
         )}
       </Section>
     </div>

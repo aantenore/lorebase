@@ -5,6 +5,7 @@ import type { KeeperApi } from '@/api';
 import { problem } from '@/api/errors';
 import { asRemote, createMockApi } from '@/api/mock/adapter';
 import { testConfig } from '@/config/env';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 import { changesLabel, lastRunOf, mappingSummary, policyLabel } from './source-summary';
 
@@ -68,7 +69,7 @@ describe('Sources screen', () => {
 
   it('points to the data wizard when the Branch has no Sources', async () => {
     renderApp('/hr/sources');
-    const empty = await screen.findByText(/This Branch has no Sources/);
+    const empty = await screen.findByText(/No Sources yet/);
     expect(within(empty).getByRole('link', { name: 'Modeler' })).toHaveAttribute(
       'href',
       expect.stringContaining('view=start'),
@@ -100,8 +101,8 @@ describe('Sources screen', () => {
     await waitFor(() => {
       expect(editor.querySelector('.cm-content')?.textContent).toContain('sources:');
     });
-    expect(screen.getByText(/The mapping editor is planned/)).toBeInTheDocument();
-    expect(screen.getByText('No pending schema changes on cleanup/tiers.')).toBeInTheDocument();
+    expect(screen.getByText(messages.sources.editor.hint)).toBeInTheDocument();
+    expect(screen.getByText(messages.modeler.changeSet.empty)).toBeInTheDocument();
 
     typeInYaml(editor, '0 2 * * *', '0 3 * * *');
     const change = await screen.findByRole('region', { name: 'Change set' });
@@ -120,10 +121,8 @@ describe('Sources screen', () => {
 
     typeInYaml(editor, 'sources:', 'other:');
     expect(await screen.findByText(/Only the sources: section is edited here/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Reset to cleanup/tiers' }));
-    expect(
-      await screen.findByText('No pending schema changes on cleanup/tiers.'),
-    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: messages.sources.editor.reset }));
+    expect(await screen.findByText(messages.modeler.changeSet.empty)).toBeInTheDocument();
   });
 });
 

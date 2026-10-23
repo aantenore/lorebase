@@ -2,7 +2,8 @@ import { useState } from 'react';
 import type { SchemaIssue } from '@/api/schema-rules';
 import { Button } from '@/ui/button';
 import { Input, Select, Textarea } from '@/ui/field';
-import { Section } from '@/ui/layout';
+import { modeler as modelerMessages } from '@/messages/modeler';
+import { FormAction, FormRow, Section } from '@/ui/layout';
 import { AttributesEditor } from './attributes-editor';
 import type { KindDocument, SchemaDocument } from './document';
 import {
@@ -25,6 +26,8 @@ interface Props {
 }
 
 const STATUSES = ['draft', 'active', 'deprecated'];
+const t = modelerMessages.kinds;
+const e = modelerMessages.elements;
 
 export function NewName({
   label,
@@ -38,9 +41,9 @@ export function NewName({
   onAdd: (name: string) => void;
 }) {
   const [name, setName] = useState('');
-  const problem = name !== '' && taken(name) ? `${name} exists already.` : undefined;
+  const problem = name !== '' && taken(name) ? e.exists(name) : undefined;
   return (
-    <div className="flex flex-wrap items-start gap-2">
+    <FormRow>
       <Input
         label={label}
         value={name}
@@ -49,17 +52,18 @@ export function NewName({
           setName(event.target.value.trim());
         }}
       />
-      <Button
-        className="mt-5"
-        disabled={name === '' || problem !== undefined}
-        onClick={() => {
-          onAdd(name);
-          setName('');
-        }}
-      >
-        {button}
-      </Button>
-    </div>
+      <FormAction>
+        <Button
+          disabled={name === '' || problem !== undefined}
+          onClick={() => {
+            onAdd(name);
+            setName('');
+          }}
+        >
+          {button}
+        </Button>
+      </FormAction>
+    </FormRow>
   );
 }
 
@@ -78,9 +82,9 @@ function KindName({
   const taken = typed !== null && typed !== name && typed in (document.kinds ?? {});
   return (
     <Input
-      label="Kind name"
+      label={t.kindName}
       value={typed ?? name}
-      error={taken ? `${typed} exists already.` : errorAt(issues, `kinds/${name}`)}
+      error={taken ? e.exists(typed) : errorAt(issues, `kinds/${name}`)}
       onChange={(event) => {
         const next = event.target.value;
         setTyped(next);
@@ -121,11 +125,11 @@ function SemanticSearch({
     });
   };
   return (
-    <Section title="Semantic search">
+    <Section title={t.search}>
       <div className="flex flex-col gap-2">
         <Textarea
-          label="Embedding template"
-          hint="Opts the Kind into semantic search. Placeholders: {attribute_name}, {_kind}, {_key}. Leave empty for none."
+          label={t.embeddingTemplate}
+          hint={t.embeddingTemplateHint}
           value={search.embedding_template ?? ''}
           error={errorAt(issues, `kinds/${kindName}/search/embedding_template`)}
           onChange={(event) => {
@@ -148,7 +152,7 @@ function SemanticSearch({
               });
             }}
           />
-          Allow sensitive Attributes in the template
+          {t.embeddingSensitive}
         </label>
       </div>
     </Section>
@@ -175,21 +179,21 @@ function TraitMapping({
   const [adding, setAdding] = useState('');
   const choice = adding !== '' && available.includes(adding) ? adding : (available[0] ?? '');
   return (
-    <Section title="Traits">
+    <Section title={t.traits}>
       <div className="flex flex-col gap-3">
         {(kind.traits ?? []).map((implementation, index) => (
           <div
             key={implementation.trait}
             className="rounded-md border border-line bg-surface p-3"
             role="group"
-            aria-label={`Trait ${implementation.trait}`}
+            aria-label={t.traitGroup(implementation.trait)}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <h4 className="text-sm font-medium">{implementation.trait}</h4>
               <Button
                 size="sm"
                 variant="ghost"
-                aria-label={`Remove Trait ${implementation.trait}`}
+                aria-label={t.removeTrait(implementation.trait)}
                 onClick={() => {
                   edit((draft) => {
                     const target = draft.kinds?.[kindName];
@@ -199,18 +203,18 @@ function TraitMapping({
                   });
                 }}
               >
-                Remove
+                {t.remove}
               </Button>
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               {Object.keys(traits[implementation.trait]?.attributes ?? {}).map((traitAttribute) => (
                 <Select
                   key={traitAttribute}
-                  label={`${implementation.trait}.${traitAttribute} maps to`}
+                  label={t.mapsTo(implementation.trait, traitAttribute)}
                   value={implementation.attribute_map[traitAttribute] ?? ''}
                   error={errorAt(issues, `kinds/${kindName}/traits/${index}/attribute_map`)}
                   options={[
-                    { value: '', label: 'Not mapped' },
+                    { value: '', label: t.notMapped },
                     ...attributeNames.map((n) => ({ value: n, label: n })),
                   ]}
                   onChange={(event) => {
@@ -228,27 +232,32 @@ function TraitMapping({
           </div>
         ))}
         {available.length > 0 && (
-          <div className="flex flex-wrap items-end gap-2">
+          <FormRow>
             <Select
-              label="Trait to implement"
+              label={t.traitToImplement}
               value={choice}
               options={available.map((n) => ({ value: n, label: n }))}
               onChange={(event) => {
                 setAdding(event.target.value);
               }}
             />
-            <Button
-              onClick={() => {
-                edit((draft) => {
-                  const target = draft.kinds?.[kindName];
-                  if (target === undefined) return;
-                  target.traits = [...(target.traits ?? []), { trait: choice, attribute_map: {} }];
-                });
-              }}
-            >
-              Implement Trait
-            </Button>
-          </div>
+            <FormAction>
+              <Button
+                onClick={() => {
+                  edit((draft) => {
+                    const target = draft.kinds?.[kindName];
+                    if (target === undefined) return;
+                    target.traits = [
+                      ...(target.traits ?? []),
+                      { trait: choice, attribute_map: {} },
+                    ];
+                  });
+                }}
+              >
+                {t.implementTrait}
+              </Button>
+            </FormAction>
+          </FormRow>
         )}
       </div>
     </Section>
@@ -264,10 +273,10 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3">
+      <FormRow>
         {name !== undefined && (
           <Select
-            label="Kind"
+            label={t.kind}
             value={name}
             options={names.map((n) => ({ value: n, label: n }))}
             onChange={(event) => {
@@ -276,8 +285,8 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
           />
         )}
         <NewName
-          label="New Kind name"
-          button="Add Kind"
+          label={t.newKind}
+          button={t.addKind}
           taken={(candidate) => candidate in kinds}
           onAdd={(added) => {
             edit((draft) => {
@@ -287,26 +296,28 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
           }}
         />
         {name !== undefined && (
-          <Button
-            variant="danger"
-            onClick={() => {
-              edit((draft) => {
-                draft.kinds = removeKey(draft.kinds, name);
-              });
-              onSelect(undefined);
-            }}
-          >
-            Remove Kind
-          </Button>
+          <FormAction>
+            <Button
+              variant="danger"
+              onClick={() => {
+                edit((draft) => {
+                  draft.kinds = removeKey(draft.kinds, name);
+                });
+                onSelect(undefined);
+              }}
+            >
+              {t.removeKind}
+            </Button>
+          </FormAction>
         )}
-      </div>
+      </FormRow>
 
       {name === undefined || kind === undefined ? null : (
         <div className="flex flex-col gap-4" key={kind.id ?? name}>
           <div className="grid gap-3 sm:grid-cols-2">
             <KindName name={name} issues={issues} document={document} edit={edit} />
             <Select
-              label="Status"
+              label={e.status}
               value={kind.status ?? 'active'}
               options={STATUSES.map((s) => ({ value: s, label: s }))}
               onChange={(event) => {
@@ -320,7 +331,7 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
               }}
             />
             <Input
-              label="Kind description"
+              label={t.kindDescription}
               className="sm:col-span-2"
               value={kind.description ?? ''}
               onChange={(event) => {
@@ -334,7 +345,7 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
               }}
             />
             <fieldset className="flex flex-col gap-1">
-              <legend className="mb-1 text-xs font-medium text-muted">Primary key</legend>
+              <legend className="mb-1 text-xs font-medium text-muted">{t.primaryKey}</legend>
               {Object.keys(kind.attributes ?? {}).map((attribute) => (
                 <label key={attribute} className="flex items-center gap-1.5 text-sm">
                   <input
@@ -350,7 +361,7 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
                       });
                     }}
                   />
-                  Primary key: {attribute}
+                  {t.primaryKeyOf(attribute)}
                 </label>
               ))}
               {errorAt(issues, `kinds/${name}/primary_key`) !== undefined && (
@@ -360,7 +371,7 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
               )}
             </fieldset>
             <Select
-              label="Title Attribute"
+              label={t.titleAttribute}
               value={kind.title_attribute ?? ''}
               error={errorAt(issues, `kinds/${name}/title_attribute`)}
               options={Object.keys(kind.attributes ?? {}).map((n) => ({ value: n, label: n }))}
@@ -374,7 +385,7 @@ export function KindsForm({ document, issues, edit, ids, selected, onSelect }: P
             />
           </div>
 
-          <Section title="Attributes">
+          <Section title={t.attributes}>
             <AttributesEditor
               attributes={kind.attributes ?? {}}
               path={`kinds/${name}/attributes`}

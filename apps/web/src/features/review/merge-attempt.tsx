@@ -10,6 +10,8 @@ import type {
   ResolutionChoice,
   Schema,
 } from '@/api/types';
+import { common as commonMessages } from '@/messages/common';
+import { review as reviewMessages } from '@/messages/review';
 import { Button } from '@/ui/button';
 import { Badge, EmptyState, QueryBoundary, Section } from '@/ui/layout';
 import { useToast } from '@/ui/toast';
@@ -26,6 +28,8 @@ import {
 } from './conflict-state';
 import { MergedSummary } from './merged-summary';
 
+const text = reviewMessages.attempt;
+
 interface RunReport {
   remaining: number;
   refused: number;
@@ -35,13 +39,11 @@ function Progress({ attempt }: { attempt: MergeAttempt }) {
   const total = attempt.conflicts.length;
   const resolved = total - unresolvedOf(attempt).length;
   return (
-    <div className="flex items-center gap-3 text-sm">
-      <progress aria-label="Resolved Conflicts" max={total} value={resolved} className="h-2 w-40" />
-      <span>
-        {resolved} of {total} resolved
-      </span>
+    <div className="flex flex-wrap items-center gap-3 text-sm">
+      <progress aria-label={text.progressLabel} max={total} value={resolved} className="h-2 w-40" />
+      <span>{text.resolvedOf(resolved, total)}</span>
       {attempt.auto_resolutions.length > 0 && (
-        <Badge tone="accent">{attempt.auto_resolutions.length} by policy</Badge>
+        <Badge tone="accent">{text.byPolicy(attempt.auto_resolutions.length)}</Badge>
       )}
     </div>
   );
@@ -52,19 +54,20 @@ function AutoResolutions({ attempt, names }: { attempt: MergeAttempt; names: Nam
   return (
     <details className="text-sm">
       <summary className="cursor-pointer">
-        Resolved by policy ({attempt.auto_resolutions.length})
+        {text.resolvedByPolicy(attempt.auto_resolutions.length)}
       </summary>
       <ul className="mt-1 list-disc pl-5 text-muted">
-        {attempt.auto_resolutions.map((auto) => {
-          const reason = policyReason(auto);
-          return (
-            <li key={auto.fingerprint}>
-              {auto.kind} {partitionName(auto.partition, names)}
-              {auto.key === null ? '' : `/${auto.key}`}: {auto.choice} by {auto.resolver}
-              {reason === null ? '' : ` (${reason})`}
-            </li>
-          );
-        })}
+        {attempt.auto_resolutions.map((auto) => (
+          <li key={auto.fingerprint} className="break-words">
+            {text.autoResolution(
+              auto.kind,
+              `${partitionName(auto.partition, names)}${auto.key === null ? '' : `/${auto.key}`}`,
+              auto.choice,
+              auto.resolver,
+              policyReason(auto),
+            )}
+          </li>
+        ))}
       </ul>
     </details>
   );
@@ -74,12 +77,7 @@ function RunStatus({ report }: { report: RunReport | null }) {
   if (report === null) return null;
   return (
     <p role="status" className="rounded-md border border-line bg-surface p-2 text-sm">
-      Merge run: {report.remaining}{' '}
-      {report.remaining === 1 ? 'Conflict remains' : 'Conflicts remain'}
-      {report.refused > 0
-        ? `, ${report.refused} stored resolution(s) refused on re-validation`
-        : ''}
-      .
+      {text.runStatus(report.remaining, report.refused)}
     </p>
   );
 }
@@ -111,7 +109,7 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
   const save = useMutation({
     mutationFn: (resolution: Resolution) => api.conflicts.resolve(domain, proposal.id, resolution),
     onSuccess: () => {
-      toast.notify('Resolution saved.', 'success');
+      toast.notify(text.resolutionSaved, 'success');
       return refresh();
     },
   });
@@ -119,7 +117,7 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
     mutationFn: (resolutions: Resolution[]) =>
       api.conflicts.resolveMany(domain, proposal.id, { resolutions }),
     onSuccess: (updated) => {
-      toast.notify(`${updated.resolutions.length} resolutions stored.`, 'success');
+      toast.notify(text.resolutionsStored(updated.resolutions.length), 'success');
       return refresh();
     },
   });
@@ -128,7 +126,7 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
     onSuccess: (outcome) => {
       if (outcome.status === 'merged') {
         setReport(null);
-        toast.notify(`Proposal #${proposal.id} merged.`, 'success');
+        toast.notify(reviewMessages.proposal.merged(proposal.id), 'success');
       } else {
         const refused = outcome.attempt.conflicts.filter(
           (c) => typeof c.details['rejected'] === 'string',
@@ -173,7 +171,7 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
                 }
               }}
             >
-              Next open Conflict
+              {text.nextOpen}
             </Button>
             <Button
               variant="primary"
@@ -182,7 +180,7 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
                 apply.mutate();
               }}
             >
-              Apply resolutions
+              {text.apply}
             </Button>
           </div>
         )}
@@ -192,9 +190,9 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
       <FilterBar conflicts={attempt.conflicts} filter={filter} onChange={setFilter} />
       {!readOnly && <BulkBar open={open} disabled={saveMany.isPending} onApply={applyBulk} />}
       {filtered.length === 0 ? (
-        <EmptyState>No Conflict matches the filter.</EmptyState>
+        <EmptyState>{text.noMatch}</EmptyState>
       ) : (
-        <div className="grid items-start gap-4 lg:grid-cols-[minmax(16rem,22rem)_1fr]">
+        <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
           <ConflictList
             conflicts={filtered}
             resolutions={attempt.resolutions}
@@ -218,18 +216,15 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
           )}
         </div>
       )}
-      <p className="text-xs text-muted">
-        Keys in the list: arrow keys or j and k move between Conflicts, Home and End jump to the
-        first and last.
-      </p>
+      <p className="text-xs text-muted">{text.keys}</p>
     </div>
   );
 }
 
 /**
- * The merge attempt of a Proposal (design 12.3, Conflict resolver): Conflicts grouped by
- * kind with filters, a resolver for the selected one, bulk choices, and "Apply resolutions",
- * which re-runs the merge and shows what remains or the merged Revision.
+ * The merge attempt of a Proposal: Conflicts grouped by type with filters, a resolver for the
+ * selected one, bulk choices, and "Apply resolutions", which re-runs the merge and shows what
+ * remains or the merged Revision.
  */
 export function MergeAttemptSection({
   domain,
@@ -245,14 +240,14 @@ export function MergeAttemptSection({
   const attempt = useConflicts(domain, proposal.id);
   const schema = useBranchSchema(domain, proposal.source_ref);
   return (
-    <Section title="Merge attempt">
+    <Section title={text.title}>
       <QueryBoundary query={attempt}>
         {(data) =>
           data.conflicts.length === 0 && proposal.status !== 'merged' ? (
-            <EmptyState>No Conflicts. The merge applies cleanly.</EmptyState>
+            <EmptyState>{text.clean}</EmptyState>
           ) : schema.isPending ? (
             <p role="status" className="text-muted">
-              Loading...
+              {commonMessages.loading}
             </p>
           ) : (
             <AttemptBody

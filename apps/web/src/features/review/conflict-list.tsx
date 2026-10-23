@@ -1,7 +1,10 @@
 import { useId, type KeyboardEvent } from 'react';
 import type { Conflict, ConflictCode, Resolution } from '@/api/types';
+import { review as reviewMessages } from '@/messages/review';
 import { Badge } from '@/ui/layout';
 import { CODE_LABEL, compareCodes, isGrouped, locationOf, type Names } from './conflict-meta';
+
+const text = reviewMessages.conflicts;
 
 export interface ConflictGroup {
   code: ConflictCode;
@@ -75,7 +78,7 @@ export function ConflictList({
   return (
     <div
       role="listbox"
-      aria-label="Conflicts"
+      aria-label={text.listLabel}
       aria-activedescendant={active === undefined ? undefined : idOf(active)}
       tabIndex={0}
       onKeyDown={onKeyDown}
@@ -110,13 +113,13 @@ export function ConflictList({
                       {locationOf(conflict, names)}
                     </span>
                     {stored === undefined ? (
-                      <Badge tone="warning">open</Badge>
+                      <Badge tone="warning">{text.open}</Badge>
                     ) : (
                       <Badge tone="success">{stored.choice}</Badge>
                     )}
                   </div>
                   {isGrouped(conflict) && (
-                    <span className="text-xs text-muted">{conflict.count} members</span>
+                    <span className="text-xs text-muted">{text.members(conflict.count)}</span>
                   )}
                 </li>
               );

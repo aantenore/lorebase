@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { CARDINALITIES, ON_DELETE, type SchemaIssue } from '@/api/schema-rules';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { Section } from '@/ui/layout';
+import { modeler as modelerMessages } from '@/messages/modeler';
+import { FormAction, FormRow, Section } from '@/ui/layout';
 import { AttributesEditor } from './attributes-editor';
 import type { RelationDocument, SchemaDocument } from './document';
 import {
@@ -14,6 +15,8 @@ import {
   type ElementIds,
 } from './form-helpers';
 import { NewName } from './kind-form';
+
+const t = modelerMessages.relations;
 
 interface Props {
   document: SchemaDocument;
@@ -39,9 +42,9 @@ function RelationName({
   const taken = typed !== null && typed !== name && typed in (document.relations ?? {});
   return (
     <Input
-      label="Relation name"
+      label={t.relationName}
       value={typed ?? name}
-      error={taken ? `${typed} exists already.` : errorAt(issues, `relations/${name}`)}
+      error={taken ? modelerMessages.elements.exists(typed) : errorAt(issues, `relations/${name}`)}
       onChange={(event) => {
         const next = event.target.value;
         setTyped(next);
@@ -80,15 +83,15 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
   const kindOptions = (current: string) =>
     (kindNames.includes(current) ? kindNames : [current, ...kindNames]).map((n) => ({
       value: n,
-      label: n === '' ? 'Choose a Kind' : n,
+      label: n === '' ? t.chooseKind : n,
     }));
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3">
+      <FormRow>
         {name !== undefined && (
           <Select
-            label="Relation"
+            label={t.relation}
             value={name}
             options={names.map((n) => ({ value: n, label: n }))}
             onChange={(event) => {
@@ -97,8 +100,8 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
           />
         )}
         <NewName
-          label="New Relation name"
-          button="Add Relation"
+          label={t.newRelation}
+          button={t.addRelation}
           taken={(candidate) => candidate in relations}
           onAdd={(added) => {
             edit((draft) => {
@@ -108,26 +111,28 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
           }}
         />
         {name !== undefined && (
-          <Button
-            variant="danger"
-            onClick={() => {
-              edit((draft) => {
-                draft.relations = removeKey(draft.relations, name);
-              });
-              onSelect(undefined);
-            }}
-          >
-            Remove Relation
-          </Button>
+          <FormAction>
+            <Button
+              variant="danger"
+              onClick={() => {
+                edit((draft) => {
+                  draft.relations = removeKey(draft.relations, name);
+                });
+                onSelect(undefined);
+              }}
+            >
+              {t.removeRelation}
+            </Button>
+          </FormAction>
         )}
-      </div>
+      </FormRow>
 
       {name === undefined || relation === undefined ? null : (
         <div className="flex flex-col gap-4" key={relation.id ?? name}>
           <div className="grid gap-3 sm:grid-cols-2">
             <RelationName name={name} document={document} issues={issues} edit={edit} />
             <Input
-              label="Inverse name"
+              label={t.inverseName}
               value={relation.inverse_api_name}
               error={errorAt(issues, `relations/${name}/inverse_api_name`)}
               onChange={(event) => {
@@ -135,7 +140,7 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
               }}
             />
             <Select
-              label="From Kind"
+              label={t.fromKind}
               value={relation.from_kind}
               error={errorAt(issues, `relations/${name}/from_kind`)}
               options={kindOptions(relation.from_kind)}
@@ -144,7 +149,7 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
               }}
             />
             <Select
-              label="To Kind"
+              label={t.toKind}
               value={relation.to_kind}
               error={errorAt(issues, `relations/${name}/to_kind`)}
               options={kindOptions(relation.to_kind)}
@@ -153,7 +158,7 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
               }}
             />
             <Select
-              label="Cardinality"
+              label={t.cardinality}
               value={relation.cardinality ?? 'many_to_many'}
               error={errorAt(issues, `relations/${name}/cardinality`)}
               options={CARDINALITIES.map((c) => ({ value: c, label: c }))}
@@ -162,7 +167,7 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
               }}
             />
             <Select
-              label="On delete"
+              label={t.onDelete}
               value={relation.on_delete ?? 'cascade'}
               error={errorAt(issues, `relations/${name}/on_delete`)}
               options={ON_DELETE.map((c) => ({ value: c, label: c }))}
@@ -180,17 +185,17 @@ export function RelationsForm({ document, issues, edit, ids, selected, onSelect 
                   set({ required_from: event.target.checked });
                 }}
               />
-              Every from Record needs a Link
+              {t.requiredFrom}
             </label>
             <Input
-              label="Relation description"
+              label={t.description}
               value={relation.description ?? ''}
               onChange={(event) => {
                 set({ description: event.target.value === '' ? undefined : event.target.value });
               }}
             />
           </div>
-          <Section title="Link Attributes">
+          <Section title={t.linkAttributes}>
             <AttributesEditor
               attributes={relation.attributes ?? {}}
               path={`relations/${name}/attributes`}

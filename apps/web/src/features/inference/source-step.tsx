@@ -3,10 +3,12 @@ import type { InferRequest } from '@/api/inference-types';
 import { useConfig } from '@/config/context';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
+import { LearnMore } from '@/ui/learn-more';
 import { Tabs } from '@/ui/tabs';
 import { FileDrop } from './file-drop';
 import { listOfText } from '@/features/modeler/form-helpers';
 import { secretReferenceError } from './postgres';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export interface SourceStepProps {
   pending: boolean;
@@ -22,10 +24,10 @@ function FileSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'onRun
     <div className="flex flex-col gap-4">
       <FileDrop files={files} caps={inference} onChange={setFiles} />
       <Input
-        label="Records path (JSON documents)"
+        label={inferenceMessages.source.recordsPath.label}
         value={recordsPath}
-        placeholder="data.items"
-        hint="Dotted keys of the array of records, for JSON documents that hold it under a key. Leave empty when the document is the array."
+        placeholder={inferenceMessages.source.recordsPath.placeholder}
+        hint={inferenceMessages.source.recordsPath.hint}
         onChange={(event) => {
           setRecordsPath(event.target.value);
         }}
@@ -40,7 +42,7 @@ function FileSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'onRun
             );
           }}
         >
-          {pending ? 'Inferring...' : 'Run inference'}
+          {pending ? inferenceMessages.source.running : inferenceMessages.source.run}
         </Button>
       </div>
     </div>
@@ -71,11 +73,11 @@ function PostgresSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'o
       }}
     >
       <Input
-        label="Source reference"
+        label={inferenceMessages.source.reference.label}
         value={dsn}
         list={listId}
-        placeholder="secret://env/ERP_DSN"
-        hint="A secret reference an administrator allowlisted on the Keeper. Connection strings are never sent."
+        placeholder={inferenceMessages.source.reference.placeholder}
+        hint={inferenceMessages.source.reference.hint}
         error={error}
         onChange={(event) => {
           setDsn(event.target.value);
@@ -87,16 +89,16 @@ function PostgresSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'o
         ))}
       </datalist>
       <Input
-        label="Schema"
+        label={inferenceMessages.source.schema}
         value={schema}
         onChange={(event) => {
           setSchema(event.target.value);
         }}
       />
       <Input
-        label="Tables"
+        label={inferenceMessages.source.tables.label}
         value={tables}
-        hint="Comma separated. Leave empty for every table of the schema."
+        hint={inferenceMessages.source.tables.hint}
         onChange={(event) => {
           setTables(event.target.value);
         }}
@@ -107,7 +109,7 @@ function PostgresSource({ pending, onRun }: Pick<SourceStepProps, 'pending' | 'o
           variant="primary"
           disabled={dsn.trim() === '' || error !== undefined || pending}
         >
-          {pending ? 'Inferring...' : 'Run inference'}
+          {pending ? inferenceMessages.source.running : inferenceMessages.source.run}
         </Button>
       </div>
     </form>
@@ -120,23 +122,21 @@ export function SourceStep({ pending, error, onRun }: SourceStepProps) {
   return (
     <div className="flex flex-col gap-4">
       <p className="max-w-3xl text-sm text-muted">
-        Point Lorebase at the tables you already have and review the schema it proposes: Kinds,
-        typed Attributes, keys and Relations, each with the evidence behind it. The inference reads
-        the data with rules only and commits nothing.
+        {inferenceMessages.source.intro} <LearnMore path={inferenceMessages.docs} />
       </p>
       <Tabs
-        label="Data source"
+        label={inferenceMessages.source.tabsLabel}
         value={source}
         onChange={setSource}
         tabs={[
           {
             id: 'csv',
-            label: 'Files',
+            label: inferenceMessages.source.filesTab,
             content: <FileSource pending={pending} onRun={onRun} />,
           },
           {
             id: 'postgres',
-            label: 'Postgres source',
+            label: inferenceMessages.source.postgresTab,
             content: <PostgresSource pending={pending} onRun={onRun} />,
           },
         ]}

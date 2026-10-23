@@ -1,4 +1,5 @@
 import type { GuideAuth } from '@/features/retrieval-lab/guide-client';
+import { explore as exploreMessages } from '@/messages/explore';
 import { parseExploreEvent, type ExploreEvent } from './events';
 import { readSse } from './sse';
 
@@ -41,18 +42,18 @@ export function parseRetryAfter(value: string | null, now = Date.now()): number 
   return Math.min(MAX_RETRY_S, Math.max(1, Math.ceil(seconds)));
 }
 
+const E = exploreMessages.errors;
+
 const MESSAGES: Readonly<Record<string, string>> = {
-  unauthorized:
-    'The guide service did not accept your sign-in. Sign in again, or check the token in Settings.',
-  origin_not_allowed:
-    'The guide service does not accept requests from this app (guide.http.allowed_origins).',
-  cross_site: 'The guide service refused a cross-site request.',
-  csrf: 'The guide service refused the request: the session check failed. Reload the page and try again.',
-  rate: 'You asked the guide service too often in the last minute.',
-  concurrent: 'Another exploration of yours is still running.',
-  busy: 'The guide service is busy.',
-  keeper_unavailable: 'The guide service could not reach Keeper.',
-  question_too_long: 'The question is longer than the guide service allows.',
+  unauthorized: E.unauthorized,
+  origin_not_allowed: E.originNotAllowed,
+  cross_site: E.crossSite,
+  csrf: E.csrf,
+  rate: E.rate,
+  concurrent: E.concurrent,
+  busy: E.busy,
+  keeper_unavailable: E.keeperUnavailable,
+  question_too_long: E.questionTooLong,
 };
 
 async function refusal(response: Response): Promise<GuideError> {
@@ -69,10 +70,7 @@ async function refusal(response: Response): Promise<GuideError> {
   const retryAfterS =
     response.status === 429 ? (parseRetryAfter(response.headers.get('Retry-After')) ?? 1) : null;
   const message =
-    MESSAGES[code] ??
-    (response.status === 429
-      ? MESSAGES['busy']
-      : `The guide service answered ${response.status.toString()} to /explore.`);
+    MESSAGES[code] ?? (response.status === 429 ? MESSAGES['busy'] : E.answered(response.status));
   return new GuideError(message ?? '', response.status, code, retryAfterS);
 }
 

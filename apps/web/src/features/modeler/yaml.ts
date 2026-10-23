@@ -36,7 +36,7 @@ export function dumpSchemaYaml(document: SchemaDocument): string {
 }
 
 /**
- * Where a document path (`kinds/Supplier/attributes/tier/type`) sits in the text. A path
+ * Where a document path (`kinds/Asset/attributes/status/type`) sits in the text. A path
  * that does not exist resolves to its deepest existing parent.
  */
 export function locateIssue(text: string, path: string): Position | null {

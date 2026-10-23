@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { JsonValue } from '@/api/types';
 import { useKeeperApi } from '@/api/provider';
 import { useScope } from '@/app/scope';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import type { SchemaDocument } from './document';
 import type { ExpressionResults, Row } from './source-preview';
 
@@ -62,7 +63,10 @@ export function ExpressionFeed({
             attribute,
             cell.error === null
               ? { value: cell.value }
-              : { error: cell.error.message ?? `Cannot be evaluated (${cell.error.code}).` },
+              : {
+                  error:
+                    cell.error.message ?? modelerMessages.expressions.notEvaluated(cell.error.code),
+                },
           ]),
         ),
       );

@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { testConfig } from '@/config/env';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 import { segment, spansOf } from './document-spans';
 
@@ -45,18 +46,20 @@ describe('Documents: intake', () => {
     });
     const { user } = await openLibrary(config);
     expect(screen.getByText(/Up to 20 files, 1 KiB each \(\.md, \.pdf\)/)).toBeInTheDocument();
-    const input = screen.getByLabelText('Upload documents');
+    const input = screen.getByLabelText(messages.documents.intake.inputLabel);
     await user.upload(input, file('big.md', 'x'.repeat(2048)));
     expect(screen.getByRole('alert', { name: 'Rejected files' })).toHaveTextContent(
       'big.md: Larger than 1 KiB',
     );
-    fireEvent.drop(screen.getByRole('group', { name: 'Drop zone for documents' }), {
+    fireEvent.drop(screen.getByRole('group', { name: messages.documents.intake.zoneLabel }), {
       dataTransfer: { files: [file('notes.txt')] },
     });
     expect(screen.getByRole('alert', { name: 'Rejected files' })).toHaveTextContent(
       'notes.txt: Only .md, .pdf files are accepted.',
     );
-    expect(screen.getByRole('button', { name: 'Upload 0 documents' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: messages.documents.intake.upload(0) }),
+    ).toBeDisabled();
   });
 
   it('uploads a document, queues its extraction and follows the job to its end', async () => {
@@ -64,9 +67,12 @@ describe('Documents: intake', () => {
       documents: { ...testConfig().documents, jobPollMs: 20 },
     });
     const { user, table } = await openLibrary(config);
-    await user.upload(screen.getByLabelText('Upload documents'), file('notice-9.md'));
+    await user.upload(
+      screen.getByLabelText(messages.documents.intake.inputLabel),
+      file('notice-9.md'),
+    );
     expect(screen.getByRole('list', { name: 'Selected files' })).toHaveTextContent('notice-9.md');
-    await user.click(screen.getByRole('button', { name: 'Upload 1 document' }));
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
 
     const results = await screen.findByRole('list', { name: 'Upload results' });
     expect(results).toHaveTextContent('notice-9.md: Stored; extraction job 101 queued.');
@@ -79,12 +85,12 @@ describe('Documents: intake', () => {
 
   it('says so when the same bytes were stored before', async () => {
     const { user } = await openLibrary();
-    const input = screen.getByLabelText('Upload documents');
+    const input = screen.getByLabelText(messages.documents.intake.inputLabel);
     await user.upload(input, file('a.md'));
-    await user.click(screen.getByRole('button', { name: 'Upload 1 document' }));
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
     await screen.findByText(/Stored; extraction job/);
     await user.upload(input, file('b.md'));
-    await user.click(screen.getByRole('button', { name: 'Upload 1 document' }));
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
     expect(await screen.findByRole('list', { name: 'Upload results' })).toHaveTextContent(
       'b.md: Stored before; nothing new was queued.',
     );
@@ -92,10 +98,10 @@ describe('Documents: intake', () => {
 
   it('sends the extraction options with the upload and can turn extraction off', async () => {
     const { user } = await openLibrary();
-    await user.upload(screen.getByLabelText('Upload documents'), file('c.md'));
+    await user.upload(screen.getByLabelText(messages.documents.intake.inputLabel), file('c.md'));
     await user.click(screen.getByRole('checkbox', { name: 'Extract after storing' }));
     expect(screen.getByRole('checkbox', { name: /Tier 1/ })).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: 'Upload 1 document' }));
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
     expect(await screen.findByRole('list', { name: 'Upload results' })).toHaveTextContent(
       'c.md: Stored without extraction.',
     );
@@ -103,11 +109,13 @@ describe('Documents: intake', () => {
 
   it('asks for a tier when extraction is on', async () => {
     const { user } = await openLibrary();
-    await user.upload(screen.getByLabelText('Upload documents'), file('d.md'));
+    await user.upload(screen.getByLabelText(messages.documents.intake.inputLabel), file('d.md'));
     await user.click(screen.getByRole('checkbox', { name: /Tier 0/ }));
     await user.click(screen.getByRole('checkbox', { name: /Tier 1/ }));
     expect(screen.getByText(/Pick at least one tier/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Upload 1 document' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: messages.documents.intake.upload(1) }),
+    ).toBeDisabled();
   });
 
   it('keeps a file Keeper refuses and shows why', async () => {
@@ -115,8 +123,11 @@ describe('Documents: intake', () => {
       documents: { ...testConfig().documents, fileSuffixes: ['.md', '.exe'] },
     });
     const { user } = await openLibrary(config);
-    await user.upload(screen.getByLabelText('Upload documents'), file('tool.exe'));
-    await user.click(screen.getByRole('button', { name: 'Upload 1 document' }));
+    await user.upload(
+      screen.getByLabelText(messages.documents.intake.inputLabel),
+      file('tool.exe'),
+    );
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
     const results = await screen.findByRole('list', { name: 'Upload results' });
     expect(results).toHaveTextContent('tool.exe: One or more request members are invalid.');
     expect(results).toHaveTextContent('unsupported file type .exe');
@@ -125,9 +136,9 @@ describe('Documents: intake', () => {
 
   it('fetches a document by URL from an allowed host, and shows the refusal for another', async () => {
     const { user } = await openLibrary();
-    const form = screen.getByRole('form', { name: 'Add a document by URL' });
+    const form = screen.getByRole('form', { name: messages.documents.intake.urlForm });
     await user.type(within(form).getByLabelText('Document URL'), 'https://elsewhere.test/c.pdf');
-    await user.click(within(form).getByRole('button', { name: 'Fetch document' }));
+    await user.click(within(form).getByRole('button', { name: messages.documents.intake.fetch }));
     expect(await screen.findByRole('list', { name: 'Upload results' })).toHaveTextContent(
       'the host is not in keeper.documents.url_hosts',
     );
@@ -137,7 +148,7 @@ describe('Documents: intake', () => {
       within(form).getByLabelText('Document URL'),
       'https://documents.example.test/contracts/c-4000.pdf',
     );
-    await user.click(within(form).getByRole('button', { name: 'Fetch document' }));
+    await user.click(within(form).getByRole('button', { name: messages.documents.intake.fetch }));
     expect(await screen.findByRole('list', { name: 'Upload results' })).toHaveTextContent(
       'c-4000.pdf: Stored; extraction job 101 queued.',
     );
@@ -145,7 +156,7 @@ describe('Documents: intake', () => {
 
   it('hides URL intake when the configuration turns it off', async () => {
     await openLibrary(testConfig({ documents: { ...testConfig().documents, urlIntake: false } }));
-    expect(screen.queryByRole('form', { name: 'Add a document by URL' })).toBeNull();
+    expect(screen.queryByRole('form', { name: messages.documents.intake.urlForm })).toBeNull();
   });
 });
 
@@ -155,7 +166,7 @@ describe('Documents: viewer', () => {
     expect(
       await screen.findByRole('heading', { name: 'amendment-c-3013-wexrix-filtration.md' }),
     ).toBeInTheDocument();
-    const text = await screen.findByLabelText('Parsed text');
+    const text = await screen.findByLabelText(messages.documents.viewer.textLabel);
     const marks = await waitFor(() => {
       const found = within(text).getAllByText(/payment is due 30 days after invoice/);
       expect(found.length).toBeGreaterThan(0);
@@ -171,26 +182,24 @@ describe('Documents: viewer', () => {
   it('selects the passage of an item from the list and the URL follows', async () => {
     const user = userEvent.setup();
     const { router } = renderApp('/supply/documents/doc_amendment_c3013');
-    const list = await screen.findByRole('list', { name: 'Items quoting this document' });
+    const list = await screen.findByRole('list', { name: messages.documents.viewer.items });
     await user.click(within(list).getAllByRole('button')[0] as HTMLElement);
     await waitFor(() => {
       expect(router.state.location.search).toMatchObject({ item: 'pit_03' });
     });
-    const text = screen.getByLabelText('Parsed text');
+    const text = screen.getByLabelText(messages.documents.viewer.textLabel);
     expect(text.querySelector('mark[data-tone="active"]')).not.toBeNull();
   });
 
   it('opens at the offsets named in the URL', async () => {
     renderApp('/supply/documents/doc_amendment_c3013?start=1000&end=1002');
-    await screen.findByLabelText('Parsed text');
+    await screen.findByLabelText(messages.documents.viewer.textLabel);
     expect(document.querySelector('mark[data-tone="active"]')).toBeNull();
   });
 
   it('says when a document has no text yet', async () => {
     renderApp('/supply/documents/doc_scan_1999');
-    expect(
-      await screen.findByText('The text of this document has not been parsed yet.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(messages.documents.viewer.notParsed)).toBeInTheDocument();
     expect(screen.getByText(/no text layer/)).toBeInTheDocument();
   });
 });

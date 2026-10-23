@@ -125,3 +125,16 @@ def test_domain_id_cannot_change(supply: Schema) -> None:
     document["domain"]["id"] = "other"
     with pytest.raises(ChangeSetInvalidError):
         target_schema(supply, ChangeSetInput(yaml=yaml.safe_dump(document)))
+
+
+def test_domain_examples_are_a_domain_change(supply: Schema) -> None:
+    document = supply_document()
+    assert document["domain"]["examples"][0]["label"] == "Single-source risk"
+    document["domain"]["examples"] = [{"label": "Overview", "question": "What changed today?"}]
+    target = target_schema(supply, ChangeSetInput(yaml=yaml.safe_dump(document)))
+    changes, described = diff_schemas(supply, target)
+    assert [(c.op, c.section) for c in described] == [("update", "domain")]
+    assert len(changes) == 1
+    assert target.content()["domain"]["examples"] == [
+        {"label": "Overview", "question": "What changed today?"}
+    ]

@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 
 const PATH = '/supply/review/44?tab=items';
@@ -115,7 +116,7 @@ describe('Review: extraction items', () => {
 
     await user.click(screen.getByRole('button', { name: 'Apply decisions (2)' }));
     const outcome = await screen.findByRole('region', { name: 'Last applied decisions' });
-    expect(outcome).toHaveTextContent('3 item(s) on the branch, 3 change(s), 0 skipped');
+    expect(outcome).toHaveTextContent('Applied 3 items: 3 changes on the Branch, 0 skipped');
     await waitFor(() => {
       expect(screen.getByText('3 accepted')).toBeInTheDocument();
     });
@@ -128,7 +129,7 @@ describe('Review: extraction items', () => {
       within(rowOf(table, /Contract C-3025/)).getByRole('button', { name: /^Accept Contract/ }),
     );
     await user.click(screen.getByRole('button', { name: 'Apply decisions (1)' }));
-    const refusal = await screen.findByRole('alert', { name: 'Keeper refused the decisions' });
+    const refusal = await screen.findByRole('alert', { name: messages.extraction.refusal.label });
     expect(refusal).toHaveTextContent('Contract/C-3025 needs a with_supplier Link');
     expect(refusal).toHaveTextContent('Nothing changed');
     // Nothing was applied: the staged decision is still there.
@@ -139,9 +140,9 @@ describe('Review: extraction items', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Apply decisions (2)' }));
     expect(await screen.findByRole('region', { name: 'Last applied decisions' })).toHaveTextContent(
-      '3 item(s) on the branch, 3 change(s)',
+      'Applied 3 items: 3 changes on the Branch',
     );
-    expect(screen.queryByRole('alert', { name: 'Keeper refused the decisions' })).toBeNull();
+    expect(screen.queryByRole('alert', { name: messages.extraction.refusal.label })).toBeNull();
   });
 
   it('points an ambiguous match at another candidate before applying', async () => {
@@ -163,7 +164,7 @@ describe('Review: extraction items', () => {
   it('edits the values of a new Record and checks them against the schema', async () => {
     const { user, table } = await openItems();
     await user.click(rowOf(table, /Contract C-3025/));
-    const form = screen.getByRole('form', { name: 'Edit the proposal' });
+    const form = screen.getByRole('form', { name: messages.extraction.editor.label });
     const currency = within(form).getByLabelText('currency');
     await user.clear(currency);
     await user.type(currency, 'eur');
@@ -175,7 +176,9 @@ describe('Review: extraction items', () => {
     await user.click(within(form).getByRole('button', { name: 'Stage edits' }));
     expect(screen.getByText('1 staged.')).toBeInTheDocument();
     expect(
-      within(screen.getByRole('form', { name: 'Edit the proposal' })).getByLabelText('currency'),
+      within(screen.getByRole('form', { name: messages.extraction.editor.label })).getByLabelText(
+        'currency',
+      ),
     ).toHaveValue('PLN');
   });
 
