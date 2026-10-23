@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -11,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Schema
-from lorebase_store import storage
+from lorebase_store import migrations, storage
 from lorebase_store.commit import commit, create_domain
 from lorebase_store.indexes import IndexReason, existing_indexes, plan_indexes
 from lorebase_store.materialize import create_branch, verify
@@ -28,7 +29,7 @@ from lorebase_store.reads import (
 )
 from lorebase_store.repositories import MaterializedRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import StorageSettings, StoreSettings
+from lorebase_store.settings import DatabaseSettings, StorageSettings, StoreSettings
 from lorebase_store.traverse import neighborhood
 
 from .read_support import rated_supplier, seed_graph, sourced_from, sourced_part
@@ -155,7 +156,8 @@ async def state(engine: AsyncEngine) -> storage.StorageState:
 
 
 async def apply(engine: AsyncEngine, **options: Any) -> storage.ApplyReport:
-    report = await storage.apply(engine, StoreSettings(storage=StorageSettings(**options)))
+    settings = StoreSettings(storage=StorageSettings(**options))
+    report = await storage.apply(engine, settings, switch_wait_s=0)
     assert report.complete, report.as_dict()
     return report
 
@@ -166,15 +168,18 @@ async def test_lineage_maps_are_shared_and_read_back(
 ) -> None:
     """With the default profile every writer stores references; readers see the maps."""
     shared, total = await counts(sessions, REFERENCES)
-    assert total > 0 and shared == total
+    assert total > 0
+    assert shared == total
     assert 0 < (await counts(sessions, MAPS))[0] < total
     assert (await counts(sessions, LARGE_INLINE_LINKS))[0] == 0
     found = await snapshot(sessions, runtime)
     lineage, _ = found["get"]
-    assert lineage and all(str(v).startswith("prv_") for v in lineage.values())
+    assert lineage
+    assert all(str(v).startswith("prv_") for v in lineage.values())
     stored, revisions = found["repository"]["S-1"]
     assert stored == lineage
-    assert revisions and "$created" in revisions
+    assert revisions
+    assert "$created" in revisions
     assert "$map" not in repr(found)
 
 
@@ -208,13 +213,15 @@ async def test_switching_profiles_rewrites_rows_and_keeps_reads(
     shared, total = await counts(sessions, REFERENCES)
     assert shared == total
     found = await state(engine)
-    assert not found.values_index and not found.lexicon_index
+    assert not found.values_index
+    assert not found.lexicon_index
     assert found.lineage_triggers == {"mat_records": True, "mat_links": True}
     assert set(found.compression.values()) == {"pglz"}
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
         indexed = {i.attribute_id for i in await existing_indexes(session, DOMAIN)}
-    assert VAT in indexed and RATING not in indexed
+    assert VAT in indexed
+    assert RATING not in indexed
     assert (await snapshot(sessions, runtime)) == before
 
     # Every read still works without the indexes compact leaves out.
@@ -234,12 +241,14 @@ async def test_switching_profiles_rewrites_rows_and_keeps_reads(
         hood = await neighborhood(
             session, DOMAIN, "main", head.schema, [(PART, "P-1")], depth=2, runtime=runtime
         )
-        assert hood.records and all(n.record.lineage for n in hood.records)
+        assert hood.records
+        assert all(n.record.lineage for n in hood.records)
 
     await apply(engine)
     found = await state(engine)
-    assert found.values_index and found.lexicon_index
-    again = await storage.apply(engine, StoreSettings())
+    assert found.values_index
+    assert found.lexicon_index
+    again = await storage.apply(engine, StoreSettings(), switch_wait_s=0)
     assert {step.status for step in again.steps} <= {"skipped"}, again.as_dict()
 
 
@@ -255,7 +264,8 @@ async def test_overlay_reads_the_shared_maps_of_its_base(
         await scope_to_domain(session, DOMAIN)
         base = await get_record(session, DOMAIN, "main", SUPPLIER, "S-1")
         overlay = await get_record(session, DOMAIN, "agent/x", SUPPLIER, "S-1")
-    assert base is not None and overlay is not None
+    assert base is not None
+    assert overlay is not None
     assert overlay.lineage == base.lineage
     assert overlay.lineage_revisions == base.lineage_revisions
 
@@ -281,7 +291,8 @@ async def test_maps_follow_row_level_security(engine: AsyncEngine, sessions: Ses
             await scope_to_domain(session, DOMAIN)
             assert (await session.execute(MAPS, {"d": DOMAIN})).scalar_one() > 0
             record = await get_record(session, DOMAIN, "main", SUPPLIER, "S-1")
-            assert record is not None and record.lineage
+            assert record is not None
+            assert record.lineage
         async with sessions() as session, session.begin():
             await session.execute(text(f"SET LOCAL ROLE {role}"))
             await scope_to_domain(session, "rival")
@@ -340,3 +351,38 @@ async def test_compaction_moves_rows_forward_and_gives_pages_back(
         await session.execute(
             text("DELETE FROM mat_records WHERE domain_id = :d AND key LIKE 'F-%'"), {"d": DOMAIN}
         )
+
+
+@pytest.mark.integration
+async def test_downgrade_restores_maps_and_an_upgraded_install_starts_inline(
+    engine: AsyncEngine,
+    sessions: Sessions,
+    runtime: StoreRuntime,
+    database_url: str,
+    database: DatabaseSettings,
+    store: StoreSettings,
+) -> None:
+    """The downgrade writes every map back into its rows; upgrading a database that holds
+    Records leaves the triggers off (processes of the previous version may still run) until
+    `storage apply`."""
+    before = await snapshot(sessions, runtime)
+    await engine.dispose()
+    await asyncio.to_thread(
+        migrations.downgrade, "0035", database=database, store=store, url=database_url
+    )
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', false)"))
+        held = await connection.scalar(
+            text("SELECT count(*) FROM mat_records WHERE lineage ? '$map'")
+        )
+    assert held == 0
+    await engine.dispose()
+    await asyncio.to_thread(migrations.upgrade, database=database, store=store, url=database_url)
+    found = await state(engine)
+    assert found.lineage_triggers == {"mat_records": False, "mat_links": False}
+    assert (await counts(sessions, REFERENCES))[0] == 0
+    assert await snapshot(sessions, runtime) == before
+    await apply(engine)
+    shared, total = await counts(sessions, REFERENCES)
+    assert shared == total
+    assert await snapshot(sessions, runtime) == before

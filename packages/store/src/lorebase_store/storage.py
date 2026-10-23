@@ -32,7 +32,8 @@ optional indexes. `apply` is batched and resumable (`storage_tasks`); reads go o
 - compression and fill factor: catalog changes that apply to rows written from then on;
 - `--compact`: moves the rows of the last pages of `mat_records`, `mat_links` and
   `mat_history` into the free space of earlier pages (one branch at a time, under the branch
-  lock that commits take), lets VACUUM give the emptied pages back, and with `--reindex`
+  lock that commits take: every writer of these tables holds it, see the store schema
+  notes), lets VACUUM give the emptied pages back, and with `--reindex`
   rebuilds their indexes concurrently. This is what shrinks a table after a rewrite.
 
 `prewarm` loads the hot relations of the agent read path, most valuable first, into shared
@@ -75,6 +76,8 @@ MAP_KEY = "$map"
 """Key of a reference to a shared lineage map."""
 VALUES_INDEX = "ix_mat_records_values"
 LEXICON_INDEX = "ix_mat_lexicon_branch_word"
+PRECISION_TTL_S = 60.0
+"""How long a process trusts the HNSW precision it found (`embeddings.index_precision`)."""
 HALFVEC_MIN_VERSION = (0, 7, 0)
 """First pgvector release with `halfvec`."""
 LOCK_NOT_AVAILABLE = "55P03"
@@ -171,6 +174,9 @@ class StorageState:
     values_index_partitions: list[str] = field(default_factory=list)
     lexicon_index: bool = False
     hnsw: dict[str, bool] = field(default_factory=dict)
+    invalid_indexes: list[str] = field(default_factory=list)
+    """Optional indexes that exist but are not valid (an interrupted concurrent build, a
+    partitioned index with partitions not attached yet): the flags above count only valid ones."""
     compression: dict[str, str] = field(default_factory=dict)
     records_fillfactor: int = 100
     pgvector: tuple[int, ...] | None = None
@@ -233,17 +239,21 @@ async def read_state(connection: AsyncConnection, dims: int) -> StorageState:
             {"t": table, "n": LINEAGE_TRIGGER},
         )
         state.lineage_triggers[table] = bool(enabled)
-    names = set(
-        (
-            await connection.execute(
-                text("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")
-            )
-        ).scalars()
+    found = await connection.execute(
+        text(
+            "SELECT c.relname, x.indisvalid FROM pg_index x "
+            "JOIN pg_class c ON c.oid = x.indexrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema()"
+        )
     )
-    state.values_index = VALUES_INDEX in names
-    state.lexicon_index = LEXICON_INDEX in names
+    valid = {str(name): bool(ok) for name, ok in found}
+    names = set(valid)
+    optional = [VALUES_INDEX, LEXICON_INDEX, *(hnsw_index_name(dims, p) for p in ("full", "half"))]
+    state.invalid_indexes = [name for name in optional if name in valid and not valid[name]]
+    state.values_index = valid.get(VALUES_INDEX, False)
+    state.lexicon_index = valid.get(LEXICON_INDEX, False)
     for precision in ("full", "half"):
-        state.hnsw[precision] = hnsw_index_name(dims, precision) in names
+        state.hnsw[precision] = valid.get(hnsw_index_name(dims, precision), False)
     state.values_index_partitions = [
         p for p in await _partitions(connection, "mat_records") if f"{p}_values_idx" in names
     ]
@@ -269,8 +279,8 @@ async def read_state(connection: AsyncConnection, dims: int) -> StorageState:
             text("SELECT reloptions FROM pg_class WHERE oid = CAST(:t AS regclass)"),
             {"t": partition},
         )
-        found = [str(o).split("=", 1)[1] for o in options or () if str(o).startswith("fillfactor=")]
-        factors.add(int(found[0]) if found else 100)
+        given = [str(o).split("=", 1)[1] for o in options or () if str(o).startswith("fillfactor=")]
+        factors.add(int(given[0]) if given else 100)
     state.records_fillfactor = factors.pop() if len(factors) == 1 else 0
     state.pgvector = _version(
         await connection.scalar(
@@ -424,6 +434,7 @@ async def _rewrite_lineage(
     report: ApplyReport,
     *,
     max_batches: int | None,
+    leftovers: Mapping[str, Mapping[str, int]] | None = None,
 ) -> None:
     """Rewrite the map columns of every row, page range by page range, from the first page
     to the last page the table had when the pass started (rows a concurrent write puts after
@@ -439,11 +450,14 @@ async def _rewrite_lineage(
     for table, partition in work:
         columns = LINEAGE_TABLES[table]
         name = f"lineage:{partition}"
+        # Rows of the other form found after a finished pass (copies of rows written before
+        # the triggers switched) start the pass again.
+        stale = bool((leftovers or {}).get(table, {}).get("shared" if not shared else "inline"))
         async with engine.begin() as connection:
             state = await _task(connection, name)
-            if state.get("mode") == mode and state.get("done"):
+            if state.get("mode") == mode and state.get("done") and not stale:
                 continue
-            if state.get("mode") != mode:
+            if state.get("mode") != mode or state.get("done"):
                 state = {
                     "mode": mode,
                     "page": 0,
@@ -464,26 +478,41 @@ async def _rewrite_lineage(
                 report.add(f"lineage {partition}", "deferred", f"stopped at page {state['page']}")
                 return
             start, stop = int(state["page"]), min(int(state["page"]) + step, int(state["end"]))
-            async with engine.begin() as connection:
-                await connection.execute(
-                    text("SELECT set_config('lorebase.bypass_rls', 'on', true)")
+            try:
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text("SELECT set_config('lorebase.bypass_rls', 'on', true)")
+                    )
+                    await connection.exec_driver_sql(
+                        f"SET LOCAL lock_timeout = '{int(settings.lock_timeout_ms)}ms'"
+                    )
+                    # Rows a commit holds are skipped, never waited for: the rewrite cannot
+                    # deadlock with commits, which lock rows in key order. A later pass picks
+                    # the skipped rows up (`leftovers`).
+                    result = await connection.execute(
+                        text(
+                            f"UPDATE {partition} SET {assignments} WHERE ctid = ANY(ARRAY("
+                            f"SELECT ctid FROM {partition} "
+                            f"WHERE ctid >= CAST(:lo AS tid) AND ctid < CAST(:hi AS tid) "
+                            f"AND ({condition}) FOR UPDATE SKIP LOCKED))"
+                        ),
+                        {"lo": (start, 0), "hi": (stop, 0)},
+                    )
+                    state = {
+                        **state,
+                        "page": stop,
+                        "rows": int(state["rows"]) + int(result.rowcount or 0),
+                    }
+                    if stop >= int(state["end"]):
+                        state["done"] = True
+                    await _save_task(connection, name, state)
+            except DBAPIError as error:
+                if sqlstate(error) not in (LOCK_NOT_AVAILABLE, DEADLOCK):
+                    raise
+                report.add(
+                    f"lineage {partition}", "deferred", f"lock conflict at page {start}; run again"
                 )
-                result = await connection.execute(
-                    text(
-                        f"UPDATE {partition} SET {assignments} "
-                        f"WHERE ctid >= CAST(:lo AS tid) AND ctid < CAST(:hi AS tid) "
-                        f"AND ({condition})"
-                    ),
-                    {"lo": (start, 0), "hi": (stop, 0)},
-                )
-                state = {
-                    **state,
-                    "page": stop,
-                    "rows": int(state["rows"]) + int(result.rowcount or 0),
-                }
-                if stop >= int(state["end"]):
-                    state["done"] = True
-                await _save_task(connection, name, state)
+                return
             batches += 1
         if not state.get("done"):  # an empty partition
             async with engine.begin() as connection:
@@ -531,7 +560,7 @@ async def _values_index(
     if wanted and state.values_index:
         return
     if not wanted:
-        if not state.values_index:
+        if not state.values_index and VALUES_INDEX not in state.invalid_indexes:
             # Leftovers of an interrupted build.
             for partition in state.values_index_partitions:
                 await ddl.exec_driver_sql(
@@ -587,9 +616,12 @@ async def _values_index(
 async def _lexicon_index(
     ddl: AsyncConnection, state: StorageState, wanted: bool, report: ApplyReport
 ) -> None:
-    if wanted == state.lexicon_index:
+    present = state.lexicon_index or LEXICON_INDEX in state.invalid_indexes
+    if wanted == state.lexicon_index and (wanted or not present):
         return
     if wanted:
+        if present:  # an invalid leftover of an interrupted concurrent build
+            await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {LEXICON_INDEX}")
         await ddl.exec_driver_sql(
             f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {LEXICON_INDEX} ON mat_lexicon "
             "USING gin (domain_id, branch, word gin_trgm_ops)"
@@ -601,7 +633,13 @@ async def _lexicon_index(
 
 
 async def _hnsw(
-    ddl: AsyncConnection, state: StorageState, wanted: Precision, dims: int, report: ApplyReport
+    ddl: AsyncConnection,
+    state: StorageState,
+    wanted: Precision,
+    dims: int,
+    report: ApplyReport,
+    *,
+    switch_wait_s: float,
 ) -> None:
     if wanted == "half" and (state.pgvector is None or state.pgvector < HALFVEC_MIN_VERSION):
         report.add(
@@ -620,8 +658,17 @@ async def _hnsw(
         if valid is False:
             await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
         await ddl.exec_driver_sql(hnsw_index_sql(dims, wanted))
-    # Searches use whichever index exists (`embeddings.index_precision`), so the old one
-    # goes once the new one is valid.
+    valid = await ddl.scalar(
+        text("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(:i)"),
+        {"i": hnsw_index_name(dims, wanted)},
+    )
+    if not valid:
+        report.add("embedding index", "failed", f"{wanted} index not valid after the build")
+        return
+    if state.hnsw.get(other):
+        # Searches use the newest valid index (`embeddings.index_precision`, looked up again
+        # after PRECISION_TTL_S): wait until every process uses the new one.
+        await asyncio.sleep(switch_wait_s)
     await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {hnsw_index_name(dims, other)}")
     report.add("embedding index", "done", wanted)
 
@@ -860,6 +907,7 @@ async def apply(
     reindex: bool = False,
     max_batches: int | None = None,
     dry_run: bool = False,
+    switch_wait_s: float = PRECISION_TTL_S + 1,
 ) -> ApplyReport:
     """Bring the database in line with the storage profile (see the module documentation)."""
     settings = store.storage
@@ -877,14 +925,18 @@ async def apply(
         triggers_ok = await _switch_triggers(ddl, state, shared, settings, report)
         await _values_index(ddl, state, choices.values_index, settings, report)
         await _lexicon_index(ddl, state, choices.lexicon_index, report)
-        await _hnsw(ddl, state, choices.embedding_precision, dims, report)
+        await _hnsw(
+            ddl, state, choices.embedding_precision, dims, report, switch_wait_s=switch_wait_s
+        )
         await _compression(ddl, state, choices.compression, settings, report)
         await _fillfactor(ddl, state, choices.records_fillfactor, settings, report)
         await _attribute_indexes(engine, ddl, store, report)
     finally:
         await ddl.close()
     if triggers_ok:
-        await _rewrite_lineage(engine, settings, shared, report, max_batches=max_batches)
+        await _rewrite_lineage(
+            engine, settings, shared, report, max_batches=max_batches, leftovers=state.lineage_rows
+        )
     else:
         report.add("lineage rows", "deferred", "triggers not switched yet")
     if compact_tables:
