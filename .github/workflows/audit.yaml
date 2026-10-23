@@ -5,11 +5,6 @@ name: Audit
 # The weekly run reports advisories published after the last change.
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "17 5 * * 1"
 
 concurrency:
   group: audit-${{ github.event.pull_request.number || github.ref }}
