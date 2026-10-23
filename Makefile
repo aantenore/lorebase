@@ -136,7 +136,7 @@ demo-down: ## Stop the demo stack and delete its data
 env: ## Create .env from .env.example with generated passwords and webhook key (keeps an existing one)
 	@scripts/quickstart.sh env
 
-up: ## Build the images and start Postgres, migrations, Keeper and the web app (PROFILES=assistant adds Guide and Scribe); waits until healthy, prints the web URL
+up: ## Build the images and start Postgres, migrations, Keeper and the web app (PROFILES=assistant adds Guide and Scribe, PROFILES=mcp Herald); waits until healthy, prints the web URL
 	@PROFILES="$(PROFILES)" scripts/quickstart.sh up
 
 up-assistant: ## Same as `make up PROFILES=assistant`: also Guide and Scribe on the backend-ml image (embeddings, semantic search)

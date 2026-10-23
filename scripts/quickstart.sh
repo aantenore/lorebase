@@ -8,7 +8,8 @@
 #                         db-roles, migrate, keeper and web; returns when both are healthy and
 #                         prints the URL of the web app. With PROFILES=assistant it also builds
 #                         the backend-ml image and starts Guide and Scribe (overlay
-#                         deploy/compose/assistant.yaml)
+#                         deploy/compose/assistant.yaml); with PROFILES=mcp it also starts
+#                         Herald, the MCP server, over Streamable HTTP
 #   quickstart.sh data    load the supply sample through the CLI: Domain, schema and data on
 #                         branch `work`, then a Proposal merged into `main`. A Domain
 #                         `supply` that already holds the sample is left alone.
@@ -24,7 +25,8 @@
 #
 # Settings (environment):
 #   PROFILES              compose profiles `up` starts besides the default services; only
-#                         `assistant` (Guide and Scribe), several separated by spaces or commas
+#                         `assistant` (Guide and Scribe) and `mcp` (Herald), several separated
+#                         by spaces or commas
 #   COMPOSE_OVERLAYS      extra compose files added after the others by every command that
 #                         runs compose, separated by spaces, relative to the repository root
 #                         (for example `deploy/compose/hosted-model.yaml`, or a file of your
@@ -54,9 +56,9 @@ say() { printf '[quickstart] %s\n' "$*" >&2; }
 PROFILE_WORDS="$(printf '%s' "${PROFILES:-}" | tr ',' ' ')"
 for word in $PROFILE_WORDS; do
   case "$word" in
-    assistant) ;;
+    assistant | mcp) ;;
     *)
-      say "PROFILES=$word is not supported here (only: assistant); start other profiles with docker compose"
+      say "PROFILES=$word is not supported here (only: assistant, mcp); start other profiles with docker compose"
       exit 2
       ;;
   esac
@@ -84,6 +86,7 @@ overlays() {
 compose() {
   local files=(-f "$COMPOSE_FILE") overlay
   if has_profile assistant; then files+=(-f "$OVERLAY_DIR/assistant.yaml" --profile assistant); fi
+  if has_profile mcp; then files+=(--profile mcp); fi
   for overlay in $(overlays); do
     if [ ! -f "$overlay" ]; then
       say "COMPOSE_OVERLAYS names $overlay, which does not exist (paths start from $ROOT)"
@@ -137,6 +140,7 @@ up() {
   require_env
   local args=(postgres migrate keeper web)
   if has_profile assistant; then args+=(guide scribe); fi
+  if has_profile mcp; then args+=(herald); fi
   say "building the images and starting project $(env_value COMPOSE_PROJECT_NAME)"
   if [ -n "$(overlays)" ]; then say "with the compose overlays: $(overlays)"; fi
   compose up -d --build --wait "${args[@]}" >&2
@@ -145,6 +149,16 @@ up() {
   if has_profile assistant; then
     say "Guide: $(web_url)/guide/ (POST /embed), Scribe is running; try \`make example-documents\`"
   fi
+  if has_profile mcp; then
+    say "Herald (MCP, Streamable HTTP): http://127.0.0.1:$(value_or HERALD_HOST_PORT 8091)/mcp"
+  fi
+}
+
+# Value of NAME in the environment file, or DEFAULT when it is empty.
+value_or() {
+  local value
+  value="$(env_value "$1")"
+  printf '%s' "${value:-$2}"
 }
 
 web_url() {

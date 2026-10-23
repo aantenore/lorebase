@@ -14,6 +14,8 @@
 #                  needs a model endpoint, see LLM_* in .env.example). Together with Scribe it
 #                  runs on the backend-ml image (fastembed and a small embedding model).
 #                  `make up PROFILES=assistant` starts it with the overlay assistant.yaml
+#   mcp            Herald, the MCP server, over Streamable HTTP on 127.0.0.1:8091/mcp
+#                  (HERALD_HOST_PORT); `make up PROFILES=mcp` starts it with the default services
 #   observability  OpenTelemetry Collector, Prometheus, Grafana, Jaeger
 #   scale-out      second Keeper, Postgres streaming replica, nginx in front of the Keepers
 #                  (set KEEPER_RATE_LIMIT_BACKEND=postgres so both Keepers share their rate
@@ -386,6 +388,58 @@ services:
         - python
         - -c
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${GUIDE_PORT:-8095}/readyz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # ---- profile mcp ----------------------------------------------------------------------
+  # Herald, the MCP server, over Streamable HTTP at http://127.0.0.1:HERALD_HOST_PORT/mcp (and
+  # http://herald:HERALD_PORT/mcp from other containers of the stack). It holds no Keeper
+  # credential: each caller sends `Authorization: Bearer <api key>`, forwarded to Keeper.
+  # HERALD_ALLOW_ANONYMOUS=true lets calls without one through to Keeper, which accepts them only
+  # in auth mode none (the example configuration): local stacks only (docs/mcp.md).
+  # `make up PROFILES=mcp` starts it with the default services.
+
+  herald:
+    <<: *backend
+    profiles: [mcp]
+    command: ["lorebase-herald"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
+      LOREBASE__HERALD__TRANSPORT: streamable_http
+      LOREBASE__HERALD__HTTP__HOST: 0.0.0.0
+      LOREBASE__HERALD__HTTP__PORT: ${HERALD_PORT:-8090}
+      # DNS rebinding protection: Host and Origin values accepted (":*" matches any port).
+      LOREBASE__HERALD__HTTP__ALLOWED_HOSTS: ${HERALD_ALLOWED_HOSTS:-["127.0.0.1:*","localhost:*","herald:*"]}
+      LOREBASE__HERALD__HTTP__ALLOWED_ORIGINS: ${HERALD_ALLOWED_ORIGINS:-["http://127.0.0.1:*","http://localhost:*"]}
+      LOREBASE__HERALD__HTTP__ALLOW_ANONYMOUS: ${HERALD_ALLOW_ANONYMOUS:-false}
+      LOREBASE_URL: http://keeper:${KEEPER_PORT:-8080}
+      # Domain and branch used when a call names none; empty: the call must name the Domain.
+      LOREBASE_DOMAIN: ${HERALD_DOMAIN:-}
+      LOREBASE_BRANCH: ${HERALD_BRANCH:-}
+      LOREBASE__LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+      LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
+      LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-herald
+      LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
+    volumes:
+      - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
+    ports:
+      # Host port 8091 by default: 8090 is the web app's.
+      - "${HERALD_BIND:-127.0.0.1}:${HERALD_HOST_PORT:-8091}:${HERALD_PORT:-8090}"
+    depends_on:
+      keeper:
+        condition: service_healthy
+    # Herald serves only the MCP endpoint (no health route): the check opens its port.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', ${HERALD_PORT:-8090}), timeout=3).close()"
       interval: 10s
       timeout: 5s
       retries: 6

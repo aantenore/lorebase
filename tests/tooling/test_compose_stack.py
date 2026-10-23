@@ -353,6 +353,40 @@ def test_forwarded_keeper_settings_are_documented_in_the_example_env_file() -> N
         assert f"# {key}=" in example, key
 
 
+def test_herald_is_an_optional_streamable_http_service_wired_to_keeper() -> None:
+    assert "herald" not in services(BASE_ENV)
+    herald = services(BASE_ENV, "mcp")["herald"]
+    assert herald["profiles"] == ["mcp"]
+    assert herald["command"] == ["lorebase-herald"]
+    assert herald["read_only"] is True
+    assert herald["depends_on"]["keeper"]["condition"] == "service_healthy"
+    env = herald["environment"]
+    assert env["LOREBASE__HERALD__TRANSPORT"] == "streamable_http"
+    assert env["LOREBASE__HERALD__HTTP__PORT"] == "8090"
+    assert env["LOREBASE_URL"] == "http://keeper:8080"
+    hosts = json.loads(env["LOREBASE__HERALD__HTTP__ALLOWED_HOSTS"])
+    assert {"127.0.0.1:*", "localhost:*", "herald:*"} <= set(hosts)
+    assert json.loads(env["LOREBASE__HERALD__HTTP__ALLOWED_ORIGINS"])
+    # Anonymous calls stay refused unless the environment file asks for them.
+    assert env["LOREBASE__HERALD__HTTP__ALLOW_ANONYMOUS"] == "false"
+    (port,) = herald["ports"]
+    # Loopback, and not the web app's 8090.
+    assert (port["host_ip"], port["published"], port["target"]) == ("127.0.0.1", "8091", 8090)
+
+
+def test_herald_settings_are_configurable() -> None:
+    env = {**BASE_ENV, "HERALD_ALLOW_ANONYMOUS": "true", "HERALD_DOMAIN": "supply"}
+    herald = services(env, "mcp")["herald"]["environment"]
+    assert herald["LOREBASE__HERALD__HTTP__ALLOW_ANONYMOUS"] == "true"
+    assert herald["LOREBASE_DOMAIN"] == "supply"
+
+
+def test_quickstart_accepts_the_mcp_profile() -> None:
+    script = (ROOT / "scripts" / "quickstart.sh").read_text()
+    assert "assistant | mcp) ;;" in script
+    assert "args+=(herald)" in script
+
+
 def test_prebuilt_images_can_be_used_instead() -> None:
     found = services({**BASE_ENV, "LOREBASE_PULL_POLICY": "missing"})
     for name in BUILT_SERVICES:
