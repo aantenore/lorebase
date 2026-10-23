@@ -426,7 +426,12 @@ async def test_kind_scoped_grants_see_only_their_kinds(seeded: Seeded) -> None:
         other = await http.get(
             f"{BASE}/kinds/Plant/health", params={"branch": BROKEN}, headers=narrow
         )
-        assert other.status_code == 403
+        # Invisible to the narrow reader (design 13.3): like a Kind that does not exist.
+        assert other.status_code == 404
+        unknown = await http.get(
+            f"{BASE}/kinds/Nowhere/health", params={"branch": BROKEN}, headers=narrow
+        )
+        assert other.json()["detail"] == unknown.json()["detail"].replace("Nowhere", "Plant")
         assert (await http.get(f"{BASE}/health", headers={})).status_code == 401
 
         full = await http.get(f"{BASE}/health", params={"branch": BROKEN}, headers=wide)

@@ -32,6 +32,7 @@ from lorebase_core.expr import (
     links_read,
 )
 from lorebase_core.expr.sensitivity import schema_tags, tag_origins
+from lorebase_core.expr.visibility import element_ids
 from lorebase_core.model import (
     AggregateDerivation,
     Attribute,
@@ -58,6 +59,7 @@ from lorebase_store.repositories import MaterializedRepository
 
 DERIVATION_NOT_FOUND = "derivation.not_found"
 DERIVATION_UNSUPPORTED = "derivation.unsupported"
+DERIVATION_ID_UNAVAILABLE = "derivation.id_unavailable"
 
 
 class CandidateInvalidError(Exception):
@@ -148,6 +150,17 @@ def candidate_of(
     limits = rules.expression_limits or ExprLimits()
     compiled = compile_derivation(schema, derivation, limits)
     return Candidate(schema, derivation, kind, attribute, compiled, limits)
+
+
+def require_new_ids(candidate: Candidate, hidden: frozenset[str]) -> None:
+    """Refuse a candidate built on a projected schema (`ReadPoint.hidden`) that reuses an id
+    the projection left out: Records and values stored under it are not the caller's to read
+    (design 13.3)."""
+    reused = sorted(element_ids(candidate.schema) & hidden)
+    if reused:
+        raise CandidateInvalidError(
+            [_issue(DERIVATION_ID_UNAVAILABLE, f"Id {reused[0]} cannot be used here.", ())]
+        )
 
 
 def touched_kinds(

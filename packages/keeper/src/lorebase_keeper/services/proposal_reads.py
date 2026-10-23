@@ -23,7 +23,8 @@ from dataclasses import dataclass, replace
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, relation_partition
 from lorebase_keeper.auth.permissions import Permission
-from lorebase_keeper.errors import FORBIDDEN, ProblemError
+from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, ProblemError
+from lorebase_keeper.reading.visibility import visible
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.repositories import (
     EVERY_PARTITION,
@@ -40,6 +41,9 @@ class ConflictScope:
 
     kinds: frozenset[str] | None = None
     schema: bool = True
+    invisible: bool = False
+    """The other Kinds are invisible to the caller (design 13.3): a Conflict outside the scope
+    answers like an unknown one."""
 
     @property
     def everything(self) -> bool:
@@ -64,7 +68,9 @@ async def conflict_scope(data: ReadGuard, proposal: ProposalRow) -> ConflictScop
     kinds = await data.granted_kinds()
     if not kinds:
         raise data.denied()
-    return ConflictScope(kinds=kinds, schema=schema_readable)
+    return ConflictScope(
+        kinds=kinds, schema=schema_readable, invisible=data.authorizer.invisible_kinds
+    )
 
 
 async def reads_both(data: ReadGuard, proposal: ProposalRow) -> bool:
@@ -98,9 +104,14 @@ async def require_target_read(data: ReadGuard, target_ref: str) -> None:
     raise data.denied()
 
 
-def require_visible(partitions: PartitionFilter, conflict: ConflictRow) -> None:
-    """403 for a Conflict stored in a partition outside `partitions`."""
+def require_visible(
+    partitions: PartitionFilter, conflict: ConflictRow, attempt_id: str, *, invisible: bool = False
+) -> None:
+    """403 for a Conflict stored in a partition outside `partitions`; with `invisible`, the
+    404 of a Conflict that is not part of the attempt."""
     if not partitions.allows(conflict.partition):
+        if invisible:
+            raise unknown_conflict(conflict.fingerprint, attempt_id)
         raise ProblemError(
             FORBIDDEN,
             f"Conflict {conflict.fingerprint} is outside what the caller may read.",
@@ -116,6 +127,8 @@ def visible_partitions(scope: ConflictScope, schemas: Iterable[Schema]) -> Parti
     if scope.kinds is None:
         return PartitionFilter(exclude=frozenset({PARTITION_SCHEMA}))
     seen = list(schemas)
+    if scope.invisible:
+        seen = [visible(schema, scope.kinds) for schema in seen]
     kind_ids = {
         kind.id for schema in seen for kind in schema.kinds.values() if kind.api_name in scope.kinds
     }
@@ -129,3 +142,12 @@ def visible_partitions(scope: ConflictScope, schemas: Iterable[Schema]) -> Parti
     if scope.schema:
         partitions.add(PARTITION_SCHEMA)
     return PartitionFilter(include=frozenset(partitions))
+
+
+def unknown_conflict(fingerprint: str, attempt_id: str) -> ProblemError:
+    """404 for a Conflict that is not part of the current merge attempt."""
+    return ProblemError(
+        NOT_FOUND,
+        f"Conflict {fingerprint} is not part of the current merge attempt.",
+        extensions={"conflict": fingerprint, "attempt": attempt_id},
+    )

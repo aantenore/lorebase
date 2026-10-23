@@ -314,7 +314,8 @@ export interface paths {
         };
         /**
          * List Domains
-         * @description Domains whose schema the caller may read, ordered by id.
+         * @description Domains whose schema the caller may read (also through grants narrowed to Kinds that
+         *     are invisible to it otherwise), ordered by id.
          */
         get: operations["list_domains_api_v1_domains_get"];
         put?: never;

@@ -102,7 +102,8 @@ def compiler_for(point: ReadPoint, runtime: ReadRuntime) -> Compiler:
 
 
 def require_kind(point: ReadPoint, api_name: str) -> Kind:
-    """The Kind named `api_name`: 403 when the caller may not read it, 404 when unknown."""
+    """The Kind named `api_name`: 404 when unknown, or invisible to the caller (design 13.3);
+    403 when the caller may not read it and invisible Kinds are off."""
     point.scope.require([api_name])
     kind = point.schema.kind_by_api_name(api_name)
     if kind is None:
@@ -314,7 +315,7 @@ async def lineage_summary(
 def plan_query(query: Query, point: ReadPoint, runtime: ReadRuntime, prefix: str) -> QueryPlan:
     """The resolved query, once every Kind it reads is one the caller may read."""
     if query.kind is not None:
-        point.scope.require([query.kind])
+        point.scope.precheck([query.kind])
     try:
         plan = resolve_query(query, point.schema, runtime.read.query_limits())
     except QueryError as error:

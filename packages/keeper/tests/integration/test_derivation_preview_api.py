@@ -7,6 +7,7 @@ here, and so is the band (a derived Attribute carries the tags of what it reads)
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -315,11 +316,30 @@ async def test_the_caller_needs_to_read_every_kind_the_derivation_touches(seeded
         none = await _preview(http, facts["schema_only"], "single_sourced", {})
         assert none.status_code == 403
         assert none.json()["permission"] == "data.read"
-        # supplier_count reads Suppliers through supplied_by; single_sourced only Parts.
+        # supplier_count reads Suppliers through supplied_by; single_sourced only Parts. To a
+        # reader of Parts the first does not exist (design 13.3).
         denied = await _preview(http, facts["parts_only"], "supplier_count", {})
-        assert denied.status_code == 403, denied.text
-        assert denied.json()["kind"] == "Supplier"
-        allowed = await _preview(http, facts["parts_only"], "single_sourced", {})
+        assert denied.status_code == 422, denied.text
+        unknown = await _preview(http, facts["parts_only"], "nowhere", {})
+        assert denied.json()["issues"] == json.loads(
+            json.dumps(unknown.json()["issues"]).replace("nowhere", "supplier_count")
+        )
+        # Defining it anew does not read Suppliers: supplied_by is unknown too.
+        redefined = _edit(
+            "supplier_count",
+            variant="aggregate",
+            kind="Part",
+            attribute="supplier_count",
+            relation="supplied_by",
+            function="count",
+        )
+        assert (
+            await _preview(http, facts["parts_only"], "supplier_count", redefined)
+        ).status_code == 422
+        # single_sourced reads supplier_count: it tells about Suppliers too.
+        hidden = await _preview(http, facts["parts_only"], "single_sourced", {})
+        assert hidden.status_code == 422, hidden.text
+        allowed = await _preview(http, facts["viewer"], "single_sourced", {})
         assert allowed.status_code == 200, allowed.text
         anonymous = await http.post(PREVIEW, json={"derivation": "single_sourced", "patch": {}})
         assert anonymous.status_code == 401

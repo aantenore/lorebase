@@ -268,3 +268,19 @@ async def resolve_readable(
             )
     except ProblemError as error:
         raise guard.unknown(error, wide=wide) from None
+
+
+async def resolve_kind_limited(
+    store: StoreAccess, guard: ReadGuard, *, branch: str | None, at: str | None
+) -> ReadTarget:
+    """The Revision a caller holding grants narrowed to Kinds reads (they cover every branch
+    and Revision, for those Kinds). Unknown Domains, branches and Revisions answer 403, like
+    names the caller may not read."""
+    try:
+        async with store.sessions() as session, session.begin():
+            domain = await require_domain(session, guard.domain_id)
+            return await StoreReadSource(session, domain).lookup(branch=branch, at=at)
+    except ProblemError as error:
+        if error.status_code == 404:
+            raise guard.denied() from None
+        raise

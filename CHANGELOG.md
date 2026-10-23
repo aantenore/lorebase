@@ -4,9 +4,19 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+### Added
+
+- Kind-scoped invisibility, the last part of full RBAC. A caller whose grants are narrowed to Kinds no longer learns of the other Kinds: `GET /schema` (JSON and YAML) and schema elements return the schema without them and without the Relations, path Derivations, derived and `ref` Attributes, Traits, Operations and Sources that would tell about them, and every request naming one of them answers with the 404 or 422 of a name that does not exist, never a 403. Counts, Link summaries, neighborhoods, search hits and typo corrections, health reports, context packs and agent trace refs cover the visible Kinds only. Such callers can now read the Domain, its branches and tags, so the web app, Herald and the Guide work for them. On by default; `keeper.auth.authz.invisible_kinds: false` keeps the 403 naming the Kind ([design 13.3](docs/design.md#133-authorization-enforcement), [threat model](docs/threat-model.md#tb3-authorization-inside-keeper)).
+
 ### Changed
 
-- Documentation: the validation record gains the five-day scenario's CI figures, the rounds and findings of the PII vault and outbox security reviews; the README and the documentation landing page describe v0.2.1; the roadmap keeps open only the reference-hardware benchmark, Kind-scoped invisibility and the API stability guarantees ([validation](docs/validation.md), [roadmap](docs/roadmap.md)).
+- Kind-narrowed callers get 404 or 422 instead of 403 for Kinds they may not read, see the cache entries and `ETag`s of their own projection, and no longer see a Kind whose keys reference an invisible Kind or whose titles or full-text index are computed from one (a searchable count of its Records); derived Attributes reading an invisible Kind, such as `supplier_count` and `single_sourced` for a reader of Parts only, are left out of their Records and of Derivation previews. Agent trace steps of other principals no longer carry result counts, query plans or a `truncated` flag for them, Proposal extraction checks no longer count items for callers who do not see every Conflict, and resolving a Conflict outside their Kinds answers 404 like an unknown one. Branch responses leave out the progress of background copies for them.
+
+- Documentation: the validation record gains the five-day scenario's CI figures, the rounds and findings of the PII vault and outbox security reviews; the README and the documentation landing page describe v0.2.1; the roadmap keeps open only the reference-hardware benchmark and the API stability guarantees ([validation](docs/validation.md), [roadmap](docs/roadmap.md)).
+
+### Upgrade notes
+
+- Clients of Kind-narrowed principals that relied on 403 to tell a forbidden Kind from an unknown one now get 404 or 422 for both. Set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers.
 
 ## 0.2.1 - 2026-10-23
 

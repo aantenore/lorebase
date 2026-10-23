@@ -343,9 +343,15 @@ class _RefFilter:
         explain = step.explain if await self.explains(step.domain_id) else None
         if await self.cleared(step.domain_id):
             return _View(step.query, step.result, refs, step.note, explain)
+        # A reader limited to Kinds that are invisible to it (design 13.3) learns nothing of
+        # the others: no counts, no query plans, no hint that refs were left out.
+        invisible = allowed is not None and self._auth.authorizer.invisible_kinds
+        kept = ("agent_step",) if invisible else ("counts", "agent_step")
         result = step.result
         if result is not None:
-            result = {k: v for k, v in result.items() if k in ("counts", "agent_step")}
+            result = {k: v for k, v in result.items() if k in kept}
+        if invisible:
+            explain = None
         note = None if step.note is None else ""
         return _View(None, result, refs, note, explain, withheld=True)
 
@@ -370,9 +376,12 @@ class _RefFilter:
         hidden = len(records) + len(links) < len(stored.get("records") or ()) + len(
             stored.get("links") or ()
         )
-        return TraceRefs(
-            records=records, links=links, truncated=bool(stored.get("truncated")) or hidden
-        )
+        truncated = bool(stored.get("truncated")) or hidden
+        if allowed is not None and self._auth.authorizer.invisible_kinds:
+            # Whether refs were left out, or cut by the recorder's cap (which counts every
+            # Kind), would tell about Kinds invisible to the reader.
+            truncated = False
+        return TraceRefs(records=records, links=links, truncated=truncated)
 
 
 @router.get(

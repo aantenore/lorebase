@@ -18,7 +18,14 @@ from pydantic import BaseModel, Field, JsonValue
 from lorebase_core.canonical import hex
 from lorebase_core.model import Domain
 from lorebase_keeper.auth.audit import annotate
-from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, require, require_installation
+from lorebase_keeper.auth.deps import (
+    Access,
+    AuthDep,
+    PrincipalDep,
+    limited_kinds,
+    require,
+    require_installation,
+)
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.context import StoreDep
 from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep
@@ -126,7 +133,8 @@ async def create_domain(
 async def list_domains(
     principal: PrincipalDep, auth: AuthDep, store: StoreDep, params: PageParamsDep
 ) -> Page[DomainOut]:
-    """Domains whose schema the caller may read, ordered by id."""
+    """Domains whose schema the caller may read (also through grants narrowed to Kinds that
+    are invisible to it otherwise), ordered by id."""
     after = None if params.position is None else str(params.position.get("id", ""))
     items: list[DomainOut] = []
     more = True
@@ -136,7 +144,9 @@ async def list_domains(
         more = len(rows) == params.limit
         for position, row in enumerate(rows):
             after = row.id
-            if await auth.authorizer.allows(principal, Permission.SCHEMA_READ, row.id):
+            if await auth.authorizer.allows(
+                principal, Permission.SCHEMA_READ, row.id
+            ) or await limited_kinds(auth.authorizer, principal, Permission.SCHEMA_READ, row.id):
                 items.append(_out(row, None))
             if len(items) == params.limit:
                 more = more or position < len(rows) - 1
@@ -149,7 +159,7 @@ async def list_domains(
 async def get_domain(
     domain_id: str,
     store: StoreDep,
-    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ))],
+    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ, kind_limited=True))],
 ) -> DomainOut:
     """The Domain and the head Revision of its default branch."""
     row, head = await service.get(store, domain_id)

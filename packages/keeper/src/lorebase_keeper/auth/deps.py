@@ -72,6 +72,9 @@ class Access:
     principal: Principal
     domain_id: str | None
     permission: Permission
+    kinds: frozenset[str] | None = None
+    """Set when only grants narrowed to these Kinds allowed the request (`require` with
+    `kind_limited`): the response must not tell about other Kinds."""
 
 
 def require(
@@ -81,22 +84,35 @@ def require(
     kind_param: str | None = None,
     operation_param: str | None = None,
     branch_param: str | None = None,
+    kind_limited: bool = False,
 ) -> Callable[..., Awaitable[Access]]:
     """Dependency: the caller holds `permission` in the Domain named by the path.
+
+    With `kind_limited`, grants narrowed to Kinds count too when Kinds are invisible to such
+    callers (`keeper.auth.authz.invisible_kinds`, design 13.3): for reads that tell nothing
+    about Kinds (the Domain, its branches and tags), which a caller limited to Kinds needs to
+    find its way. `Access.kinds` then names them.
 
     Answers 401 without a valid credential and 403, naming the missing permission, otherwise.
     """
 
     async def dependency(request: Request, principal: PrincipalDep, auth: AuthDep) -> Access:
         params = request.path_params
+        domain_id = str(params[domain_param])
         context = AccessContext(
             kind=_param(params, kind_param),
             operation=_param(params, operation_param),
             branch=_param(params, branch_param),
         )
-        return await authorize(
-            request, auth, principal, permission, str(params[domain_param]), context
-        )
+        try:
+            return await authorize(request, auth, principal, permission, domain_id, context)
+        except ProblemError as error:
+            if not kind_limited or error.status_code != 403:
+                raise
+            kinds = await limited_kinds(auth.authorizer, principal, permission, domain_id)
+            if not kinds:
+                raise
+            return Access(principal, domain_id, permission, kinds)
 
     return dependency
 
@@ -115,6 +131,16 @@ async def authorize(
     if not await auth.authorizer.allows(principal, permission, domain_id, context):
         raise await refusal(auth.authorizer, principal, permission, domain_id)
     return Access(principal=principal, domain_id=domain_id, permission=permission)
+
+
+async def limited_kinds(
+    authorizer: Authorizer, principal: Principal, permission: Permission, domain_id: str
+) -> frozenset[str]:
+    """Kinds that grants narrowed to Kinds give `permission` on, when such Kinds are invisible
+    to the caller (design 13.3); empty otherwise."""
+    if not authorizer.invisible_kinds:
+        return frozenset()
+    return await authorizer.granted_kinds(principal, permission, domain_id)
 
 
 async def refusal(

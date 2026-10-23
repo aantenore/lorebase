@@ -189,6 +189,10 @@ keeper:
       grants_cache_ttl_s: 15     # grants are cached this long; other processes see changes after
                                  # at most this; 0 disables
       grants_cache_max_entries: 2048
+      invisible_kinds: true      # Kinds a caller's Kind-narrowed grants leave out are invisible to
+                                 # it: the schema it reads omits them and what tells about them,
+                                 # and naming them answers like an unknown name (404/422, never
+                                 # 403); false refuses them with 403 naming the Kind
       custom_roles: {}           # extra roles, name -> permissions. Built-in roles: viewer,
                                  # explorer, editor, operator, modeler, reviewer, maintainer,
                                  # admin, agent-reader. Example:

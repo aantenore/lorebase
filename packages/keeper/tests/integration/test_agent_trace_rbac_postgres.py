@@ -167,9 +167,11 @@ async def test_principals_see_their_own_steps_and_trace_readers_their_domains(
         narrow = (await http.get(f"{TRACE}/s1", params=bots, headers=headers["narrow"])).json()
         [step] = narrow["steps"]
         assert step["query"] is None
-        assert step["result"] == {"counts": {"items": 2}}
+        # Kinds the narrowed reader may not read are invisible to it (design 13.3): no counts
+        # over every Kind, no hint that refs were left out.
+        assert step["result"] == {}
         assert step["refs"]["records"] == [{"kind": "Part", "key": "P-1"}]
-        assert step["refs"]["truncated"] is True
+        assert step["refs"]["truncated"] is False
         assert step["withheld"] is True
         mine = await http.get(f"{TRACE}/s1", headers=headers["admin"])
         assert mine.status_code == 404  # without actor: the caller's own session
