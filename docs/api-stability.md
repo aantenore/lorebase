@@ -144,6 +144,10 @@ refuses unknown sections and keys, all as validation problems
 (`packages/core/src/lorebase_core/model/yaml_schema.py`: `SCHEMA_FORMAT` and `read`). Exports
 always write `format: lorebase.schema/v1`.
 
+Attribute api names `key`, `kind`, `ref` and `revision` are reserved on Kinds (they name the
+Record envelope) and refused with `schema.api_name_reserved`, whose message proposes another name
+([design 5.4](design.md#54-attribute)).
+
 Within v1:
 
 - new optional keys and sections may be added in any release. Because unknown keys are refused,

@@ -230,6 +230,14 @@ A Domain is the unit of isolation for data, permissions, storage scoping (object
 | indexed | boolean; creates a partial expression index on the materialized head |
 | searchable | boolean plus weight `A` to `D` for full-text |
 | derivation_id | set when the value is computed by a Derivation (read-only) |
+
+**Reserved api names.** A Kind's Attributes cannot be named `key`, `kind`, `ref` or `revision`:
+those name the Record envelope in API responses and in the query language
+(`DEFAULT_RESERVED_ATTRIBUTE_NAMES` in `lorebase_core.validate.schema_rules`). Validation refuses
+them with `schema.api_name_reserved` and proposes a replacement, for example ``"`key` is a
+reserved name, choose another (e.g. `code`)"``; `kind` suggests `category`, `ref` `reference`,
+`revision` `version`. Relation Attributes may use them. Schema inference renames colliding
+columns on its own.
 | authority | optional Source id that owns this Attribute's values (used by merge policies) |
 
 **Type system.** `string`, `text` (long, full-text), `integer` (int64), `decimal` (precision, scale), `float` (float64), `boolean`, `date`, `timestamp` (UTC, microseconds), `duration`, `enum` (closed value list), `json` (opaque, not filterable beyond existence), `geo_point` (lat, lon), `uri`, and `array<T>` of any scalar type. No nested structs in v1; model them as Kinds. **[Architect call AC-05]**
