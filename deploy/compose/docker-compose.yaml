@@ -134,6 +134,15 @@ x-keeper: &keeper
     LOREBASE__TELEMETRY__OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
     LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-keeper
     LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
+    # Keeper settings passed through from the environment file (or the shell) when set there,
+    # under their own names; left unset, the YAML file above decides. See .env.example.
+    LOREBASE__KEEPER__AUTH__MODE:
+    LOREBASE__KEEPER__PROPOSALS__ALLOW_SELF_APPROVAL:
+    LOREBASE__KEEPER__PROPOSALS__REQUIRED_APPROVALS:
+    LOREBASE__KEEPER__OPERATIONS__DIRECT_COMMIT_ON_PROTECTED:
+    LOREBASE__KEEPER__CORS__ALLOW_ORIGINS:
+    LOREBASE__KEEPER__CORS__ALLOW_HEADERS:
+    LOREBASE__KEEPER__CORS__ALLOW_CREDENTIALS:
   volumes:
     - ${LOREBASE_CONFIG_FILE:-../../config/lorebase.example.yaml}:/etc/lorebase/lorebase.yaml:ro
   depends_on:

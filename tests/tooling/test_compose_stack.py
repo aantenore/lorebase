@@ -320,6 +320,39 @@ def test_images_are_rebuilt_from_the_checkout_on_every_up() -> None:
         assert "build" in found[name], name
 
 
+FORWARDED_KEEPER_SETTINGS = {
+    "LOREBASE__KEEPER__PROPOSALS__ALLOW_SELF_APPROVAL": "true",
+    "LOREBASE__KEEPER__OPERATIONS__DIRECT_COMMIT_ON_PROTECTED": "true",
+    "LOREBASE__KEEPER__CORS__ALLOW_ORIGINS": '["http://localhost:5173"]',
+}
+
+
+def test_keeper_settings_of_the_environment_file_reach_every_keeper() -> None:
+    found = services({**BASE_ENV, **FORWARDED_KEEPER_SETTINGS}, "scale-out")
+    for name in ("keeper", "keeper-2"):
+        env = found[name]["environment"]
+        for key, value in FORWARDED_KEEPER_SETTINGS.items():
+            assert env[key] == value, (name, key)
+
+
+def test_unset_keeper_settings_leave_the_yaml_file_in_charge() -> None:
+    env = services(BASE_ENV)["keeper"]["environment"]
+    for key in FORWARDED_KEEPER_SETTINGS:
+        # Present without a value: compose leaves the variable out of the container.
+        assert env[key] is None, key
+
+
+def test_forwarded_keeper_settings_are_documented_in_the_example_env_file() -> None:
+    example = (ROOT / ".env.example").read_text()
+    env = services(BASE_ENV)["keeper"]["environment"]
+    forwarded = [
+        key for key, value in env.items() if key.startswith("LOREBASE__") and value is None
+    ]
+    assert forwarded
+    for key in forwarded:
+        assert f"# {key}=" in example, key
+
+
 def test_prebuilt_images_can_be_used_instead() -> None:
     found = services({**BASE_ENV, "LOREBASE_PULL_POLICY": "missing"})
     for name in BUILT_SERVICES:

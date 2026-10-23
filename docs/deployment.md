@@ -252,6 +252,34 @@ it (rebuild the images from that checkout), or restore a backup taken before tha
 Keeper, which waits for `migrate`, does not start. `alembic stamp --purge` stays available for a
 manual repair of the version table.
 
+### Keeper settings from the environment file
+
+Keeper reads its settings from the mounted YAML file (`LOREBASE_CONFIG_FILE`) and from
+`LOREBASE__KEEPER__...` variables. The compose file forwards a documented set of them from `.env`
+(or the shell) to `keeper` and `keeper-2` under their own names, and only when they are set, so
+the YAML file decides otherwise:
+
+| Variable | Setting |
+|----------|---------|
+| `LOREBASE__KEEPER__AUTH__MODE` | `keeper.auth.mode` |
+| `LOREBASE__KEEPER__PROPOSALS__ALLOW_SELF_APPROVAL` | `keeper.proposals.allow_self_approval` |
+| `LOREBASE__KEEPER__PROPOSALS__REQUIRED_APPROVALS` | `keeper.proposals.required_approvals` |
+| `LOREBASE__KEEPER__OPERATIONS__DIRECT_COMMIT_ON_PROTECTED` | `keeper.operations.direct_commit_on_protected` |
+| `LOREBASE__KEEPER__CORS__ALLOW_ORIGINS` | `keeper.cors.allow_origins` (JSON list) |
+| `LOREBASE__KEEPER__CORS__ALLOW_HEADERS` | `keeper.cors.allow_headers` (JSON list) |
+| `LOREBASE__KEEPER__CORS__ALLOW_CREDENTIALS` | `keeper.cors.allow_credentials` |
+
+For a single-operator demo, for example:
+
+```bash
+# in .env
+LOREBASE__KEEPER__PROPOSALS__ALLOW_SELF_APPROVAL=true
+LOREBASE__KEEPER__OPERATIONS__DIRECT_COMMIT_ON_PROTECTED=true
+```
+
+Any other setting goes into a copy of `config/lorebase.example.yaml` named by
+`LOREBASE_CONFIG_FILE`, or into an overlay compose file (`COMPOSE_OVERLAYS`).
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot
