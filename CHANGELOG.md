@@ -4,14 +4,37 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+## 0.2.1 - 2026-10-23
+
+Patch release for the storage profiles of 0.2.0. `python -m lorebase_store.storage apply` now converges when commits run during the lineage rewrite, the downgrade of migration `0036` no longer deadlocks against commits, and a repeated `apply` skips the full lineage scan once a pass is recorded complete (`--verify` forces it). The performance documentation replaces the 10M-Record storage profile estimate with measured numbers. No migration, configuration key or API response changes.
+
+### Added
+
+- `make perf-up` starts the Postgres of the performance harness without running a benchmark; `PERF_VM=16g` sizes its memory for a Docker VM of 16 GiB (`shared_buffers` 6GB, `effective_cache_size` 12GB) instead of the default `PERF_VM=8g`. Each `PERF_PG_*` value can still be set on its own; these are harness settings, not product defaults ([performance](docs/performance.md#10m-records)).
+- `python -m lorebase_store.storage apply --verify` scans every lineage map row again and resets what is recorded ([performance](docs/performance.md#switching)).
+
 ### Changed
 
-- `storage apply` no longer scans every lineage map row again once a rewrite has finished: it records the pass per partition with a watermark, and a later run with the same profile only looks at the rows written since, and `--verify` forces the full pass ([performance](docs/performance.md#switching)).
+- `storage apply` no longer scans every lineage map row again once a rewrite has finished: it records the pass per partition in `storage_tasks` with a watermark, and a later run with the same profile only looks at the rows written since. At 10M Records the full scan took 13.5 minutes even with nothing to rewrite. Rows written while the triggers were turned off out of band, or frozen by `VACUUM` before a run looked at them, are only found by `--verify` ([performance](docs/performance.md#switching)).
+- The storage profiles at 10M Records are measured instead of estimated (Docker VM of 16 GiB): the hot set goes from 57 GB to 44.1 GB in `balanced` and 43.3 GB in `compact`, the cold 2-hop neighborhood from 122 to 100 ms at p50 (96 in `compact`), and a commit of 1,000 Part updates takes 2,711 ms at p50 in `balanced` and 2,332 in `compact` under the same load ([performance](docs/performance.md#working-set), [validation](docs/validation.md)).
 
 ### Fixed
 
 - `storage apply` no longer leaves lineage map rows a commit held during the rewrite in the other form: the page ranges they are in are rewritten again after the pass, and while rows stay held the step is deferred (exit status 3) and the next run finishes them ([performance](docs/performance.md#switching)).
 - The downgrade of migration `0036` takes the locks of `mat_records` and `mat_links` up front, in the order commits write them, each wait shorter than `deadlock_timeout`: a commit waiting for it is never chosen as a deadlock victim, and neither is the downgrade.
+
+### Not done yet
+
+- The performance baseline on the 1M-Record fixture: the neighborhood on branches other than `main` is just over budget when the working set does not fit in memory ([performance](docs/performance.md#1m-records)).
+- The performance targets of the design at 10M Records: the 2-hop neighborhood, full-text search (searches of very common words above all), Record history and lineage are over budget, and a commit of 1,000 changes takes more than 2 s ([performance](docs/performance.md#10m-records)).
+- Full RBAC: Kind-scoped invisibility in queries ([roadmap](docs/roadmap.md#m3-governance-and-agents)).
+- The stability guarantees for `/api/v1` bind from 1.0 ([API stability](docs/api-stability.md)).
+- Packages on PyPI: the wheels and sdists are attached to the GitHub release.
+
+### Upgrade notes
+
+- From 0.2.0: replace the images (or the packages) with 0.2.1 and restart; there is no migration and no configuration to change. If an earlier `storage apply` stopped or left lineage map rows in the other form, run it again as the maintenance role: it finishes them, and it exits with status 3 while commits still hold rows, in which case run it again later. The first run of 0.2.1 makes the full lineage pass once and records it; later runs skip it.
+- From 0.1.0: follow the upgrade notes of 0.2.0 below, with the images of 0.2.1.
 
 ## 0.2.0 - 2026-10-23
 

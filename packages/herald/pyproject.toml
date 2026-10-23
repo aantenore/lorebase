@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-herald"
-version = "0.2.0"
+version = "0.2.1"
 description = "Lorebase Herald: MCP server over the Keeper REST API"
 requires-python = ">=3.12"
 # mcp: the official Model Context Protocol SDK (tools, resources and prompts; stdio and

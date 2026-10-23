@@ -102,7 +102,7 @@ The first upload of a name cannot use a project-scoped token (the project does n
 Signatures and attestations, with [cosign](https://docs.sigstore.dev/):
 
 ```bash
-VERSION=0.2.0
+VERSION=0.2.1
 IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/tags/v'
 ISSUER=https://token.actions.githubusercontent.com
 
