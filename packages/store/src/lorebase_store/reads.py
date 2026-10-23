@@ -36,6 +36,7 @@ on a full branch they are unchanged.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ from typing import Any
 
 from sqlalchemy import LargeBinary, Table, TextClause, TextualSelect, column, text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Relation, RelationBacking, Schema
@@ -55,8 +57,11 @@ from lorebase_store.indexes import IndexSpec, plan_indexes, predicate_sql, sql_l
 from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
 from lorebase_store.models import metadata
 from lorebase_store.repositories.materialized import RecordRow
+from lorebase_store.repositories.refs import sqlstate
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import record_definer_call
+
+log = logging.getLogger(__name__)
 
 MAT_RECORDS: Table = metadata.tables["mat_records"]
 MAT_LINKS: Table = metadata.tables["mat_links"]
@@ -889,6 +894,9 @@ def _tsqueries(corrections: int) -> TextClause:
     return text(f"SELECT CAST({_QUERY} AS text), CAST({_corrected_query(corrections)} AS text)")
 
 
+QUERY_CANCELED = "57014"
+
+
 @dataclass(frozen=True, slots=True)
 class _Bm25Plan:
     """BM25 queries of a search: `match` for the query as written (`None`: it has no lexeme
@@ -941,7 +949,18 @@ async def _bm25_rows(
         "fixed": None if plan.fixed is None else plan.fixed.json(),
         "fixed_exact": True if plan.fixed is None else plan.fixed.exact,
     }
-    return list((await session.execute(statement, values)).all())
+    # In a savepoint: a server that stopped serving the index (dropped since `bm25.ready`
+    # looked, a standby without it) costs a fallback, not the request. A cancelled statement
+    # (statement_timeout) is not run again.
+    try:
+        async with session.begin_nested():
+            return list((await session.execute(statement, values)).all())
+    except DBAPIError as error:
+        if sqlstate(error) == QUERY_CANCELED:
+            raise
+        log.warning("BM25 search failed, ranking the default way: %s", error.orig)
+        bm25.forget()
+        return None
 
 
 class SearchHits(list[SearchHit]):
@@ -1309,12 +1328,17 @@ async def search_records(
     async def rank(given: dict[str, Any]) -> list[Any]:
         """One search statement: the BM25 function when it serves the query, else the
         default one (and every later statement of this search too)."""
-        nonlocal ranked
+        nonlocal ranked, bound
         if ranked == "bm25":
             found = await _bm25_rows(session, layout, given, fixes)
             if found is not None:
                 return found
             ranked = "postgres"
+            if common is not None and bound is None:
+                # As without BM25: the candidates the lexicon says the query needs.
+                bound = await _match_bound(session, layout, query, fixes, kind_ids, config)
+                wanted = _wanted(bound.query if given["query"] == query else bound.any_term, common)
+                given = {**given, "candidates": _candidates(wanted, ceiling)}
         if definer:
             statement = _SEARCH_DEFINER[_function("lb_search_bounded", layout)]
         else:

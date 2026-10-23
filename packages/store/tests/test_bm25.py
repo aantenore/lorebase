@@ -14,6 +14,7 @@ def term(word: str) -> dict[str, Any]:
 
 
 ALL = {"all": None}
+PHRASE_ABC = {"phrase": {"field": "terms", "phrases": ["a", "b", "c"], "slop": 0}}
 
 
 @pytest.mark.parametrize(
@@ -46,10 +47,15 @@ ALL = {"all": None}
         ),
         # Quotes and backslashes as tsquery prints them.
         ("'it''s' & 'x\\\\y'", {"boolean": {"must": [term("it's"), term("x\\y")]}}, True),
-        # Phrases: positional in the index, rechecked against the vector.
+        # Phrases: every word, the rows with them in sequence first; rechecked.
         (
             "'a' <-> 'b' <-> 'c'",
-            {"phrase": {"field": "terms", "phrases": ["a", "b", "c"], "slop": 0}},
+            {
+                "boolean": {
+                    "must": [term("a"), term("b"), term("c")],
+                    "should": [PHRASE_ABC],
+                }
+            },
             False,
         ),
         ("'a' <2> 'b'", {"boolean": {"must": [term("a"), term("b")]}}, False),
@@ -100,6 +106,6 @@ def test_index_statement() -> None:
     sql = bm25.index_sql("mat_records_p0", "mat_records_p0_bm25_idx", concurrently=True)
     assert sql.startswith("CREATE INDEX CONCURRENTLY IF NOT EXISTS mat_records_p0_bm25_idx ")
     assert "USING bm25 ((key::pdb.literal), " in sql
-    assert "(lb_search_terms(search)::pdb.whitespace('alias=terms'))" in sql
+    assert "::pdb.whitespace('alias=terms', 'lowercase=false'))" in sql
     parent = bm25.index_sql("mat_records", bm25.INDEX, only=True)
     assert f"{bm25.INDEX} ON ONLY mat_records USING bm25" in parent

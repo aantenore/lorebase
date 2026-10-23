@@ -162,6 +162,36 @@ async def test_bm25_finds_what_full_text_search_finds(
         top = await search_records(session, DOMAIN, "main", "stock", limit=3, backend="bm25")
         assert len(top) == 3
         assert not top.truncated
+        assert top[0].score == 1.0  # relative to the best hit
+        assert all(0 < h.score <= 1 for h in top)
+
+    # Lexemes are indexed as the vector holds them, case included; a row without a vector
+    # matches no query, a negation-only one neither.
+    async with indexed() as session, session.begin():
+        await session.execute(
+            text(
+                "UPDATE mat_records SET search = CASE key WHEN 'SP-3' THEN "
+                "CAST('Ärger:1 zeta:2' AS tsvector) END "
+                "WHERE domain_id = :d AND branch = 'main' AND key IN ('SP-3', 'SP-4')"
+            ),
+            {"d": DOMAIN},
+        )
+    async with indexed() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        upper = json.dumps({"term": {"field": "terms", "value": "Ärger"}})
+        found = await session.execute(
+            text(
+                "SELECT key FROM lb_search_bm25(:d, 'main', NULL, 'simple', 'zeta', 10, 10, "
+                "CAST(:m AS jsonb), true)"
+            ),
+            {"d": DOMAIN, "m": upper},
+        )
+        assert list(found.scalars()) == ["SP-3"]
+        for query in ("-stock", "-bearing -seal"):
+            default, ranked = await _both(session, "main", query)
+            assert ranked.backend == "bm25"
+            assert _hits(ranked) == _hits(default), query
+            assert "SP-4" not in {h.key for h in ranked}
 
     # Commits reach the index in the same transaction: new, changed and deleted rows.
     await _put(

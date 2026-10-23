@@ -764,6 +764,19 @@ async def _lexicon_index(
         report.add("lexicon index", "done", "dropped")
 
 
+_WRITABLE_EXTENSION_SCHEMAS = text(
+    "SELECT DISTINCT n.nspname FROM pg_namespace n "
+    "CROSS JOIN LATERAL aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) AS a "
+    "WHERE a.privilege_type = 'CREATE' AND a.grantee <> n.nspowner "
+    "AND n.oid IN (SELECT d.objid FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid "
+    "WHERE e.extname = :e AND d.classid = 'pg_namespace'::regclass AND d.deptype = 'e' "
+    "UNION SELECT e.extnamespace FROM pg_extension e WHERE e.extname = :e "
+    "AND e.extnamespace <> 'public'::regnamespace) ORDER BY 1"
+)
+"""Schemas of `pg_search` (its own, `pdb` and `paradedb`) where a role other than the owner,
+or PUBLIC (grantee 0), may create objects."""
+
+
 async def _bm25_index(
     ddl: AsyncConnection,
     state: StorageState,
@@ -811,16 +824,32 @@ async def _bm25_index(
         except DBAPIError as error:
             report.add("bm25 index", "failed", f"cannot create the extension: {error.orig}")
             return
-    partitions = await _partitions(ddl, "mat_records")
-    for partition in partitions:
-        index = bm25.partition_index(partition)
-        valid = await ddl.scalar(
-            text("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(:i)"),
-            {"i": index},
+    # The definer functions call the extension's functions by schema: a role that may create
+    # objects there could put its own in front of them and run them as the function owner.
+    open_schemas = list(await ddl.scalars(_WRITABLE_EXTENSION_SCHEMAS, {"e": bm25.EXTENSION}))
+    if open_schemas:
+        report.add(
+            "bm25 index",
+            "failed",
+            f"roles other than the owner may create objects in schema(s) "
+            f"{', '.join(open_schemas)} of pg_search; revoke CREATE there and run again",
         )
-        if valid is False:
-            await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {index}")
-        await ddl.exec_driver_sql(bm25.index_sql(partition, index, concurrently=True))
+        return
+    partitions = await _partitions(ddl, "mat_records")
+    try:
+        for partition in partitions:
+            index = bm25.partition_index(partition)
+            valid = await ddl.scalar(
+                text("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(:i)"),
+                {"i": index},
+            )
+            if valid is False:
+                await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {index}")
+            await ddl.exec_driver_sql(bm25.index_sql(partition, index, concurrently=True))
+    except DBAPIError as error:
+        # An interrupted concurrent build leaves an invalid index the next run rebuilds.
+        report.add("bm25 index", "failed", f"build of {index} failed: {error.orig}")
+        return
     try:
         await _ddl(
             ddl, bm25.index_sql("mat_records", bm25.INDEX, only=True), settings.lock_timeout_ms
