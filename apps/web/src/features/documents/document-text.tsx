@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { documents as documentsMessages } from '@/messages/documents';
 import { cn } from '@/ui/cn';
 import { segment, type Segment, type Span } from './document-spans';
 
@@ -41,7 +42,7 @@ export function DocumentText({
   return (
     <pre
       ref={container}
-      aria-label="Parsed text"
+      aria-label={documentsMessages.viewer.textLabel}
       tabIndex={0}
       className="max-h-[70vh] overflow-auto rounded-md border border-line bg-surface p-3 font-mono text-sm whitespace-pre-wrap focus-visible:outline-2 focus-visible:outline-ring"
     >

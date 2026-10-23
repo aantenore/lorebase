@@ -100,8 +100,8 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Ingestion | CSV, JSON, JSON Lines, Parquet, HTTP JSON and Postgres Sources with snapshot and incremental syncs into Source branches, Proposals or direct merges, with per-row Lineage; the Scribe worker and scheduler ([docs/scribe.md](docs/scribe.md)) | Done | M2 |
 | Ingestion | Inference providers: any OpenAI-compatible chat and embeddings endpoint, local fastembed, GLiNER and GLiREL ([docs/inference-providers.md](docs/inference-providers.md)) | Done | M4 |
 | Ingestion | Document extraction into reviewable Proposals: intake of Markdown, text, PDF and DOCX, rules, local span and relation models, any LLM with JSON schema output, verified evidence, item review over REST, CLI and in the web app ([docs/extraction.md](docs/extraction.md)) | Done; schema suggestions planned | M4 |
-| Web app | Explorer, Canvas, Modeler with a Start from data wizard, Review with Conflict resolver and extraction Items, Documents, Sources, Admin basics | Done; runs on the mock API or on Keeper, with end-to-end tests against a real Keeper for browsing, Branches, schema changes, Review and Settings | M2, M3 |
-| Web app | Explore: questions to the optional Guide assistant streamed step by step (notes, Keeper reads, result counts), answers rendered as plain text with links only to the cited Records, Stop, a link to the session's agent trace, presets for the `supply` sample ([docs/guide.md](docs/guide.md#the-explore-panel-in-the-web-app)) | Done; scripted on the mock API | M4 |
+| Web app | Explorer with Record history and lineage, Canvas, Modeler with Operation, Derivation and Source editors and their previews, a Start from data wizard, Review with Conflict resolver, extraction Items and schema suggestions, Documents, Sources, Agent activity, Retrieval lab, Admin basics; domain-agnostic, with all copy in one messages module | Done; runs on the mock API or on Keeper, with end-to-end tests against a real Keeper for browsing, Branches, schema changes, Review and Settings | M2, M3 |
+| Web app | Explore: questions to the optional Guide assistant streamed step by step (notes, Keeper reads, result counts), answers rendered as plain text with links only to the cited Records, Stop, a link to the session's agent trace, example questions from the Domain's schema (`domain.examples`) ([docs/guide.md](docs/guide.md#the-explore-panel-in-the-web-app)) | Done; scripted on the mock API | M4 |
 | Operations | Helm chart: Keeper, migration hook, optional Scribe, Herald, web app, Ollama, Ingress, HPA, read replica DSNs ([docs/kubernetes.md](docs/kubernetes.md)) | Done, checked by lint, template and kubeconform; not yet run on a live cluster | M5, landed early |
 | Scale | Overlay branches that store only the rows they change, created in milliseconds whatever the size of the Domain ([docs/store-schema-notes.md](docs/store-schema-notes.md#overlay-branches)) | Done | M5, landed early |
 | Project | Documentation site with generated CLI, configuration and REST API reference ([aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/)) | Done | M5, landed early |
@@ -127,13 +127,17 @@ Under row-level security Postgres cannot use non-leakproof operators (`->>`, cas
 
 ## See it
 
-Screens of the web app. The first row runs on a real Keeper with the supply sample loaded, the second on the mock API. The [visual tour](docs/tour.md) says what is live and what is not served yet.
+Screens of the web app on a running demo stack with the supply sample: real data, a real answer of the guide service and its trace. The Conflict resolver comes from the mock API. The [visual tour](docs/tour.md) shows every screen and says where each picture comes from.
 
-| Explorer | Canvas | Conflict resolver |
-|----------|--------|-------------------|
-| [![Explorer: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home.png)](docs/tour.md#explorer) | [![Canvas: graph of Records coloured by Kind](docs/images/canvas-graph.png)](docs/tour.md#canvas) | [![Conflict resolver: base, ours and theirs for one Conflict of Proposal 41](docs/images/review-conflict.png)](docs/tour.md#review) |
-| **Extraction items** | **Documents** | **Sources** |
-| [![Extraction items: Records and values proposed from a document, with evidence](docs/images/review-items.png)](docs/tour.md#review) | [![Documents: library and a viewer that highlights the evidence](docs/images/documents.png)](docs/tour.md#documents) | [![Sources: Source definitions and their sync runs](docs/images/sources.png)](docs/tour.md#sources) |
+[![Lorebase in the dark theme: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home-dark.png)](docs/tour.md#dark-theme)
+
+| Explore | Agent activity | Retrieval lab |
+|---------|----------------|---------------|
+| [![Explore: a question to the guide streamed step by step, with an answer citing Records](docs/images/explore.png)](docs/tour.md#explore) | [![Agent activity: the steps of a session and the Records they touched on the Canvas](docs/images/agent-activity.png)](docs/tour.md#agent-activity) | [![Retrieval lab: two search settings compared side by side, with the context pack](docs/images/retrieval-lab.png)](docs/tour.md#retrieval-lab) |
+| **Explorer** | **Canvas** | **Record history** |
+| [![Explorer: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home.png)](docs/tour.md#explorer) | [![Canvas: graph of Records colored by Kind](docs/images/canvas-graph.png)](docs/tour.md#canvas) | [![Record history: every change of a Record with the values before and after](docs/images/record-history.png)](docs/tour.md#record-page) |
+| **Extraction items** | **Schema suggestions** | **Conflict resolver** |
+| [![Extraction items: Records and Links proposed from a document, with evidence](docs/images/review-items.png)](docs/tour.md#extraction-items) | [![Schema suggestions: Attributes and Relations that documents mention](docs/images/review-suggestions.png)](docs/tour.md#schema-suggestions) | [![Conflict resolver: base, ours and theirs for one Conflict](docs/images/review-conflict.png)](docs/tour.md#merge-attempt-and-conflict-resolver) |
 
 ## Quickstart
 

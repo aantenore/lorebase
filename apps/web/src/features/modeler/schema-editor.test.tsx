@@ -1,6 +1,7 @@
 import { EditorView } from '@codemirror/view';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 import { typeCel } from './form-harness';
 
@@ -125,7 +126,7 @@ describe('Modeler schema editor: two synchronized views', () => {
     const { user } = await openEditor('/supply/modeler?view=edit&branch=model%2Frisk');
     await user.click(screen.getByRole('tab', { name: /^Operations/ }));
     await user.type(screen.getByRole('textbox', { name: 'Dry run value of supplier' }), 'S-1001');
-    await user.click(screen.getByRole('button', { name: 'Dry run on model/risk' }));
+    await user.click(screen.getByRole('button', { name: 'Dry run' }));
     const result = await screen.findByText(/2 edits, 0 violations/);
     expect(result).toBeInTheDocument();
   });
@@ -196,13 +197,13 @@ describe('Modeler validation issues', () => {
 describe('Modeler change sets', () => {
   it('lists the pending commands and the migrations the Branch reports', async () => {
     const { user } = await openEditor();
-    expect(screen.getByText('No pending schema changes on cleanup/tiers.')).toBeInTheDocument();
+    expect(screen.getByText(messages.modeler.changeSet.empty)).toBeInTheDocument();
 
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'Type of risk_score' }),
       'decimal',
     );
-    const summary = await screen.findByRole('region', { name: 'Change set' });
+    const summary = await screen.findByRole('region', { name: messages.modeler.changeSet.label });
     expect(
       within(summary).getByText('update attribute risk_score in Supplier (type)'),
     ).toBeInTheDocument();
@@ -238,12 +239,8 @@ describe('Modeler change sets', () => {
     });
     await user.click(save);
 
-    expect(
-      await screen.findByText('Schema change set saved on cleanup/tiers.'),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText('No pending schema changes on cleanup/tiers.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(messages.modeler.changeSet.saved)).toBeInTheDocument();
+    expect(await screen.findByText(messages.modeler.changeSet.empty)).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Type of risk_score' })).toHaveValue('decimal');
   });
 
@@ -280,9 +277,9 @@ describe('Modeler change sets', () => {
       screen.getByRole('combobox', { name: 'Type of risk_score' }),
       'decimal',
     );
-    await screen.findByRole('region', { name: 'Change set' });
-    await user.click(screen.getByRole('button', { name: 'Reset to cleanup/tiers' }));
+    await screen.findByRole('region', { name: messages.modeler.changeSet.label });
+    await user.click(screen.getByRole('button', { name: messages.modeler.editor.reset }));
     expect(screen.getByRole('combobox', { name: 'Type of risk_score' })).toHaveValue('integer');
-    expect(screen.getByText('No pending schema changes on cleanup/tiers.')).toBeInTheDocument();
+    expect(screen.getByText(messages.modeler.changeSet.empty)).toBeInTheDocument();
   });
 });

@@ -1,0 +1,162 @@
+/** Strings of the inference screens ("Start from data" in the Modeler). */
+export const inference = {
+  /** Path of the documentation page, linked with "Learn more". */
+  docs: 'inference/#using-it',
+  source: {
+    intro: 'Infer a schema from tables you already have, then review it. Nothing is saved.',
+    tabsLabel: 'Data source',
+    filesTab: 'Files',
+    postgresTab: 'Postgres source',
+    recordsPath: {
+      label: 'Records path (JSON documents)',
+      placeholder: 'data.items',
+      hint: 'Dotted keys of the array of records. Leave empty when the document is the array.',
+    },
+    reference: {
+      label: 'Source reference',
+      placeholder: 'secret://env/SOURCE_DSN',
+      hint: 'A secret reference allowed by an administrator. Connection strings are never sent.',
+      invalid: (scheme: string) =>
+        `Use a secret reference such as ${scheme}env/SOURCE_DSN; connection strings are never sent.`,
+    },
+    schema: 'Schema',
+    tables: {
+      label: 'Tables',
+      hint: 'Comma separated. Leave empty for every table of the schema.',
+    },
+    run: 'Run inference',
+    running: 'Inferring...',
+    failed: 'The inference request failed.',
+  },
+  drop: {
+    zoneLabel: 'Drop zone for data files',
+    prompt: 'Drop CSV, TSV, JSON, JSON Lines or Parquet files here, or',
+    inputLabel: 'Upload data files',
+    note: 'The file name is the table name.',
+    choose: 'Choose files',
+    caps: (maxFiles: number, each: string, together: string | null, suffixes: string) =>
+      `Up to ${maxFiles.toString()} files, ${each} each${
+        together === null ? '' : ` and ${together} together`
+      } (${suffixes}).`,
+    rejectedLabel: 'Rejected files',
+    selectedLabel: 'Selected files',
+    remove: 'Remove',
+    removeFile: (name: string) => `Remove ${name}`,
+    count: (n: number, size: string) => `${n.toString()} ${n === 1 ? 'file' : 'files'}, ${size}`,
+  },
+  files: {
+    suffixes: (list: string) => `Only ${list} files are accepted.`,
+    duplicate: 'A file with this name is already added.',
+    tooMany: (max: number) => `At most ${max.toString()} files per run.`,
+    tooLarge: (max: string, size: string) => `Larger than ${max} (${size}).`,
+    tooLargeTogether: (max: string) => `The files together would exceed ${max}.`,
+  },
+  review: {
+    notSaved: 'Nothing is saved yet. Rename, change types, accept or drop.',
+    startOver: 'Start over',
+    proposedSchema: 'Proposed schema',
+    yamlPreview: 'YAML preview',
+    yamlLabel: 'Proposal YAML',
+    blocked: 'Fix the schema problems first.',
+    defaultMessage: 'Add the schema inferred from data',
+    applyLabels: {
+      save: 'Apply as schema change',
+      propose: 'Apply as schema change and open a Proposal',
+    },
+  },
+  toolbar: {
+    summary: (tables: number, rows: number, kinds: number) =>
+      `Read ${tables.toString()} ${tables === 1 ? 'table' : 'tables'} (${rows.toString()} rows): ${kinds.toString()} became Kinds, ${(tables - kinds).toString()} Relations.`,
+    threshold: 'Confidence threshold (%)',
+    acceptAll: (percent: number) => `Accept all at or above ${percent.toString()}%`,
+    progressLabel: 'Review progress',
+    progress: (
+      counts: { accepted: number; pending: number; dropped: number; total: number },
+      applied: { kinds: number; attributes: number; relations: number },
+    ) =>
+      `${counts.accepted.toString()} accepted, ${counts.pending.toString()} pending, ${counts.dropped.toString()} dropped of ${counts.total.toString()} elements. Applies ${applied.kinds.toString()} Kinds, ${applied.attributes.toString()} Attributes, ${applied.relations.toString()} Relations.`,
+  },
+  tree: {
+    parseError: (message: string) => `The proposal could not be read: ${message}`,
+    noKinds: 'The proposal has no Kinds.',
+    expandAll: 'Expand all',
+    collapseAll: 'Collapse all',
+    relations: 'Relations',
+  },
+  kind: {
+    section: (name: string) => `Kind ${name}`,
+    toggle: (open: boolean, name: string) => `${open ? 'Collapse' : 'Expand'} Kind ${name}`,
+    hide: 'Hide',
+    show: 'Show',
+    nameOf: (name: string) => `Name of Kind ${name}`,
+    merges: (branch: string) => `on ${branch}: Attributes merge in`,
+    count: (total: number, accepted: number) =>
+      `${total.toString()} Attributes, ${accepted.toString()} accepted`,
+    decisionTarget: (name: string) => `Kind ${name}`,
+    primaryKey: 'Primary key',
+    noKey: 'none: Records get minted keys',
+    keyEvidence: 'Key evidence',
+  },
+  attributes: {
+    caption: (owner: string) => `Attributes of ${owner}`,
+    columns: {
+      attribute: 'Attribute',
+      type: 'Type',
+      samples: 'Samples',
+      confidence: 'Confidence',
+      evidence: 'Evidence',
+      decision: 'Decision',
+    },
+    nameOf: (label: string) => `Name of ${label}`,
+    typeOf: (label: string) => `Type of ${label}`,
+    key: 'key',
+    inKey: 'In the primary key',
+  },
+  relations: {
+    none: 'No Relations proposed.',
+    caption: 'Proposed Relations',
+    columns: {
+      relation: 'Relation',
+      between: 'Between',
+      cardinality: 'Cardinality',
+      inclusion: 'Inclusion',
+      confidence: 'Confidence',
+      evidence: 'Evidence',
+      decision: 'Decision',
+    },
+    nameOf: (name: string) => `Name of Relation ${name}`,
+    inverse: (name: string) => `inverse: ${name}`,
+    kept: (branch: string) => `on ${branch}: kept as is`,
+    between: (from: string, to: string) => `${from} to ${to}`,
+    notApplicable: 'n/a',
+    decisionTarget: (name: string) => `Relation ${name}`,
+    linkAttributes: (name: string) => `Link Attributes of ${name}`,
+  },
+  decision: {
+    group: (what: string) => `Decision for ${what}`,
+    accept: 'Accept',
+    drop: 'Drop',
+    acceptLabel: (what: string) => `Accept ${what}`,
+    dropLabel: (what: string) => `Drop ${what}`,
+    nameRequired: 'A name is required.',
+    nameTaken: (name: string) => `${name} is already used.`,
+    leftOut: (reason: string) => `Left out: ${reason}`,
+    notAccepted: (name: string) => `${name} is not accepted`,
+  },
+  evidence: {
+    none: 'no evidence',
+    confidence: 'Confidence ',
+    why: 'Why',
+    from: (source: string) => `From ${source}`,
+  },
+  issues: {
+    section: 'Issues',
+    heading: 'Inference issues',
+    none: 'The inference found nothing to settle.',
+    showing: (shown: number, total: number) =>
+      `Showing ${shown.toString()} of ${total.toString()} issues.`,
+    schemaProblems: 'Schema problems',
+    schemaPath: 'schema',
+  },
+  invalidYaml: 'Invalid YAML.',
+} as const;

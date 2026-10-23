@@ -2,6 +2,7 @@ import type { InferenceTable } from '@/api/inference-types';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
 import { useDraftView } from './draft-context';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export interface ProposalToolbarProps {
   /** Threshold as a whole percent, as typed. */
@@ -20,13 +21,12 @@ export function ProposalToolbar({ percent, onPercent, tables }: ProposalToolbarP
   return (
     <div className="flex flex-col gap-3 rounded-md border border-line bg-surface p-3">
       <p className="text-sm text-muted">
-        Read {tables.length} {tables.length === 1 ? 'table' : 'tables'} ({rows} rows): {kinds}{' '}
-        became Kinds, {tables.length - kinds} Relations.
+        {inferenceMessages.toolbar.summary(tables.length, rows, kinds)}
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-40">
           <Input
-            label="Confidence threshold (%)"
+            label={inferenceMessages.toolbar.threshold}
             type="number"
             min={0}
             max={100}
@@ -44,12 +44,10 @@ export function ProposalToolbar({ percent, onPercent, tables }: ProposalToolbarP
             draft.acceptAtOrAbove(threshold);
           }}
         >
-          Accept all at or above {percent}%
+          {inferenceMessages.toolbar.acceptAll(percent)}
         </Button>
-        <p role="status" aria-label="Review progress" className="text-sm">
-          {counts.accepted} accepted, {counts.pending} pending, {counts.dropped} dropped of{' '}
-          {counts.total} elements. Applies {analysis.applied.kinds} Kinds,{' '}
-          {analysis.applied.attributes} Attributes, {analysis.applied.relations} Relations.
+        <p role="status" aria-label={inferenceMessages.toolbar.progressLabel} className="text-sm">
+          {inferenceMessages.toolbar.progress(counts, analysis.applied)}
         </p>
       </div>
     </div>

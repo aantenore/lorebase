@@ -2,7 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useConflicts, useProposals } from '@/api/queries';
 import type { Proposal, ProposalStatus } from '@/api/types';
 import { useScope, useScopeSearch } from '@/app/scope';
-import { PlannedScreens } from '@/features/planned-screens';
+import { review as reviewMessages } from '@/messages/review';
 import { Select } from '@/ui/field';
 import { Badge, EmptyState, PageHeader, QueryBoundary, type BadgeTone } from '@/ui/layout';
 import { unresolvedOf } from './conflict-state';
@@ -17,18 +17,23 @@ export const STATUS_TONE: Record<ProposalStatus, BadgeTone> = {
   closed: 'neutral',
 };
 
+const text = reviewMessages.list;
+
+const STATUS_OPTIONS = (['open', 'merged', 'closed', 'all'] as const).map((value) => ({
+  value,
+  label: text.statusOptions[value],
+}));
+
 /** Number of Conflicts of a Proposal, with how many are still unresolved. */
 export function ConflictCount({ domain, proposal }: { domain: string; proposal: string }) {
   const conflicts = useConflicts(domain, proposal);
-  if (conflicts.isPending) return <span className="text-muted">...</span>;
-  if (conflicts.isError) return <span className="text-danger">error</span>;
+  if (conflicts.isPending) return <span className="text-muted">{text.countPending}</span>;
+  if (conflicts.isError) return <span className="text-danger">{text.countError}</span>;
   const total = conflicts.data.conflicts.length;
   const unresolved = unresolvedOf(conflicts.data).length;
   if (total === 0) return <Badge tone="success">0</Badge>;
   return (
-    <Badge tone={unresolved > 0 ? 'danger' : 'success'}>
-      {total} ({unresolved} unresolved)
-    </Badge>
+    <Badge tone={unresolved > 0 ? 'danger' : 'success'}>{text.count(total, unresolved)}</Badge>
   );
 }
 
@@ -48,9 +53,7 @@ function ProposalRow({ domain, proposal }: { domain: string; proposal: Proposal 
         </Link>
       </TD>
       <TD>{proposal.origin}</TD>
-      <TD>
-        {proposal.source_ref} to {proposal.target_ref}
-      </TD>
+      <TD>{text.branches(proposal.source_ref, proposal.target_ref)}</TD>
       <TD>
         <Badge tone={STATUS_TONE[proposal.status]}>{proposal.status}</Badge>
       </TD>
@@ -78,12 +81,9 @@ export function ReviewPage({
 
   return (
     <>
-      <PageHeader
-        title="Review"
-        description="Proposals waiting for review, with their Conflicts."
-      />
+      <PageHeader title={text.title} description={text.description} docs={text.docs} />
       <Tabs
-        label="Review"
+        label={text.tabsLabel}
         value={tab}
         onChange={(id) => {
           onTab(id === 'suggestions' ? 'suggestions' : 'proposals');
@@ -91,19 +91,14 @@ export function ReviewPage({
         tabs={[
           {
             id: 'proposals',
-            label: 'Proposals',
+            label: text.tabProposals,
             content: (
               <>
-                <div className="mb-4 w-48">
+                <div className="mb-4 w-48 max-w-full">
                   <Select
-                    label="Status"
+                    label={text.statusLabel}
                     value={status}
-                    options={[
-                      { value: 'open', label: 'Open' },
-                      { value: 'merged', label: 'Merged' },
-                      { value: 'closed', label: 'Closed' },
-                      { value: 'all', label: 'All' },
-                    ]}
+                    options={STATUS_OPTIONS}
                     onChange={(event) => {
                       const next = event.target.value;
                       void navigate({
@@ -116,17 +111,17 @@ export function ReviewPage({
                 <QueryBoundary query={proposals}>
                   {(page) =>
                     page.items.length === 0 ? (
-                      <EmptyState>No Proposals match this filter.</EmptyState>
+                      <EmptyState>{text.empty}</EmptyState>
                     ) : (
-                      <Table caption="Proposals">
+                      <Table caption={text.caption}>
                         <THead>
                           <TR>
-                            <TH>Id</TH>
-                            <TH>Title</TH>
-                            <TH>Origin</TH>
-                            <TH>Branches</TH>
-                            <TH>Status</TH>
-                            <TH>Conflicts</TH>
+                            <TH>{text.columns.id}</TH>
+                            <TH>{text.columns.title}</TH>
+                            <TH>{text.columns.origin}</TH>
+                            <TH>{text.columns.branches}</TH>
+                            <TH>{text.columns.status}</TH>
+                            <TH>{text.columns.conflicts}</TH>
                           </TR>
                         </THead>
                         <TBody>
@@ -147,23 +142,11 @@ export function ReviewPage({
           },
           {
             id: 'suggestions',
-            label: 'Schema suggestions',
+            label: text.tabSuggestions,
             content: <SuggestionsPanel domain={scope.domain} />,
           },
         ]}
       />
-      <div className="mt-6">
-        <PlannedScreens
-          area="Review"
-          built={[
-            'Proposal list',
-            'Proposal detail',
-            'Extraction items',
-            'Conflict resolver',
-            'Schema suggestions',
-          ]}
-        />
-      </div>
     </>
   );
 }

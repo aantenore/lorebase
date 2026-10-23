@@ -2,7 +2,8 @@ import { useState } from 'react';
 import type { Conflict, JsonValue, Resolution, ResolutionChoice } from '@/api/types';
 import { validateValue, type ValueSpec } from '@/api/values';
 import { Button } from '@/ui/button';
-import { Badge } from '@/ui/layout';
+import { review as reviewMessages } from '@/messages/review';
+import { Badge, FormAction, FormRow } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { ValueInput } from '@/ui/value-input';
 import {
@@ -15,6 +16,8 @@ import {
   type Names,
 } from './conflict-meta';
 import { SideBySide } from './side-by-side';
+
+const text = reviewMessages.resolver;
 
 export interface ConflictResolverProps {
   conflict: Conflict;
@@ -41,7 +44,7 @@ function seedValue(conflict: Conflict): JsonValue | undefined {
 }
 
 function problemOf(spec: ValueSpec | null, typed: Typed | undefined): string | null {
-  if (typed === undefined) return 'Enter a value.';
+  if (typed === undefined) return text.enterValue;
   if (typed.parseError !== null) return typed.parseError;
   if (spec === null) return null;
   return validateValue(spec, typed.value ?? null);
@@ -63,7 +66,7 @@ function CustomSingle({
   const problem = typed === undefined ? null : problemOf(spec, typed);
   return (
     <ValueInput
-      label={conflict.kind === 'SC3' ? 'New name' : 'Custom value'}
+      label={conflict.kind === 'SC3' ? text.newName : text.customValue}
       spec={spec}
       value={typed === undefined ? seedValue(conflict) : typed.value}
       error={problem}
@@ -93,9 +96,9 @@ function CustomMembers({
   const allProblem = all.value === undefined ? null : problemOf(spec, all);
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-2">
+      <FormRow>
         <ValueInput
-          label="Same value for every member"
+          label={text.sameForAll}
           spec={spec}
           value={all.value}
           error={allProblem}
@@ -104,22 +107,23 @@ function CustomMembers({
             setAll({ value, parseError });
           }}
         />
-        <Button
-          size="sm"
-          disabled={disabled || all.value === undefined || allProblem !== null}
-          onClick={() => {
-            for (const member of conflict.sample) onChange(member, all);
-            setVersion((v) => v + 1);
-          }}
-        >
-          Apply to all members
-        </Button>
-      </div>
-      <Table caption="Values per member">
+        <FormAction>
+          <Button
+            disabled={disabled || all.value === undefined || allProblem !== null}
+            onClick={() => {
+              for (const member of conflict.sample) onChange(member, all);
+              setVersion((v) => v + 1);
+            }}
+          >
+            {text.applyToAll}
+          </Button>
+        </FormAction>
+      </FormRow>
+      <Table caption={text.membersCaption}>
         <THead>
           <TR>
-            <TH>Member</TH>
-            <TH>New value</TH>
+            <TH>{text.member}</TH>
+            <TH>{text.newValue}</TH>
           </TR>
         </THead>
         <TBody>
@@ -131,7 +135,7 @@ function CustomMembers({
               <TD>
                 <ValueInput
                   key={`${member}-${version}`}
-                  label={`Value for ${member}`}
+                  label={text.valueFor(member)}
                   hideLabel
                   spec={spec}
                   value={values[member]?.value}
@@ -175,7 +179,10 @@ function buildResolution(
       const typed = members[member];
       const problem = problemOf(spec, typed);
       if (typed === undefined || problem !== null) {
-        return { resolution: null, problem: `${member}: ${problem ?? 'Enter a value.'}` };
+        return {
+          resolution: null,
+          problem: text.memberProblem(member, problem ?? text.enterValue),
+        };
       }
       values[member] = typed.value ?? null;
     }
@@ -214,21 +221,23 @@ export function ConflictResolver({
 
   const draft =
     choice === null
-      ? { resolution: null, problem: 'Pick a choice.' }
+      ? { resolution: null, problem: text.pickChoice }
       : buildResolution(conflict, choice, single, members, spec);
 
   return (
     <section
-      aria-label={`Conflict ${conflict.kind} ${locationOf(conflict, names)}`}
-      className="flex flex-col gap-4 rounded-md border border-line bg-surface p-4"
+      aria-label={text.section(conflict.kind, locationOf(conflict, names))}
+      className="flex min-w-0 flex-col gap-4 rounded-md border border-line bg-surface p-4"
     >
       <header className="flex flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="danger">{conflict.kind}</Badge>
           <h3 className="text-sm font-semibold">{CODE_LABEL[conflict.kind]}</h3>
-          {grouped && <Badge>{conflict.count} members</Badge>}
-          {conflict.machine_resolvable && <Badge tone="accent">policy can resolve</Badge>}
-          {resolution !== undefined && <Badge tone="success">resolved: {resolution.choice}</Badge>}
+          {grouped && <Badge>{reviewMessages.conflicts.members(conflict.count)}</Badge>}
+          {conflict.machine_resolvable && <Badge tone="accent">{text.policyCanResolve}</Badge>}
+          {resolution !== undefined && (
+            <Badge tone="success">{text.resolved(resolution.choice)}</Badge>
+          )}
         </div>
         <p className="font-mono text-xs text-muted">{locationOf(conflict, names)}</p>
         <p className="text-sm">{messageOf(conflict, names)}</p>
@@ -236,14 +245,14 @@ export function ConflictResolver({
 
       {typeof rejected === 'string' && (
         <p role="alert" className="rounded-md border border-danger p-2 text-sm text-danger">
-          The last merge run refused the stored resolution: {rejected}
+          {text.refused(rejected)}
         </p>
       )}
 
       <SideBySide conflict={conflict} names={names} />
 
       <fieldset className="flex flex-col gap-2" disabled={readOnly}>
-        <legend className="mb-1 text-xs font-medium text-muted">Resolution</legend>
+        <legend className="mb-1 text-xs font-medium text-muted">{text.legend}</legend>
         {conflict.choices.map((option) => {
           const hint = choiceHint(conflict, option);
           return (
@@ -295,7 +304,7 @@ export function ConflictResolver({
             if (draft.resolution !== null) onSave(draft.resolution);
           }}
         >
-          {resolution === undefined ? 'Save resolution' : 'Update resolution'}
+          {resolution === undefined ? text.save : text.update}
         </Button>
         {draft.resolution === null && choice === 'custom' && grouped && (
           <span className="text-xs text-muted">{draft.problem}</span>

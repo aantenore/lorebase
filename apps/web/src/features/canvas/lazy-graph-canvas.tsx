@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react';
+import { canvas as canvasMessages } from '@/messages/canvas';
 import type { GraphCanvasProps } from './graph-canvas';
 
 const Canvas = lazy(() => import('./graph-canvas').then((m) => ({ default: m.GraphCanvas })));
@@ -12,7 +13,7 @@ export function LazyGraphCanvas(props: GraphCanvasProps) {
     <Suspense
       fallback={
         <p role="status" className="text-muted">
-          Loading graph...
+          {canvasMessages.renderer.loadingGraph}
         </p>
       }
     >

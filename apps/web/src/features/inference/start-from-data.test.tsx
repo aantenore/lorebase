@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { testConfig, type AppConfig } from '@/config/env';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 
 const csv = (name: string, body = 'a,b\n1,2\n') => new File([body], name, { type: 'text/csv' });
@@ -165,14 +166,16 @@ describe('Start from data: accepting by confidence', () => {
 describe('Start from data: applying', () => {
   it('opens a Proposal from a new Branch when the Branch is protected', async () => {
     const user = await infer(HR, ['supplier', 'purchase_order']);
-    expect(screen.getByText('No pending schema changes on main.')).toBeInTheDocument();
+    expect(screen.getByText(messages.modeler.changeSet.empty)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Accept all at or above 90%' }));
     const change = screen.getByRole('region', { name: 'Change set' });
     await waitFor(() => {
       expect(within(change).getByText(/add kind Supplier/)).toBeInTheDocument();
     });
-    expect(within(change).getByText(/main is protected/)).toBeInTheDocument();
+    expect(
+      within(change).getByText(messages.modeler.changeSet.protectedNotice),
+    ).toBeInTheDocument();
 
     const apply = within(change).getByRole('button', { name: /^Apply as schema change/ });
     await waitFor(() => {
@@ -194,9 +197,7 @@ describe('Start from data: applying', () => {
       expect(apply).toBeEnabled();
     });
     await user.click(apply);
-    expect(
-      await screen.findByText(/Schema change set saved on cleanup\/tiers/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(messages.modeler.changeSet.saved)).toBeInTheDocument();
   });
 
   it('merges into a Kind that exists, and the schema rules guard the merge', async () => {

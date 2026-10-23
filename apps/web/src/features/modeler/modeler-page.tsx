@@ -3,7 +3,7 @@ import { useSchema } from '@/api/queries';
 import type { Schema } from '@/api/types';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { StartFromData } from '@/features/inference/start-from-data';
-import { PlannedScreens } from '@/features/planned-screens';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { Badge, EmptyState, PageHeader, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { Tabs } from '@/ui/tabs';
@@ -16,25 +16,27 @@ import {
   type ModelerView,
 } from './search';
 
+const t = modelerMessages.overview;
+
 function kindName(schema: Schema, id: string): string {
   return schema.kinds.find((k) => k.id === id)?.api_name ?? id;
 }
 
 function yesNo(value: boolean) {
-  return value ? 'Yes' : 'No';
+  return value ? t.yes : t.no;
 }
 
 function KindsTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Kinds">
+    <Table caption={t.tabs.kinds}>
       <THead>
         <TR>
-          <TH>Kind</TH>
-          <TH>Primary key</TH>
-          <TH>Title Attribute</TH>
-          <TH>Attributes</TH>
-          <TH>Traits</TH>
-          <TH>Status</TH>
+          <TH>{t.columns.kind}</TH>
+          <TH>{t.columns.primaryKey}</TH>
+          <TH>{t.columns.titleAttribute}</TH>
+          <TH>{t.columns.attributes}</TH>
+          <TH>{t.columns.traits}</TH>
+          <TH>{t.columns.status}</TH>
         </TR>
       </THead>
       <TBody>
@@ -49,8 +51,8 @@ function KindsTable({ schema }: { schema: Schema }) {
             <TD>{Object.keys(kind.attributes).length}</TD>
             <TD>
               {kind.traits
-                .map((t) => schema.traits.find((trait) => trait.id === t.trait_id)?.api_name)
-                .join(', ') || '-'}
+                .map((trait) => schema.traits.find((s) => s.id === trait.trait_id)?.api_name)
+                .join(', ') || t.blank}
             </TD>
             <TD>
               <Badge tone={kind.status === 'active' ? 'success' : 'neutral'}>{kind.status}</Badge>
@@ -64,15 +66,15 @@ function KindsTable({ schema }: { schema: Schema }) {
 
 function AttributesTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Attributes">
+    <Table caption={t.tabs.attributes}>
       <THead>
         <TR>
-          <TH>Attribute</TH>
-          <TH>Type</TH>
-          <TH>Required</TH>
-          <TH>Unique</TH>
-          <TH>Indexed</TH>
-          <TH>Sensitivity</TH>
+          <TH>{t.columns.attribute}</TH>
+          <TH>{t.columns.type}</TH>
+          <TH>{t.columns.required}</TH>
+          <TH>{t.columns.unique}</TH>
+          <TH>{t.columns.indexed}</TH>
+          <TH>{t.columns.sensitivity}</TH>
         </TR>
       </THead>
       <TBody>
@@ -83,7 +85,7 @@ function AttributesTable({ schema }: { schema: Schema }) {
                 {kind.api_name}.{attribute.api_name}
                 {attribute.derivation_id !== null && (
                   <span className="ml-2">
-                    <Badge tone="accent">derived</Badge>
+                    <Badge tone="accent">{t.derived}</Badge>
                   </span>
                 )}
               </TD>
@@ -91,7 +93,7 @@ function AttributesTable({ schema }: { schema: Schema }) {
               <TD>{yesNo(attribute.required)}</TD>
               <TD>{yesNo(attribute.unique)}</TD>
               <TD>{yesNo(attribute.indexed)}</TD>
-              <TD>{attribute.sensitivity.join(', ') || '-'}</TD>
+              <TD>{attribute.sensitivity.join(', ') || t.blank}</TD>
             </TR>
           )),
         )}
@@ -102,15 +104,15 @@ function AttributesTable({ schema }: { schema: Schema }) {
 
 function RelationsTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Relations">
+    <Table caption={t.tabs.relations}>
       <THead>
         <TR>
-          <TH>Relation</TH>
-          <TH>Inverse</TH>
-          <TH>From</TH>
-          <TH>To</TH>
-          <TH>Cardinality</TH>
-          <TH>Link Attributes</TH>
+          <TH>{t.columns.relation}</TH>
+          <TH>{t.columns.inverse}</TH>
+          <TH>{t.columns.from}</TH>
+          <TH>{t.columns.to}</TH>
+          <TH>{t.columns.cardinality}</TH>
+          <TH>{t.columns.linkAttributes}</TH>
         </TR>
       </THead>
       <TBody>
@@ -124,7 +126,7 @@ function RelationsTable({ schema }: { schema: Schema }) {
             <TD>
               {Object.values(relation.attributes)
                 .map((a) => a.api_name)
-                .join(', ') || '-'}
+                .join(', ') || t.blank}
             </TD>
           </TR>
         ))}
@@ -135,12 +137,12 @@ function RelationsTable({ schema }: { schema: Schema }) {
 
 function TraitsTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Traits">
+    <Table caption={t.tabs.traits}>
       <THead>
         <TR>
-          <TH>Trait</TH>
-          <TH>Attributes</TH>
-          <TH>Implemented by</TH>
+          <TH>{t.columns.trait}</TH>
+          <TH>{t.columns.attributes}</TH>
+          <TH>{t.columns.implementedBy}</TH>
         </TR>
       </THead>
       <TBody>
@@ -150,9 +152,9 @@ function TraitsTable({ schema }: { schema: Schema }) {
             <TD>{trait.attributes.map((a) => `${a.name}: ${a.type}`).join(', ')}</TD>
             <TD>
               {schema.kinds
-                .filter((k) => k.traits.some((t) => t.trait_id === trait.id))
+                .filter((k) => k.traits.some((x) => x.trait_id === trait.id))
                 .map((k) => k.api_name)
-                .join(', ') || '-'}
+                .join(', ') || t.blank}
             </TD>
           </TR>
         ))}
@@ -163,14 +165,14 @@ function TraitsTable({ schema }: { schema: Schema }) {
 
 function OperationsTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Operations">
+    <Table caption={t.tabs.operations}>
       <THead>
         <TR>
-          <TH>Operation</TH>
-          <TH>Parameters</TH>
-          <TH>Review policy</TH>
-          <TH>Origin</TH>
-          <TH>Status</TH>
+          <TH>{t.columns.operation}</TH>
+          <TH>{t.columns.parameters}</TH>
+          <TH>{t.columns.reviewPolicy}</TH>
+          <TH>{t.columns.origin}</TH>
+          <TH>{t.columns.status}</TH>
         </TR>
       </THead>
       <TBody>
@@ -180,11 +182,11 @@ function OperationsTable({ schema }: { schema: Schema }) {
               <div className="font-medium">{operation.api_name}</div>
               <div className="text-xs text-muted">{operation.description}</div>
             </TD>
-            <TD>{operation.parameters.map((p) => p.name).join(', ') || '-'}</TD>
+            <TD>{operation.parameters.map((p) => p.name).join(', ') || t.blank}</TD>
             <TD>
               <code className="font-mono text-xs">{operation.review_policy}</code>
             </TD>
-            <TD>{operation.builtin ? 'Built-in' : 'Custom'}</TD>
+            <TD>{operation.builtin ? t.builtIn : t.custom}</TD>
             <TD>{operation.status}</TD>
           </TR>
         ))}
@@ -195,12 +197,12 @@ function OperationsTable({ schema }: { schema: Schema }) {
 
 function DerivationsTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Derivations">
+    <Table caption={t.tabs.derivations}>
       <THead>
         <TR>
-          <TH>Derivation</TH>
-          <TH>Variant</TH>
-          <TH>Target</TH>
+          <TH>{t.columns.derivation}</TH>
+          <TH>{t.columns.variant}</TH>
+          <TH>{t.columns.target}</TH>
         </TR>
       </THead>
       <TBody>
@@ -223,14 +225,14 @@ function DerivationsTable({ schema }: { schema: Schema }) {
 
 function SourcesTable({ schema }: { schema: Schema }) {
   return (
-    <Table caption="Sources">
+    <Table caption={t.tabs.sources}>
       <THead>
         <TR>
-          <TH>Source</TH>
-          <TH>Type</TH>
-          <TH>Target Kind</TH>
-          <TH>Sync</TH>
-          <TH>Schedule</TH>
+          <TH>{t.columns.source}</TH>
+          <TH>{t.columns.type}</TH>
+          <TH>{t.columns.targetKind}</TH>
+          <TH>{t.columns.sync}</TH>
+          <TH>{t.columns.schedule}</TH>
         </TR>
       </THead>
       <TBody>
@@ -240,7 +242,7 @@ function SourcesTable({ schema }: { schema: Schema }) {
             <TD>{source.type}</TD>
             <TD>{kindName(schema, source.target_kind)}</TD>
             <TD>{source.sync_mode}</TD>
-            <TD>{source.schedule ?? 'manual'}</TD>
+            <TD>{source.schedule ?? t.manual}</TD>
           </TR>
         ))}
       </TBody>
@@ -258,19 +260,8 @@ const COUNT_OF: Record<ModelerTab, (schema: Schema) => number> = {
   sources: (s) => s.sources.length,
 };
 
-const LABEL_OF: Record<ModelerTab, string> = {
-  kinds: 'Kinds',
-  attributes: 'Attributes',
-  relations: 'Relations',
-  traits: 'Traits',
-  operations: 'Operations',
-  derivations: 'Derivations',
-  sources: 'Sources',
-};
-
 function TabContent({ tab, schema }: { tab: ModelerTab; schema: Schema }) {
-  if (COUNT_OF[tab](schema) === 0)
-    return <EmptyState>No {LABEL_OF[tab]} on this Branch.</EmptyState>;
+  if (COUNT_OF[tab](schema) === 0) return <EmptyState>{t.empty(t.tabs[tab])}</EmptyState>;
   switch (tab) {
     case 'kinds':
       return <KindsTable schema={schema} />;
@@ -294,7 +285,7 @@ function SchemaOverview({ tab, schema }: { tab: ModelerTab; schema: Schema }) {
   const scopeSearch = useScopeSearch();
   return (
     <Tabs
-      label="Schema elements"
+      label={t.tabsLabel}
       value={tab}
       onChange={(id) => {
         void navigate({
@@ -304,7 +295,7 @@ function SchemaOverview({ tab, schema }: { tab: ModelerTab; schema: Schema }) {
       }}
       tabs={MODELER_TABS.map((id) => ({
         id,
-        label: `${LABEL_OF[id]} (${COUNT_OF[id](schema)})`,
+        label: t.tabLabel(t.tabs[id], COUNT_OF[id](schema)),
         content: <TabContent tab={id} schema={schema} />,
       }))}
     />
@@ -317,28 +308,27 @@ export function ModelerPage({ tab, view }: { tab: ModelerTab; view: ModelerView 
   const schema = useSchema(scope);
   const navigate = useNavigate();
   const scopeSearch = useScopeSearch();
+  const m = modelerMessages;
 
   return (
     <>
       <PageHeader
-        title="Modeler"
-        description={`Schema of ${scope.domainInfo.display_name}, edited on a Branch.`}
+        title={m.title}
+        description={m.description}
+        docs={m.docs}
         actions={
-          <div className="flex gap-2">
-            <Badge tone="accent">Branch {scope.branch}</Badge>
-            {scope.branchInfo.protected && <Badge tone="warning">protected</Badge>}
-          </div>
+          scope.branchInfo.protected ? <Badge tone="warning">{m.protectedBadge}</Badge> : undefined
         }
       />
       {scope.branchInfo.protected && (
         <p className="mb-4 rounded-md border border-line bg-surface p-3 text-sm text-muted">
-          {scope.branch} is protected. Schema changes go through another Branch and a Proposal.
+          {m.protectedNotice}
         </p>
       )}
       <QueryBoundary query={schema}>
         {(data) => (
           <Tabs
-            label="Modeler views"
+            label={m.viewsLabel}
             value={view}
             onChange={(id) => {
               void navigate({
@@ -349,38 +339,23 @@ export function ModelerPage({ tab, view }: { tab: ModelerTab; view: ModelerView 
             tabs={[
               {
                 id: 'overview',
-                label: 'Overview',
+                label: m.views.overview,
                 content: <SchemaOverview tab={tab} schema={data} />,
               },
               {
                 id: 'edit',
-                label: 'Edit schema',
+                label: m.views.edit,
                 content: <SchemaEditor key={data.revision} base={data} />,
               },
               {
                 id: 'start',
-                label: 'Start from data',
+                label: m.views.start,
                 content: <StartFromData key={data.revision} base={data} />,
               },
             ]}
           />
         )}
       </QueryBoundary>
-      <div className="mt-6">
-        <PlannedScreens
-          area="Modeler"
-          built={[
-            'Schema overview',
-            'Kind editor',
-            'Relation editor',
-            'Trait editor',
-            'Operation editor',
-            'Derivation editor',
-            'Source mapping editor',
-            'Change set summary',
-          ]}
-        />
-      </div>
     </>
   );
 }

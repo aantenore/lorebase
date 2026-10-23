@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 
 describe('Review', () => {
@@ -154,11 +155,11 @@ describe('Review merge attempt', () => {
 
   it('filters the list by kind, status and text', async () => {
     const { user } = await openRiskProposal();
-    await user.selectOptions(screen.getByLabelText('Kind'), 'XS5');
+    await user.selectOptions(screen.getByLabelText(messages.review.filters.type), 'XS5');
     expect(options()).toHaveLength(1);
     expect(screen.getByRole('region', { name: /^Conflict XS5/ })).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText('Kind'), 'all');
+    await user.selectOptions(screen.getByLabelText(messages.review.filters.type), 'all');
     await user.type(screen.getByLabelText('Find a Conflict'), 'S-1005');
     expect(options()).toHaveLength(1);
     expect(

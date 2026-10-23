@@ -1,10 +1,13 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { SearchResponse } from '@/api/types';
 import { RecordLink } from '@/app/record-link';
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
 import { cn } from '@/ui/cn';
 import { Badge, EmptyState } from '@/ui/layout';
 import { correctionText } from '@/features/agent-activity/step-view';
 import { describeRow, type Comparison } from './result-diff';
+
+const R = retrievalLabMessages.results;
 
 /**
  * The hits of one parameter set. Snippets come from the Keeper's text search and may hold
@@ -22,16 +25,16 @@ export function ResultsColumn({
   comparison: Comparison | null;
 }) {
   return (
-    <section aria-label={`Results ${name}`}>
+    <section aria-label={R.column(name)}>
       <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-        Results {name}
+        {R.column(name)}
         {query.data?.mode !== undefined && <Badge>{query.data.mode}</Badge>}
       </h3>
       {query.isPending && !query.isFetching ? (
-        <EmptyState>Ask a question to see the results.</EmptyState>
+        <EmptyState>{R.askFirst}</EmptyState>
       ) : query.isPending ? (
         <p role="status" className="text-muted">
-          Searching...
+          {R.searching}
         </p>
       ) : query.isError ? (
         <p role="alert" className="text-danger">
@@ -41,7 +44,7 @@ export function ResultsColumn({
         <>
           {(query.data.corrections ?? []).length > 0 && (
             <p className="mb-2 text-xs">
-              Corrected:{' '}
+              {R.corrected}{' '}
               {(query.data.corrections ?? []).map((c, index) => (
                 <span key={c.word}>
                   {index > 0 && '; '}
@@ -51,7 +54,7 @@ export function ResultsColumn({
             </p>
           )}
           {query.data.results.length === 0 ? (
-            <EmptyState>No hits.</EmptyState>
+            <EmptyState>{R.noHits}</EmptyState>
           ) : (
             <ol className="flex flex-col gap-2">
               {query.data.results.map((hit, index) => {
@@ -71,7 +74,7 @@ export function ResultsColumn({
                         {hit.title}
                       </RecordLink>
                       <Badge>{hit.kind}</Badge>
-                      <span className="ml-auto font-mono text-xs">score {hit.score}</span>
+                      <span className="ml-auto font-mono text-xs">{R.score(hit.score)}</span>
                     </div>
                     {hit.snippet !== '' && <p className="mt-1 text-xs text-muted">{hit.snippet}</p>}
                     {row !== undefined && (

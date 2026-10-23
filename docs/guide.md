@@ -123,10 +123,10 @@ session's timeline.
 
 ## The Explore panel in the web app
 
-The web app asks Guide from **Explore**, a screen next to the Retrieval lab in the navigation
-(`/<domain>/explore`), and from the same panel at the bottom of the Retrieval lab. It appears
-when the runtime configuration has `guideUrl`; against the mock API it plays scripted
-explorations instead, so it can be tried without Guide.
+The web app asks Guide from **Explore**, a screen of its own in the navigation
+(`/<domain>/explore`); the Retrieval lab links to it ("Ask the guide"). It appears when the
+runtime configuration has `guideUrl`; against the mock API it plays scripted explorations
+instead, so it can be tried without Guide.
 
 ![Explore](images/explore.png)
 
@@ -153,10 +153,12 @@ explorations instead, so it can be tried without Guide.
   draws them with their neighbors.
 - **Trace.** "View trace" opens the session of the `session` event in Agent activity
   (`/<domain>/agent-activity?session=<id>`).
-- **Presets.** On the `supply` Domain the panel offers the questions of the example agent:
-  single-source risk, tier-1 suppliers at high risk with open orders, what if S-1007 stops,
-  the history of C-3013 and a misspelled search ("bering"). They live in
-  `apps/web/src/features/explore/presets.ts`.
+- **Example questions.** The panel offers the questions a Domain declares in its schema
+  (`domain.examples`, see [schema as code](design.md#513-schema-as-code)) as buttons, and
+  nothing when it declares none; the Retrieval lab offers the same questions as quick picks.
+  The app itself holds no questions of any dataset. The `supply` example declares the
+  questions of the example agent: single-source risk, tier-1 suppliers at high risk with open
+  orders, what if S-1007 stops, the history of C-3013 and a misspelled search ("bering").
 
 ## Budgets and limits
 

@@ -4,6 +4,8 @@ import { useDocument, useDocumentText, useProposalItems } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { targetOf } from '@/features/extraction/item-state';
 import { formatBytes } from '@/features/inference/files';
+import { common as commonMessages } from '@/messages/common';
+import { documents as documentsMessages } from '@/messages/documents';
 import { Badge, EmptyState, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
@@ -27,21 +29,21 @@ export function itemLabel(item: ExtractionItem): string {
 function Jobs({ detail, domain }: { detail: DocumentDetail; domain: string }) {
   const scopeSearch = useScopeSearch();
   if (detail.extraction_jobs.length === 0) {
-    return <EmptyState>No extraction job was queued for this document.</EmptyState>;
+    return <EmptyState>{documentsMessages.jobs.empty}</EmptyState>;
   }
   return (
-    <Table caption="Extraction jobs">
+    <Table caption={documentsMessages.jobs.caption}>
       <THead>
         <TR>
-          <TH>Job</TH>
-          <TH>Status</TH>
-          <TH>Model</TH>
-          <TH>Prompt</TH>
-          <TH>Started</TH>
-          <TH>Finished</TH>
-          <TH>Tokens</TH>
-          <TH>Cost</TH>
-          <TH>Proposal</TH>
+          <TH>{documentsMessages.jobs.job}</TH>
+          <TH>{documentsMessages.jobs.status}</TH>
+          <TH>{documentsMessages.jobs.model}</TH>
+          <TH>{documentsMessages.jobs.prompt}</TH>
+          <TH>{documentsMessages.jobs.started}</TH>
+          <TH>{documentsMessages.jobs.finished}</TH>
+          <TH>{documentsMessages.jobs.tokens}</TH>
+          <TH>{documentsMessages.jobs.cost}</TH>
+          <TH>{documentsMessages.jobs.proposal}</TH>
         </TR>
       </THead>
       <TBody>
@@ -93,7 +95,7 @@ function EvidenceList({
   const scope = useScope();
   const scopeSearch = useScopeSearch();
   return (
-    <ul aria-label="Items quoting this document" className="flex flex-col gap-2">
+    <ul aria-label={documentsMessages.viewer.items} className="flex flex-col gap-2">
       {items.map((item) => (
         <li
           key={item.id}
@@ -122,7 +124,7 @@ function EvidenceList({
             search={{ ...scopeSearch, tab: 'items', item: item.id }}
             className="mt-1 inline-block text-xs text-accent hover:underline"
           >
-            Review this item
+            {documentsMessages.viewer.review}
           </Link>
         </li>
       ))}
@@ -134,7 +136,7 @@ function EvidenceList({
 function Passages({ items, active }: { items: ExtractionItem[]; active: string | null }) {
   const sorted = [...items].sort((a, b) => (a.evidence?.start ?? 0) - (b.evidence?.start ?? 0));
   return (
-    <ol aria-label="Evidence passages" className="flex flex-col gap-2">
+    <ol aria-label={documentsMessages.viewer.passages} className="flex flex-col gap-2">
       {sorted.map((item) => (
         <li
           key={item.id}
@@ -144,7 +146,10 @@ function Passages({ items, active }: { items: ExtractionItem[]; active: string |
           )}
         >
           <p className="text-xs text-muted">
-            Characters {item.evidence?.start.toString()} to {item.evidence?.end.toString()}
+            {documentsMessages.viewer.characters(
+              item.evidence?.start ?? 0,
+              item.evidence?.end ?? 0,
+            )}
           </p>
           <blockquote className="whitespace-pre-wrap">{item.evidence?.quote}</blockquote>
         </li>
@@ -184,7 +189,7 @@ function Viewer({
   if (text.isPending || (proposal != null && items.isPending)) {
     return (
       <p role="status" className="text-muted">
-        Loading...
+        {commonMessages.loading}
       </p>
     );
   }
@@ -197,7 +202,7 @@ function Viewer({
   }
   const body = text.data;
   if (body === null && mine.length === 0) {
-    return <EmptyState>The text of this document has not been parsed yet.</EmptyState>;
+    return <EmptyState>{documentsMessages.viewer.notParsed}</EmptyState>;
   }
   // Keeper's offsets count code points, not UTF-16 units.
   const shown = body === null ? 0 : Array.from(body.text).length;
@@ -206,17 +211,17 @@ function Viewer({
       <div>
         {body === null ? (
           <>
-            <p className="mb-2 text-sm text-muted">
-              The parsed text is not available yet; the passages the items quote are shown.
-            </p>
+            <p className="mb-2 text-sm text-muted">{documentsMessages.viewer.passagesOnly}</p>
             <Passages items={mine} active={active} />
           </>
         ) : (
           <>
             {body.truncated && (
               <p className="mb-2 text-sm text-muted">
-                The text is long: the first {shown.toLocaleString()} of{' '}
-                {body.length.toLocaleString()} characters are shown.
+                {documentsMessages.viewer.truncated(
+                  shown.toLocaleString(),
+                  body.length.toLocaleString(),
+                )}
               </p>
             )}
             <DocumentText
@@ -272,7 +277,12 @@ export function DocumentPage({
         <>
           <PageHeader
             title={data.filename}
-            description={`${data.media_type}, ${formatBytes(data.size)}, added ${shortTime(data.created_at)} by ${data.created_by}.`}
+            description={documentsMessages.page.meta(
+              data.media_type,
+              formatBytes(data.size),
+              shortTime(data.created_at),
+              data.created_by,
+            )}
             actions={
               <Link
                 to="/$domain/documents"
@@ -280,14 +290,14 @@ export function DocumentPage({
                 search={scopeSearch}
                 className="text-sm text-accent hover:underline"
               >
-                Back to the library
+                {documentsMessages.page.back}
               </Link>
             }
           />
-          <Section title="Extraction jobs">
+          <Section title={documentsMessages.page.jobsTitle}>
             <Jobs detail={data} domain={scope.domain} />
           </Section>
-          <Section title="Parsed text">
+          <Section title={documentsMessages.page.textTitle}>
             <Viewer
               domain={scope.domain}
               document={documentId}

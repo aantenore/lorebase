@@ -1,15 +1,19 @@
 import { useState } from 'react';
 import type { Conflict, ConflictCode, ResolutionChoice } from '@/api/types';
+import { review as reviewMessages } from '@/messages/review';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
+import { FormAction, FormRow } from '@/ui/layout';
 import { CODE_LABEL } from './conflict-meta';
 import type { ConflictFilter, StatusFilter } from './conflict-state';
 import { groupByKind } from './conflict-list';
 
+const filters = reviewMessages.filters;
+
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'open', label: 'Open' },
-  { value: 'resolved', label: 'Resolved' },
+  { value: 'all', label: filters.statusOptions.all },
+  { value: 'open', label: filters.statusOptions.open },
+  { value: 'resolved', label: filters.statusOptions.resolved },
 ];
 
 export function FilterBar({
@@ -17,18 +21,18 @@ export function FilterBar({
   filter,
   onChange,
 }: {
-  /** Every Conflict of the attempt, so the kind list does not shrink while filtering. */
+  /** Every Conflict of the attempt, so the type list does not shrink while filtering. */
   conflicts: Conflict[];
   filter: ConflictFilter;
   onChange: (filter: ConflictFilter) => void;
 }) {
   return (
-    <div className="grid gap-2 sm:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-3">
       <Select
-        label="Kind"
+        label={filters.type}
         value={filter.kind}
         options={[
-          { value: 'all', label: 'All kinds' },
+          { value: 'all', label: filters.allTypes },
           ...groupByKind(conflicts).map((group) => ({
             value: group.code,
             label: `${group.code} ${CODE_LABEL[group.code]} (${group.conflicts.length})`,
@@ -39,7 +43,7 @@ export function FilterBar({
         }}
       />
       <Select
-        label="Status"
+        label={filters.status}
         value={filter.status}
         options={STATUS_OPTIONS}
         onChange={(event) => {
@@ -47,7 +51,7 @@ export function FilterBar({
         }}
       />
       <Input
-        label="Find a Conflict"
+        label={filters.find}
         type="search"
         value={filter.text}
         onChange={(event) => {
@@ -87,23 +91,25 @@ export function BulkBar({
   if (choice === null) return null;
   const targets = open.filter((c) => c.choices.includes(choice));
   return (
-    <div className="flex flex-wrap items-end gap-2">
+    <FormRow>
       <Select
-        label="Bulk choice"
+        label={filters.bulkChoice}
         value={choice}
         options={choices.map((value) => ({ value, label: value }))}
         onChange={(event) => {
           setPicked(event.target.value as ResolutionChoice);
         }}
       />
-      <Button
-        disabled={disabled || targets.length === 0}
-        onClick={() => {
-          onApply(choice, targets);
-        }}
-      >
-        Apply {choice} to {targets.length} open
-      </Button>
-    </div>
+      <FormAction>
+        <Button
+          disabled={disabled || targets.length === 0}
+          onClick={() => {
+            onApply(choice, targets);
+          }}
+        >
+          {filters.bulkApply(choice, targets.length)}
+        </Button>
+      </FormAction>
+    </FormRow>
   );
 }

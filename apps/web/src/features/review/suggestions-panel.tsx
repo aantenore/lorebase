@@ -13,7 +13,9 @@ import { useScope, useScopeSearch } from '@/app/scope';
 import { percent } from '@/features/extraction/item-state';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { Badge, EmptyState, QueryBoundary } from '@/ui/layout';
+import { review as reviewMessages } from '@/messages/review';
+import { Badge, EmptyState, FormAction, FormRow, QueryBoundary } from '@/ui/layout';
+import { LearnMore } from '@/ui/learn-more';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import {
   DEFAULT_SUGGESTION_FILTER,
@@ -26,6 +28,18 @@ import {
   type SuggestionFilterState,
 } from './suggestion-state';
 
+const text = reviewMessages.suggestions;
+
+const STATUS_OPTIONS = (['all', 'pending', 'accepted', 'rejected'] as const).map((value) => ({
+  value,
+  label: text.statusOptions[value],
+}));
+
+const TYPE_OPTIONS = (['all', 'kind', 'attribute', 'relation'] as const).map((value) => ({
+  value,
+  label: text.typeOptions[value],
+}));
+
 function Filters({
   filter,
   onChange,
@@ -35,48 +49,41 @@ function Filters({
 }) {
   return (
     <form
-      aria-label="Filter suggestions"
-      className="flex flex-wrap items-end gap-3"
+      aria-label={text.filterLabel}
       onSubmit={(event) => {
         event.preventDefault();
       }}
     >
-      <Select
-        label="Status"
-        value={filter.status}
-        options={[
-          { value: 'all', label: 'All' },
-          { value: 'pending', label: 'Pending' },
-          { value: 'accepted', label: 'Accepted' },
-          { value: 'rejected', label: 'Rejected' },
-        ]}
-        onChange={(event) => {
-          onChange({ ...filter, status: event.target.value as SuggestionStatus | 'all' });
-        }}
-      />
-      <Select
-        label="Type"
-        value={filter.type}
-        options={[
-          { value: 'all', label: 'All' },
-          { value: 'kind', label: 'Kind' },
-          { value: 'attribute', label: 'Attribute' },
-          { value: 'relation', label: 'Relation' },
-        ]}
-        onChange={(event) => {
-          onChange({ ...filter, type: event.target.value as SuggestionType | 'all' });
-        }}
-      />
-      <label className="flex h-9 items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={filter.belowMinSupport}
+      <FormRow>
+        <Select
+          label={text.status}
+          value={filter.status}
+          options={STATUS_OPTIONS}
           onChange={(event) => {
-            onChange({ ...filter, belowMinSupport: event.target.checked });
+            onChange({ ...filter, status: event.target.value as SuggestionStatus | 'all' });
           }}
         />
-        Include below min support
-      </label>
+        <Select
+          label={text.type}
+          value={filter.type}
+          options={TYPE_OPTIONS}
+          onChange={(event) => {
+            onChange({ ...filter, type: event.target.value as SuggestionType | 'all' });
+          }}
+        />
+        <FormAction>
+          <label className="flex h-9 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={filter.belowMinSupport}
+              onChange={(event) => {
+                onChange({ ...filter, belowMinSupport: event.target.checked });
+              }}
+            />
+            {text.lowSupport}
+          </label>
+        </FormAction>
+      </FormRow>
     </form>
   );
 }
@@ -93,7 +100,7 @@ function ExampleLink({ example }: { example: SuggestionExample }) {
         search={{ ...scopeSearch, start: example.start, end: example.end }}
         className="text-accent hover:underline"
       >
-        View in document
+        {text.viewInDocument}
       </Link>
     </li>
   );
@@ -110,28 +117,24 @@ function Detail({
 }) {
   const guess = suggestion.type_guess;
   return (
-    <section aria-label={`Details of ${suggestion.name}`} className="flex flex-col gap-3 text-sm">
-      {suggestion.withheld && (
-        <p className="text-warning">
-          Samples and evidence are withheld: this matches a sensitive Attribute.
-        </p>
-      )}
+    <section aria-label={text.details(suggestion.name)} className="flex flex-col gap-3 text-sm">
+      {suggestion.withheld && <p className="text-warning">{text.withheld}</p>}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
-        <dt className="text-muted">Labels</dt>
-        <dd>{suggestion.labels.length === 0 ? 'none' : suggestion.labels.join(', ')}</dd>
-        <dt className="text-muted">Found by</dt>
+        <dt className="text-muted">{text.labels}</dt>
+        <dd>{suggestion.labels.length === 0 ? text.none : suggestion.labels.join(', ')}</dd>
+        <dt className="text-muted">{text.foundBy}</dt>
         <dd>{suggestion.sources.join(', ')}</dd>
         {guess !== null && (
           <>
-            <dt className="text-muted">Type guess</dt>
+            <dt className="text-muted">{text.typeGuess}</dt>
             <dd>
-              {guess.type} ({percent(guess.confidence)}): {guess.reasons.join('; ')}
+              {text.typeGuessValue(guess.type, percent(guess.confidence), guess.reasons.join('; '))}
             </dd>
           </>
         )}
         {suggestion.duplicate_of !== null && (
           <>
-            <dt className="text-muted">Duplicate of</dt>
+            <dt className="text-muted">{text.duplicateOf}</dt>
             <dd>
               {suggestion.duplicate_of.section}.{suggestion.duplicate_of.api_name}
             </dd>
@@ -139,14 +142,14 @@ function Detail({
         )}
         {suggestion.decided_by !== null && (
           <>
-            <dt className="text-muted">Decided by</dt>
+            <dt className="text-muted">{text.decidedBy}</dt>
             <dd>{suggestion.decided_by}</dd>
           </>
         )}
       </dl>
       {suggestion.samples.length > 0 && (
         <div>
-          <h4 className="font-medium">Samples</h4>
+          <h4 className="font-medium">{text.samples}</h4>
           <ul className="list-disc pl-5">
             {suggestion.samples.map((sample) => (
               <li key={sample}>{sample}</li>
@@ -156,7 +159,7 @@ function Detail({
       )}
       {suggestion.examples.length > 0 && (
         <div>
-          <h4 className="font-medium">Evidence</h4>
+          <h4 className="font-medium">{text.evidence}</h4>
           <ul className="flex flex-col gap-2">
             {suggestion.examples.map((example) => (
               <ExampleLink
@@ -169,8 +172,8 @@ function Detail({
       )}
       {isDecidable(suggestion) && (
         <Input
-          label={`Accept ${suggestion.name} as`}
-          hint="Optional api name to use instead of the proposed one."
+          label={text.acceptAs(suggestion.name)}
+          hint={text.acceptAsHint}
           value={rename}
           placeholder={suggestion.name}
           className="max-w-xs"
@@ -189,7 +192,7 @@ function Refusal({ error }: { error: unknown }) {
   return (
     <section
       role="alert"
-      aria-label="Keeper refused the decisions"
+      aria-label={text.refusedLabel}
       className="flex flex-col gap-2 rounded-md border border-danger p-3 text-sm text-danger"
     >
       <p>{describeError(error)}</p>
@@ -211,14 +214,14 @@ function Outcome({ domain, result }: { domain: string; result: DecideSuggestions
   const { proposal } = result;
   return (
     <section
-      aria-label="Last decision"
+      aria-label={text.outcomeLabel}
       className="flex flex-col gap-1 rounded-md border border-success p-3 text-sm"
     >
-      <p role="status">{result.suggestions.length.toString()} suggestion(s) decided.</p>
+      <p role="status">{text.decided(result.suggestions.length)}</p>
       {proposal !== null && (
         <>
           <p>
-            Proposal{' '}
+            {text.proposalPrefix}{' '}
             <Link
               to="/$domain/review/$proposal"
               params={{ domain, proposal: proposal.id }}
@@ -227,7 +230,7 @@ function Outcome({ domain, result }: { domain: string; result: DecideSuggestions
             >
               #{proposal.id} {proposal.title}
             </Link>{' '}
-            on branch {proposal.branch}.
+            {text.onBranch(proposal.branch)}
           </p>
           <ul className="list-disc pl-5">
             {proposal.changes.map((change) => (
@@ -281,6 +284,9 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted">
+        {text.description} <LearnMore path={text.docs} />
+      </p>
       <Filters
         filter={filter}
         onChange={(next) => {
@@ -296,7 +302,7 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
             send('accepted');
           }}
         >
-          Accept selected
+          {text.accept}
         </Button>
         <Button
           disabled={chosen.length === 0 || decide.isPending}
@@ -304,7 +310,7 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
             send('rejected');
           }}
         >
-          Reject selected
+          {text.reject}
         </Button>
         <Button
           disabled={chosen.length === 0 || decide.isPending}
@@ -312,10 +318,10 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
             send('pending');
           }}
         >
-          Reset
+          {text.reset}
         </Button>
         <span role="status" className="text-sm text-muted">
-          {chosen.length.toString()} selected
+          {text.selected(chosen.length)}
         </span>
       </div>
       {decide.isError && <Refusal error={decide.error} />}
@@ -323,15 +329,15 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
       <QueryBoundary query={query}>
         {() =>
           rows.length === 0 ? (
-            <EmptyState>No schema suggestions match this filter.</EmptyState>
+            <EmptyState>{text.empty}</EmptyState>
           ) : (
-            <Table caption="Schema suggestions">
+            <Table caption={text.caption}>
               <THead>
                 <TR>
                   <TH>
                     <input
                       type="checkbox"
-                      aria-label="Select all suggestions"
+                      aria-label={text.selectAll}
                       checked={allChosen}
                       disabled={decidable.length === 0}
                       onChange={(event) => {
@@ -341,15 +347,15 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
                       }}
                     />
                   </TH>
-                  <TH>Type</TH>
-                  <TH>Name</TH>
-                  <TH>Owner or ends</TH>
-                  <TH>Support</TH>
-                  <TH>Documents</TH>
-                  <TH>Confidence</TH>
-                  <TH>Type guess</TH>
-                  <TH>Status</TH>
-                  <TH>Notes</TH>
+                  <TH>{text.columns.type}</TH>
+                  <TH>{text.columns.name}</TH>
+                  <TH>{text.columns.owner}</TH>
+                  <TH>{text.columns.support}</TH>
+                  <TH>{text.columns.documents}</TH>
+                  <TH>{text.columns.confidence}</TH>
+                  <TH>{text.columns.typeGuess}</TH>
+                  <TH>{text.columns.status}</TH>
+                  <TH>{text.columns.notes}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -359,7 +365,7 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
                       <TD>
                         <input
                           type="checkbox"
-                          aria-label={`Select ${row.name}`}
+                          aria-label={text.select(row.name)}
                           checked={selected.has(row.id)}
                           disabled={!isDecidable(row)}
                           onChange={(event) => {
@@ -387,15 +393,20 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
                       <TD>
                         {row.type_guess === null
                           ? ''
-                          : `${row.type_guess.type} (${percent(row.type_guess.confidence)})`}
+                          : text.guessValue(
+                              row.type_guess.type,
+                              percent(row.type_guess.confidence),
+                            )}
                       </TD>
                       <TD>
                         <Badge tone={STATUS_TONE[row.status]}>{row.status}</Badge>
                       </TD>
                       <TD>
                         <span className="flex flex-wrap gap-1">
-                          {row.duplicate_of !== null && <Badge tone="danger">duplicate</Badge>}
-                          {row.withheld && <Badge tone="warning">withheld</Badge>}
+                          {row.duplicate_of !== null && (
+                            <Badge tone="danger">{text.duplicate}</Badge>
+                          )}
+                          {row.withheld && <Badge tone="warning">{text.withheldBadge}</Badge>}
                           {row.proposal_id !== null && (
                             <Badge tone="accent">#{row.proposal_id}</Badge>
                           )}
@@ -430,7 +441,7 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
               void query.fetchNextPage();
             }}
           >
-            Load more
+            {text.loadMore}
           </Button>
         </div>
       )}

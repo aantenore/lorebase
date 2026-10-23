@@ -1,6 +1,7 @@
 import type { InferenceIssue } from '@/api/inference-types';
 import type { SchemaIssue } from '@/api/schema-rules';
 import { Badge } from '@/ui/layout';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export interface IssuesListProps {
   /** What the inference reported. */
@@ -14,12 +15,13 @@ export interface IssuesListProps {
 /** The ambiguities the inference found and the rule violations of the edited proposal. */
 export function IssuesList({ issues, issueCount, validation }: IssuesListProps) {
   return (
-    <section aria-label="Issues" className="flex flex-col gap-3">
+    <section aria-label={inferenceMessages.issues.section} className="flex flex-col gap-3">
       <h3 className="text-sm font-semibold">
-        Inference issues <Badge tone={issueCount === 0 ? 'success' : 'warning'}>{issueCount}</Badge>
+        {inferenceMessages.issues.heading}{' '}
+        <Badge tone={issueCount === 0 ? 'success' : 'warning'}>{issueCount}</Badge>
       </h3>
       {issues.length === 0 ? (
-        <p className="text-sm text-muted">The inference found nothing to settle.</p>
+        <p className="text-sm text-muted">{inferenceMessages.issues.none}</p>
       ) : (
         <ul className="flex flex-col gap-1 text-sm">
           {issues.map((issue, index) => (
@@ -35,21 +37,27 @@ export function IssuesList({ issues, issueCount, validation }: IssuesListProps) 
       )}
       {issueCount > issues.length && (
         <p className="text-xs text-muted">
-          Showing {issues.length} of {issueCount} issues.
+          {inferenceMessages.issues.showing(issues.length, issueCount)}
         </p>
       )}
       {validation.length > 0 && (
         <>
           <h3 className="text-sm font-semibold">
-            Schema problems <Badge tone="danger">{validation.length}</Badge>
+            {inferenceMessages.issues.schemaProblems}{' '}
+            <Badge tone="danger">{validation.length}</Badge>
           </h3>
-          <ul className="flex flex-col gap-1 text-sm" aria-label="Schema problems">
+          <ul
+            className="flex flex-col gap-1 text-sm"
+            aria-label={inferenceMessages.issues.schemaProblems}
+          >
             {validation.map((issue, index) => (
               <li
                 key={`${issue.path}-${issue.code}-${index.toString()}`}
                 className="flex flex-wrap gap-2"
               >
-                <code className="font-mono text-xs">{issue.path || 'schema'}</code>
+                <code className="font-mono text-xs">
+                  {issue.path || inferenceMessages.issues.schemaPath}
+                </code>
                 <span className="text-danger">{issue.message}</span>
               </li>
             ))}

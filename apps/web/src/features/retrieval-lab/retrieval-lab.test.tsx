@@ -2,8 +2,11 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMockApi } from '@/api/mock/adapter';
 import { testConfig } from '@/config/env';
+import { messages } from '@/messages';
 import { renderApp } from '@/test/render';
 import { urlOf } from '@/test/fetch';
+
+const T = messages.retrievalLab;
 
 const options = { pageSize: 50, searchLimit: 20, maxNodes: 200 };
 
@@ -15,15 +18,34 @@ afterEach(() => {
 });
 
 describe('Retrieval lab', () => {
-  it('asks for a question first and shows the scripted Explore panel of the mock', async () => {
+  it('asks for a question first, with no Explore panel and no link without an assistant', async () => {
     renderApp('/supply/retrieval-lab');
-    expect(
-      await screen.findByRole('heading', { name: 'Retrieval lab', level: 1 }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/No guide service is configured/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Query vector (JSON array)')).toBeInTheDocument();
-    expect(screen.getByLabelText('Question for the guide')).toBeInTheDocument();
-    expect(await screen.findByText('Ask a question to see its pack.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: T.title, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/Searching by words only/)).toBeInTheDocument();
+    expect(screen.getByLabelText(T.vector.pasteLabel)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Question for the guide')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: T.askGuide })).not.toBeInTheDocument();
+    expect(await screen.findByText(T.pack.askFirst)).toBeInTheDocument();
+  });
+
+  it('fills the Question from the example questions of the Domain', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/retrieval-lab');
+    const examples = await screen.findByRole('group', { name: T.question.examples });
+    await user.click(within(examples).getByRole('button', { name: 'Single-source risk' }));
+    expect(screen.getByLabelText(T.question.label)).toHaveValue(
+      'Which parts depend on a single supplier, and how risky is that supplier?',
+    );
+    expect(screen.getByLabelText(T.question.label)).toHaveAttribute(
+      'placeholder',
+      T.question.placeholder,
+    );
+  });
+
+  it('offers no example questions for a Domain that declares none', async () => {
+    renderApp('/hr/retrieval-lab');
+    await screen.findByLabelText(T.question.label);
+    expect(screen.queryByRole('group', { name: T.question.examples })).not.toBeInTheDocument();
   });
 
   it('shows the hits of both sets, the corrections and the pack with the reasons', async () => {
@@ -47,8 +69,8 @@ describe('Retrieval lab', () => {
   it('puts the question in the URL when asked', async () => {
     const user = userEvent.setup();
     const { router } = renderApp('/supply/retrieval-lab');
-    await user.type(await screen.findByLabelText('Question'), 'bearing');
-    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await user.type(await screen.findByLabelText(T.question.label), 'bearing');
+    await user.click(screen.getByRole('button', { name: T.question.ask }));
     expect(await (await resultsA()).findByText('Deep groove bearing 6204')).toBeInTheDocument();
     expect(router.state.location.search).toMatchObject({ q: 'bearing' });
   });
@@ -57,7 +79,7 @@ describe('Retrieval lab', () => {
     const user = userEvent.setup();
     renderApp('/supply/retrieval-lab?q=bearing');
     await (await resultsA()).findByText('Deep groove bearing 6204');
-    await user.click(screen.getByLabelText('Query vector (JSON array)'));
+    await user.click(screen.getByLabelText(T.vector.pasteLabel));
     await user.paste('[0.2, 0.7, 0.1]');
     expect(await screen.findByText('3 dimensions')).toBeInTheDocument();
     expect(await screen.findByText(/in both, \d+ only in A, \d+ only in B/)).toBeInTheDocument();
@@ -84,7 +106,7 @@ describe('Retrieval lab', () => {
     expect(container.querySelector('li b')).toBeNull();
   });
 
-  it('asks the guide service to embed the question and shows the Explore panel', async () => {
+  it('asks the assistant to embed the question and links to Explore', async () => {
     const calls: { url: string; body: unknown }[] = [];
     vi.stubGlobal(
       'fetch',
@@ -102,23 +124,25 @@ describe('Retrieval lab', () => {
       }),
     );
     renderApp('/supply/retrieval-lab?q=bearing', testConfig({ guideUrl: 'http://guide.test' }));
-    expect(
-      await screen.findByText(/Embedded by the guide service \(mini\): 4 dimensions/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Embedded by mini: 4 dimensions/)).toBeInTheDocument();
     expect(calls).toEqual([
       { url: 'http://guide.test/embed', body: { text: 'bearing', mode: 'query' } },
     ]);
-    expect(screen.getByLabelText('Question for the guide')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Query vector (JSON array)')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: T.askGuide })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/supply/explore'),
+    );
+    expect(screen.queryByLabelText('Question for the guide')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(T.vector.pasteLabel)).not.toBeInTheDocument();
   });
 
-  it('falls back to a pasted vector when the guide service fails', async () => {
+  it('falls back to a pasted vector when the assistant fails', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.resolve(new Response('no', { status: 502 }))),
     );
     renderApp('/supply/retrieval-lab?q=bearing', testConfig({ guideUrl: 'http://guide.test' }));
     expect(await screen.findByText(/answered 502 to \/embed/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Query vector (JSON array)')).toBeInTheDocument();
+    expect(screen.getByLabelText(T.vector.pasteLabel)).toBeInTheDocument();
   });
 });

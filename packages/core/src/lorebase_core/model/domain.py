@@ -13,6 +13,23 @@ DomainSlug = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]*$")]
 
 _TIMESTAMP = TypeSpec.of(AttributeType.TIMESTAMP)
 
+#: Upper bounds of the example questions of a Domain; they are shown as buttons.
+MAX_EXAMPLES = 20
+MAX_EXAMPLE_LABEL = 80
+MAX_EXAMPLE_QUESTION = 500
+
+
+class DomainExample(Model):
+    """A sample question about the Domain, offered by clients as a ready-made prompt."""
+
+    label: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_EXAMPLE_LABEL)
+    ]
+    question: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_EXAMPLE_QUESTION),
+    ]
+
 
 class Domain(Model):
     object_type: ClassVar[str] = "schema.domain"
@@ -22,6 +39,9 @@ class Domain(Model):
     description: str = ""
     default_branch: str = "main"
     settings: dict[str, JsonValue] = Field(default_factory=dict)
+    #: Optional sample questions; absent (not empty) when there are none, so the canonical
+    #: content of Domains written before this field existed is unchanged.
+    examples: tuple[DomainExample, ...] | None = Field(default=None, max_length=MAX_EXAMPLES)
     #: Canonical RFC 3339 UTC timestamp.
     created_at: str | None = None
     created_by: str | None = None
@@ -30,3 +50,22 @@ class Domain(Model):
     @classmethod
     def _canonical_timestamp(cls, value: object) -> object:
         return encode_value(_TIMESTAMP, value)
+
+    @field_validator("examples", mode="before")
+    @classmethod
+    def _empty_examples_are_absent(cls, value: object) -> object:
+        if isinstance(value, list | tuple) and len(value) == 0:
+            return None
+        return value
+
+    @field_validator("examples")
+    @classmethod
+    def _unique_labels(
+        cls, value: tuple[DomainExample, ...] | None
+    ) -> tuple[DomainExample, ...] | None:
+        if value is not None:
+            labels = [example.label for example in value]
+            duplicates = sorted({label for label in labels if labels.count(label) > 1})
+            if duplicates:
+                raise ValueError(f"duplicate example labels: {', '.join(duplicates)}")
+        return value

@@ -12,6 +12,17 @@ domain:
   default_branch: main
   settings:
     search_language: english
+  examples:
+    - label: Single-source risk
+      question: Which parts depend on a single supplier, and how risky is that supplier?
+    - label: Tier-1 high risk with open orders
+      question: Which tier-1 suppliers have a high risk score and open purchase orders?
+    - label: What if S-1007 stops
+      question: What is the impact if supplier S-1007 stops delivering?
+    - label: History of C-3013
+      question: What is the history of contract C-3013?
+    - label: Typo search "bering"
+      question: Who supplies bering parts?
 
 kinds:
   Supplier:

@@ -13,6 +13,7 @@ import type {
   TypeDocument,
 } from '@/features/modeler/document';
 import { renameKey } from '@/features/modeler/form-helpers';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export type Decision = 'accepted' | 'dropped';
 /** Decisions by element id. An element without an entry is pending. */
@@ -56,7 +57,7 @@ export function withIds(document: SchemaDocument, ids: IdFactory): SchemaDocumen
   return copy;
 }
 
-/** The Kind a type points at: `ref(Supplier)` gives `Supplier`. */
+/** The Kind a type points at: `ref(Asset)` gives `Asset`. */
 export function refTarget(type: TypeDocument | undefined): string | undefined {
   return typeof type === 'string' ? /^ref\((.+)\)$/.exec(type)?.[1] : undefined;
 }
@@ -181,7 +182,8 @@ export function analyze(document: SchemaDocument, decisions: Decisions): Analysi
   for (const [name, kind] of Object.entries(document.kinds ?? {})) {
     if (!accepted.has(name)) {
       for (const a of Object.values(kind.attributes ?? {})) {
-        if (decisions[idOf(a)] === 'accepted') notApplied.set(idOf(a), `${name} is not accepted`);
+        if (decisions[idOf(a)] === 'accepted')
+          notApplied.set(idOf(a), inferenceMessages.decision.notAccepted(name));
       }
       continue;
     }
@@ -189,7 +191,7 @@ export function analyze(document: SchemaDocument, decisions: Decisions): Analysi
     for (const [attributeName, attribute] of Object.entries(attributes)) {
       const target = refTarget(attribute.type);
       if (target !== undefined && !accepted.has(target)) {
-        notApplied.set(idOf(attribute), `${target} is not accepted`);
+        notApplied.set(idOf(attribute), inferenceMessages.decision.notAccepted(target));
         delete attributes[attributeName];
       }
     }
@@ -208,7 +210,7 @@ export function analyze(document: SchemaDocument, decisions: Decisions): Analysi
     if (decisions[id] !== 'accepted') continue;
     const missing = [relation.from_kind, relation.to_kind].find((k) => !accepted.has(k));
     if (missing !== undefined) {
-      notApplied.set(id, `${missing} is not accepted`);
+      notApplied.set(id, inferenceMessages.decision.notAccepted(missing));
       continue;
     }
     const reference = relation.foreign_key_attribute;
@@ -312,7 +314,7 @@ export function renameLinkAttribute(
 
 /**
  * Inclusion ratios the engine reports in the reasons of a reference ("100% of 22 distinct
- * values are keys of supplier(supplier_code)"): one for a foreign key, two for a junction.
+ * values are keys of asset(asset_code)"): one for a foreign key, two for a junction.
  */
 export function inclusionRatios(reasons: readonly string[]): number[] {
   return reasons.flatMap((reason) => {

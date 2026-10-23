@@ -1,5 +1,7 @@
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
+import { FormAction, FormRow } from '@/ui/layout';
 import { asList, asText, isRecord, moveItem, renameKey } from './form-helpers';
 import { KeyInput } from './key-input';
 import { ListInput } from './list-input';
@@ -16,6 +18,9 @@ import {
 } from './transform-edits';
 
 type Doc = Record<string, unknown>;
+
+const t = modelerEditorsMessages.source.transforms;
+const actions = modelerEditorsMessages.actions;
 
 /** Applies `mutate` to the transform list of one Attribute mapping, in the document draft. */
 export type ChangeTransforms = (mutate: (transforms: Doc[]) => Doc[] | void) => void;
@@ -36,13 +41,13 @@ function MapTable({
   const entries = Object.entries(values);
   return (
     <fieldset className="flex flex-col gap-2 sm:col-span-2">
-      <legend className="mb-1 text-xs font-medium text-muted">{label} value table</legend>
+      <legend className="mb-1 text-xs font-medium text-muted">{t.valueTable(label)}</legend>
       {entries.map(([from, to], index) => {
         const n = index + 1;
         return (
-          <div key={index} className="flex flex-wrap items-start gap-2">
+          <FormRow key={index}>
             <KeyInput
-              label={`${label} map ${n} from`}
+              label={t.mapFrom(label, n)}
               name={from}
               taken={(candidate) => candidate !== from && candidate in values}
               onRename={(next) => {
@@ -52,7 +57,7 @@ function MapTable({
               }}
             />
             <ScalarInput
-              label={`${label} map ${n} to`}
+              label={t.mapTo(label, n)}
               value={to}
               onChange={(next) => {
                 update((a) => {
@@ -60,20 +65,20 @@ function MapTable({
                 });
               }}
             />
-            <Button
-              size="sm"
-              variant="ghost"
-              className="mt-5"
-              aria-label={`Remove ${label} map ${n}`}
-              onClick={() => {
-                update((a) => {
-                  delete (a['values'] as Doc)[from];
-                });
-              }}
-            >
-              Remove
-            </Button>
-          </div>
+            <FormAction>
+              <Button
+                variant="ghost"
+                aria-label={t.removeMap(label, n)}
+                onClick={() => {
+                  update((a) => {
+                    delete (a['values'] as Doc)[from];
+                  });
+                }}
+              >
+                {actions.remove}
+              </Button>
+            </FormAction>
+          </FormRow>
         );
       })}
       <div>
@@ -89,7 +94,7 @@ function MapTable({
             });
           }}
         >
-          Add value
+          {t.addValue}
         </Button>
       </div>
     </fieldset>
@@ -111,7 +116,7 @@ function Arguments({
     case 'cast':
       return (
         <Select
-          label={`${label} target type`}
+          label={t.targetType(label)}
           value={asText(args['to'])}
           options={[
             ...(CAST_TARGETS.some((t) => t === args['to'])
@@ -130,8 +135,8 @@ function Arguments({
     case 'parse_date':
       return (
         <Input
-          label={`${label} date format`}
-          hint="A strptime format such as %Y-%m-%d."
+          label={t.dateFormat(label)}
+          hint={t.dateFormatHint}
           value={asText(args['format'])}
           onChange={(event) => {
             const value = event.target.value;
@@ -145,8 +150,8 @@ function Arguments({
       return (
         <>
           <ListInput
-            label={`${label} columns`}
-            hint="Columns appended to the value, comma separated."
+            label={t.columns(label)}
+            hint={t.columnsHint}
             value={asList(args['columns']).map(asText)}
             onChange={(next) => {
               update((a) => {
@@ -155,7 +160,7 @@ function Arguments({
             }}
           />
           <Input
-            label={`${label} separator`}
+            label={t.separator(label)}
             value={asText(args['separator'])}
             onChange={(event) => {
               const value = event.target.value;
@@ -170,8 +175,8 @@ function Arguments({
     case 'constant':
       return (
         <ScalarInput
-          label={`${label} constant`}
-          hint="Replaces the value."
+          label={t.constant(label)}
+          hint={t.constantHint}
           value={args['value']}
           onChange={(next) => {
             update((a) => {
@@ -183,8 +188,8 @@ function Arguments({
     case 'null_if':
       return (
         <ListInput
-          label={`${label} values`}
-          hint="The value becomes empty when it is one of these, comma separated."
+          label={t.values(label)}
+          hint={t.valuesHint}
           value={nullIfValues(args).map(scalarText)}
           onChange={(next) => {
             update((a) => {
@@ -200,8 +205,8 @@ function Arguments({
         <>
           <MapTable label={label} transform={transform} update={update} />
           <ScalarInput
-            label={`${label} default`}
-            hint="Used for values not in the table; empty keeps the value."
+            label={t.default(label)}
+            hint={t.defaultHint}
             value={args['default']}
             onChange={(next) => {
               update((a) => {
@@ -229,14 +234,14 @@ export function TransformsEditor({
 }) {
   return (
     <fieldset className="flex flex-col gap-2 sm:col-span-2">
-      <legend className="mb-1 text-xs font-medium text-muted">Transforms of {attribute}</legend>
+      <legend className="mb-1 text-xs font-medium text-muted">{t.title(attribute)}</legend>
       {transforms.length === 0 ? (
-        <p className="text-xs text-muted">None: the value is used as it is.</p>
+        <p className="text-xs text-muted">{t.none}</p>
       ) : (
         <ol className="flex flex-col gap-2">
           {transforms.map((transform, index) => {
             const n = index + 1;
-            const label = `${attribute} transform ${n}`;
+            const label = t.item(attribute, n);
             const name = asText(transform['name']);
             const known = TRANSFORM_NAMES.some((t) => t === name);
             const problem = transformProblem(transform);
@@ -253,7 +258,7 @@ export function TransformsEditor({
                 className="grid gap-2 rounded-md border border-line bg-surface p-2 sm:grid-cols-2"
               >
                 <Select
-                  label={`${label} name`}
+                  label={t.name(label)}
                   value={name}
                   error={problem}
                   options={[
@@ -268,40 +273,37 @@ export function TransformsEditor({
                     });
                   }}
                 />
-                <div className="flex items-end gap-1">
+                <FormAction>
                   <Button
-                    size="sm"
                     variant="ghost"
-                    aria-label={`Move ${label} up`}
+                    aria-label={t.moveUp(label)}
                     disabled={index === 0}
                     onClick={() => {
                       change((list) => moveItem(list, index, index - 1));
                     }}
                   >
-                    Up
+                    {actions.up}
                   </Button>
                   <Button
-                    size="sm"
                     variant="ghost"
-                    aria-label={`Move ${label} down`}
+                    aria-label={t.moveDown(label)}
                     disabled={index === transforms.length - 1}
                     onClick={() => {
                       change((list) => moveItem(list, index, index + 1));
                     }}
                   >
-                    Down
+                    {actions.down}
                   </Button>
                   <Button
-                    size="sm"
                     variant="ghost"
-                    aria-label={`Remove ${label}`}
+                    aria-label={t.remove(label)}
                     onClick={() => {
                       change((list) => list.filter((_, i) => i !== index));
                     }}
                   >
-                    Remove
+                    {actions.remove}
                   </Button>
-                </div>
+                </FormAction>
                 {!NO_ARGS.has(name) && (
                   <Arguments label={label} transform={transform} update={update} />
                 )}
@@ -321,7 +323,7 @@ export function TransformsEditor({
             });
           }}
         >
-          Add transform to {attribute}
+          {t.add(attribute)}
         </Button>
       </div>
     </fieldset>

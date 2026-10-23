@@ -3,17 +3,15 @@ import { useState, useSyncExternalStore } from 'react';
 import { describeError } from '@/api';
 import { useCredentials, useKeeperApi, useSession, useSessionInfo } from '@/api/provider';
 import { useConfig } from '@/config/context';
+import { settings as settingsMessages } from '@/messages/settings';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
 import { EmptyState, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { useToast } from '@/ui/toast';
 
-const SOURCE_LABEL = {
-  storage: 'typed here (kept in this browser)',
-  env: 'VITE_API_TOKEN',
-  none: 'none',
-} as const;
+const T = settingsMessages;
+const SOURCE_LABEL = T.connection.tokenSource;
 
 function Row({ name, value }: { name: string; value: string }) {
   return (
@@ -38,34 +36,32 @@ function WhoAmI() {
   if (who.isPending) {
     return (
       <p role="status" className="text-sm text-muted">
-        Asking Keeper who you are...
+        {T.whoAmI.asking}
       </p>
     );
   }
   if (who.isError) {
-    return (
-      <EmptyState>{`Keeper did not identify the caller. ${describeError(who.error)}`}</EmptyState>
-    );
+    return <EmptyState>{T.whoAmI.failed(describeError(who.error))}</EmptyState>;
   }
   const principal = who.data;
   return (
-    <Table caption="Caller">
+    <Table caption={T.whoAmI.caption}>
       <THead>
         <TR>
-          <TH>Property</TH>
-          <TH>Value</TH>
+          <TH>{T.table.property}</TH>
+          <TH>{T.table.value}</TH>
         </TR>
       </THead>
       <TBody>
-        <Row name="Principal" value={principal.display_name} />
-        <Row name="Id" value={principal.id} />
-        <Row name="Type" value={principal.type} />
-        <Row name="Authenticated by" value={principal.method} />
+        <Row name={T.whoAmI.principal} value={principal.display_name} />
+        <Row name={T.whoAmI.id} value={principal.id} />
+        <Row name={T.whoAmI.type} value={principal.type} />
+        <Row name={T.whoAmI.method} value={principal.method} />
         <Row
-          name="Installation administrator"
-          value={principal.installation_admin ? 'yes' : 'no'}
+          name={T.whoAmI.admin}
+          value={principal.installation_admin ? T.whoAmI.yes : T.whoAmI.no}
         />
-        <Row name="Key scopes" value={principal.key_scopes.join(', ') || 'none'} />
+        <Row name={T.whoAmI.keyScopes} value={principal.key_scopes.join(', ') || T.whoAmI.none} />
       </TBody>
     </Table>
   );
@@ -90,40 +86,43 @@ export function ConnectionSection() {
   const apply = (next: string | null) => {
     credentials.set(next);
     setToken('');
-    toast.notify(
-      next === null ? 'Stored token forgotten.' : 'Token stored in this browser.',
-      'success',
-    );
+    toast.notify(next === null ? T.connection.forgotten : T.connection.stored, 'success');
     return queryClient.invalidateQueries({ queryKey: ['keeper'] });
   };
 
   return (
-    <Section title="Connection">
-      <Table caption="Connection">
+    <Section title={T.connection.title}>
+      <Table caption={T.connection.caption}>
         <THead>
           <TR>
-            <TH>Setting</TH>
-            <TH>Value</TH>
+            <TH>{T.table.setting}</TH>
+            <TH>{T.table.value}</TH>
           </TR>
         </THead>
         <TBody>
-          <Row name="Data source" value={live ? 'Keeper over REST' : 'sample data (mock)'} />
           <Row
-            name="Keeper"
+            name={T.connection.dataSource}
+            value={live ? T.connection.keeperRest : T.connection.sampleData}
+          />
+          <Row
+            name={T.connection.keeper}
             value={
               live
                 ? config.keeperBaseUrl === ''
-                  ? 'this origin (/api/v1)'
+                  ? T.connection.thisOriginApi
                   : (config.keeperBaseUrl ?? '')
-                : 'not used in mock mode'
+                : T.connection.notUsedInMock
             }
           />
           {session === null ? (
-            <Row name="API token" value={live ? SOURCE_LABEL[source] : 'not used in mock mode'} />
+            <Row
+              name={T.connection.apiToken}
+              value={live ? SOURCE_LABEL[source] : T.connection.notUsedInMock}
+            />
           ) : (
             <Row
-              name="Sign-in"
-              value={`single sign-on through Keeper${signedIn === null ? '' : `, as ${signedIn.display_name}`}`}
+              name={T.connection.signIn}
+              value={T.connection.singleSignOn(signedIn?.display_name ?? null)}
             />
           )}
         </TBody>
@@ -131,7 +130,7 @@ export function ConnectionSection() {
 
       {session === null && live && (
         <form
-          aria-label="Store an API token"
+          aria-label={T.connection.form}
           className="mt-3 flex max-w-xl flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
@@ -139,18 +138,18 @@ export function ConnectionSection() {
           }}
         >
           <Input
-            label="API token"
+            label={T.connection.apiToken}
             type="password"
             autoComplete="off"
             value={token}
-            hint="API key (lbk_...) or access token, sent as a Bearer header. Development only: it is kept in this browser's local storage, unencrypted."
+            hint={T.connection.tokenHint}
             onChange={(event) => {
               setToken(event.target.value);
             }}
           />
           <div className="flex gap-2">
             <Button type="submit" variant="primary" disabled={token.trim() === ''}>
-              Save token
+              {T.connection.save}
             </Button>
             <Button
               type="button"
@@ -159,20 +158,18 @@ export function ConnectionSection() {
                 void apply(null);
               }}
             >
-              Forget stored token
+              {T.connection.forget}
             </Button>
           </div>
         </form>
       )}
 
       {session !== null && (
-        <p className="mt-3 max-w-xl text-sm text-muted">
-          This app signs in through Keeper (single sign-on) and keeps no API token in the browser.
-        </p>
+        <p className="mt-3 max-w-xl text-sm text-muted">{T.connection.noTokenInBrowser}</p>
       )}
 
       <div className="mt-4">
-        <h3 className="mb-2 text-sm font-semibold">Who am I</h3>
+        <h3 className="mb-2 text-sm font-semibold">{T.whoAmI.title}</h3>
         <WhoAmI />
       </div>
     </Section>

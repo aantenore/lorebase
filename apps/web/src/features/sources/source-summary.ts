@@ -1,18 +1,18 @@
 import type { Schema, Source } from '@/api/types';
 import type { SourceRun } from '@/api/sources-types';
-
-const plural = (n: number, one: string, many: string) => `${n.toString()} ${n === 1 ? one : many}`;
+import { sources as sourcesMessages } from '@/messages/sources';
 
 /** One line on what a Source maps: Attributes and Relations into its Kind, and the key columns. */
 export function mappingSummary(source: Source, schema: Schema): string {
   const kind =
     schema.kinds.find((k) => k.id === source.target_kind)?.api_name ?? source.target_kind;
   const parts = [
-    `${plural(Object.keys(source.attribute_mapping).length, 'Attribute', 'Attributes')} into ${kind}`,
+    sourcesMessages.summary.attributesInto(Object.keys(source.attribute_mapping).length, kind),
   ];
   const relations = Object.keys(source.relation_mapping).length;
-  if (relations > 0) parts.push(plural(relations, 'Relation', 'Relations'));
-  if (source.key_mapping.length > 0) parts.push(`key ${source.key_mapping.join(', ')}`);
+  if (relations > 0) parts.push(sourcesMessages.summary.relations(relations));
+  if (source.key_mapping.length > 0)
+    parts.push(sourcesMessages.summary.key(source.key_mapping.join(', ')));
   return parts.join(', ');
 }
 

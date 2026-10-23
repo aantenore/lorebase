@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { messages } from '@/messages';
 import type { KeeperApi } from '@/api/client';
 import type { FilePreview } from '@/api/inference-types';
 import type { SchemaDocument } from './document';
@@ -89,6 +90,8 @@ describe('Source preview of a Parquet file', () => {
       screen.getByLabelText('Sample file for approved.suppliers'),
       new File(['PAR1'], 'suppliers.parquet'),
     );
-    expect(await screen.findByRole('alert')).toHaveTextContent(/read by Keeper/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      messages.modelerEditors.source.preview.parquetNotRead,
+    );
   });
 });

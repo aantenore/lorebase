@@ -12,15 +12,14 @@ import { IssuesList } from './issues-list';
 import { ProposalToolbar } from './proposal-toolbar';
 import { ProposalTree } from './proposal-tree';
 import { useProposalDraft } from './use-proposal-draft';
+import { common as commonMessages } from '@/messages/common';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 // CodeMirror loads when the preview first shows, as in the schema editor.
 const YamlEditor = lazy(() => import('@/features/modeler/yaml-editor'));
 
-const APPLY_LABELS = {
-  save: 'Apply as schema change',
-  propose: 'Apply as schema change and open a Proposal',
-};
-const MESSAGE = 'Add the schema inferred from data';
+const APPLY_LABELS = inferenceMessages.review.applyLabels;
+const MESSAGE = inferenceMessages.review.defaultMessage;
 
 export interface ReviewStepProps {
   proposal: SchemaProposalDraft;
@@ -41,37 +40,38 @@ export function ReviewStep({ proposal, base, onRestart }: ReviewStepProps) {
     blocked: checkBlocked,
   } = useChangeCheck(draft.changes, document, draft.issues.length === 0);
 
-  const blocked = draft.issues.length > 0 ? 'Fix the schema problems first.' : checkBlocked;
+  const blocked = draft.issues.length > 0 ? inferenceMessages.review.blocked : checkBlocked;
   const problems = [...draft.issues, ...remote];
 
   return (
     <DraftProvider value={{ draft, threshold: percent / 100 }}>
       <div className="flex flex-col gap-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-muted">
-            Nothing is saved yet. Rename, change types, accept or drop; the YAML follows.
-          </p>
-          <Button onClick={onRestart}>Start over</Button>
+          <p className="text-sm text-muted">{inferenceMessages.review.notSaved}</p>
+          <Button onClick={onRestart}>{inferenceMessages.review.startOver}</Button>
         </div>
 
         <ProposalToolbar percent={percent} onPercent={setPercent} tables={proposal.tables} />
 
         <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <Section title="Proposed schema" className="mb-0 min-w-0">
+          <Section title={inferenceMessages.review.proposedSchema} className="mb-0 min-w-0">
             <ProposalTree />
           </Section>
-          <Section title="YAML preview" className="mb-0 min-w-0 xl:sticky xl:top-4">
+          <Section
+            title={inferenceMessages.review.yamlPreview}
+            className="mb-0 min-w-0 xl:sticky xl:top-4"
+          >
             <Suspense
               fallback={
                 <p role="status" className="text-muted">
-                  Loading editor...
+                  {commonMessages.loading}
                 </p>
               }
             >
               <YamlEditor
                 value={draft.yaml}
                 onChange={() => undefined}
-                label="Proposal YAML"
+                label={inferenceMessages.review.yamlLabel}
                 jump={null}
                 readOnly
                 className="h-[32rem]"

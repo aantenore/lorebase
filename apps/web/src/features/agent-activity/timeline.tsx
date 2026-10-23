@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import type { TraceStep } from '@/api/types';
+import { agentActivity as agentActivityMessages } from '@/messages/agent-activity';
 import { Badge, type BadgeTone } from '@/ui/layout';
 import { cn } from '@/ui/cn';
 import { ProposalLink } from './proposal-link';
@@ -27,17 +28,17 @@ function Budget({ budget }: { budget: BudgetView }) {
   const percent = Math.round(budgetShare(budget) * 100);
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span>
-        Budget {budget.usedTokens} / {budget.limitTokens} tokens
-      </span>
+      <span>{agentActivityMessages.timeline.budget(budget.usedTokens, budget.limitTokens)}</span>
       <span aria-hidden="true" className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-2">
         <span
           className={cn('block h-full', budget.overBudget ? 'bg-danger' : 'bg-accent')}
           style={{ width: `${percent.toString()}%` }}
         />
       </span>
-      {budget.overBudget && <Badge tone="danger">over budget</Badge>}
-      {budget.capped && <Badge tone="warning">capped</Badge>}
+      {budget.overBudget && (
+        <Badge tone="danger">{agentActivityMessages.timeline.overBudget}</Badge>
+      )}
+      {budget.capped && <Badge tone="warning">{agentActivityMessages.timeline.capped}</Badge>}
     </div>
   );
 }
@@ -70,24 +71,27 @@ function CallBody({ step, domain }: { step: TraceStep; domain: string }) {
         {step.latency_ms != null && (
           <span className="text-xs text-muted">{step.latency_ms} ms</span>
         )}
-        {step.cache != null && <Badge>cache {step.cache}</Badge>}
+        {step.cache != null && <Badge>{agentActivityMessages.timeline.cache(step.cache)}</Badge>}
         {step.branch != null && <Badge>{step.branch}</Badge>}
         {result.mode !== null && <Badge>{result.mode}</Badge>}
       </div>
       {(counts !== '' || refs.records.length > 0 || refs.links.length > 0) && (
         <p className="text-xs text-muted">
-          {counts !== '' && <>Result: {counts}. </>}
+          {counts !== '' && <>{agentActivityMessages.timeline.result(counts)}</>}
           {(refs.records.length > 0 || refs.links.length > 0) && (
             <>
-              Touched {refs.records.length} Records and {refs.links.length} Links
-              {touched ? ' (more than listed)' : ''}.
+              {agentActivityMessages.timeline.touched(
+                refs.records.length,
+                refs.links.length,
+                touched,
+              )}
             </>
           )}
         </p>
       )}
       {result.corrections.length > 0 && (
         <p className="text-xs">
-          Corrections:{' '}
+          {agentActivityMessages.timeline.corrections}{' '}
           {result.corrections.map((c, index) => (
             <span key={c.word}>
               {index > 0 && '; '}
@@ -99,16 +103,22 @@ function CallBody({ step, domain }: { step: TraceStep; domain: string }) {
       {result.budget !== null && <Budget budget={result.budget} />}
       {(result.truncated || result.hasMore) && (
         <p className="text-xs text-warning">
-          {result.truncated ? 'The answer was cut short.' : 'There was more to read.'}
+          {result.truncated
+            ? agentActivityMessages.timeline.cutShort
+            : agentActivityMessages.timeline.hasMore}
         </p>
       )}
-      {query !== null && <Json label="Query" value={query} />}
+      {query !== null && <Json label={agentActivityMessages.timeline.query} value={query} />}
       {step.explain != null && Object.keys(step.explain).length > 0 && (
-        <Json label="Plan" value={JSON.stringify(step.explain, null, 2)} />
+        <Json
+          label={agentActivityMessages.timeline.plan}
+          value={JSON.stringify(step.explain, null, 2)}
+        />
       )}
       {step.proposal_id != null && (
         <p className="text-sm">
-          Opened <ProposalLink domain={step.domain_id ?? domain} proposal={step.proposal_id} />
+          {agentActivityMessages.timeline.opened}{' '}
+          <ProposalLink domain={step.domain_id ?? domain} proposal={step.proposal_id} />
         </p>
       )}
     </div>
@@ -139,7 +149,7 @@ function StepCard({
           to="/$domain/agent-activity"
           params={{ domain }}
           search={(previous) => ({ ...previous, step: step.step })}
-          aria-label={`Show step ${step.step.toString()} on the Canvas`}
+          aria-label={agentActivityMessages.timeline.showStep(step.step)}
           className="font-mono text-xs font-semibold text-accent hover:underline"
         >
           #{step.step}
@@ -147,16 +157,15 @@ function StepCard({
         <span className="text-xs text-muted">{clockTime(step.at)}</span>
         <Badge tone={step.type === 'note' ? 'warning' : 'neutral'}>{step.type}</Badge>
         {step.type === 'note' && agentStep(step) !== null && (
-          <span className="text-xs text-muted">agent step {agentStep(step)}</span>
+          <span className="text-xs text-muted">
+            {agentActivityMessages.timeline.agentStep(agentStep(step) ?? 0)}
+          </span>
         )}
         {step.domain_id != null && <span className="text-xs text-muted">{step.domain_id}</span>}
         <span className="text-xs text-muted">{step.actor}</span>
       </div>
       {step.withheld === true && (
-        <p className="mt-1 text-xs text-muted">
-          Query, corrections and note text of this step are withheld: they may hold values you would
-          see masked.
-        </p>
+        <p className="mt-1 text-xs text-muted">{agentActivityMessages.timeline.withheld}</p>
       )}
       {step.type === 'note' ? (
         // The note is the agent's own text: shown as text, never parsed as markup.
@@ -179,7 +188,7 @@ export function Timeline({
   current: number;
 }) {
   return (
-    <ol aria-label="Session timeline" className="flex flex-col gap-2">
+    <ol aria-label={agentActivityMessages.timeline.label} className="flex flex-col gap-2">
       {steps.map((step) => (
         <StepCard key={step.step} step={step} domain={domain} current={step.step === current} />
       ))}

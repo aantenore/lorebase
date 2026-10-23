@@ -22,7 +22,7 @@ from lorebase_core.model.derivation import (
     PathDerivation,
     PathStep,
 )
-from lorebase_core.model.domain import Domain, DomainSlug
+from lorebase_core.model.domain import Domain, DomainExample, DomainSlug
 from lorebase_core.model.ids import (
     AttributeId,
     DerivationId,
@@ -153,6 +153,7 @@ __all__ = [
     "DerivationDefinition",
     "DerivationId",
     "Domain",
+    "DomainExample",
     "DomainSlug",
     "ElementStatus",
     "Expression",

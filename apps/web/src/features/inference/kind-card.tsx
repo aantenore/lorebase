@@ -8,6 +8,7 @@ import { ConfidenceBadge, EvidenceDetails } from './confidence-badge';
 import { useDraftView } from './draft-context';
 import { DecisionButtons, NameInput } from './name-input';
 import { idOf } from './proposal-model';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 export interface KindCardProps {
   name: string;
@@ -30,19 +31,22 @@ export function KindCard({ name, kind, open, onToggle }: KindCardProps) {
   const decision = draft.decisions[id];
 
   return (
-    <section aria-label={`Kind ${name}`} className="rounded-md border border-line bg-surface">
+    <section
+      aria-label={inferenceMessages.kind.section(name)}
+      className="rounded-md border border-line bg-surface"
+    >
       <div className="flex flex-wrap items-start gap-3 p-3">
         <Button
           size="sm"
           aria-expanded={open}
-          aria-label={`${open ? 'Collapse' : 'Expand'} Kind ${name}`}
+          aria-label={inferenceMessages.kind.toggle(open, name)}
           onClick={onToggle}
         >
-          {open ? 'Hide' : 'Show'}
+          {open ? inferenceMessages.kind.hide : inferenceMessages.kind.show}
         </Button>
         <div className="w-56">
           <NameInput
-            label={`Name of Kind ${name}`}
+            label={inferenceMessages.kind.nameOf(name)}
             value={name}
             taken={Object.keys(draft.document.kinds ?? {})}
             error={errorAt(draft.issues, `kinds/${name}`)}
@@ -55,14 +59,14 @@ export function KindCard({ name, kind, open, onToggle }: KindCardProps) {
         </div>
         <ConfidenceBadge evidence={evidence} threshold={threshold} />
         {draft.shared.kinds.has(name) && (
-          <Badge tone="warning">on {scope.branch}: Attributes merge in</Badge>
+          <Badge tone="warning">{inferenceMessages.kind.merges(scope.branch)}</Badge>
         )}
         <span className="text-xs text-muted">
-          {Object.keys(attributes).length} Attributes, {accepted} accepted
+          {inferenceMessages.kind.count(Object.keys(attributes).length, accepted)}
         </span>
         <div className="ml-auto">
           <DecisionButtons
-            what={`Kind ${name}`}
+            what={inferenceMessages.kind.decisionTarget(name)}
             decision={decision}
             onDecide={(value) => {
               draft.decideKindElement(name, value);
@@ -73,13 +77,13 @@ export function KindCard({ name, kind, open, onToggle }: KindCardProps) {
       {open && (
         <div className="flex flex-col gap-3 border-t border-line p-3">
           <div className="flex flex-wrap items-baseline gap-x-3 text-sm">
-            <span className="font-medium">Primary key</span>
+            <span className="font-medium">{inferenceMessages.kind.primaryKey}</span>
             {key.length > 0 ? (
               <code className="font-mono text-xs">{key.join(', ')}</code>
             ) : (
-              <span className="text-muted">none: Records get minted keys</span>
+              <span className="text-muted">{inferenceMessages.kind.noKey}</span>
             )}
-            <EvidenceDetails evidence={evidence} label="Key evidence" />
+            <EvidenceDetails evidence={evidence} label={inferenceMessages.kind.keyEvidence} />
           </div>
           <AttributesTable owner={{ type: 'kind', name }} attributes={attributes} keyNames={key} />
         </div>

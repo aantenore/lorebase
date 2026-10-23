@@ -2,14 +2,17 @@ import { useMemo, useState } from 'react';
 import { useAuditLog } from '@/api/queries';
 import { useScope } from '@/app/scope';
 import { useConfig } from '@/config/context';
+import { admin as adminMessages } from '@/messages/admin';
+import { common as commonMessages } from '@/messages/common';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { EmptyState, QueryBoundary, Section } from '@/ui/layout';
+import { EmptyState, FormAction, FormRow, QueryBoundary, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
 import { distinct, filterAudit, NO_FILTER, type AuditFilter } from './audit-filter';
 import { usePrincipalNames } from './principal-names';
 
+const T = adminMessages.audit;
 const HASH_SHOWN = 12;
 
 /** Audit log of the Domain, newest first, with filters over the entries loaded so far. */
@@ -31,17 +34,13 @@ export function AuditPanel() {
   ];
 
   return (
-    <Section title={`Audit log of ${scope.domainInfo.display_name}`}>
-      <p className="mb-3 text-sm text-muted">
-        Keeper pages the log and filters nothing, so the filters apply to the {loaded.length}{' '}
-        entries loaded so far.
-      </p>
-      <div className="mb-3 flex flex-wrap items-end gap-3">
+    <Section title={T.title} description={T.loadedNote(loaded.length)}>
+      <FormRow className="mb-3">
         <div className="w-48">
           <Select
-            label="Actor"
+            label={T.actor}
             value={filter.actor}
-            options={menu(distinct(loaded, 'actor'), 'All actors')}
+            options={menu(distinct(loaded, 'actor'), T.allActors)}
             onChange={(event) => {
               set({ actor: event.target.value });
             }}
@@ -49,9 +48,9 @@ export function AuditPanel() {
         </div>
         <div className="w-56">
           <Select
-            label="Action"
+            label={T.action}
             value={filter.action}
-            options={menu(distinct(loaded, 'action'), 'All actions')}
+            options={menu(distinct(loaded, 'action'), T.allActions)}
             onChange={(event) => {
               set({ action: event.target.value });
             }}
@@ -59,43 +58,41 @@ export function AuditPanel() {
         </div>
         <div className="w-64">
           <Input
-            label="Contains"
+            label={T.contains}
             value={filter.text}
-            placeholder="target, actor or detail"
+            placeholder={T.containsPlaceholder}
             onChange={(event) => {
               set({ text: event.target.value });
             }}
           />
         </div>
-        <Button
-          disabled={Object.values(filter).every((value) => value === '')}
-          onClick={() => {
-            setFilter(NO_FILTER);
-          }}
-        >
-          Clear filters
-        </Button>
-      </div>
+        <FormAction>
+          <Button
+            disabled={Object.values(filter).every((value) => value === '')}
+            onClick={() => {
+              setFilter(NO_FILTER);
+            }}
+          >
+            {T.clear}
+          </Button>
+        </FormAction>
+      </FormRow>
 
       <QueryBoundary query={log}>
         {() =>
           shown.length === 0 ? (
-            <EmptyState>
-              {loaded.length === 0
-                ? 'The audit log is empty.'
-                : 'No loaded entry matches the filters.'}
-            </EmptyState>
+            <EmptyState>{loaded.length === 0 ? T.empty : T.noMatch}</EmptyState>
           ) : (
-            <Table caption="Audit log">
+            <Table caption={T.caption}>
               <THead>
                 <TR>
-                  <TH>Seq</TH>
-                  <TH>Time</TH>
-                  <TH>Actor</TH>
-                  <TH>Action</TH>
-                  <TH>Target</TH>
-                  <TH>Details</TH>
-                  <TH>Hash</TH>
+                  <TH>{T.columns.seq}</TH>
+                  <TH>{T.columns.time}</TH>
+                  <TH>{T.columns.actor}</TH>
+                  <TH>{T.columns.action}</TH>
+                  <TH>{T.columns.target}</TH>
+                  <TH>{T.columns.details}</TH>
+                  <TH>{T.columns.hash}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -131,7 +128,7 @@ export function AuditPanel() {
               void log.fetchNextPage();
             }}
           >
-            {log.isFetchingNextPage ? 'Loading...' : 'Load older entries'}
+            {log.isFetchingNextPage ? commonMessages.loading : T.loadOlder}
           </Button>
         </div>
       )}

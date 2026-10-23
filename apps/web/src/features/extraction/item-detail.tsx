@@ -2,6 +2,7 @@ import type { ExtractionItem, ItemDecision, ItemEdits } from '@/api/extraction-t
 import { useDocument } from '@/api/queries';
 import type { Schema } from '@/api/types';
 import { useScope } from '@/app/scope';
+import { extraction as extractionMessages } from '@/messages/extraction';
 import { Button } from '@/ui/button';
 import { Badge } from '@/ui/layout';
 import { ConfidenceBar } from './confidence-bar';
@@ -12,19 +13,25 @@ import { MatchBadge } from './match-badge';
 import { MatchPicker } from './match-picker';
 import { percent } from './item-state';
 
+const text = extractionMessages;
+
 function Quote({ item }: { item: ExtractionItem }) {
   const scope = useScope();
   const evidence = item.evidence;
   const document = useDocument(scope.domain, evidence?.document_id ?? '');
-  if (evidence === null) return <p className="text-sm text-muted">This item quotes no evidence.</p>;
+  if (evidence === null) return <p className="text-sm text-muted">{text.detail.noEvidence}</p>;
   return (
     <figure className="flex flex-col gap-1">
       <blockquote className="border-l-2 border-accent pl-3 text-sm whitespace-pre-wrap">
         {evidence.quote}
       </blockquote>
       <figcaption className="text-xs text-muted">
-        {document.data?.filename ?? evidence.document_id}, characters {evidence.start} to{' '}
-        {evidence.end} <EvidenceLink item={item}>Open in document</EvidenceLink>
+        {text.detail.location(
+          document.data?.filename ?? evidence.document_id,
+          evidence.start,
+          evidence.end,
+        )}{' '}
+        <EvidenceLink item={item}>{text.detail.openInDocument}</EvidenceLink>
       </figcaption>
     </figure>
   );
@@ -37,16 +44,19 @@ function MatchDetails({ item }: { item: ExtractionItem }) {
     <div className="flex flex-col gap-1 text-sm">
       <p className="flex flex-wrap items-center gap-2">
         <MatchBadge item={item} />
-        {match.method != null && <span className="text-muted">by {match.method}</span>}
-        {match.score != null && <span className="text-muted">score {percent(match.score)}</span>}
+        {match.method != null && (
+          <span className="text-muted">{text.detail.method(match.method)}</span>
+        )}
+        {match.score != null && (
+          <span className="text-muted">{text.detail.score(percent(match.score))}</span>
+        )}
       </p>
       {match.status === 'new' && (match.missing?.length ?? 0) > 0 && (
-        <p className="text-warning">Missing values: {match.missing?.join(', ')}.</p>
+        <p className="text-warning">{text.detail.missingValues(match.missing?.join(', ') ?? '')}</p>
       )}
       {match.status === 'new' && (match.missing_links?.length ?? 0) > 0 && (
         <p className="text-warning">
-          Needs a {match.missing_links?.join(', ')} Link: accept the Link with this Record, or
-          Keeper refuses the set.
+          {text.detail.missingLinks(match.missing_links?.join(', ') ?? '')}
         </p>
       )}
     </div>
@@ -82,32 +92,27 @@ export function ItemDetail({
   };
   return (
     <section
-      aria-label={`Item ${describeItem(item)}`}
-      className="flex flex-col gap-4 rounded-md border border-line bg-surface p-4"
+      aria-label={text.detail.label(describeItem(item))}
+      className="flex min-w-0 flex-col gap-4 rounded-md border border-line bg-surface p-4"
     >
       <header className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="accent">{item.type}</Badge>
           <Badge tone={DECISION_TONE[item.decision]}>{item.decision}</Badge>
-          {item.tier !== null && (
-            <Badge>
-              tier {item.tier}
-              {item.model === null ? '' : `, ${item.model}`}
-            </Badge>
-          )}
+          {item.tier !== null && <Badge>{text.detail.tier(item.tier, item.model)}</Badge>}
         </div>
         <h3 className="text-sm font-semibold break-words">{describeItem(item)}</h3>
         <ConfidenceBar confidence={item.confidence} threshold={threshold} />
         {item.decided_by !== null && (
           <p className="text-xs text-muted">
-            {item.decision} by {item.decided_by}
+            {text.detail.decidedBy(item.decision, item.decided_by)}
           </p>
         )}
       </header>
 
       {item.not_applied !== null && (
         <p role="alert" className="rounded-md border border-warning p-2 text-sm text-warning">
-          Accepted, but not on the branch: {item.not_applied}
+          {text.detail.notApplied(item.not_applied)}
         </p>
       )}
 
@@ -117,9 +122,9 @@ export function ItemDetail({
 
       {item.type === 'value' && (
         <p className="text-sm">
-          <span className="text-muted">Current:</span>{' '}
+          <span className="text-muted">{text.detail.current}</span>{' '}
           <code className="font-mono">{JSON.stringify(item.current)}</code>{' '}
-          <span className="text-muted">Proposed:</span>{' '}
+          <span className="text-muted">{text.detail.proposed}</span>{' '}
           <code className="font-mono">{JSON.stringify(item.value)}</code>
         </p>
       )}
@@ -141,7 +146,7 @@ export function ItemDetail({
               onDecide('accepted');
             }}
           >
-            Accept
+            {text.accept}
           </Button>
           <Button
             disabled={item.decision === 'rejected'}
@@ -149,7 +154,7 @@ export function ItemDetail({
               onDecide('rejected');
             }}
           >
-            Reject
+            {text.reject}
           </Button>
           <Button
             variant="ghost"
@@ -158,7 +163,7 @@ export function ItemDetail({
               onDecide('pending');
             }}
           >
-            Back to pending
+            {text.backToPending}
           </Button>
         </div>
       )}

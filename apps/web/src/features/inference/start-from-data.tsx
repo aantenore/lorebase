@@ -7,9 +7,10 @@ import type { Schema } from '@/api/types';
 import { useScope } from '@/app/scope';
 import { ReviewStep } from './review-step';
 import { SourceStep } from './source-step';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 /**
- * "Start from data" (design 9.1, 12.3): infer a schema from data files or a Postgres source,
+ * "Start from data": infer a schema from data files or a Postgres source,
  * review and edit the proposal, and apply it as a schema change on a Branch. A protected
  * Branch takes it through a new Branch and a Proposal, the same path as the schema editor.
  */
@@ -51,5 +52,5 @@ export function StartFromData({ base }: { base: Schema }) {
 }
 
 function describe(error: Error): string {
-  return isApiError(error) ? error.message : 'The inference request failed.';
+  return isApiError(error) ? error.message : inferenceMessages.source.failed;
 }

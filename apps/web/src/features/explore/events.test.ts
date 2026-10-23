@@ -1,6 +1,6 @@
 import { compactArgs, parseExploreEvent, safeCitation } from './events';
 import { GuideError, liveTransport, parseRetryAfter } from './explore-client';
-import { scriptedEvents } from './mock-guide';
+import { scriptedEvents } from '@/api/mock/explore';
 
 describe('citations', () => {
   it('accepts a Kind name, a plain key and a matching ref', () => {

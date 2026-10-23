@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { Kind, TraceStep } from '@/api/types';
 import { LazyGraphCanvas } from '@/features/canvas/lazy-graph-canvas';
+import { agentActivity as agentActivityMessages } from '@/messages/agent-activity';
 import { EmptyState } from '@/ui/layout';
 import { traceGraph } from './trace-graph';
 
@@ -29,35 +30,43 @@ export function TraceCanvas({
   return (
     <div className="flex flex-col gap-2">
       <label className="flex items-center gap-3 text-sm">
-        <span className="font-medium">Step</span>
+        <span className="font-medium">{agentActivityMessages.canvas.step}</span>
         <input
           type="range"
           min={first}
           max={last}
           step={1}
           value={selected}
-          aria-label="Step"
-          aria-valuetext={`Step ${selected.toString()} of ${last.toString()}`}
+          aria-label={agentActivityMessages.canvas.step}
+          aria-valuetext={agentActivityMessages.canvas.valueText(selected, last)}
           onChange={(event) => {
             onSelect(Number(event.target.value));
           }}
           className="flex-1"
         />
         <span className="w-20 text-right text-muted">
-          {selected} of {last}
+          {agentActivityMessages.canvas.position(selected, last)}
         </span>
       </label>
       {data.nodes.length === 0 ? (
-        <EmptyState>No Records were touched up to this step.</EmptyState>
+        <EmptyState>{agentActivityMessages.canvas.empty}</EmptyState>
       ) : (
-        <LazyGraphCanvas data={data} label="Records touched" highlight={highlight} />
+        <LazyGraphCanvas
+          data={data}
+          label={agentActivityMessages.canvas.label}
+          highlight={highlight}
+        />
       )}
       <p className="text-xs text-muted">
-        {data.nodes.length} Records and {data.edges.length} Links touched in steps {first} to{' '}
-        {selected}
+        {agentActivityMessages.canvas.summary(
+          data.nodes.length,
+          data.edges.length,
+          first,
+          selected,
+        )}
         {highlight === undefined
           ? '.'
-          : `; ${[...highlight.nodes].length.toString()} by step ${selected.toString()}.`}
+          : agentActivityMessages.canvas.byStep([...highlight.nodes].length, selected)}
       </p>
     </div>
   );

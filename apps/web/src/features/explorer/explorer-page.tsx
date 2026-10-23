@@ -5,15 +5,18 @@ import type { Schema } from '@/api/types';
 import { RecordLink } from '@/app/record-link';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { useConfig } from '@/config/context';
-import { PlannedScreens } from '@/features/planned-screens';
+import { common as commonMessages } from '@/messages/common';
+import { explorer as explorerMessages } from '@/messages/explorer';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { Badge, EmptyState, PageHeader, QueryBoundary } from '@/ui/layout';
+import { Badge, EmptyState, FormAction, FormRow, PageHeader, QueryBoundary } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { DomainHome } from './domain-home';
 import { RecordsTable } from './records-table';
 
 const ALL_KINDS = '';
+
+const t = explorerMessages;
 
 function SearchForm({ schema, q, kind }: { schema: Schema; q: string; kind: string }) {
   const navigate = useNavigate();
@@ -37,31 +40,35 @@ function SearchForm({ schema, q, kind }: { schema: Schema; q: string; kind: stri
   };
 
   return (
-    <form onSubmit={submit} role="search" className="mb-6 flex flex-wrap items-end gap-3">
-      <Input
-        label="Search Records"
-        className="w-72"
-        value={draft}
-        placeholder="Name, code or text"
-        onChange={(event) => {
-          setDraft(event.target.value);
-        }}
-      />
-      <Select
-        label="Kind"
-        className="w-48"
-        value={kind}
-        options={[
-          { value: ALL_KINDS, label: 'All Kinds' },
-          ...schema.kinds.map((k) => ({ value: k.api_name, label: k.display_name })),
-        ]}
-        onChange={(event) => {
-          go(draft, event.target.value);
-        }}
-      />
-      <Button type="submit" variant="primary">
-        Search
-      </Button>
+    <form onSubmit={submit} role="search" className="mb-6">
+      <FormRow>
+        <Input
+          label={t.search.label}
+          className="w-full sm:w-72"
+          value={draft}
+          placeholder={t.search.placeholder}
+          onChange={(event) => {
+            setDraft(event.target.value);
+          }}
+        />
+        <Select
+          label={t.search.kind}
+          className="w-full sm:w-48"
+          value={kind}
+          options={[
+            { value: ALL_KINDS, label: commonMessages.allKinds },
+            ...schema.kinds.map((k) => ({ value: k.api_name, label: k.display_name })),
+          ]}
+          onChange={(event) => {
+            go(draft, event.target.value);
+          }}
+        />
+        <FormAction>
+          <Button type="submit" variant="primary">
+            {commonMessages.search}
+          </Button>
+        </FormAction>
+      </FormRow>
     </form>
   );
 }
@@ -79,14 +86,14 @@ function SearchResults({ q, kind }: { q: string; kind: string }) {
     <QueryBoundary query={results}>
       {(data) =>
         data.results.length === 0 ? (
-          <EmptyState>No Records match "{q}".</EmptyState>
+          <EmptyState>{t.search.noMatches(q)}</EmptyState>
         ) : (
-          <Table caption="Search results">
+          <Table caption={t.search.resultsCaption}>
             <THead>
               <TR>
-                <TH>Record</TH>
-                <TH>Kind</TH>
-                <TH>Match</TH>
+                <TH>{t.search.columnRecord}</TH>
+                <TH>{t.search.columnKind}</TH>
+                <TH>{t.search.columnMatch}</TH>
               </TR>
             </THead>
             <TBody>
@@ -117,13 +124,12 @@ function KindRecords({ schema, kind }: { schema: Schema; kind: string }) {
   const records = useRecords(scope, kind, { limit: config.pageSize });
   const definition = schema.kinds.find((k) => k.api_name === kind);
 
-  if (definition === undefined)
-    return <EmptyState>Kind {kind} does not exist on this Branch.</EmptyState>;
+  if (definition === undefined) return <EmptyState>{t.kind.missing(kind)}</EmptyState>;
   return (
     <QueryBoundary query={records}>
       {(page) =>
         page.rows.length === 0 ? (
-          <EmptyState>No {kind} Records.</EmptyState>
+          <EmptyState>{t.kind.noRecords(kind)}</EmptyState>
         ) : (
           <RecordsTable domain={scope.domain} kind={definition} rows={page.rows} />
         )
@@ -139,10 +145,7 @@ export function ExplorerPage({ q, kind }: { q: string | undefined; kind: string 
 
   return (
     <>
-      <PageHeader
-        title="Explorer"
-        description={`Search and browse Records of ${scope.domainInfo.display_name} on ${scope.branch}.`}
-      />
+      <PageHeader title={t.title} description={t.description} docs={t.docs} />
       <QueryBoundary query={schema}>
         {(data) => (
           <>
@@ -157,10 +160,6 @@ export function ExplorerPage({ q, kind }: { q: string | undefined; kind: string 
           </>
         )}
       </QueryBoundary>
-      <PlannedScreens
-        area="Explorer"
-        built={['Domain home', 'Search results', 'Kind table', 'Record page']}
-      />
     </>
   );
 }

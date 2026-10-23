@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useKeeperApi } from '@/api/provider';
+import { common as commonMessages } from '@/messages/common';
+import { shell as shellMessages } from '@/messages/shell';
 import { Button } from '@/ui/button';
 import { Dialog } from '@/ui/dialog';
 import { Input } from '@/ui/field';
@@ -31,10 +33,7 @@ export function NewBranch({ domain, from, defaultBranch }: NewBranchProps) {
         ...(from === undefined ? {} : { source: from }),
       }),
     onSuccess: async (branch) => {
-      toast.notify(
-        `Branch ${branch.name} created from ${from ?? 'the default Branch'}.`,
-        'success',
-      );
+      toast.notify(shellMessages.newBranch.created(branch.name, from), 'success');
       setOpen(false);
       setName('');
       await queryClient.invalidateQueries({ queryKey: ['keeper'] });
@@ -51,19 +50,19 @@ export function NewBranch({ domain, from, defaultBranch }: NewBranchProps) {
   return (
     <>
       <Button
-        size="sm"
+        className="whitespace-nowrap"
         onClick={() => {
           setOpen(true);
         }}
       >
-        New Branch
+        {shellMessages.newBranch.open}
       </Button>
       <Dialog
         open={open}
         onClose={() => {
           setOpen(false);
         }}
-        title="New Branch"
+        title={shellMessages.newBranch.title}
       >
         <form
           className="flex flex-col gap-3"
@@ -72,12 +71,10 @@ export function NewBranch({ domain, from, defaultBranch }: NewBranchProps) {
             if (name.trim() !== '') create.mutate();
           }}
         >
-          <p className="text-sm text-muted">
-            The Branch starts at the head of {from ?? 'the default Branch'}. Names may contain
-            slashes, for example model/risk.
-          </p>
+          <p className="text-sm text-muted">{shellMessages.newBranch.startsAt(from)}</p>
           <Input
-            label="Branch name"
+            label={shellMessages.newBranch.name}
+            hint={shellMessages.newBranch.nameHint}
             value={name}
             onChange={(event) => {
               setName(event.target.value);
@@ -90,14 +87,14 @@ export function NewBranch({ domain, from, defaultBranch }: NewBranchProps) {
                 setOpen(false);
               }}
             >
-              Cancel
+              {commonMessages.cancel}
             </Button>
             <Button
               type="submit"
               variant="primary"
               disabled={name.trim() === '' || create.isPending}
             >
-              Create Branch
+              {shellMessages.newBranch.create}
             </Button>
           </div>
         </form>

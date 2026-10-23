@@ -37,16 +37,6 @@ describe('Settings', () => {
     expect(document.documentElement).not.toHaveAttribute('data-theme');
   });
 
-  it('lists History and the Domain settings editor as planned; Admin and Sources are built', async () => {
-    renderApp('/supply/settings');
-    expect(
-      await screen.findByRole('region', { name: 'History: Log and compare' }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Admin: Domain settings' })).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Admin: Audit log' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: /^Sources:/ })).not.toBeInTheDocument();
-  });
-
   it('says in mock mode that no Keeper and token are used, and who the mock user is', async () => {
     renderApp('/supply/settings');
     const connection = await screen.findByRole('table', { name: 'Connection' });
@@ -96,7 +86,7 @@ describe('Settings', () => {
       },
     };
     renderApp('/supply/settings', liveConfig(), refusing);
-    expect(await screen.findByText(/Keeper did not identify the caller/)).toHaveTextContent(
+    expect(await screen.findByText(/The server did not identify you/)).toHaveTextContent(
       'No credential. Set the API token in Settings.',
     );
   });

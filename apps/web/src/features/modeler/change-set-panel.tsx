@@ -6,6 +6,7 @@ import type { Schema, SchemaChange, SchemaChangeResult } from '@/api/types';
 import { useScope } from '@/app/scope';
 import { useConfig } from '@/config/context';
 import { buildNames } from '@/features/review/conflict-meta';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import type { SchemaDocument } from './document';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
@@ -25,7 +26,8 @@ export function describeChange(change: SchemaChange, names: ReadonlyMap<string, 
   const target =
     change.target === undefined ? undefined : (names.get(change.target) ?? change.target);
   const owner = change.arguments['owner'];
-  const place = typeof owner === 'string' ? ` in ${names.get(owner) ?? owner}` : '';
+  const place =
+    typeof owner === 'string' ? modelerMessages.changeSet.place(names.get(owner) ?? owner) : '';
   const set = change.arguments['set'];
   const fields =
     verb === 'update' && typeof set === 'object' && set !== null
@@ -50,20 +52,21 @@ export interface ChangeSetPanelProps {
   actionLabels?: { save: string; propose: string };
 }
 
-const DEFAULT_MESSAGE = 'Change the schema';
-const DEFAULT_LABELS = { save: 'Save change set', propose: 'Open Proposal' };
+const t = modelerMessages.changeSet;
+const DEFAULT_MESSAGE = t.defaultMessage;
+const DEFAULT_LABELS = { save: t.save, propose: t.propose };
 
 function Migrations({ result }: { result: SchemaChangeResult }) {
   if (result.migrations.length === 0) {
-    return <p className="text-sm text-muted">No data migrations.</p>;
+    return <p className="text-sm text-muted">{t.migrationsNone}</p>;
   }
   return (
-    <Table caption="Data migrations">
+    <Table caption={t.migrationsTitle}>
       <THead>
         <TR>
-          <TH>Migration</TH>
-          <TH>Values</TH>
-          <TH>Failing</TH>
+          <TH>{t.migration}</TH>
+          <TH>{t.values}</TH>
+          <TH>{t.failing}</TH>
         </TR>
       </THead>
       <TBody>
@@ -127,8 +130,8 @@ export function ChangeSetPanel({
         message: revisionMessage,
       }),
     onSuccess: (result) => {
-      if (result.valid) toast.notify(`Schema change set saved on ${scope.branch}.`, 'success');
-      else toast.notify('The Branch refused the change set.', 'error');
+      if (result.valid) toast.notify(t.saved, 'success');
+      else toast.notify(t.refused, 'error');
       return refresh();
     },
   });
@@ -141,7 +144,7 @@ export function ChangeSetPanel({
         document,
         message: revisionMessage,
       });
-      if (!result.valid) throw new Error('The Branch refused the change set.');
+      if (!result.valid) throw new Error(t.refused);
       return api.proposals.create(scope.domain, {
         source_ref: proposedBranch,
         target_ref: scope.branch,
@@ -149,7 +152,7 @@ export function ChangeSetPanel({
       });
     },
     onSuccess: async (proposal) => {
-      toast.notify(`Proposal #${proposal.id} opened from ${proposedBranch}.`, 'success');
+      toast.notify(t.proposalOpened(proposal.id), 'success');
       await refresh();
       await navigate({
         to: '/$domain/review/$proposal',
@@ -163,13 +166,12 @@ export function ChangeSetPanel({
   const disabled = blocked !== null || changes.length === 0 || working;
 
   return (
-    <section aria-label="Change set" className="flex flex-col gap-3">
+    <section aria-label={t.label} className="flex flex-col gap-3">
       <h3 className="text-sm font-semibold">
-        Change set{' '}
-        <Badge tone={changes.length === 0 ? 'neutral' : 'accent'}>{changes.length}</Badge>
+        {t.label} <Badge tone={changes.length === 0 ? 'neutral' : 'accent'}>{changes.length}</Badge>
       </h3>
       {changes.length === 0 ? (
-        <EmptyState>No pending schema changes on {scope.branch}.</EmptyState>
+        <EmptyState>{t.empty}</EmptyState>
       ) : (
         <>
           <ul className="list-disc pl-5 text-sm">
@@ -179,19 +181,19 @@ export function ChangeSetPanel({
               </li>
             ))}
           </ul>
-          <Section title="Data migrations">
+          <Section title={t.migrationsTitle}>
             {check.pending ? (
               <p role="status" className="text-sm text-muted">
-                Checking against {scope.branch}...
+                {t.migrationsChecking}
               </p>
             ) : check.result === undefined ? (
-              <p className="text-sm text-muted">Fix the validation issues to see the migrations.</p>
+              <p className="text-sm text-muted">{t.migrationsBlocked}</p>
             ) : (
               <Migrations result={check.result} />
             )}
           </Section>
           <Input
-            label="Revision message"
+            label={t.revisionMessage}
             value={message}
             placeholder={defaultMessage}
             onChange={(event) => {
@@ -200,11 +202,9 @@ export function ChangeSetPanel({
           />
           {protectedBranch && (
             <>
-              <p className="text-sm text-muted">
-                {scope.branch} is protected: the change set goes to a new Branch and a Proposal.
-              </p>
+              <p className="text-sm text-muted">{t.protectedNotice}</p>
               <Input
-                label="Branch for the change set"
+                label={t.branchName}
                 value={branchName}
                 placeholder={proposedBranch}
                 onChange={(event) => {

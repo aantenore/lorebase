@@ -3,7 +3,7 @@ import { useConfig } from '@/config/context';
 import type { GuideAuth } from '@/features/retrieval-lab/guide-client';
 import type { ExploreTransport } from './explore-client';
 import { liveTransport } from './explore-client';
-import { mockTransport } from './mock-guide';
+import { mockTransport } from '@/api/mock/explore';
 
 /**
  * The caller's credential for Guide, read when a request is made: in session mode the session

@@ -7,6 +7,7 @@ import { Input } from '@/ui/field';
 import { Badge } from '@/ui/layout';
 import type { TypeDocument } from './document';
 import { asText, isRecord, typeLabel } from './form-helpers';
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
 
 /** A parameter value as typed: numbers and booleans for those types, text otherwise. */
 export function parameterValue(type: string, text: string): unknown {
@@ -29,6 +30,8 @@ export function parameterValue(type: string, text: string): unknown {
  * Dry run of a saved Operation on the current Branch (`dry_run: true`): the edits it would
  * make and the violations it would hit. Nothing is committed.
  */
+const t = modelerEditorsMessages.operation.dryRun;
+
 export function OperationDryRun({ name, parameters }: { name: string; parameters: unknown[] }) {
   const api = useKeeperApi();
   const scope = useScope();
@@ -50,17 +53,14 @@ export function OperationDryRun({ name, parameters }: { name: string; parameters
       }),
   });
   return (
-    <div className="flex flex-col gap-3" role="group" aria-label={`Dry run of ${name}`}>
-      <p className="text-xs text-muted">
-        Runs the saved version of {name} on {scope.branch} without committing. Record references are
-        keys; lists and JSON are written as JSON.
-      </p>
+    <div className="flex flex-col gap-3" role="group" aria-label={t.group(name)}>
+      <p className="text-xs text-muted">{t.intro}</p>
       {typed.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2">
           {typed.map((parameter) => (
             <Input
               key={parameter.name}
-              label={`Dry run value of ${parameter.name}`}
+              label={t.value(parameter.name)}
               hint={parameter.type}
               value={values[parameter.name] ?? ''}
               onChange={(event) => {
@@ -78,7 +78,7 @@ export function OperationDryRun({ name, parameters }: { name: string; parameters
             run.mutate();
           }}
         >
-          Dry run on {scope.branch}
+          {t.run}
         </Button>
       </div>
       {run.isError && (
@@ -92,7 +92,7 @@ export function OperationDryRun({ name, parameters }: { name: string; parameters
             <Badge tone={run.data.violations.length === 0 ? 'success' : 'danger'}>
               {run.data.status}
             </Badge>{' '}
-            {run.data.edits.length} edits, {run.data.violations.length} violations.
+            {t.summary(run.data.edits.length, run.data.violations.length)}
           </p>
           {run.data.edits.length > 0 && (
             <ul className="list-disc pl-5">

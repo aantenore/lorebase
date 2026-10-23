@@ -23,7 +23,7 @@ describe('login route', () => {
 
   it('explains a failure code', async () => {
     renderApp('/login?error=no_account', sessionConfig);
-    expect(await screen.findByText(/no access to Lorebase/)).toBeInTheDocument();
+    expect(await screen.findByText(/no access. Ask an administrator/)).toBeInTheDocument();
   });
 
   it('starts the login at Keeper with the return path', async () => {
@@ -39,7 +39,7 @@ describe('login route', () => {
 
   it('says sign-in is not used outside session mode', async () => {
     renderApp('/login');
-    expect(await screen.findByText(/Sign-in is not used/)).toBeInTheDocument();
+    expect(await screen.findByText(/does not use sign-in/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Lorebase' })).toHaveAttribute('href', '/');
     expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
   });

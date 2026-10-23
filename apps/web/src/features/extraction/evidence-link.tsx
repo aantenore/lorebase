@@ -1,11 +1,12 @@
 import { Link } from '@tanstack/react-router';
 import type { ExtractionItem } from '@/api/extraction-types';
 import { useScope, useScopeSearch } from '@/app/scope';
+import { extraction as extractionMessages } from '@/messages/extraction';
 
 /** Jump from an item to its quote in the document viewer. */
 export function EvidenceLink({
   item,
-  children = 'View in document',
+  children = extractionMessages.evidence.view,
 }: {
   item: ExtractionItem;
   children?: string;

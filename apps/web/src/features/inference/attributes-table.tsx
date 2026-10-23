@@ -15,6 +15,7 @@ import { ConfidenceBadge, EvidenceDetails } from './confidence-badge';
 import { useDraftView } from './draft-context';
 import { DecisionButtons, NameInput } from './name-input';
 import { enumSeed, renameLinkAttribute } from './proposal-model';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 /** Samples shown per Attribute; the evidence carries a few more. */
 const SAMPLES_SHOWN = 3;
@@ -33,15 +34,15 @@ export function AttributesTable({ owner, attributes, keyNames }: AttributesTable
   const section = owner.type === 'kind' ? 'kinds' : 'relations';
 
   return (
-    <Table caption={`Attributes of ${owner.name}`}>
+    <Table caption={inferenceMessages.attributes.caption(owner.name)}>
       <THead>
         <TR>
-          <TH>Attribute</TH>
-          <TH>Type</TH>
-          <TH>Samples</TH>
-          <TH>Confidence</TH>
-          <TH>Evidence</TH>
-          <TH>Decision</TH>
+          <TH>{inferenceMessages.attributes.columns.attribute}</TH>
+          <TH>{inferenceMessages.attributes.columns.type}</TH>
+          <TH>{inferenceMessages.attributes.columns.samples}</TH>
+          <TH>{inferenceMessages.attributes.columns.confidence}</TH>
+          <TH>{inferenceMessages.attributes.columns.evidence}</TH>
+          <TH>{inferenceMessages.attributes.columns.decision}</TH>
         </TR>
       </THead>
       <TBody>
@@ -58,7 +59,7 @@ export function AttributesTable({ owner, attributes, keyNames }: AttributesTable
             <TR key={id} className={cn(decision === 'dropped' && 'opacity-50')}>
               <TD className="min-w-44">
                 <NameInput
-                  label={`Name of ${label}`}
+                  label={inferenceMessages.attributes.nameOf(label)}
                   value={name}
                   taken={Object.keys(attributes)}
                   error={errorAt(draft.issues, path)}
@@ -69,11 +70,11 @@ export function AttributesTable({ owner, attributes, keyNames }: AttributesTable
                     });
                   }}
                 />
-                {isKey && <Badge tone="accent">key</Badge>}
+                {isKey && <Badge tone="accent">{inferenceMessages.attributes.key}</Badge>}
               </TD>
               <TD className="min-w-40">
                 <Select
-                  label={`Type of ${label}`}
+                  label={inferenceMessages.attributes.typeOf(label)}
                   hideLabel
                   value={typeLabel(attribute.type)}
                   error={errorAt(draft.issues, `${path}/type`)}
@@ -114,13 +115,15 @@ export function AttributesTable({ owner, attributes, keyNames }: AttributesTable
                 <DecisionButtons
                   what={label}
                   decision={decision}
-                  lockDrop={isKey ? 'Part of the primary key' : undefined}
+                  lockDrop={isKey ? inferenceMessages.attributes.inKey : undefined}
                   onDecide={(value) => {
                     draft.decideElement(id, value);
                   }}
                 />
                 {leftOut !== undefined && (
-                  <p className="mt-1 text-xs text-warning">Left out: {leftOut}</p>
+                  <p className="mt-1 text-xs text-warning">
+                    {inferenceMessages.decision.leftOut(leftOut)}
+                  </p>
                 )}
               </TD>
             </TR>

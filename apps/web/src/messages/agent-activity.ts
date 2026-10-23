@@ -1,0 +1,65 @@
+/** Strings of the agent activity screens. */
+export const agentActivity = {
+  title: 'Agent activity',
+  description: 'Each agent session step by step, with the Records and Links it touched.',
+  docs: 'agent-trace/',
+  allDomains: 'All Domains',
+  tracingOff: 'Tracing is off. Earlier sessions are still listed.',
+  loadMore: 'Load more',
+  pickSession: 'Pick a session to see its timeline.',
+
+  sessions: {
+    title: 'Sessions',
+    actor: 'Actor',
+    actorPlaceholder: 'svc_agent',
+    filter: 'Filter',
+    thisDomain: 'Only steps in this Domain',
+    empty: 'No agent sessions match.',
+    caption: 'Agent sessions',
+    session: 'Session',
+    lastActivity: 'Last activity',
+    calls: 'Calls',
+    notes: 'Notes',
+    tools: 'Tools',
+    proposals: 'Proposals',
+    noProposals: 'none',
+  },
+
+  timeline: {
+    title: (session: string) => `Session ${session}`,
+    label: 'Session timeline',
+    truncated: 'The session has more steps than are shown.',
+    empty: 'This session has no visible steps.',
+    inferred: 'inferred',
+    inferredNote: 'Grouped heuristically: these calls carried no session id',
+    showStep: (step: number) => `Show step ${step.toString()} on the Canvas`,
+    agentStep: (step: number) => `agent step ${step.toString()}`,
+    withheld: 'Query, corrections and note text of this step are withheld.',
+    budget: (used: number, limit: number) =>
+      `Budget ${used.toString()} / ${limit.toString()} tokens`,
+    overBudget: 'over budget',
+    capped: 'capped',
+    cache: (state: string) => `cache ${state}`,
+    result: (counts: string) => `Result: ${counts}. `,
+    touched: (records: number, links: number, more: boolean) =>
+      `Touched ${records.toString()} Records and ${links.toString()} Links${more ? ' (more than listed)' : ''}.`,
+    corrections: 'Corrections:',
+    cutShort: 'The answer was cut short.',
+    hasMore: 'There was more to read.',
+    query: 'Query',
+    plan: 'Plan',
+    opened: 'Opened',
+    proposal: (id: string) => `Proposal #${id}`,
+  },
+
+  canvas: {
+    step: 'Step',
+    valueText: (step: number, last: number) => `Step ${step.toString()} of ${last.toString()}`,
+    position: (step: number, last: number) => `${step.toString()} of ${last.toString()}`,
+    empty: 'No Records were touched up to this step.',
+    label: 'Records touched',
+    summary: (records: number, links: number, first: number, selected: number) =>
+      `${records.toString()} Records and ${links.toString()} Links touched in steps ${first.toString()} to ${selected.toString()}`,
+    byStep: (count: number, step: number) => `; ${count.toString()} by step ${step.toString()}.`,
+  },
+} as const;

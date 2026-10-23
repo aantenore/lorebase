@@ -1,4 +1,5 @@
 import { lazy, Suspense, useId } from 'react';
+import { modeler as modelerMessages } from '@/messages/modeler';
 import { cn } from '@/ui/cn';
 
 // CodeMirror loads with the first expression field, in the chunk the YAML editor shares.
@@ -35,7 +36,7 @@ export function CelField({
       <Suspense
         fallback={
           <p role="status" className="text-xs text-muted">
-            Loading expression editor...
+            {modelerMessages.expressions.loading}
           </p>
         }
       >

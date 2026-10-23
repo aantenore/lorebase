@@ -7,7 +7,8 @@ import {
 import { SOURCE_TYPES, type SourceType } from '@/api/types';
 import { Button } from '@/ui/button';
 import { Input, Select, Textarea } from '@/ui/field';
-import { Section } from '@/ui/layout';
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
+import { FormAction, FormRow, Section } from '@/ui/layout';
 import type { SchemaDocument } from './document';
 import { ElementName, ElementPicker, StatusAndDescription } from './element-controls';
 import {
@@ -48,10 +49,13 @@ interface Props {
   onSelect: (name: string | undefined) => void;
 }
 
-const SECRET_HINT = 'A secret reference such as secret://env/ERP_DSN; never a literal.';
+const t = modelerEditorsMessages.source;
+const actions = modelerEditorsMessages.actions;
+
+const SECRET_HINT = t.secretHint;
 const MERGE_POLICIES = ['proposal', 'auto_when_clean', 'auto_with_authority'];
 
-const SECRET_MESSAGE = 'Must be a secret:// reference, never a literal.';
+const SECRET_MESSAGE = t.secretProblem;
 
 /** The client-side check of a secret field; Keeper checks again when the change set is sent. */
 const secretProblem = (value: string): string | undefined =>
@@ -112,7 +116,7 @@ function Connection({
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Select
-        label="Source type"
+        label={t.connection.type}
         value={type}
         error={errorAt(issues, `${path}/type`)}
         options={[
@@ -127,10 +131,10 @@ function Connection({
         }}
       />
       <Input
-        label="Connection"
-        hint={type === 'http_json' ? `The URL, as ${SECRET_HINT}` : SECRET_HINT}
+        label={t.connection.connection}
+        hint={type === 'http_json' ? t.secretHintUrl(SECRET_HINT) : SECRET_HINT}
         value={connection}
-        placeholder="secret://env/NAME"
+        placeholder={t.connection.placeholder}
         error={errorAt(issues, `${path}/connection`) ?? secretProblem(connection)}
         onChange={(event) => {
           const value = event.target.value;
@@ -141,8 +145,8 @@ function Connection({
       />
       {appliesTo('table', type) && (
         <TextField
-          label="Table"
-          hint="Optionally schema-qualified; empty reads the table named like the Source."
+          label={t.connection.table}
+          hint={t.connection.tableHint}
           source={source}
           field="table"
           path={path}
@@ -152,8 +156,8 @@ function Connection({
       )}
       {appliesTo('query', type) && (
         <Textarea
-          label="Query"
-          hint="A read-only SELECT."
+          label={t.connection.query}
+          hint={t.connection.queryHint}
           className="sm:col-span-2"
           value={asText(source['query'])}
           error={errorAt(issues, `${path}/query`)}
@@ -167,8 +171,8 @@ function Connection({
       )}
       {appliesTo('records_path', type) && (
         <TextField
-          label="Records path"
-          hint="Dotted path of the array of records, such as data.items; empty: the document is the array."
+          label={t.connection.recordsPath}
+          hint={t.connection.recordsPathHint}
           source={source}
           field="records_path"
           path={path}
@@ -178,8 +182,8 @@ function Connection({
       )}
       {appliesTo('flatten_separator', type) && (
         <TextField
-          label="Flatten separator"
-          hint="Nested objects become parent<separator>child columns; empty keeps them as JSON."
+          label={t.connection.flattenSeparator}
+          hint={t.connection.flattenSeparatorHint}
           source={source}
           field="flatten_separator"
           path={path}
@@ -206,18 +210,16 @@ function Headers({
   const entries = Object.entries(headers);
   return (
     <fieldset className="flex flex-col gap-2 sm:col-span-2">
-      <legend className="mb-1 text-xs font-medium text-muted">Request headers</legend>
-      <p className="text-xs text-muted">
-        Headers that carry credentials (auth, token, key, cookie...) take a secret:// reference.
-      </p>
+      <legend className="mb-1 text-xs font-medium text-muted">{t.http.headers}</legend>
+      <p className="text-xs text-muted">{t.http.headersHint}</p>
       {entries.map(([header, value], index) => {
         const n = index + 1;
         const text = asText(value);
         const local = credentialHeader(header) ? secretProblem(text || 'x') : undefined;
         return (
-          <div key={index} className="flex flex-wrap items-start gap-2">
+          <FormRow key={index}>
             <KeyInput
-              label={`Header ${n} name`}
+              label={t.http.headerName(n)}
               name={header}
               taken={(candidate) => candidate !== header && candidate in headers}
               onRename={(next) => {
@@ -227,7 +229,7 @@ function Headers({
               }}
             />
             <Input
-              label={`Header ${n} value`}
+              label={t.http.headerValue(n)}
               className="min-w-64 flex-1"
               value={text}
               error={errorAt(issues, `${at}/headers/${header}`) ?? local}
@@ -238,22 +240,22 @@ function Headers({
                 });
               }}
             />
-            <Button
-              size="sm"
-              variant="ghost"
-              className="mt-5"
-              aria-label={`Remove header ${n}`}
-              onClick={() => {
-                changeHttp((h) => {
-                  const next = child(h, 'headers');
-                  delete next[header];
-                  if (Object.keys(next).length === 0) delete h['headers'];
-                });
-              }}
-            >
-              Remove
-            </Button>
-          </div>
+            <FormAction>
+              <Button
+                variant="ghost"
+                aria-label={t.http.removeHeader(n)}
+                onClick={() => {
+                  changeHttp((h) => {
+                    const next = child(h, 'headers');
+                    delete next[header];
+                    if (Object.keys(next).length === 0) delete h['headers'];
+                  });
+                }}
+              >
+                {actions.remove}
+              </Button>
+            </FormAction>
+          </FormRow>
         );
       })}
       <div>
@@ -267,7 +269,7 @@ function Headers({
             });
           }}
         >
-          Add header
+          {t.http.addHeader}
         </Button>
       </div>
     </fieldset>
@@ -342,7 +344,7 @@ function Http({
     <div className="grid gap-3 sm:grid-cols-2">
       <Headers http={http} at={at} issues={issues} changeHttp={changeHttp} />
       <Select
-        label="Pagination"
+        label={t.http.pagination}
         value={type}
         error={errorAt(issues, `${at}/pagination/type`)}
         options={PAGINATION_TYPES.map((t) => ({ value: t, label: t }))}
@@ -351,25 +353,25 @@ function Http({
           setPagination('type', value === 'none' ? undefined : value);
         }}
       />
-      {type === 'cursor' && text('cursor_path', 'Cursor path', 'meta.next_cursor')}
-      {type === 'cursor' && text('cursor_param', 'Cursor parameter', 'cursor')}
-      {type === 'page' && text('page_param', 'Page parameter', 'page')}
+      {type === 'cursor' && text('cursor_path', t.http.cursorPath, t.http.cursorPathPlaceholder)}
+      {type === 'cursor' && text('cursor_param', t.http.cursorParam, t.http.cursorParamPlaceholder)}
+      {type === 'page' && text('page_param', t.http.pageParam, t.http.pageParamPlaceholder)}
       {type === 'page' &&
         number(
           'start_page',
-          'Start page',
+          t.http.startPage,
           pagination,
           (v) => {
             setPagination('start_page', v);
           },
           `${at}/pagination/start_page`,
         )}
-      {type === 'offset' && text('offset_param', 'Offset parameter', 'offset')}
-      {paged && text('size_param', 'Page size parameter')}
+      {type === 'offset' && text('offset_param', t.http.offsetParam, t.http.offsetParamPlaceholder)}
+      {paged && text('size_param', t.http.sizeParam)}
       {paged &&
         number(
           'page_size',
-          'Page size',
+          t.http.pageSize,
           pagination,
           (v) => {
             setPagination('page_size', v);
@@ -377,8 +379,8 @@ function Http({
           `${at}/pagination/page_size`,
         )}
       <Input
-        label="Since parameter"
-        hint="Query parameter that carries the watermark of the previous run."
+        label={t.http.sinceParam}
+        hint={t.http.sinceParamHint}
         value={asText(http['since_param'])}
         error={errorAt(issues, `${at}/since_param`)}
         onChange={(event) => {
@@ -390,7 +392,7 @@ function Http({
       />
       {number(
         'max_pages',
-        'Max pages per run',
+        t.http.maxPages,
         http,
         (v) => {
           changeHttp((h) => {
@@ -447,7 +449,7 @@ function Mapping({
     <div className="flex flex-col gap-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <Select
-          label="Target Kind"
+          label={t.mapping.targetKind}
           value={kindName}
           error={errorAt(issues, `${path}/target_kind`)}
           options={[
@@ -462,8 +464,8 @@ function Mapping({
           }}
         />
         <TextField
-          label="Scope filter"
-          hint="Optional filter of the rows read, in the language of the Source."
+          label={t.mapping.scopeFilter}
+          hint={t.mapping.scopeFilterHint}
           source={source}
           field="scope_filter"
           path={path}
@@ -472,15 +474,15 @@ function Mapping({
         />
       </div>
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-xs font-medium text-muted">Key mapping</legend>
+        <legend className="mb-1 text-xs font-medium text-muted">{t.mapping.keyMapping}</legend>
         {primaryKey.length === 0 ? (
-          <p className="text-sm text-muted">{kindName} has no primary key.</p>
+          <p className="text-sm text-muted">{t.mapping.noKey(kindName)}</p>
         ) : (
           <div className="grid gap-2 sm:grid-cols-3">
             {primaryKey.map((attribute, index) => (
               <Input
                 key={attribute}
-                label={`Key column for ${attribute}`}
+                label={t.mapping.keyColumn(attribute)}
                 value={keyMapping[index] ?? ''}
                 onChange={(event) => {
                   const value = event.target.value;
@@ -500,7 +502,9 @@ function Mapping({
         )}
       </fieldset>
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-xs font-medium text-muted">Attribute mapping</legend>
+        <legend className="mb-1 text-xs font-medium text-muted">
+          {t.mapping.attributeMapping}
+        </legend>
         {attributes.map(([attribute]) => {
           const entry = isRecord(mapping[attribute]) ? mapping[attribute] : undefined;
           const mode: MappingMode =
@@ -513,12 +517,12 @@ function Mapping({
           return (
             <div key={attribute} className="grid gap-2 sm:grid-cols-[1fr_2fr] sm:items-start">
               <Select
-                label={`Mapping of ${attribute}`}
+                label={t.mapping.mappingOf(attribute)}
                 value={mode}
                 options={[
-                  { value: 'none', label: 'not mapped' },
-                  { value: 'column', label: 'column' },
-                  { value: 'expression', label: 'expression' },
+                  { value: 'none', label: t.mapping.notMapped },
+                  { value: 'column', label: t.mapping.column },
+                  { value: 'expression', label: t.mapping.expression },
                 ]}
                 onChange={(event) => {
                   const next = event.target.value as MappingMode;
@@ -536,7 +540,9 @@ function Mapping({
               {mode !== 'none' && (
                 <Input
                   label={
-                    mode === 'column' ? `Column for ${attribute}` : `Expression for ${attribute}`
+                    mode === 'column'
+                      ? t.mapping.columnFor(attribute)
+                      : t.mapping.expressionFor(attribute)
                   }
                   value={asText(entry?.[mode])}
                   error={errorAt(issues, `${path}/attribute_mapping/${attribute}`)}
@@ -566,7 +572,9 @@ function Mapping({
       </fieldset>
       {relations.length > 0 && (
         <fieldset className="flex flex-col gap-2">
-          <legend className="mb-1 text-xs font-medium text-muted">Relation mapping</legend>
+          <legend className="mb-1 text-xs font-medium text-muted">
+            {t.mapping.relationMapping}
+          </legend>
           <div className="grid gap-2 sm:grid-cols-2">
             {relations.map((relation) => {
               const index = relationMapping.findIndex((m) => m['relation'] === relation);
@@ -575,8 +583,8 @@ function Mapping({
               return (
                 <ListInput
                   key={relation}
-                  label={`Columns for ${relation}`}
-                  hint="Foreign key columns of the row; empty: not mapped."
+                  label={t.mapping.columnsFor(relation)}
+                  hint={t.mapping.columnsHint}
                   value={columns}
                   error={
                     index < 0
@@ -635,12 +643,12 @@ function Sync({
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Select
-        label="Sync mode"
+        label={t.sync.mode}
         value={mode}
         error={errorAt(issues, `${path}/sync_mode`)}
         options={[
-          { value: 'snapshot', label: 'snapshot: every run reads everything' },
-          { value: 'incremental', label: 'incremental: rows past the watermark' },
+          { value: 'snapshot', label: t.sync.snapshot },
+          { value: 'incremental', label: t.sync.incremental },
         ]}
         onChange={(event) => {
           const value = event.target.value;
@@ -650,10 +658,8 @@ function Sync({
         }}
       />
       <TextField
-        label="Watermark column"
-        hint={
-          mode === 'incremental' ? 'Required for incremental runs.' : 'Used by incremental runs.'
-        }
+        label={t.sync.watermark}
+        hint={mode === 'incremental' ? t.sync.watermarkRequired : t.sync.watermarkUsed}
         source={source}
         field="watermark_column"
         path={path}
@@ -661,8 +667,8 @@ function Sync({
         change={change}
       />
       <TextField
-        label="Tombstone column"
-        hint="Rows where it is set are deleted."
+        label={t.sync.tombstone}
+        hint={t.sync.tombstoneHint}
         source={source}
         field="tombstone_column"
         path={path}
@@ -670,9 +676,9 @@ function Sync({
         change={change}
       />
       <TextField
-        label="Schedule"
-        hint="Cron expression; empty: manual runs only."
-        placeholder="0 2 * * *"
+        label={t.sync.schedule}
+        hint={t.sync.scheduleHint}
+        placeholder={t.sync.schedulePlaceholder}
         source={source}
         field="schedule"
         path={path}
@@ -680,8 +686,8 @@ function Sync({
         change={change}
       />
       <Input
-        label="Branch template"
-        placeholder="source/{source}"
+        label={t.sync.branchTemplate}
+        placeholder={t.sync.branchTemplatePlaceholder}
         value={asText(policy['branch_template'])}
         error={errorAt(issues, `${path}/target_branch_policy/branch_template`)}
         onChange={(event) => {
@@ -689,7 +695,7 @@ function Sync({
         }}
       />
       <Select
-        label="Merge policy"
+        label={t.sync.mergePolicy}
         value={asText(policy['merge_policy']) || 'proposal'}
         error={errorAt(issues, `${path}/target_branch_policy/merge_policy`)}
         options={MERGE_POLICIES.map((p) => ({ value: p, label: p }))}
@@ -727,7 +733,7 @@ function SourceEditor({
     <div className="flex flex-col gap-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <ElementName
-          what="Source"
+          what={t.kind}
           name={name}
           names={Object.keys(document.sources ?? {})}
           issues={issues}
@@ -740,7 +746,7 @@ function SourceEditor({
           onRenamed={onSelect}
         />
         <StatusAndDescription
-          what="Source"
+          what={t.kind}
           element={source}
           onChange={(key, value) => {
             change((target) => {
@@ -749,21 +755,21 @@ function SourceEditor({
           }}
         />
       </div>
-      <Section title="Connection">
+      <Section title={t.connectionTitle}>
         <Connection source={source} path={path} issues={issues} change={change} />
       </Section>
       {asText(source['type']) === 'http_json' && (
-        <Section title="HTTP requests">
+        <Section title={t.httpTitle}>
           <Http source={source} path={path} issues={issues} change={change} />
         </Section>
       )}
-      <Section title="Mapping">
+      <Section title={t.mappingTitle}>
         <Mapping source={source} path={path} issues={issues} document={document} change={change} />
       </Section>
-      <Section title="Sync and merge">
+      <Section title={t.syncTitle}>
         <Sync source={source} path={path} issues={issues} change={change} />
       </Section>
-      <Section title="Preview">
+      <Section title={t.previewTitle}>
         <SourcePreview name={name} source={source} document={document} />
       </Section>
     </div>
@@ -779,7 +785,7 @@ export function SourcesForm({ document, issues, edit, ids, selected, onSelect }:
   return (
     <div className="flex flex-col gap-4">
       <ElementPicker
-        what="Source"
+        what={t.kind}
         names={names}
         selected={name}
         onSelect={onSelect}
@@ -795,7 +801,7 @@ export function SourcesForm({ document, issues, edit, ids, selected, onSelect }:
         }}
       />
       {name === undefined || source === undefined ? (
-        <p className="text-sm text-muted">No Sources.</p>
+        <p className="text-sm text-muted">{t.none}</p>
       ) : (
         <SourceEditor
           key={asText(source['id']) || name}

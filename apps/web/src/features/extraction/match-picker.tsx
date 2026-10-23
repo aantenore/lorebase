@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import type { ExtractionItem } from '@/api/extraction-types';
+import { extraction as extractionMessages } from '@/messages/extraction';
 import { percent } from './item-state';
 
 /** The Record the item points at, or `null`: the key of a Record or value item, the `to` of a Link. */
@@ -28,8 +29,8 @@ export function MatchPicker({
     <fieldset disabled={disabled} className="flex flex-col gap-1">
       <legend className="mb-1 text-xs font-medium text-muted">
         {item.match?.status === 'ambiguous'
-          ? 'Which Record is meant?'
-          : 'Other Records it could mean'}
+          ? extractionMessages.picker.ambiguous
+          : extractionMessages.picker.others}
       </legend>
       {candidates.map((candidate) => (
         <label key={candidate.key} className="flex items-start gap-2 text-sm">
@@ -46,7 +47,7 @@ export function MatchPicker({
             <span className="font-medium">{candidate.title}</span>{' '}
             <span className="font-mono text-xs">{candidate.key}</span>
             <span className="block text-xs text-muted">
-              {percent(candidate.score)} by {candidate.method}
+              {extractionMessages.picker.score(percent(candidate.score), candidate.method)}
             </span>
           </span>
         </label>

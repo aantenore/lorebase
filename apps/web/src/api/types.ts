@@ -11,39 +11,39 @@
  */
 import type { components } from './generated/keeper';
 
-type Contract = components['schemas'];
+type Schemas = components['schemas'];
 
 // -------------------------------------------------------- contract (generated)
 
-export type ProposalOrigin = Contract['ProposalOrigin'];
-export type ProposalStatus = Contract['ProposalStatus'];
-export type ReviewVerdict = Contract['ReviewVerdict'];
-export type ProposalCheck = Contract['CheckOut'];
-export type ProposalApproval = Contract['ApprovalOut'];
-export type ProposalReview = Contract['ReviewOut'];
-export type ReviewResult = Contract['ReviewResult'];
-export type Proposal = Contract['lorebase_keeper__routes__proposals__ProposalOut'];
-export type ProposalDetail = Contract['ProposalDetailOut'];
-export type CreateProposalInput = Contract['ProposalCreate'];
-export type ReviewInput = Contract['ReviewIn'];
-export type Domain = Contract['DomainOut'];
-export type CreateDomainInput = Contract['DomainCreate'];
-export type CreateBranchInput = Contract['BranchCreate'];
-export type WhereOperator = Contract['Operator'];
-export type WhoAmI = Contract['WhoAmI'];
-export type Webhook = Contract['WebhookOut'];
-export type WebhookCreated = Contract['WebhookCreated'];
-export type CreateWebhookInput = Contract['CreateWebhook'];
-export type ContextRequest = Partial<Contract['ContextRequest']>;
-export type ContextPack = Contract['ContextPackOut'];
-export type ExplainedRecord = Contract['ExplainOut'];
-export type SearchTuning = Contract['SearchTuning'];
-export type SearchCorrection = Contract['SearchCorrection'];
+export type ProposalOrigin = Schemas['ProposalOrigin'];
+export type ProposalStatus = Schemas['ProposalStatus'];
+export type ReviewVerdict = Schemas['ReviewVerdict'];
+export type ProposalCheck = Schemas['CheckOut'];
+export type ProposalApproval = Schemas['ApprovalOut'];
+export type ProposalReview = Schemas['ReviewOut'];
+export type ReviewResult = Schemas['ReviewResult'];
+export type Proposal = Schemas['lorebase_keeper__routes__proposals__ProposalOut'];
+export type ProposalDetail = Schemas['ProposalDetailOut'];
+export type CreateProposalInput = Schemas['ProposalCreate'];
+export type ReviewInput = Schemas['ReviewIn'];
+export type Domain = Schemas['DomainOut'];
+export type CreateDomainInput = Schemas['DomainCreate'];
+export type CreateBranchInput = Schemas['BranchCreate'];
+export type WhereOperator = Schemas['Operator'];
+export type WhoAmI = Schemas['WhoAmI'];
+export type Webhook = Schemas['WebhookOut'];
+export type WebhookCreated = Schemas['WebhookCreated'];
+export type CreateWebhookInput = Schemas['CreateWebhook'];
+export type ContextRequest = Partial<Schemas['ContextRequest']>;
+export type ContextPack = Schemas['ContextPackOut'];
+export type ExplainedRecord = Schemas['ExplainOut'];
+export type SearchTuning = Schemas['SearchTuning'];
+export type SearchCorrection = Schemas['SearchCorrection'];
 /** One agent session as the trace lists it (`GET /trace/sessions`). */
-export type TraceSession = Contract['TraceSessionOut'];
-export type TraceStep = Contract['TraceStepOut'];
-export type TraceRefs = Contract['TraceRefs'];
-export type TraceTimeline = Contract['TraceTimeline'];
+export type TraceSession = Schemas['TraceSessionOut'];
+export type TraceStep = Schemas['TraceStepOut'];
+export type TraceRefs = Schemas['TraceRefs'];
+export type TraceTimeline = Schemas['TraceTimeline'];
 /** The schema Keeper proposes from uploaded tables (`POST .../schema:infer`). */
 export type InferredSchema =
   components['schemas']['lorebase_keeper__routes__schema_inference__ProposalOut'];
@@ -55,7 +55,7 @@ export type BranchName = string;
 export type RevisionId = string;
 /** Stable, prefixed ULID: `knd_...`, `att_...`, `rel_...`, `trt_...`, ... */
 export type ElementId = string;
-/** External Record reference: `{kind_api_name}/{key}`, for example `Supplier/S-1001`. */
+/** External Record reference: `{kind_api_name}/{key}`, for example `Asset/A-100`. */
 export type RecordRef = string;
 
 // ----------------------------------------------------------------- generic
@@ -155,7 +155,7 @@ export type ScalarType =
   | 'geo_point'
   | 'uri';
 
-/** `decimal(12,2)` and `ref(Supplier)` are the YAML spellings of precision and reference types. */
+/** `decimal(12,2)` and `ref(Asset)` are the YAML spellings of precision and reference types. */
 export type AttributeType =
   ScalarType | `array<${ScalarType}>` | `decimal(${number},${number})` | `ref(${string})`;
 export type Sensitivity = 'pii' | 'confidential' | 'restricted';
@@ -228,9 +228,9 @@ export interface Kind {
 
 export interface Relation {
   id: ElementId;
-  /** Forward name, for example `supplied_by`. */
+  /** Forward name, for example `owned_by`. */
   api_name: string;
-  /** Inverse name, for example `supplies`. */
+  /** Inverse name, for example `owns`. */
   inverse_api_name: string;
   display_name: string;
   description: string;
@@ -389,11 +389,19 @@ export interface SearchCapabilities {
   embedding: { model: string; dims: number } | null;
 }
 
+/** A sample question about a Domain, declared in its schema (`domain.examples`). */
+export interface DomainExample {
+  label: string;
+  question: string;
+}
+
 /** The `domain` block of a schema document, besides the id: kept so a save does not blank it. */
 export interface SchemaDomainInfo {
   display_name?: string;
   description?: string;
   settings?: Record<string, unknown>;
+  /** Sample questions offered as ready-made prompts; absent when the Domain declares none. */
+  examples?: DomainExample[];
 }
 
 export interface Schema {
@@ -489,7 +497,7 @@ export interface Violation {
   code: string;
   message: string;
   ref?: RecordRef;
-  /** Schema path such as `kinds/Supplier/attributes/tier`, for schema violations. */
+  /** Schema path such as `kinds/Asset/attributes/status`, for schema violations. */
   path?: string;
   /** Keeper: `error` or `warning`. */
   severity?: string;

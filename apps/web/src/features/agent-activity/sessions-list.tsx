@@ -2,9 +2,10 @@ import { Link } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import type { TraceSession } from '@/api/types';
 import { useScopeSearch } from '@/app/scope';
+import { agentActivity as agentActivityMessages } from '@/messages/agent-activity';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
-import { Badge, EmptyState } from '@/ui/layout';
+import { Badge, EmptyState, FormAction, FormRow } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
 import { InferredBadge, ProposalLink } from './proposal-link';
@@ -23,17 +24,21 @@ export function ActorFilter({
     onActor(text.trim() === '' ? undefined : text.trim());
   };
   return (
-    <form onSubmit={submit} className="mb-3 flex items-end gap-2">
-      <Input
-        label="Actor"
-        value={text}
-        placeholder="svc_herald"
-        onChange={(event) => {
-          setText(event.target.value);
-        }}
-        className="w-64"
-      />
-      <Button type="submit">Filter</Button>
+    <form onSubmit={submit}>
+      <FormRow>
+        <Input
+          label={agentActivityMessages.sessions.actor}
+          value={text}
+          placeholder={agentActivityMessages.sessions.actorPlaceholder}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+          className="w-64 max-w-full"
+        />
+        <FormAction>
+          <Button type="submit">{agentActivityMessages.sessions.filter}</Button>
+        </FormAction>
+      </FormRow>
     </form>
   );
 }
@@ -49,18 +54,18 @@ export function SessionsList({
   selected: string | undefined;
 }) {
   const scopeSearch = useScopeSearch();
-  if (sessions.length === 0) return <EmptyState>No agent sessions match.</EmptyState>;
+  if (sessions.length === 0) return <EmptyState>{agentActivityMessages.sessions.empty}</EmptyState>;
   return (
-    <Table caption="Agent sessions">
+    <Table caption={agentActivityMessages.sessions.caption}>
       <THead>
         <tr>
-          <TH>Session</TH>
-          <TH>Actor</TH>
-          <TH>Last activity</TH>
-          <TH>Calls</TH>
-          <TH>Notes</TH>
-          <TH>Tools</TH>
-          <TH>Proposals</TH>
+          <TH>{agentActivityMessages.sessions.session}</TH>
+          <TH>{agentActivityMessages.sessions.actor}</TH>
+          <TH>{agentActivityMessages.sessions.lastActivity}</TH>
+          <TH>{agentActivityMessages.sessions.calls}</TH>
+          <TH>{agentActivityMessages.sessions.notes}</TH>
+          <TH>{agentActivityMessages.sessions.tools}</TH>
+          <TH>{agentActivityMessages.sessions.proposals}</TH>
         </tr>
       </THead>
       <TBody>
@@ -94,7 +99,9 @@ export function SessionsList({
             </TD>
             <TD>
               <span className="flex flex-wrap gap-2">
-                {session.proposals.length === 0 && <span className="text-muted">none</span>}
+                {session.proposals.length === 0 && (
+                  <span className="text-muted">{agentActivityMessages.sessions.noProposals}</span>
+                )}
                 {session.proposals.map((proposal) => (
                   <ProposalLink key={proposal} domain={domain} proposal={proposal} />
                 ))}

@@ -21,6 +21,7 @@ import { digest, makeConflict } from '../conflicts';
 import { extractionCheck, seedBranch } from '../extraction';
 import type { BranchData, DomainData, ProposalState, SchemaBody } from '../state';
 import { supplyDocuments } from './documents';
+import { SUPPLY_EXAMPLES } from './explore';
 import { octoberItems, supplyItems } from './extraction';
 
 const DOMAIN = 'supply';
@@ -922,5 +923,6 @@ export function buildSupplyDomain(): DomainData {
     ]),
     proposals: proposalStates,
     documents: supplyDocuments(),
+    examples: SUPPLY_EXAMPLES,
   };
 }

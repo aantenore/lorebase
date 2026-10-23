@@ -1,17 +1,20 @@
 import type { Kind, SearchMode } from '@/api/types';
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
 import { Input, Select } from '@/ui/field';
 import { MODES, needsVector, type LabParams, type ParamsRequest } from './params';
 
-const NUMBER_FIELDS: { field: keyof LabParams; label: string; hint: string }[] = [
-  { field: 'lexicalWeight', label: 'lexical_weight', hint: 'Weight of the word match' },
-  { field: 'semanticWeight', label: 'semantic_weight', hint: 'Weight of the vector match' },
-  { field: 'rrfK', label: 'rrf_k', hint: 'Rank fusion constant' },
-  { field: 'trigramThreshold', label: 'trigram_threshold', hint: 'Similarity for typo matches' },
-  { field: 'trigramWeight', label: 'trigram_weight', hint: 'Weight of typo matches' },
-  { field: 'typoCandidates', label: 'typo_candidates', hint: 'Typo corrections tried' },
-  { field: 'candidates', label: 'candidates', hint: 'Candidates per ranking' },
-  { field: 'limit', label: 'limit', hint: 'Results shown' },
-];
+const P = retrievalLabMessages.params;
+
+const NUMBER_FIELDS = [
+  'lexicalWeight',
+  'semanticWeight',
+  'rrfK',
+  'trigramThreshold',
+  'trigramWeight',
+  'typoCandidates',
+  'candidates',
+  'limit',
+] as const satisfies readonly (keyof LabParams & keyof typeof P.fields)[];
 
 /** The parameters of one search; empty fields keep the Domain's configured value. */
 export function ParamsForm({
@@ -34,27 +37,27 @@ export function ParamsForm({
   };
   const waiting = needsVector(params.mode) && !hasVector;
   return (
-    <fieldset className="rounded-md border border-line bg-surface p-3">
-      <legend className="px-1 text-sm font-semibold">Parameters {name}</legend>
-      <div className="grid grid-cols-2 gap-3">
+    <fieldset className="min-w-0 rounded-md border border-line bg-surface p-4">
+      <legend className="px-1 text-sm font-semibold">{P.legend(name)}</legend>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Select
-          label={`Mode ${name}`}
+          label={P.mode}
           value={params.mode}
           options={MODES.map((mode) => ({
             value: mode,
-            label: needsVector(mode) && !hasVector ? `${mode} (needs a vector)` : mode,
+            label: needsVector(mode) && !hasVector ? P.needsVector(mode) : mode,
           }))}
           onChange={(event) => {
             set({ mode: event.target.value as SearchMode });
           }}
         />
-        {NUMBER_FIELDS.map(({ field, label, hint }) => (
+        {NUMBER_FIELDS.map((field) => (
           <Input
             key={field}
-            label={`${label} ${name}`}
-            hint={hint}
+            label={P.fields[field].label}
+            hint={P.fields[field].hint}
             inputMode="decimal"
-            value={params[field] as string}
+            value={params[field]}
             error={errors[field]}
             onChange={(event) => {
               set({ [field]: event.target.value });
@@ -62,13 +65,9 @@ export function ParamsForm({
           />
         ))}
       </div>
-      {waiting && (
-        <p className="mt-2 text-xs text-warning">
-          {params.mode} needs a query vector. Until there is one, set {name} searches by words only.
-        </p>
-      )}
+      {waiting && <p className="mt-2 text-xs text-warning">{P.waiting(params.mode, name)}</p>}
       {kinds.length > 0 && (
-        <div role="group" aria-label={`Kinds ${name}`} className="mt-3 flex flex-wrap gap-3">
+        <div role="group" aria-label={P.kinds(name)} className="mt-3 flex flex-wrap gap-3">
           {kinds.map((kind) => (
             <label key={kind.id} className="flex items-center gap-1 text-sm">
               <input
@@ -85,7 +84,7 @@ export function ParamsForm({
               {kind.display_name}
             </label>
           ))}
-          <span className="text-xs text-muted">No Kind ticked: all Kinds.</span>
+          <span className="text-xs text-muted">{P.noKind}</span>
         </div>
       )}
     </fieldset>

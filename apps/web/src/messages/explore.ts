@@ -1,0 +1,56 @@
+/** Strings of the Explore screen (questions to the optional assistant). */
+export const explore = {
+  title: 'Explore',
+  description: 'Ask a question and follow the assistant step by step.',
+  docs: 'guide/#the-explore-panel-in-the-web-app',
+  noGuide: 'No assistant is configured, so there is nobody to ask.',
+  noGuideDocs: 'guide/',
+  examples: 'Example questions',
+  question: 'Question for the guide',
+  placeholder: 'Ask about your data',
+  maxSteps: 'Max steps',
+  stepsRange: (max: number) => `1 to ${max.toString()}`,
+  stop: 'Stop',
+  submit: 'Explore',
+  limits: (steps: number, model: string | null) =>
+    `Up to ${steps.toString()} steps${model === null ? '' : `, model ${model}`}.`,
+  status: {
+    retryIn: (seconds: number) => ` Try again in ${seconds.toString()} s.`,
+    running: (steps: number) => `Exploring... ${steps.toString()} steps so far.`,
+    stopped: 'Stopped.',
+    done: (steps: number, seconds: string, tokens: number) =>
+      `Done in ${steps.toString()} steps, ${seconds} s, ${tokens.toString()} tokens.`,
+  },
+  stepKinds: {
+    thought: 'thought',
+    tool_call: 'tool call',
+    tool_result: 'result',
+    error: 'error',
+  },
+  steps: 'Exploration steps',
+  records: (n: number) => `(${n.toString()} Records)`,
+  answer: {
+    region: 'Answer',
+    found: 'Answer',
+    notFound: 'No answer',
+    cited: 'Cited Records',
+    viewTrace: 'View trace',
+    showCanvas: 'Show cited Records on the Canvas',
+    hideCanvas: 'Hide the Canvas',
+  },
+  errors: {
+    streamEnded: 'The stream ended before an answer.',
+    unexpected: 'The exploration failed unexpectedly.',
+    unauthorized:
+      'The assistant did not accept your sign-in. Sign in again, or check the token in Settings.',
+    originNotAllowed: 'The assistant does not accept requests from this app.',
+    crossSite: 'The assistant refused a cross-site request.',
+    csrf: 'The assistant refused the request: the session check failed. Reload the page and try again.',
+    rate: 'You asked the assistant too often in the last minute.',
+    concurrent: 'Another exploration of yours is still running.',
+    busy: 'The assistant is busy.',
+    keeperUnavailable: 'The assistant could not reach the server.',
+    questionTooLong: 'The question is longer than the assistant allows.',
+    answered: (status: number) => `The assistant answered ${status.toString()} to /explore.`,
+  },
+} as const;

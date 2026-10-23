@@ -26,6 +26,9 @@ governed writes through two Operations.
 
 ## Schema at a glance
 
+- **Example questions:** `domain.examples` lists five questions (single-source risk, tier-1 risk
+  with open orders, what if S-1007 stops, the history of C-3013, a misspelled search) that the
+  web app offers in Explore and the Retrieval lab.
 - **Kinds:** `Supplier`, `Part`, `Plant`, `PurchaseOrder`, `Contract` (natural keys such as
   `S-1001`, `P-10001`, `PL-01`, `PO-200001`, `C-3001`) and `RiskFlag` (minted keys).
 - **Trait:** `Located` (`country`, `city`), implemented by `Supplier` and `Plant`.

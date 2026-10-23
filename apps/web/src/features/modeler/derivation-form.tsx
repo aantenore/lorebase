@@ -2,7 +2,9 @@ import { AGGREGATE_FUNCTIONS, LINK_DIRECTIONS, type SchemaIssue } from '@/api/sc
 import type { DerivationVariant } from '@/api/types';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
-import { Section } from '@/ui/layout';
+import { common as commonMessages } from '@/messages/common';
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
+import { FormAction, FormRow, Section } from '@/ui/layout';
 import { CelField } from './cel-field';
 import { DerivationPreview } from './derivation-preview';
 import type { SchemaDocument } from './document';
@@ -28,6 +30,8 @@ import {
 
 type Doc = Record<string, unknown>;
 
+const t = modelerEditorsMessages.derivation;
+
 interface Props {
   document: SchemaDocument;
   /** Whether the named Derivation is saved on the Branch exactly as shown. */
@@ -40,9 +44,9 @@ interface Props {
 }
 
 const VARIANTS: { value: DerivationVariant; label: string }[] = [
-  { value: 'expression', label: 'expression: CEL over the Record' },
-  { value: 'aggregate', label: 'aggregate: over linked Records' },
-  { value: 'path', label: 'path: a composed Relation' },
+  { value: 'expression', label: t.variants.expression },
+  { value: 'aggregate', label: t.variants.aggregate },
+  { value: 'path', label: t.variants.path },
 ];
 
 const options = (values: readonly string[], current: string, empty?: string) => [
@@ -80,7 +84,7 @@ function Target({
   return (
     <>
       <Select
-        label="Target Kind"
+        label={t.targetKind}
         value={kind}
         error={errorAt(issues, `${at}/kind`)}
         options={options(kinds, kind)}
@@ -92,11 +96,11 @@ function Target({
         }}
       />
       <Select
-        label="Target Attribute"
-        hint="The Attribute the Derivation computes; it is marked as derived."
+        label={t.targetAttribute}
+        hint={t.targetAttributeHint}
         value={attribute}
         error={errorAt(issues, `${at}/attribute`)}
-        options={options(attributes, attribute, 'Choose an Attribute')}
+        options={options(attributes, attribute, t.chooseAttribute)}
         onChange={(event) => {
           const value = event.target.value;
           edit((draft) => {
@@ -139,7 +143,7 @@ function Aggregate({
   return (
     <>
       <Select
-        label="Relation"
+        label={t.relation}
         value={relation}
         error={errorAt(issues, `${at}/relation`)}
         options={options(touching, relation)}
@@ -148,7 +152,7 @@ function Aggregate({
         }}
       />
       <Select
-        label="Direction"
+        label={t.direction}
         value={direction}
         error={errorAt(issues, `${at}/direction`)}
         options={LINK_DIRECTIONS.map((d) => ({ value: d, label: d }))}
@@ -158,7 +162,7 @@ function Aggregate({
         }}
       />
       <Select
-        label="Function"
+        label={t.function}
         value={fn}
         error={errorAt(issues, `${at}/function`)}
         options={options(AGGREGATE_FUNCTIONS, fn)}
@@ -167,19 +171,19 @@ function Aggregate({
         }}
       />
       <Select
-        label="Source Attribute"
-        hint={far === '' ? undefined : `An Attribute of ${far}; count needs none.`}
+        label={t.sourceAttribute}
+        hint={far === '' ? undefined : t.sourceAttributeHint(far)}
         value={sourceAttribute}
         error={errorAt(issues, `${at}/source_attribute`)}
-        options={options(farAttributes, sourceAttribute, 'None')}
+        options={options(farAttributes, sourceAttribute, commonMessages.none)}
         onChange={(event) => {
           set('source_attribute', event.target.value);
         }}
       />
       <CelField
         className="sm:col-span-2"
-        label="Filter"
-        hint="Optional CEL over each linked Record; only Records where it is true count."
+        label={t.filter}
+        hint={t.filterHint}
         value={asText(definition['filter'])}
         error={errorAt(issues, `${at}/filter`)}
         onChange={(text) => {
@@ -214,7 +218,7 @@ function PathSteps({
   return (
     <div className="flex flex-col gap-3 sm:col-span-2">
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-xs font-medium text-muted">Path steps</legend>
+        <legend className="mb-1 text-xs font-medium text-muted">{t.pathSteps}</legend>
         {errorAt(issues, `${at}/steps`) !== undefined && (
           <p className="text-xs text-danger">{errorAt(issues, `${at}/steps`)}</p>
         )}
@@ -223,37 +227,44 @@ function PathSteps({
             const n = index + 1;
             const relation = asText(step['relation']);
             return (
-              <li key={index} className="flex flex-wrap items-end gap-2">
-                <Select
-                  label={`Path step ${n} Relation`}
-                  value={relation}
-                  error={errorsAt(issues, `${at}/steps/${index}/relation`, `${at}/steps/${index}`)}
-                  options={options(relations, relation)}
-                  onChange={(event) => {
-                    update(index, 'relation', event.target.value);
-                  }}
-                />
-                <Select
-                  label={`Path step ${n} direction`}
-                  value={asText(step['direction']) || 'forward'}
-                  options={LINK_DIRECTIONS.map((d) => ({ value: d, label: d }))}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    update(index, 'direction', value === 'forward' ? undefined : value);
-                  }}
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Remove path step ${n}`}
-                  onClick={() => {
-                    change((d) => {
-                      d['steps'] = asList(d['steps']).filter((_, i) => i !== index);
-                    });
-                  }}
-                >
-                  Remove
-                </Button>
+              <li key={index}>
+                <FormRow>
+                  <Select
+                    label={t.pathRelation(n)}
+                    value={relation}
+                    error={errorsAt(
+                      issues,
+                      `${at}/steps/${index}/relation`,
+                      `${at}/steps/${index}`,
+                    )}
+                    options={options(relations, relation)}
+                    onChange={(event) => {
+                      update(index, 'relation', event.target.value);
+                    }}
+                  />
+                  <Select
+                    label={t.pathDirection(n)}
+                    value={asText(step['direction']) || 'forward'}
+                    options={LINK_DIRECTIONS.map((d) => ({ value: d, label: d }))}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      update(index, 'direction', value === 'forward' ? undefined : value);
+                    }}
+                  />
+                  <FormAction>
+                    <Button
+                      variant="ghost"
+                      aria-label={t.pathRemove(n)}
+                      onClick={() => {
+                        change((d) => {
+                          d['steps'] = asList(d['steps']).filter((_, i) => i !== index);
+                        });
+                      }}
+                    >
+                      {modelerEditorsMessages.actions.remove}
+                    </Button>
+                  </FormAction>
+                </FormRow>
               </li>
             );
           })}
@@ -266,14 +277,14 @@ function PathSteps({
               });
             }}
           >
-            Add path step
+            {t.pathAdd}
           </Button>
         </div>
       </fieldset>
       <div className="grid gap-3 sm:grid-cols-2">
         <Input
-          label="Inverse name"
-          hint="Name of the composed Relation read backwards; optional."
+          label={t.inverseName}
+          hint={t.inverseNameHint}
           value={asText(definition['inverse_api_name'])}
           error={errorAt(issues, `${at}/inverse_api_name`)}
           onChange={(event) => {
@@ -295,7 +306,7 @@ function PathSteps({
               });
             }}
           />
-          Materialized
+          {t.stored}
         </label>
       </div>
     </div>
@@ -333,7 +344,7 @@ function DerivationEditor({
     <div className="flex flex-col gap-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <ElementName
-          what="Derivation"
+          what={t.kind}
           name={name}
           names={Object.keys(document.derivations ?? {})}
           issues={issues}
@@ -346,7 +357,7 @@ function DerivationEditor({
           onRenamed={onSelect}
         />
         <StatusAndDescription
-          what="Derivation"
+          what={t.kind}
           element={derivation}
           onChange={(key, value) => {
             edit((draft) => {
@@ -356,10 +367,10 @@ function DerivationEditor({
           }}
         />
       </div>
-      <Section title="Definition">
+      <Section title={t.definition}>
         <div className="grid gap-3 sm:grid-cols-2">
           <Select
-            label="Variant"
+            label={t.variant}
             className="sm:col-span-2"
             value={variant}
             error={errorAt(issues, `${at}/variant`)}
@@ -384,11 +395,11 @@ function DerivationEditor({
           {variant === 'expression' && (
             <CelField
               className="sm:col-span-2"
-              label="Expression"
-              hint="CEL over the Attributes of the Record; its type matches the target Attribute."
+              label={t.expression}
+              hint={t.expressionHint}
               value={asText(definition['expression'])}
               error={errorsAt(issues, `${at}/expression`, at)}
-              placeholder="supplier_count == 1"
+              placeholder={t.expressionPlaceholder}
               onChange={(text) => {
                 changeDefinition((d) => {
                   d['expression'] = text;
@@ -416,9 +427,9 @@ function DerivationEditor({
           )}
         </div>
       </Section>
-      <Section title="Preview">
+      <Section title={t.preview.title}>
         {asText(definition['kind']) === '' || asText(definition['attribute']) === '' ? (
-          <p className="text-sm text-muted">Choose the target Attribute to preview its values.</p>
+          <p className="text-sm text-muted">{t.preview.choose}</p>
         ) : (
           <DerivationPreview
             name={name}
@@ -442,7 +453,7 @@ export function DerivationsForm({ document, saved, issues, edit, ids, selected, 
   return (
     <div className="flex flex-col gap-4">
       <ElementPicker
-        what="Derivation"
+        what={t.kind}
         names={names}
         selected={name}
         onSelect={onSelect}
@@ -458,7 +469,7 @@ export function DerivationsForm({ document, saved, issues, edit, ids, selected, 
         }}
       />
       {name === undefined || derivation === undefined ? (
-        <p className="text-sm text-muted">No Derivations.</p>
+        <p className="text-sm text-muted">{t.none}</p>
       ) : (
         <DerivationEditor
           key={asText(derivation['id']) || name}

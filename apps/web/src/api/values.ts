@@ -30,7 +30,7 @@ export interface ParsedType {
   scale?: number;
 }
 
-/** Parse the spelling of a type (`string`, `array<enum>`, `decimal(12,2)`, `ref(Supplier)`). */
+/** Parse the spelling of a type (`string`, `array<enum>`, `decimal(12,2)`, `ref(Asset)`). */
 export function parseAttributeType(type: string): ParsedType | null {
   const array = /^array<(.+)>$/.exec(type);
   if (array?.[1] !== undefined) {

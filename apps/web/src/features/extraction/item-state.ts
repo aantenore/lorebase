@@ -8,6 +8,7 @@ import type {
   ItemType,
 } from '@/api/extraction-types';
 import type { JsonValue } from '@/api/types';
+import { extraction as extractionMessages } from '@/messages/extraction';
 
 /** A decision the reviewer has made but not sent yet; `edits` is the whole edit of the item. */
 export interface Staged {
@@ -20,9 +21,9 @@ export type Draft = ReadonlyMap<string, Staged>;
 export const TYPE_ORDER: readonly ItemType[] = ['record', 'value', 'link'];
 
 export const TYPE_LABEL: Record<ItemType, string> = {
-  record: 'New Records',
-  value: 'Attribute values',
-  link: 'Links',
+  record: extractionMessages.types.record,
+  value: extractionMessages.types.value,
+  link: extractionMessages.types.link,
 };
 
 /** The Kind or Relation an item is about. */

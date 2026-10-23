@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
+import { messages } from '@/messages';
 import type { SchemaDocument } from './document';
 import { AppProviders } from '@/app/providers';
 import { ScopeProvider } from '@/app/scope';
@@ -207,7 +208,9 @@ describe('Source preview', () => {
     await user.upload(await screen.findByLabelText('Sample file for approved.suppliers'), file);
     const table = await screen.findByRole('table', { name: 'Sample rows of approved.suppliers' });
     expect(await within(table).findByText('ACME-7')).toBeInTheDocument();
-    expect(screen.getByText(/Keeper receives the sample rows shown below/)).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(messages.modelerEditors.source.preview.expressionsNote)),
+    ).toBeInTheDocument();
   });
 
   it('reports a file it cannot read', async () => {

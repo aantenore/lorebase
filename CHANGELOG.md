@@ -4,6 +4,18 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+### Added
+
+- Example questions in the schema: `domain.examples` of `lorebase.schema/v1` lists optional `{label, question}` pairs (at most 20, unique labels; [design 5.13](docs/design.md#513-schema-as-code)). They are part of the Domain element, so changing them is a schema change, and `GET /domains/{d}/schema` returns them in its `domain` block. The web app offers them in Explore and the Retrieval lab only when present. Schemas without them load and hash as before. `examples/supply/schema.yaml` declares the five questions of the example agent.
+- `VITE_DOCS_URL` (`docsUrl` in `/config.js`): the documentation site behind the web app's "Learn more" links (default `https://aantenore.github.io/lorebase`, `none` hides them). `LOREBASE_GUIDE_PROXY` makes `pnpm dev` and `pnpm preview` proxy `/guide` to a guide service.
+- `pnpm screenshots --live --keeper <url> --domain <id> --guide <url>` takes the tour pictures from a running stack read only: the existing Domain as it is, a real Explore answer and its trace ([apps/web](apps/web/README.md#screenshots)).
+
+### Changed
+
+- The web app is domain-agnostic and its copy is shorter. No screen names the Kinds, Records or questions of a dataset (the `supply` presets, placeholders such as a question about bearings in Torino, and example keys are gone; mock data stays in the mock fixtures), and no description puts the Domain's name into its text. Every user-facing string lives in `apps/web/src/messages`: a heading and at most one short line per screen, with "Learn more" links into the docs, consistent terms and no internal jargon. `src/test/domain-agnostic.test.ts` fails on dataset identifiers or an interpolated Domain name outside the mock fixtures and tests. The "planned screen" placeholders (Explorer, Modeler, Review, Sources, Settings, the Record page's Run Operation and the Canvas diff overlay tab) are removed.
+- Web app layout: shared primitives (`PageHeader`, `Section`, `Card`, `CardGrid`, `FormRow`, `FormAction`) give every screen the same spacing, equal-height cards and buttons on the line of their inputs; the navigation becomes a scrolling row below 768px, tab lists scroll instead of overflowing, and tables, long keys and JSON no longer push screens wider than a phone. The Explore panel is no longer repeated in the Retrieval lab: the lab links to Explore ("Ask the guide") when a guide service is configured, and its parameter fields have readable labels.
+- The tour pictures, the README gallery and `docs/tour.md` show the current app on a demo stack with real data, a real Explore answer and its Agent activity trace, Record history, the Derivation preview, typo-tolerant and hybrid search, extraction items and schema suggestions; four pictures come from the mock and say so.
+
 ## 0.2.0 - 2026-10-23
 
 Second pre-alpha release. Records now carry their history and lineage, values tagged `pii`, `confidential` or `restricted` are masked and vault values can be erased, Scribe computes embeddings for semantic and hybrid search, path Derivations work, and Guide, an optional exploration assistant outside Keeper, reads a Domain with the caller's own credential. The web app signs in through Keeper and its Modeler edits Operations, Derivations and Sources. Pre-1.0: this minor version changes interfaces; read the breaking changes before upgrading. The database schema moves from migration `0012` to `0035`, `read.history.lineage_max_changes` is removed, Scribe and Guide run on a new image `ghcr.io/aantenore/lorebase-ml`, and `POST /search` adds `truncated_candidates`. The lines link the documentation of each change: the work landed directly on `main`, without pull requests to link.

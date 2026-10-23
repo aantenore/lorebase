@@ -1,0 +1,66 @@
+/** Strings of the app frame: top bar, navigation, Branch and search dialogs, sign-in. */
+export const shell = {
+  product: 'Lorebase',
+  nav: {
+    label: 'Main',
+    explorer: 'Explorer',
+    canvas: 'Canvas',
+    modeler: 'Modeler',
+    review: 'Review',
+    sources: 'Sources',
+    agentActivity: 'Agent activity',
+    retrievalLab: 'Retrieval lab',
+    explore: 'Explore',
+    documents: 'Documents',
+    settings: 'Settings',
+  },
+  domain: 'Domain',
+  branch: 'Branch',
+  theme: {
+    label: 'Theme',
+    system: 'System theme',
+    light: 'Light theme',
+    dark: 'Dark theme',
+  },
+  revision: (short: string) => `Revision ${short}`,
+  behind: (branch: string, count: number) => `${count.toString()} behind ${branch}`,
+  atRevision: (short: string) => `At ${short} (back to head)`,
+  signOut: 'Sign out',
+  newBranch: {
+    open: 'New Branch',
+    title: 'New Branch',
+    startsAt: (from: string | undefined) =>
+      `Starts at the head of ${from ?? 'the default Branch'}.`,
+    name: 'Branch name',
+    nameHint: 'Slashes allowed, for example team/topic.',
+    create: 'Create Branch',
+    created: (name: string, from: string | undefined) =>
+      `Branch ${name} created from ${from ?? 'the default Branch'}.`,
+  },
+  search: {
+    open: 'Search',
+    shortcut: 'Ctrl K',
+    title: 'Search Records',
+    query: 'Search query',
+    placeholder: 'Name, code or text',
+    submit: 'Search',
+  },
+  home: {
+    noDomains: 'No Domains yet.',
+  },
+  login: {
+    title: 'Sign in to Lorebase',
+    notUsed: 'This configuration does not use sign-in.',
+    open: 'Open Lorebase',
+    intro: "Sign in with your organization's identity provider.",
+    submit: 'Sign in',
+    errors: {
+      login_expired: 'The sign-in expired. Sign in again.',
+      login_failed: 'The sign-in did not complete. Sign in again.',
+      access_denied: 'The identity provider denied access.',
+      no_account: 'Your account has no access. Ask an administrator.',
+      provider_unavailable: 'The identity provider is unreachable. Try again shortly.',
+    } as Readonly<Record<string, string>>,
+    unknownError: 'The sign-in failed.',
+  },
+} as const;

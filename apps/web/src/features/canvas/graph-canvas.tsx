@@ -1,6 +1,7 @@
 import type Sigma from 'sigma';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfig } from '@/config/context';
+import { canvas as canvasMessages } from '@/messages/canvas';
 import { Button } from '@/ui/button';
 import { useTheme } from '@/ui/theme';
 import { buildGraph, layoutSettings, type GraphData } from './graph-model';
@@ -18,13 +19,8 @@ import { renderDetail } from './render-detail';
 /** Free space around the graph, in pixels, so labels at the edge stay visible. */
 const STAGE_PADDING = 60;
 
-const LAYOUT_LABELS: Record<LayoutStatus, string> = {
-  idle: 'Layout ready',
-  running: 'Laying out...',
-  settled: 'Layout settled',
-  timeout: 'Layout paused at its time limit',
-  stopped: 'Layout paused',
-};
+const t = canvasMessages.renderer;
+const LAYOUT_LABELS: Record<LayoutStatus, string> = t.layout;
 
 function cssVar(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -168,7 +164,7 @@ export function GraphCanvas({ data, label, onSelectNode, highlight }: GraphCanva
   return (
     <div
       role="img"
-      aria-label={`${label}: ${data.nodes.length} nodes, ${data.edges.length} edges`}
+      aria-label={t.graphSummary(label, data.nodes.length, data.edges.length)}
       data-layout={layout ?? undefined}
       className="relative h-[28rem] rounded-md border border-line bg-surface"
     >
@@ -184,7 +180,7 @@ export function GraphCanvas({ data, label, onSelectNode, highlight }: GraphCanva
               else controller.current?.start();
             }}
           >
-            {layout === 'running' ? 'Pause' : 'Resume'}
+            {layout === 'running' ? t.pause : t.resume}
           </Button>
         </div>
       )}
@@ -193,7 +189,7 @@ export function GraphCanvas({ data, label, onSelectNode, highlight }: GraphCanva
           role="status"
           className="absolute inset-0 grid place-items-center p-4 text-center text-muted"
         >
-          Graph drawing is unavailable in this environment. Use the list below.
+          {t.unavailable}
         </p>
       )}
     </div>

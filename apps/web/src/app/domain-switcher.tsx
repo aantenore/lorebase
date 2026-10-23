@@ -1,5 +1,6 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useDomains } from '@/api/queries';
+import { shell as shellMessages } from '@/messages/shell';
 import { Select } from '@/ui/field';
 
 /** Switching Domain drops the Branch: Branches belong to one Domain. */
@@ -13,8 +14,9 @@ export function DomainSwitcher({ domain }: { domain: string }) {
 
   return (
     <Select
-      label="Domain"
+      label={shellMessages.domain}
       hideLabel
+      className="w-44"
       value={domain}
       options={options}
       onChange={(event) => {

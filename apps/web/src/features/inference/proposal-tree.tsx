@@ -4,6 +4,7 @@ import { useDraftView } from './draft-context';
 import { KindCard } from './kind-card';
 import { idOf } from './proposal-model';
 import { RelationsTable } from './relations-table';
+import { inference as inferenceMessages } from '@/messages/inference';
 
 /** The proposal as a tree: Kinds with their Attributes, then the Relations between them. */
 export function ProposalTree() {
@@ -25,11 +26,11 @@ export function ProposalTree() {
   if (draft.parseError !== null) {
     return (
       <p role="alert" className="text-danger">
-        The proposal could not be read: {draft.parseError}
+        {inferenceMessages.tree.parseError(draft.parseError)}
       </p>
     );
   }
-  if (kinds.length === 0) return <p className="text-muted">The proposal has no Kinds.</p>;
+  if (kinds.length === 0) return <p className="text-muted">{inferenceMessages.tree.noKinds}</p>;
 
   return (
     <div className="flex flex-col gap-3">
@@ -40,7 +41,7 @@ export function ProposalTree() {
             setOpen(new Set(kinds.map(([, kind]) => idOf(kind))));
           }}
         >
-          Expand all
+          {inferenceMessages.tree.expandAll}
         </Button>
         <Button
           size="sm"
@@ -48,7 +49,7 @@ export function ProposalTree() {
             setOpen(new Set());
           }}
         >
-          Collapse all
+          {inferenceMessages.tree.collapseAll}
         </Button>
       </div>
       {kinds.map(([name, kind]) => (
@@ -62,7 +63,7 @@ export function ProposalTree() {
           }}
         />
       ))}
-      <h3 className="mt-2 text-sm font-semibold">Relations</h3>
+      <h3 className="mt-2 text-sm font-semibold">{inferenceMessages.tree.relations}</h3>
       <RelationsTable />
     </div>
   );

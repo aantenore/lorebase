@@ -7,21 +7,17 @@ import { useKeeperApi } from '@/api/provider';
 import { useDocument, useDocuments } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { useConfig } from '@/config/context';
+import { common as commonMessages } from '@/messages/common';
+import { documents as documentsMessages } from '@/messages/documents';
 import { FileDrop } from '@/features/inference/file-drop';
 import { formatBytes } from '@/features/inference/files';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/field';
-import { Badge, EmptyState, PageHeader, Section } from '@/ui/layout';
+import { Badge, EmptyState, FormAction, FormRow, PageHeader, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
 import { useToast } from '@/ui/toast';
 import { JobBadge } from './job-status';
-
-const TIER_LABEL: Record<number, string> = {
-  0: 'Rules',
-  1: 'Local models',
-  2: 'Chat model',
-};
 
 interface Outcome {
   name: string;
@@ -31,22 +27,22 @@ interface Outcome {
 }
 
 const WORDING = {
-  zoneLabel: 'Drop zone for documents',
-  prompt: 'Drop documents here, or',
-  inputLabel: 'Upload documents',
-  note: 'Each document is stored once, whatever its name.',
+  zoneLabel: documentsMessages.intake.zoneLabel,
+  prompt: documentsMessages.intake.prompt,
+  inputLabel: documentsMessages.intake.inputLabel,
+  note: documentsMessages.intake.note,
 };
 
 function outcomeOf(name: string, uploaded: DocumentUploaded): Outcome {
   if (uploaded.duplicate) {
-    return { name, text: 'Stored before; nothing new was queued.', failed: false };
+    return { name, text: documentsMessages.intake.storedBefore, failed: false };
   }
   return {
     name,
     text:
       uploaded.job_id === null
-        ? 'Stored without extraction.'
-        : `Stored; extraction job ${uploaded.job_id.toString()} queued.`,
+        ? documentsMessages.intake.storedPlain
+        : documentsMessages.intake.storedQueued(uploaded.job_id),
     failed: false,
   };
 }
@@ -65,7 +61,7 @@ function ExtractionOptions({
 }) {
   return (
     <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-      <legend className="sr-only">Extraction</legend>
+      <legend className="sr-only">{documentsMessages.intake.extraction}</legend>
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
@@ -74,7 +70,7 @@ function ExtractionOptions({
             onExtract(event.target.checked);
           }}
         />
-        Extract after storing
+        {documentsMessages.intake.extract}
       </label>
       {[0, 1, 2].map((tier) => (
         <label key={tier} className="flex items-center gap-2">
@@ -90,7 +86,7 @@ function ExtractionOptions({
               );
             }}
           />
-          Tier {tier} ({TIER_LABEL[tier]})
+          {documentsMessages.intake.tier(tier, documentsMessages.intake.tierNames[tier])}
         </label>
       ))}
     </fieldset>
@@ -135,7 +131,7 @@ function Intake({ domain }: { domain: string }) {
       const refused = new Set(results.filter((r) => r.failed).map((r) => r.name));
       setFiles(batch.filter((file) => refused.has(file.name)));
       const stored = results.filter((r) => !r.failed).length;
-      if (stored > 0) toast.notify(`${stored.toString()} document(s) stored.`, 'success');
+      if (stored > 0) toast.notify(documentsMessages.intake.stored(stored), 'success');
       await refresh();
     },
   });
@@ -165,7 +161,7 @@ function Intake({ domain }: { domain: string }) {
   };
 
   return (
-    <Section title="Add documents">
+    <Section title={documentsMessages.intake.title}>
       <div className="flex flex-col gap-3">
         <FileDrop
           files={files}
@@ -186,7 +182,7 @@ function Intake({ domain }: { domain: string }) {
         />
         {tiersMissing && (
           <p role="alert" className="text-sm text-danger">
-            Pick at least one tier, or turn extraction off.
+            {documentsMessages.intake.tiersMissing}
           </p>
         )}
         <div>
@@ -198,44 +194,44 @@ function Intake({ domain }: { domain: string }) {
             }}
           >
             {upload.isPending
-              ? 'Uploading...'
-              : `Upload ${files.length.toString()} ${files.length === 1 ? 'document' : 'documents'}`}
+              ? documentsMessages.intake.uploading
+              : documentsMessages.intake.upload(files.length)}
           </Button>
         </div>
         {documents.urlIntake && (
-          <form
-            aria-label="Add a document by URL"
-            onSubmit={submitUrl}
-            className="flex flex-wrap items-end gap-2"
-          >
-            <Input
-              label="Document URL"
-              type="url"
-              className="w-96 max-w-full"
-              placeholder="https://"
-              value={url}
-              hint="Keeper fetches it, from the hosts it allows only."
-              onChange={(event) => {
-                setUrl(event.target.value);
-              }}
-            />
-            <Input
-              label="File name (optional)"
-              value={filename}
-              onChange={(event) => {
-                setFilename(event.target.value);
-              }}
-            />
-            <Button
-              type="submit"
-              disabled={url.trim() === '' || tiersMissing || fetchUrl.isPending}
-            >
-              Fetch document
-            </Button>
+          <form aria-label={documentsMessages.intake.urlForm} onSubmit={submitUrl}>
+            <FormRow>
+              <Input
+                label={documentsMessages.intake.urlLabel}
+                type="url"
+                className="w-96 max-w-full"
+                placeholder="https://"
+                value={url}
+                hint={documentsMessages.intake.urlHint}
+                onChange={(event) => {
+                  setUrl(event.target.value);
+                }}
+              />
+              <Input
+                label={documentsMessages.intake.filenameLabel}
+                value={filename}
+                onChange={(event) => {
+                  setFilename(event.target.value);
+                }}
+              />
+              <FormAction>
+                <Button
+                  type="submit"
+                  disabled={url.trim() === '' || tiersMissing || fetchUrl.isPending}
+                >
+                  {documentsMessages.intake.fetch}
+                </Button>
+              </FormAction>
+            </FormRow>
           </form>
         )}
         {outcomes.length > 0 && (
-          <ul aria-label="Upload results" className="flex flex-col gap-1 text-sm">
+          <ul aria-label={documentsMessages.intake.results} className="flex flex-col gap-1 text-sm">
             {outcomes.map((outcome) => (
               <li
                 key={outcome.name}
@@ -272,7 +268,13 @@ function LibraryRow({ domain, document }: { domain: string; document: DocumentIn
       <TD>{formatBytes(document.size)}</TD>
       <TD>{shortTime(document.created_at)}</TD>
       <TD>{document.created_by}</TD>
-      <TD>{detail.isPending ? <span className="text-muted">...</span> : <JobBadge job={job} />}</TD>
+      <TD>
+        {detail.isPending ? (
+          <span className="text-muted">{documentsMessages.library.pending}</span>
+        ) : (
+          <JobBadge job={job} />
+        )}
+      </TD>
       <TD>
         {job?.proposal_id != null && (
           <Link
@@ -281,7 +283,7 @@ function LibraryRow({ domain, document }: { domain: string; document: DocumentIn
             search={{ ...scopeSearch, tab: 'items' }}
             className="text-accent hover:underline"
           >
-            Proposal #{job.proposal_id}
+            {documentsMessages.library.proposalLink(job.proposal_id)}
           </Link>
         )}
       </TD>
@@ -301,34 +303,35 @@ export function DocumentsPage() {
   return (
     <>
       <PageHeader
-        title="Documents"
-        description={`Contracts, notices and reports that Lorebase reads into Proposals for ${scope.domainInfo.display_name}.`}
-        actions={<Badge tone="accent">Branch {scope.branch}</Badge>}
+        title={documentsMessages.title}
+        description={documentsMessages.description}
+        docs={documentsMessages.docs}
+        actions={<Badge tone="accent">{documentsMessages.branchBadge(scope.branch)}</Badge>}
       />
       <Intake domain={scope.domain} />
-      <Section title="Library">
+      <Section title={documentsMessages.library.title}>
         {documents.isPending ? (
           <p role="status" className="text-muted">
-            Loading...
+            {commonMessages.loading}
           </p>
         ) : documents.isError ? (
           <p role="alert" className="text-danger">
             {documents.error.message}
           </p>
         ) : documents.data.pages.every((page) => page.items.length === 0) ? (
-          <EmptyState>No documents yet. Drop one above.</EmptyState>
+          <EmptyState>{documentsMessages.library.empty}</EmptyState>
         ) : (
           <>
-            <Table caption="Documents">
+            <Table caption={documentsMessages.library.caption}>
               <THead>
                 <TR>
-                  <TH>Document</TH>
-                  <TH>Type</TH>
-                  <TH>Size</TH>
-                  <TH>Added</TH>
-                  <TH>By</TH>
-                  <TH>Extraction</TH>
-                  <TH>Proposal</TH>
+                  <TH>{documentsMessages.library.document}</TH>
+                  <TH>{documentsMessages.library.type}</TH>
+                  <TH>{documentsMessages.library.size}</TH>
+                  <TH>{documentsMessages.library.added}</TH>
+                  <TH>{documentsMessages.library.by}</TH>
+                  <TH>{documentsMessages.library.extraction}</TH>
+                  <TH>{documentsMessages.library.proposal}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -347,7 +350,7 @@ export function DocumentsPage() {
                     void documents.fetchNextPage();
                   }}
                 >
-                  Load more
+                  {documentsMessages.loadMore}
                 </Button>
               </div>
             )}

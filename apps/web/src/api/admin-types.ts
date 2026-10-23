@@ -4,20 +4,20 @@
  */
 import type { components } from './generated/keeper';
 
-type Contract = components['schemas'];
+type Schemas = components['schemas'];
 
-export type PrincipalType = Contract['PrincipalType'];
-export type Principal = Contract['PrincipalOut'];
+export type PrincipalType = Schemas['PrincipalType'];
+export type Principal = Schemas['PrincipalOut'];
 /** `prefix` is the first characters of the key, to recognize it; the secret is never shown again. */
-export type ApiKey = Contract['ApiKeyOut'];
+export type ApiKey = Schemas['ApiKeyOut'];
 /** The answer of key creation; `key` is the only time the secret is returned. */
-export type ApiKeyCreated = Contract['ApiKeyCreated'];
+export type ApiKeyCreated = Schemas['ApiKeyCreated'];
 /** `name` names the service principal; `principal_id` adds the key to an existing one. */
-export type CreateApiKeyInput = Contract['CreateApiKey'];
-export type GrantScopeType = Contract['GrantScope'];
+export type CreateApiKeyInput = Schemas['CreateApiKey'];
+export type GrantScopeType = Schemas['GrantScope'];
 /** `subject` is a principal or group id. */
-export type Grant = Contract['GrantOut'];
-export type AuditEntry = Contract['AuditEntryOut'];
+export type Grant = Schemas['GrantOut'];
+export type AuditEntry = Schemas['AuditEntryOut'];
 
 export interface PrincipalListParams {
   type?: PrincipalType;

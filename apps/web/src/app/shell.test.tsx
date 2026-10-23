@@ -9,7 +9,7 @@ describe('app shell', () => {
     expect(branch).toHaveValue('model/risk');
     expect(screen.getByLabelText('Domain')).toHaveValue('supply');
     expect(await screen.findByText(/Revision f2a8c3d5/)).toBeInTheDocument();
-    expect(screen.getByText('behind main by 1')).toBeInTheDocument();
+    expect(screen.getByText('1 behind main')).toBeInTheDocument();
   });
 
   it('switches Branch and every view follows', async () => {
@@ -60,7 +60,7 @@ describe('app shell', () => {
     await screen.findByLabelText('Branch');
     await user.click(screen.getByRole('button', { name: 'New Branch' }));
     const dialog = await screen.findByRole('dialog', { name: 'New Branch' });
-    expect(dialog).toHaveTextContent('starts at the head of model/risk');
+    expect(dialog).toHaveTextContent('Starts at the head of model/risk');
     await user.type(within(dialog).getByLabelText('Branch name'), 'work/ui');
     await user.click(within(dialog).getByRole('button', { name: 'Create Branch' }));
 

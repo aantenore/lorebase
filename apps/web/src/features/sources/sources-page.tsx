@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useKeeperApi } from '@/api/provider';
 import { useSchema, useSourceRuns } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
-import { PlannedScreens } from '@/features/planned-screens';
+import { sources as sourcesMessages } from '@/messages/sources';
 import { Badge, EmptyState, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { useToast } from '@/ui/toast';
 import { RunsTable } from './runs-table';
@@ -26,10 +26,7 @@ export function SourcesPage() {
   const sync = useMutation({
     mutationFn: (source: string) => api.sources.sync(scope.domain, source),
     onSuccess: async (queued) => {
-      toast.notify(
-        `Sync of ${queued.api_name} queued (job ${queued.job_id.toString()}).`,
-        'success',
-      );
+      toast.notify(sourcesMessages.syncQueued(queued.api_name, queued.job_id), 'success');
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'source-runs'] });
       await queryClient.invalidateQueries({ queryKey: ['keeper', 'audit'] });
     },
@@ -38,26 +35,27 @@ export function SourcesPage() {
   return (
     <>
       <PageHeader
-        title="Sources"
-        description={`Where the Records of ${scope.domainInfo.display_name} come from, and how they got here.`}
-        actions={<Badge tone="accent">Branch {scope.branch}</Badge>}
+        title={sourcesMessages.title}
+        description={sourcesMessages.description}
+        docs={sourcesMessages.docs}
+        actions={<Badge tone="accent">{sourcesMessages.branchBadge(scope.branch)}</Badge>}
       />
       <QueryBoundary query={schema}>
         {(data) => (
           <>
-            <Section title={`Sources on ${scope.branch}`}>
+            <Section title={sourcesMessages.title}>
               {data.sources.length === 0 ? (
                 <EmptyState>
-                  This Branch has no Sources. Start from your data in the{' '}
+                  {sourcesMessages.emptyBeforeLink}
                   <Link
                     to="/$domain/modeler"
                     params={{ domain: scope.domain }}
                     search={{ ...scopeSearch, view: 'start' }}
                     className="text-accent hover:underline"
                   >
-                    Modeler
-                  </Link>{' '}
-                  or add one in the YAML editor below.
+                    {sourcesMessages.modelerLink}
+                  </Link>
+                  {sourcesMessages.emptyAfterLink}
                 </EmptyState>
               ) : (
                 <SourcesTable
@@ -71,11 +69,11 @@ export function SourcesPage() {
               )}
             </Section>
 
-            <Section title="Run history">
+            <Section title={sourcesMessages.runHistory}>
               <QueryBoundary query={runs}>
                 {(page) =>
                   page.items.length === 0 ? (
-                    <EmptyState>No runs yet in {scope.domainInfo.display_name}.</EmptyState>
+                    <EmptyState>{sourcesMessages.noRuns}</EmptyState>
                   ) : (
                     <RunsTable domain={scope.domain} runs={page.items} />
                   )
@@ -83,16 +81,12 @@ export function SourcesPage() {
               </QueryBoundary>
             </Section>
 
-            <Section title="Edit Sources (YAML)">
+            <Section title={sourcesMessages.editSection}>
               <SourcesEditor key={data.revision} base={data} />
             </Section>
           </>
         )}
       </QueryBoundary>
-      <PlannedScreens
-        area="Sources"
-        built={['Source list and detail', 'Documents and extraction jobs']}
-      />
     </>
   );
 }

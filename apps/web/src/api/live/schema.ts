@@ -13,6 +13,7 @@ import type {
   AttributeType,
   Derivation,
   DerivationVariant,
+  DomainExample,
   ElementStatus,
   Kind,
   Operation,
@@ -401,6 +402,20 @@ function source(raw: Raw): Source {
   };
 }
 
+/** The well-formed `{label, question}` entries of `domain.examples`; anything else is dropped. */
+function domainExamples(value: unknown): DomainExample[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) =>
+    isRaw(item) &&
+    typeof item['label'] === 'string' &&
+    typeof item['question'] === 'string' &&
+    item['label'].trim() !== '' &&
+    item['question'].trim() !== ''
+      ? [{ label: item['label'], question: item['question'] }]
+      : [],
+  );
+}
+
 /** The view `Schema` of a `SchemaOut`. */
 export function mapSchema(out: SchemaOut): Schema {
   const body: Raw = out.schema;
@@ -413,12 +428,14 @@ export function mapSchema(out: SchemaOut): Schema {
   }
   const info = isRaw(body['domain']) ? body['domain'] : {};
   const settings = isRaw(info['settings']) ? info['settings'] : undefined;
+  const examples = domainExamples(info['examples']);
   return {
     domain: out.domain,
     domain_info: {
       ...(typeof info['display_name'] === 'string' ? { display_name: info['display_name'] } : {}),
       ...(typeof info['description'] === 'string' ? { description: info['description'] } : {}),
       ...(settings === undefined ? {} : { settings }),
+      ...(examples.length === 0 ? {} : { examples }),
     },
     branch: out.branch ?? '',
     revision: out.revision,

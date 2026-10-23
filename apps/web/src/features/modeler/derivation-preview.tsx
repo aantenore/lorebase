@@ -6,9 +6,12 @@ import { useOptionalKeeperApi } from '@/api/provider';
 import { useRecords } from '@/api/queries';
 import { useScope } from '@/app/scope';
 import { ValueView } from '@/features/explorer/value-view';
+import { modelerEditors as modelerEditorsMessages } from '@/messages/modeler-editors';
 import { Button } from '@/ui/button';
 import { Badge } from '@/ui/layout';
 import type { SchemaDocument } from './document';
+
+const t = modelerEditorsMessages.derivation.preview;
 
 /** Records shown by the preview of a Derivation. */
 const SAMPLE_RECORDS = 5;
@@ -35,11 +38,11 @@ function SampleTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table aria-label={`Sample values of ${kind}.${attribute}`} className="w-full text-sm">
+      <table aria-label={t.samples(kind, attribute)} className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-muted">
             <th scope="col" className="py-1 pr-4 font-medium">
-              Record
+              {t.record}
             </th>
             <th scope="col" className="py-1 font-medium">
               {attribute}
@@ -61,7 +64,7 @@ function SampleTable({
                     {row.masked === true && (
                       <>
                         {' '}
-                        <Badge>masked</Badge>
+                        <Badge>{t.masked}</Badge>
                       </>
                     )}
                   </>
@@ -82,7 +85,7 @@ function SavedPreview({ kind, attribute }: { kind: string; attribute: string }) 
   if (records.isPending) {
     return (
       <p role="status" className="text-sm text-muted">
-        Reading sample Records...
+        {t.reading}
       </p>
     );
   }
@@ -99,18 +102,10 @@ function SavedPreview({ kind, attribute }: { kind: string; attribute: string }) 
   const noValues = rows.length > 0 && rows.every((row) => valueOf(row) == null);
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs text-muted">
-        {attribute} of the first {SAMPLE_RECORDS} {kind} Records on {scope.branch}, computed by the
-        saved Derivation.
-      </p>
-      {noValues && (
-        <p className="text-xs text-muted">
-          Keeper returned no value of {attribute} for these Records: none is computed yet, or this
-          Keeper does not serve derived values.
-        </p>
-      )}
+      <p className="text-xs text-muted">{t.saved(attribute, SAMPLE_RECORDS)}</p>
+      {noValues && <p className="text-xs text-muted">{t.noValues(attribute)}</p>}
       {rows.length === 0 ? (
-        <p className="text-sm text-muted">No {kind} Records on this Branch.</p>
+        <p className="text-sm text-muted">{t.noRecords(kind)}</p>
       ) : (
         <SampleTable
           kind={kind}
@@ -123,7 +118,7 @@ function SavedPreview({ kind, attribute }: { kind: string; attribute: string }) 
 }
 
 function cannotCompute(code: string | null): string {
-  return code === null ? 'Cannot be computed.' : `Cannot be computed (${code}).`;
+  return code === null ? t.cannotCompute : t.cannotComputeCode(code);
 }
 
 function rowsOf(preview: Preview) {
@@ -145,11 +140,7 @@ function rowsOf(preview: Preview) {
 function EditedPreview(props: Omit<Props, 'saved'>) {
   const api = useOptionalKeeperApi();
   if (api === null) {
-    return (
-      <p className="text-xs text-muted">
-        The edited Derivation is evaluated by Keeper, which this view is not using.
-      </p>
-    );
+    return <p className="text-xs text-muted">{t.notServed}</p>;
   }
   return <KeeperPreview api={api} {...props} />;
 }
@@ -169,10 +160,7 @@ function KeeperPreview({
   const issues = run.error instanceof ValidationError ? run.error.issues.slice(0, 5) : [];
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted">
-        Evaluates {name} as edited, without saving it, on the first {SAMPLE_RECORDS} {kind} Records
-        of {scope.branch}. Keeper checks the edit first, as it checks a change set.
-      </p>
+      <p className="text-xs text-muted">{t.edited(SAMPLE_RECORDS)}</p>
       <div>
         <Button
           disabled={run.isPending}
@@ -180,7 +168,7 @@ function KeeperPreview({
             run.mutate();
           }}
         >
-          Preview the edited Derivation
+          {t.run}
         </Button>
       </div>
       {run.isError && (
@@ -201,7 +189,7 @@ function KeeperPreview({
       {run.data !== undefined &&
         (run.data.items.length === 0 ? (
           <p role="status" className="text-sm text-muted">
-            No {kind} Records on this Branch.
+            {t.noRecords(kind)}
           </p>
         ) : (
           <SampleTable kind={kind} attribute={attribute} rows={rowsOf(run.data)} />

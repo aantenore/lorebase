@@ -33,6 +33,11 @@ export interface AppConfig {
    * scripted exploration instead, whatever this value.
    */
   guideUrl: string | null;
+  /**
+   * Base of the documentation site (`VITE_DOCS_URL`, `docsUrl` in `/config.js`) that "Learn
+   * more" links point into, without a trailing slash. `VITE_DOCS_URL=none` hides those links.
+   */
+  docsUrl: string | null;
   /** From `VITE_AUTH_MODE`. Always `token` in mock mode. */
   authMode: AuthMode;
   /**
@@ -173,6 +178,7 @@ const NON_FUNCTIONAL_DEFAULTS = {
   toastMs: 5000,
   mockLatencyMs: 0,
   schemaBranchPrefix: 'schema/',
+  docsUrl: 'https://aantenore.github.io/lorebase',
   // The caps repeat the defaults of keeper.schema_inference so a stock Keeper and a stock app agree.
   inferMaxFiles: 50,
   inferMaxFileBytes: 1_048_576,
@@ -274,6 +280,7 @@ const RUNTIME_ALIASES: Readonly<Record<string, string>> = {
   apiMode: 'VITE_API_MODE',
   keeperBaseUrl: 'VITE_KEEPER_BASE_URL',
   guideUrl: 'VITE_GUIDE_URL',
+  docsUrl: 'VITE_DOCS_URL',
   authMode: 'VITE_AUTH_MODE',
   apiToken: 'VITE_API_TOKEN',
   token: 'VITE_API_TOKEN',
@@ -325,6 +332,9 @@ export function loadConfig(raw: RawEnv): AppConfig {
   const guideText = text(raw, 'VITE_GUIDE_URL');
   const guideUrl = guideText === undefined ? null : parseBaseUrl(guideText, 'VITE_GUIDE_URL');
 
+  const docsText = text(raw, 'VITE_DOCS_URL') ?? NON_FUNCTIONAL_DEFAULTS.docsUrl;
+  const docsUrl = docsText === 'none' ? null : parseBaseUrl(docsText, 'VITE_DOCS_URL');
+
   const authText = text(raw, 'VITE_AUTH_MODE') ?? 'token';
   if (authText !== 'token' && authText !== 'session') {
     throw new ConfigError(
@@ -337,6 +347,7 @@ export function loadConfig(raw: RawEnv): AppConfig {
     apiMode: mode,
     keeperBaseUrl,
     guideUrl,
+    docsUrl,
     authMode,
     apiToken:
       mode === 'live' && authMode === 'token' ? (text(raw, 'VITE_API_TOKEN') ?? null) : null,

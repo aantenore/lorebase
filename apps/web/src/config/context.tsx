@@ -12,3 +12,8 @@ export function useConfig(): AppConfig {
   if (config === null) throw new Error('useConfig must be used inside ConfigProvider.');
   return config;
 }
+
+/** The configuration, or `null` outside a ConfigProvider (shared UI primitives in isolation). */
+export function useOptionalConfig(): AppConfig | null {
+  return use(ConfigContext);
+}

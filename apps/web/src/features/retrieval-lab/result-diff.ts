@@ -1,4 +1,7 @@
 import type { RecordRef, SearchResult } from '@/api/types';
+import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
+
+const R = retrievalLabMessages.results;
 
 /** Where a Record ranks in each of the two result lists (1 is the best); null when absent. */
 export interface RankRow {
@@ -50,11 +53,9 @@ export function compareResults(a: SearchResult[], b: SearchResult[]): Comparison
 export function describeRow(row: RankRow, side: 'A' | 'B'): string {
   const other = side === 'A' ? 'B' : 'A';
   const there = side === 'A' ? row.rankB : row.rankA;
-  if (there === null) return `only in ${side}`;
-  if (row.moved === null || row.moved === 0) return `same rank in ${other}`;
+  if (there === null) return R.onlyIn(side);
+  if (row.moved === null || row.moved === 0) return R.sameRank(other);
   // `moved` is A's rank minus B's: positive means B ranks the Record higher.
   const gain = side === 'B' ? row.moved : -row.moved;
-  return gain > 0
-    ? `ranks ${gain.toString()} higher than in ${other}`
-    : `ranks ${(-gain).toString()} lower than in ${other}`;
+  return gain > 0 ? R.higher(gain, other) : R.lower(-gain, other);
 }

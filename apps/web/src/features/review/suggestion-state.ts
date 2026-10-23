@@ -6,13 +6,14 @@ import type {
   SuggestionStatus,
   SuggestionType,
 } from '@/api/suggestion-types';
+import { review as reviewMessages } from '@/messages/review';
 import type { BadgeTone } from '@/ui/layout';
 
 /** What the filter form holds; `all` stands for "no restriction". */
 export interface SuggestionFilterState {
   status: SuggestionStatus | 'all';
   type: SuggestionType | 'all';
-  /** Also the pending suggestions below Keeper's minimum support. */
+  /** Also the suggestions below the minimum support. */
   belowMinSupport: boolean;
 }
 
@@ -29,9 +30,9 @@ export const STATUS_TONE: Record<SuggestionStatus, BadgeTone> = {
 };
 
 export const TYPE_LABEL: Record<SuggestionType, string> = {
-  kind: 'Kind',
-  attribute: 'Attribute',
-  relation: 'Relation',
+  kind: reviewMessages.suggestions.typeOptions.kind,
+  attribute: reviewMessages.suggestions.typeOptions.attribute,
+  relation: reviewMessages.suggestions.typeOptions.relation,
 };
 
 export function toSuggestionFilter(state: SuggestionFilterState): SuggestionFilter {
@@ -44,15 +45,16 @@ export function toSuggestionFilter(state: SuggestionFilterState): SuggestionFilt
 
 /** A Kind another suggestion proposes is `+Name`; shown as `Name (new)`. */
 export const refLabel = (ref: string): string =>
-  ref.startsWith('+') ? `${ref.slice(1)} (new)` : ref;
+  ref.startsWith('+') ? reviewMessages.suggestions.newRef(ref.slice(1)) : ref;
 
 /** The Kind that owns an Attribute, or the ends of a Relation; empty for a Kind. */
 export function ownerLabel(suggestion: SchemaSuggestion): string {
   const owner = suggestion.kind === null ? null : refLabel(suggestion.kind);
   if (suggestion.type === 'attribute') return owner ?? '';
   if (suggestion.type === 'relation') {
-    const target = suggestion.target === null ? '?' : refLabel(suggestion.target);
-    return `${owner ?? '?'} to ${target}`;
+    const unknown = reviewMessages.suggestions.unknownEnd;
+    const target = suggestion.target === null ? unknown : refLabel(suggestion.target);
+    return reviewMessages.suggestions.ends(owner ?? unknown, target);
   }
   return '';
 }
