@@ -12,6 +12,8 @@ from logging.config import fileConfig
 from typing import Any
 
 from alembic import context
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy.engine import Connection
 
 from lorebase_platform.settings import load_settings
@@ -20,6 +22,7 @@ from lorebase_store.migrations import (
     DATABASE_ATTRIBUTE,
     STORE_ATTRIBUTE,
     URL_ATTRIBUTE,
+    check_known_revisions,
     include_object,
 )
 from lorebase_store.models import metadata
@@ -62,7 +65,21 @@ def run_offline() -> None:
         context.run_migrations()
 
 
+def _invoked_command() -> str | None:
+    """Name of the `alembic` command line command being run; None when called from code."""
+    invocation = getattr(config.cmd_opts, "cmd", None)
+    return getattr(invocation[0], "__name__", None) if invocation else None
+
+
 def _run_sync(connection: Connection) -> None:
+    # `stamp --purge` is the manual way to repair the version table, so it is left alone.
+    if _invoked_command() != "stamp":
+        current = MigrationContext.configure(connection).get_current_heads()
+        # The read began a transaction; end it so that migrations manage their own (some run
+        # steps in autocommit blocks).
+        if connection.in_transaction():
+            connection.rollback()
+        check_known_revisions(ScriptDirectory.from_config(config), current)
     _configure(connection=connection)
     with context.begin_transaction():
         context.run_migrations()

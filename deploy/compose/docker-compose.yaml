@@ -24,8 +24,14 @@
 
 name: lorebase
 
+# Images are built from this checkout on every `up` (pull_policy build; unchanged layers come
+# from the cache), so a stale local image with the same tag never runs against newer
+# migrations. To run prebuilt images from a registry instead, set LOREBASE_IMAGE,
+# LOREBASE_ML_IMAGE, LOREBASE_WEB_IMAGE and LOREBASE_TAG to them and LOREBASE_PULL_POLICY to
+# missing (or always).
 x-backend: &backend
   image: ${LOREBASE_IMAGE:-lorebase}:${LOREBASE_TAG:-dev}
+  pull_policy: ${LOREBASE_PULL_POLICY:-build}
   build:
     context: ../..
     dockerfile: deploy/docker/backend.Dockerfile
@@ -254,6 +260,7 @@ services:
   # oidc-mock.yaml sets it up against a mock provider for a local try.
   web:
     image: ${LOREBASE_WEB_IMAGE:-lorebase-web}:${LOREBASE_TAG:-dev}
+    pull_policy: ${LOREBASE_PULL_POLICY:-build}
     build:
       context: ../..
       dockerfile: deploy/docker/web.Dockerfile

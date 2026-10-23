@@ -229,6 +229,29 @@ more, the same for Keeper and Scribe) and refuses to create a webhook without it
 Webhooks created before the key was set keep working: each delivery pass seals their keys. Rotation goes
 through `webhooks.previous_encryption_keys` ([agents](agents.md)).
 
+## Docker compose images and migrations
+
+The compose file builds the backend, backend-ml and web images from the checkout on every `up`
+(`pull_policy: build`, `LOREBASE_PULL_POLICY` in `.env`): unchanged layers come from the build
+cache, so a rebuild after no change takes seconds, and an image left over from an older checkout
+under the same tag (`lorebase:dev`) is never started against a newer database. Build explicitly
+with
+
+```bash
+docker compose --env-file .env -f deploy/compose/docker-compose.yaml build
+```
+
+To run prebuilt images instead (a registry, a CI artifact), set `LOREBASE_IMAGE`,
+`LOREBASE_ML_IMAGE`, `LOREBASE_WEB_IMAGE` and `LOREBASE_TAG` to them and
+`LOREBASE_PULL_POLICY=missing` (or `always`); `up --no-build` also skips the build for one run.
+
+`migrate` refuses a database that a newer Lorebase already migrated, before changing anything:
+it exits 1 with `FAILED: the database is at revision <db revision>, which this code does not
+know (its newest revision is <code head>) ...` and names the fix: run the version that migrated
+it (rebuild the images from that checkout), or restore a backup taken before that upgrade.
+Keeper, which waits for `migrate`, does not start. `alembic stamp --purge` stays available for a
+manual repair of the version table.
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot
