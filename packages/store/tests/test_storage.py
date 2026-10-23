@@ -386,3 +386,74 @@ async def test_downgrade_restores_maps_and_an_upgraded_install_starts_inline(
     shared, total = await counts(sessions, REFERENCES)
     assert shared == total
     assert await snapshot(sessions, runtime) == before
+
+
+HELD = text(
+    "SELECT tableoid::regclass::text FROM mat_records "
+    "WHERE domain_id = :d AND kind_id = :k AND key = 'S-1' FOR UPDATE"
+)
+
+
+@pytest.mark.integration
+async def test_rows_a_commit_holds_are_rewritten_by_a_later_run(
+    engine: AsyncEngine, sessions: Sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rewrite skips rows a commit holds, tries their page ranges again, defers the step
+    while they stay held and finishes them on the next run."""
+    monkeypatch.setattr(storage, "RETRY_WAIT_S", 0.0)
+    settings = StoreSettings(storage=StorageSettings(profile="fast"))
+    async with engine.connect() as holder:
+        await holder.begin()
+        await holder.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        partition = (await holder.execute(HELD, {"d": DOMAIN, "k": SUPPLIER})).scalar_one()
+        report = await storage.apply(engine, settings, switch_wait_s=0)
+        deferred = {
+            s.step for s in report.steps if s.status == "deferred" and s.step.startswith("lineage")
+        }
+        assert deferred == {f"lineage {partition}"}, report.as_dict()
+        assert (await counts(sessions, REFERENCES))[0] == 1
+        await holder.rollback()
+    report = await storage.apply(engine, settings, switch_wait_s=0)
+    assert report.complete, report.as_dict()
+    assert (await counts(sessions, REFERENCES))[0] == 0
+
+
+WAITING = text(
+    "SELECT count(*) FROM pg_locks WHERE relation = CAST('mat_links' AS regclass) AND NOT granted"
+)
+
+
+@pytest.mark.integration
+async def test_downgrade_backs_off_from_a_commit_holding_links(
+    engine: AsyncEngine,
+    sessions: Sessions,
+    runtime: StoreRuntime,
+    database_url: str,
+    database: DatabaseSettings,
+    store: StoreSettings,
+) -> None:
+    """A writer holding `mat_links` that then needs `mat_records` gets it while the downgrade
+    waits: the downgrade lets go before a deadlock check could pick a victim."""
+    before = await snapshot(sessions, runtime)
+    async with engine.connect() as holder:
+        await holder.begin()
+        await holder.execute(text("LOCK TABLE mat_links IN ROW EXCLUSIVE MODE"))
+        downgrade = asyncio.create_task(
+            asyncio.to_thread(
+                migrations.downgrade, "0035", database=database, store=store, url=database_url
+            )
+        )
+        async with engine.connect() as probe:
+            for _ in range(500):
+                if (await probe.execute(WAITING)).scalar_one():
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("the downgrade never waited for mat_links")
+        await holder.execute(text("LOCK TABLE mat_records IN ROW EXCLUSIVE MODE"))
+        await holder.commit()
+    await downgrade
+    await engine.dispose()
+    await asyncio.to_thread(migrations.upgrade, database=database, store=store, url=database_url)
+    await apply(engine)
+    assert await snapshot(sessions, runtime) == before

@@ -4,6 +4,11 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+### Fixed
+
+- `storage apply` no longer leaves lineage map rows a commit held during the rewrite in the other form: the page ranges they are in are rewritten again after the pass, and while rows stay held the step is deferred (exit status 3) and the next run finishes them ([performance](docs/performance.md#switching)).
+- The downgrade of migration `0036` takes the locks of `mat_records` and `mat_links` up front, in the order commits write them, each wait shorter than `deadlock_timeout`: a commit waiting for it is never chosen as a deadlock victim, and neither is the downgrade.
+
 ## 0.2.0 - 2026-10-23
 
 Second pre-alpha release. Records now carry their history and lineage, values tagged `pii`, `confidential` or `restricted` are masked and vault values can be erased, Scribe computes embeddings for semantic and hybrid search, path Derivations work, storage profiles decide what the database keeps besides the rows, and Guide, an optional exploration assistant outside Keeper, reads a Domain with the caller's own credential. The web app signs in through Keeper and its Modeler edits Operations, Derivations and Sources, and its copy no longer names the data of any one Domain. Pre-1.0: this minor version changes interfaces; read the breaking changes before upgrading. The database schema moves from migration `0012` to `0036`, `read.history.lineage_max_changes` is removed, Scribe and Guide run on a new image `ghcr.io/aantenore/lorebase-ml`, and `POST /search` adds `truncated_candidates`. The lines link the documentation of each change: the work landed directly on `main`, without pull requests to link.
