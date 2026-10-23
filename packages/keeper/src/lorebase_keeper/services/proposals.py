@@ -840,7 +840,11 @@ def _limited(attempt: MergeAttemptRow, partitions: PartitionFilter) -> MergeAtte
     outcome["auto_resolutions"] = [
         a
         for a in outcome.get("auto_resolutions") or []
-        if isinstance(a, dict) and partitions.allows(str(a.get("partition")))
+        if isinstance(a, dict)
+        and partitions.allows(
+            str(a.get("partition")),
+            None if a.get("attribute") is None else str(a.get("attribute")),
+        )
     ]
     outcome["unmatched_resolutions"] = []
     return replace(attempt, outcome=outcome)

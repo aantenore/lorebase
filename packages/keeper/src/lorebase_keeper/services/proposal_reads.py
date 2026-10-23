@@ -24,7 +24,7 @@ from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, relation_partition
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, ProblemError
-from lorebase_keeper.reading.visibility import visible
+from lorebase_keeper.reading.visibility import projection
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_store.repositories import (
     EVERY_PARTITION,
@@ -109,7 +109,7 @@ def require_visible(
 ) -> None:
     """403 for a Conflict stored in a partition outside `partitions`; with `invisible`, the
     404 of a Conflict that is not part of the attempt."""
-    if not partitions.allows(conflict.partition):
+    if not partitions.allows(conflict.partition, conflict.attribute_id):
         if invisible:
             raise unknown_conflict(conflict.fingerprint, attempt_id)
         raise ProblemError(
@@ -127,8 +127,13 @@ def visible_partitions(scope: ConflictScope, schemas: Iterable[Schema]) -> Parti
     if scope.kinds is None:
         return PartitionFilter(exclude=frozenset({PARTITION_SCHEMA}))
     seen = list(schemas)
+    hidden: frozenset[str] = frozenset()
     if scope.invisible:
-        seen = [visible(schema, scope.kinds) for schema in seen]
+        projections = [projection(schema, scope.kinds) for schema in seen]
+        seen = [p.schema for p in projections]
+        # Conflicts about Attributes left out of a visible Kind (a reference to an invisible
+        # Kind) are left out too: their values are keys of invisible Records.
+        hidden = frozenset().union(*(p.hidden for p in projections))
     kind_ids = {
         kind.id for schema in seen for kind in schema.kinds.values() if kind.api_name in scope.kinds
     }
@@ -141,7 +146,7 @@ def visible_partitions(scope: ConflictScope, schemas: Iterable[Schema]) -> Parti
     }
     if scope.schema:
         partitions.add(PARTITION_SCHEMA)
-    return PartitionFilter(include=frozenset(partitions))
+    return PartitionFilter(include=frozenset(partitions), exclude_attributes=hidden)
 
 
 def unknown_conflict(fingerprint: str, attempt_id: str) -> ProblemError:

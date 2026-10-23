@@ -64,8 +64,7 @@ def test_references_to_other_kinds_are_left_out() -> None:
     seen = visible_schema(schema, {"PurchaseOrder", "Part", "Plant"})
     assert "supplier" not in _attributes(seen, "PurchaseOrder")
     assert _names(seen, "relations") == {"stocked_at", "for_part", "delivered_to"}
-    # The Source of purchase orders maps nothing left out but its target is kept only when
-    # every Relation and Attribute it writes is visible.
+    # The Source of purchase orders writes `supplier`, which is left out: it goes too.
     assert _names(seen, "sources") == set()
 
 
@@ -75,9 +74,7 @@ def test_operations_naming_other_kinds_are_left_out() -> None:
     assert _names(seen, "operations") == {"approve_contract"}
 
 
-@pytest.mark.parametrize(
-    "size", range(len(supply().kinds) + 1), ids=lambda size: f"{size}-kinds"
-)
+@pytest.mark.parametrize("size", range(len(supply().kinds) + 1), ids=lambda size: f"{size}-kinds")
 def test_no_projection_names_an_element_it_leaves_out(size: int) -> None:
     schema = supply()
     kinds = sorted(_names(schema, "kinds"))
@@ -125,6 +122,26 @@ def test_a_kind_keyed_by_a_reference_to_another_kind_is_left_out() -> None:
 
     schema = _variant(keyed)
     assert _names(visible_schema(schema, {"PurchaseOrder", "Part"}), "kinds") == {"Part"}
-    assert "PurchaseOrder" in _names(
-        visible_schema(schema, {"PurchaseOrder", "Supplier"}), "kinds"
-    )
+    assert "PurchaseOrder" in _names(visible_schema(schema, {"PurchaseOrder", "Supplier"}), "kinds")
+
+
+def test_trait_implementations_mapping_attributes_left_out_are_left_out() -> None:
+    def counted(document: dict[str, Any]) -> None:
+        document["traits"]["Counted"] = {
+            "id": "trt_01KEZF7C00ZZZZZZZZZZZZZZZZ",
+            "attributes": {"count": {"id": "att_01KEZF7C00YYYYYYYYYYYYYYYY", "type": "integer"}},
+        }
+        document["kinds"]["Part"]["traits"] = [
+            {"trait": "Counted", "attribute_map": {"count": "supplier_count"}}
+        ]
+
+    schema = _variant(counted)
+    part = schema.kind_by_api_name("Part")
+    assert part is not None
+    assert part.traits
+    seen = visible_schema(schema, {"Part", "Plant"})
+    hidden = element_ids(schema) - element_ids(seen)
+    assert "Counted" not in _names(seen, "traits")
+    assert not [i for i in hidden if i in json.dumps(seen.model_dump(mode="json"))]
+    assert not [i for i in validate_schema(seen, RULES) if i.is_error]
+    assert "Counted" in _names(visible_schema(schema, {"Part", "Supplier"}), "traits")

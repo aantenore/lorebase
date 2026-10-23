@@ -14,6 +14,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from fastapi import Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,7 @@ from lorebase_keeper.errors import NOT_FOUND, ProblemError
 from lorebase_keeper.reading.caching import not_modified
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import UNCLEARED, Disclosure, Masking, masking_for
-from lorebase_keeper.reading.visibility import Projection, projection
+from lorebase_keeper.reading.visibility import Projection, projection, tells
 from lorebase_keeper.services.reads import ReadGuard, ReadTarget, StoreReadSource
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.layout import BranchLayout
@@ -132,6 +133,13 @@ class ReadPoint:
     hidden: frozenset[str] = frozenset()
     """Ids of the schema elements and Attributes the projection left out (`KindScope.visible`):
     what a candidate schema built on the visible one must not reuse."""
+    hidden_names: frozenset[str] = frozenset()
+    """Names of the schema elements the projection left out."""
+
+    def tells(self, value: Any) -> bool:
+        """Whether `value` (a Revision message, an origin document) names something the
+        projection left out: such text is not shown (design 13.3)."""
+        return tells(value, self.hidden, self.hidden_names)
 
     @property
     def variant(self) -> str:
@@ -320,6 +328,7 @@ async def resolve_point(
                 layout,
                 masking.over(schema),
                 hidden=seen.hidden,
+                hidden_names=seen.names,
             )
     schema = await schema_at(session, runtime, domain.id, revision)
     seen = scope.visible(schema)
@@ -333,6 +342,7 @@ async def resolve_point(
         layout,
         masking.over(schema),
         hidden=seen.hidden,
+        hidden_names=seen.names,
     )
 
 

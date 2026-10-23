@@ -257,20 +257,27 @@ async def _changes(
     ]
 
 
+def _nothing(_value: Any) -> bool:
+    return False
+
+
 async def _provenance(
-    session: AsyncSession, runtime: ReadRuntime, domain_id: str, ids: Iterable[str]
+    session: AsyncSession, point: ReadPoint, runtime: ReadRuntime, ids: Iterable[str]
 ) -> dict[str, ProvenanceOut]:
     rows = await ProvenanceRepository(
-        session, domain_id, writes=runtime.store_settings.writes
+        session, point.domain.id, writes=runtime.store_settings.writes
     ).get_many(ids)
-    return {id_: provenance_out(row) for id_, row in rows.items()}
+    return {id_: provenance_out(row, point.tells) for id_, row in rows.items()}
 
 
-def provenance_out(row: ProvenanceRow) -> ProvenanceOut:
+def provenance_out(row: ProvenanceRow, tells: Callable[[Any], bool] = _nothing) -> ProvenanceOut:
+    """A provenance entry; its origin document is left out when it names something invisible
+    to the caller (`ReadPoint.tells`, an Operation or Source left out of its schema)."""
+    origin = dict(row.origin_ref)
     return ProvenanceOut(
         id=row.id,
         origin_type=row.origin_type,
-        origin=dict(row.origin_ref),
+        origin={} if tells(origin) else origin,
         actor=row.actor,
         at=row.at,
     )
@@ -303,6 +310,7 @@ def _change_out(
     *,
     values: bool,
     masking: Masking,
+    tells: Callable[[Any], bool] = _nothing,
 ) -> RecordChangeOut:
     order = _reading_order(kind)
     scope = (kind.id,)
@@ -331,8 +339,8 @@ def _change_out(
         at=change.at,
         author=change.author,
         on_behalf_of=change.on_behalf_of,
-        message=change.message,
-        origin=change.origin,
+        message="" if tells(change.message) else change.message,
+        origin={} if tells(change.origin) else change.origin,
         change=_change_kind(change),
         attributes=sorted(attributes, key=lambda a: order(a.name)),
         provenance=None if element is None else provenance.get(element),
@@ -363,12 +371,19 @@ async def _render(
         session, runtime, domain, [h for c in changes for h in (c.old_hash, c.new_hash)]
     )
     provenance = await _provenance(
-        session, runtime, domain, [p for c in changes for p in c.provenance.values()]
+        session, point, runtime, [p for c in changes for p in c.provenance.values()]
     )
-    return [
-        _change_out(kind, c, bodies, provenance, values=values, masking=point.masking)
+    items = [
+        _change_out(
+            kind, c, bodies, provenance, values=values, masking=point.masking, tells=point.tells
+        )
         for c in changes
     ]
+    if not point.hidden:
+        return items
+    # A change of nothing but Attributes left out of the caller's schema (a reference to an
+    # invisible Kind) would tell that, and when, something invisible changed.
+    return [i for i in items if i.change is not ChangeKind.UPDATED or i.attributes]
 
 
 # History --------------------------------------------------------------------------------------
@@ -603,7 +618,7 @@ async def record_lineage(
         item["id"]: ProvenanceOut(
             id=item["id"],
             origin_type=item["origin_type"],
-            origin=item["origin"],
+            origin={} if point.tells(item["origin"]) else item["origin"],
             actor=item["actor"],
             at=_utc(item["at"]),
         )
@@ -613,6 +628,8 @@ async def record_lineage(
     by_id: dict[str, LineageProposalOut] = {}
     for item in row["proposals"] or ():
         out = LineageProposalOut.model_validate(item)
+        if point.tells(out.title):
+            out.title = ""
         by_id[out.id] = out
         if out.merged_revision is not None:
             by_revision.setdefault(out.merged_revision, out)
@@ -648,7 +665,9 @@ async def record_lineage(
                 revision=None if setter is None else setter["id"],
                 revision_at=None if setter is None else _utc(setter["at"]),
                 author=None if setter is None else setter["author"],
-                message=None if setter is None else setter["message"],
+                message=None
+                if setter is None or point.tells(setter["message"])
+                else setter["message"],
                 source=source,
                 operation=operation,
                 extraction=extraction,
@@ -698,4 +717,6 @@ def _created(
         created["provenance"] or {},
     )
     bodies = {new_hash: created["values"] or {}}
-    return _change_out(kind, change, bodies, provenance, values=False, masking=point.masking)
+    return _change_out(
+        kind, change, bodies, provenance, values=False, masking=point.masking, tells=point.tells
+    )
