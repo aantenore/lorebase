@@ -3062,6 +3062,16 @@ export interface components {
             };
         };
         /**
+         * EdgeRef
+         * @description A Link by its endpoints only (`values: false`).
+         */
+        EdgeRef: {
+            /** Relation */
+            relation: string;
+            from: components["schemas"]["RecordRef"];
+            to: components["schemas"]["RecordRef"];
+        };
+        /**
          * ElementChangeOut
          * @description One element written or removed.
          */
@@ -4029,6 +4039,12 @@ export interface components {
             max_nodes?: number | null;
             /** Max Edges */
             max_edges?: number | null;
+            /**
+             * Values
+             * @description false: nodes are Record headers (kind, key, title) and edges Link endpoints (relation, from, to), without values; for callers that need the structure only.
+             * @default true
+             */
+            values: boolean;
         };
         /** NeighborhoodResponse */
         NeighborhoodResponse: {
@@ -4038,10 +4054,16 @@ export interface components {
              */
             revision: string;
             served_from: components["schemas"]["ServedFrom"];
-            /** Nodes */
-            nodes: components["schemas"]["RecordOut"][];
-            /** Edges */
-            edges: components["schemas"]["Edge"][];
+            /**
+             * Nodes
+             * @description Records reached, nearest first: headers only (`RecordRef`) when the request has `values: false`.
+             */
+            nodes: (components["schemas"]["RecordOut"] | components["schemas"]["RecordRef"])[];
+            /**
+             * Edges
+             * @description Links between the nodes: endpoints only (`EdgeRef`) when the request has `values: false`.
+             */
+            edges: (components["schemas"]["Edge"] | components["schemas"]["EdgeRef"])[];
             /**
              * Truncated
              * @default false
@@ -5410,6 +5432,12 @@ export interface components {
              * @description Typo corrections applied to q; hits found only through them come after the others.
              */
             corrections?: components["schemas"]["SearchCorrection"][];
+            /**
+             * Truncated Candidates
+             * @description Only a sample of the matches of q (the first ones in index order) was ranked, as happens when every term of q is very common: better matches may exist. Add a rarer term, a Kind or a filter to narrow q.
+             * @default false
+             */
+            truncated_candidates: boolean;
         };
         /**
          * SearchTuning
