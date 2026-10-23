@@ -82,7 +82,7 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $fn$
         WHEN jsonb_typeof(p_value) = 'object' AND p_value ? '{MAP_KEY}' THEN coalesce(
             (SELECT m.map FROM __MAPS__ m
              WHERE m.domain_id = p_domain AND m.id = decode(p_value ->> '{MAP_KEY}', 'hex')),
-            lb_lineage_missing(p_domain, p_value ->> '{MAP_KEY}'))
+            __SCHEMA__.lb_lineage_missing(p_domain, p_value ->> '{MAP_KEY}'))
         ELSE p_value
     END
 $fn$
@@ -113,8 +113,8 @@ RECORD_TRIGGER = """
 CREATE FUNCTION lb_lineage_maps_records() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 BEGIN
-    NEW.lineage := lb_lineage_share(NEW.domain_id, NEW.lineage);
-    NEW.lineage_revisions := lb_lineage_share(NEW.domain_id, NEW.lineage_revisions);
+    NEW.lineage := __SCHEMA__.lb_lineage_share(NEW.domain_id, NEW.lineage);
+    NEW.lineage_revisions := __SCHEMA__.lb_lineage_share(NEW.domain_id, NEW.lineage_revisions);
     RETURN NEW;
 END
 $fn$
@@ -124,7 +124,7 @@ LINK_TRIGGER = """
 CREATE FUNCTION lb_lineage_maps_links() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 BEGIN
-    NEW.lineage := lb_lineage_share(NEW.domain_id, NEW.lineage);
+    NEW.lineage := __SCHEMA__.lb_lineage_share(NEW.domain_id, NEW.lineage);
     RETURN NEW;
 END
 $fn$
@@ -244,8 +244,9 @@ def upgrade() -> None:
     )
     _grant(TASKS)
     maps = _maps_name()
+    schema = maps.rsplit(".", 1)[0]
     for statement in (LINEAGE_MISSING, LINEAGE, LINEAGE_SHARE, RECORD_TRIGGER, LINK_TRIGGER):
-        op.execute(statement.replace("__MAPS__", maps))
+        op.execute(statement.replace("__MAPS__", maps).replace("__SCHEMA__", schema))
     # Trigger functions are not called directly. The others run as their caller (no SECURITY
     # DEFINER), under its table privileges and row-level security, so every role may call them.
     for signature in TRIGGER_FUNCTIONS:
