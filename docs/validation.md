@@ -219,6 +219,17 @@ columns of one run compare):
 
 Detail: [performance](performance.md#search-on-very-common-terms).
 
+**Working set and storage profiles, 2026-10-23** (`tests/perf/working_set.py` on copies of
+the seeds; load average 45 to 105 at 1M, 40 to 75 at 10M): at 1M Records the hot set of the
+agent read path went from 12.5 GB (13,120 bytes per Record) to 5.5 GB in `balanced` and
+`compact` and 6.7 GB in `fast` after `storage apply --compact --reindex`; the cold 2-hop
+neighborhood from 291 to 42 ms at p50 (`balanced`), with 211 against 138 pages read from
+outside shared buffers. Commits of 1,000 Part updates with the lineage map triggers on and off
+alternating: p50 256 and 257 ms. A half-precision HNSW index is 43% smaller and 6 points of
+recall@10 lower, so only `compact` uses it. The 10M before-run is measured (57 GB hot,
+neighborhood 122 ms cold at p50); the 10M after-run was interrupted when the Docker VM
+stopped. Detail: [performance](performance.md#working-set).
+
 ### Canvas, 5,000 nodes and 10,000 edges
 
 - **Date:** 2026-10-22, median of 3 runs.

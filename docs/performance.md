@@ -850,6 +850,318 @@ and the heap page, 2.0 ms of I/O at the median, 3.7 ms per statement at p50 and 
   not touch them, so its gain (about 1 ms) is below the noise of the run and does not justify a
   second index on the largest table of a commit; the commit cost was therefore not measured.
 
+## Working set
+
+What the agent read path keeps touching, measured per relation, and how much of it a storage
+profile keeps. Measured on 2026-10-23 with `tests/perf/working_set.py` on copies of the seed
+databases (`perf_seed_1m`, `perf_seed_10m`, the 1M and 10M fixtures of the sections above),
+same machine and Postgres as above (`shared_buffers` 2GB in a Docker VM of 8 GiB).
+
+### Method
+
+```sh
+LOREBASE_TEST_DATABASE_URL=postgresql://perf:perf@127.0.0.1:55410/postgres \
+uv run python tests/perf/working_set.py --database <copy> --iterations 200 --warmup 20 \
+  --buffercache --seed <fresh> [--commits 8] --out build/perf/ws.md --json build/perf/ws.json
+```
+
+- **Sizes.** `pg_relation_size` of every table (hash partitions folded into their table), its
+  TOAST relation and each index (`pg_total_relation_size`, `pg_indexes_size` agree), divided by
+  the Records of `main`; column widths from `pg_stats` (`avg_width`, `null_frac`,
+  `n_distinct`) and the average row of a 1% sample.
+- **Pages per read.** For each read of the harness (`harness.read_operations`, the reads of
+  the 10M table), `--iterations` calls on one connection, one transaction each, random keys:
+  the deltas of `pg_statio_user_tables` and `pg_statio_user_indexes` (heap, TOAST and every
+  index; the backend's statistics flushed with `pg_stat_force_next_flush()` before each
+  snapshot) give the pages each call touched per relation, from shared buffers (`hit`) or not
+  (`read`). Unlike `EXPLAIN (ANALYZE, BUFFERS)`, which sees a security definer function as one
+  node, this attributes the pages the neighborhood and search functions read inside. The
+  relations some read touched are the **hot set**.
+- **Cold and warm.** Cold: keys drawn from a seed no earlier run of the database used
+  (`--seed`), so their pages are not in shared buffers. Warm: the same keys again right after.
+  At 10M the database is eight times the VM's memory, so cold pages come from disk or the
+  VM's page cache; at 1M most of the hot set fits in the page cache.
+- **Residency.** `pg_buffercache` after the reads: the shared buffers each relation holds.
+- **Commits.** `--commits` times commits of 1,000 Part updates after the reads (the bench's
+  `commit of 1000 changes`).
+
+The machine was shared with other workloads throughout: load average 45 to 105 on 15 cores
+during the 1M runs and 40 to 75 during the 10M runs. Latencies move by a factor of 2 between
+runs at the same load; compare sizes and pages, which do not depend on the load, and read the
+latencies as upper bounds.
+
+### Where the bytes are (before)
+
+At 10M Records the agent read path touches 18 relations, 57 GB, 6,165 bytes per Record:
+
+| relation | 10M | bytes per Record | read by |
+|---|---:|---:|---|
+| `mat_records` heap | 17.0 GB | 1,824 | every Record read, search ranking |
+| `mat_history` heap | 16.5 GB | 1,766 | history, lineage |
+| `mat_links` heap | 8.7 GB | 939 | Links of a Record, neighborhood |
+| `mat_history` primary key | 6.8 GB | 726 | history, lineage |
+| `mat_links` primary key | 3.5 GB | 378 | neighborhood |
+| `mat_records` primary key | 1.4 GB | 145 | get, page, neighborhood, lineage |
+| `objects` heap and key | 1.5 GB | 159 | history, lineage |
+| `mat_links` reverse index | 1.0 GB | 108 | Links of a Record, neighborhood |
+| per-Attribute indexes (14) | 0.9 GB | 96 | attribute queries, foreign key Links |
+| GIN on `values` | 0.6 GB | 65 | none of the reads (DSL equality filters) |
+| search GIN | 0.2 GB | 19 | search |
+
+- **Lineage maps were half of a Record row.** `pg_stats` of `mat_records`: `lineage` 495
+  bytes, `lineage_revisions` 370 and `values` 398 of a 1,600-byte row, 4.5 rows per 8 kB page;
+  `lineage` has 467 distinct values in 10M rows and `lineage_revisions` 5,272. `mat_links.lineage`
+  is 81 of about 300 bytes. Rows under 2 kB are never compressed or moved to TOAST
+  (`TOAST_TUPLE_THRESHOLD`; a lower `toast_tuple_target` does not apply below it, checked on
+  20,000 rows), so `SET STORAGE` and lz4 change nothing for these rows.
+- **The 1M fixture was half empty.** `pgstattuple_approx` of the 1M copy: 54% free space in
+  `mat_records`, 49% in `mat_links`, 51% in `mat_history` (pages emptied by the rewrites of the
+  lineage backfill and the loads, kept by the table): 3.4 kB of heap per Record where the rows
+  are 1.6 kB. Every page a read touches holds half as many rows as it could.
+- **Unused indexes.** `ix_mat_records_values` (0.6 GB at 10M) served none of the reads, and 10
+  of the 14 per-Attribute indexes had no scan over the whole benchmark history
+  (`pg_stat_user_indexes`).
+- **Key widths.** `kind_id` and `relation_id` are 31-byte text ids in every row and in the
+  primary keys; integer surrogates would shrink `mat_links`' primary key by about a third, but
+  every statement, the row-level security policies and the definer functions name them; not
+  changed (see below).
+
+### What changed
+
+| Change | Adopted | Effect (1M, measured) |
+|---|---|---|
+| Shared lineage maps (migration `0036`, store schema notes) | yes, `compact` and `balanced` | `mat_records` row 1,551 to about 700 bytes; 4,328 distinct maps take 2.5 MB |
+| Online compaction (`storage apply --compact --reindex`) | yes, all profiles, on request | `mat_records` heap 3,269 to 799 MB, `mat_links` 1,611 to 672 MB, `mat_history` 3,059 to 1,515 MB, their indexes a third to a half smaller |
+| GIN on `values` optional | off in `compact` | 111 MB at 1M, 624 MB at 10M; equality on Attributes without an index scans the Kind |
+| Per-Attribute indexes of unique and foreign key Attributes only | `compact` | 90 to 15 MB at 1M; the attribute query reads the Kind (12,700 pages per call instead of 47) |
+| Lexicon trigram index optional | off in `compact` | 7 MB; typo corrections compare the lexicon's words (1,527 pages per call instead of 636) |
+| `halfvec` HNSW index | `compact` only | index 43% smaller; recall@10 6 points lower (below) |
+| TOAST compression lz4 or pglz | per profile | no effect on these rows (under 2 kB); applies to large values |
+| `mat_records` fill factor 90 | `fast` | room for HOT updates; 10% more heap |
+| Search vectors in a side table | no | 86 bytes of 1,600; ranking reads the vector of every candidate, a join would add a page per candidate |
+| Integer keys for Kinds and Relations | no | about a third of `mat_links`' primary key; touches every statement, policy and definer function |
+| `toast_tuple_target` / `SET STORAGE` on the row | no | no effect below 2 kB |
+
+Each was adopted only if it shrinks the hot set without slowing commits by more than 5%:
+commits of 1,000 Part updates with the lineage map triggers on and off, alternating, 12 each on
+the 1M copy: p50 256 and 257 ms, mean 292 and 268 ms (one first-run outlier of 591 ms with the
+triggers on).
+
+### 1M Records: profiles
+
+The 1M copy as seeded (before), then after `storage apply --compact --reindex` in each
+profile. Hot set and per-relation sizes:
+
+| relation | before | balanced | compact | fast |
+|---|---:|---:|---:|---:|
+| `mat_records` heap | 3,269 MB | 799 MB | 802 MB | 1,827 MB |
+| `mat_records` primary key | 262 MB | 76 MB | 76 MB | 76 MB |
+| GIN on `values` | 136 MB | 111 MB | none | 113 MB |
+| per-Attribute indexes | 179 MB | 90 MB | 15 MB | 90 MB |
+| `mat_links` heap | 1,611 MB | 672 MB | 672 MB | 802 MB |
+| `mat_links` primary key | 797 MB | 252 MB | 252 MB | 252 MB |
+| `mat_history` heap | 3,059 MB | 1,515 MB | 1,515 MB | 1,517 MB |
+| `mat_history` primary key | 1,525 MB | 476 MB | 476 MB | 477 MB |
+| `mat_lineage_maps` | none | 2 MB | 4 MB | 6 MB |
+| **hot set** | **12.5 GB (13,120 B/Record)** | **5.5 GB (5,791)** | **5.5 GB (5,714)** | **6.7 GB (7,006)** |
+| all relations | 19.0 GB | 11.9 GB | 11.8 GB | 13.1 GB |
+
+`fast` keeps the maps in the rows (1,915 bytes of heap per Record); its compaction stopped when
+no free space was left below the last pages, so its heap is 15% above a fresh load of inline
+rows. Reads, p50 / p95 in milliseconds, cold then warm (load average in brackets):
+
+| read | before (72) cold | warm | balanced (82) cold | warm | compact (95) cold | warm | fast (50) cold | warm |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| get by key | 9.1 / 33.8 | 5.4 / 11.1 | 3.9 / 22.2 | 3.1 / 6.4 | 3.5 / 13.6 | 8.1 / 23.6 | 6.0 / 26.8 | 3.4 / 16.6 |
+| list page of 50 | 16.6 / 59.0 | 12.2 / 87.7 | 6.1 / 24.1 | 8.1 / 31.5 | 5.7 / 16.0 | 7.0 / 40.2 | 6.2 / 14.2 | 4.3 / 7.4 |
+| links of a record | 22.1 / 74.0 | 14.9 / 84.3 | 6.0 / 14.1 | 3.6 / 14.6 | 4.7 / 7.3 | 2.9 / 5.1 | 6.4 / 10.1 | 4.7 / 8.4 |
+| 2-hop neighborhood | 291.5 / 718.5 | 73.0 / 285.5 | 42.5 / 93.0 | 20.3 / 45.1 | 27.1 / 50.8 | 13.6 / 28.0 | 47.1 / 74.4 | 14.0 / 32.7 |
+| query by indexed attribute | 13.6 / 84.2 | 7.8 / 25.5 | 4.7 / 26.5 | 6.3 / 22.1 | 10.7 / 80.9 | 10.7 / 77.3 | 4.2 / 6.4 | 4.5 / 10.6 |
+| full-text search | 22.6 / 83.5 | 20.8 / 46.5 | 14.6 / 45.8 | 15.3 / 41.5 | 15.9 / 47.5 | 15.0 / 30.0 | 13.3 / 20.4 | 14.2 / 25.1 |
+| typo-tolerant search | 20.2 / 69.0 | 26.0 / 122.8 | 14.7 / 35.4 | 14.0 / 32.2 | 20.7 / 41.7 | 19.8 / 46.5 | 13.4 / 24.4 | 13.3 / 22.0 |
+| partial-match search | 61.3 / 234.7 | 50.1 / 134.1 | 32.0 / 82.0 | 31.4 / 70.2 | 36.1 / 68.0 | 36.4 / 67.0 | 29.3 / 45.7 | 29.3 / 40.2 |
+| record history page | 30.5 / 89.1 | 20.4 / 96.6 | 10.6 / 28.2 | 8.9 / 25.0 | 11.1 / 25.3 | 8.3 / 15.0 | 10.1 / 15.0 | 8.0 / 16.8 |
+| record lineage | 15.8 / 50.7 | 15.9 / 66.1 | 8.6 / 23.6 | 10.0 / 22.0 | 8.0 / 17.0 | 9.1 / 22.4 | 8.1 / 11.1 | 7.5 / 10.3 |
+
+Pages read from outside shared buffers per cold neighborhood: 211 before, 138 balanced, 70
+compact, 128 fast. Commits of 1,000 Part updates after the reads: p50 901 ms (balanced), 2,108
+(compact, at load 95 to 105), 686 (fast, load 45 to 69); the alternating on/off measurement
+above is the comparison to trust.
+
+- Compaction is most of the gain at 1M (the fixture was half empty); shared maps add the rest
+  and are what keeps a freshly loaded table small (rows of 700 instead of 1,600 bytes).
+- Resolving a shared map costs a primary-key lookup in `mat_lineage_maps` (a few MB, always in
+  shared buffers) per Record row returned: a page of 50 touches 173 pages instead of 26, a
+  neighborhood 1,342 instead of 950, all hits; the latency stays below the inline rows' because
+  the Record pages that are read from disk are half as many.
+- `compact`: the attribute query and typo corrections scan instead of using an index, 5 to 10
+  ms more at this size; everything else reads as in `balanced`.
+- `storage apply` on the 1M copy: switching to shared maps rewrote 1,000,110 Records and
+  2,248,896 Links in 26 minutes (other Links have maps of at most 64 bytes); `--compact
+  --reindex` took 7 minutes; switching to `fast` (inline rewrite and compaction) 14 minutes.
+  Reads went on throughout.
+
+### 10M Records
+
+Before, on a copy of `perf_seed_10m` (migrated to `0035`, fresh keys, load average 40 to 75),
+p50 / p95 in milliseconds, with pages per call and pages read from outside shared buffers:
+
+| read | cold | warm | pages | read |
+|---|---:|---:|---:|---:|
+| get by key | 4.9 / 14.0 | 2.9 / 5.6 | 6 | 1.4 |
+| list page of 50 | 9.0 / 17.5 | 4.2 / 21.4 | 31 | 15.2 |
+| links of a record | 10.0 / 16.9 | 3.9 / 6.0 | 27 | 13.8 |
+| 2-hop neighborhood | 122.4 / 190.3 | 14.4 / 26.1 | 954 | 345.7 |
+| query by indexed attribute | 3.8 / 6.5 | 4.0 / 8.6 | 45 | 0.1 |
+| full-text search | 56.6 / 119.6 | 56.2 / 92.3 | 4,526 | 0.0 |
+| typo-tolerant search | 56.8 / 103.6 | 56.8 / 116.6 | 3,015 | 0.5 |
+| partial-match search | 148.7 / 231.0 | 145.3 / 248.8 | 9,405 | 0.2 |
+| record history page | 10.0 / 15.9 | 8.5 / 14.7 | 22 | 4.9 |
+| record lineage | 7.4 / 10.1 | 7.6 / 11.2 | 47 | 0.0 |
+
+The cold neighborhood reads 346 of its 954 pages from outside shared buffers: the read set
+(57 GB) is seven times the VM. The 10M fixture was written once by `replicate` and is not
+bloated: its Record heap is 1,824 bytes per Record (rows of 1,600 bytes, 4.5 per page).
+
+**After: not measured yet.** The `balanced` end state was being produced on a copy (one
+`UPDATE` per table through the lineage map triggers, then `VACUUM FULL`, the end state of
+`apply --compact --reindex`, offline because the online rewrite runs at 600 to 2,800 rows per
+second under this load): the Records took 30.5 minutes and their `VACUUM FULL` 9.6 minutes,
+then the Docker VM stopped before the Links were done. The 10M rows are the 1M fixture's rows
+with renumbered keys, so their widths are the 1M copy's: shared maps take the Record heap from
+1,824 to about 838 bytes per Record and the Link heap from 939 to about 704 (three Links per
+Record), which puts the 10M hot set at about 4.9 kB per Record (49 GB) in `balanced`, against
+6,165 (57 GB) before. The read table at 10M after the change is to be measured
+(`tests/perf/working_set.py --seed <fresh>` on the transformed copy).
+
+### Embeddings: half precision
+
+`tests/perf/halfvec_recall.py`: 30,000 Records of `perf_seed_1m_zipf` (title and string values)
+and 300 queries (title words, two- and three-word phrases, misspelled words, titles less a
+word) embedded with BAAI/bge-small-en-v1.5 (384 dimensions, the default model); recall@10
+against exact cosine search in float32, pgvector 0.8.7, HNSW m=16, ef_construction=64.
+
+| index | size | bytes per vector | recall@10, ef_search 40 | ef_search 100 |
+|---|---:|---:|---:|---:|
+| exact search, `vector` | none | | 1.000 | |
+| exact search, `halfvec` | none | | 0.998 | |
+| HNSW `vector` (default) | 61.4 MB | 2,048 | 0.532 | 0.597 |
+| HNSW `halfvec` | 35.1 MB | 1,171 | 0.472 | 0.541 |
+
+Half precision alone costs 0.2 points of recall; the HNSW graph built on it 6 points (HNSW
+recall is low for both on this corpus of templated texts and short, out-of-corpus queries).
+That is not negligible, so `halfvec` is the `compact` choice only; `balanced` and `fast` keep
+full precision. Stored vectors keep full precision in every profile, so switching back costs
+an index build and no data.
+
+## Storage profiles
+
+`store.storage.profile` (`compact`, `balanced`, `fast`, default `balanced`; compose
+`LOREBASE_STORAGE_PROFILE`, Helm `config.store.storage.profile`) decides what the database
+keeps besides the rows. Every feature works in every profile; each other key of
+`store.storage` overrides one choice ([configuration](reference/configuration.md)).
+
+| choice | compact | balanced | fast |
+|---|---|---|---|
+| lineage maps | shared | shared | inline |
+| GIN on Record values | off | on | on |
+| per-Attribute indexes | unique and foreign key | all | all |
+| trigram index of the typo lexicon | off | on | on |
+| HNSW index of embeddings | `halfvec` | `vector` | `vector` |
+| TOAST compression | pglz | lz4 | lz4 |
+| `mat_records` fill factor | 100 | 100 | 90 |
+| prewarm after `storage apply` | off | off | on |
+
+What leaving something out costs: an equality filter on an Attribute without an index scans its
+Kind (`compact`), typo corrections compare the lexicon's words of the searched Kinds
+(`compact`), semantic search ranks with a slightly worse graph (`compact`), inline maps make
+Record rows twice as large (`fast`, which saves the lookup of the map, a buffer hit).
+
+### Switching
+
+```sh
+python -m lorebase_store.storage status                    # choices, what the database has, hot sizes
+python -m lorebase_store.storage apply [--dry-run]          # bring the database in line
+python -m lorebase_store.storage apply --compact --reindex  # and give free space back
+python -m lorebase_store.storage prewarm [--fraction 0.8]   # load the hot relations
+```
+
+(`docker compose --profile maintenance run --rm storage apply` in the compose stack.) The
+database keeps what it has until `apply` runs: reads accept both forms of a lineage map, use
+whichever HNSW index exists and work without the optional indexes. `apply` builds indexes with
+`CREATE INDEX CONCURRENTLY`, rewrites rows in batches of `store.storage.batch_rows` (progress in
+`storage_tasks`; an interrupted run resumes), and waits at most
+`store.storage.lock_timeout_ms` for a table lock (trigger switches, dropping the partitioned
+values index), deferring the step to the next run otherwise; reads go on throughout. Run it as
+the maintenance role (the owner of the tables). It exits with status 3 while a step is
+deferred.
+
+Upgrading to revision `0036`: the migration leaves an existing install's lineage maps inline
+(processes of the previous version may still be running); once every process runs the new
+version, `storage apply` shares them, and `--compact --reindex` gives the space back.
+
+### Prewarm
+
+`storage prewarm` loads the hot relations into shared buffers with `pg_prewarm`, most valuable
+first: refs, Revisions, schemas, provenance, lineage maps and the lexicon, then the primary
+keys of Records and Links, the reverse Link index, the search index, per-Attribute indexes, the
+HNSW index, the Record and Link heaps, then history, up to `store.storage.prewarm_fraction` of
+`shared_buffers`. On the 1M copy it loaded 1,638 MB (80% of 2 GB) in the `fast` apply.
+`autoprewarm` keeps it across restarts and failovers: `shared_preload_libraries =
+'pg_prewarm'` (compose `POSTGRES_PRELOAD_LIBRARIES=pg_prewarm`, Helm
+`ci/storage-fast-values.yaml`) dumps the list of cached blocks every
+`pg_prewarm.autoprewarm_interval` and reloads them at start. The extension ships with Postgres
+(contrib); `prewarm` creates it, which needs a role allowed to.
+
+### Sizing
+
+Memory that keeps the whole agent read set resident (the hot set above: Record, Link and
+history heaps, their indexes, objects read by history), per profile, from the measured bytes
+per Record after `apply --compact --reindex`, plus a quarter for the operating system,
+connections, sorts and growth:
+
+Bytes per Record of the agent read set: the core reads (Records, Links and their indexes:
+get, pages, Links, neighborhoods, attribute queries, search) and everything including history
+and lineage. Measured at 1M; at 10M and 100M, the 10M fixture's sizes with the row widths
+measured at 1M (estimates; 100M is ten times 10M).
+
+| | compact | balanced | fast |
+|---|---:|---:|---:|
+| core read set, bytes per Record | 2,210 | 2,290 | 3,690 |
+| whole read set, bytes per Record (1M measured) | 5,714 | 5,791 | 7,006 |
+| whole read set, bytes per Record (10M estimate) | 4,860 | 4,940 | 6,350 |
+| 1M Records: core / whole read set | 2.2 / 5.5 GB | 2.3 / 5.5 GB | 3.7 / 6.7 GB |
+| 1M Records: memory to keep the whole set resident | 7 GB | 7 GB | 8.5 GB |
+| 10M Records: core / whole read set | 22 / 49 GB | 23 / 49 GB | 37 / 64 GB |
+| 10M Records: memory to keep the whole set resident | 61 GB | 62 GB | 80 GB |
+| 100M Records: core / whole read set | 220 / 486 GB | 229 / 494 GB | 369 / 635 GB |
+| 100M Records: memory to keep the whole set resident | 610 GB | 620 GB | 795 GB |
+
+With less memory than the whole read set, history and lineage reads go to disk first; with
+less than the core read set, the neighborhood does. `fast` trades about 60% more memory for
+the core reads for no map lookups and HOT room in the Record pages: choose it when the memory
+is there anyway, `balanced` otherwise, `compact` on a small box (an attribute query or a typo
+correction scans instead of using an index).
+
+- `shared_buffers`: as much of the hot set as it can hold without starving the page cache;
+  `effective_cache_size` tells the planner what both hold together.
+- Huge pages: with `shared_buffers` of 8 GB and more, `huge_pages = on` (with pages reserved on
+  the host or the node, `vm.nr_hugepages` or `hugepages-2Mi` in Kubernetes) saves the page
+  tables of every backend; `try` elsewhere.
+- Below the read set, reads that miss memory read about one page from disk per Record and per
+  Link they return (0.26 ms each on this VM, [10M Records](#10m-records)): the cold
+  neighborhood is the read that feels it first.
+
+Recommended Postgres settings (compose `.env.example`, Helm `ci/storage-<profile>-values.yaml`):
+
+| | compact | balanced | fast |
+|---|---|---|---|
+| memory for Postgres | what there is (4 GiB example) | 16 GiB example | the read set + 25% (64 GiB example) |
+| `shared_buffers` | 1/8 of it (512MB) | 1/4 (4GB) | 2/5 (24GB) |
+| `effective_cache_size` | 1/2 (2GB) | 3/4 (12GB) | 3/4 (48GB) |
+| `huge_pages` | off | try | on |
+| `shared_preload_libraries` | | | `pg_prewarm` (autoprewarm) |
+
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
 Measured by `pnpm perf:canvas` in `apps/web` on the generated graph of the mock API (`VITE_MOCK_PERF_NODES=5000`, `VITE_MOCK_PERF_EDGES=10000`, `VITE_CANVAS_MAX_NODES=5000`): a production build served by `vite preview`, opened in headless Chromium with a software WebGL (SwiftShader), 1440x900, median of 3 runs, 2026-10-22, same machine as above. Time to first render is navigation start to the second animation frame after the canvas exists. The pan is 80 mouse moves with the button down; frame time is the gap between animation frames while it runs. Software WebGL makes every frame slower than on a GPU, so read the numbers as a comparison between the two rows, not as what a laptop shows.
