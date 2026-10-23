@@ -21,8 +21,9 @@ DATABASE_ATTRIBUTE = "database_settings"
 STORE_ATTRIBUTE = "store_settings"
 URL_ATTRIBUTE = "database_url"
 
-DYNAMIC_INDEX_PREFIXES = ("embeddings_hnsw_", "mat_records_attr_")
-"""Indexes created from configuration or schema at runtime; schema comparison skips them."""
+DYNAMIC_INDEX_PREFIXES = ("embeddings_hnsw_", "mat_records_attr_", "ix_mat_records_bm25")
+"""Indexes created from configuration or schema at runtime, the optional BM25 index
+(`lorebase_store.bm25`) included; schema comparison skips them."""
 
 PROFILE_INDEXES = ("ix_mat_records_values", "ix_mat_lexicon_branch_word")
 """Indexes of the models that a storage profile may leave out (`lorebase_store.storage`);

@@ -47,7 +47,6 @@ from typing import Any
 
 from sqlalchemy import LargeBinary, Table, TextClause, TextualSelect, column, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Relation, RelationBacking, Schema
@@ -57,7 +56,6 @@ from lorebase_store.indexes import IndexSpec, plan_indexes, predicate_sql, sql_l
 from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
 from lorebase_store.models import metadata
 from lorebase_store.repositories.materialized import RecordRow
-from lorebase_store.repositories.refs import sqlstate
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.telemetry import record_definer_call
 
@@ -894,7 +892,10 @@ def _tsqueries(corrections: int) -> TextClause:
     return text(f"SELECT CAST({_QUERY} AS text), CAST({_corrected_query(corrections)} AS text)")
 
 
-QUERY_CANCELED = "57014"
+SUPERSET_FIRST = 4
+"""A superset query first ranks this many times the limit of candidates..."""
+SUPERSET_MIN = 64
+"""...and at least this many."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -941,7 +942,7 @@ async def _bm25_rows(
         return None
     if plan.match is None:
         return []
-    statement = _BM25_DEFINER[_function("lb_search_bm25", layout)]
+    function = _function("lb_search_bm25", layout)
     values = {
         **params,
         "match": plan.match.json(),
@@ -949,18 +950,33 @@ async def _bm25_rows(
         "fixed": None if plan.fixed is None else plan.fixed.json(),
         "fixed_exact": True if plan.fixed is None else plan.fixed.exact,
     }
-    # In a savepoint: a server that stopped serving the index (dropped since `bm25.ready`
-    # looked, a standby without it) costs a fallback, not the request. A cancelled statement
-    # (statement_timeout) is not run again.
-    try:
-        async with session.begin_nested():
-            return list((await session.execute(statement, values)).all())
-    except DBAPIError as error:
-        if sqlstate(error) == QUERY_CANCELED:
-            raise
-        log.warning("BM25 search failed, ranking the default way: %s", error.orig)
+    # A superset query (a phrase) is rechecked over its first candidates by score; the rows
+    # holding the words in sequence rank first, so a few times the limit is usually enough
+    # for an exact answer, and only a cut one is asked again with every candidate.
+    superset = not plan.match.exact or (plan.fixed is not None and not plan.fixed.exact)
+    every = int(values["candidates"])
+    first = (
+        min(every, max(SUPERSET_FIRST * int(values["limit"]), SUPERSET_MIN)) if superset else every
+    )
+    rows = list(
+        (await session.execute(_BM25_DEFINER[function], {**values, "candidates": first})).all()
+    )
+    if first < every and not _bm25_failed(rows) and (not rows or rows[0][5]):
+        record_definer_call(function)
+        rows = list((await session.execute(_BM25_DEFINER[function], values)).all())
+    failed = _bm25_failed(rows)
+    if failed is not None:
+        # The index could not serve the call (dropped since `bm25.ready` looked, the library
+        # not loaded): the function caught the error, so the transaction goes on.
+        log.warning("BM25 search failed (%s: %s); ranking the default way", failed[1], failed[2])
         bm25.forget()
         return None
+    return rows
+
+
+def _bm25_failed(rows: Sequence[Any]) -> Any | None:
+    """The error row of `lb_search_bm25` (no Kind; SQLSTATE and message), if any."""
+    return next((row for row in rows if row[0] is None), None)
 
 
 class SearchHits(list[SearchHit]):
