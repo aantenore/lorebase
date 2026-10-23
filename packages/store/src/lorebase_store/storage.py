@@ -82,6 +82,10 @@ HALFVEC_MIN_VERSION = (0, 7, 0)
 """First pgvector release with `halfvec`."""
 LOCK_NOT_AVAILABLE = "55P03"
 DEADLOCK = "40P01"
+RETRY_PASSES = 3
+"""Passes over the page ranges whose rows a commit held during the lineage rewrite."""
+RETRY_WAIT_S = 1.0
+"""Pause between those passes."""
 
 LINEAGE_TABLES: Mapping[str, tuple[str, ...]] = {
     "mat_records": ("lineage", "lineage_revisions"),
@@ -427,6 +431,38 @@ def _map_columns_condition(columns: Sequence[str], *, shared: bool) -> str:
     return " OR ".join(one.format(c=c) for c in columns)
 
 
+async def _rewrite_range(
+    engine: AsyncEngine,
+    settings: StorageSettings,
+    name: str,
+    statements: tuple[Any, Any],
+    state: Mapping[str, Any],
+    pages: tuple[int, int],
+    *,
+    page: int | None = None,
+) -> dict[str, Any]:
+    """Rewrite one page range and save the task: the range goes on the retry list while
+    rows of the other form are left in it, and off it once none are."""
+    rewrite, remaining = statements
+    start, stop = pages
+    async with engine.begin() as connection:
+        await connection.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        await connection.exec_driver_sql(
+            f"SET LOCAL lock_timeout = '{int(settings.lock_timeout_ms)}ms'"
+        )
+        bounds = {"lo": (start, 0), "hi": (stop, 0)}
+        result = await connection.execute(rewrite, bounds)
+        left = int((await connection.execute(remaining, bounds)).scalar_one())
+        retry = [r for r in state.get("retry", []) if r != [start, stop]]
+        if left:
+            retry.append([start, stop])
+        new = {**state, "rows": int(state["rows"]) + int(result.rowcount or 0), "retry": retry}
+        if page is not None:
+            new["page"] = page
+        await _save_task(connection, name, new)
+        return new
+
+
 async def _rewrite_lineage(
     engine: AsyncEngine,
     settings: StorageSettings,
@@ -438,7 +474,9 @@ async def _rewrite_lineage(
 ) -> None:
     """Rewrite the map columns of every row, page range by page range, from the first page
     to the last page the table had when the pass started (rows a concurrent write puts after
-    it are written by the trigger, or are already inline). Resumes where it stopped."""
+    it are written by the trigger, or are already inline). Ranges with rows a commit held are
+    rewritten again after the pass, `RETRY_PASSES` times; ranges still held stay in the task
+    and the step is deferred, so a later run finishes them. Resumes where it stopped."""
     mode = "shared" if shared else "inline"
     async with engine.connect() as probe:
         work = [
@@ -463,6 +501,7 @@ async def _rewrite_lineage(
                     "page": 0,
                     "end": await _pages(connection, partition),
                     "rows": 0,
+                    "retry": [],
                     "done": False,
                 }
                 await _save_task(connection, name, state)
@@ -473,50 +512,58 @@ async def _rewrite_lineage(
         else:
             assignments = ", ".join(f"{c} = lb_lineage(domain_id, {c})" for c in columns)
         condition = _map_columns_condition(columns, shared=shared)
-        while int(state["page"]) < int(state["end"]):
-            if max_batches is not None and batches >= max_batches:
-                report.add(f"lineage {partition}", "deferred", f"stopped at page {state['page']}")
-                return
-            start, stop = int(state["page"]), min(int(state["page"]) + step, int(state["end"]))
-            try:
-                async with engine.begin() as connection:
-                    await connection.execute(
-                        text("SELECT set_config('lorebase.bypass_rls', 'on', true)")
+        in_range = "ctid >= CAST(:lo AS tid) AND ctid < CAST(:hi AS tid)"
+        # Rows a commit holds are skipped, never waited for: the rewrite cannot deadlock with
+        # commits, which lock rows in key order. The rows of the range still in the other
+        # form afterwards (the skipped ones, or rows a commit wrote meanwhile) put the range
+        # on the retry list.
+        rewrite = text(
+            f"UPDATE {partition} SET {assignments} WHERE ctid = ANY(ARRAY("
+            f"SELECT ctid FROM {partition} WHERE {in_range} AND ({condition}) "
+            "FOR UPDATE SKIP LOCKED))"
+        )
+        remaining = text(f"SELECT count(*) FROM {partition} WHERE {in_range} AND ({condition})")
+
+        try:
+            while int(state["page"]) < int(state["end"]):
+                if max_batches is not None and batches >= max_batches:
+                    report.add(
+                        f"lineage {partition}", "deferred", f"stopped at page {state['page']}"
                     )
-                    await connection.exec_driver_sql(
-                        f"SET LOCAL lock_timeout = '{int(settings.lock_timeout_ms)}ms'"
-                    )
-                    # Rows a commit holds are skipped, never waited for: the rewrite cannot
-                    # deadlock with commits, which lock rows in key order. A later pass picks
-                    # the skipped rows up (`leftovers`).
-                    result = await connection.execute(
-                        text(
-                            f"UPDATE {partition} SET {assignments} WHERE ctid = ANY(ARRAY("
-                            f"SELECT ctid FROM {partition} "
-                            f"WHERE ctid >= CAST(:lo AS tid) AND ctid < CAST(:hi AS tid) "
-                            f"AND ({condition}) FOR UPDATE SKIP LOCKED))"
-                        ),
-                        {"lo": (start, 0), "hi": (stop, 0)},
-                    )
-                    state = {
-                        **state,
-                        "page": stop,
-                        "rows": int(state["rows"]) + int(result.rowcount or 0),
-                    }
-                    if stop >= int(state["end"]):
-                        state["done"] = True
-                    await _save_task(connection, name, state)
-            except DBAPIError as error:
-                if sqlstate(error) not in (LOCK_NOT_AVAILABLE, DEADLOCK):
-                    raise
-                report.add(
-                    f"lineage {partition}", "deferred", f"lock conflict at page {start}; run again"
+                    return
+                start = int(state["page"])
+                stop = min(start + step, int(state["end"]))
+                state = await _rewrite_range(
+                    engine, settings, name, (rewrite, remaining), state, (start, stop), page=stop
                 )
-                return
-            batches += 1
-        if not state.get("done"):  # an empty partition
-            async with engine.begin() as connection:
-                await _save_task(connection, name, {**state, "done": True})
+                batches += 1
+            for attempt in range(RETRY_PASSES):
+                if not state.get("retry"):
+                    break
+                if attempt:
+                    await asyncio.sleep(RETRY_WAIT_S)
+                for start, stop in list(state["retry"]):
+                    state = await _rewrite_range(
+                        engine, settings, name, (rewrite, remaining), state, (start, stop)
+                    )
+        except DBAPIError as error:
+            if sqlstate(error) not in (LOCK_NOT_AVAILABLE, DEADLOCK):
+                raise
+            report.add(
+                f"lineage {partition}",
+                "deferred",
+                f"lock conflict at page {state['page']}; run again",
+            )
+            return
+        if state.get("retry"):
+            report.add(
+                f"lineage {partition}",
+                "deferred",
+                f"{len(state['retry'])} page ranges hold rows commits kept locked; run again",
+            )
+            continue
+        async with engine.begin() as connection:
+            await _save_task(connection, name, {**state, "done": True})
         if int(state["rows"]) == 0:
             continue
         report.add(

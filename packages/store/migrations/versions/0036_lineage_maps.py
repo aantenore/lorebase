@@ -37,11 +37,13 @@ Create Date: 2026-10-23 10:00:00.000000
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DBAPIError
 
 revision: str = "0036"
 down_revision: str | Sequence[str] | None = "0035"
@@ -53,6 +55,9 @@ TASKS = "storage_tasks"
 TRIGGER = "lb_lineage_maps"
 GRANTED = "SELECT, INSERT, UPDATE, DELETE"
 REVOKED = "TRUNCATE, REFERENCES, TRIGGER"
+LOCK_NOT_AVAILABLE = "55P03"
+LOCK_RETRY_S = 0.2
+"""Pause before the downgrade asks again for the locks of both tables."""
 
 DOMAIN_VISIBLE = (
     "current_setting('lorebase.bypass_rls', true) = 'on' "
@@ -261,13 +266,40 @@ def upgrade() -> None:
             op.execute(f"ALTER TABLE {table} DISABLE TRIGGER {TRIGGER}")
 
 
+def _lock_tables(bind: sa.Connection, tables: Sequence[str]) -> None:
+    """Take the exclusive lock of every table up front (dropping the triggers needs it), in
+    the order commits write them (Records, then Links), each wait shorter than
+    `deadlock_timeout`: when a commit holding a later table waits for an earlier one, the
+    downgrade gives up what it holds before the deadlock check runs and asks again, so the
+    commit is never the victim, and neither is the downgrade."""
+    deadlock_ms = bind.execute(
+        sa.text("SELECT extract(epoch FROM current_setting('deadlock_timeout')::interval) * 1000")
+    ).scalar_one()
+    wait_ms = max(1, int(float(deadlock_ms) / 2))
+    previous = bind.execute(sa.text("SELECT current_setting('lock_timeout')")).scalar_one()
+    while True:
+        try:
+            with bind.begin_nested():
+                bind.execute(sa.text(f"SET LOCAL lock_timeout = '{wait_ms}ms'"))
+                for table in tables:
+                    bind.execute(sa.text(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
+            break
+        except DBAPIError as error:
+            cause: BaseException | None = error
+            while cause is not None and not isinstance(getattr(cause, "sqlstate", None), str):
+                cause = getattr(cause, "orig", None) or cause.__cause__
+            if cause is None or cause.sqlstate != LOCK_NOT_AVAILABLE:  # type: ignore[attr-defined]
+                raise
+            time.sleep(LOCK_RETRY_S)
+    bind.execute(sa.text("SELECT set_config('lock_timeout', :v, true)"), {"v": previous})
+
+
 def downgrade() -> None:
     op.execute("SELECT set_config('lorebase.bypass_rls', 'on', true)")
     bind = op.get_bind()
+    _lock_tables(bind, [table for table, _, _ in TABLES])
     for table, _, columns in TABLES:
         op.execute(f"DROP TRIGGER IF EXISTS {TRIGGER} ON {table}")
-        # Lock out writers that would copy references meanwhile (reads go on).
-        op.execute(f"LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE")
         assignments = ", ".join(f"{c} = lb_lineage(domain_id, {c})" for c in columns)
         references = " OR ".join(
             f"(jsonb_typeof({c}) = 'object' AND {c} ? '{MAP_KEY}')" for c in columns
