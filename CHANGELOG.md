@@ -4,6 +4,10 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
+### Changed
+
+- Documentation: the validation record gains the five-day scenario's CI figures, the rounds and findings of the PII vault and outbox security reviews; the README and the documentation landing page describe v0.2.1; the roadmap keeps open only the reference-hardware benchmark, Kind-scoped invisibility and the API stability guarantees ([validation](docs/validation.md), [roadmap](docs/roadmap.md)).
+
 ## 0.2.1 - 2026-10-23
 
 Patch release for the storage profiles of 0.2.0. `python -m lorebase_store.storage apply` now converges when commits run during the lineage rewrite, the downgrade of migration `0036` no longer deadlocks against commits, and a repeated `apply` skips the full lineage scan once a pass is recorded complete (`--verify` forces it). The performance documentation replaces the 10M-Record storage profile estimate with measured numbers. No migration, configuration key or API response changes.
