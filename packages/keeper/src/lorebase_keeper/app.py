@@ -56,7 +56,12 @@ from lorebase_keeper.routes.domain_api import domain_routers
 from lorebase_keeper.routes.sessions import router as sessions_router
 from lorebase_keeper.routes.trace import router as trace_router
 from lorebase_keeper.routes.whoami import router as whoami_router
-from lorebase_keeper.settings import keeper_settings
+from lorebase_keeper.settings import (
+    REQUIRED_CORS_REQUEST_HEADERS,
+    REQUIRED_CORS_RESPONSE_HEADERS,
+    KeeperSettings,
+    keeper_settings,
+)
 from lorebase_keeper.tracing.config import TraceSettings
 from lorebase_keeper.tracing.middleware import TraceMiddleware
 from lorebase_keeper.tracing.recorder import TraceRecorder, TraceSink
@@ -73,6 +78,43 @@ _DEFAULT_RESPONSES: dict[int | str, dict[str, Any]] = {
         "description": "Problem details (RFC 9457), media type application/problem+json.",
     }
 }
+
+
+def _merge_headers(*names: str) -> list[str]:
+    """Header names in order, each once (compared without case)."""
+    seen: dict[str, str] = {}
+    for name in names:
+        seen.setdefault(name.lower(), name)
+    return list(seen.values())
+
+
+def cors_request_headers(keeper: KeeperSettings) -> list[str]:
+    """Request headers allowed cross-origin: the required ones, then `keeper.cors.allow_headers`.
+
+    The agent trace headers are allowed even with tracing off: clients send them regardless,
+    and a refused preflight would fail the whole request.
+    """
+    return _merge_headers(
+        *REQUIRED_CORS_REQUEST_HEADERS,
+        keeper.request_id_header,
+        *([keeper.auth.sessions.csrf_header] if keeper.auth.sessions.enabled else []),
+        keeper.trace.session_header,
+        keeper.trace.tool_header,
+        keeper.trace.opt_in_header,
+        keeper.trace.client_header,
+        *keeper.cors.allow_headers,
+    )
+
+
+def cors_response_headers(keeper: KeeperSettings) -> list[str]:
+    """Response headers readable cross-origin: the required ones, then
+    `keeper.cors.expose_headers`."""
+    return _merge_headers(
+        *REQUIRED_CORS_RESPONSE_HEADERS,
+        keeper.request_id_header,
+        *EXPOSED_HEADERS,
+        *keeper.cors.expose_headers,
+    )
 
 
 def create_app(
@@ -257,22 +299,8 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(keeper.cors.allow_origins),
             allow_methods=list(keeper.cors.allow_methods),
-            allow_headers=[
-                *keeper.cors.allow_headers,
-                keeper.request_id_header,
-                *([keeper.auth.sessions.csrf_header] if keeper.auth.sessions.enabled else []),
-                *(
-                    [
-                        keeper.trace.session_header,
-                        keeper.trace.tool_header,
-                        keeper.trace.opt_in_header,
-                        keeper.trace.client_header,
-                    ]
-                    if keeper.trace.enabled
-                    else []
-                ),
-            ],
-            expose_headers=[keeper.request_id_header, *EXPOSED_HEADERS],
+            allow_headers=cors_request_headers(keeper),
+            expose_headers=cors_response_headers(keeper),
             allow_credentials=keeper.cors.allow_credentials,
             max_age=keeper.cors.max_age_s,
         )

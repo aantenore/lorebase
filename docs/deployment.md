@@ -267,6 +267,7 @@ the YAML file decides otherwise:
 | `LOREBASE__KEEPER__OPERATIONS__DIRECT_COMMIT_ON_PROTECTED` | `keeper.operations.direct_commit_on_protected` |
 | `LOREBASE__KEEPER__CORS__ALLOW_ORIGINS` | `keeper.cors.allow_origins` (JSON list) |
 | `LOREBASE__KEEPER__CORS__ALLOW_HEADERS` | `keeper.cors.allow_headers` (JSON list) |
+| `LOREBASE__KEEPER__CORS__EXPOSE_HEADERS` | `keeper.cors.expose_headers` (JSON list) |
 | `LOREBASE__KEEPER__CORS__ALLOW_CREDENTIALS` | `keeper.cors.allow_credentials` |
 
 For a single-operator demo, for example:

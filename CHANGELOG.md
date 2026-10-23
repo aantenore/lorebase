@@ -26,11 +26,13 @@ What changed in each release, newest first. The notes are written for the person
 
 ### Fixed
 
+- Keeper CORS: `keeper.cors.expose_headers` (default `ETag`, `Lorebase-Revision`) makes conditional reads work for a web app on another origin, which could not read the `ETag` and so never got a 304. `keeper.cors.allow_headers` now adds to the headers Keeper always allows (`Authorization`, `Content-Type`, `Idempotency-Key`, `If-None-Match`, the request id, session CSRF and agent trace headers) instead of replacing them, and the trace headers are allowed even with tracing off, since clients send them anyway ([configuration](docs/reference/configuration.md)).
 - A Kind Attribute named after a reserved api name (`key`, `kind`, `ref`, `revision`) is refused with a message that says why and proposes another name, such as ``"`key` is a reserved name, choose another (e.g. `code`)"``, instead of `api name 'key' is reserved`; the schema documentation lists the reserved names ([design 5.4](docs/design.md#54-attribute)).
 - Docker compose no longer starts a stale local image: the backend, backend-ml and web images are rebuilt from the checkout on every `up` (`pull_policy: build`; `LOREBASE_PULL_POLICY=missing` keeps prebuilt images), and `migrate` refuses a database that a newer Lorebase already migrated with an error naming the database revision, the newest revision of the code and the fix, instead of Alembic's `Can't locate revision` and a Keeper that restarts in a loop ([deployment](docs/deployment.md#docker-compose-images-and-migrations)).
 
 ### Upgrade notes
 
+- `keeper.cors.allow_headers` lists further headers only; its default is now empty. A configuration that repeats the earlier default keeps working, and one that listed fewer headers now allows the required ones as well.
 - Clients of Kind-narrowed principals that relied on 403 to tell a forbidden Kind from an unknown one now get 404 or 422 for both. Set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers.
 - Migration `0037` creates functions only and runs on any Postgres; apply it as usual. Search is unchanged unless you set `search.backend: bm25` and build the index.
 
