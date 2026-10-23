@@ -2,7 +2,16 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
-## Unreleased
+## 0.2.2 - 2026-10-23
+
+Kind-scoped invisibility completes full RBAC: a caller whose grants are narrowed to Kinds no longer learns of the other Kinds, and gets 404 or 422 where it got 403 (`keeper.auth.authz.invisible_kinds: false` keeps the earlier answers). Lexical search can rank with BM25 through ParadeDB `pg_search`, opt-in and off by default. Seven fixes for running Lorebase locally: compose rebuilds its images and `migrate` refuses a database ahead of the code, Keeper settings forwarded from `.env`, a clear message for reserved Attribute names, `herald.http.allow_anonymous`, Herald as the compose profile `mcp` on `127.0.0.1:8091`, CORS `expose_headers` and an additive `allow_headers`, and the web app README for live mode. Migration `0037` adds functions only.
+
+This release was built and published locally, without the release workflow: the images on GHCR, the checksums and the release assets are not signed with cosign, and the images carry no SBOM attestation (the CycloneDX SBOMs are attached to the release as files). `cosign verify` does not apply to 0.2.2.
+
+### Breaking changes
+
+- Kind-scoped invisibility is on by default: principals whose grants are narrowed to Kinds get 404 or 422 instead of 403 for Kinds they may not read, and no longer see those Kinds in the schema, counts, search or context packs. Clients that told a forbidden Kind from an unknown one by the 403 must stop relying on it, or set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers ([design 13.3](docs/design.md#133-authorization-enforcement)).
+- Docker compose builds the backend, backend-ml and web images from the checkout on every `up`; set `LOREBASE_PULL_POLICY=missing` to keep using prebuilt images ([deployment](docs/deployment.md#docker-compose-images-and-migrations)).
 
 ### Added
 
@@ -32,9 +41,17 @@ What changed in each release, newest first. The notes are written for the person
 - `keeper.cors.allow_headers` lists further headers only; its default is now empty. A configuration that repeats the earlier default keeps working, and one that listed fewer headers now allows the required ones as well.
 - Clients of Kind-narrowed principals that relied on 403 to tell a forbidden Kind from an unknown one now get 404 or 422 for both. Set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers.
 - Migration `0037` creates functions only and runs on any Postgres; apply it as usual. Search is unchanged unless you set `search.backend: bm25` and build the index.
+- From 0.2.1: replace the images (or the packages) with 0.2.2, run the migration to `0037`, then restart.
+- From 0.2.0: as from 0.2.1; the notes of 0.2.1 add nothing to do.
+- From 0.1.0: follow the upgrade notes of 0.2.0 below, with the images of 0.2.2.
 
 ### Not done yet
 
+- The performance baseline on the 1M-Record fixture: the neighborhood on branches other than `main` is just over budget when the working set does not fit in memory ([performance](docs/performance.md#1m-records)).
+- The performance targets of the design at 10M Records: the 2-hop neighborhood, full-text search (searches of very common words above all), Record history and lineage are over budget, and a commit of 1,000 changes takes more than 2 s ([performance](docs/performance.md#10m-records)).
+- The stability guarantees for `/api/v1` bind from 1.0 ([API stability](docs/api-stability.md)).
+- Packages on PyPI: the wheels and sdists are attached to the GitHub release.
+- Signed images and assets: 0.2.2 was published without the release workflow (see above).
 - BM25 search at 10M Records is not measured (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`, then `tests/perf/bm25.py --database perf_seed_10m_zipf`), and `storage apply` does not tune autovacuum for it: with BM25 on and frequent writes, set a lower `autovacuum_vacuum_scale_factor` on the `mat_records` partitions yourself ([performance](docs/performance.md#bm25-search)).
 
 ## 0.2.1 - 2026-10-23

@@ -99,7 +99,7 @@ The first upload of a name cannot use a project-scoped token (the project does n
 
 ## Verify a release
 
-Signatures and attestations, with [cosign](https://docs.sigstore.dev/):
+Signatures and attestations, with [cosign](https://docs.sigstore.dev/). 0.2.2 was built and published locally, without the release workflow: its images, checksums and assets are not signed and its images carry no SBOM attestation, so these commands apply to 0.2.1 and earlier.
 
 ```bash
 VERSION=0.2.1

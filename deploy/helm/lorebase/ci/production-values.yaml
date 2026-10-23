@@ -2,7 +2,7 @@
 # network policy with narrow egress, Herald and the web app, telemetry to a collector. The
 # address ranges below are placeholders (192.0.2.0/24 is a documentation range): replace them.
 image:
-  tag: "0.2.1"
+  tag: "0.2.2"
 secrets:
   existingSecret: lorebase-secrets
   keys:
