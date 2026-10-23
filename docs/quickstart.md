@@ -336,7 +336,16 @@ rev bb30d34bebf7... (lexical): 2 hits
 ```
 
 For agent frameworks that speak Streamable HTTP, run one shared Herald with
-`LOREBASE__HERALD__TRANSPORT=streamable_http` ([mcp.md](mcp.md#run-it)).
+`LOREBASE__HERALD__TRANSPORT=streamable_http` ([mcp.md](mcp.md#run-it)), or start it in the
+compose stack:
+
+```bash
+make up PROFILES=mcp      # Herald at http://127.0.0.1:8091/mcp (HERALD_HOST_PORT)
+```
+
+Agents send `Authorization: Bearer <api key>`; with the stack's authentication off, set
+`HERALD_ALLOW_ANONYMOUS=true` in `.env` to let them call without one
+([mcp.md](mcp.md#docker-compose)).
 
 ## 4. Use a real model
 

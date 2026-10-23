@@ -33,6 +33,26 @@ The API key belongs to a service principal created for the agent
 (`POST /api/v1/domains/{domain}/api-keys`), with only the grants it needs: for example role `agent-reader` for reads plus
 an Operation grant such as `flag_supplier_risk` for writes. Never give an agent an admin key.
 
+### Docker compose
+
+The compose stack has Herald as the optional profile `mcp`, on the backend image, over
+Streamable HTTP and wired to the stack's Keeper (`http://keeper:8080`):
+
+```bash
+make up PROFILES=mcp
+# or: docker compose --env-file .env -f deploy/compose/docker-compose.yaml --profile mcp up -d --wait herald
+```
+
+It listens on port 8090 in the container and is published on `127.0.0.1:8091`
+(`HERALD_BIND`, `HERALD_HOST_PORT`; 8090 on the host is the web app's), so agents on the host use
+`http://127.0.0.1:8091/mcp` and containers on the compose network `http://herald:8090/mcp`. DNS
+rebinding protection accepts the Host values `127.0.0.1`, `localhost` and `herald` on any port
+and the Origins `http://127.0.0.1` and `http://localhost` (`HERALD_ALLOWED_HOSTS`,
+`HERALD_ALLOWED_ORIGINS`, JSON lists; add the name agents use when they reach it another way).
+`HERALD_DOMAIN` and `HERALD_BRANCH` set the defaults of calls that name none, and
+`HERALD_ALLOW_ANONYMOUS=true` lets calls without a credential through to a Keeper in auth mode
+none (below). The variables are listed in `.env.example`.
+
 ## Configuration
 
 Herald reads the `herald` section of the Lorebase settings (YAML file named by
