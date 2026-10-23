@@ -2,7 +2,7 @@
 
 The public roadmap of Lorebase, by milestone. It is derived from [section 18 of the design](design.md#18-roadmap) and from what is on `main` today. A checked box means the item is merged on `main` and covered by tests. An unchecked box is not done, even when part of it exists; the note says what is missing. Dates are deliberately absent: the order is firm, the timing is not.
 
-Lorebase is pre-alpha. [v0.2.0](https://github.com/aantenore/lorebase/releases/tag/v0.2.0) is the current pre-alpha release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)) ([CHANGELOG](../CHANGELOG.md)); interfaces may change.
+Lorebase is pre-alpha. [v0.2.1](https://github.com/aantenore/lorebase/releases/tag/v0.2.1) is the current pre-alpha release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)) ([CHANGELOG](../CHANGELOG.md)); interfaces may change.
 
 ## Next up
 

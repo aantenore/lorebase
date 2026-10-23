@@ -160,7 +160,7 @@ def test_no_arguments_prints_help() -> None:
 def test_version() -> None:
     result = run("--version")
     assert result.exit_code == 0
-    assert result.stdout.startswith("lorebase 0.2.0")
+    assert result.stdout.startswith("lorebase 0.2.1")
 
 
 @pytest.mark.parametrize(
@@ -1704,7 +1704,7 @@ def test_module_entry_point_runs() -> None:
         check=False,
     )
     assert done.returncode == 0
-    assert done.stdout.startswith("lorebase 0.2.0")
+    assert done.stdout.startswith("lorebase 0.2.1")
 
 
 # Proposals, context and explain --------------------------------------------------------------
