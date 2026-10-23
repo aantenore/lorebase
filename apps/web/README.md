@@ -285,6 +285,38 @@ printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
 LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
 ```
 
+### Against a Keeper on another port or host
+
+The variables are read when `pnpm dev` (or `pnpm build`) starts, so restart it after a change.
+With the dev proxy only `LOREBASE_KEEPER_PROXY` names Keeper; for example a Keeper published on
+port 18080:
+
+```bash
+printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
+LOREBASE_KEEPER_PROXY=http://127.0.0.1:18080 pnpm dev --port 5174   # app at http://localhost:5174
+```
+
+Cross origin, the app calls Keeper directly and Keeper must allow the app's exact origin (scheme,
+host and port, as the browser shows it in the address bar):
+
+```bash
+printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=http://127.0.0.1:18080\n' > .env.local
+pnpm dev --port 5174
+```
+
+and on Keeper, `keeper.cors.allow_origins` in its YAML file or, as a JSON list, in its
+environment; with the compose stack in the repository's `.env`, which the compose file forwards to
+Keeper ([deployment](../../docs/deployment.md#keeper-settings-from-the-environment-file)):
+
+```bash
+LOREBASE__KEEPER__CORS__ALLOW_ORIGINS=["http://localhost:5174","http://127.0.0.1:5174"]
+```
+
+Restart Keeper afterwards (`make up`, or `docker compose ... up -d keeper`). `localhost` and
+`127.0.0.1` are different origins: list the one you open, or both. A preflight refused by Keeper
+shows in the browser console as a CORS error, not as a Keeper error. Session mode cross-origin
+also needs `keeper.cors.allow_credentials: true` (see [Session mode](#session-mode)).
+
 ### Authentication
 
 Keeper in `keeper.auth.mode: none` (development) needs nothing. With `api_key` or `oidc`, set `VITE_API_TOKEN` or type the token into Settings, Connection: the adapter sends `Authorization: Bearer <token>` on every request. The token typed in Settings is kept in this browser's local storage and wins over `VITE_API_TOKEN`; "Forget stored token" removes it. **Both are development conveniences.** A `VITE_` variable is part of the bundle, and local storage is readable by any script on the origin, so neither belongs in a deployment that other people use; put the app behind a login or a proxy that adds the header instead. Settings, "Who am I", shows what Keeper (`GET /auth/whoami`) makes of the credential.

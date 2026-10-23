@@ -19,10 +19,7 @@ What changed in each release, newest first. The notes are written for the person
 - Kind-narrowed callers get 404 or 422 instead of 403 for Kinds they may not read, see the cache entries and `ETag`s of their own projection, and no longer see a Kind whose keys reference an invisible Kind or whose titles or full-text index are computed from one (a searchable count of its Records); derived Attributes reading an invisible Kind, such as `supplier_count` and `single_sourced` for a reader of Parts only, are left out of their Records and of Derivation previews. Agent trace steps of other principals no longer carry result counts, query plans or a `truncated` flag for them, Proposal extraction checks no longer count items for callers who do not see every Conflict, and resolving a Conflict outside their Kinds answers 404 like an unknown one. Branch responses leave out the progress of background copies for them. Proposal Conflicts about a reference to an invisible Kind are left out for them, and Record history, lineage, explanations and context packs leave out origins, messages and Proposal titles naming something invisible and the changes that touched only what is left out.
 - Documentation: the validation record gains the five-day scenario's CI figures, the rounds and findings of the PII vault and outbox security reviews; the README and the documentation landing page describe v0.2.1; the roadmap keeps open only the reference-hardware benchmark and the API stability guarantees ([validation](docs/validation.md), [roadmap](docs/roadmap.md)).
 - The standby of the compose profile `scale-out` passes the arguments of its service command to Postgres, so an overlay can add settings to it.
-
-### Not done yet
-
-- BM25 search at 10M Records is not measured (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`, then `tests/perf/bm25.py --database perf_seed_10m_zipf`), and `storage apply` does not tune autovacuum for it: with BM25 on and frequent writes, set a lower `autovacuum_vacuum_scale_factor` on the `mat_records` partitions yourself ([performance](docs/performance.md#bm25-search)).
+- Documentation: the web app README explains live mode against a Keeper on another port or host, through the dev proxy (`LOREBASE_KEEPER_PROXY`) or cross-origin (`VITE_KEEPER_BASE_URL`), and how Keeper allows the app's origin with `LOREBASE__KEEPER__CORS__ALLOW_ORIGINS` as a JSON list ([apps/web](apps/web/README.md#against-a-keeper-on-another-port-or-host)).
 
 ### Fixed
 
@@ -35,6 +32,10 @@ What changed in each release, newest first. The notes are written for the person
 - `keeper.cors.allow_headers` lists further headers only; its default is now empty. A configuration that repeats the earlier default keeps working, and one that listed fewer headers now allows the required ones as well.
 - Clients of Kind-narrowed principals that relied on 403 to tell a forbidden Kind from an unknown one now get 404 or 422 for both. Set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers.
 - Migration `0037` creates functions only and runs on any Postgres; apply it as usual. Search is unchanged unless you set `search.backend: bm25` and build the index.
+
+### Not done yet
+
+- BM25 search at 10M Records is not measured (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`, then `tests/perf/bm25.py --database perf_seed_10m_zipf`), and `storage apply` does not tune autovacuum for it: with BM25 on and frequent writes, set a lower `autovacuum_vacuum_scale_factor` on the `mat_records` partitions yourself ([performance](docs/performance.md#bm25-search)).
 
 ## 0.2.1 - 2026-10-23
 
