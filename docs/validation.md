@@ -219,6 +219,14 @@ columns of one run compare):
 
 Detail: [performance](performance.md#search-on-very-common-terms).
 
+**BM25 search, 2026-10-23** (`tests/perf/bm25.py` on `perf_seed_1m_zipf`, the perf Postgres on
+the ParadeDB image, load average about 9): very common words 23.2 to 15.7 ms at p50 and 48.7
+to 27.3 at p95 (cold), every match ranked (no truncated answer against 164 to 200 of 200);
+rare words about 3 ms slower (12.3 against 9.1 ms at p50); writes slow BM25 scans until
+`VACUUM` (a rare word 22 ms at p50 under one commit per second); overlays slower with BM25
+(two scans per arm). Index 75 to 99 MB, built in 15 to 19 s; commit cost not measurable. Not
+measured: 10M Records. Detail: [performance](performance.md#bm25-search).
+
 **Working set and storage profiles, 2026-10-23** (`tests/perf/working_set.py` on copies of
 the seeds; load average 45 to 105 at 1M, 40 to 75 at 10M): at 1M Records the hot set of the
 agent read path went from 12.5 GB (13,120 bytes per Record) to 5.5 GB in `balanced` and
@@ -294,6 +302,7 @@ Documents: [security review](security-review.md) (findings, fixes, tool results)
 | Outbox and Operation events | 2026-10-22 | Delivery state, sensitive values in events | Three High findings, all fixed ([details](#outbox-and-operation-events)) |
 | Shared rate limits, read audit, off-database anchor | 2026-10-22 | Rate limiting, audit | Fixed; a follow-up commit adds outage and freshness handling |
 | Helm database roles | 2026-10-22 | The chart's database connections | Installed on a kind cluster |
+| BM25 search backend (`pg_search`) | 2026-10-23 | The definer functions, the query translation, overlays, masking, the fallback and the licence isolation | No High; four Medium and eight Low, all fixed or documented ([details](#bm25-search-backend)) |
 
 ### The 23-finding review
 
@@ -347,6 +356,36 @@ Shared token buckets (UNLOGGED `rate_limit_buckets`, revision `0022`) so all Kee
 ### Helm database roles on a live cluster
 
 The chart's database roles were installed on a kind cluster with an external Postgres: install, upgrade and `helm test`. Keeper and Scribe connected as `lorebase_app` with `rolsuper` and `rolbypassrls` false, no `CREATE` on `public` and no `UPDATE` or `DELETE` on `audit_log`, and the tables stayed owned by the maintenance role. The CloudNativePG mode was not run. Outside that run the chart has been checked by `helm lint --strict`, `helm template` of every profile and `kubeconform --strict` in CI, and by `tests/tooling/test_helm_network_policy.py` and `tests/tooling/test_helm_db_roles.py` (skipped without a `helm` binary); the hook ordering, the Ollama sidecar and NetworkPolicy behavior are untested end to end ([kubernetes](kubernetes.md#validation-status)). Finding fixed: the chart used one DSN, so the services connected as the table owner, row-level security held only through `FORCE` and the audit revoke did not apply to them; it now takes two DSNs and a `db-roles` init container, and refuses one user for both unless `database.allowSharedRole` is set.
+
+### BM25 search backend
+
+An independent review of the optional BM25 backend (migration `0037`, `lorebase_store.bm25`,
+the storage step, the compose and Helm files) before its first push. It found no way for a
+caller of `lb_search_bm25` to read outside the Domain, branch and Kinds it passes, or to run
+code as the function owner: the scope is bound as literals and parameters after the checks of
+revision `0008`, and the JSON queries are checked against the shapes the store builds. The
+overlay resolution and the `truncated` rule were found correct. Fixed after it:
+
+- Medium: raw BM25 scores carried term statistics of every Domain; scores now come back
+  relative to the best hit, and the remaining channel (the order of several-word hits) is
+  documented ([search](search.md#bm25-ranking), threat model residual risk 8).
+- Medium: the whitespace tokenizer folded case, so a lexeme with capitals in the vector (a
+  configuration or locale that keeps them) would not be found by an exact query; the index
+  now keeps lexemes as they are, tested with `Ärger`.
+- Medium: an index dropped while a process still trusted it failed the request; the function
+  now catches the error and the store ranks the default way within the same transaction
+  (tested by dropping the index behind a cached process).
+- Medium: the key field is not unique across branches; checked that scores follow each row
+  (two rows with one key on two branches score by their own text).
+- Low: negation-only queries matched rows without a search vector; phrases could miss a row
+  whose lexemes share a position (now every word, the phrase only ranks); the build stopped
+  `storage apply` on an error; the extension's schemas were not checked for `CREATE` by other
+  roles; readiness ignored `use_definer_functions: false` and an unloaded library; ties of a
+  zero correction weight; the fallback's candidate count; leftovers of the downgrade. All
+  fixed.
+
+Measured on the way: the planner chose a parallel scan of an overlay's rows, 19 ms of workers
+for a top-k scan of 1 ms; the functions now run without parallel workers.
 
 ### Residual risks
 

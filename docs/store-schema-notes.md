@@ -205,6 +205,39 @@ triggers takes on `mat_records`; downgrade rebuilds the title index of `0011` co
 The search functions of revisions `0005` and `0010` stay for processes that still call them
 during an upgrade; their trigram branch has no index any more.
 
+### BM25 search index (optional)
+
+Revision `0037` prepares an optional BM25 ranking of lexical search through ParadeDB
+`pg_search` (AGPL-3.0, an opt-in image; [search](search.md#bm25-ranking)). It needs nothing of
+the extension: its functions name the extension's types and operator only inside statements
+they build at run time.
+
+- `lb_search_terms(search)`: the lexemes of a search vector, each repeated at each of its
+  positions, in position order (lexemes of one position bytewise), joined by spaces; once each
+  for a vector without positions, NULL for an empty or NULL vector. A standard SQL body,
+  `IMMUTABLE`: the index expression.
+- `ix_mat_records_bm25`, built by `storage apply` with `store.storage.bm25_index` (not by a
+  migration): `USING bm25` over `key`, `domain_id`, `branch`, `kind_id` as literal fields,
+  `revision_generation`, `deleted`, and `lb_search_terms(search)` tokenized on whitespace
+  without case folding (field `terms`). Per partition `CREATE INDEX CONCURRENTLY`, then
+  attached to an index created `ON ONLY` the parent, as the values index; it is valid once
+  every partition is attached. Maintained by every write in the writing transaction. Schema
+  comparison skips it. `storage apply` refuses to build it while a role other than the owner
+  may create objects in the extension's schemas (`pdb`, `paradedb`), whose functions the
+  definer functions call as their owner.
+- `lb_bm25_query_valid(query)`: the JSON query shapes the store builds (`term`, `phrase` on
+  `terms`, `boolean`, `all`), nothing else.
+- `lb_search_bm25` and `lb_search_bm25_overlay` (below): one top-k scan of the index per
+  branch half and per arm (the query as written, the corrected-only hits), ordered by
+  `pdb.score` then Kind and key bytewise; an overlay's base half reads as many more rows as
+  the overlay holds of the searched Kinds (at most `p_candidates`), then drops the rows the
+  overlay shadows; a superset query (phrases) reads `p_candidates` rows and rechecks
+  `search @@`; `truncated` says when a scan's limit may have cut a row that would rank among
+  those returned; scores come back relative to the best row.
+
+The downgrade drops the functions and the index (`CASCADE` on `lb_search_terms` also takes
+partition indexes never attached); the extension stays.
+
 ### Shared lineage maps
 
 `mat_records.lineage` (Attribute to provenance id), `mat_records.lineage_revisions`
@@ -327,6 +360,7 @@ SQL otherwise:
 | `lb_query_by_attribute(domain, branch, kind, attribute, type, op, value, limit, after_value, after_key)` | comparisons on a per-Attribute partial index |
 | `lb_search_corrections(domain, branch, kinds, config, query, threshold, candidates, min_length)` | typo corrections of the query words (negated ones aside) the Kinds of a branch (and of its base) do not hold, from the word lexicon (revision `0018`) |
 | `lb_search_corrected(domain, branch, kinds, config, query, candidates, limit, words, replacements, weight)` | full-text search with corrected words widened to their replacements, exact matches first (revision `0018`; replaces `lb_search` in the store) |
+| `lb_search_bm25(domain, branch, kinds, config, query, candidates, limit, match, match_exact, words, replacements, weight, fixed, fixed_exact)` | BM25 search through the optional `pg_search` index (revision `0037`); `match` and `fixed` are JSON queries checked by `lb_bm25_query_valid`, the scope comes from the arguments only |
 
 Why this keeps Domains isolated:
 

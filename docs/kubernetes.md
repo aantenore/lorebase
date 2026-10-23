@@ -203,6 +203,34 @@ operator's `<release>-postgresql-app` Secret; Keeper and Scribe connect as the m
 point `secrets.values.dbReadDsn` at the `-ro` Service for reads. Not recommended for production data
 unless you operate CloudNativePG, backups included.
 
+### BM25 search
+
+`ci/search-bm25-values.yaml` ranks lexical search with the BM25 index of ParadeDB `pg_search`
+([search](search.md#bm25-ranking)). It is optional: `pg_search` is licensed under AGPL-3.0,
+unlike Lorebase (Apache-2.0); read the [licence note](search.md#licence) first. The chart's
+defaults never reference the image. The file sets `config.search.backend: bm25` and
+`config.store.storage.bm25_index: true`, and for the in-cluster Postgres the ParadeDB image
+(`paradedb/paradedb:0.26.3-pg16`, pinned by digest), `pg_search` in `shared_preload_libraries`
+and the extension at bootstrap. ParadeDB documents CloudNativePG deployments of its image; the
+chart renders and lints with it in CI, but a CloudNativePG cluster on it has not been run here,
+so check it with your operator version. Layer it on a profile
+with the in-cluster Postgres (CI renders it with `ci/local-models-values.yaml`):
+
+```bash
+helm upgrade --install lorebase deploy/helm/lorebase -n lorebase \
+  -f deploy/helm/lorebase/ci/local-models-values.yaml \
+  -f deploy/helm/lorebase/ci/search-bm25-values.yaml
+```
+
+With an external Postgres, preload `pg_search` there and keep only the `config` keys. Then run
+`python -m lorebase_store.storage apply` once with the backend image as the maintenance role
+(the role of `db-maintenance-dsn`, as the migration Job runs), for example from a copy of the
+migration Job with that command: it creates the extension and builds the index concurrently.
+Until it has, Keeper ranks the default way and `/readyz` reports `search_backend: degraded`.
+A cluster created on the default image keeps its data directory: move the data to a new
+cluster on the ParadeDB image (the images differ in their C library, which text indexes depend
+on) rather than changing `imageName` in place ([search](search.md#operations)).
+
 ## Database roles
 
 As on compose ([deployment](deployment.md#database-roles)), two roles:
