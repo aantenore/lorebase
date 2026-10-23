@@ -67,7 +67,26 @@ RECORD_NAMES = (
     "updated_revision",
     "updated_at",
 )
-RECORD_COLUMNS = ", ".join(f'm."{name}"' for name in RECORD_NAMES)
+
+
+def lineage_sql(value: str, domain: str = "CAST(:domain AS text)") -> str:
+    """`value` (a map column of `mat_records` or `mat_links`) as the map it stands for: with
+    shared lineage maps (revision 0036) a column may hold a reference to the map instead."""
+    return f"lb_lineage({domain}, {value})"
+
+
+def record_columns(alias: str | None = "m") -> str:
+    """The columns of `RECORD_NAMES` from `alias` (bare names without one), lineage resolved
+    with the bound `:domain`."""
+    prefix = "" if alias is None else f"{alias}."
+    columns = [f'{prefix}"{name}"' for name in RECORD_NAMES]
+    return ", ".join(
+        f'{lineage_sql(column)} AS "{name}"' if name == "lineage" else column
+        for name, column in zip(RECORD_NAMES, columns, strict=True)
+    )
+
+
+RECORD_COLUMNS = record_columns()
 
 
 def _records(sql: str) -> TextualSelect:
@@ -603,6 +622,7 @@ async def query_by_attribute(
     layout = await resolve_layout(session, domain_id, branch)
     expression = spec.expression
     params: dict[str, Any] = {
+        "domain": domain_id,
         "value": _value_text(value),
         "limit": _cap(limit, _runtime(runtime).settings.reads.max_page_rows),
     }
@@ -653,7 +673,8 @@ async def query_by_attribute(
 
 _QUERY_BY_ATTRIBUTE = {
     function: _records(
-        f"SELECT * FROM {function}(:domain, :branch, :kind, :attribute, :type, :op, "
+        f"SELECT {record_columns(None)} FROM {function}(:domain, :branch, :kind, :attribute, "
+        ":type, :op, "
         ":value, CAST(:limit AS integer), :after_value, :after_key)"
     )
     for function in ("lb_query_by_attribute", "lb_query_by_attribute_overlay")

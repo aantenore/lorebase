@@ -425,14 +425,15 @@ async def record_history(
 # that recorded that entry for the Attribute, and the newest creation. The change that created
 # the Record is the history row of `$created`, or that fallback when the row is missing. JSON
 # that is not an object (null lineage, for one) reads as empty. Changes are counted up to
-# `:count`, so a Record with a long history costs no more than that bound.
+# `:count`, so a Record with a long history costs no more than that bound. Shared lineage maps
+# (revision 0036) are resolved with `lb_lineage`.
 _HEAD = """
 rec AS MATERIALIZED (
     SELECT m."values" AS vals,
-           CASE WHEN jsonb_typeof(m.lineage) = 'object' THEN m.lineage
+           CASE WHEN jsonb_typeof(m.lineage) = 'object' THEN lb_lineage(m.domain_id, m.lineage)
                 ELSE '{{}}'::jsonb END AS lineage,
-           CASE WHEN jsonb_typeof(m.lineage_revisions) = 'object' THEN m.lineage_revisions
-                END AS revs
+           CASE WHEN jsonb_typeof(m.lineage_revisions) = 'object'
+                THEN lb_lineage(m.domain_id, m.lineage_revisions) END AS revs
     FROM {records}
     WHERE m.domain_id = :domain AND m.branch = :branch AND m.kind_id = :kind AND m.key = :key
 ),

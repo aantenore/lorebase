@@ -76,7 +76,7 @@ from lorebase_core.query import (
 )
 from lorebase_core.types import AttributeType, decode_value
 from lorebase_store.indexes import IndexMethod, IndexSpec
-from lorebase_store.layout import BranchLayout
+from lorebase_store.layout import BranchLayout, lineage_column
 from lorebase_store.settings import TraverseSettings
 
 EARTH_RADIUS_M = 6_371_008.8
@@ -560,7 +560,7 @@ def record_columns(rows: FromClause) -> list[KeyedColumnElement[Any]]:
         rows.c["values"],
         rows.c.derived,
         rows.c.object_hash,
-        rows.c.lineage,
+        lineage_column(rows),
         rows.c.updated_revision,
         rows.c.updated_at,
     ]

@@ -74,7 +74,10 @@ log = logging.getLogger(__name__)
 SWEEP_PAYLOAD: Mapping[str, Any] = {}
 """Payload of the sweep job."""
 
-_INCOMPLETE = f"(m.lineage_revisions IS NULL OR (m.lineage_revisions ->> '{CREATED_KEY}') IS NULL)"
+_REVISIONS = "lb_lineage(m.domain_id, m.lineage_revisions)"
+"""The lineage revisions of row `m`, a shared map resolved (revision 0036)."""
+
+_INCOMPLETE = f"(m.lineage_revisions IS NULL OR ({_REVISIONS} ->> '{CREATED_KEY}') IS NULL)"
 
 _BRANCHES = text(
     f"""
@@ -108,7 +111,7 @@ _ALL_BRANCHES = text(
 _NAMES_A_MERGE = f"""EXISTS (
     SELECT 1
     FROM jsonb_each_text(CASE WHEN jsonb_typeof(m.lineage_revisions) = 'object'
-                              THEN m.lineage_revisions ELSE '{{}}'::jsonb END) AS e
+                              THEN {_REVISIONS} ELSE '{{}}'::jsonb END) AS e
     JOIN revisions r ON r.domain_id = m.domain_id AND r.id = decode(e.value, 'hex')
     WHERE r.origin ->> 'type' = '{MERGE_ORIGIN_TYPE}')"""
 
@@ -116,7 +119,8 @@ _NAMES_A_MERGE = f"""EXISTS (
 def _page(condition: str) -> TextClause:
     return text(
         f"""
-    SELECT m.kind_id, m.key, m.lineage_revisions, m."values", m.lineage, m.updated_revision
+    SELECT m.kind_id, m.key, {_REVISIONS} AS lineage_revisions, m."values",
+           lb_lineage(m.domain_id, m.lineage) AS lineage, m.updated_revision
     FROM mat_records m
     WHERE m.domain_id = :domain AND m.branch = :branch AND NOT m.deleted AND {condition}
       AND (m.kind_id, m.key) > (:kind, :key)
@@ -162,7 +166,7 @@ _LINK_LINEAGE = text(
     UPDATE mat_links SET lineage = CAST(:lineage AS jsonb)
     WHERE domain_id = :domain AND branch = :branch AND relation_id = :relation
       AND from_key = :from_key AND to_key = :to_key
-      AND lineage IS DISTINCT FROM CAST(:lineage AS jsonb)
+      AND lb_lineage(domain_id, lineage) IS DISTINCT FROM CAST(:lineage AS jsonb)
     """
 )
 
@@ -181,7 +185,7 @@ _REFOLD = text(
                                                         updated text, updated_at timestamptz)
     WHERE m.domain_id = :domain AND m.branch = :branch
       AND m.kind_id = v.kind_id AND m.key = v.key
-      AND m.lineage_revisions IS NOT DISTINCT FROM v.before
+      AND lb_lineage(m.domain_id, m.lineage_revisions) IS NOT DISTINCT FROM v.before
     """
 )
 
@@ -192,7 +196,7 @@ _WRITE = text(
                                                         before jsonb)
     WHERE m.domain_id = :domain AND m.branch = :branch
       AND m.kind_id = v.kind_id AND m.key = v.key
-      AND m.lineage_revisions IS NOT DISTINCT FROM v.before
+      AND lb_lineage(m.domain_id, m.lineage_revisions) IS NOT DISTINCT FROM v.before
     """
 )
 

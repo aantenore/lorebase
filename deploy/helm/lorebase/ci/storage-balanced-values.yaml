@@ -1,0 +1,24 @@
+# Storage profile `balanced` (docs/performance.md#storage-profiles), the default. Postgres
+# settings for the in-cluster Cluster (`postgresql.enabled`); with an external Postgres apply
+# the same parameters there. Sized for 16 GiB of memory for Postgres, which keeps the hot
+# indexes and most of the agent read set of 1M Records in memory. Add it to another profile:
+#   helm upgrade --install lorebase deploy/helm/lorebase -f ci/production-values.yaml -f ci/storage-balanced-values.yaml
+config:
+  store:
+    storage:
+      profile: balanced
+postgresql:
+  cluster:
+    resources:
+      requests:
+        memory: 16Gi
+      limits:
+        memory: 16Gi
+    postgresql:
+      parameters:
+        max_connections: "100"
+        shared_buffers: "4GB"
+        effective_cache_size: "12GB"
+        work_mem: "8MB"
+        maintenance_work_mem: "1GB"
+        huge_pages: "try"

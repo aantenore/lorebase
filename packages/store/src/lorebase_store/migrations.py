@@ -24,6 +24,10 @@ URL_ATTRIBUTE = "database_url"
 DYNAMIC_INDEX_PREFIXES = ("embeddings_hnsw_", "mat_records_attr_")
 """Indexes created from configuration or schema at runtime; schema comparison skips them."""
 
+PROFILE_INDEXES = ("ix_mat_records_values", "ix_mat_lexicon_branch_word")
+"""Indexes of the models that a storage profile may leave out (`lorebase_store.storage`);
+schema comparison skips them whether they exist or not."""
+
 PARTITION_NAME = re.compile(r"^(?P<parent>[a-z_]+)_p(?P<remainder>\d+)$")
 """Hash partitions are named `<table>_p<remainder>`."""
 
@@ -39,7 +43,10 @@ def script_location() -> Path:
 def include_object(
     obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any
 ) -> bool:
-    """Schema comparison filter: skip hash partitions and runtime-managed indexes."""
+    """Schema comparison filter: skip hash partitions, runtime-managed indexes and the
+    indexes a storage profile manages."""
+    if type_ == "index" and name in PROFILE_INDEXES:
+        return False
     if not reflected or compare_to is not None or name is None:
         return True
     if type_ == "table":

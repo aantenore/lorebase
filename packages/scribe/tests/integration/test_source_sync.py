@@ -117,7 +117,8 @@ async def test_csv_source_proposal_flow(
     # Lineage: each Record names the run and its row.
     origin = await scalar(
         sessions,
-        "SELECT p.origin_ref FROM mat_records r, jsonb_each_text(r.lineage) l "
+        "SELECT p.origin_ref FROM mat_records r, "
+        "jsonb_each_text(lb_lineage(r.domain_id, r.lineage)) l "
         "JOIN provenance p ON p.id = l.value "
         "WHERE r.domain_id = :d AND r.branch = :b AND r.key = 'S-1003' LIMIT 1",
         d=DOMAIN,

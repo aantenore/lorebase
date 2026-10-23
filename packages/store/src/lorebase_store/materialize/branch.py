@@ -45,6 +45,7 @@ from lorebase_store.repositories.refs import RefRepository, RefRow
 from lorebase_store.repositories.revisions import RevisionRepository, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
+from lorebase_store.storage import constraints_only
 
 BRANCH_CREATE_REASON = "branch.create"
 
@@ -180,6 +181,7 @@ async def _create(
             domain_id,
             name,
             settings=runtime.settings.indexes,
+            constraints_only=constraints_only(runtime.settings),
             maintenance=runtime.index_maintenance,
         ).sync(load_compiled(source_schema.compiled))
         # The overlay reads the source's rows: stale ones are the source's to rewrite (its
@@ -225,6 +227,7 @@ async def _create(
             domain_id,
             name,
             settings=runtime.settings.indexes,
+            constraints_only=constraints_only(runtime.settings),
             maintenance=runtime.index_maintenance,
         ).sync(copied)
         # Stale rows of the source are copied as they are.

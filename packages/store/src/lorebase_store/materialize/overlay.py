@@ -46,6 +46,7 @@ from lorebase_store.repositories.revisions import RevisionRepository
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.settings import MaterializeSettings
+from lorebase_store.storage import constraints_only
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ async def promote(
             domain_id,
             branch,
             settings=runtime.settings.indexes,
+            constraints_only=constraints_only(runtime.settings),
             maintenance=runtime.index_maintenance,
         ).sync(load_compiled(schema.compiled))
     log.info("promoted overlay branch %s of Domain %s to a full copy", branch, domain_id)
@@ -284,6 +286,7 @@ async def refork(
             domain_id,
             branch,
             settings=runtime.settings.indexes,
+            constraints_only=constraints_only(runtime.settings),
             maintenance=runtime.index_maintenance,
         ).sync(load_compiled(schema.compiled))
     return await refs.require(branch)

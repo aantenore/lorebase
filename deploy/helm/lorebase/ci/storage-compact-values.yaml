@@ -1,0 +1,25 @@
+# Storage profile `compact` (docs/performance.md#storage-profiles): the smallest footprint, for
+# a small node. Every feature works; equality filters on Attributes without an index scan their
+# Kind, typo corrections scan the lexicon. Postgres settings for the in-cluster Cluster
+# (`postgresql.enabled`); with an external Postgres apply the same parameters there. Sized for
+# 4 GiB of memory for Postgres. Add it to another profile:
+#   helm upgrade --install lorebase deploy/helm/lorebase -f ci/minimal-values.yaml -f ci/storage-compact-values.yaml
+config:
+  store:
+    storage:
+      profile: compact
+postgresql:
+  cluster:
+    resources:
+      requests:
+        memory: 4Gi
+      limits:
+        memory: 4Gi
+    postgresql:
+      parameters:
+        max_connections: "100"
+        shared_buffers: "512MB"
+        effective_cache_size: "2GB"
+        work_mem: "4MB"
+        maintenance_work_mem: "256MB"
+        huge_pages: "off"

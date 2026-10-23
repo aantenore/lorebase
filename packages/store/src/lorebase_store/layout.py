@@ -34,7 +34,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import FromClause, Table, text
+from sqlalchemy import FromClause, Label, Table, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -48,6 +49,13 @@ MAT_HISTORY: Table = metadata.tables["mat_history"]
 RECORD_COLUMNS = tuple(c.name for c in MAT_RECORDS.columns)
 LINK_COLUMNS = tuple(c.name for c in MAT_LINKS.columns)
 HISTORY_COLUMNS = tuple(c.name for c in MAT_HISTORY.columns)
+
+
+def lineage_column(rows: FromClause, column: str = "lineage") -> Label[Any]:
+    """A map column of Record or Link `rows` (`lineage`, `lineage_revisions`) as the map it
+    stands for: with shared lineage maps (revision 0036) the column may hold a reference."""
+    return func.lb_lineage(rows.c.domain_id, rows.c[column], type_=JSONB).label(column)
+
 
 _LAYOUT = text(
     "SELECT CAST(materialization AS text), base_branch, base_generation FROM refs "

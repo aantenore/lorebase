@@ -120,6 +120,13 @@ config:
   # scribe:
   #   sources:
   #     allowed_connections: ["secret://env/ERP_DSN"]
+  # Storage profile (docs/performance.md#storage-profiles): compact | balanced | fast, what the
+  # database keeps traded against memory and disk. Read by the migration Job and the services;
+  # after a change run `python -m lorebase_store.storage apply` as the maintenance role.
+  # ci/storage-<profile>-values.yaml set it with matching Postgres settings.
+  store:
+    storage:
+      profile: balanced
 
 # Log level of every service (LOREBASE__LOGGING__LEVEL). CRITICAL | ERROR | WARNING | INFO | DEBUG.
 logLevel: INFO
@@ -297,7 +304,9 @@ postgresql:
           name: lorebase-db-app
     postgresql:
       # postgresql.conf parameters (string values). Size max_connections above
-      # Keepers x (pool_size + max_overflow), plus Scribe, migrations and admin.
+      # Keepers x (pool_size + max_overflow), plus Scribe, migrations and admin. Memory
+      # settings per storage profile (shared_buffers, effective_cache_size, huge_pages,
+      # pg_prewarm): ci/storage-<profile>-values.yaml and docs/performance.md#sizing.
       parameters:
         max_connections: "100"
 

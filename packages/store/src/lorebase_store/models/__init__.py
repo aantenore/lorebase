@@ -37,9 +37,11 @@ from lorebase_store.models.materialized import (
     EmbeddingCursor,
     MatHistory,
     MatLexicon,
+    MatLineageMap,
     MatLink,
     MatRecord,
     MatSchema,
+    StorageTask,
 )
 from lorebase_store.models.proposals import (
     Conflict,
@@ -99,6 +101,7 @@ __all__ = [
     "Job",
     "MatHistory",
     "MatLexicon",
+    "MatLineageMap",
     "MatLink",
     "MatRecord",
     "MatSchema",
@@ -120,6 +123,7 @@ __all__ = [
     "RevisionParent",
     "SchemaSuggestion",
     "SourceRun",
+    "StorageTask",
     "StoredObject",
     "TreeNode",
     "VaultEntry",

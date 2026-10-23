@@ -98,6 +98,7 @@ from lorebase_store.materialize import (
     run_sensitivity_refresh_job,
 )
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.storage import constraints_only
 from lorebase_store.vault import rotate
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
@@ -219,7 +220,11 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
 
     async def index(job: JobRow) -> Mapping[str, Any]:
         _domain(job)
-        return await run_index_job(context.ddl_engine or context.engine, job)
+        return await run_index_job(
+            context.ddl_engine or context.engine,
+            job,
+            constraints_only=constraints_only(context.runtime.settings),
+        )
 
     async def materialize(job: JobRow) -> Mapping[str, Any]:
         _domain(job)

@@ -123,6 +123,7 @@ from lorebase_store.repositories.refs import LockTimeoutError, RefMovedError, Re
 from lorebase_store.repositories.revisions import RevisionRepository, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
+from lorebase_store.storage import constraints_only
 from lorebase_store.telemetry import COMMIT_DURATION
 from lorebase_store.vault.store import (
     Lineage,
@@ -353,6 +354,7 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
             domain_id,
             branch,
             settings=settings.indexes,
+            constraints_only=constraints_only(settings),
             maintenance=request.runtime.index_maintenance,
         )
         await indexes.retire(prepared.schema)

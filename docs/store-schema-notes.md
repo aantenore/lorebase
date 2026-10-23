@@ -205,6 +205,58 @@ triggers takes on `mat_records`; downgrade rebuilds the title index of `0011` co
 The search functions of revisions `0005` and `0010` stay for processes that still call them
 during an upgrade; their trigram branch has no index any more.
 
+### Shared lineage maps
+
+`mat_records.lineage` (Attribute to provenance id), `mat_records.lineage_revisions`
+(Attribute to Revision) and `mat_links.lineage` were about half of a Record row (840 of 1,600
+bytes at 10M Records) while a few hundred distinct maps repeat over millions of rows. Revision
+`0036` stores each distinct map once per Domain:
+
+- `mat_lineage_maps(domain_id, id, map)`: `id` is the first 16 bytes of the SHA-256 of the
+  map's canonical text (`jsonb::text`); Domain-scoped with row-level security, rows go with
+  their Domain. Maps are never updated; one that no row names any more stays (a map is a few
+  hundred bytes, and their number is bounded by the distinct lineage combinations written).
+- A column holds either the map or a reference `{"$map": "<32 hex>"}`. Readers resolve it with
+  `lb_lineage(domain_id, column)` (SQL, inlined: a primary-key probe of the small, always cached
+  maps table per reference), which every read path uses: the Record statements of
+  `lorebase_store.reads` and `traverse` (the security definer functions' results are wrapped,
+  the functions are unchanged), `MaterializedRepository`, the merge lineage and index views,
+  the lineage backfill and Keeper's lineage, explain and query compiler. A reference whose map is
+  missing raises `XX001` instead of reading as empty.
+- `BEFORE INSERT OR UPDATE OF` the map columns row triggers `lb_lineage_maps` replace maps by
+  references (`lb_lineage_share`) for every writer, so the commit pipeline, copy-on-write,
+  background copies, rebuilds and backfills need no change; `INSERT ... ON CONFLICT DO
+  UPDATE SET lineage = excluded.lineage` copies the reference the insert trigger produced.
+  Maps of at most 64 bytes (`{}`, a Link with one entry) stay inline: a reference is as large.
+- The storage profile decides whether the triggers are enabled (`store.storage.lineage_maps`,
+  `shared` except with `fast`); `python -m lorebase_store.storage apply` switches them and
+  rewrites the rows in batches either way, so readers always see both forms. The functions
+  run as the caller, under its privileges and row-level security; only the trigger functions
+  have `EXECUTE` revoked from `PUBLIC`.
+
+### Storage profiles
+
+`store.storage.profile` (`compact`, `balanced`, `fast`; `lorebase_store.storage`) decides what
+the database keeps besides the rows: the lineage maps above, the GIN index on Record values
+(`ix_mat_records_values`, which serves equality on Attributes without an index of their own),
+the per-Attribute indexes of `indexed` Attributes (`compact` keeps those of unique and foreign
+key Attributes only: `IndexPlan.built`), the trigram index of the word lexicon, the precision
+of the HNSW index (`embeddings_hnsw_half_<dims>` on `halfvec`, `embeddings_hnsw_<dims>` on
+`vector`; stored vectors keep full precision, searches cast to the type the index that exists
+has, `embeddings.index_precision`), TOAST compression of large values and the fill factor of
+`mat_records`. Schema comparison ignores the two optional model indexes.
+
+`storage apply` builds and drops indexes concurrently (the values index partition by
+partition, attached to the parent; dropping it takes a lock of at most
+`store.storage.lock_timeout_ms` on the partitions), queues nothing, rewrites lineage maps in
+page ranges (progress in `storage_tasks`, resumed by the next run), and with `--compact`
+moves rows from the last pages of `mat_records`, `mat_links` and `mat_history` into free space
+earlier in the table (`DELETE ... RETURNING` into `INSERT` on the partition, one branch at a
+time under the branch lock that commits take, so no commit changes a row being moved), then
+lets `VACUUM` truncate the emptied pages; `--reindex` rebuilds the indexes of those tables with
+`REINDEX TABLE CONCURRENTLY`. Moving rows on the partition does not fire the statement-level
+lexicon triggers of the parent: the words do not change.
+
 ## Row-level security
 
 - Every table with a `domain_id` column, partitions included, has `ENABLE` and `FORCE ROW LEVEL

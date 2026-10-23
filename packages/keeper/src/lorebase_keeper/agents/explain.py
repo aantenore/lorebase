@@ -38,6 +38,7 @@ from lorebase_keeper.reading.records import compiler_for, fetch_record
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import record_out, relation_name
+from lorebase_store.layout import lineage_column
 from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 from lorebase_store.models import metadata
 from lorebase_store.repositories import MaterializedRepository, ProvenanceRepository
@@ -225,7 +226,7 @@ async def _links(
         source = compiler.link_source(hop)
         far = point.layout.records("far")
         inverse_key = hop.foreign_key and hop.direction is LinkDirection.INVERSE
-        holder = source.rows.c.lineage if inverse_key else None
+        holder = lineage_column(source.rows) if inverse_key else None
         columns: list[Any] = [
             source.far.label("far_key"),
             source.values.label("link_values"),

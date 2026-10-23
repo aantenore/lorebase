@@ -1,4 +1,4 @@
-SELECT r.kind_id, r.key, r.title, r.values, r.derived, r.object_hash, r.lineage, r.updated_revision, r.updated_at, CAST(r.values ->> %(param_1)s::VARCHAR AS DATE) IS NULL AS s0, CAST(r.values ->> %(param_1)s::VARCHAR AS DATE) AS s1, r.key AS s2 
+SELECT r.kind_id, r.key, r.title, r.values, r.derived, r.object_hash, lb_lineage(r.domain_id, r.lineage) AS lineage, r.updated_revision, r.updated_at, CAST(r.values ->> %(param_1)s::VARCHAR AS DATE) IS NULL AS s0, CAST(r.values ->> %(param_1)s::VARCHAR AS DATE) AS s1, r.key AS s2 
 FROM mat_records AS r 
 WHERE r.domain_id = %(param_2)s::VARCHAR AND r.branch = %(param_3)s::VARCHAR AND r.kind_id = %(param_4)s::VARCHAR AND ((EXISTS (SELECT %(param_5)s::INTEGER AS anon_1 
 FROM mat_records AS mat_records_1 JOIN mat_records AS mat_records_2 ON mat_records_2.domain_id = %(param_6)s::VARCHAR AND mat_records_2.branch = %(param_7)s::VARCHAR AND mat_records_2.kind_id = %(param_8)s::VARCHAR AND mat_records_2.key = mat_records_1.key 
