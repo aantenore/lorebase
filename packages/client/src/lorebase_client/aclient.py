@@ -606,6 +606,35 @@ class Operations(_Resource):
             idempotency_key=idempotency_key,
         )
 
+    async def delete_records(
+        self,
+        domain: str,
+        kind: str,
+        keys: Sequence[str],
+        *,
+        skip_missing: bool = False,
+        branch: str | None = None,
+        dry_run: bool = False,
+        expected_head: str | None = None,
+        message: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> m.Execution:
+        """Delete Records of `kind` by key in one Revision; Links follow each Relation's
+        `on_delete`. Unknown keys fail the call unless `skip_missing` (then warnings)."""
+        parameters: dict[str, Any] = {"kind": kind, "keys": list(keys)}
+        if skip_missing:
+            parameters["skip_missing"] = True
+        return await self.execute(
+            domain,
+            "delete_records",
+            parameters,
+            branch=branch,
+            dry_run=dry_run,
+            expected_head=expected_head,
+            message=message,
+            idempotency_key=idempotency_key,
+        )
+
 
 class Records(_Resource):
     async def list(

@@ -23,7 +23,11 @@ from lorebase_herald.render import (
 )
 from lorebase_herald.settings import OutputSettings
 
-GENERIC_OPERATIONS = ("import_records(kind, rows)", "import_links(relation, rows)")
+GENERIC_OPERATIONS = (
+    "import_records(kind, rows)",
+    "import_links(relation, rows)",
+    "delete_records(kind, keys)",
+)
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 View = dict[str, Any]
