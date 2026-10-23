@@ -1024,16 +1024,54 @@ The cold neighborhood reads 346 of its 954 pages from outside shared buffers: th
 (57 GB) is seven times the VM. The 10M fixture was written once by `replicate` and is not
 bloated: its Record heap is 1,824 bytes per Record (rows of 1,600 bytes, 4.5 per page).
 
-**After: not measured yet.** The `balanced` end state was being produced on a copy (one
-`UPDATE` per table through the lineage map triggers, then `VACUUM FULL`, the end state of
-`apply --compact --reindex`, offline because the online rewrite runs at 600 to 2,800 rows per
-second under this load): the Records took 30.5 minutes and their `VACUUM FULL` 9.6 minutes,
-then the Docker VM stopped before the Links were done. The 10M rows are the 1M fixture's rows
-with renumbered keys, so their widths are the 1M copy's: shared maps take the Record heap from
-1,824 to about 838 bytes per Record and the Link heap from 939 to about 704 (three Links per
-Record), which puts the 10M hot set at about 4.9 kB per Record (49 GB) in `balanced`, against
-6,165 (57 GB) before. The read table at 10M after the change is to be measured
-(`tests/perf/working_set.py --seed <fresh>` on the transformed copy).
+After, measured on 2026-10-23 on the same copy in its `balanced` end state (each table
+rewritten through the lineage map triggers, then `VACUUM FULL`: the end state of `apply
+--compact --reindex`), then after `storage apply` to `compact`, fresh keys each, Docker VM of
+16 GiB with `shared_buffers` 6GB, `effective_cache_size` 12GB, `work_mem` 8MB,
+`maintenance_work_mem` 1GB (`make perf-up PERF_VM=16g`), load average 9 to 15. The read set
+(44 GB) is still about three times the VM.
+
+| | before | balanced | compact |
+|---|---:|---:|---:|
+| `mat_records` heap | 17.0 GB | 7.8 GB | 7.8 GB |
+| `mat_links` heap | 8.7 GB | 6.6 GB | 6.6 GB |
+| **hot set** | **57 GB (6,165 B/Record)** | **44.1 GB (4,729)** | **43.3 GB (4,651)** |
+
+Reads, p50 / p95 in milliseconds, cold then warm, with pages read from outside shared buffers
+per cold call:
+
+| read | balanced cold | warm | read | compact cold | warm | read |
+|---|---:|---:|---:|---:|---:|---:|
+| get by key | 4.9 / 10.7 | 3.2 / 7.4 | 2.7 | 3.5 / 10.1 | 3.8 / 7.7 | 2.6 |
+| list page of 50 | 6.3 / 13.8 | 3.6 / 6.0 | 17.7 | 6.8 / 21.1 | 3.4 / 7.3 | 16.8 |
+| links of a record | 9.1 / 19.2 | 3.1 / 5.3 | 15.5 | 8.0 / 17.7 | 2.3 / 4.2 | 8.1 |
+| 2-hop neighborhood | 99.8 / 145.4 | 9.8 / 20.9 | 383.0 | 95.7 / 159.0 | 9.4 / 16.6 | 272.8 |
+| query by indexed attribute | 3.5 / 7.5 | 3.3 / 5.2 | 5.0 | 5.9 / 708.2 | 7.4 / 828.8 | 0.0 |
+| full-text search | 35.4 / 58.3 | 36.9 / 56.7 | 5.4 | 41.0 / 75.1 | 40.7 / 76.7 | 8.2 |
+| typo-tolerant search | 39.0 / 69.9 | 40.1 / 82.2 | 3.6 | 40.3 / 88.1 | 40.2 / 86.0 | 0.3 |
+| partial-match search | 91.9 / 117.7 | 89.6 / 122.5 | 0.6 | 99.0 / 148.8 | 107.3 / 167.4 | 0.7 |
+| record history page | 7.9 / 10.3 | 6.9 / 11.4 | 5.5 | 7.3 / 11.2 | 4.2 / 6.8 | 5.6 |
+| record lineage | 6.2 / 9.7 | 5.8 / 8.2 | 0.1 | 4.9 / 7.5 | 4.9 / 8.5 | 0.1 |
+
+- The hot set is 23% smaller than before (4,729 against 6,165 bytes per Record), close to the
+  4.9 kB the 1M widths predicted; `compact` saves another 0.8 GB (the values index and the
+  per-Attribute indexes it leaves out).
+- The cold neighborhood went from 122 to 100 ms at p50 (`balanced`; the before-run had 2 GB of
+  shared buffers and a load of 40 to 75, so part of the gain is the machine).
+- `compact` at 10M: the attribute query scans the Kind (190,000 pages per call, p95 0.7 s,
+  all from shared buffers once read); every other read is as in `balanced`.
+- Producing the end state: the Records rewrite took 30.5 minutes and its `VACUUM FULL` 9.6;
+  the Links rewrite 27 minutes in ten parallel page ranges (WAL-bound at about 24 MB/s, with
+  the maps stored first in one statement so the ranges did not wait for each other's map
+  inserts) and its `VACUUM FULL` 9.4 minutes. `storage apply` to `compact` afterwards took
+  13.5 minutes, almost all of it the rewrite pass checking every page and finding no row left
+  in the other form.
+
+Commits of 1,000 Part updates, six after each read run at load 9 to 13: p50 2,711 ms in
+`balanced`, 2,332 ms in `compact`. Commits are slower at 10M than at 1M in both profiles,
+and `compact` is not slower than `balanced` under the same load: the 2,108 ms of the 1M
+`compact` run was the load (95 to 105) of that run. The six runs are sequential, not
+alternating, as switching profiles at 10M rebuilds the values index.
 
 ### Embeddings: half precision
 
@@ -1123,20 +1161,19 @@ connections, sorts and growth:
 
 Bytes per Record of the agent read set: the core reads (Records, Links and their indexes:
 get, pages, Links, neighborhoods, attribute queries, search) and everything including history
-and lineage. Measured at 1M; at 10M and 100M, the 10M fixture's sizes with the row widths
-measured at 1M (estimates; 100M is ten times 10M).
+and lineage. Measured at 1M and 10M; 100M is ten times 10M (an estimate).
 
 | | compact | balanced | fast |
 |---|---:|---:|---:|
 | core read set, bytes per Record | 2,210 | 2,290 | 3,690 |
 | whole read set, bytes per Record (1M measured) | 5,714 | 5,791 | 7,006 |
-| whole read set, bytes per Record (10M estimate) | 4,860 | 4,940 | 6,350 |
+| whole read set, bytes per Record (10M measured; `fast` estimated) | 4,651 | 4,729 | 6,350 |
 | 1M Records: core / whole read set | 2.2 / 5.5 GB | 2.3 / 5.5 GB | 3.7 / 6.7 GB |
 | 1M Records: memory to keep the whole set resident | 7 GB | 7 GB | 8.5 GB |
-| 10M Records: core / whole read set | 22 / 49 GB | 23 / 49 GB | 37 / 64 GB |
-| 10M Records: memory to keep the whole set resident | 61 GB | 62 GB | 80 GB |
-| 100M Records: core / whole read set | 220 / 486 GB | 229 / 494 GB | 369 / 635 GB |
-| 100M Records: memory to keep the whole set resident | 610 GB | 620 GB | 795 GB |
+| 10M Records: core / whole read set | 22 / 43 GB | 23 / 44 GB | 37 / 64 GB |
+| 10M Records: memory to keep the whole set resident | 54 GB | 55 GB | 80 GB |
+| 100M Records: core / whole read set | 220 / 433 GB | 229 / 440 GB | 369 / 635 GB |
+| 100M Records: memory to keep the whole set resident | 540 GB | 550 GB | 795 GB |
 
 With less memory than the whole read set, history and lineage reads go to disk first; with
 less than the core read set, the neighborhood does. `fast` trades about 60% more memory for
