@@ -717,7 +717,7 @@ async def test_lexical_semantic_and_hybrid_search(http: httpx.AsyncClient) -> No
     assert lexical["corrections"] == []
     # The lexicon bounds "bearing" well within search.common_term_docs: every match ranked.
     assert lexical["truncated_candidates"] is False
-    typo =await post_ok(http, "/search", {"q": "Kavsen Aloys", "kinds": ["Supplier"]})
+    typo = await post_ok(http, "/search", {"q": "Kavsen Aloys", "kinds": ["Supplier"]})
     assert "S-1001" in [hit["key"] for hit in typo["items"]]
     assert [c["word"] for c in typo["corrections"]] == ["aloys"]
     assert "alloys" in typo["corrections"][0]["replacements"]

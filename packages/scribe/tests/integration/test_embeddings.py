@@ -54,10 +54,14 @@ SUPPLIERS = rows("supplier.csv")
 
 
 def schema_with(template: str | None) -> Schema:
+    """The supply schema with an embedding template on Supplier only, or on no Kind."""
     schema = supply_schema()
     supplier = schema.kind_by_api_name("Supplier")
     assert supplier is not None
-    kinds = dict(schema.kinds)
+    kinds = {
+        kind_id: kind.model_copy(update={"search": KindSearch()})
+        for kind_id, kind in schema.kinds.items()
+    }
     kinds[supplier.id] = supplier.model_copy(
         update={"search": KindSearch(embedding_template=template)}
     )

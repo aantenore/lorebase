@@ -1,5 +1,5 @@
 # Context: supply/main
-revision e3bb4431a01856c433032fc114ec85db2b3569b8f8f31b5c5b4919e9a8fd6c8f; estimated 1458 of 1500 tokens; trimmed: lineage(2), recent_changes(7)
+revision f5f3f96468c0b2a9e9e1f8aa8249d534b0d8001c9a88782b2f273877f9f092a2; estimated 1458 of 1500 tokens; trimmed: lineage(2), recent_changes(7)
 
 ## Records
 ### Supplier/S-1001: Kavsen Alloys Sp. z o.o.
@@ -12,7 +12,7 @@ revision e3bb4431a01856c433032fc114ec85db2b3569b8f8f31b5c5b4919e9a8fd6c8f; estim
 - status: active
 - tier: 1
 - vat_number: PL000007919
-- (last changed in e3bb4431a018)
+- (last changed in f5f3f96468c0)
 
 ## Neighbors
 | ref | title | depth | values |
@@ -93,4 +93,4 @@ key: supplier_code; title: legal_name
 ## Recent changes
 | revision | at | record | change | attributes | by | origin | message |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| e3bb4431a018 | 2026-10-01T08:00:04Z | Supplier/S-1001 | modified | risk_score | usr_editor | operation | Raise the risk of S-1001 |
+| f5f3f96468c0 | 2026-10-01T08:00:04Z | Supplier/S-1001 | modified | risk_score | usr_editor | operation | Raise the risk of S-1001 |
