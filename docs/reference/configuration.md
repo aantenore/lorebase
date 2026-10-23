@@ -730,6 +730,25 @@ Storage engine. `layout` and `embeddings` are read once by the initial migration
 |---------|---------|-------------|
 | `store.layout.hash_partitions` | `8` | domain_id hash partitions of objects, tree_nodes, mat_records and mat_links |
 
+### `store.storage`
+
+Storage profile (docs/performance.md#storage-profiles): memory and disk traded for speed. Applied by `python -m lorebase_store.storage apply` (batched, resumable, reads go on); until then the database keeps what it has. Each key but `profile` overrides one choice.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.storage.profile` | `balanced` | compact \| balanced \| fast |
+| `store.storage.lineage_maps` | `null` | shared \| inline (null: inline with fast, shared otherwise) |
+| `store.storage.values_index` | `null` | GIN index on Record values (null: off with compact) |
+| `store.storage.attribute_indexes` | `null` | all \| constraints (null: constraints with compact) |
+| `store.storage.lexicon_index` | `null` | trigram index of the typo lexicon (null: off with compact) |
+| `store.storage.embedding_precision` | `null` | half \| full HNSW index (null: half with compact) |
+| `store.storage.compression` | `null` | lz4 \| pglz for values above ~2 kB (null: pglz with compact) |
+| `store.storage.records_fillfactor` | `null` | 50-100 (null: 90 with fast, 100 otherwise) |
+| `store.storage.prewarm` | `null` | apply ends with `storage prewarm` (null: on with fast) |
+| `store.storage.prewarm_fraction` | `0.8` | share of shared_buffers the prewarm may fill |
+| `store.storage.batch_rows` | `2000` | rows rewritten per transaction by `storage apply` |
+| `store.storage.lock_timeout_ms` | `2000` | wait for a table lock in `storage apply`, then retry later |
+
 ### `store.embeddings`
 
 | Setting | Default | Description |

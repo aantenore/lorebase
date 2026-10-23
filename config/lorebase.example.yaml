@@ -609,6 +609,22 @@ store:
   layout:
     hash_partitions: 8           # domain_id hash partitions of objects, tree_nodes, mat_records
                                  # and mat_links
+  # Storage profile (docs/performance.md#storage-profiles): memory and disk traded for speed.
+  # Applied by `python -m lorebase_store.storage apply` (batched, resumable, reads go on);
+  # until then the database keeps what it has. Each key but `profile` overrides one choice.
+  storage:
+    profile: balanced            # compact | balanced | fast
+    lineage_maps: null           # shared | inline (null: inline with fast, shared otherwise)
+    values_index: null           # GIN index on Record values (null: off with compact)
+    attribute_indexes: null      # all | constraints (null: constraints with compact)
+    lexicon_index: null          # trigram index of the typo lexicon (null: off with compact)
+    embedding_precision: null    # half | full HNSW index (null: half with compact)
+    compression: null            # lz4 | pglz for values above ~2 kB (null: pglz with compact)
+    records_fillfactor: null     # 50-100 (null: 90 with fast, 100 otherwise)
+    prewarm: null                # apply ends with `storage prewarm` (null: on with fast)
+    prewarm_fraction: 0.8        # share of shared_buffers the prewarm may fill
+    batch_rows: 2000             # rows rewritten per transaction by `storage apply`
+    lock_timeout_ms: 2000        # wait for a table lock in `storage apply`, then retry later
   embeddings:
     dims: 384                    # HNSW index dimension; must equal inference.embeddings.dims
   writes:

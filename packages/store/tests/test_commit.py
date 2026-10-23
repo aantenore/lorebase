@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
@@ -67,6 +69,14 @@ from .support import (
 pytestmark = pytest.mark.integration
 
 Sessions = async_sessionmaker[AsyncSession]
+
+
+async def lineage_of(session: AsyncSession, stored: Any) -> dict[str, str]:
+    """A lineage column as read through `lb_lineage` (it may hold a shared map reference)."""
+    resolved = await session.scalar(
+        text("SELECT lb_lineage(:d, CAST(:v AS jsonb))"), {"d": DOMAIN, "v": json.dumps(stored)}
+    )
+    return dict(json.loads(resolved) if isinstance(resolved, str) else resolved)
 
 
 @pytest.fixture
@@ -145,9 +155,10 @@ async def test_commit_schema_records_and_links(
         assert acme.values[COUNTRY] == "IT"
         assert acme.updated_revision == result.revision_id
         assert acme.search is not None
-        own = set(acme.lineage.values())
+        lineage = await lineage_of(session, acme.lineage)
+        own = set(lineage.values())
         assert len(own) == 1
-        assert set(acme.lineage) == set(acme.values)
+        assert set(lineage) == set(acme.values)
         provenance = await session.get(Provenance, (DOMAIN, own.pop()))
         assert provenance is not None
         assert provenance.origin_type == ORIGIN.type
@@ -226,8 +237,9 @@ async def test_update_delete_lineage_and_cascade(
     async with sessions() as session:
         acme = await session.get(MatRecord, (DOMAIN, "main", SUPPLIER, "S-1"))
         assert acme is not None
-        assert acme.lineage[COUNTRY] == entry.id
-        assert acme.lineage[LEGAL_NAME] != entry.id  # unchanged Attributes keep their lineage
+        lineage = await lineage_of(session, acme.lineage)
+        assert lineage[COUNTRY] == entry.id
+        assert lineage[LEGAL_NAME] != entry.id  # unchanged Attributes keep their lineage
         assert await session.get(MatRecord, (DOMAIN, "main", SUPPLIER, "S-2")) is None
         assert await count(session, MatLink, branch="main") == 1
         history = await MaterializedRepository(
@@ -404,7 +416,8 @@ async def test_schema_change_casts_existing_values(
         acme = await session.get(MatRecord, (DOMAIN, "main", SUPPLIER, "S-1"))
         assert acme is not None
         assert acme.values[RATING] == "4.0"
-        origin = await session.get(Provenance, (DOMAIN, acme.lineage[RATING]))
+        lineage = await lineage_of(session, acme.lineage)
+        origin = await session.get(Provenance, (DOMAIN, lineage[RATING]))
         assert origin is not None
         assert origin.origin_type == "schema_migration"
         assert origin.origin_ref["attribute_id"] == RATING

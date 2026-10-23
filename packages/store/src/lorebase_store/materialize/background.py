@@ -107,6 +107,7 @@ from lorebase_store.repositories.revisions import RevisionRepository, RevisionRo
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.settings import MaterializeSettings
+from lorebase_store.storage import constraints_only
 from lorebase_store.telemetry import (
     BRANCH_JOB_BATCH_DURATION,
     BRANCH_JOB_BATCH_ROWS,
@@ -1109,6 +1110,7 @@ async def _sync_indexes(
             domain_id,
             branch,
             settings=runtime.settings.indexes,
+            constraints_only=constraints_only(runtime.settings),
             maintenance=runtime.index_maintenance,
             defer=True,
         ).sync(compiled)

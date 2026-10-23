@@ -36,7 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.bulk import OnConflict, bulk_write, chunks, pairs_in
-from lorebase_store.layout import BranchLayout, load_layout
+from lorebase_store.layout import BranchLayout, lineage_column, load_layout
 from lorebase_store.models import metadata
 from lorebase_store.repositories.refs import RefRepository
 from lorebase_store.settings import WriteSettings
@@ -127,7 +127,8 @@ _KEYS_WITH_ORIGIN = """
     SELECT r.key FROM {records}
     WHERE r.domain_id = :domain AND r.branch = :branch AND r.kind_id = :kind
       AND EXISTS (
-        SELECT 1 FROM jsonb_each_text(r.lineage) AS l(attribute, provenance_id)
+        SELECT 1 FROM jsonb_each_text(lb_lineage(r.domain_id, r.lineage))
+            AS l(attribute, provenance_id)
         JOIN provenance p ON p.domain_id = r.domain_id AND p.id = l.provenance_id
         WHERE p.origin_type = :origin_type AND p.origin_ref ->> :field = :value
       )
@@ -1087,17 +1088,19 @@ def _record_select(rows: FromClause) -> Any:
         c["values"],
         c.title,
         c.object_hash,
-        c.lineage,
+        lineage_column(rows),
         c.updated_revision,
         c.updated_at,
         c.derived,
-        c.lineage_revisions,
+        lineage_column(rows, "lineage_revisions"),
     )
 
 
 def _link_select(rows: FromClause) -> Any:
     c = rows.c
-    return select(c.relation_id, c.from_key, c.to_key, c["values"], c.object_hash, c.lineage)
+    return select(
+        c.relation_id, c.from_key, c.to_key, c["values"], c.object_hash, lineage_column(rows)
+    )
 
 
 def _record_keys(kind_id: str, keys: Sequence[str]) -> Where:

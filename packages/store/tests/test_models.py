@@ -19,6 +19,8 @@ DESIGN_TABLES = {
     "mat_records",
     "mat_links",
     "mat_lexicon",
+    "mat_lineage_maps",
+    "storage_tasks",
     "mat_history",
     "embeddings",
     "embedding_cursors",
@@ -114,4 +116,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_latest_migration() -> None:
-    assert head_revisions() == ("0035",)
+    assert head_revisions() == ("0036",)

@@ -20,6 +20,7 @@ in the Domain's row-level security scope (`scope_to_domain`).
 from __future__ import annotations
 
 import hashlib
+import time
 from collections import OrderedDict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ from lorebase_core.model.embedding import TemplateError, kind_template
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
+from lorebase_store.storage import Precision, hnsw_index_name
 
 EMBEDDINGS: Table = metadata.tables["embeddings"]
 EMBEDDING_CURSORS: Table = metadata.tables["embedding_cursors"]
@@ -413,3 +415,31 @@ async def prune_models(session: AsyncSession, domain_id: str, *, keep: str) -> i
         delete(EMBEDDINGS).where(EMBEDDINGS.c.domain_id == domain_id, EMBEDDINGS.c.model != keep)
     )
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+# Index precision --------------------------------------------------------------------------------
+
+PRECISION_TTL_S = 60.0
+"""How long a process trusts the HNSW precision it found (`storage apply` switches it)."""
+
+_INDEX_NAMES = sql_text(
+    "SELECT indexname FROM pg_indexes "
+    "WHERE schemaname = current_schema() AND tablename = 'embeddings' "
+    "AND indexname IN (:full, :half)"
+)
+_precision: dict[int, tuple[float, Precision]] = {}
+
+
+async def index_precision(session: AsyncSession, dims: int) -> Precision:
+    """`half` when the HNSW index of `dims` is on `halfvec` (storage profile, see
+    `lorebase_store.storage`), else `full`: searches cast to the indexed type so the index
+    serves them. Looked up again after `PRECISION_TTL_S`."""
+    now = time.monotonic()
+    cached = _precision.get(dims)
+    if cached is not None and now - cached[0] < PRECISION_TTL_S:
+        return cached[1]
+    full, half = hnsw_index_name(dims, "full"), hnsw_index_name(dims, "half")
+    found = set((await session.execute(_INDEX_NAMES, {"full": full, "half": half})).scalars())
+    precision: Precision = "half" if half in found and full not in found else "full"
+    _precision[dims] = (now, precision)
+    return precision

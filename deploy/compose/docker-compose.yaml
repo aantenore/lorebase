@@ -70,6 +70,8 @@ x-database: &database
   # (docs/store-schema-notes.md).
   LOREBASE__DATABASE__MAINTENANCE_DSN: secret://env/LOREBASE_DB_MAINTENANCE_DSN
   LOREBASE_DB_MAINTENANCE_DSN: ${LOREBASE_DB_MAINTENANCE_DSN:-postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}}
+  # Storage profile (store.storage.profile: compact, balanced or fast; docs/performance.md#storage-profiles).
+  LOREBASE__STORE__STORAGE__PROFILE: ${LOREBASE_STORAGE_PROFILE:-balanced}
 
 # Key that seals webhook signing keys in the database (webhooks.encryption_key); Keeper and
 # Scribe need the same value. Passed as a secret reference like the DSN; `make env` generates it.
@@ -148,6 +150,20 @@ services:
   postgres:
     image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
     restart: unless-stopped
+    # Memory settings per storage profile: see .env.example and docs/performance.md#sizing.
+    # The defaults are those of Postgres. pg_prewarm in POSTGRES_PRELOAD_LIBRARIES turns on
+    # autoprewarm, which reloads the cached pages after a restart.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - huge_pages=${POSTGRES_HUGE_PAGES:-try}
+      - -c
+      - shared_preload_libraries=${POSTGRES_PRELOAD_LIBRARIES:-}
+    shm_size: ${POSTGRES_SHM_SIZE:-256m}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lorebase}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}
@@ -200,11 +216,30 @@ services:
       LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
       LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
       LOREBASE__DATABASE__APPLICATION_ROLE: ${LOREBASE_APP_USER:-lorebase_app}
+      LOREBASE__STORE__STORAGE__PROFILE: ${LOREBASE_STORAGE_PROFILE:-balanced}
     depends_on:
       postgres:
         condition: service_healthy
       db-roles:
         condition: service_completed_successfully
+
+  # Brings the database in line with the storage profile after LOREBASE_STORAGE_PROFILE
+  # changed; batched and resumable, reads go on (docs/performance.md#storage-profiles):
+  #   docker compose --profile maintenance run --rm storage apply [--compact]
+  #   docker compose --profile maintenance run --rm storage status | prewarm
+  storage:
+    <<: *backend
+    restart: "no"
+    profiles: [maintenance]
+    entrypoint: ["python", "-m", "lorebase_store.storage"]
+    command: ["status"]
+    environment:
+      LOREBASE__DATABASE__DSN: secret://env/LOREBASE_DB_DSN
+      LOREBASE_DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-lorebase}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:-lorebase}
+      LOREBASE__STORE__STORAGE__PROFILE: ${LOREBASE_STORAGE_PROFILE:-balanced}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   keeper:
     <<: *keeper

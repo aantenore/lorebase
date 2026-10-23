@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from lorebase_core.merge import ChangeStamp
-from lorebase_store.layout import BranchLayout, load_layout_sync
+from lorebase_store.layout import BranchLayout, lineage_column, load_layout_sync
 from lorebase_store.materialize.rows import PartitionType, parse_partition, split_link_key
 from lorebase_store.repositories.provenance import PROVENANCE
 
@@ -39,7 +39,7 @@ class BranchLineage:
         layout = self._resolved()
         if parsed.type is PartitionType.KIND:
             records = layout.records()
-            query = select(records.c.lineage).where(
+            query = select(lineage_column(records)).where(
                 records.c.domain_id == self._domain,
                 records.c.branch == self._branch,
                 records.c.kind_id == parsed.element_id,
@@ -48,7 +48,7 @@ class BranchLineage:
         elif parsed.type is PartitionType.RELATION:
             from_key, to_key = split_link_key(key)
             links = layout.links()
-            query = select(links.c.lineage).where(
+            query = select(lineage_column(links)).where(
                 links.c.domain_id == self._domain,
                 links.c.branch == self._branch,
                 links.c.relation_id == parsed.element_id,

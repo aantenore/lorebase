@@ -33,7 +33,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Literal
 
-from pgvector.sqlalchemy import VECTOR
+from pgvector.sqlalchemy import HALFVEC, VECTOR
 from sqlalchemy import (
     ARRAY,
     Boolean,
@@ -78,7 +78,7 @@ from lorebase_keeper.reading.views import (
     served,
 )
 from lorebase_keeper.tracing.explain import explain
-from lorebase_store.embeddings import fingerprint_of, template_fingerprints
+from lorebase_store.embeddings import fingerprint_of, index_precision, template_fingerprints
 from lorebase_store.models import metadata
 from lorebase_store.reads import (
     CommonTerms,
@@ -212,6 +212,7 @@ async def search(
         )
     if mode in ("semantic", "hybrid"):
         assert request.query_vector is not None
+        precision = await index_precision(session, dims)
         lists.append(
             (
                 _semantic(
@@ -220,6 +221,7 @@ async def search(
                     request.query_vector,
                     runtime,
                     target,
+                    half=precision == "half",
                 ),
                 settings.hybrid.semantic_weight,
             )
@@ -599,16 +601,19 @@ def _semantic(
     vector: list[float],
     runtime: ReadRuntime,
     target: Target,
+    *,
+    half: bool = False,
 ) -> Select[Any]:
     """Records ranked by the vector stored for their object hash under the fingerprint of
     their Kind's embedding template in the searched branch's schema: another branch's vector
-    for the same content, rendered by a different template, is never used."""
+    for the same content, rendered by a different template, is never used. With `half`, the
+    distance is computed in half precision, as the HNSW index of the storage profile holds it
+    (`lorebase_store.embeddings.index_precision`)."""
     dims = runtime.store_settings.embeddings.dims
     fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
     e = EMBEDDINGS.alias("e")
-    distance = cast(e.c.embedding, VECTOR(dims)).op("<=>", return_type=Float)(
-        literal(vector, VECTOR(dims))
-    )
+    kind = HALFVEC(dims) if half else VECTOR(dims)
+    distance = cast(e.c.embedding, kind).op("<=>", return_type=Float)(literal(vector, kind))
     return (
         select(r.c.kind_id, r.c.key, (literal(1.0, Float) - distance).label("score"))
         .join(

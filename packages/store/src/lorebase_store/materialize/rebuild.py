@@ -54,6 +54,7 @@ from lorebase_store.repositories.refs import RefRepository
 from lorebase_store.repositories.revisions import RevisionRepository, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
+from lorebase_store.storage import constraints_only
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +150,12 @@ async def materialize_revision(
         else tagged_schema(schema, {}, runtime.schema.expression_limits)
     )
     branch_indexes = BranchIndexes(
-        session, domain_id, branch, settings=settings.indexes, maintenance=runtime.index_maintenance
+        session,
+        domain_id,
+        branch,
+        settings=settings.indexes,
+        maintenance=runtime.index_maintenance,
+        constraints_only=constraints_only(settings),
     )
     if indexes:
         await branch_indexes.retire(schema)

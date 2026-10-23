@@ -25,7 +25,7 @@ from lorebase_core.model.record import LinkIdentity
 from lorebase_core.types import AttributeType, CanonicalValue
 from lorebase_core.validate import DataChange, LinkUpsert, RecordDelete, RecordUpsert
 from lorebase_store.bulk import chunks, pairs_in
-from lorebase_store.layout import BranchLayout, load_layout_sync
+from lorebase_store.layout import BranchLayout, lineage_column, load_layout_sync
 
 if TYPE_CHECKING:
     from lorebase_store.indexes import IndexSpec
@@ -236,7 +236,7 @@ class MaterializedIndexView:
                 query = select(
                     rows.c.key,
                     rows.c["values"],
-                    rows.c.lineage,
+                    lineage_column(rows),
                     rows.c.object_hash,
                 ).where(
                     self._scope(rows),
@@ -260,7 +260,7 @@ class MaterializedIndexView:
                     links.c.from_key,
                     links.c.to_key,
                     links.c["values"],
-                    links.c.lineage,
+                    lineage_column(links),
                     links.c.object_hash,
                 ).where(
                     self._scope(links),

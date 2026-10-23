@@ -112,6 +112,36 @@ class MatLink(Base):
     deleted: Mapped[bool] = mapped_column(server_default=text("false"))
 
 
+class MatLineageMap(Base):
+    """A lineage map shared by the rows that name it (revision 0036).
+
+    With shared lineage maps (`store.storage.lineage_maps`), the map columns of `mat_records`
+    (`lineage`, `lineage_revisions`) and `mat_links` (`lineage`) hold `{"$map": "<hex id>"}`
+    and the map is stored here once per Domain; `id` is the first 16 bytes of the SHA-256 of
+    its canonical text. Readers resolve the columns with `lb_lineage(domain_id, column)`.
+    """
+
+    __tablename__ = "mat_lineage_maps"
+    __table_args__ = (
+        CheckConstraint("octet_length(id) = 16", name="id_h16"),
+        domain_fk(),
+    )
+
+    domain_id: Mapped[DomainKey]
+    id: Mapped[bytes] = mapped_column(primary_key=True)
+    map: Mapped[dict[str, Any]]
+
+
+class StorageTask(Base):
+    """Progress of a resumable step of `storage apply` (`lorebase_store.storage`, 0036)."""
+
+    __tablename__ = "storage_tasks"
+
+    name: Mapped[str] = mapped_column(primary_key=True)
+    state: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
 class MatLexicon(Base):
     """Per Kind, the words of a branch's own search vectors and how many of its rows hold
     each (revision 0018): typo-tolerant search matches query words against them by trigrams.

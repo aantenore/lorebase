@@ -48,6 +48,7 @@ from lorebase_store.reads import (
     LinkRef,
     foreign_key_relations,
     hydrate_records,
+    record_columns,
     stored_relation_ids,
 )
 from lorebase_store.repositories.materialized import MaterializedRepository, RecordRow
@@ -271,7 +272,6 @@ def neighborhood_sql(
         else f"SELECT w.depth + 1, w.kind_id, w.key, w.kind_id, w.key, {_NULL_LINK} "
         "FROM walk w WHERE false"
     )
-    record_columns = ", ".join(f'm."{c}"' for c in RECORD_NAMES)
     alias = "x" if layout.overlay else "m"
     found = f"{alias}.kind_id = n.kind_id AND {alias}.key = n.key"
     hydrate = (
@@ -308,7 +308,7 @@ def neighborhood_sql(
         WHERE relation_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM nodes n WHERE n.kind_id = w.from_kind AND n.key = w.from_key)
           AND EXISTS (SELECT 1 FROM nodes n WHERE n.kind_id = w.to_kind AND n.key = w.to_key))
-    SELECT 'record' AS item, n.depth, {record_columns},
+    SELECT 'record' AS item, n.depth, {record_columns()},
            NULL AS relation_id, NULL AS from_key, NULL AS to_key,
            CAST(NULL AS jsonb) AS link_values, CAST(NULL AS bytea) AS link_hash
     FROM nodes n
@@ -342,7 +342,8 @@ _RESULT_COLUMNS: tuple[ColumnElement[Any], ...] = (
 )
 _DEFINER = {
     function: text(
-        f"SELECT * FROM {function}(:domain, :branch, CAST(:seeds AS jsonb), "
+        f"SELECT item, depth, {record_columns(None)}, relation_id, from_key, to_key, "
+        f"link_values, link_hash FROM {function}(:domain, :branch, CAST(:seeds AS jsonb), "
         "CAST(:depth AS integer), CAST(:relations AS jsonb), CAST(:fanout AS integer), "
         "CAST(:max_steps AS integer), CAST(:max_nodes AS integer))"
     ).columns(*_RESULT_COLUMNS)

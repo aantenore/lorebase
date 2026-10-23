@@ -55,7 +55,8 @@ ONE_A_BATCH = StoreRuntime.from_settings(
     StoreSettings(materialize=MaterializeSettings(job_batch_rows=1))
 )
 REVISIONS = text(
-    "SELECT branch, kind_id, key, lineage_revisions FROM mat_records "
+    "SELECT branch, kind_id, key, lb_lineage(domain_id, lineage_revisions) "
+    "FROM mat_records "
     "WHERE domain_id = :domain ORDER BY branch, kind_id, key"
 )
 
@@ -135,7 +136,8 @@ async def test_backfill_restores_what_commits_wrote(
         await session.execute(text("UPDATE mat_records SET lineage_revisions = NULL"))
         await session.execute(
             text(
-                "UPDATE mat_records SET lineage_revisions = lineage_revisions - '$created' "
+                "UPDATE mat_records "
+                "SET lineage_revisions = lb_lineage(domain_id, lineage_revisions) - '$created' "
                 "WHERE key = 'S-1'"
             )
         )
@@ -227,7 +229,8 @@ async def test_fold_names_a_creation_only_for_the_change_that_created(
 
 
 MAIN_ROWS = text(
-    "SELECT kind_id, key, lineage, lineage_revisions, updated_revision, updated_at "
+    "SELECT kind_id, key, lb_lineage(domain_id, lineage), "
+    "lb_lineage(domain_id, lineage_revisions), updated_revision, updated_at "
     "FROM mat_records WHERE domain_id = :domain AND branch = 'main' ORDER BY kind_id, key"
 )
 
@@ -339,7 +342,7 @@ SINGLE_ROW = StoreRuntime.from_settings(
 
 
 MAIN_LINKS = text(
-    "SELECT relation_id, from_key, to_key, lineage FROM mat_links "
+    "SELECT relation_id, from_key, to_key, lb_lineage(domain_id, lineage) FROM mat_links "
     "WHERE domain_id = :domain AND branch = 'main' ORDER BY relation_id, from_key, to_key"
 )
 
@@ -385,7 +388,8 @@ async def test_recompute_rewrites_what_older_fast_forwards_wrote(
                 "UPDATE mat_records SET updated_revision = :head, lineage_revisions = "
                 "jsonb_build_object(CAST(:country AS text), CAST(:hex AS text), "
                 "CAST(:name AS text), "
-                "CAST(:hex AS text), '$created', lineage_revisions ->> '$created') "
+                "CAST(:hex AS text), '$created', "
+                "lb_lineage(domain_id, lineage_revisions) ->> '$created') "
                 "WHERE domain_id = :d AND branch = 'main' AND key = 'S-1'"
             ),
             {"head": head, "hex": head.hex(), "country": COUNTRY, "name": LEGAL_NAME, "d": DOMAIN},

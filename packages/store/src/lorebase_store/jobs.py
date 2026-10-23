@@ -579,6 +579,7 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     from lorebase_store.materialize.stale import run_sensitivity_refresh_job
     from lorebase_store.runtime import StoreRuntime
     from lorebase_store.settings import database_settings
+    from lorebase_store.storage import constraints_only
 
     settings = load_settings()
     database = database_settings(settings)
@@ -596,7 +597,9 @@ async def _work(limit: int | None, types: Iterable[str]) -> int:
     ddl = maintenance or engine
     known: dict[str, JobHandler] = {
         GC_JOB: lambda job: run_gc_job(engine, job, runtime=runtime),
-        INDEX_JOB: lambda job: run_index_job(ddl, job),
+        INDEX_JOB: lambda job: run_index_job(
+            ddl, job, constraints_only=constraints_only(runtime.settings)
+        ),
         MATERIALIZE_JOB: lambda job: run_materialize_job(engine, job, runtime=runtime),
         BRANCH_DELETE_JOB: lambda job: run_branch_delete_job(engine, job, runtime=runtime),
         SENSITIVITY_REFRESH_JOB: lambda job: run_sensitivity_refresh_job(

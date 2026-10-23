@@ -698,11 +698,94 @@ class TraverseSettings(SectionModel):
     )
 
 
+StorageProfile = Literal["compact", "balanced", "fast"]
+
+
+class StorageSettings(SectionModel):
+    """Storage profile: what the database keeps to trade memory and disk for speed
+    (`lorebase_store.storage`, docs/performance.md#storage-profiles).
+
+    `profile` picks every choice; each other key, when set, overrides the profile's. A change
+    takes effect when `python -m lorebase_store.storage apply` runs (batched, resumable,
+    reads keep working); until then the database keeps what it has.
+    """
+
+    profile: StorageProfile = Field(
+        default="balanced",
+        description="compact: smallest footprint, every feature works, some reads slower; "
+        "balanced: the default; fast: more indexes and memory for the lowest latency.",
+    )
+    lineage_maps: Literal["shared", "inline"] | None = Field(
+        default=None,
+        description="shared: each distinct lineage map is stored once per Domain and rows "
+        "name it (smaller Record and Link rows); inline: every row holds its maps. Default: "
+        "shared, inline with fast.",
+    )
+    values_index: bool | None = Field(
+        default=None,
+        description="GIN index on Record values, which serves equality on Attributes without "
+        "their own index (queries). Default: off with compact.",
+    )
+    attribute_indexes: Literal["all", "constraints"] | None = Field(
+        default=None,
+        description="Per-Attribute indexes built: all (indexed, unique and foreign key "
+        "Attributes) or constraints (unique and foreign key only; filters on other Attributes "
+        "scan the Kind). Default: constraints with compact.",
+    )
+    lexicon_index: bool | None = Field(
+        default=None,
+        description="Trigram index of the word lexicon used by typo-tolerant search; without "
+        "it corrections compare every word of the searched Kinds. Default: off with compact.",
+    )
+    embedding_precision: Literal["half", "full"] | None = Field(
+        default=None,
+        description="Precision of the HNSW index of embeddings: half (halfvec, about 40% "
+        "smaller, a few points of recall lost) or full. Stored vectors keep full precision "
+        "either way. Default: half with compact.",
+    )
+    compression: Literal["lz4", "pglz"] | None = Field(
+        default=None,
+        description="TOAST compression of large values (rows above about 2 kB). Default: pglz "
+        "with compact (smaller), lz4 otherwise (faster).",
+    )
+    records_fillfactor: int | None = Field(
+        default=None,
+        ge=50,
+        le=100,
+        description="Fill factor of the Record table: room left in each page for updates. "
+        "Default: 90 with fast, 100 otherwise.",
+    )
+    prewarm: bool | None = Field(
+        default=None,
+        description="`storage apply` ends by loading the hot relations into shared buffers "
+        "with pg_prewarm (as `storage prewarm` does on request); after a restart, autoprewarm "
+        "of the server reloads them. Default: on with fast.",
+    )
+    prewarm_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        le=1,
+        description="Share of shared_buffers the prewarm may fill.",
+    )
+    batch_rows: int = Field(
+        default=2000,
+        ge=1,
+        description="Rows rewritten per transaction by `storage apply` (lineage maps, compaction).",
+    )
+    lock_timeout_ms: int = Field(
+        default=2000,
+        ge=0,
+        description="Wait for a table lock taken by `storage apply` (index drops, trigger "
+        "switches) before retrying later; reads queue behind a waiting lock, so keep it short.",
+    )
+
+
 class StoreSettings(SectionModel):
     """Schema shape, bulk writes, node cache, commits, materialization, indexes, reads and
     profiling."""
 
     layout: LayoutSettings = Field(default_factory=LayoutSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
     writes: WriteSettings = Field(default_factory=WriteSettings)
     nodes: NodeSettings = Field(default_factory=NodeSettings)

@@ -1,0 +1,36 @@
+# Storage profile `fast` (docs/performance.md#storage-profiles): the agent read set kept in
+# memory on a large node. Huge pages back shared_buffers (the node must offer hugepages-2Mi;
+# the request below reserves them) and autoprewarm reloads the cached pages after a restart
+# or failover. Postgres settings for the in-cluster Cluster (`postgresql.enabled`); with an
+# external Postgres apply the same parameters there. Sized for 64 GiB of memory for
+# Postgres (the read set of 10M Records, docs/performance.md#sizing). Add it to another profile:
+#   helm upgrade --install lorebase deploy/helm/lorebase -f ci/production-values.yaml -f ci/storage-fast-values.yaml
+config:
+  store:
+    storage:
+      profile: fast
+postgresql:
+  cluster:
+    resources:
+      requests:
+        memory: 64Gi
+        hugepages-2Mi: 26Gi
+      limits:
+        memory: 64Gi
+        hugepages-2Mi: 26Gi
+    initdb:
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector
+        - CREATE EXTENSION IF NOT EXISTS pg_prewarm
+    postgresql:
+      shared_preload_libraries:
+        - pg_prewarm
+      parameters:
+        max_connections: "100"
+        shared_buffers: "24GB"
+        effective_cache_size: "48GB"
+        work_mem: "16MB"
+        maintenance_work_mem: "2GB"
+        huge_pages: "on"
+        pg_prewarm.autoprewarm: "on"
+        pg_prewarm.autoprewarm_interval: "300s"

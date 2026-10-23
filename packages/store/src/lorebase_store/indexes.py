@@ -211,6 +211,16 @@ class IndexPlan:
     def by_attribute(self) -> dict[tuple[str, str], IndexSpec]:
         return {(spec.kind_id, spec.attribute_id): spec for spec in self.indexes}
 
+    def built(self, *, constraints_only: bool) -> tuple[IndexSpec, ...]:
+        """The indexes to build: all, or with `constraints_only` (storage profile `compact`,
+        `store.storage.attribute_indexes: constraints`) those of unique and foreign key
+        Attributes. Reads render the same expressions either way; without the index they
+        scan the Kind."""
+        if not constraints_only:
+            return self.indexes
+        kept = {IndexReason.UNIQUE, IndexReason.FOREIGN_KEY}
+        return tuple(spec for spec in self.indexes if kept.intersection(spec.reasons))
+
 
 @dataclass(frozen=True, slots=True)
 class ExistingIndex:
@@ -516,7 +526,9 @@ class BranchIndexes:
     With `maintenance` (a maintenance role is configured, `database.maintenance_dsn`), a
     session role that does not own `mat_records` queues every change instead of skipping it;
     the job worker runs the jobs as the maintenance role. With `defer`, every index to create
-    is queued, whatever the size of its Kind (a transaction that must stay short).
+    is queued, whatever the size of its Kind (a transaction that must stay short). With
+    `constraints_only`, only the indexes of unique and foreign key Attributes are kept
+    (`IndexPlan.built`).
     """
 
     def __init__(
@@ -528,9 +540,11 @@ class BranchIndexes:
         settings: IndexSettings,
         maintenance: bool = False,
         defer: bool = False,
+        constraints_only: bool = False,
     ) -> None:
         self._session = session
         self._defer = defer
+        self._constraints_only = constraints_only
         self._domain = domain_id
         self._branch = branch
         self._settings = settings
@@ -660,7 +674,8 @@ class BranchIndexes:
         return self._overlay
 
     async def _plan(self, schema: Schema) -> IndexPlan:
-        return plan_indexes(schema, overlay=await self.overlay())
+        plan = plan_indexes(schema, overlay=await self.overlay())
+        return replace(plan, indexes=plan.built(constraints_only=self._constraints_only))
 
     async def _indexes(self) -> list[ExistingIndex]:
         if self._existing is None:
@@ -781,6 +796,7 @@ async def run_index_jobs(
     *,
     worker: str = "store",
     jobs: JobSettings | None = None,
+    constraints_only: bool = False,
 ) -> list[IndexJobOutcome]:
     """Claim and run up to `settings.job_batch` queued index jobs.
 
@@ -804,7 +820,9 @@ async def run_index_jobs(
         action = IndexAction(payload["action"])
         beat = asyncio.create_task(heartbeat(sessions, worker, job_id, jobs or JobSettings()))
         try:
-            status, detail = await _run_job(engine, domain_id, action, payload)
+            status, detail = await _run_job(
+                engine, domain_id, action, payload, constraints_only=constraints_only
+            )
         except Exception as error:  # the job records the failure; the runner goes on
             status, detail = JobStatus.FAILED, f"{type(error).__name__}: {error}"
         finally:
@@ -821,7 +839,12 @@ async def run_index_jobs(
 
 
 async def _run_job(
-    engine: AsyncEngine, domain_id: str, action: IndexAction, payload: Mapping[str, Any]
+    engine: AsyncEngine,
+    domain_id: str,
+    action: IndexAction,
+    payload: Mapping[str, Any],
+    *,
+    constraints_only: bool = False,
 ) -> tuple[JobStatus, str]:
     name: str = payload["name"]
     branch: str = payload["branch"]
@@ -844,7 +867,9 @@ async def _run_job(
         overlay = (await load_layout(session, domain_id, branch)).overlay
     spec = None
     if compiled is not None:
-        planned = plan_indexes(Schema.model_validate(compiled), overlay=overlay).indexes
+        planned = plan_indexes(Schema.model_validate(compiled), overlay=overlay).built(
+            constraints_only=constraints_only
+        )
         spec = next((s for s in planned if s.name(domain_id, branch) == name), None)
     statements: list[str] = []
     if action is IndexAction.DROP:
@@ -896,7 +921,9 @@ async def _branch_still_exists(engine: AsyncEngine, domain_id: str, branch: str)
         return await _branch_exists(session, {"domain": domain_id, "branch": branch})
 
 
-async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:
+async def run_index_job(
+    engine: AsyncEngine, job: JobRow, *, constraints_only: bool = False
+) -> dict[str, Any]:
     """Handler of `store.index` jobs for `lorebase_store.jobs.run_jobs`.
 
     `engine` runs the DDL: the maintenance engine (`database.maintenance_dsn`) where the
@@ -905,7 +932,9 @@ async def run_index_job(engine: AsyncEngine, job: JobRow) -> dict[str, Any]:
     if job.domain_id is None:
         raise ValueError(f"index job {job.id} has no Domain")
     action = IndexAction(job.payload["action"])
-    status, detail = await _run_job(engine, job.domain_id, action, job.payload)
+    status, detail = await _run_job(
+        engine, job.domain_id, action, job.payload, constraints_only=constraints_only
+    )
     return {"status": status.value, "detail": detail, "name": job.payload["name"]}
 
 
@@ -920,7 +949,11 @@ _SCHEMAS = text(
 
 
 async def pending_index_plan(
-    session: AsyncSession, domain_id: str, *, branch: str | None = None
+    session: AsyncSession,
+    domain_id: str,
+    *,
+    branch: str | None = None,
+    constraints_only: bool = False,
 ) -> list[str]:
     """DDL that brings the per-Attribute indexes of a Domain (or of one branch) in line with
     the materialized schemas: concurrent builds of missing or invalid indexes with their
@@ -942,7 +975,7 @@ async def pending_index_plan(
     statements: list[str] = []
     wanted: set[str] = set()
     for name, (schema, overlay) in schemas.items():
-        for spec in plan_indexes(schema, overlay=overlay).indexes:
+        for spec in plan_indexes(schema, overlay=overlay).built(constraints_only=constraints_only):
             index_name = spec.name(domain_id, name)
             wanted.add(index_name)
             current = existing.get(index_name)

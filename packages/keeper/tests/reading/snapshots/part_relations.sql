@@ -1,4 +1,4 @@
-SELECT r.kind_id, r.key, r.title, r.values, r.derived, r.object_hash, r.lineage, r.updated_revision, r.updated_at, r.key AS s0 
+SELECT r.kind_id, r.key, r.title, r.values, r.derived, r.object_hash, lb_lineage(r.domain_id, r.lineage) AS lineage, r.updated_revision, r.updated_at, r.key AS s0 
 FROM mat_records AS r 
 WHERE r.domain_id = %(param_1)s::VARCHAR AND r.branch = %(param_2)s::VARCHAR AND r.kind_id = %(param_3)s::VARCHAR AND (EXISTS (SELECT %(param_4)s::INTEGER AS anon_1 
 FROM mat_links AS mat_links_1 JOIN mat_records AS mat_records_1 ON mat_records_1.domain_id = %(param_5)s::VARCHAR AND mat_records_1.branch = %(param_6)s::VARCHAR AND mat_records_1.kind_id = %(param_7)s::VARCHAR AND mat_records_1.key = mat_links_1.to_key 
