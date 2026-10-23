@@ -1,0 +1,51 @@
+# Overlay for BM25 ranking of lexical search (docs/search.md#bm25-ranking): Postgres on the
+# ParadeDB image, whose pg_search extension serves the BM25 index. pg_search is licensed under
+# AGPL-3.0, unlike Lorebase (Apache-2.0): read the licence note in docs/search.md before you
+# run it. Add it after the main file, from the repository root, then build the index:
+#
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+#     -f deploy/compose/search-bm25.yaml up -d
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yaml \
+#     -f deploy/compose/search-bm25.yaml --profile maintenance run --rm storage apply
+#
+# (`make up COMPOSE_OVERLAYS=deploy/compose/search-bm25.yaml` for the first command). Until the
+# index is built, and after this overlay is removed, search keeps the default ranking and
+# /readyz reports `search_backend` as degraded.
+#
+# The image runs the same Postgres major version (16) with pgvector, but on another Debian
+# release (glibc) than pgvector/pgvector:pg16: start it on a new volume, or move an existing
+# database with pg_dump and pg_restore, rather than pointing it at a volume the default image
+# initialized (text indexes depend on the C library's collation; docs/deployment.md).
+
+x-bm25: &bm25
+  LOREBASE__SEARCH__BACKEND: bm25
+  LOREBASE__STORE__STORAGE__BM25_INDEX: "true"
+
+services:
+  postgres:
+    # Pinned by digest: Postgres 16.15, pg_search 0.26.3, pgvector 0.8.6.
+    image: ${POSTGRES_BM25_IMAGE:-paradedb/paradedb:0.26.3-pg16@sha256:c5dc31626136f47afb30096b59e78c78de3016a830d77e10a24ee9ea4d25eba4}
+    # pg_search must be preloaded; POSTGRES_PRELOAD_LIBRARIES adds others (pg_prewarm).
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - huge_pages=${POSTGRES_HUGE_PAGES:-try}
+      - -c
+      - shared_preload_libraries=pg_search${POSTGRES_PRELOAD_LIBRARIES:+,${POSTGRES_PRELOAD_LIBRARIES}}
+    # The image's own initialization scripts create extensions Lorebase does not use (some
+    # need other preloaded libraries); `storage apply` creates pg_search in the database.
+    tmpfs:
+      - /docker-entrypoint-initdb.d
+
+  keeper:
+    environment: *bm25
+
+  keeper-2:
+    environment: *bm25
+
+  storage:
+    environment: *bm25

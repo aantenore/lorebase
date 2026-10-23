@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -39,12 +40,16 @@ from lorebase_keeper.ratelimit.enforce import (
     enforce_limits,
 )
 from lorebase_keeper.readiness import (
+    CheckStatus,
     MigrationHeads,
     ReadinessCheck,
     ReplicaCheck,
+    SearchBackendCheck,
     default_checks,
     packaged_heads,
+    run_checks,
 )
+from lorebase_keeper.reading.settings import search_settings
 from lorebase_keeper.routes.admin import router as admin_router
 from lorebase_keeper.routes.documents import document_upload_path
 from lorebase_keeper.routes.domain_api import domain_routers
@@ -58,6 +63,8 @@ from lorebase_keeper.tracing.recorder import TraceRecorder, TraceSink
 from lorebase_keeper.tracing.recorder import database_sink as trace_database_sink
 from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import Telemetry
+
+logger = logging.getLogger("lorebase.keeper")
 
 _DEFAULT_RESPONSES: dict[int | str, dict[str, Any]] = {
     "default": {
@@ -129,6 +136,13 @@ def create_app(
                 required=keeper.reads.prefer_replica and not database.reads.fallback_to_primary,
             )
         )
+    # search.backend: bm25 falls back to the default ranking while the database cannot serve
+    # it; /readyz reports that as degraded, and the start logs it.
+    search_check = None
+    if database is not None and search_settings(settings).backend == "bm25":
+        search_check = SearchBackendCheck(database.sessions)
+        if readiness_checks is None:
+            checks.append(search_check)
     store = auth_store or (database.auth_store if database else None)
     if keeper.auth.mode != "none" and store is None:
         raise ConfigError(
@@ -162,6 +176,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if search_check is not None:
+            found = (await run_checks([search_check], keeper.readiness.timeout_s))[
+                search_check.name
+            ]
+            if found.status is not CheckStatus.OK:
+                logger.warning("search backend: %s", found.detail)
         try:
             yield
         finally:

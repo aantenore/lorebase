@@ -761,6 +761,13 @@ class StorageSettings(SectionModel):
         "with pg_prewarm (as `storage prewarm` does on request); after a restart, autoprewarm "
         "of the server reloads them. Default: on with fast.",
     )
+    bm25_index: bool | None = Field(
+        default=None,
+        description="BM25 index of lexical search on mat_records (ParadeDB pg_search, an "
+        "AGPL-3.0 extension of an optional image; docs/search.md#bm25-ranking). Needs a server "
+        "that preloads pg_search; elsewhere `storage apply` skips it. Keeper ranks with it "
+        "under search.backend: bm25. Default: off in every profile.",
+    )
     prewarm_fraction: float = Field(
         default=0.8,
         gt=0,

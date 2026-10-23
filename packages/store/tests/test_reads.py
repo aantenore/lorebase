@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Domain, Schema
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
-from lorebase_store.definer import READ_FUNCTIONS, grant_read_functions
+from lorebase_store.definer import BM25_FUNCTIONS, READ_FUNCTIONS, grant_read_functions
 from lorebase_store.indexes import plan_indexes, run_index_jobs
 from lorebase_store.layout import BranchLayout, load_layout
 from lorebase_store.materialize import create_branch, verify
@@ -588,7 +588,8 @@ async def reader_role(engine: AsyncEngine, *, functions: bool) -> AsyncIterator[
         await auto.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
         await auto.exec_driver_sql(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role}")
         if functions:
-            assert len(await grant_read_functions(auto, role)) == len(READ_FUNCTIONS)
+            granted = await grant_read_functions(auto, role)
+            assert len(granted) == len(READ_FUNCTIONS) + len(BM25_FUNCTIONS)
     try:
         yield role
     finally:

@@ -13,6 +13,7 @@ key of `store.storage` overrides one (docs/performance.md#storage-profiles):
 | `compression`: TOAST compression of large values | pglz | lz4 | lz4 |
 | `records_fillfactor` | 100 | 100 | 90 |
 | `prewarm`: load the hot relations after a restart | off | off | on |
+| `bm25_index`: BM25 index of search (`pg_search`, optional) | off | off | off |
 
 Every feature works with every profile; what a profile leaves out makes some reads slower:
 equality filters on Attributes without an index scan the Kind, typo corrections compare
@@ -29,6 +30,9 @@ optional indexes. `apply` is batched and resumable (`storage_tasks`); reads go o
   and attached; dropping it takes a short exclusive lock (waits at most
   `store.storage.lock_timeout_ms`, then the step is retried by the next run);
 - per-Attribute indexes: queued as index jobs (`python -m lorebase_store.jobs work`);
+- BM25 index (`lorebase_store.bm25`): only on a server that offers `pg_search` and preloads
+  it (a ParadeDB image); creates the extension, then builds and drops the index as the values
+  index. Without the extension the step is skipped and says so;
 - compression and fill factor: catalog changes that apply to rows written from then on;
 - `--compact`: moves the rows of the last pages of `mat_records`, `mat_links` and
   `mat_history` into the free space of earlier pages (one branch at a time, under the branch
@@ -60,6 +64,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from lorebase_store import bm25
 from lorebase_store.repositories.refs import advisory_lock_key, sqlstate
 from lorebase_store.settings import StorageSettings, StoreSettings
 
@@ -114,6 +119,7 @@ class StorageChoices:
     compression: Compression
     records_fillfactor: int
     prewarm: bool
+    bm25_index: bool = False
 
 
 PROFILES: Mapping[str, StorageChoices] = {
@@ -177,6 +183,12 @@ class StorageState:
     values_index: bool = False
     values_index_partitions: list[str] = field(default_factory=list)
     lexicon_index: bool = False
+    bm25_index: bool = False
+    bm25_index_partitions: list[str] = field(default_factory=list)
+    pg_search: str | None = None
+    """Installed version of the extension; `None` when it is not installed."""
+    pg_search_available: bool = False
+    pg_search_preloaded: bool = False
     hnsw: dict[str, bool] = field(default_factory=dict)
     invalid_indexes: list[str] = field(default_factory=list)
     """Optional indexes that exist but are not valid (an interrupted concurrent build, a
@@ -252,14 +264,23 @@ async def read_state(connection: AsyncConnection, dims: int) -> StorageState:
     )
     valid = {str(name): bool(ok) for name, ok in found}
     names = set(valid)
-    optional = [VALUES_INDEX, LEXICON_INDEX, *(hnsw_index_name(dims, p) for p in ("full", "half"))]
+    optional = [
+        VALUES_INDEX,
+        LEXICON_INDEX,
+        bm25.INDEX,
+        *(hnsw_index_name(dims, p) for p in ("full", "half")),
+    ]
     state.invalid_indexes = [name for name in optional if name in valid and not valid[name]]
     state.values_index = valid.get(VALUES_INDEX, False)
     state.lexicon_index = valid.get(LEXICON_INDEX, False)
+    state.bm25_index = valid.get(bm25.INDEX, False)
     for precision in ("full", "half"):
         state.hnsw[precision] = valid.get(hnsw_index_name(dims, precision), False)
     state.values_index_partitions = [
         p for p in await _partitions(connection, "mat_records") if f"{p}_values_idx" in names
+    ]
+    state.bm25_index_partitions = [
+        p for p in await _partitions(connection, "mat_records") if bm25.partition_index(p) in names
     ]
     rows = await connection.execute(
         text(
@@ -300,7 +321,17 @@ async def read_state(connection: AsyncConnection, dims: int) -> StorageState:
         )
     )
     preload = str(await connection.scalar(text("SHOW shared_preload_libraries")) or "")
-    state.autoprewarm = "pg_prewarm" in {p.strip() for p in preload.split(",")}
+    preloaded = {p.strip() for p in preload.split(",")}
+    state.autoprewarm = "pg_prewarm" in preloaded
+    state.pg_search_preloaded = bm25.EXTENSION in preloaded
+    state.pg_search = await connection.scalar(
+        text("SELECT extversion FROM pg_extension WHERE extname = :e"), {"e": bm25.EXTENSION}
+    )
+    state.pg_search_available = bool(
+        await connection.scalar(
+            text("SELECT 1 FROM pg_available_extensions WHERE name = :e"), {"e": bm25.EXTENSION}
+        )
+    )
     for table, columns in LINEAGE_TABLES.items():
         shared = _map_columns_condition(columns, shared=False)
         inline = _map_columns_condition(columns, shared=True)
@@ -733,6 +764,88 @@ async def _lexicon_index(
         report.add("lexicon index", "done", "dropped")
 
 
+async def _bm25_index(
+    ddl: AsyncConnection,
+    state: StorageState,
+    wanted: bool,
+    settings: StorageSettings,
+    report: ApplyReport,
+) -> None:
+    """Build or drop the BM25 index (`lorebase_store.bm25`): partitions concurrently, then
+    attached to an index on the parent, as the values index."""
+    present = state.bm25_index or bool(state.bm25_index_partitions)
+    if not wanted:
+        if not present and bm25.INDEX not in state.invalid_indexes:
+            return
+        try:
+            await _ddl(ddl, f"DROP INDEX IF EXISTS {bm25.INDEX}", settings.lock_timeout_ms)
+            for partition in state.bm25_index_partitions:  # leftovers never attached
+                await ddl.exec_driver_sql(
+                    f"DROP INDEX CONCURRENTLY IF EXISTS {bm25.partition_index(partition)}"
+                )
+            report.add("bm25 index", "done", "dropped")
+        except _LockedError:
+            report.add("bm25 index", "deferred", "lock not granted; run again")
+        return
+    if state.bm25_index:
+        return
+    if state.pg_search is None:
+        if not state.pg_search_available:
+            report.add(
+                "bm25 index",
+                "skipped",
+                "pg_search is not available on this server (a ParadeDB image provides it); "
+                "search keeps the default ranking",
+            )
+            return
+        if not state.pg_search_preloaded:
+            report.add(
+                "bm25 index",
+                "failed",
+                "pg_search must be in shared_preload_libraries; add it and restart Postgres",
+            )
+            return
+        try:
+            # pg_search needs pgvector (`vector`), which revision 0001 installs.
+            await ddl.exec_driver_sql(f"CREATE EXTENSION IF NOT EXISTS {bm25.EXTENSION} CASCADE")
+        except DBAPIError as error:
+            report.add("bm25 index", "failed", f"cannot create the extension: {error.orig}")
+            return
+    partitions = await _partitions(ddl, "mat_records")
+    for partition in partitions:
+        index = bm25.partition_index(partition)
+        valid = await ddl.scalar(
+            text("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(:i)"),
+            {"i": index},
+        )
+        if valid is False:
+            await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {index}")
+        await ddl.exec_driver_sql(bm25.index_sql(partition, index, concurrently=True))
+    try:
+        await _ddl(
+            ddl, bm25.index_sql("mat_records", bm25.INDEX, only=True), settings.lock_timeout_ms
+        )
+        for partition in partitions:
+            index = bm25.partition_index(partition)
+            attached = await ddl.scalar(
+                text(
+                    "SELECT 1 FROM pg_inherits WHERE inhrelid = to_regclass(:i) "
+                    "AND inhparent = to_regclass(:p)"
+                ),
+                {"i": index, "p": bm25.INDEX},
+            )
+            if not attached:
+                await _ddl(
+                    ddl,
+                    f"ALTER INDEX {bm25.INDEX} ATTACH PARTITION {index}",
+                    settings.lock_timeout_ms,
+                )
+        bm25.forget()
+        report.add("bm25 index", "done", "built")
+    except _LockedError:
+        report.add("bm25 index", "deferred", "lock not granted; run again")
+
+
 async def _hnsw(
     ddl: AsyncConnection,
     state: StorageState,
@@ -1041,6 +1154,7 @@ async def apply(
         triggers_ok = await _switch_triggers(ddl, state, shared, settings, report)
         await _values_index(ddl, state, choices.values_index, settings, report)
         await _lexicon_index(ddl, state, choices.lexicon_index, report)
+        await _bm25_index(ddl, state, choices.bm25_index, settings, report)
         await _hnsw(
             ddl, state, choices.embedding_precision, dims, report, switch_wait_s=switch_wait_s
         )
@@ -1093,6 +1207,8 @@ def _differences(state: StorageState, choices: StorageChoices) -> list[tuple[str
         found.append(("values index", state.values_index, choices.values_index))
     if state.lexicon_index != choices.lexicon_index:
         found.append(("lexicon index", state.lexicon_index, choices.lexicon_index))
+    if state.bm25_index != choices.bm25_index:
+        found.append(("bm25 index", state.bm25_index, choices.bm25_index))
     have = "half" if state.hnsw.get("half") and not state.hnsw.get("full") else "full"
     if have != choices.embedding_precision:
         found.append(("embedding index", have, choices.embedding_precision))

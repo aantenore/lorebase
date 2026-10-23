@@ -20,7 +20,7 @@ from lorebase_store import migrations
 from lorebase_store.auth.scope import BYPASS_SETTING
 from lorebase_store.commit import create_domain
 from lorebase_store.db import create_engine
-from lorebase_store.definer import READ_FUNCTIONS
+from lorebase_store.definer import BM25_FUNCTIONS, READ_FUNCTIONS
 from lorebase_store.materialize import BranchMode, create_branch
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.repositories.refs import sqlstate
@@ -297,8 +297,9 @@ def test_upgrade_refuses_an_application_role_that_may_create_in_the_table_schema
 
 @pytest.mark.integration
 def test_read_functions_are_every_definer_function(database_url: str) -> None:
-    """The Helm db-roles.py grants READ_FUNCTIONS, the compose app-role.sh every SECURITY
-    DEFINER function of the owner: both cover the same functions only while this holds."""
+    """The Helm db-roles.py grants READ_FUNCTIONS and BM25_FUNCTIONS
+    (`grant_read_functions`), the compose app-role.sh every SECURITY DEFINER function of the
+    owner: both cover the same functions only while this holds."""
 
     async def definers() -> set[str]:
         engine = create_engine(DatabaseSettings(), url=database_url, pooled=False)
@@ -314,4 +315,4 @@ def test_read_functions_are_every_definer_function(database_url: str) -> None:
         finally:
             await engine.dispose()
 
-    assert asyncio.run(definers()) == set(READ_FUNCTIONS)
+    assert asyncio.run(definers()) == {*READ_FUNCTIONS, *BM25_FUNCTIONS}

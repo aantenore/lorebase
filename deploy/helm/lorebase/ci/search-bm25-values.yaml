@@ -1,0 +1,25 @@
+# BM25 ranking of lexical search (docs/search.md#bm25-ranking): the in-cluster Cluster
+# (`postgresql.enabled`) on the ParadeDB image, whose pg_search extension serves the BM25
+# index. pg_search is licensed under AGPL-3.0, unlike Lorebase (Apache-2.0): read the licence
+# note in docs/search.md before you deploy it. With an external Postgres, preload pg_search
+# there and keep only the `config` keys. Add it to another profile:
+#   helm upgrade --install lorebase deploy/helm/lorebase -f ci/production-values.yaml -f ci/search-bm25-values.yaml
+# then build the index with `python -m lorebase_store.storage apply` (docs/kubernetes.md);
+# until then search keeps the default ranking and /readyz reports `search_backend` degraded.
+config:
+  search:
+    backend: bm25
+  store:
+    storage:
+      bm25_index: true
+postgresql:
+  cluster:
+    # Pinned by digest: Postgres 16.15, pg_search 0.26.3, pgvector 0.8.6.
+    imageName: paradedb/paradedb:0.26.3-pg16@sha256:c5dc31626136f47afb30096b59e78c78de3016a830d77e10a24ee9ea4d25eba4
+    initdb:
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector
+        - CREATE EXTENSION IF NOT EXISTS pg_search
+    postgresql:
+      shared_preload_libraries:
+        - pg_search

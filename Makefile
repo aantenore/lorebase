@@ -51,8 +51,15 @@ PERF_PG_EFFECTIVE_CACHE_SIZE ?= $(PERF_PG_EFFECTIVE_CACHE_SIZE_$(PERF_VM))
 PERF_PG_MAINTENANCE_WORK_MEM ?= $(PERF_PG_MAINTENANCE_WORK_MEM_$(PERF_VM))
 PERF_PG_SHM ?= $(PERF_PG_SHM_$(PERF_VM))
 PERF_PG_WORK_MEM ?= 8MB
+# Search backend measured (PERF_SEARCH=bm25: the ParadeDB image with pg_search preloaded, same
+# volume; docs/performance.md#bm25-search). Harness setting only.
+PERF_SEARCH ?= postgres
+PERF_PG_IMAGE_bm25 := paradedb/paradedb:0.26.3-pg16@sha256:c5dc31626136f47afb30096b59e78c78de3016a830d77e10a24ee9ea4d25eba4
+PERF_PG_PRELOAD_bm25 := pg_search,pg_stat_statements
+PERF_PG_IMAGE ?= $(PERF_PG_IMAGE_$(PERF_SEARCH))
+PERF_PG_PRELOAD ?= $(or $(PERF_PG_PRELOAD_$(PERF_SEARCH)),pg_stat_statements)
 export PERF_PG_PORT PERF_PG_PASSWORD PERF_PG_SHARED_BUFFERS PERF_PG_EFFECTIVE_CACHE_SIZE \
-	PERF_PG_MAINTENANCE_WORK_MEM PERF_PG_SHM PERF_PG_WORK_MEM
+	PERF_PG_MAINTENANCE_WORK_MEM PERF_PG_SHM PERF_PG_WORK_MEM PERF_PG_IMAGE PERF_PG_PRELOAD
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
 	test-perf perf-up perf-1m perf-10m perf-down security security-python security-web demo demo-down \
@@ -98,7 +105,7 @@ test-int: ## Integration tests (need Docker for Postgres)
 test-perf: ## Performance harness at a small scale (needs Docker); bench.py writes the baseline
 	$(UV) run pytest tests/perf -m perf
 
-perf-up: ## Start the perf Postgres (PERF_VM=16g for a Docker VM of 16 GiB)
+perf-up: ## Start the perf Postgres (PERF_VM=16g for a Docker VM of 16 GiB; PERF_SEARCH=bm25 for pg_search)
 	$(PERF_COMPOSE) up -d --wait
 
 perf-1m: perf-run-1m ## Benchmark at 1M Records on the perf Postgres (seeds once, then measures in place)

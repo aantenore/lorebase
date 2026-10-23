@@ -626,6 +626,7 @@ store:
     compression: null            # lz4 | pglz for values above ~2 kB (null: pglz with compact)
     records_fillfactor: null     # 50-100 (null: 90 with fast, 100 otherwise)
     prewarm: null                # apply ends with `storage prewarm` (null: on with fast)
+    bm25_index: null             # BM25 index of search; needs pg_search (null: off in every profile)
     prewarm_fraction: 0.8        # share of shared_buffers the prewarm may fill
     batch_rows: 2000             # rows rewritten per transaction by `storage apply`
     lock_timeout_ms: 2000        # wait for a table lock in `storage apply`, then retry later
@@ -864,6 +865,10 @@ search:
     default_limit: 20
     max_limit: 100
   candidates: 200                # rows of each ranked list before fusion and paging
+  # Ranking of lexical search without filters: postgres (ts_rank_cd over the GIN index) or
+  # bm25 (the BM25 index of ParadeDB pg_search, an optional AGPL-3.0 extension; build it with
+  # store.storage.bm25_index, docs/search.md#bm25-ranking). Without it search keeps postgres.
+  backend: postgres
   # Typo tolerance: a query word the branch does not hold is corrected to its closest words
   # in the branch's word lexicon (trigram similarity) and searched as (word | correction ...).
   trigram_threshold: 0.3         # least similarity of a correction to the query word
