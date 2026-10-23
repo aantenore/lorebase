@@ -26,7 +26,10 @@ def runtime(model: str, dims: int) -> ReadRuntime:
 
 
 def supply(template: str | None) -> Any:
+    """The supply schema with an embedding template on Supplier only, or on no Kind."""
     document: dict[str, Any] = yaml.safe_load(SUPPLY_SCHEMA.read_text())
+    for kind in document["kinds"].values():
+        kind.pop("search", None)
     if template is not None:
         document["kinds"]["Supplier"]["search"] = {"embedding_template": template}
     return load_schema(yaml.safe_dump(document))

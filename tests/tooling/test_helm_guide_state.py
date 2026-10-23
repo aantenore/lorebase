@@ -54,7 +54,8 @@ def guide_state(manifests: list[Manifest]) -> tuple[Manifest, Manifest]:
         and doc["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/component"] == "guide"
     )
     container = spec["containers"][0]
-    data_dir = next(e["value"] for e in container["env"] if e["name"] == "LOREBASE__GUIDE__DATA_DIR")
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    data_dir = env["LOREBASE__GUIDE__DATA_DIR"]
     mount = next(m for m in container["volumeMounts"] if m["mountPath"] == data_dir)
     assert not mount.get("readOnly")
     return container, next(v for v in spec["volumes"] if v["name"] == mount["name"])
