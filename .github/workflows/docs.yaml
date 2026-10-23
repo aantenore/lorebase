@@ -5,31 +5,6 @@ name: Docs
 # The repository setting Pages > Source must be "GitHub Actions".
 
 on:
-  pull_request:
-    paths:
-      - docs/**
-      - mkdocs.yml
-      - overrides/**
-      - scripts/docs/**
-      - CHANGELOG.md
-      - CONTRIBUTING.md
-      - SECURITY.md
-      - pyproject.toml
-      - uv.lock
-      - .github/workflows/docs.yaml
-  push:
-    branches: [main]
-    paths:
-      - docs/**
-      - mkdocs.yml
-      - overrides/**
-      - scripts/docs/**
-      - CHANGELOG.md
-      - CONTRIBUTING.md
-      - SECURITY.md
-      - pyproject.toml
-      - uv.lock
-      - .github/workflows/docs.yaml
   workflow_dispatch:
 
 permissions:
