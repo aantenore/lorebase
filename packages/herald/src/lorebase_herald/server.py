@@ -6,8 +6,10 @@ schemas a host sees match what Herald accepts.
 
 Credentials: on stdio, every call uses the API key configured for this agent's server process;
 on Streamable HTTP, every call forwards the caller's own `Authorization` header and fails
-without one. Herald holds no key of its own and never substitutes one: each call opens its own
-client with that one credential.
+without one, unless `herald.http.allow_anonymous` (local stacks whose Keeper runs with auth mode
+none) lets it go to Keeper without a credential, where Keeper's own mode decides. Herald holds no
+key of its own and never substitutes one: each call opens its own client with that one
+credential.
 """
 
 # No `from __future__ import annotations`: tool signatures are evaluated where they are defined
@@ -73,7 +75,7 @@ class Credentials:
             except ValueError:
                 headers = None
             value = request_header(headers, header)
-            if value is None:
+            if value is None and not self._settings.http.allow_anonymous:
                 raise invalid_input(
                     "unauthorized",
                     "this request carries no credential",

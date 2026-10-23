@@ -1307,6 +1307,7 @@ Streamable_http: each caller sends its own key
 | `herald.http.allowed_hosts` | `[]` | e.g. [herald.example.com]; empty: SDK default for the host |
 | `herald.http.allowed_origins` | `[]` |  |
 | `herald.http.credential_header` | `Authorization` |  |
+| `herald.http.allow_anonymous` | `false` | true: calls without a credential go to Keeper without one; local stacks with keeper.auth.mode none only (Keeper decides) |
 
 ### `herald.output`
 
