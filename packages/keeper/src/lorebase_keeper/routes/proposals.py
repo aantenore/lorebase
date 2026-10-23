@@ -31,6 +31,7 @@ count.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -60,6 +61,7 @@ from lorebase_keeper.reading.sensitivity import (
     mask_conflict,
     masking_for,
 )
+from lorebase_keeper.reading.visibility import projection
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import proposals as service
@@ -443,13 +445,52 @@ class _Visibility:
 
     schema: Schema | None
     masking: Masking
+    left_out: frozenset[str] = frozenset()
+    """Ids the caller's projection of the schema leaves out (Kinds invisible to it, design
+    13.3): Conflicts and automatic resolutions never show them."""
 
     def hidden(self, payload: Mapping[str, Any]) -> bool:
         return conflict_hidden(payload, self.schema, self.masking)
 
+    def names_left_out(self, value: Any) -> bool:
+        if not self.left_out:
+            return False
+        text = json.dumps(value, default=str)
+        return any(i in text for i in self.left_out)
+
+    def scrub(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`payload` without the values of Attributes left out, and without a message or
+        details naming something left out."""
+        if not self.left_out:
+            return payload
+        out = dict(payload)
+        for name in (*_CONFLICT_SIDES, "values"):
+            out[name] = _without(out.get(name), self.left_out)
+        if self.names_left_out([out.get("message"), out.get("details")]):
+            out["message"] = "The versions differ."
+            out["details"] = {}
+        return out
+
+
+_CONFLICT_SIDES = ("base", "ours", "theirs")
+
+
+def _without(value: Any, ids: frozenset[str]) -> Any:
+    """A value map (or an element body holding `values`) without the entries of `ids`."""
+    if not isinstance(value, dict):
+        return value
+    if isinstance(value.get("values"), dict):
+        return {**value, "values": _without(value["values"], ids)}
+    return {k: v for k, v in value.items() if k not in ids}
+
 
 async def _visibility(
-    store: StoreDep, guard: ReadGuard, domain_id: str, target: str, keeper: KeeperSettings
+    store: StoreDep,
+    guard: ReadGuard,
+    domain_id: str,
+    target: str,
+    keeper: KeeperSettings,
+    scope: ConflictScope | None = None,
 ) -> _Visibility:
     writes = store.runtime.settings.writes
     async with store.sessions() as session, session.begin():
@@ -460,12 +501,15 @@ async def _visibility(
     masking = await masking_for(
         guard.authorizer, guard.principal, domain_id, reference, keeper.reads.sensitivity
     )
-    return _Visibility(schema, masking if schema is None else masking.over(schema))
+    left_out: frozenset[str] = frozenset()
+    if schema is not None and scope is not None and scope.invisible and scope.kinds is not None:
+        left_out = projection(schema, scope.kinds).hidden
+    return _Visibility(schema, masking if schema is None else masking.over(schema), left_out)
 
 
 def _conflict(row: ConflictRow, seen: _Visibility) -> ConflictOut:
-    payload = mask_conflict(row.payload, seen.schema, seen.masking)
-    resolution = row.resolution
+    payload = seen.scrub(mask_conflict(row.payload, seen.schema, seen.masking))
+    resolution = None if row.resolution is None else seen.scrub(row.resolution)
     if resolution is not None and seen.hidden(row.payload):
         resolution = {
             **resolution,
@@ -486,10 +530,11 @@ async def _attempt(
     domain_id: str,
     target: str,
     keeper: KeeperSettings,
+    scope: ConflictScope | None = None,
 ) -> ConflictsOut:
     """The attempt as the caller may see it: values masked by schema (`_conflicts`), then
     the vault references left in it resolved as on every read (`Disclosure`)."""
-    seen = await _visibility(store, guard, domain_id, target, keeper)
+    seen = await _visibility(store, guard, domain_id, target, keeper, scope)
     attempt = _conflicts(view, seen)
     schemas = () if seen.schema is None else (seen.schema,)
     async with store.sessions() as session, session.begin():
@@ -519,6 +564,9 @@ def _conflicts(view: service.AttemptView, seen: _Visibility) -> ConflictsOut:
         stale=view.stale,
         masked=masked,
     )
+    fields["auto_resolutions"] = [
+        a for a in fields["auto_resolutions"] if not seen.names_left_out(a)
+    ]
     return ConflictsOut(
         **fields,
         conflicts=[_conflict(row, seen) for row in view.conflicts],
@@ -863,9 +911,11 @@ async def merge_proposal(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
         ) from None
-    attempt = await _attempt(outcome.view, store, guard, domain_id, proposal.target_ref, keeper)
+    attempt = await _attempt(
+        outcome.view, store, guard, domain_id, proposal.target_ref, keeper, scope
+    )
     annotate(
         request,
         action="proposal.merge",
@@ -937,9 +987,9 @@ async def list_conflicts(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
         ) from None
-    return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper)
+    return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper, scope)
 
 
 @router.post(
@@ -988,7 +1038,7 @@ async def resolve_conflict(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
         ) from None
     annotate(request, action="proposal.resolve", target=proposal_id, conflicts=[conflict_id])
     return _resolution(rows[0], frozenset())
@@ -1044,7 +1094,7 @@ async def resolve_conflicts(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper),
+            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
         ) from None
     assert view is not None
     annotate(
@@ -1054,4 +1104,4 @@ async def resolve_conflicts(
         conflicts=[item.fingerprint for item in body.resolutions],
         attempt=view.attempt.id,
     )
-    return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper)
+    return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper, scope)

@@ -311,3 +311,23 @@ def test_merges_compare_vault_tokens() -> None:
         custom = Resolution(fingerprint=state.conflict.fingerprint, choice=C.CUSTOM, value=value)
         with pytest.raises(ResolutionError):
             check_resolution(state.conflict, state.members, custom)
+
+
+def test_partition_filters_leave_out_conflicts_about_attributes() -> None:
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql
+
+    from lorebase_store.repositories.merges import CONFLICTS, PartitionFilter
+
+    hidden = PartitionFilter(exclude_attributes=frozenset({"att_hidden"}))
+    assert not hidden.everything
+    assert hidden.allows("p", None)
+    assert hidden.allows("p", "att_shown")
+    assert not hidden.allows("p", "att_hidden")
+    sql = str(
+        hidden.apply(select(CONFLICTS.c.fingerprint)).compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    assert "conflicts.attribute_id IS NULL OR" in sql
+    assert "NOT IN ('att_hidden')" in sql

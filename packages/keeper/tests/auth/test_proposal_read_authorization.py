@@ -3,6 +3,7 @@ Proposal creation and Conflict resolution keep that scope."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import Authorizer
 from lorebase_keeper.errors import ProblemError
+from lorebase_keeper.reading.sensitivity import UNCLEARED
+from lorebase_keeper.routes.proposals import _Visibility
 from lorebase_keeper.services.proposal_reads import (
     NO_SCOPE,
     ConflictScope,
@@ -213,3 +216,61 @@ async def test_callers_who_cannot_read_a_proposal_see_no_conflict(store: Any) ->
     assert (await visible_scope(narrowed, proposal("agent/a", "agent/b"))).everything
     schema = load_schema(SCHEMA.read_text())
     assert visible_partitions(NO_SCOPE, [schema]).include == frozenset()
+
+
+async def test_conflicts_about_references_to_invisible_kinds_are_left_out(store: Any) -> None:
+    scope = await conflict_scope(
+        guard(store, GrantScope.KIND, "PurchaseOrder"), proposal("agent/a", "main")
+    )
+    schema = load_schema(SCHEMA.read_text())
+    order = schema.kind_by_api_name("PurchaseOrder")
+    assert order is not None
+    supplier = order.attribute_by_api_name("supplier")
+    status = order.attribute_by_api_name("status")
+    assert supplier is not None
+    assert status is not None
+    partitions = visible_partitions(scope, [schema])
+    partition = kind_partition(order.id)
+    assert partitions.allows(partition, status.id)
+    assert partitions.allows(partition)  # Record-level Conflicts: values are scrubbed
+    assert not partitions.allows(partition, supplier.id)
+    hidden = replace(conflict(partition), attribute_id=supplier.id)
+    with pytest.raises(ProblemError) as raised:
+        require_visible(partitions, hidden, "mat_1", invisible=True)
+    assert raised.value.status_code == 404
+
+
+async def test_legacy_scopes_keep_every_attribute_of_a_readable_kind(store: Any) -> None:
+    legacy = await conflict_scope(
+        guard(store, GrantScope.KIND, "PurchaseOrder", invisible=False),
+        proposal("agent/a", "main"),
+    )
+    schema = load_schema(SCHEMA.read_text())
+    order = schema.kind_by_api_name("PurchaseOrder")
+    assert order is not None
+    supplier = order.attribute_by_api_name("supplier")
+    assert supplier is not None
+    assert visible_partitions(legacy, [schema]).allows(kind_partition(order.id), supplier.id)
+
+
+def test_record_level_conflicts_lose_values_and_messages_left_out() -> None:
+    schema = load_schema(SCHEMA.read_text())
+    order = schema.kind_by_api_name("PurchaseOrder")
+    assert order is not None
+    supplier = order.attribute_by_api_name("supplier")
+    status = order.attribute_by_api_name("status")
+    assert supplier is not None
+    assert status is not None
+    seen = _Visibility(None, UNCLEARED, frozenset({supplier.id}))
+    payload = {
+        "ours": {supplier.id: "S-1001", status.id: "open"},
+        "theirs": {"values": {supplier.id: "S-1002"}},
+        "message": f"{supplier.id} differs",
+        "details": {"attribute": supplier.id},
+    }
+    scrubbed = seen.scrub(payload)
+    assert scrubbed["ours"] == {status.id: "open"}
+    assert scrubbed["theirs"] == {"values": {}}
+    assert scrubbed["details"] == {}
+    assert supplier.id not in scrubbed["message"]
+    assert _Visibility(None, UNCLEARED).scrub(payload) == payload

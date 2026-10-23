@@ -12,7 +12,8 @@ Left out, besides the invisible Kinds:
   out, or reading (an expression's `links.<name>` fields, an aggregate's source Attribute and
   filter) anything left out, transitively; the derived Attributes they compute go with them;
 - Attributes of type `ref` (or arrays of `ref`) to an invisible Kind;
-- Traits implemented by invisible Kinds only, or declaring a reference to one;
+- Trait implementations mapping an Attribute left out, and Traits implemented by nothing left
+  in, or declaring a reference to an invisible Kind;
 - Operations whose parameters, steps or expressions name anything left out;
 - Sources writing an invisible Kind or a Relation or Attribute left out;
 - Kinds keyed by a reference to an invisible Kind, and Kinds whose titles, full-text index
@@ -89,15 +90,23 @@ def visible_schema(
         for rid, relation in schema.relations.items()
         if rid in relations
     }
+    # An implementation mapping a Trait Attribute to an Attribute left out goes with it.
+    implementations = {
+        kind_id: tuple(
+            t for t in kind.traits if not any(a in dropped for a in t.attribute_map.values())
+        )
+        for kind_id, kind in kept_kinds.items()
+    }
+    implemented = {t.trait_id for found in implementations.values() for t in found}
     traits = {
         tid: trait
         for tid, trait in schema.traits.items()
-        if _trait_visible(schema, tid, shown)
+        if (tid in implemented or not schema.kinds_implementing(tid))
         and not any(_refs_hidden(a.type, shown) for a in trait.attributes.values())
     }
     kept_kinds = {
         kind_id: kind.model_copy(
-            update={"traits": tuple(t for t in kind.traits if t.trait_id in traits)}
+            update={"traits": tuple(t for t in implementations[kind_id] if t.trait_id in traits)}
         )
         for kind_id, kind in kept_kinds.items()
     }
@@ -280,11 +289,6 @@ def _attributes(
 def _kind(kind: Kind, dropped: Collection[str], sources: Collection[str]) -> Kind:
     attributes = _attributes(kind.attributes, dropped, sources)
     return kind.model_copy(update={"attributes": attributes})
-
-
-def _trait_visible(schema: Schema, trait_id: str, shown: Collection[str]) -> bool:
-    implementers = schema.kinds_implementing(trait_id)
-    return not implementers or any(k.id in shown for k in implementers)
 
 
 def _source_visible(

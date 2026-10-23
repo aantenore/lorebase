@@ -11,9 +11,13 @@ same object comes back for the same schema), like the effective sensitivity tags
 
 from __future__ import annotations
 
+import json
+import re
 from collections import OrderedDict
+from collections.abc import Collection
 from dataclasses import dataclass
 from threading import Lock
+from typing import Any
 
 from lorebase_core.expr.visibility import element_ids, visible_schema
 from lorebase_core.model import Schema
@@ -21,10 +25,43 @@ from lorebase_core.model import Schema
 
 @dataclass(frozen=True, slots=True)
 class Projection:
-    """A schema as a reader of some Kinds sees it, and the ids it leaves out."""
+    """A schema as a reader of some Kinds sees it, the ids it leaves out and the names of the
+    elements it leaves out (Kinds, Relations both ways, Traits, Operations, Derivations,
+    Sources)."""
 
     schema: Schema
     hidden: frozenset[str]
+    names: frozenset[str] = frozenset()
+
+    def tells(self, value: Any) -> bool:
+        """Whether `value` (any JSON-like value: a Revision message, an origin document)
+        holds an id or, as a word, a name left out."""
+        return tells(value, self.hidden, self.names)
+
+
+_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def tells(value: Any, hidden: Collection[str], names: Collection[str]) -> bool:
+    """Whether `value` holds one of the ids `hidden` or, as a word, one of `names`."""
+    if not hidden or value is None:
+        return False
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return any(i in text for i in hidden) or not set(_WORD.findall(text)).isdisjoint(names)
+
+
+def _names(schema: Schema, hidden: frozenset[str]) -> frozenset[str]:
+    names: set[str] = set()
+    for element in schema.elements():
+        if element.id not in hidden:
+            continue
+        names.add(element.api_name)
+        inverse = getattr(element, "inverse_api_name", None)
+        definition = getattr(element, "definition", None)
+        inverse = inverse or getattr(definition, "inverse_api_name", None)
+        if isinstance(inverse, str) and inverse:
+            names.add(inverse)
+    return frozenset(n for n in names if n)
 
 
 _Key = tuple[int, frozenset[str]]
@@ -43,7 +80,7 @@ def projection(schema: Schema, kinds: frozenset[str]) -> Projection:
             return found[1]
     seen = visible_schema(schema, kinds)
     hidden = frozenset() if seen is schema else frozenset(element_ids(schema) - element_ids(seen))
-    projected = Projection(seen, hidden)
+    projected = Projection(seen, hidden, _names(schema, hidden))
     with _VISIBLE_LOCK:
         _VISIBLE[key] = (schema, projected)
         while len(_VISIBLE) > _VISIBLE_ENTRIES:

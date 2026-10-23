@@ -28,7 +28,7 @@ from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings
 
 from .read_fixtures import Seeded, keeper, seeded_database
-from .supply import DOMAIN, Clock, load_supply, rows
+from .supply import DOMAIN, Clock, commit_changes, load_supply, record_change, rows
 
 pytestmark = pytest.mark.integration
 
@@ -38,6 +38,8 @@ CODEC = ApiKeyCodec(ApiKeySettings(pepper=PEPPER))
 VISIBLE = frozenset({"Part", "Plant"})
 ORDERS = frozenset({"PurchaseOrder", "Part", "Plant"})
 """A reader of purchase orders, which reference Suppliers (`supplier`, `issued_to`)."""
+REVEALING = "Summary checked by the Supplier team"
+"""A Revision message naming a Kind invisible to the narrowed readers."""
 VOLATILE = ("instance", "request_id", "trace_id")
 """Problem members that differ between any two requests."""
 
@@ -67,6 +69,29 @@ async def seed(
     session: AsyncSession, runtime: StoreRuntime, clock: Clock, owner_url: str, app_url: str
 ) -> Seeded:
     schema, _ = await load_supply(session, runtime, clock)
+    order_kind, part_kind = (
+        schema.kind_by_api_name("PurchaseOrder"),
+        schema.kind_by_api_name("Part"),
+    )
+    assert order_kind is not None
+    assert part_kind is not None
+    order = rows("purchase_order.csv")[0]
+    # A change of nothing but a reference to a Supplier, and one whose message names Suppliers.
+    await commit_changes(
+        session,
+        runtime,
+        clock,
+        [record_change(order_kind, {**order, "supplier": "S-1001"})],
+        message="Reassign the order",
+    )
+    part = rows("part.csv")[0]
+    await commit_changes(
+        session,
+        runtime,
+        clock,
+        [record_change(part_kind, {**part, "summary": "Checked against the vendor list."})],
+        message=REVEALING,
+    )
     engine = create_engine(DatabaseSettings(), url=owner_url, pooled=False)
     try:
         store = SqlAuthStore(async_sessionmaker(engine, expire_on_commit=False))
@@ -336,3 +361,32 @@ async def test_references_to_invisible_kinds_are_left_out_of_visible_records(
         assert health.status_code == 200, health.text
         assert not [i for i in hidden if i in health.text]
         assert health.json()["health"]["violations"]["invalid_records"] == 0
+
+
+async def test_history_tells_nothing_about_invisible_kinds(seeded: Seeded) -> None:
+    part = rows("part.csv")[0]["part_number"]
+    order = rows("purchase_order.csv")[0]["po_number"]
+    async with keeper(seeded.app_url, _section()) as http:
+        wide = Reader(http, seeded.facts["domain_key"])
+        history = f"/kinds/Part/records/{part}/history"
+        full = await wide.get(history)
+        assert REVEALING in {i["message"] for i in full.json()["items"]}
+        reader = Reader(http, seeded.facts["limited_key"])
+        seen = await reader.get(history)
+        assert seen.status_code == 200, seen.text
+        assert len(seen.json()["items"]) == len(full.json()["items"])
+        assert "Supplier team" not in seen.text
+        lineage = await reader.get(f"/kinds/Part/records/{part}/lineage")
+        assert lineage.status_code == 200
+        assert "Supplier team" not in lineage.text
+        explained = await reader.get(f"/kinds/Part/records/{part}/explain")
+        assert explained.status_code == 200
+        assert "Supplier team" not in explained.text
+        # The change of the order's Supplier alone is not listed to a reader of orders.
+        orders = Reader(http, seeded.facts["orders_key"])
+        order_history = f"/kinds/PurchaseOrder/records/{order}/history"
+        every = await wide.get(order_history)
+        mine = await orders.get(order_history)
+        assert mine.status_code == 200, mine.text
+        assert len(mine.json()["items"]) == len(every.json()["items"]) - 1
+        assert all(i["attributes"] or i["change"] != "updated" for i in mine.json()["items"])

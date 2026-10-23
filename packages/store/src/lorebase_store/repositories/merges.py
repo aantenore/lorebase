@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, Table, delete, func, insert, select, update
+from sqlalchemy import Select, Table, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -221,18 +221,22 @@ class MergeAttemptRepository:
 @dataclass(frozen=True, slots=True)
 class PartitionFilter:
     """The partitions whose Conflicts a reader sees: those in `include` (every partition when
-    None) except those in `exclude`."""
+    None) except those in `exclude`; Conflicts about one of the Attributes in
+    `exclude_attributes` are left out too."""
 
     include: frozenset[str] | None = None
     exclude: frozenset[str] = frozenset()
+    exclude_attributes: frozenset[str] = frozenset()
 
     @property
     def everything(self) -> bool:
-        return self.include is None and not self.exclude
+        return self.include is None and not self.exclude and not self.exclude_attributes
 
-    def allows(self, partition: str) -> bool:
-        return (self.include is None or partition in self.include) and (
-            partition not in self.exclude
+    def allows(self, partition: str, attribute: str | None = None) -> bool:
+        return (
+            (self.include is None or partition in self.include)
+            and partition not in self.exclude
+            and (attribute is None or attribute not in self.exclude_attributes)
         )
 
     def apply[T: Select[Any]](self, query: T) -> T:
@@ -240,6 +244,11 @@ class PartitionFilter:
             query = query.where(CONFLICTS.c.partition.in_(sorted(self.include)))
         if self.exclude:
             query = query.where(CONFLICTS.c.partition.not_in(sorted(self.exclude)))
+        if self.exclude_attributes:
+            column = CONFLICTS.c.attribute_id
+            query = query.where(
+                or_(column.is_(None), column.not_in(sorted(self.exclude_attributes)))
+            )
         return query
 
 

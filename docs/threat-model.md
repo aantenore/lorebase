@@ -236,10 +236,13 @@ Remaining:
    permissions that bound it (TB3).
 
 8. **What people write is not projected.** A caller whose grants are narrowed to Kinds never
-   sees the other Kinds in structured data (TB3), but Revision messages, Proposal titles,
-   descriptions, comments and reviews and the Domain's description are shown as written, and
+   sees the other Kinds in structured data (TB3). Record history, lineage, explanations and
+   context packs leave out messages and titles that name something invisible word for word,
+   but a paraphrase passes, and Proposal descriptions, comments and reviews and the Domain's
+   description are shown as written, and
    whether a Proposal has open Conflicts (its merge check, the status of its attempt) covers
-   every Kind. Inherent: free text cannot be filtered by Kind; keep the names of restricted Kinds
+   every Kind. Revisions are Domain-wide: the Revision a response names and a branch's ahead
+   and behind counts move when any Kind changes, which tells that something changed, not what. Inherent: free text cannot be filtered by Kind; keep the names of restricted Kinds
    out of messages and Proposal titles where their existence matters, and grant history reads
    (log, diff, change feed), which stay refused to such callers, only with Domain-wide or branch
    grants.

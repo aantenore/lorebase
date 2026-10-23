@@ -481,6 +481,39 @@ values outside the vault stay in content-addressed history; the services hold th
 fingerprints are deterministic; the fallback digest secret lives in the database; checkpoints
 cover the chains up to the latest one published.
 
+## Kind-scoped invisibility
+
+An independent review of the change making Kinds invisible to callers whose grants are narrowed
+to other Kinds (design 13.3) looked for reads that still name, key, title or count an invisible
+Kind, answers that differ from those for unknown names, gaps in the schema projection, cache
+mixing and widening through the new Domain and branch reads. Findings and what was done:
+
+- **High: Proposal Conflicts about a reference to an invisible Kind** (`PurchaseOrder.supplier`
+  for a reader of orders) sat in a visible Kind's partition and showed Supplier keys, the
+  hidden Attribute id and messages. Fixed: such Conflicts and automatic resolutions are left
+  out in SQL (`PartitionFilter.exclude_attributes`), Record-level value maps lose the
+  Attributes left out, and messages naming them are replaced (`routes/proposals.py`). Tests:
+  `packages/keeper/tests/auth/test_proposal_read_authorization.py`,
+  `packages/store/tests/test_merging.py`.
+- **Medium: Trait implementations mapping a dropped Attribute** kept its id in the projected
+  schema, which then failed validation and quoted it in previews. Fixed: such implementations
+  are left out, and a Trait implemented by nothing left in goes too. Test:
+  `packages/core/tests/expr/test_visibility.py`.
+- **Medium: provenance origins, Revision messages and Proposal titles** in Record history,
+  lineage and explanations named Operations and Sources of invisible Kinds, and changes of a
+  visible Record touching only a hidden reference were listed. Fixed: origins and texts naming
+  an id or a name left out are left out, and such changes are not listed (also in context
+  packs). Test: `packages/keeper/tests/integration/test_invisible_kinds.py`.
+- **Low, accepted:** agent trace refs are filtered by the granted Kinds, not by the projection
+  (a Kind keyed by a reference to an invisible Kind is shown in traces); Derivation previews
+  refuse a reused hidden id, which confirms an id the caller already knows (ids carry 80 random
+  bits); Revisions, branch heads and ahead/behind counts move on changes of any Kind (threat
+  model, residual risk 8).
+- No issue found in the projection cache (entries hold their schema and compare by identity),
+  the `ETag` variants, `unchanged_head`, search and typo corrections, trait query fields,
+  Source previews, and callers whose grants are not narrowed to Kinds or with
+  `invisible_kinds: false`.
+
 ## Other observations
 
 - **Prompt injection.** The extraction model gets no tools, its output is validated against a

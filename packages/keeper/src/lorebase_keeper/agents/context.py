@@ -366,7 +366,7 @@ async def recent_changes(
     if floor is not None:
         query = query.where(r.c.generation > floor)
     rows = list((await session.execute(query)).mappings())
-    return tuple(
+    items = [
         ChangeItem(
             revision=bytes(row["revision_id"]).hex(),
             at=timestamp(row["at"]) or "",
@@ -375,10 +375,16 @@ async def recent_changes(
             attributes=_attribute_names(point.schema, row["partition"], row["provenance"]),
             actor=row["author"],
             origin=str((row["origin"] or {}).get("type", "")),
-            message=row["message"],
+            # Messages naming something invisible to the caller are left out (design 13.3).
+            message="" if point.tells(row["message"]) else row["message"],
         )
         for row in reversed(rows)
-    )
+    ]
+    if point.hidden:
+        # A change of nothing but Attributes left out of the caller's schema tells that
+        # something invisible changed.
+        items = [i for i in items if i.change != "modified" or i.attributes]
+    return tuple(items)
 
 
 async def lineage_items(

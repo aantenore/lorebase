@@ -139,6 +139,10 @@ def _compact(values: Mapping[str, Any]) -> dict[str, Any]:
     return {name: value for name, value in values.items() if value is not None}
 
 
+_TOLD = ("origin", "message")
+"""Members of an origin that may name an Operation or Source left out of the caller's schema."""
+
+
 def _origin(
     entry: ProvenanceRow | None, revision: _Revision | None, at: str | None = None
 ) -> dict[str, Any]:
@@ -337,7 +341,7 @@ async def _proposals(
         _compact(
             {
                 "id": row.id,
-                "title": row.title,
+                "title": "" if point.tells(row.title) else row.title,
                 "status": str(row.status),
                 "merged_revision": None
                 if row.merged_revision is None
@@ -398,13 +402,15 @@ async def explain_record(
         entry = None if provenance is None else entries.get(provenance)
         if revision is None and provenance is not None:
             revision = revision_of.get(provenance)
-        return _origin(entry, None if revision is None else revisions.get(revision))
+        found = _origin(entry, None if revision is None else revisions.get(revision))
+        # Origins and messages naming something invisible to the caller are left out.
+        return {k: v for k, v in found.items() if k not in _TOLD or not point.tells(v)}
 
     created = None
     if created_row is not None:
         revision = revisions.get(created_row.revision_id)
         created = origin_of(_first_provenance(created_row.provenance), created_row.revision_id)
-        if revision is not None:
+        if revision is not None and not point.tells(revision.origin):
             created["revision_origin"] = revision.origin
 
     values = ordered_values(kind, record.values)
