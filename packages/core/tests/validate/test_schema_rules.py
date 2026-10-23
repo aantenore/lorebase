@@ -867,3 +867,14 @@ def test_attribute_ids_unique_across_relations() -> None:
         },
     )
     assert error_codes(schema) == {C.SCHEMA_ID_DUPLICATE}
+
+
+@pytest.mark.parametrize(
+    ("name", "suggestion"),
+    [("key", "code"), ("kind", "category"), ("ref", "reference"), ("revision", "version")],
+)
+def test_reserved_attribute_names_say_why_and_what_to_use(name: str, suggestion: str) -> None:
+    schema = replace_attribute(supply_schema(), SUPPLIER, SUPPLIER_CITY, api_name=name)
+    (issue,) = [i for i in validate_schema(schema) if i.code == C.SCHEMA_API_NAME_RESERVED]
+    assert f"`{name}` is a reserved name, choose another (e.g. `{suggestion}`)" in issue.message
+    assert "`key`, `kind`, `ref`, `revision`" in issue.message

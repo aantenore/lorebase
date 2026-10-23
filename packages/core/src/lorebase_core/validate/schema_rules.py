@@ -54,6 +54,25 @@ if TYPE_CHECKING:
 #: Attribute api names reserved for Record envelopes in the API and the query DSL.
 DEFAULT_RESERVED_ATTRIBUTE_NAMES = frozenset({"key", "kind", "ref", "revision"})
 
+#: Api name offered instead when a Kind Attribute takes a reserved one.
+RESERVED_NAME_SUGGESTIONS = {
+    "key": "code",
+    "kind": "category",
+    "ref": "reference",
+    "revision": "version",
+}
+
+
+def reserved_name_message(name: str, reserved: frozenset[str]) -> str:
+    """Why `name` is refused and what to use instead."""
+    suggestion = RESERVED_NAME_SUGGESTIONS.get(name, f"{name}_value")
+    return (
+        f"`{name}` is a reserved name, choose another (e.g. `{suggestion}`); Kind Attributes "
+        f"cannot be named {', '.join(f'`{n}`' for n in sorted(reserved))}, which name the "
+        "Record envelope in the API and the query language"
+    )
+
+
 #: Types usable as primary key components (rendered as stable key text).
 KEYABLE_TYPES = frozenset(
     {
@@ -291,7 +310,7 @@ class _Checker:
                 self.add(
                     IssueCode.SCHEMA_API_NAME_RESERVED,
                     path,
-                    f"api name {attribute.api_name!r} is reserved",
+                    reserved_name_message(attribute.api_name, self.rules.reserved_attribute_names),
                 )
             names.append((attribute.api_name, path))
         self.check_unique(names, "/".join(map(str, owner)))

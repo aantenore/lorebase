@@ -24,6 +24,7 @@ What changed in each release, newest first. The notes are written for the person
 
 ### Fixed
 
+- A Kind Attribute named after a reserved api name (`key`, `kind`, `ref`, `revision`) is refused with a message that says why and proposes another name, such as ``"`key` is a reserved name, choose another (e.g. `code`)"``, instead of `api name 'key' is reserved`; the schema documentation lists the reserved names ([design 5.4](docs/design.md#54-attribute)).
 - Docker compose no longer starts a stale local image: the backend, backend-ml and web images are rebuilt from the checkout on every `up` (`pull_policy: build`; `LOREBASE_PULL_POLICY=missing` keeps prebuilt images), and `migrate` refuses a database that a newer Lorebase already migrated with an error naming the database revision, the newest revision of the code and the fix, instead of Alembic's `Can't locate revision` and a Keeper that restarts in a loop ([deployment](docs/deployment.md#docker-compose-images-and-migrations)).
 
 ### Upgrade notes
