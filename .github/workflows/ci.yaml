@@ -115,6 +115,43 @@ jobs:
       - name: pytest -m integration (tests/integration and packages)
         run: make test-int
 
+  # The optional BM25 backend (docs/search.md#bm25-ranking) on the ParadeDB image, which
+  # preloads pg_search; the main integration job runs the same modules without it (fallback).
+  integration-bm25:
+    name: Integration tests, BM25 search (ParadeDB pg_search)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: paradedb/paradedb:0.26.3-pg16@sha256:c5dc31626136f47afb30096b59e78c78de3016a830d77e10a24ee9ea4d25eba4
+        env:
+          POSTGRES_USER: lorebase
+          POSTGRES_PASSWORD: lorebase-ci
+          POSTGRES_DB: lorebase_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lorebase -d lorebase_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 24
+    env:
+      LOREBASE_TEST_DATABASE_URL: postgresql+asyncpg://lorebase:lorebase-ci@localhost:5432/lorebase_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --extra documents
+      - name: pytest -m integration, BM25 modules
+        run: >-
+          uv run pytest -m integration
+          packages/store/tests/test_search_bm25.py
+          packages/keeper/tests/integration/test_search_bm25_postgres.py
+
   web:
     name: Web (lint, typecheck, test, build)
     runs-on: ubuntu-latest
@@ -193,6 +230,7 @@ jobs:
           helm lint --strict "$CHART" -f "$CHART/ci/local-models-values.yaml"
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/sessions-values.yaml"
           helm lint --strict "$CHART" -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/guide-values.yaml"
+          helm lint --strict "$CHART" -f "$CHART/ci/local-models-values.yaml" -f "$CHART/ci/search-bm25-values.yaml"
       - name: helm template, every profile
         run: |
           mkdir -p build/helm
@@ -202,6 +240,7 @@ jobs:
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/local-models-values.yaml" > build/helm/local-models.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/sessions-values.yaml" > build/helm/sessions.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/guide-values.yaml" > build/helm/guide.yaml
+          helm template ci "$CHART" -n lorebase -f "$CHART/ci/local-models-values.yaml" -f "$CHART/ci/search-bm25-values.yaml" > build/helm/search-bm25.yaml
           helm template ci "$CHART" -n lorebase -f "$CHART/ci/production-values.yaml" -f "$CHART/ci/scale-out-values.yaml" -f "$CHART/ci/local-models-values.yaml" > build/helm/all.yaml
       - name: values.schema.json refuses a wrong type, value or key
         run: |

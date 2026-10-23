@@ -19,8 +19,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_platform.settings import ConfigError, Settings
+from lorebase_store import bm25
 from lorebase_store.migrations import head_revisions
 from lorebase_store.replicas import ReplicaState
 
@@ -186,6 +189,27 @@ class ReplicaCheck:
         if state.in_recovery is False:
             return f"{where}: ok, not a standby"
         return f"{where}: ok, lag {state.lag_ms or 0:.0f} ms"
+
+
+class SearchBackendCheck:
+    """Whether `search.backend: bm25` is served: degraded, without taking the service out of
+    rotation, while the database has no `pg_search` or no valid BM25 index, when lexical
+    search ranks the default way (`lorebase_store.bm25`)."""
+
+    name = "search_backend"
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def __call__(self) -> CheckResult:
+        async with self._sessions() as session:
+            found = await bm25.status(session)
+        if found.ready:
+            return CheckResult(CheckStatus.OK, "bm25")
+        return CheckResult(
+            CheckStatus.DEGRADED,
+            f"search.backend is bm25 but {found.reason}; lexical search ranks with postgres",
+        )
 
 
 def _join(revisions: Collection[str]) -> str:

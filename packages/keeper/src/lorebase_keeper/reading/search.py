@@ -25,7 +25,10 @@ under row-level security; snippets are computed for the returned page only. The 
 bounds the matches of q (`lorebase_store.reads.CommonTerms`): within
 `search.common_term_docs` every match is ranked; when every term is more common, only the
 first `search.common_term_candidates` matches in index order are, and the response says
-`truncated_candidates`. Filtered, semantic and hybrid searches are compiled here.
+`truncated_candidates`. With `search.backend: bm25` the BM25 index of `pg_search` ranks it
+instead (`lorebase_store.bm25`): every match is ranked by BM25, and the store keeps the
+default ranking while the database has no valid BM25 index. Filtered, semantic and hybrid
+searches are compiled here, with `ts_rank_cd`, whatever the backend.
 """
 
 from __future__ import annotations
@@ -408,6 +411,7 @@ async def _lexical_page(
         correction_weight=settings.trigram_weight,
         partial=partial,
         common=common_terms(runtime),
+        backend=settings.backend,
         runtime=runtime.store,
     )
     snippets: dict[tuple[str, str], str | None] = {}

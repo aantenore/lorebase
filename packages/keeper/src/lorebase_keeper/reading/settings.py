@@ -16,6 +16,7 @@ from pydantic import Field, model_validator
 from lorebase_core.query import QueryLimits
 from lorebase_keeper.kindhealth.config import HealthSettings
 from lorebase_platform.settings import SectionModel, Settings, register_section
+from lorebase_store.bm25 import SearchBackend
 
 READ_SECTION = "read"
 SEARCH_SECTION = "search"
@@ -268,6 +269,13 @@ class SearchSettings(SectionModel):
     """Ranking of `POST /search`."""
 
     results: Bounds = Field(default_factory=lambda: Bounds(default_limit=20, max_limit=100))
+    backend: SearchBackend = Field(
+        default="postgres",
+        description="Ranking of lexical search without filters: postgres (ts_rank_cd over the "
+        "GIN index, the default) or bm25 (the BM25 index of ParadeDB pg_search, an optional "
+        "AGPL-3.0 extension; store.storage.bm25_index, docs/search.md#bm25-ranking). Without "
+        "the extension or a valid index, search keeps postgres and /readyz reports it.",
+    )
     candidates: int = Field(
         default=200, ge=1, description="Rows of each ranked list before fusion and paging."
     )

@@ -283,3 +283,25 @@ def test_oidc_mock_overlay_signs_in_through_the_web_service() -> None:
     callback = keeper["LOREBASE__KEEPER__AUTH__SESSIONS__REDIRECT_URI"]
     assert callback == "http://127.0.0.1:18090/api/v1/auth/callback"
     assert found["web"]["environment"]["VITE_AUTH_MODE"] == "session"
+
+
+SEARCH_BM25 = ROOT / "deploy" / "compose" / "search-bm25.yaml"
+
+
+def test_bm25_overlay_runs_postgres_on_paradedb_with_pg_search_preloaded() -> None:
+    env = {**BASE_ENV, "POSTGRES_PRELOAD_LIBRARIES": "pg_prewarm"}
+    found = services(env, "scale-out", "maintenance", overlays=(SEARCH_BM25,))
+    postgres = found["postgres"]
+    assert postgres["image"].startswith("paradedb/paradedb:0.26.3-pg16@sha256:")
+    assert "shared_preload_libraries=pg_search,pg_prewarm" in postgres["command"]
+    assert "/docker-entrypoint-initdb.d" in postgres["tmpfs"]
+    for name in ("keeper", "keeper-2", "storage"):
+        environment = found[name]["environment"]
+        assert environment["LOREBASE__SEARCH__BACKEND"] == "bm25", name
+        assert environment["LOREBASE__STORE__STORAGE__BM25_INDEX"] == "true", name
+    alone = services(BASE_ENV, overlays=(SEARCH_BM25,))["postgres"]["command"]
+    assert "shared_preload_libraries=pg_search" in alone
+    # The default stack keeps the pgvector image and the default ranking.
+    default = services(BASE_ENV)
+    assert default["postgres"]["image"] == "pgvector/pgvector:pg16"
+    assert "LOREBASE__SEARCH__BACKEND" not in default["keeper"]["environment"]

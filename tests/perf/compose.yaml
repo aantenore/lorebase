@@ -6,6 +6,9 @@
 #
 # Memory settings come from the environment (PERF_PG_*), defaults sized for a Docker VM of
 # 8 GiB (`make perf-up PERF_VM=16g` for 16 GiB); the run reports the values it measured with.
+# `make perf-up PERF_SEARCH=bm25` runs the same volume on the ParadeDB image with pg_search
+# preloaded (PERF_PG_IMAGE, PERF_PG_PRELOAD) for the BM25 search measurements; that image is
+# built on a newer Debian, whose C library sorts the ASCII keys of the seeds the same way.
 services:
   postgres:
     image: ${PERF_PG_IMAGE:-pgvector/pgvector:pg16}
@@ -33,7 +36,7 @@ services:
       - -c
       - max_connections=50
       - -c
-      - shared_preload_libraries=pg_stat_statements
+      - shared_preload_libraries=${PERF_PG_PRELOAD:-pg_stat_statements}
     volumes:
       - data:/var/lib/postgresql/data
     healthcheck:

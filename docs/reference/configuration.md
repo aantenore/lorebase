@@ -746,6 +746,7 @@ Storage profile (docs/performance.md#storage-profiles): memory and disk traded f
 | `store.storage.compression` | `null` | lz4 \| pglz for values above ~2 kB (null: pglz with compact) |
 | `store.storage.records_fillfactor` | `null` | 50-100 (null: 90 with fast, 100 otherwise) |
 | `store.storage.prewarm` | `null` | apply ends with `storage prewarm` (null: on with fast) |
+| `store.storage.bm25_index` | `null` | BM25 index of search; needs pg_search (null: off in every profile) |
 | `store.storage.prewarm_fraction` | `0.8` | share of shared_buffers the prewarm may fill |
 | `store.storage.batch_rows` | `2000` | rows rewritten per transaction by `storage apply` |
 | `store.storage.lock_timeout_ms` | `2000` | wait for a table lock in `storage apply`, then retry later |
@@ -1128,6 +1129,7 @@ Search (design 8.4). Keeper never computes embeddings: semantic and hybrid searc
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `search.candidates` | `200` | rows of each ranked list before fusion and paging |
+| `search.backend` | `postgres` | Ranking of lexical search without filters: postgres (ts_rank_cd over the GIN index) or bm25 (the BM25 index of ParadeDB pg_search, an optional AGPL-3.0 extension; build it with store.storage.bm25_index, docs/search.md#bm25-ranking). Without it search keeps postgres. |
 | `search.trigram_threshold` | `0.3` | Typo tolerance: a query word the branch does not hold is corrected to its closest words in the branch's word lexicon (trigram similarity) and searched as (word \| correction ...). least similarity of a correction to the query word |
 | `search.trigram_weight` | `0.5` | weight of ts_rank_cd for hits found only through corrections (they always rank after the hits of q as written) |
 | `search.typo_candidates` | `3` | corrections tried per unknown word; 0 turns typo tolerance off |

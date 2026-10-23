@@ -14,14 +14,16 @@ reports, run the reads of one request in a `REPEATABLE READ` transaction.
 - `search_records`: full-text search over the GIN index, ranking a bounded candidate set
   (sized per query from the word lexicon with `CommonTerms`, and reported `truncated` when
   the cap cut the ranking); with `PartialMatching`, a query whose words do not all occur
-  together falls back to Records that hold some of them (`partial_terms`).
+  together falls back to Records that hold some of them (`partial_terms`). With the BM25
+  backend (`lorebase_store.bm25`) the BM25 index ranks instead, through `lb_search_bm25`.
 - `search_corrections`: typo corrections of query words from the branch's word lexicon.
 
 Incoming foreign-key Links, attribute queries and search compare with functions Postgres does
 not mark leakproof, so under row-level security plain SQL cannot use their indexes. With
 `store.reads.use_definer_functions` (the default) they run through the security definer
 functions of revisions 0005, 0018 and 0035 (`lb_links_in`, `lb_query_by_attribute`,
-`lb_search_bounded`, `lb_search_corrections`), which take the Domain as an argument: only
+`lb_search_bounded`, `lb_search_corrections`, and `lb_search_bm25` of revision 0037), which
+take the Domain as an argument: only
 these primitives call them, with the Domain their caller has already authorized (store schema
 notes). Otherwise the same statements run as plain SQL.
 
@@ -47,6 +49,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Relation, RelationBacking, Schema
+from lorebase_store import bm25
+from lorebase_store.bm25 import SearchBackend
 from lorebase_store.indexes import IndexSpec, plan_indexes, predicate_sql, sql_literal, values_text
 from lorebase_store.layout import BranchLayout, escape_colons, resolve_layout
 from lorebase_store.models import metadata
@@ -867,13 +871,94 @@ _SEARCH_DEFINER = {
 }
 
 
+_BM25_DEFINER = {
+    function: text(
+        f"SELECT * FROM {function}(:domain, :branch, CAST(:kinds AS text[]), "
+        "CAST(:config AS regconfig), :query, CAST(:candidates AS integer), "
+        "CAST(:limit AS integer), CAST(:match AS jsonb), CAST(:match_exact AS boolean), "
+        "CAST(:words AS text[]), CAST(:replacements AS text[]), CAST(:weight AS real), "
+        "CAST(:fixed AS jsonb), CAST(:fixed_exact AS boolean))"
+    )
+    for function in ("lb_search_bm25", "lb_search_bm25_overlay")
+}
+
+
+@lru_cache(maxsize=64)
+def _tsqueries(corrections: int) -> TextClause:
+    """The query as full-text search reads it, and with its corrections, as tsquery text."""
+    return text(f"SELECT CAST({_QUERY} AS text), CAST({_corrected_query(corrections)} AS text)")
+
+
+@dataclass(frozen=True, slots=True)
+class _Bm25Plan:
+    """BM25 queries of a search: `match` for the query as written (`None`: it has no lexeme
+    and matches nothing), `fixed` for the hits found only through a correction."""
+
+    match: bm25.Bm25Query | None
+    fixed: bm25.Bm25Query | None = None
+
+
+async def _bm25_plan(
+    session: AsyncSession, query: str, fixes: Sequence[Correction], config: str
+) -> _Bm25Plan | None:
+    """The BM25 queries of `query`, or `None` when it has no translation the definer
+    functions accept (one round trip)."""
+    params: dict[str, Any] = {"config": config, "query": query}
+    for n, correction in enumerate(fixes):
+        params[f"word_{n}"] = correction.word
+        params[f"replacements_{n}"] = list(correction.replacements)
+    written, corrected = (await session.execute(_tsqueries(len(fixes)), params)).one()
+    if not written:
+        return _Bm25Plan(None)
+    match = bm25.translate(written)
+    if match is None:
+        return None
+    if not fixes or corrected == written:
+        return _Bm25Plan(match)
+    widened = bm25.translate(corrected)
+    fixed = None if widened is None else bm25.corrected_only(match, widened)
+    return None if fixed is None else _Bm25Plan(match, fixed)
+
+
+async def _bm25_rows(
+    session: AsyncSession,
+    layout: BranchLayout,
+    params: dict[str, Any],
+    fixes: Sequence[Correction],
+) -> list[Any] | None:
+    """Rows of `lb_search_bm25` for the definer parameters of `search_records`; `None` when
+    the query has no BM25 translation (the caller ranks it the default way)."""
+    plan = await _bm25_plan(session, params["query"], fixes, params["config"])
+    if plan is None:
+        return None
+    if plan.match is None:
+        return []
+    statement = _BM25_DEFINER[_function("lb_search_bm25", layout)]
+    values = {
+        **params,
+        "match": plan.match.json(),
+        "match_exact": plan.match.exact,
+        "fixed": None if plan.fixed is None else plan.fixed.json(),
+        "fixed_exact": True if plan.fixed is None else plan.fixed.exact,
+    }
+    return list((await session.execute(statement, values)).all())
+
+
 class SearchHits(list[SearchHit]):
     """Hits of `search_records`, best first. `truncated`: a candidate cap cut the ranking, so
-    the hits are the best of the first matches in index order, not of every match."""
+    the hits are the best of the first matches in index order, not of every match.
+    `backend`: what ranked them (`bm25` only when the BM25 index served every statement)."""
 
-    def __init__(self, hits: Iterable[SearchHit] = (), *, truncated: bool = False) -> None:
+    def __init__(
+        self,
+        hits: Iterable[SearchHit] = (),
+        *,
+        truncated: bool = False,
+        backend: SearchBackend = "postgres",
+    ) -> None:
         super().__init__(hits)
         self.truncated = truncated
+        self.backend = backend
 
 
 @dataclass(frozen=True, slots=True)
@@ -1162,6 +1247,7 @@ async def search_records(
     correction_weight: float = 1.0,
     partial: PartialMatching | None = None,
     common: CommonTerms | None = None,
+    backend: SearchBackend = "postgres",
     runtime: StoreRuntime | None = None,
 ) -> SearchHits:
     """Best `limit` lexical matches of `query` (web search syntax) on the branch head.
@@ -1175,6 +1261,12 @@ async def search_records(
     At most `store.reads.search_candidates` matches are ranked, or with `common` as many as
     the word lexicon says the query needs (`CommonTerms`, one more round trip); the result
     is `truncated` when a statement filled its candidates.
+
+    `backend="bm25"` ranks with the BM25 index (`lorebase_store.bm25`, `lb_search_bm25`)
+    when the database has a valid one and the definer functions are in use; otherwise, and
+    for a query it cannot translate, the default ranking above. BM25 ranks every match: only
+    queries it matches as a superset (phrases) rank their first candidates, `common.candidates`
+    or `store.reads.search_candidates` of them, and are `truncated` when that cut the result.
     """
     settings = _runtime(runtime).settings
     layout = await resolve_layout(session, domain_id, branch)
@@ -1182,9 +1274,15 @@ async def search_records(
     cap = _cap(limit, settings.reads.max_search_rows)
     config = settings.materialize.text_search_config
     ceiling = settings.reads.definer_ceilings.candidates
+    definer = _definer(runtime)
+    ranked: SearchBackend = "postgres"
+    if backend == "bm25" and definer and await bm25.ready(session):
+        ranked = "bm25"
     bound = None
     wanted = settings.reads.search_candidates
-    if common is not None:
+    if common is not None and ranked == "bm25":
+        wanted = common.candidates
+    elif common is not None:
         bound = await _match_bound(session, layout, query, fixes, kind_ids, config)
         wanted = _wanted(bound.query, common)
     params: dict[str, Any] = {
@@ -1195,36 +1293,49 @@ async def search_records(
         "weight": correction_weight,
     }
     kinds = None if kind_ids is None else list(kind_ids)
-    definer = _definer(runtime)
     if definer:
         params.update(
             kinds=kinds,
             words=[c.word for c in fixes for _ in c.replacements],
             replacements=[r for c in fixes for r in c.replacements],
         )
-        statement = _SEARCH_DEFINER[_function("lb_search_bounded", layout)]
     else:
         for n, correction in enumerate(fixes):
             params[f"word_{n}"] = correction.word
             params[f"replacements_{n}"] = list(correction.replacements)
         if kinds is not None:
             params["kinds"] = kinds
-        statement = _search(layout.records_from("m", probe=False), kinds is not None, len(fixes))
-    rows = (await session.execute(statement, {**params, "query": query, "limit": cap})).all()
+
+    async def rank(given: dict[str, Any]) -> list[Any]:
+        """One search statement: the BM25 function when it serves the query, else the
+        default one (and every later statement of this search too)."""
+        nonlocal ranked
+        if ranked == "bm25":
+            found = await _bm25_rows(session, layout, given, fixes)
+            if found is not None:
+                return found
+            ranked = "postgres"
+        if definer:
+            statement = _SEARCH_DEFINER[_function("lb_search_bounded", layout)]
+        else:
+            records = layout.records_from("m", probe=False)
+            statement = _search(records, kinds is not None, len(fixes))
+        return list((await session.execute(statement, given)).all())
+
+    rows = await rank({**params, "query": query, "limit": cap})
     hits = SearchHits(
         (
             SearchHit(kind_id, key, title, float(score), bool(exact))
             for kind_id, key, title, score, exact, _ in rows
         ),
         truncated=bool(rows and rows[0][5]),
+        backend=ranked,
     )
     if partial is None or len(hits) >= min(partial.min_results, cap):
         return hits
     alternatives = await partial_terms(session, query, partial.stop_words)
     if alternatives is None:
         return hits
-    if definer:
-        _function("lb_search_bounded", layout)
     found = {(h.kind_id, h.key) for h in hits}
     others: dict[str, Any] = {
         "query": alternatives.text,
@@ -1232,7 +1343,7 @@ async def search_records(
     }
     if common is not None and bound is not None:
         others["candidates"] = _candidates(_wanted(bound.any_term, common), ceiling)
-    found_rows = (await session.execute(statement, {**params, **others})).all()
+    found_rows = await rank({**params, **others})
     truncated = hits.truncated or bool(found_rows and found_rows[0][5])
     matches = [
         (kind_id, key, title, float(score), bool(exact))
@@ -1240,7 +1351,7 @@ async def search_records(
         if (kind_id, key) not in found
     ]
     if not matches:
-        return SearchHits(hits, truncated=truncated)
+        return SearchHits(hits, truncated=truncated, backend=ranked)
     matched = await _matched_terms(
         session,
         domain_id,
@@ -1262,7 +1373,7 @@ async def search_records(
         for kind_id, key, title, rank, exact in matches
     ]
     scored.sort(key=lambda h: (-h.score, h.kind_id, h.key))
-    return SearchHits([*hits, *scored[: cap - len(hits)]], truncated=truncated)
+    return SearchHits([*hits, *scored[: cap - len(hits)]], truncated=truncated, backend=ranked)
 
 
 async def _matched_terms(
