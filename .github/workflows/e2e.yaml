@@ -1,19 +1,7 @@
 name: End-to-end
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "23 3 * * *"
   workflow_dispatch:
-  pull_request:
-    paths:
-      - examples/**
-      - packages/**
-      - deploy/compose/**
-      - deploy/docker/**
-      - uv.lock
-      - .github/workflows/e2e.yaml
 
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}

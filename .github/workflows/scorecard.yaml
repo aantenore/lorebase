@@ -4,11 +4,6 @@ name: Scorecard
 # feeds the README badge) and uploaded to code scanning. Needs a public repository.
 on:
   workflow_dispatch:
-  branch_protection_rule:
-  schedule:
-    - cron: "41 4 * * 2"
-  push:
-    branches: [main]
 
 permissions: read-all
 
