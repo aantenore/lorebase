@@ -3,8 +3,8 @@ name: lorebase
 description: Lorebase on Kubernetes - Keeper (REST API), Scribe, Herald (MCP), the web app, migrations and optional local models.
 type: application
 # Chart version: bump on every change of the chart. appVersion is the default image tag.
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/aantenore/lorebase
 sources:

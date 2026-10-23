@@ -1808,7 +1808,7 @@ wheels = [
 
 [[package]]
 name = "lorebase"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "lorebase-cli" },
@@ -1885,7 +1885,7 @@ docs = [
 
 [[package]]
 name = "lorebase-cli"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/cli" }
 dependencies = [
     { name = "lorebase-client" },
@@ -1911,7 +1911,7 @@ provides-extras = ["parquet", "linkml"]
 
 [[package]]
 name = "lorebase-client"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/client" }
 dependencies = [
     { name = "httpx" },
@@ -1926,7 +1926,7 @@ requires-dist = [
 
 [[package]]
 name = "lorebase-core"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "cel-python" },
@@ -1945,7 +1945,7 @@ requires-dist = [
 
 [[package]]
 name = "lorebase-guide"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/guide" }
 dependencies = [
     { name = "fastapi" },
@@ -1979,7 +1979,7 @@ provides-extras = ["fastembed"]
 
 [[package]]
 name = "lorebase-herald"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/herald" }
 dependencies = [
     { name = "httpx" },
@@ -2002,7 +2002,7 @@ requires-dist = [
 
 [[package]]
 name = "lorebase-inference"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/inference" }
 dependencies = [
     { name = "httpx" },
@@ -2032,7 +2032,7 @@ provides-extras = ["fastembed", "local-extractors"]
 
 [[package]]
 name = "lorebase-keeper"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/keeper" }
 dependencies = [
     { name = "asyncpg" },
@@ -2078,7 +2078,7 @@ provides-extras = ["parquet", "mysql", "mssql"]
 
 [[package]]
 name = "lorebase-platform"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/platform" }
 dependencies = [
     { name = "opentelemetry-api" },
@@ -2101,7 +2101,7 @@ requires-dist = [
 
 [[package]]
 name = "lorebase-scribe"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/scribe" }
 dependencies = [
     { name = "asyncpg" },
@@ -2159,7 +2159,7 @@ dev = [{ name = "testcontainers", extras = ["mysql", "mssql"], specifier = ">=4.
 
 [[package]]
 name = "lorebase-store"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/store" }
 dependencies = [
     { name = "alembic" },
