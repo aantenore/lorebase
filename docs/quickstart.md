@@ -450,7 +450,8 @@ well: `docker image rm lorebase:dev lorebase-ml:dev lorebase-web:dev` (the `LORE
 | `required variable POSTGRES_PASSWORD is missing a value`, `set LOREBASE_APP_PASSWORD in the environment file` or `set LOREBASE_WEBHOOK_KEY in the environment file` | `.env` is missing or a password or the webhook key is empty: `make env` fills them. |
 | Keeper unhealthy, `make up` fails with `dependency failed to start` | `docker compose --env-file .env -f deploy/compose/docker-compose.yaml logs migrate keeper` names the error. A password changed after the first start does not change the database: run `make clean-stack` (deletes the data) and `make up`. |
 | `curl: (52) Empty reply from server` right after `up -d` without `--wait` | Keeper is still starting; `make up` waits for its health check. |
-| The stack runs code older than the checkout | The image tag `lorebase:dev` is shared by every checkout on the machine. `make up` always passes `--build`; with plain compose add `--build`, or set `LOREBASE_TAG` per checkout. |
+| The stack runs code older than the checkout | The image tag `lorebase:dev` is shared by every checkout on the machine. Compose rebuilds the images from the checkout on every `up` (`LOREBASE_PULL_POLICY=build`, the default; `docker compose ... build` builds them alone); check that `.env` does not set `LOREBASE_PULL_POLICY=missing`, or set `LOREBASE_TAG` per checkout. |
+| `migrate` fails with `the database is at revision ..., which this code does not know` | A newer Lorebase migrated this database and older code is running. Rebuild from the newer checkout (`make up`, or `docker compose ... build`), or `make clean-stack` to start over without the data ([deployment](deployment.md#docker-compose-images-and-migrations)). |
 | Containers or volumes of another Lorebase stack are reused or replaced | Both use the project name `lorebase`. Set `COMPOSE_PROJECT_NAME` in `.env`. |
 | `docker compose` hangs on pull or build with a credential helper error | The Docker credential helper is stuck. Run the command with an empty Docker config: `DOCKER_CONFIG=$(mktemp -d) make up` (public images need no login). |
 | `no configuration file provided: not found` | The command left out `-f deploy/compose/docker-compose.yaml`, or did not run from the repository root. |
@@ -563,8 +564,10 @@ only, for example `openssl rand -hex 24`; they are embedded in the connection st
 docker compose --env-file .env -f deploy/compose/docker-compose.yaml up -d --build --wait postgres migrate keeper
 ```
 
-The first run builds the backend image, which takes a few minutes; `--build` rebuilds it when the
-checkout changed (the tag `lorebase:dev` is shared by every checkout on the machine) and `--wait`
+The first run builds the backend image, which takes a few minutes; every `up` rebuilds it when the
+checkout changed (`--build`, and `LOREBASE_PULL_POLICY=build` in `.env` without it: the tag
+`lorebase:dev` is shared by every checkout on the machine; `docker compose ... build` builds the
+images alone) and `--wait`
 returns once Keeper is healthy. Compose starts Postgres 16,
 creates the application role Keeper connects as (`db-roles`), runs the Alembic migrations once
 (`migrate` exits when done) and starts Keeper on

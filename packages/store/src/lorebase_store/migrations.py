@@ -8,12 +8,14 @@ by the environment; revisions read `config.attributes["store_settings"]`.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from alembic.util import CommandError
 
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 
@@ -79,6 +81,34 @@ def alembic_config(
 def head_revisions() -> tuple[str, ...]:
     """Alembic head revisions of this code, for readiness checks."""
     return tuple(ScriptDirectory.from_config(alembic_config()).get_heads())
+
+
+class RevisionMismatchError(CommandError):
+    """The database is at a revision this code does not know: a newer version migrated it."""
+
+
+def unknown_revisions(script: ScriptDirectory, current: Iterable[str]) -> tuple[str, ...]:
+    """Revisions of `current` (the database's) that the migration scripts of this code lack."""
+    known = {revision.revision for revision in script.walk_revisions()}
+    return tuple(sorted({revision for revision in current if revision not in known}))
+
+
+def check_known_revisions(script: ScriptDirectory, current: Iterable[str]) -> None:
+    """Refuse to migrate a database that a newer version already migrated.
+
+    Alembic alone stops with "Can't locate revision"; this names both sides and the way out.
+    """
+    unknown = unknown_revisions(script, current)
+    if not unknown:
+        return
+    heads = ", ".join(sorted(script.get_heads())) or "none"
+    raise RevisionMismatchError(
+        f"the database is at revision {', '.join(unknown)}, which this code does not know "
+        f"(its newest revision is {heads}): a newer Lorebase migrated this database. Run the "
+        "version that did (with docker compose: `docker compose build` then `up`, or "
+        "`make up`, which rebuild the images from the checkout), or restore a backup taken "
+        "before that upgrade. Older code cannot downgrade it."
+    )
 
 
 def upgrade(

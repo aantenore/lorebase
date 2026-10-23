@@ -21,6 +21,10 @@ What changed in each release, newest first. The notes are written for the person
 
 - BM25 search at 10M Records is not measured (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`, then `tests/perf/bm25.py --database perf_seed_10m_zipf`), and `storage apply` does not tune autovacuum for it: with BM25 on and frequent writes, set a lower `autovacuum_vacuum_scale_factor` on the `mat_records` partitions yourself ([performance](docs/performance.md#bm25-search)).
 
+### Fixed
+
+- Docker compose no longer starts a stale local image: the backend, backend-ml and web images are rebuilt from the checkout on every `up` (`pull_policy: build`; `LOREBASE_PULL_POLICY=missing` keeps prebuilt images), and `migrate` refuses a database that a newer Lorebase already migrated with an error naming the database revision, the newest revision of the code and the fix, instead of Alembic's `Can't locate revision` and a Keeper that restarts in a loop ([deployment](docs/deployment.md#docker-compose-images-and-migrations)).
+
 ### Upgrade notes
 
 - Clients of Kind-narrowed principals that relied on 403 to tell a forbidden Kind from an unknown one now get 404 or 422 for both. Set `keeper.auth.authz.invisible_kinds: false` to keep the earlier answers.

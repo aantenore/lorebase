@@ -308,3 +308,19 @@ def test_bm25_overlay_runs_postgres_on_paradedb_with_pg_search_preloaded() -> No
     default = services(BASE_ENV)
     assert default["postgres"]["image"] == "pgvector/pgvector:pg16"
     assert "LOREBASE__SEARCH__BACKEND" not in default["keeper"]["environment"]
+
+
+BUILT_SERVICES = ("migrate", "keeper", "scribe", "web")
+
+
+def test_images_are_rebuilt_from_the_checkout_on_every_up() -> None:
+    found = services(BASE_ENV)
+    for name in BUILT_SERVICES:
+        assert found[name]["pull_policy"] == "build", name
+        assert "build" in found[name], name
+
+
+def test_prebuilt_images_can_be_used_instead() -> None:
+    found = services({**BASE_ENV, "LOREBASE_PULL_POLICY": "missing"})
+    for name in BUILT_SERVICES:
+        assert found[name]["pull_policy"] == "missing", name
