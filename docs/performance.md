@@ -522,6 +522,7 @@ machine was shared with other test workloads during the whole run (load average 
 
 ```sh
 make perf-10m        # Postgres of tests/perf/compose.yaml, then the command below
+make perf-up PERF_VM=16g  # only start it, sized for a Docker VM of 16 GiB (default 8g)
 make perf-down       # deletes the Postgres volume and the seeded databases
 ```
 

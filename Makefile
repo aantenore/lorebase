@@ -35,10 +35,27 @@ PERF_OUT ?= build/perf
 PERF_VOCABULARY ?= zipf
 PERF_SEED_SUFFIX_zipf := _zipf
 PERF_SEED_SUFFIX_demo :=
-export PERF_PG_PORT PERF_PG_PASSWORD
+# Postgres memory of the perf stack for the Docker VM's memory (PERF_VM=8g or 16g); each
+# PERF_PG_* value can still be set on its own. Harness settings only, not product defaults.
+PERF_VM ?= 8g
+PERF_PG_SHARED_BUFFERS_8g := 2GB
+PERF_PG_EFFECTIVE_CACHE_SIZE_8g := 6GB
+PERF_PG_MAINTENANCE_WORK_MEM_8g := 512MB
+PERF_PG_SHM_8g := 3g
+PERF_PG_SHARED_BUFFERS_16g := 6GB
+PERF_PG_EFFECTIVE_CACHE_SIZE_16g := 12GB
+PERF_PG_MAINTENANCE_WORK_MEM_16g := 1GB
+PERF_PG_SHM_16g := 7g
+PERF_PG_SHARED_BUFFERS ?= $(PERF_PG_SHARED_BUFFERS_$(PERF_VM))
+PERF_PG_EFFECTIVE_CACHE_SIZE ?= $(PERF_PG_EFFECTIVE_CACHE_SIZE_$(PERF_VM))
+PERF_PG_MAINTENANCE_WORK_MEM ?= $(PERF_PG_MAINTENANCE_WORK_MEM_$(PERF_VM))
+PERF_PG_SHM ?= $(PERF_PG_SHM_$(PERF_VM))
+PERF_PG_WORK_MEM ?= 8MB
+export PERF_PG_PORT PERF_PG_PASSWORD PERF_PG_SHARED_BUFFERS PERF_PG_EFFECTIVE_CACHE_SIZE \
+	PERF_PG_MAINTENANCE_WORK_MEM PERF_PG_SHM PERF_PG_WORK_MEM
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
-	test-perf perf-1m perf-10m perf-down security security-python security-web demo demo-down \
+	test-perf perf-up perf-1m perf-10m perf-down security security-python security-web demo demo-down \
 	env up up-assistant logs example-data example-documents down clean-stack
 
 help: ## List available targets
@@ -80,6 +97,9 @@ test-int: ## Integration tests (need Docker for Postgres)
 
 test-perf: ## Performance harness at a small scale (needs Docker); bench.py writes the baseline
 	$(UV) run pytest tests/perf -m perf
+
+perf-up: ## Start the perf Postgres (PERF_VM=16g for a Docker VM of 16 GiB)
+	$(PERF_COMPOSE) up -d --wait
 
 perf-1m: perf-run-1m ## Benchmark at 1M Records on the perf Postgres (seeds once, then measures in place)
 

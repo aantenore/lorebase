@@ -5,7 +5,7 @@
 #   docker compose -p lorebase-perf -f tests/perf/compose.yaml down -v   # deletes the dataset
 #
 # Memory settings come from the environment (PERF_PG_*), defaults sized for a Docker VM of
-# 8 GiB; the run reports the values it measured with.
+# 8 GiB (`make perf-up PERF_VM=16g` for 16 GiB); the run reports the values it measured with.
 services:
   postgres:
     image: ${PERF_PG_IMAGE:-pgvector/pgvector:pg16}
