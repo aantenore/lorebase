@@ -154,9 +154,17 @@ class TagCreate(BaseModel):
     revision: str | None = Field(default=None, description="Revision id to tag.")
 
 
-def _branch(ref: RefRow, *, default: bool, state: MaterializationState | None = None) -> BranchOut:
+def _branch(
+    ref: RefRow,
+    *,
+    default: bool,
+    state: MaterializationState | None = None,
+    limited: bool = False,
+) -> BranchOut:
+    """A branch; `limited` (a caller limited to Kinds, `Access.kinds`) leaves out the
+    progress of its copy, whose row counts and errors tell about every Kind."""
     progress = None
-    if state is not None:
+    if state is not None and not limited:
         progress = MaterializationProgress(
             phase=state.phase,
             rows_done=state.rows_done,
@@ -222,7 +230,7 @@ async def list_branches(
     domain_id: str,
     store: StoreDep,
     params: PageParamsDep,
-    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ))],
+    access: Annotated[Access, Depends(require(Permission.SCHEMA_READ, kind_limited=True))],
 ) -> Page[BranchOut]:
     """Branches ordered by name."""
     found = await service.page(
@@ -230,7 +238,12 @@ async def list_branches(
     )
     return Page[BranchOut](
         items=[
-            _branch(r, default=r.name == found.default, state=found.materializations.get(r.name))
+            _branch(
+                r,
+                default=r.name == found.default,
+                state=found.materializations.get(r.name),
+                limited=access.kinds is not None,
+            )
             for r in found.refs[: params.limit]
         ],
         next_cursor=_next(found.refs, params.limit),
@@ -305,7 +318,7 @@ async def list_tags(
     domain_id: str,
     store: StoreDep,
     params: PageParamsDep,
-    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ))],
+    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ, kind_limited=True))],
 ) -> Page[TagOut]:
     """Tags ordered by name."""
     found = await service.page(
@@ -369,11 +382,19 @@ async def get_branch(
     domain_id: str,
     branch: str,
     store: StoreDep,
-    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ, branch_param="branch"))],
+    access: Annotated[
+        Access,
+        Depends(require(Permission.SCHEMA_READ, branch_param="branch", kind_limited=True)),
+    ],
 ) -> BranchDetail:
     """The branch head, protection flag and ahead/behind counts against the default branch."""
     state = await service.get(store, domain_id, branch)
-    out = _branch(state.ref, default=state.default, state=state.materialization)
+    out = _branch(
+        state.ref,
+        default=state.default,
+        state=state.materialization,
+        limited=access.kinds is not None,
+    )
     return BranchDetail(**out.model_dump(), ahead=state.ahead, behind=state.behind)
 
 

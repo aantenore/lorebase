@@ -101,6 +101,7 @@ Code: `packages/keeper/src/lorebase_keeper/auth/rbac.py`, `auth/permissions.py`,
 | T | Agent writes that bypass review | Agents write only through Operations with preconditions and review policies; protected branches need a Proposal; agent task branches and automatic merges are bounded by `keeper.agent_writes` (`allowed_roles_for_auto_merge` empty by default) and never skip required approvals | A Domain admin can widen `allowed_roles_for_auto_merge` per Domain |
 | T | Self-approval | `keeper.proposals.allow_self_approval` is false by default; the author's approvals are refused and not counted | None known |
 | E | Installation administration from a Domain role | Installation permissions (`principal.read`, `domain.create`) are held by installation administrators and by Domain-wide grants of roles holding them; API keys limited to Domains never hold them; Domain admins cannot mint keys for installation administrators or for principals without a grant in their Domain (`routes/admin.py`, `_check_key_holder`) | Domain admins see installation-wide principal lists (`principal.read` is in `admin`) |
+| I | Existence of Kinds to readers limited to others | With `keeper.auth.authz.invisible_kinds` (default) a Kind-narrowed caller reads a projection of the schema without the other Kinds and whatever tells about them (Relations, paths, Derivations, `ref` Attributes, Traits, Operations, Sources; Kinds keyed or indexed from them); names it may not read get the 404 or 422 of unknown names, word for word; counts, `truncated` flags, typo corrections, health totals and trace refs cover the visible Kinds only; cache keys and `ETag` variants hold the Kinds; Derivation previews refuse ids the projection left out (`core/expr/visibility.py`, `reading/visibility.py`, design 13.3) | Free text (Revision messages, Proposal titles and comments) is shown as written; a Proposal's merge check and attempt status cover the whole Proposal; see residual risk 8 |
 | I | Raw documents to readers | `document.read` is held by `editor`, `reviewer`, `maintainer` and `admin` only; `viewer`, `explorer` and `agent-reader` never read documents (`auth/permissions.py`) | Documents are unmasked input: whoever reads them reads the sensitive values they hold |
 | I | Sensitive values to readers without clearance | Values of `pii`, `confidential` and `restricted` Attributes are masked unless the caller holds `pii.read`, `confidential.read` or `restricted.read` for the read (a Kind-narrowed clearance must cover every Kind a derived value's tags come from); responses are cached per clearance; filters, ordering and grouping on them need the clearance; sensitive Attributes are out of full-text vectors, the lexicon, snippets and titles; vault references are replaced after the cache and only for cleared callers (`reading/sensitivity.py`) | Validation messages quote values back to their writers; Kind health lists the keys of Records sharing a sensitive unique value (never the value); see residual risks 5 to 8 |
 | I | Personal data kept in history | `vault: true` Attributes store a reference in Record objects and the value encrypted in `vault`; erasure (`pii.erase`) clears it for every Revision and is audited in the same transaction (`lorebase_store/vault`, `routes/vault.py`) | Inline sensitive values (no vault) and Record keys stay in history; clients and caches outside Keeper keep what they read |
@@ -233,6 +234,15 @@ Remaining:
    infer that a quote they chose matched, from the evidence being absent, so the Domain's vault
    can be probed by guessing values; submitting documents and reading suggestions are the
    permissions that bound it (TB3).
+
+8. **What people write is not projected.** A caller whose grants are narrowed to Kinds never
+   sees the other Kinds in structured data (TB3), but Revision messages, Proposal titles,
+   descriptions, comments and reviews and the Domain's description are shown as written, and
+   whether a Proposal has open Conflicts (its merge check, the status of its attempt) covers
+   every Kind. Inherent: free text cannot be filtered by Kind; keep the names of restricted Kinds
+   out of messages and Proposal titles where their existence matters, and grant history reads
+   (log, diff, change feed), which stay refused to such callers, only with Domain-wide or branch
+   grants.
 
 Fixed since this page was first published, in the order of the original list (each with tests,
 see the [security review](security-review.md#hardening-from-the-threat-model)):

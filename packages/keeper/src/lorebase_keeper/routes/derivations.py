@@ -185,6 +185,7 @@ async def preview_derivation(
         candidate = service.candidate_of(
             point.schema, payload.to_input(), payload.derivation, runtime.store.schema.rules()
         )
+        service.require_new_ids(candidate, point.hidden)
     except service.CandidateInvalidError as error:
         raise violations_problem(error.issues, limit=keeper.schema_changes.max_issues) from None
     point.scope.require(service.kind_names(candidate.schema, candidate.touched))

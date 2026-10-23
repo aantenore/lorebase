@@ -123,7 +123,7 @@ def _target(point: ReadPoint, request: SearchRequest) -> Target:
             )
         )
         return Target("search", kinds)
-    point.scope.require(request.kinds)
+    point.scope.precheck(request.kinds)
     found: list[Kind] = []
     for index, name in enumerate(request.kinds):
         kind = point.schema.kind_by_api_name(name)

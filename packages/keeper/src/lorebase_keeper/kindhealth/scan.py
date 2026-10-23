@@ -173,11 +173,15 @@ async def validate_records(
     settings: HealthSettings,
     generalize: Callable[[list[Issue]], list[Issue]] | None = None,
     hidden: Callable[[Attribute], bool] = lambda a: False,
+    *,
+    projected: bool = False,
 ) -> ViolationReport:
     """Re-validate the Records of a Kind with `validate_record` against the branch's schema.
     `generalize` rewrites the issues of each Record before they are grouped (issues about
     values the caller may not read lose their specific code); issues about a `hidden`
-    Attribute list no Record keys, which would tell which values fail the rule."""
+    Attribute list no Record keys, which would tell which values fail the rule. With
+    `projected` (a schema projected to the Kinds the caller may read, design 13.3), values of
+    Attributes the projection left out are not validated."""
     r = where.records
     step = max(1, math.ceil(total / settings.max_records_validated))
     checked = invalid = 0
@@ -199,6 +203,8 @@ async def validate_records(
             break
         for key, values in rows:
             checked += 1
+            if projected:
+                values = {k: v for k, v in (values or {}).items() if k in kind.attributes}
             issues = validate_record(
                 schema, Record.model_construct(kind=kind.id, key=key, values=values)
             )

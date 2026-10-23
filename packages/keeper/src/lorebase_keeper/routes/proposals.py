@@ -277,8 +277,9 @@ class MergeOut(BaseModel):
 def _checks(
     row: ProposalRow, approval: service.Approval | None = None, *, counted: bool = True
 ) -> list[CheckOut]:
-    """The checks of `row`; `counted` false leaves the number of open Conflicts out (callers
-    who do not see every Conflict)."""
+    """The checks of `row`; `counted` false leaves the number of open Conflicts and of
+    extraction items out (callers who do not see every Conflict: items may be about Kinds
+    they may not read)."""
     checks: list[CheckOut] = []
     merge = (row.checks or {}).get("merge")
     if isinstance(merge, dict):
@@ -301,9 +302,15 @@ def _checks(
             CheckOut(
                 name="extraction",
                 status="pending" if pending else "passed",
-                message=f"{extraction.get('items', 0)} item(s): "
-                f"{decisions.get('accepted', 0)} accepted, {pending} pending, "
-                f"{decisions.get('rejected', 0)} rejected.",
+                message=(
+                    f"{extraction.get('items', 0)} item(s): "
+                    f"{decisions.get('accepted', 0)} accepted, {pending} pending, "
+                    f"{decisions.get('rejected', 0)} rejected."
+                    if counted
+                    else "Items pending review."
+                    if pending
+                    else "Items reviewed."
+                ),
             )
         )
     if approval is not None and approval.protected:

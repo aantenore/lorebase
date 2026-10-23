@@ -122,8 +122,15 @@ def seeded(postgres_server_url: str) -> Iterator[Seeded]:
     yield from seeded_database(postgres_server_url, seed)
 
 
-def _auth_section(**reads: Any) -> dict[str, Any]:
+LEGACY = {"invisible_kinds": False}
+"""Kinds left out by Kind-narrowed grants refused with 403 instead of invisible (see
+`test_invisible_kinds` for the default)."""
+
+
+def _auth_section(authz: dict[str, Any] | None = None, **reads: Any) -> dict[str, Any]:
     section: dict[str, Any] = {"auth": {"mode": "api_key", "api_keys": {"pepper": PEPPER}}}
+    if authz is not None:
+        section["auth"]["authz"] = authz
     if reads:
         section["reads"] = reads
     return section
@@ -236,7 +243,7 @@ async def test_kind_grant_reads_only_its_kind(seeded: Seeded) -> None:
     key = seeded.facts["kind_key"]
     domain_key = seeded.facts["domain_key"]
     revs = seeded.revisions
-    async with keeper(seeded.app_url, _auth_section()) as http:
+    async with keeper(seeded.app_url, _auth_section(LEGACY)) as http:
         # its Kind, on any branch and at any Revision
         assert await _status(http, key, "/kinds/Supplier/records") == 200
         assert await _status(http, key, "/kinds/Supplier/records/S-1002") == 200
@@ -302,7 +309,7 @@ async def test_kind_grant_reads_only_its_kind(seeded: Seeded) -> None:
 async def test_kind_grant_keeps_agent_reads_to_its_kind(seeded: Seeded) -> None:
     key = seeded.facts["kind_key"]
     domain_key = seeded.facts["domain_key"]
-    async with keeper(seeded.app_url, _auth_section()) as http:
+    async with keeper(seeded.app_url, _auth_section(LEGACY)) as http:
         # context packs: seeds of another Kind are refused, the neighborhood keeps to Supplier,
         # also when a wider caller's pack for the same request is cached
         body = {"refs": ["Supplier/S-1005"], "budget_tokens": 32000}

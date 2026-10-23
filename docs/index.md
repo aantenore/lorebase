@@ -227,10 +227,9 @@ What runs on `main` is described above. The [validation record](validation.md) l
 Open:
 
 - Performance targets of design 6.14 on the 32 GB reference hardware. On a shared laptop with an 8 GiB Docker VM, 10M Records meet the budget for key, page, Link and attribute reads but not for the 2-hop neighborhood, full-text search, history and lineage.
-- Kind-scoped invisibility in queries, the last part of full RBAC.
 - API stability guarantees for `/api/v1`: the policy is written ([API stability](api-stability.md)) and binds from 1.0.
 
-Next up: the benchmark run on reference hardware, then Kind-scoped invisibility.
+Next up: the benchmark run on reference hardware.
 
 | Milestone | Theme | Highlights |
 |-----------|-------|-----------|

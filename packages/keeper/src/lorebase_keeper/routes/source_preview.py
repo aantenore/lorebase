@@ -161,6 +161,9 @@ def _target_kind_check(point: ReadPoint) -> Callable[[Schema, Source | None], No
         stored = point.schema.kinds.get(kind.id)
         if stored is not None:
             names.add(stored.api_name)
+        if point.scope.invisible and not all(point.scope.allows(n) for n in names):
+            # Like a Source that does not exist: nothing tells which Kind is missing.
+            raise point.scope.guard.denied()
         point.scope.require(names)
 
     return check

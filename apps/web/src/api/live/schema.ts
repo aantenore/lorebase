@@ -426,6 +426,7 @@ export function mapSchema(out: SchemaOut): Schema {
       for (const owned of entries(element['attributes'])) names.add(owned);
     }
   }
+  const kindIds = new Set(entries(body['kinds']).map((k) => str(k['id'])));
   const info = isRaw(body['domain']) ? body['domain'] : {};
   const settings = isRaw(info['settings']) ? info['settings'] : undefined;
   const examples = domainExamples(info['examples']);
@@ -440,7 +441,11 @@ export function mapSchema(out: SchemaOut): Schema {
     branch: out.branch ?? '',
     revision: out.revision,
     kinds: entries(body['kinds']).map((k) => kind(k, names)),
-    relations: entries(body['relations']).map((r) => relation(r, names)),
+    // A caller limited to some Kinds reads a schema without the others: a Relation reaching a
+    // Kind the document does not list is not shown.
+    relations: entries(body['relations'])
+      .filter((r) => kindIds.has(str(r['from_kind'])) && kindIds.has(str(r['to_kind'])))
+      .map((r) => relation(r, names)),
     traits: entries(body['traits']).map((t) => trait(t, names)),
     operations: entries(body['operations']).map((o) => operation(o, names)),
     derivations: entries(body['derivations']).map((d) => derivation(d, names)),

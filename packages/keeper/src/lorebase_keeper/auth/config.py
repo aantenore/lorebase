@@ -446,6 +446,13 @@ class AuthzSettings(SectionModel):
         "through another Keeper process take effect after at most this long; 0 disables.",
     )
     grants_cache_max_entries: int = Field(default=2048, ge=1)
+    invisible_kinds: bool = Field(
+        default=True,
+        description="Kinds a caller's Kind-narrowed grants leave out are invisible to it, not "
+        "just refused: the schema it reads omits them and what tells about them, and requests "
+        "naming them answer like unknown names (404 or 422, never 403). False refuses them "
+        "with 403 naming the Kind and refuses the schema to such callers.",
+    )
     custom_roles: dict[str, tuple[str, ...]] = Field(
         default_factory=dict,
         description="Extra roles: name -> permissions (see docs for the names). Built-in roles "

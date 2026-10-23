@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -184,9 +185,15 @@ async def test_a_kind_narrowed_grant_covers_its_target_kind_only(seeded: Seeded)
         allowed = await _preview(http, facts["suppliers_schema"], patch, [{"a": "x"}])
         assert allowed.status_code == 200, allowed.text
         assert allowed.json()["rows"] == [{"city": {"value": "x", "error": None}}]
+        # The Source and its Kind are invisible to a reader of Parts (design 13.3): the change
+        # set names a Kind it does not know.
         denied = await _preview(http, facts["parts_schema"], patch, [{"a": "x"}])
-        assert denied.status_code == 403, denied.text
-        assert (denied.json()["permission"], denied.json()["kind"]) == ("schema.read", "Supplier")
+        assert denied.status_code == 422, denied.text
+        nowhere = json.loads(json.dumps(patch).replace('"Supplier"', '"Nowhere"'))
+        unknown = await _preview(http, facts["parts_schema"], nowhere, [{"a": "x"}])
+        assert denied.json()["issues"] == json.loads(
+            json.dumps(unknown.json()["issues"]).replace("Nowhere", "Supplier")
+        )
         missing = await http.post(
             PREVIEW,
             json={"source": "nothing", "patch": {}, "rows": [{"a": "x"}]},

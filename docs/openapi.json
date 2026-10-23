@@ -1354,7 +1354,7 @@
           "domains"
         ],
         "summary": "List Domains",
-        "description": "Domains whose schema the caller may read, ordered by id.",
+        "description": "Domains whose schema the caller may read (also through grants narrowed to Kinds that\nare invisible to it otherwise), ordered by id.",
         "operationId": "list_domains_api_v1_domains_get",
         "security": [
           {

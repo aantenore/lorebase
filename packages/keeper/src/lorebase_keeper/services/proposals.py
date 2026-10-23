@@ -34,6 +34,7 @@ from lorebase_keeper.services.proposal_reads import (
     FULL_SCOPE,
     ConflictScope,
     require_visible,
+    unknown_conflict,
     visible_partitions,
 )
 from lorebase_keeper.services.schema import SchemaGuard, schema_at
@@ -709,12 +710,8 @@ async def resolve(
         for item in inputs:
             stored = await conflicts_repo.get(current.attempt.id, item.fingerprint)
             if stored is None:
-                raise ProblemError(
-                    NOT_FOUND,
-                    f"Conflict {item.fingerprint} is not part of the current merge attempt.",
-                    extensions={"conflict": item.fingerprint, "attempt": current.attempt.id},
-                )
-            require_visible(partitions, stored)
+                raise unknown_conflict(item.fingerprint, current.attempt.id)
+            require_visible(partitions, stored, current.attempt.id, invisible=scope.invisible)
             resolution = _resolution(item, principal.id)
             payload = {k: v for k, v in stored.payload.items() if k != "members"}
             try:

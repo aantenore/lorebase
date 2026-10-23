@@ -328,9 +328,10 @@ async def test_lineage_masks_values_for_a_reader_narrowed_to_the_kind(seeded: Se
             assert created is not None
             assert created["attributes"]
             assert all(a["before"] is None and a["after"] is None for a in created["attributes"])
-            # A grant narrowed to another Kind reads no lineage of this one.
+            # A grant narrowed to another Kind reads no lineage of this one: the Kind is
+            # invisible to it (design 13.3).
             refused = await _get(http, facts["part_viewer"], lineage, **params)
-            assert refused.status_code == 403, refused.text
+            assert refused.status_code == 404, refused.text
         cleared = await _get(http, facts["kind"], lineage)
         email = next(a for a in cleared.json()["attributes"] if a["name"] == "email")
         assert email["value"] == NEW_EMAIL

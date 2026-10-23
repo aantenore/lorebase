@@ -23,6 +23,7 @@ from lorebase_keeper.services.proposal_reads import (
     readable_proposals,
     require_target_read,
     require_visible,
+    unknown_conflict,
     visible_partitions,
     visible_scope,
 )
@@ -55,7 +56,11 @@ def proposal(source: str, target: str, n: int = 1) -> ProposalRow:
 
 
 def guard(
-    store: Any, scope_type: GrantScope = GrantScope.DOMAIN, ref: str | None = None
+    store: Any,
+    scope_type: GrantScope = GrantScope.DOMAIN,
+    ref: str | None = None,
+    *,
+    invisible: bool = True,
 ) -> ReadGuard:
     store.add_grant("acme", "usr_u", "viewer", scope_type, ref)
     principal = Principal(
@@ -66,7 +71,7 @@ def guard(
         subjects=("usr_u",),
     )
     return ReadGuard(
-        Authorizer(AuthzSettings(), store=store),
+        Authorizer(AuthzSettings(invisible_kinds=invisible), store=store),
         principal,
         (Permission.DATA_READ,),
         "acme",
@@ -87,7 +92,7 @@ async def test_kind_grant_sees_conflicts_of_its_kinds_only(store: Any) -> None:
     scope = await conflict_scope(
         guard(store, GrantScope.KIND, "Supplier"), proposal("agent/a", "main")
     )
-    assert scope == ConflictScope(kinds=frozenset({"Supplier"}), schema=False)
+    assert scope == ConflictScope(kinds=frozenset({"Supplier"}), schema=False, invisible=True)
 
     schema = load_schema(SCHEMA.read_text())
     kinds = {kind.api_name: kind.id for kind in schema.kinds.values()}
@@ -135,21 +140,29 @@ def conflict(partition: str) -> ConflictRow:
     )
 
 
+@pytest.mark.parametrize(("invisible", "status"), [(False, 403), (True, 404)])
 async def test_kind_narrowed_caller_cannot_resolve_a_conflict_of_another_kind(
-    store: Any,
+    store: Any, invisible: bool, status: int
 ) -> None:
     scope = await conflict_scope(
-        guard(store, GrantScope.KIND, "Supplier"), proposal("agent/a", "main")
+        guard(store, GrantScope.KIND, "Supplier", invisible=invisible),
+        proposal("agent/a", "main"),
     )
     schema = load_schema(SCHEMA.read_text())
     kinds = {kind.api_name: kind.id for kind in schema.kinds.values()}
     partitions = visible_partitions(scope, [schema])
-    require_visible(partitions, conflict(kind_partition(kinds["Supplier"])))
+    require_visible(partitions, conflict(kind_partition(kinds["Supplier"])), "mat_1")
     for hidden in (kind_partition(kinds["Plant"]), PARTITION_SCHEMA):
         with pytest.raises(ProblemError) as raised:
-            require_visible(partitions, conflict(hidden))
-        assert raised.value.status_code == 403
-    require_visible(visible_partitions(ConflictScope(), [schema]), conflict(PARTITION_SCHEMA))
+            require_visible(partitions, conflict(hidden), "mat_1", invisible=scope.invisible)
+        assert raised.value.status_code == status
+        if invisible:
+            # The answer to a Conflict that is not part of the attempt, word for word.
+            assert raised.value.problem_detail == unknown_conflict("f" * 64, "mat_1").problem_detail
+            assert "Plant" not in raised.value.problem_detail
+    require_visible(
+        visible_partitions(ConflictScope(), [schema]), conflict(PARTITION_SCHEMA), "mat_1"
+    )
 
 
 async def test_creating_a_proposal_needs_read_on_its_target(store: Any) -> None:

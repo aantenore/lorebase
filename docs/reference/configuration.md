@@ -258,6 +258,7 @@ Bearer tokens of any OpenID Connect provider
 |---------|---------|-------------|
 | `keeper.auth.authz.grants_cache_ttl_s` | `15` | grants are cached this long; other processes see changes after at most this; 0 disables |
 | `keeper.auth.authz.grants_cache_max_entries` | `2048` |  |
+| `keeper.auth.authz.invisible_kinds` | `true` | Kinds a caller's Kind-narrowed grants leave out are invisible to it: the schema it reads omits them and what tells about them, and naming them answers like an unknown name (404/422, never 403); false refuses them with 403 naming the Kind |
 | `keeper.auth.authz.custom_roles` | `{}` | extra roles, name -&gt; permissions. Built-in roles: viewer, explorer, editor, operator, modeler, reviewer, maintainer, admin, agent-reader. Example: contributor: [schema.read, data.read, branch.create] Permissions: schema.read data.read views.write branch.create operation.execute operation.execute_custom schema.write source.map proposal.review conflict.resolve proposal.merge source.manage job.manage grant.manage apikey.manage domain.settings domain.delete audit.read trace.read trace.explain principal.read domain.create (the last two are installation-level) |
 
 #### `keeper.auth.audit`

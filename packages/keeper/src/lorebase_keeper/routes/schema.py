@@ -43,6 +43,7 @@ from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, Problem, ProblemError
 from lorebase_keeper.reading.runtime import ReadRuntime, ReadRuntimeDep
 from lorebase_keeper.reading.sensitivity import clearance_of, default_schema
+from lorebase_keeper.reading.visibility import visible
 from lorebase_keeper.services import schema as service
 from lorebase_keeper.services.errors import (
     ProtectedBranchError,
@@ -53,7 +54,12 @@ from lorebase_keeper.services.errors import (
 )
 from lorebase_keeper.services.operation_catalog import builtin_definition
 from lorebase_keeper.services.pii_import import require_schema_change
-from lorebase_keeper.services.reads import ReadTarget, resolve_readable
+from lorebase_keeper.services.reads import (
+    ReadGuard,
+    ReadTarget,
+    resolve_kind_limited,
+    resolve_readable,
+)
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
 from lorebase_store.repositories.scope import scope_to_domain
@@ -301,6 +307,41 @@ async def _readable(
     )
 
 
+async def _visible_read(
+    request: Request,
+    auth: AuthRuntime,
+    principal: Principal,
+    store: StoreAccess,
+    keeper: KeeperSettings,
+    domain_id: str,
+    branch: str | None,
+    at: str | None,
+) -> tuple[ReadTarget, Schema]:
+    """The Revision a schema read names and its schema as the caller sees it: in full, or,
+    for a caller whose grants are narrowed to Kinds that are invisible to it, projected to
+    those Kinds (design 13.3)."""
+    try:
+        target = await _readable(request, auth, principal, store, keeper, domain_id, branch, at)
+    except ProblemError as error:
+        guard = ReadGuard(
+            auth.authorizer,
+            principal,
+            (Permission.SCHEMA_READ,),
+            domain_id,
+            keeper.reads.reachability_max_depth,
+        )
+        kinds = (
+            await guard.granted_kinds()
+            if error.status_code == 403 and auth.authorizer.invisible_kinds
+            else frozenset()
+        )
+        if not kinds:
+            raise
+        target = await resolve_kind_limited(store, guard, branch=branch, at=at)
+        return target, visible(await service.read(store, domain_id, target), kinds)
+    return target, await service.read(store, domain_id, target)
+
+
 def _changes(changes: list[service.ElementChange], limit: int) -> list[ElementChangeOut]:
     return [
         ElementChangeOut(op=c.op, section=c.section, id=c.id, api_name=c.api_name)
@@ -327,8 +368,9 @@ async def get_schema(
     format_: Annotated[Literal["json", "yaml"] | None, Query(alias="format")] = None,
 ) -> Response:
     """The schema at a branch head or at a Revision, as JSON or YAML."""
-    target = await _readable(request, auth, principal, store, keeper, domain_id, branch, at)
-    schema = await service.read(store, domain_id, target)
+    target, schema = await _visible_read(
+        request, auth, principal, store, keeper, domain_id, branch, at
+    )
     revision = hex(target.revision)
     headers = {REVISION_HEADER: revision}
     if _wants_yaml(request, format_):
@@ -390,8 +432,9 @@ async def get_element(
     Built-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are
     described with the parameters derived from the schema.
     """
-    target = await _readable(request, auth, principal, store, keeper, domain_id, branch, at)
-    schema = await service.read(store, domain_id, target)
+    target, schema = await _visible_read(
+        request, auth, principal, store, keeper, domain_id, branch, at
+    )
     element = _element(schema, section, name)
     if element is None:
         raise ProblemError(NOT_FOUND, f"No element {name!r} in {section}.")

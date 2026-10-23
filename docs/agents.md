@@ -13,8 +13,10 @@ Three properties hold on every read an agent makes:
   header. Cacheable answers carry an `ETag`; send it back in `If-None-Match` and an unchanged
   answer costs a `304`.
 - **Authorization is the one of the REST reads.** `data.read` on the branch; a grant narrowed
-  to a Kind sees that Kind only (other Kinds are left out of neighborhoods, an explicit request
-  for them gets `403`). History reads (`changes`, `events`) need a grant not narrowed to a Kind.
+  to a Kind sees that Kind only: the other Kinds are invisible (left out of the schema,
+  neighborhoods and counts, and a request naming one answers like one naming an unknown Kind;
+  `keeper.auth.authz.invisible_kinds`). History reads (`changes`, `events`) need a grant not
+  narrowed to a Kind.
 
 ## The loop
 

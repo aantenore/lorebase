@@ -61,6 +61,8 @@ class Authorizer:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._roles = role_catalog(settings.custom_roles)
+        self.invisible_kinds = settings.invisible_kinds
+        """Whether Kinds left out by Kind-narrowed grants are invisible (design 13.3)."""
         self._store = store
         self._cache: TtlCache[tuple[str | None, tuple[str, ...]], tuple[GrantRecord, ...]] = (
             TtlCache(settings.grants_cache_ttl_s, settings.grants_cache_max_entries, monotonic)

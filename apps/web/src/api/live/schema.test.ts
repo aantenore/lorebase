@@ -53,6 +53,21 @@ describe('mapSchema', () => {
     expect(schema.sources).toHaveLength(2);
   });
 
+  it('leaves out Relations reaching a Kind the schema does not list', () => {
+    const body = out.schema as Record<string, unknown>;
+    const kinds = body['kinds'] as Record<string, Record<string, unknown>>;
+    const kept = Object.fromEntries(
+      Object.entries(kinds).filter(([, kind]) => kind['api_name'] !== 'Supplier'),
+    );
+    const limited = mapSchema({ ...out, schema: { ...body, kinds: kept } });
+    const ids = new Set(limited.kinds.map((k) => k.id));
+    expect(limited.kinds.map((k) => k.api_name)).not.toContain('Supplier');
+    expect(limited.relations.length).toBeLessThan(schema.relations.length);
+    for (const relation of limited.relations) {
+      expect(ids.has(relation.from_kind) && ids.has(relation.to_kind)).toBe(true);
+    }
+  });
+
   it('spells types the way the screens read them', () => {
     const part = schema.kinds.find((k) => k.api_name === 'Part');
     const byName = Object.fromEntries(

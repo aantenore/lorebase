@@ -28,6 +28,7 @@ from lorebase_keeper.errors import NOT_FOUND, ProblemError
 from lorebase_keeper.reading.caching import not_modified
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.sensitivity import UNCLEARED, Disclosure, Masking, masking_for
+from lorebase_keeper.reading.visibility import Projection, projection
 from lorebase_keeper.services.reads import ReadGuard, ReadTarget, StoreReadSource
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.layout import BranchLayout
@@ -60,10 +61,18 @@ class ServedFrom(StrEnum):
 @dataclass(frozen=True, slots=True)
 class KindScope:
     """The Kinds a read may touch: every Kind (`kinds` is None), or only the Kinds named by
-    the caller's Kind-narrowed grants."""
+    the caller's Kind-narrowed grants.
+
+    With `invisible` (`keeper.auth.authz.invisible_kinds`, design 13.3) the other Kinds do not
+    exist for the caller: the read point's schema is the projection to `kinds`
+    (`reading.visibility`), names are resolved against it and fail like unknown names, and
+    nothing about those Kinds is refused with 403. Without it they are refused with 403
+    naming the Kind.
+    """
 
     guard: ReadGuard
     kinds: frozenset[str] | None = None
+    invisible: bool = False
 
     def allows(self, kind: str) -> bool:
         return self.kinds is None or kind in self.kinds
@@ -71,18 +80,40 @@ class KindScope:
     @property
     def variant(self) -> str:
         """Distinguishes cached responses built for callers limited to different Kinds."""
-        return "" if self.kinds is None else "kinds=" + ",".join(sorted(self.kinds))
+        if self.kinds is None:
+            return ""
+        mode = "invisible" if self.invisible else "kinds"
+        return f"{mode}=" + ",".join(sorted(self.kinds))
+
+    def visible(self, schema: Schema) -> Projection:
+        """The schema as the caller sees it: the projection to its Kinds when they are
+        invisible, else `schema` itself."""
+        if self.kinds is None or not self.invisible:
+            return Projection(schema, frozenset())
+        return projection(schema, self.kinds)
+
+    def precheck(self, kinds: Iterable[str]) -> None:
+        """Kinds named by a request, before they are resolved: 403 for one the caller may
+        not read, unless invisible Kinds are on (resolution against the visible schema then
+        reports them like unknown names)."""
+        if not self.invisible:
+            self.require(kinds)
 
     def require(self, kinds: Iterable[str]) -> None:
-        """403 naming the first Kind (by api name) the caller may not read."""
+        """Resolved Kinds: 403 naming the first Kind (by api name) the caller may not read;
+        with invisible Kinds, 404 like an unknown Kind (resolution against the visible schema
+        never yields one, this guards against a path that resolves elsewhere)."""
         for kind in sorted(kinds):
             if not self.allows(kind):
+                if self.invisible:
+                    raise not_found(f"Kind {kind}")
                 raise self.guard.kind_denied(kind)
 
 
 @dataclass(frozen=True, slots=True)
 class ReadPoint:
-    """A resolved read: the Domain, the branch, the Revision served, its schema, the Kinds
+    """A resolved read: the Domain, the branch, the Revision served, its schema (as the caller
+    sees it: `KindScope.visible`), the Kinds
     the caller may read there and how sensitive values are masked for it (`masking`).
     `layout` says where the branch's materialized rows live (its own, or an overlay over a
     base branch); materialized reads take their rows from it. At another Revision, a read
@@ -98,6 +129,9 @@ class ReadPoint:
     layout: BranchLayout
     masking: Masking = UNCLEARED
     snapshot: bool = False
+    hidden: frozenset[str] = frozenset()
+    """Ids of the schema elements and Attributes the projection left out (`KindScope.visible`):
+    what a candidate schema built on the visible one must not reuse."""
 
     @property
     def variant(self) -> str:
@@ -264,7 +298,7 @@ async def resolve_point(
         if not granted:
             raise
         ref, revision = await _locate_point(session, guard, domain, branch, at)
-        scope = KindScope(guard, granted)
+        scope = KindScope(guard, granted, invisible=guard.authorizer.invisible_kinds)
     layout = ref.layout
     reference = await branch_schema(session, runtime, domain.id, domain.default_branch)
     masking = await masking_for(
@@ -275,19 +309,30 @@ async def resolve_point(
     if revision.id == ref.head and ref.materialization is not Materialization.BUILDING:
         schema = await branch_schema(session, runtime, domain.id, ref.name)
         if schema is not None:
+            seen = scope.visible(schema)
             return ReadPoint(
                 domain,
                 ref.name,
                 revision,
-                schema,
+                seen.schema,
                 ServedFrom.MATERIALIZED,
                 scope,
                 layout,
                 masking.over(schema),
+                hidden=seen.hidden,
             )
     schema = await schema_at(session, runtime, domain.id, revision)
+    seen = scope.visible(schema)
     return ReadPoint(
-        domain, ref.name, revision, schema, ServedFrom.TREE, scope, layout, masking.over(schema)
+        domain,
+        ref.name,
+        revision,
+        seen.schema,
+        ServedFrom.TREE,
+        scope,
+        layout,
+        masking.over(schema),
+        hidden=seen.hidden,
     )
 
 

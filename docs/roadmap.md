@@ -7,8 +7,7 @@ Lorebase is pre-alpha. [v0.2.1](https://github.com/aantenore/lorebase/releases/t
 ## Next up
 
 1. The 10M-Record benchmark on the 32 GB reference hardware of design 6.14, and the 1M-Record neighborhood on branches other than `main`, which is just over budget on a shared laptop (M5).
-2. Kind-scoped invisibility in queries, the last part of full RBAC (M3).
-3. API stability guarantees for `/api/v1`, which bind from 1.0 (M5).
+2. API stability guarantees for `/api/v1`, which bind from 1.0 (M5).
 
 Everything else on this page is merged and covered by tests. The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -78,7 +77,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 
 - [x] Herald, the MCP server: tools, resources and prompts, over stdio and Streamable HTTP ([MCP server](mcp.md))
 - [x] Custom Operations with CEL, review policies, outbox and webhooks: Operations declare side effects, written to the outbox in their commit transaction and delivered at least once to signed webhooks with masking of sensitive values ([agents](agents.md#operation-events), [design 10.5](design.md#105-side-effects))
-- [ ] Full RBAC: groups, sensitivity masking, Kind-scoped invisibility in queries (groups from the OIDC groups claim, Kind-scoped grants on reads and sensitivity masking with `pii.read`, `confidential.read` and `restricted.read` are done, see [design 13.5](design.md#135-personal-data-and-erasure))
+- [x] Full RBAC: groups from the OIDC groups claim, Kind-scoped grants on reads, sensitivity masking with `pii.read`, `confidential.read` and `restricted.read` ([design 13.5](design.md#135-personal-data-and-erasure)), and Kind-scoped invisibility in queries: Kinds a Kind-narrowed caller may not read are left out of the schema it reads and answer like unknown names ([design 13.3](design.md#133-authorization-enforcement))
 - [x] Branch protection on the default branch
 - [x] Proposal checks (merge, approvals) and required approvals
 - [x] Modeler with every editor: Kinds, Relations, Traits, Operations (with dry run), Derivations and Sources in one form and YAML document, with Keeper's validation and CEL type check next to the fields

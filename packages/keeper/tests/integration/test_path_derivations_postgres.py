@@ -541,8 +541,9 @@ async def test_neighborhoods_and_link_counts_follow_paths(seeded: Seeded) -> Non
 
 
 async def test_paths_need_read_access_to_every_kind_crossed(seeded: Seeded) -> None:
-    """A caller reading Parts and Contracts, not Suppliers: following a contract path is
-    refused, and neighborhoods and Link counts leave it out instead of leaking it."""
+    """A caller reading Parts and Contracts, not Suppliers: a contract path crossing Suppliers
+    is invisible to it (like a Relation that does not exist, design 13.3), and neighborhoods
+    and Link counts leave it out instead of leaking it."""
     auth = {"Authorization": f"Bearer {seeded.facts['narrow_key']}"}
     section = {"auth": {"mode": "api_key", "api_keys": {"pepper": PEPPER}}}
     async with keeper(seeded.app_url) as http:
@@ -551,9 +552,11 @@ async def test_paths_need_read_access_to_every_kind_crossed(seeded: Seeded) -> N
     async with keeper(seeded.app_url, section) as http:
         for name in ("supplier_contracts", "supplier_contracts_live"):
             refused = await http.get(f"{BASE}/kinds/Part/records/{part}/links/{name}", headers=auth)
-            assert refused.status_code == 403, refused.text
+            assert refused.status_code == 404, refused.text
             listed = await http.get(f"{BASE}/relations/{name}/links", headers=auth)
-            assert listed.status_code == 403, listed.text
+            assert listed.status_code == 404, listed.text
+            unknown = await http.get(f"{BASE}/relations/nowhere/links", headers=auth)
+            assert listed.json()["detail"] == unknown.json()["detail"].replace("nowhere", name)
         assert (
             await http.get(f"{BASE}/kinds/Part/records/{part}", headers=auth)
         ).status_code == 200
@@ -562,11 +565,21 @@ async def test_paths_need_read_access_to_every_kind_crossed(seeded: Seeded) -> N
         assert not {k for k in found_counts if k.startswith("supplier_contracts")}
         assert "co_supplied:forward" not in found_counts  # crosses Supplier too
 
-        found = await hood(
-            http, "Part", part, ["supplier_contracts", "supplier_contracts_live"], **auth
+        # Naming the paths in a neighborhood answers like naming unknown Relations.
+        named = await http.post(
+            f"{BASE}/neighborhood",
+            json={"seeds": [{"kind": "Part", "key": part}], "relations": ["supplier_contracts"]},
+            headers=auth,
         )
-        assert {n["kind"] for n in found["nodes"]} == {"Part"}
-        assert found["edges"] == []
+        assert named.status_code == 422, named.text
+        found = await http.post(
+            f"{BASE}/neighborhood",
+            json={"seeds": [{"kind": "Part", "key": part}], "depth": 2},
+            headers=auth,
+        )
+        assert found.status_code == 200, found.text
+        assert {n["kind"] for n in found.json()["nodes"]} <= {"Part", "Contract"}
+        assert "Supplier" not in found.text
 
 
 async def test_derivations_and_operations_read_paths(seeded: Seeded) -> None:
