@@ -30,7 +30,10 @@ BM25 index itself is built by `python -m lorebase_store.storage apply` with
   scan reads as many more rows as the overlay holds of the searched Kinds (at most
   `p_candidates` more), so the rows it shadows cannot push a match out. `truncated` is true on
   every row when a scan that filled its limit may have left out a row that would rank among
-  those returned.
+  those returned. When the index cannot serve the call (dropped meanwhile, the library not
+  loaded), the functions return one row without a Kind that holds the error (SQLSTATE in
+  `key`, message in `title`) instead of failing the caller's transaction; the store then ranks
+  the default way.
 
 Revision ID: 0037
 Revises: 0036
@@ -173,6 +176,8 @@ DECLARE
     v_filter text;
     v_limit bigint;
     v_present text;
+    v_state text;
+    v_message text;
 BEGIN
     IF cardinality(p_words) IS DISTINCT FROM cardinality(p_replacements) THEN
         RAISE EXCEPTION 'p_words and p_replacements must have the same length'
@@ -258,6 +263,7 @@ BEGIN
     -- A scan that filled its limit may have left out rows scoring at most its last one: the
     -- result is cut when such a row would rank among those returned (fewer rows than asked
     -- at or above its arm, or a returned row of its arm scoring below that last one).
+    BEGIN
     RETURN QUERY EXECUTE
         'WITH ' || array_to_string(v_halves, ', ')
         || ', r AS (' || array_to_string(v_rows, ' UNION ALL ') || ')'
@@ -274,6 +280,14 @@ BEGIN
         || 'FROM t ORDER BY t.exact DESC, t.score DESC, t.raw DESC, t.kind_id COLLATE "C", '
         || 't.key COLLATE "C"'
     USING p_domain, p_branch, p_kinds, v_ts, v_fix, p_match, p_fixed, p_weight, p_limit;
+    EXCEPTION WHEN OTHERS THEN
+        -- The index cannot serve the call (dropped since the caller looked, the library not
+        -- loaded, a query the extension refuses): a row without a Kind, holding the error,
+        -- tells the caller to rank the default way. Cancellation is not caught (OTHERS).
+        GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_message = MESSAGE_TEXT;
+        RETURN QUERY SELECT CAST(NULL AS text), v_state, v_message, CAST(NULL AS real),
+            CAST(NULL AS boolean), CAST(NULL AS boolean);
+    END;
 END
 $fn$
 """
@@ -289,6 +303,10 @@ _RESOLVE_OVERLAY = """
 """The overlay variant finds the base and the generation it forked at (a branch that is no
 longer an overlay is read as a full one) and counts the overlay's rows of the searched Kinds,
 tombstones included: each can shadow one base row."""
+
+PARALLEL = "\nSET max_parallel_workers_per_gather = 0"
+"""A top-k scan of a few rows costs less than starting workers: with them the planner picked a
+parallel scan of the overlay's rows that took 19 ms instead of 1 (1M Records)."""
 
 SEARCH = (
     ("lb_search_bm25", ""),
@@ -309,7 +327,7 @@ def upgrade() -> None:
     search_path = _reads._search_path()
     op.execute(SEARCH_TERMS)
     op.execute(QUERY_VALID.format(search_path=search_path))
-    options = _reads._OPTIONS.format(search_path=search_path).strip()
+    options = _reads._OPTIONS.format(search_path=search_path).strip() + PARALLEL
     for name, resolve in SEARCH:
         guards = _checks._guards(search_path, ("p_candidates", "p_limit"))
         template = LB_SEARCH_BM25.format(name=name)

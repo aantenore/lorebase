@@ -312,6 +312,22 @@ async def test_storage_apply_drops_the_index_and_search_falls_back(
 ) -> None:
     async with engine.connect() as connection:
         assert await bm25.status(connection) == bm25.Bm25Status(True)
+    # Dropped behind the back of a process that still trusts it: that search falls back
+    # within its transaction, and the next ones look again.
+    async with indexed() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        cached = await search_records(session, DOMAIN, "main", "bearing", limit=5, backend="bm25")
+        assert cached.backend == "bm25"
+    async with engine.connect() as connection:
+        auto = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        await auto.exec_driver_sql(f"DROP INDEX {bm25.INDEX}")
+    async with indexed() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        fallen = await search_records(session, DOMAIN, "main", "bearing", limit=5, backend="bm25")
+        assert fallen.backend == "postgres"
+        assert {h.key for h in fallen} == {"P-1", "P-3"}
+        assert await session.scalar(text("SELECT 1")) == 1  # the transaction goes on
+    await _apply(engine, True)
     report = await _apply(engine, False)
     assert [(s.step, s.status) for s in report.steps if s.step == "bm25 index"] == [
         ("bm25 index", "done")
