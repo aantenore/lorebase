@@ -226,9 +226,12 @@ agent read path went from 12.5 GB (13,120 bytes per Record) to 5.5 GB in `balanc
 neighborhood from 291 to 42 ms at p50 (`balanced`), with 211 against 138 pages read from
 outside shared buffers. Commits of 1,000 Part updates with the lineage map triggers on and off
 alternating: p50 256 and 257 ms. A half-precision HNSW index is 43% smaller and 6 points of
-recall@10 lower, so only `compact` uses it. The 10M before-run is measured (57 GB hot,
-neighborhood 122 ms cold at p50); the 10M after-run was interrupted when the Docker VM
-stopped. Detail: [performance](performance.md#working-set).
+recall@10 lower, so only `compact` uses it. At 10M Records (Docker VM of 16 GiB, `shared_buffers` 6GB,
+`effective_cache_size` 12GB, load 9 to 15) the hot set went from 57 GB (6,165 bytes per
+Record) to 44.1 GB (4,729) in `balanced` and 43.3 GB (4,651) in `compact`, measured; the cold
+2-hop neighborhood from 122 to 100 ms at p50 (96 in `compact`). Commits of 1,000 Part updates
+at 10M under the same load: p50 2,711 ms `balanced`, 2,332 `compact` (the 2.1 s of the 1M
+`compact` run was its load). Detail: [performance](performance.md#working-set).
 
 ### Canvas, 5,000 nodes and 10,000 edges
 
