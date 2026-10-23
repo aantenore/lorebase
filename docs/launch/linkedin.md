@@ -15,7 +15,7 @@ The idea is to treat knowledge the way we treat code.
 - Every change is a Revision with an author and a reason, so you can read the knowledge base as it was last month.
 - Agents read through an API that never calls a language model, so answers are deterministic and take milliseconds. They write only through governed Operations.
 
-It is pre-alpha, and I would rather say what works than oversell. The versioning engine, the REST API, a CLI, an MCP server for agents and document extraction into reviewed proposals run today. Version 0.1.0 is the first tagged release; lineage and history endpoints are next.
+It is pre-alpha, and I would rather say what works than oversell. The versioning engine, the REST API, a CLI, an MCP server for agents and document extraction into reviewed proposals run today. Version 0.2.0 is the current tagged release; the 1M-Record performance baseline is next.
 
 If you run knowledge for agents, or you are weighing a proprietary ontology platform, I would like your view on the model. What would you version first?
 
@@ -23,7 +23,7 @@ First comment: https://github.com/aantenore/lorebase
 
 ## Shorter variant
 
-Branches, reviews and merges for company knowledge, so that agents read something you can audit. Lorebase is an open-source versioned knowledge graph on Postgres, with a model-free read path and governed writes. Pre-alpha, first release 0.1.0: the engine, the REST API, the CLI and the MCP server work. Feedback on the merge model welcome.
+Branches, reviews and merges for company knowledge, so that agents read something you can audit. Lorebase is an open-source versioned knowledge graph on Postgres, with a model-free read path and governed writes. Pre-alpha, current release 0.2.0: the engine, the REST API, the CLI and the MCP server work. Feedback on the merge model welcome.
 
 ## Notes
 

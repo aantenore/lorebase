@@ -39,14 +39,15 @@ operator-run) passed as two DSNs: the maintenance role and the application role.
 
 ## Install
 
-The chart is installed from the repository or from the `lorebase-0.1.0.tgz` package attached to the [GitHub release](https://github.com/aantenore/lorebase/releases/tag/v0.1.0); it is not published to a chart repository yet.
+The chart is installed from the repository or from the `lorebase-0.2.0.tgz` package attached to the [GitHub release](https://github.com/aantenore/lorebase/releases/tag/v0.2.0); it is not published to a chart repository yet.
 
 ```bash
-# 1. The image. The chart runs the published ghcr.io/aantenore/lorebase at its appVersion (0.1.0).
+# 1. The image. The chart runs the published ghcr.io/aantenore/lorebase at its appVersion (0.2.0).
 #    To run your own build instead, push it and add
 #    --set image.repository=registry.example.com/lorebase --set image.tag=<tag> in step 4:
 #    docker build -f deploy/docker/backend.Dockerfile -t registry.example.com/lorebase:<tag> .
-docker pull ghcr.io/aantenore/lorebase:0.1.0      # optional: check that the image is reachable
+docker pull ghcr.io/aantenore/lorebase:0.2.0      # optional: check that the images are reachable
+docker pull ghcr.io/aantenore/lorebase-ml:0.2.0
 #    Scribe and Guide run on ghcr.io/aantenore/lorebase-ml (`imageMl`): the same image plus fastembed
 #    and a baked embedding model, built with --target backend-ml. With your own build push both, or
 #    set --set imageMl.repository= to run them on `image` (then embeddings need an openai_compatible
@@ -138,7 +139,7 @@ ServiceMonitor on the collector. Edit the hosts, address ranges (the placeholder
 ranges) and issuer. Key points:
 
 ```yaml
-image: {tag: "0.1.0"}
+image: {tag: "0.2.0"}
 secrets: {existingSecret: lorebase-secrets}
 config:
   keeper:
