@@ -2,7 +2,9 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
-## Unreleased
+## 0.2.3 - 2026-10-24
+
+A governed bulk delete: `delete_records` removes many Records of one Kind in one Operation execution, one Revision and one rate-limit token. No migration, no breaking change.
 
 ### Added
 

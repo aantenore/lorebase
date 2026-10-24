@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-scribe"
-version = "0.2.2"
+version = "0.2.3"
 description = "Lorebase Scribe: job worker, scheduler and Source synchronization"
 requires-python = ">=3.12"
 # lorebase-store: job queue, commit pipeline, merges, webhooks, index jobs and GC.

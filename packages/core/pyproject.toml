@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-core"
-version = "0.2.2"
+version = "0.2.3"
 description = "Lorebase core: pure domain logic and versioning engine"
 requires-python = ">=3.12"
 dependencies = [

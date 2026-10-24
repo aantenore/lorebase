@@ -45,7 +45,7 @@ from lorebase_client.errors import (
     error_from_response,
 )
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 __all__ = [
     "ENV_API_KEY",
