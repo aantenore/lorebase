@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-guide"
-version = "0.2.2"
+version = "0.2.3"
 description = "Lorebase Guide: optional exploration assistant and query embedding over Keeper"
 requires-python = ">=3.12"
 # lorebase-inference: the chat model of the exploration agent and the embedding model of /embed.

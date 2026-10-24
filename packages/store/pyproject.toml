@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-store"
-version = "0.2.2"
+version = "0.2.3"
 description = "Lorebase store: persistence, repositories, migrations and materializer"
 requires-python = ">=3.12"
 dependencies = [
