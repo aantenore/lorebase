@@ -35,7 +35,7 @@ Keeper REST API
 - [x] Authentication with API keys and OIDC bearer tokens, role grants per Domain, Kind, Operation and branch, hash-chained audit log
 - [x] Domains, branches and tags
 - [x] Schema read and validate, schema change sets
-- [x] Built-in Operations: create, update, delete, link, unlink, bulk import, with dry run and idempotency
+- [x] Built-in Operations: create, update, delete, link, unlink, bulk import, bulk delete, with dry run and idempotency
 - [x] Records and Links, the query DSL, traversal, neighborhood, lexical search, time travel, ETags and conditional reads
 - [x] Revisions, branch log and diff
 - [x] Proposals, reviews, required approvals, merge and Conflict resolution API, scoped to what the caller may read
