@@ -11,7 +11,7 @@ name: Release
 #   helm     the chart packaged with the release version
 #   python   sdists and wheels of the workspace packages
 #   release  GitHub release with notes, SBOMs, chart, packages and signed checksums
-#   pypi     the packages to PyPI, only when the PYPI_API_TOKEN secret exists
+#   pypi     the packages to PyPI, through trusted publishing, only when the PYPI_TRUSTED_PUBLISHING variable is true
 on:
   push:
     tags: ["v*"]
@@ -293,13 +293,13 @@ jobs:
       - name: Is publishing configured?
         id: token
         env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          ENABLED: ${{ vars.PYPI_TRUSTED_PUBLISHING }}
         run: |
-          if [ -n "$PYPI_API_TOKEN" ]; then
+          if [ "$ENABLED" = "true" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::PYPI_API_TOKEN is not set, so nothing was published to PyPI. The packages are on the GitHub release. See docs/release.md."
+            echo "::notice::The PYPI_TRUSTED_PUBLISHING variable is not true, so nothing was published to PyPI. The packages are on the GitHub release. See docs/release.md."
           fi
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.token.outputs.present == 'true'
@@ -309,6 +309,5 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         if: steps.token.outputs.present == 'true'
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist
           skip-existing: true
