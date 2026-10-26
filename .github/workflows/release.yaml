@@ -282,7 +282,7 @@ jobs:
 
   pypi:
     name: PyPI ${{ matrix.package }}
-    needs: release
+    needs: [verify, release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Every package has its own GitHub environment (pypi-<package>) because PyPI accepts one
