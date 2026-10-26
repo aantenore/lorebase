@@ -75,6 +75,14 @@ The full suite is for releases; day to day, `make test-changed` is enough.
 
 `release.yaml` runs on a pushed tag `v*`. Every action is pinned to a commit SHA.
 
+It can also be run by hand on a tag that already exists, for example to publish a release whose tag was pushed without the workflow, or to repeat a failed run:
+
+```bash
+gh workflow run Release --repo aantenore/lorebase --ref main -f tag=vX.Y.Z
+```
+
+The workflow definition comes from `main`; every job checks out the tag, and `verify` stops when the input is not a version tag or the tag does not exist. Signatures of a run started this way carry the identity `release.yaml@refs/heads/main` instead of `@refs/tags/vX.Y.Z` (see [Verify a release](#verify-a-release)).
+
 | Job | What it does |
 |-----|--------------|
 | `verify` | Checks that every version in the repository equals the tag, that CHANGELOG.md has a section for it, and keeps that section as the release notes. A tag with `-` in it is a pre-release. |
@@ -104,6 +112,7 @@ Signatures and attestations, with [cosign](https://docs.sigstore.dev/). 0.2.2 wa
 ```bash
 VERSION=0.2.1
 IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/tags/v'
+# For a release run by hand (workflow_dispatch), the identity ends in @refs/heads/main instead.
 ISSUER=https://token.actions.githubusercontent.com
 
 for image in ghcr.io/aantenore/lorebase ghcr.io/aantenore/lorebase-ml ghcr.io/aantenore/lorebase-web; do

@@ -1,7 +1,8 @@
 name: Release
 
-# Runs when a version tag is pushed (v0.1.0, v0.2.0-rc.1). The checklist, the secrets it uses and
-# how to verify what it publishes are in docs/release.md. Nothing here runs on a pull request.
+# Runs when a version tag is pushed (v0.1.0, v0.2.0-rc.1), or by hand on a tag that already exists
+# (workflow_dispatch with the tag as input). The checklist, the secrets it uses and how to verify
+# what it publishes are in docs/release.md. Nothing here runs on a pull request.
 #
 #   verify   the tag, every version in the repository and the changelog section agree
 #   sbom     CycloneDX documents of the Python workspace and the web app (sbom.yaml)
@@ -14,9 +15,15 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release, for example v0.2.3
+        required: true
+        type: string
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -24,6 +31,9 @@ permissions:
 
 env:
   UV_FROZEN: "1"
+  # The tag being released: the pushed one, or the input of a manual run.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
 jobs:
   verify:
@@ -31,19 +41,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      revision: ${{ steps.revision.outputs.sha }}
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
+      - name: The tag is a version tag
+        run: |
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::'$RELEASE_TAG' is not a version tag (vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+      - name: The tag exists
+        id: revision
+        run: |
+          sha=$(git rev-parse --verify --quiet "$RELEASE_REF^{commit}") || { echo "::error::tag $RELEASE_TAG not found"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: Every version equals the tag
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: uv run --no-project --with pyyaml python scripts/release_tool.py check --tag "$TAG"
       - name: The changelog has a section for it
         id: version
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           version="${TAG#v}"
           uv run --no-project --with pyyaml python scripts/release_tool.py notes "$version" > release-notes.md
@@ -59,6 +83,8 @@ jobs:
     name: SBOMs
     needs: verify
     uses: ./.github/workflows/sbom.yaml
+    with:
+      ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
   images:
     name: Image ${{ matrix.name }}
@@ -98,6 +124,8 @@ jobs:
               VITE_API_MODE=mock
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.sbom_artifact }}
@@ -114,8 +142,8 @@ jobs:
         with:
           images: ${{ matrix.image }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.verify.outputs.prerelease != 'true' }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ needs.verify.outputs.prerelease != 'true' }}
             type=raw,value=latest,enable=${{ needs.verify.outputs.prerelease != 'true' }}
       - name: Build and push
         id: build
@@ -129,7 +157,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ needs.verify.outputs.version }}
-            REVISION=${{ github.sha }}
+            REVISION=${{ needs.verify.outputs.revision }}
             ${{ matrix.build_args }}
           provenance: mode=max
           cache-from: type=gha,scope=${{ matrix.name }}
@@ -165,6 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ env.RELEASE_REF }}
           sparse-checkout: |
             deploy/helm
             deploy/observability
@@ -192,6 +221,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
@@ -215,7 +246,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ inputs.tag || github.ref_name }}
       PRERELEASE: ${{ needs.verify.outputs.prerelease }}
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
