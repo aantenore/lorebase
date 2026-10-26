@@ -21,6 +21,8 @@ LOREBASE_DOMAIN=supply \
 uv run lorebase-herald              # stdio: the host starts this command
 ```
 
+Outside a clone, install Herald from PyPI (`uv tool install lorebase-herald`, or `pip install lorebase-herald`) and run `lorebase-herald` without `uv run`.
+
 Streamable HTTP on `http://127.0.0.1:8090/mcp`:
 
 ```bash

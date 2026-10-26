@@ -2,6 +2,15 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
+## Unreleased
+
+Release automation and documentation only; no change to the packages' behavior.
+
+### Changed
+
+- The release workflow can be run by hand (`workflow_dispatch`, input `tag`) on an existing tag, and publishes the ten packages to PyPI through trusted publishing, each from its own environment (`pypi-<package>`), when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true` ([release process](docs/release.md#pypi-trusted-publishing)).
+- Documentation: the release verification commands name 0.2.3 and the identity of a run started by hand; the README, the quickstart and the MCP guide say how to install `lorebase-cli` and `lorebase-herald` from PyPI.
+
 ## 0.2.3 - 2026-10-24
 
 A governed bulk delete: `delete_records` removes many Records of one Kind in one Operation execution, one Revision and one rate-limit token. No migration, no breaking change.
