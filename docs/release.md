@@ -91,13 +91,24 @@ The workflow definition comes from `main`; every job checks out the tag, and `ve
 | `helm` | Lints the chart, builds its dependency and packages it with `--version` and `--app-version` set to the release version. |
 | `python` | `uv build --all-packages`: an sdist and a wheel for each of the ten workspace packages. |
 | `release` | Creates the GitHub release with the changelog section as notes and attaches the SBOMs, the chart package, the Python distributions and `SHA256SUMS` with its cosign bundle (`SHA256SUMS.sigstore.json`). When the release exists, it uploads the files to it instead, so a failed run can be repeated. |
-| `pypi` | Publishes the distributions to PyPI, through trusted publishing, only when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true`. Otherwise it prints a notice and does nothing; the packages are on the release. Existing files are skipped, so it is safe to repeat. |
+| `pypi` | Publishes each package to PyPI from its own environment (`pypi-<short>`), through trusted publishing, only when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true`. Otherwise it prints a notice and does nothing; the packages are on the release. Existing files are skipped, so it is safe to repeat. |
 
 Permissions: the workflow defaults to `contents: read`. Only `images` (`packages: write`, `id-token: write`), `release` (`contents: write`, `id-token: write`) and `pypi` (`id-token: write`) get more. It uses no secret except `GITHUB_TOKEN`.
 
 ### PyPI: trusted publishing
 
-The `pypi` job publishes with trusted publishing: no token is stored. Each of the ten projects (`lorebase-core`, `lorebase-platform`, `lorebase-inference`, `lorebase-store`, `lorebase-keeper`, `lorebase-client`, `lorebase-cli`, `lorebase-herald`, `lorebase-scribe`, `lorebase-guide`) has a trusted publisher on PyPI: owner `aantenore`, repository `lorebase`, workflow `release.yaml`, environment `pypi`. The job runs in the GitHub environment `pypi` with `id-token: write`, and is enabled by the repository variable `PYPI_TRUSTED_PUBLISHING=true`. `PYPI_API_TOKEN` is no longer used; delete it if it still exists.
+The `pypi` job is a matrix over the ten packages and publishes each one with trusted publishing: no token is stored. Package `<short>` (`core`, `platform`, `inference`, `store`, `keeper`, `client`, `cli`, `herald`, `scribe`, `guide`) is the PyPI project `lorebase-<short>`, published from the GitHub environment `pypi-<short>`, with `id-token: write`. The job is enabled by the repository variable `PYPI_TRUSTED_PUBLISHING=true`, and each matrix entry uploads only the wheel and sdist of its own package. `PYPI_API_TOKEN` is no longer used; delete it if it still exists.
+
+Publisher values for each project (PyPI, project Publishing, GitHub tab):
+
+| Field | Value |
+|---|---|
+| Owner | `aantenore` |
+| Repository | `lorebase` |
+| Workflow | `release.yaml` |
+| Environment | `pypi-<short>`, for example `pypi-core` for `lorebase-core` |
+
+Why one environment per package: PyPI accepts only one pending publisher for the same (owner, repository, workflow, environment) and at most three pending publishers at once, so the ten projects cannot share the environment `pypi`. Create the projects in rounds of three: add a pending publisher for up to three projects, run the release (or repeat it on the same tag: existing files are skipped), and the projects become real. A project that already exists needs a normal trusted publisher with the matching environment `pypi-<short>`. The matrix entries run with `continue-on-error`, so a package whose publisher is not configured yet fails its own job without failing the release. The GitHub environments `pypi-<short>` have no protection rules; the old `pypi` environment is no longer used by the workflow.
 
 For a new project name, add a pending publisher with the same values before the first release.
 

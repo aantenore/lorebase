@@ -11,7 +11,7 @@ name: Release
 #   helm     the chart packaged with the release version
 #   python   sdists and wheels of the workspace packages
 #   release  GitHub release with notes, SBOMs, chart, packages and signed checksums
-#   pypi     the packages to PyPI, through trusted publishing, only when the PYPI_TRUSTED_PUBLISHING variable is true
+#   pypi     each package to PyPI from its own environment, through trusted publishing, only when the PYPI_TRUSTED_PUBLISHING variable is true
 on:
   push:
     tags: ["v*"]
@@ -281,14 +281,23 @@ jobs:
           fi
 
   pypi:
-    name: Publish to PyPI
+    name: PyPI ${{ matrix.package }}
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: pypi
+    # Every package has its own GitHub environment (pypi-<package>) because PyPI accepts one
+    # pending trusted publisher per identical (owner, repository, workflow, environment) and at
+    # most three pending at once: the projects are created in rounds. A package whose publisher
+    # is not configured yet fails its own job without failing the release.
+    continue-on-error: true
+    environment: pypi-${{ matrix.package }}
     permissions:
       contents: read
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [core, platform, inference, store, keeper, client, cli, herald, scribe, guide]
     steps:
       - name: Is publishing configured?
         id: token
@@ -306,8 +315,17 @@ jobs:
         with:
           name: release-python-dist
           path: dist
+      - name: Keep the files of this package
+        if: steps.token.outputs.present == 'true'
+        env:
+          PACKAGE: ${{ matrix.package }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          mkdir dist-package
+          cp dist/lorebase_"$PACKAGE"-"$VERSION"* dist-package/
+          ls dist-package
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         if: steps.token.outputs.present == 'true'
         with:
-          packages-dir: dist
+          packages-dir: dist-package
           skip-existing: true
