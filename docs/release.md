@@ -107,12 +107,14 @@ The first upload of a name cannot use a project-scoped token (the project does n
 
 ## Verify a release
 
-Signatures and attestations, with [cosign](https://docs.sigstore.dev/). 0.2.2 was built and published locally, without the release workflow: its images, checksums and assets are not signed and its images carry no SBOM attestation, so these commands apply to 0.2.1 and earlier.
+Signatures and attestations, with [cosign](https://docs.sigstore.dev/). 0.2.2 was built and published locally, without the release workflow: its images, checksums and assets are not signed and its images carry no SBOM attestation, so these commands apply to every version except 0.2.2. 0.2.3 was published by the release workflow, run by hand on the existing tag, so its signatures carry the `@refs/heads/main` identity.
 
 ```bash
-VERSION=0.2.1
-IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/tags/v'
-# For a release run by hand (workflow_dispatch), the identity ends in @refs/heads/main instead.
+VERSION=0.2.3
+# Run by hand (workflow_dispatch), as 0.2.3 was: the identity ends in @refs/heads/main.
+IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/heads/main$'
+# Released by pushing the tag: the identity ends in @refs/tags/vX.Y.Z instead.
+# IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/tags/v'
 ISSUER=https://token.actions.githubusercontent.com
 
 for image in ghcr.io/aantenore/lorebase ghcr.io/aantenore/lorebase-ml ghcr.io/aantenore/lorebase-web; do
