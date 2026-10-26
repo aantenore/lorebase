@@ -147,7 +147,7 @@ A smoke test of what was published:
 ```bash
 docker run --rm "ghcr.io/aantenore/lorebase:$VERSION" python -c "import lorebase_keeper, lorebase_store"
 helm template check "release/lorebase-$VERSION.tgz" -n lorebase >/dev/null
-uv run --with "lorebase-cli==$VERSION" lorebase --version     # only when published to PyPI
+uv run --with "lorebase-cli==$VERSION" lorebase --version     # from PyPI, once the pypi job has run
 ```
 
 ## Base images

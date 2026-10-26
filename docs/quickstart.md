@@ -631,7 +631,8 @@ already ran, delete the Domain first (`uv run lorebase domain delete supply -y`)
 a clean stack (`make clean-stack && make up`).
 
 Each step is shown twice: with curl against the REST API, and with the `lorebase` command line
-(installed by `uv sync --all-packages`, run as `uv run lorebase`). Both call the same
+(installed by `uv sync --all-packages`, run as `uv run lorebase`; outside a clone, install it from PyPI with
+`uv tool install lorebase-cli` or `pip install lorebase-cli` and run it as `lorebase`). Both call the same
 endpoints. Tell the CLI where Keeper is:
 
 ```bash

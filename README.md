@@ -145,6 +145,19 @@ There is nothing to sign in to: the example configuration runs with authenticati
 
 The first `make up` builds the backend and web images (a few minutes); the rest takes about a minute. The [quickstart](docs/quickstart.md) explains each step and continues with [an agent connected over MCP](docs/quickstart.md#3-connect-an-agent-over-mcp), [a real model](docs/quickstart.md#4-use-a-real-model) (Ollama by default, or any hosted OpenAI-compatible endpoint with its key in a file), [cleanup](docs/quickstart.md#5-stop-and-clean-up) and [troubleshooting](docs/quickstart.md#6-troubleshooting), then goes through the REST API one call at a time. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md), and the Kubernetes install in [docs/kubernetes.md](docs/kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
 
+### Install the command line and the MCP server from PyPI
+
+The ten packages are published on PyPI at 0.2.3 (`lorebase-cli`, `lorebase-client`, `lorebase-herald`, `lorebase-keeper`, and the rest). To talk to a running Keeper you do not need a clone:
+
+```bash
+uv tool install lorebase-cli            # or: pip install lorebase-cli
+lorebase --version
+uv tool install lorebase-herald         # the MCP server, `lorebase-herald`
+pip install lorebase-client             # the Python client library
+```
+
+The stack itself (Postgres, Keeper, web app) still starts from a clone with `make up`, as above. `uvx --from lorebase-cli lorebase ...` runs the CLI without installing it.
+
 ## Architecture
 
 ```mermaid
