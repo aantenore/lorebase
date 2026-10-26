@@ -91,19 +91,15 @@ The workflow definition comes from `main`; every job checks out the tag, and `ve
 | `helm` | Lints the chart, builds its dependency and packages it with `--version` and `--app-version` set to the release version. |
 | `python` | `uv build --all-packages`: an sdist and a wheel for each of the ten workspace packages. |
 | `release` | Creates the GitHub release with the changelog section as notes and attaches the SBOMs, the chart package, the Python distributions and `SHA256SUMS` with its cosign bundle (`SHA256SUMS.sigstore.json`). When the release exists, it uploads the files to it instead, so a failed run can be repeated. |
-| `pypi` | Publishes the distributions to PyPI, only when the repository secret `PYPI_API_TOKEN` exists. Otherwise it prints a notice and does nothing; the packages are on the release. Existing files are skipped, so it is safe to repeat. |
+| `pypi` | Publishes the distributions to PyPI, through trusted publishing, only when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true`. Otherwise it prints a notice and does nothing; the packages are on the release. Existing files are skipped, so it is safe to repeat. |
 
-Permissions: the workflow defaults to `contents: read`. Only `images` (`packages: write`, `id-token: write`), `release` (`contents: write`, `id-token: write`) and `pypi` (`id-token: write`) get more. It uses no secret except `GITHUB_TOKEN` and the optional `PYPI_API_TOKEN`.
+Permissions: the workflow defaults to `contents: read`. Only `images` (`packages: write`, `id-token: write`), `release` (`contents: write`, `id-token: write`) and `pypi` (`id-token: write`) get more. It uses no secret except `GITHUB_TOKEN`.
 
-### PyPI: trusted publishing is preferred
+### PyPI: trusted publishing
 
-A long-lived `PYPI_API_TOKEN` works and is what the workflow checks for. Trusted publishing needs no stored secret and is the better choice once the ten projects exist on PyPI:
+The `pypi` job publishes with trusted publishing: no token is stored. Each of the ten projects (`lorebase-core`, `lorebase-platform`, `lorebase-inference`, `lorebase-store`, `lorebase-keeper`, `lorebase-client`, `lorebase-cli`, `lorebase-herald`, `lorebase-scribe`, `lorebase-guide`) has a trusted publisher on PyPI: owner `aantenore`, repository `lorebase`, workflow `release.yaml`, environment `pypi`. The job runs in the GitHub environment `pypi` with `id-token: write`, and is enabled by the repository variable `PYPI_TRUSTED_PUBLISHING=true`. `PYPI_API_TOKEN` is no longer used; delete it if it still exists.
 
-1. On PyPI, for each project (`lorebase-core`, `lorebase-platform`, `lorebase-inference`, `lorebase-store`, `lorebase-keeper`, `lorebase-client`, `lorebase-cli`, `lorebase-herald`, `lorebase-scribe`, `lorebase-guide`), add a trusted publisher: owner `aantenore`, repository `lorebase`, workflow `release.yaml`, environment `pypi`. For projects that do not exist yet, add a pending publisher with the same values.
-2. In `release.yaml`, remove the `password:` line of the publish step and change the guard of the `pypi` job from the secret to a repository variable (for example `vars.PYPI_TRUSTED_PUBLISHING == 'true'`). The job already has `id-token: write` and `environment: pypi`.
-3. Delete the `PYPI_API_TOKEN` secret.
-
-The first upload of a name cannot use a project-scoped token (the project does not exist), so a first release by token needs an account-scoped token that is replaced by trusted publishing right after.
+For a new project name, add a pending publisher with the same values before the first release.
 
 ## Verify a release
 
