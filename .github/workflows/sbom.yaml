@@ -5,6 +5,12 @@ name: SBOM
 # artifacts (sbom-python and sbom-web).
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build the SBOMs from (default, the ref of the run)
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -22,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -50,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
           sparse-checkout: apps/web
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
