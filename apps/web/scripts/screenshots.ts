@@ -80,7 +80,7 @@ const CONFIG = {
   outputDir: resolve(import.meta.dirname, '../../../docs/images'),
   /** CSV files the "Start from data" shot uploads: the demo Domain of examples/supply. */
   sampleDataDir: resolve(import.meta.dirname, '../../../examples/supply/data'),
-  /** Sample file the Source preview shot reads: columns of the mock Source erp.vendors. */
+  /** Sample files the Source preview shot reads: columns of the mock Source erp.vendors (vendors.csv) and of the demo Source approved.suppliers (suppliers.csv). */
   sourceSampleDir: resolve(import.meta.dirname, 'screenshot-data'),
   buildDir: resolve(import.meta.dirname, '../node_modules/.cache/screenshots-dist'),
   /** Live builds bake in other variables, so they get their own folder. */
@@ -431,7 +431,7 @@ const DEMO_SHOTS = (domain: string, ids: DemoIds): Shot[] => [
     ready: '.cm-content',
     steps: [
       { click: '[role=tab]:has-text("Sources")' },
-      { upload: 'input[type=file]', files: ['vendors.csv'], from: 'sourceSample' },
+      { upload: 'input[type=file]', files: ['suppliers.csv'], from: 'sourceSample' },
       { waitFor: 'table[aria-label^="Sample rows"]' },
       { scrollToTop: 'table[aria-label^="Sample rows"]', offset: 260 },
       { wait: 300 },
