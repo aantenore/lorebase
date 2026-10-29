@@ -15,7 +15,7 @@ grants narrowed to Kinds show the candidates of those Kinds only; claim values, 
 quotes and decided values are masked by clearance (`services.reconciliation`). Decisions need
 `conflict.resolve` on the candidate's branch, plus what the write itself needs: `update_{kind}`
 needs `operation.execute`, a write needing review `branch.create` and `proposal.create` on
-`reconcile/{candidate}`. Every decision is in the audit log (`reconciliation.resolve`,
+`reconcile/{candidate}-{random}`. Every decision is in the audit log (`reconciliation.resolve`,
 `reconciliation.dismiss`, `reconciliation.reopen`), written with the decision.
 """
 
@@ -533,8 +533,8 @@ async def resolve_candidate(
     guard: DataRead,
 ) -> ReconciliationDecisionOut:
     """Decide a candidate: the value is written by `update_{kind}` on its branch (proposed
-    from `reconcile/{candidate}` when the branch needs review); `keep_current` writes nothing.
-    `dry_run` reports the edits without deciding."""
+    from a new branch `reconcile/{candidate}-{random}` when the branch needs review);
+    `keep_current` writes nothing. `dry_run` reports the edits without deciding."""
     ctx = _context(request, store, domain_id, principal, auth, keeper)
     await _decidable(request, auth, principal, guard, ctx, candidate_id)
     try:

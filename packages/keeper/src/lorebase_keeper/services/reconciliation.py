@@ -16,14 +16,15 @@ Choices of a resolution:
   current or the other claim of a two-claim candidate;
 - `merge` (duplicates only): the surviving Record, the values to set on it, the Links of the
   absorbed Record re-created on it and the absorbed Record deleted, on branch
-  `reconcile/{candidate}`, proposed into the candidate's branch.
+  `reconcile/{candidate}-{random}`, proposed into the candidate's branch.
 
 A value is written by the Kind's built-in `update_{kind}` through the Operation pipeline on
 the candidate's branch, so authorization, validation and branch protection apply unchanged;
 its provenance entry has a `reconciliation` origin (and the chosen claim's period on a
 `valid_time` Attribute). The decision is recorded and audited in the transaction of the
-write. When the write needs review (protected branch), it is made on branch
-`reconcile/{candidate}` and proposed instead: the candidate stays open, linked to the Proposal,
+write. When the write needs review (protected branch), it is made on a new branch
+`reconcile/{candidate}-{random}` (never one that exists, each write expecting the head the
+previous one left) and proposed instead: the candidate stays open, linked to that Proposal,
 until the merge resolves it (`reconciliation_settle`). `keep_current`, a claim equal to the
 current value, dismissals and reopenings write no Revision; they are recorded on the candidate
 and in the audit log. Every decision needs a reason.
@@ -36,6 +37,7 @@ masked.
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -81,20 +83,20 @@ from lorebase_keeper.services.reconciliation_settle import (
     audit,
 )
 from lorebase_keeper.settings import KeeperSettings
-from lorebase_store.models.enums import ProposalOrigin, ProposalStatus
+from lorebase_store.models.enums import ProposalOrigin
 from lorebase_store.reads import head_schema, links_of_record
 from lorebase_store.repositories import (
     CandidateRow,
     CandidateStateError,
     MaterializedRepository,
-    ProposalFilter,
-    ProposalRepository,
     ReconciliationCandidateRepository,
     wrap_decision,
 )
 
 BRANCH_PREFIX = "reconcile"
-"""Branches of decisions that need review: `reconcile/{candidate}`."""
+"""Branches of decisions that need review: `reconcile/{candidate}-{random}`."""
+BRANCH_TOKEN_BYTES = 8
+BRANCH_MOVED = ProblemType("reconciliation-branch-moved", 409, "Decision branch moved")
 CANDIDATE_NOT_OPEN = ProblemType("candidate-not-open", 409, "Candidate is not open")
 SENSITIVE_KEY = "$sensitive"
 VAULT_KEY = "$vault"
@@ -192,7 +194,8 @@ def not_open(error: CandidateStateError) -> ProblemError:
 
 
 def branch_of(candidate_id: str) -> str:
-    return f"{BRANCH_PREFIX}/{candidate_id}"
+    """A fresh, unguessable branch name for one decision on `candidate_id`."""
+    return f"{BRANCH_PREFIX}/{candidate_id}-{secrets.token_hex(BRANCH_TOKEN_BYTES)}"
 
 
 def raw_value(stored: Any) -> Any:
@@ -700,48 +703,29 @@ async def _write(
     )
 
 
-async def _open_branch(ctx: Context, candidate: CandidateRow) -> str:
-    """`reconcile/{candidate}` from the candidate's branch, created when missing."""
+async def _open_branch(ctx: Context, candidate: CandidateRow) -> tuple[str, bytes]:
+    """A new branch `reconcile/{candidate}-{random}` from the candidate's branch, and its head.
+    The name is fresh for every decision: a branch someone prepared is never reused."""
     name = branch_of(candidate.id)
     await ctx.check(Permission.PROPOSAL_CREATE, AccessContext(branch=name))
-    async with ctx.store.sessions() as session, session.begin():
-        await require_domain(session, ctx.domain_id)
-        try:
-            await require_branch(session, ctx.domain_id, name)
-            return name
-        except ProblemError as error:
-            if error.status_code != 404:
-                raise
     await ctx.check(Permission.BRANCH_CREATE, AccessContext(branch=name))
-    try:
-        await branches.create(
-            ctx.store,
-            ctx.domain_id,
-            name,
-            ctx.principal,
-            ctx.keeper.branches,
-            source=candidate.branch,
-            revision=None,
-            idempotency_key=None,
-        )
-    except ProblemError as error:
-        if error.problem is not ALREADY_EXISTS:
-            raise
-    return name
+    created = await branches.create(
+        ctx.store,
+        ctx.domain_id,
+        name,
+        ctx.principal,
+        ctx.keeper.branches,
+        source=candidate.branch,
+        revision=None,
+        idempotency_key=None,
+    )
+    if created.replayed:
+        raise ProblemError(ALREADY_EXISTS, f"Branch {name!r} exists already.")
+    return name, created.ref.head
 
 
 async def _proposal_into(ctx: Context, candidate: CandidateRow, name: str, title: str) -> str:
-    """The open Proposal of `name` into the candidate's branch, created when missing."""
-    async with ctx.store.sessions() as session, session.begin():
-        await require_domain(session, ctx.domain_id)
-        found = await ProposalRepository(session, ctx.domain_id).page(
-            ProposalFilter(
-                status=ProposalStatus.OPEN, source_ref=name, target_ref=candidate.branch
-            ),
-            limit=1,
-        )
-    if found:
-        return found[0].id
+    """A new Proposal of `name` into the candidate's branch."""
     created = await proposals.create(
         ctx.store,
         ctx.domain_id,
@@ -757,6 +741,8 @@ async def _proposal_into(ctx: Context, candidate: CandidateRow, name: str, title
         idempotency_key=None,
         reconciliation_check=ctx.keeper.reconciliation.merge_check,
     )
+    if created.replayed:
+        raise ProblemError(ALREADY_EXISTS, f"A Proposal of {name!r} exists already.")
     return created.view.proposal.id
 
 
@@ -770,8 +756,9 @@ async def _propose(
     *,
     title: str | None = None,
 ) -> DecisionOutcome:
-    """Run `requests` on `reconcile/{candidate}` and propose it into the candidate's branch;
-    the candidate stays open, linked to the Proposal, with the decision pending."""
+    """Run `requests` on a new branch `reconcile/{candidate}-{random}` and propose it into the
+    candidate's branch; the candidate stays open, linked to the Proposal, with the decision
+    pending (branch, base and head recorded)."""
     if decision.dry_run:
         edits: list[dict[str, Any]] = []
         for request in requests:
@@ -792,26 +779,38 @@ async def _propose(
             Outcome.DRY_RUN,
             candidate,
             claim_id=record.get("claim_id"),
-            branch=branch_of(candidate.id),
             edits=edits,
         )
-    name = await _open_branch(ctx, candidate)
+    name, base = await _open_branch(ctx, candidate)
+    head = base
     revisions: list[str] = []
     edits = []
     for request in requests:
+        # Each write expects the head the previous one left: nothing else lands on the branch.
         executed = await operations_service.execute(
             ctx.store,
             ctx.domain_id,
-            _on(request, name, dry_run=False),
+            _on(request, name, dry_run=False, expected_head=head),
             ctx.principal,
             ctx.keeper.operations,
             check=ctx.check,
             proposals_path=ctx.proposals_path,
             reveal=ctx.reveal,
         )
+        head = executed.head if not executed.revisions else executed.revisions[-1]
         revisions.extend(hex(r) for r in executed.revisions)
         edits.extend(executed.edits)
+    async with ctx.store.sessions() as session, session.begin():
+        await require_domain(session, ctx.domain_id)
+        current = await require_branch(session, ctx.domain_id, name)
+    if current.head != head:
+        raise ProblemError(
+            BRANCH_MOVED,
+            f"Branch {name!r} moved while the decision was written; decide again.",
+            extensions={"branch": name},
+        )
     proposal_id = await _proposal_into(ctx, candidate, name, title or f"Reconcile {candidate.id}")
+    record = {**record, "branch": name, "base": hex(base), "head": hex(head)}
     at = _now(ctx.store)
     async with ctx.store.sessions() as session, session.begin():
         await require_domain(session, ctx.domain_id)
@@ -854,12 +853,15 @@ async def _propose(
     )
 
 
-def _on(request: ExecutionRequest, branch: str, *, dry_run: bool) -> ExecutionRequest:
+def _on(
+    request: ExecutionRequest, branch: str, *, dry_run: bool, expected_head: bytes | None = None
+) -> ExecutionRequest:
     return ExecutionRequest(
         operation=request.operation,
         parameters=request.parameters,
         branch=branch,
         dry_run=dry_run,
+        expected_head=expected_head,
         message=request.message,
         reviewed_by_proposal=True,
         reconciliation=request.reconciliation,

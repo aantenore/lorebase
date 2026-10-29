@@ -42,9 +42,11 @@ async def refresh_proposal(
     *,
     documents: Sequence[str],
     policy: MergePolicy | None = None,
+    reconciliation_check: str | None = None,
 ) -> tuple[ProposalRow, AttemptResult | None]:
     """Rewrite the Proposal's title, description and `extraction` check from its items, then
-    recompute the merge preview when the Proposal is open."""
+    recompute the merge preview when the Proposal is open (`reconciliation_check`: the
+    installation's mode of that check, `MergeRequest`)."""
     summary = summarize(items, schema)
     title, description = proposal_text(summary, documents)
     checks = dict(proposal.checks or {})
@@ -58,7 +60,12 @@ async def refresh_proposal(
         return updated, None
     service = MergeService(session, context.domain_id, runtime=context.runtime, clock=context.clock)
     result = await service.recompute(
-        MergeRequest(proposal=updated, actor=context.actor, policy=policy or MergePolicy())
+        MergeRequest(
+            proposal=updated,
+            actor=context.actor,
+            policy=policy or MergePolicy(),
+            reconciliation_check=reconciliation_check,
+        )
     )
     final = await proposals.get(proposal.id)
     assert final is not None

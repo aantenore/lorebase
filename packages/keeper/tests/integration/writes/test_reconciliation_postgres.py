@@ -239,7 +239,12 @@ async def test_reconciliation_queue_end_to_end(
         )
         assert audited == 5  # resolve, resolve, dismiss, reopen, dismiss
 
-        # On the protected default branch the write is proposed; the merge resolves it.
+        # On the protected default branch the write is proposed, from a branch of its own
+        # (one prepared under a predictable name is never reused); the merge resolves it.
+        prepared = await http.post(
+            f"{DOMAIN}/branches", json={"name": f"reconcile/{on_main}"}, headers=admin
+        )
+        assert prepared.status_code == 201, prepared.text
         proposed = await http.post(
             f"{QUEUE}/{on_main}/resolution",
             json={"choice": "claim", "claim_id": "prv_j", "reason": "confirmed by phone"},
@@ -248,10 +253,14 @@ async def test_reconciliation_queue_end_to_end(
         assert proposed.status_code == 200, proposed.text
         body = proposed.json()
         assert body["status"] == "proposed"
-        assert body["branch"] == f"reconcile/{on_main}"
+        assert body["branch"].startswith(f"reconcile/{on_main}-")
         assert body["candidate"]["status"] == "open"
+        pending = body["candidate"]["decision"]
+        assert (pending["pending"], pending["branch"]) == (True, body["branch"])
+        assert pending["head"] == body["revision"]
         proposal = body["proposal"]
         detail = (await http.get(f"{PROPOSALS}/{proposal}", headers=admin)).json()
+        assert detail["source_ref"] == body["branch"]
         check = next(c for c in detail["checks"] if c["name"] == "reconciliation")
         assert check["status"] == "passed"
         approved = await http.post(
@@ -339,7 +348,8 @@ async def test_duplicates_merge_through_a_proposal(
         )
         assert merged.status_code == 200, merged.text
         body = merged.json()
-        assert (body["status"], body["branch"]) == ("proposed", f"reconcile/{candidate}")
+        assert body["status"] == "proposed"
+        assert body["branch"].startswith(f"reconcile/{candidate}-")
         assert body["candidate"]["decision"]["survivor"] == survivor
         done = await http.post(f"{PROPOSALS}/{body['proposal']}/merge", headers=maintainer)
         assert done.status_code == 200, done.text

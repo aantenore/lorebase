@@ -1100,6 +1100,9 @@ class ExtractionRun:
                 outcome,
                 documents=[d.filename for d in documents],
                 policy=policy,
+                reconciliation_check=None
+                if self._reconciliation is None
+                else self._reconciliation.merge_check,
             )
             await ExtractionJobRepository(session, domain.id).update(
                 report.job_id, proposal_id=proposal.id
