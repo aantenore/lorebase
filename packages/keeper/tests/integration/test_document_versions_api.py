@@ -9,9 +9,17 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from lorebase_inference import InferenceSettings
+from lorebase_scribe.extraction.pipeline import DocumentRetiredError, ExtractionRun
+from lorebase_scribe.extraction.settings import ExtractionSettings
+from lorebase_store.db import create_engine
+from lorebase_store.runtime import StoreRuntime
+from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 from .read_fixtures import Seeded, keeper, owner_session, seeded_database
-from .supply import DOMAIN
+from .supply import DOMAIN, Clock
 from .test_documents_api import BASE, REVIEW, extract, seed, upload
 
 pytestmark = pytest.mark.integration
@@ -167,3 +175,71 @@ async def test_retire_and_purge(seeded: Seeded) -> None:
         i=document_id,
     )
     assert blobs == 0
+
+
+async def test_purge_stops_a_running_extraction(
+    seeded: Seeded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A purge landing while a job runs (text and chunks stored, items not yet) leaves no text,
+    chunks or items behind: the job stops at its next write and is cancelled."""
+    note = REVIEW.read_text(encoding="utf-8") + "\n\nPurged while extracting.\n"
+    async with keeper(seeded.app_url) as http:
+        uploaded = await http.post(
+            f"{BASE}/documents",
+            files={"file": ("purge-race.md", note.encode())},
+            data={"extract": "false"},
+        )
+        document_id = uploaded.json()["document"]["id"]
+    purged: dict[str, Any] = {}
+    original = ExtractionRun._current
+
+    async def purge_then_continue(self: ExtractionRun, *args: Any, **kwargs: Any) -> Any:
+        assert await scalar(
+            seeded, "SELECT count(*) FROM document_chunks WHERE document_id = :d", d=document_id
+        )
+        async with keeper(seeded.app_url) as http:
+            answer = await http.post(
+                f"{BASE}/documents/{document_id}/purge",
+                json={"reason": "GDPR", "confirm": document_id},
+            )
+        assert answer.status_code == 200, answer.text
+        purged.update(answer.json())
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ExtractionRun, "_current", purge_then_continue)
+    engine = create_engine(DatabaseSettings(), url=seeded.owner_url, statement_timeout_ms=0)
+    try:
+        run = ExtractionRun(
+            async_sessionmaker(engine, expire_on_commit=False),
+            StoreRuntime.from_settings(StoreSettings()),
+            ExtractionSettings(tiers=(0,), auto_accept_threshold=0.55),
+            InferenceSettings(),
+            principal="svc_scribe",
+            clock=Clock(),
+        )
+        with pytest.raises(DocumentRetiredError):
+            await run.run(DOMAIN, [document_id])
+    finally:
+        await engine.dispose()
+    assert purged["chunks"] > 0
+    assert purged["document"]["status"] == "purged"
+    chunks = await scalar(
+        seeded, "SELECT count(*) FROM document_chunks WHERE document_id = :d", d=document_id
+    )
+    text_hash = await scalar(seeded, "SELECT text_hash FROM documents WHERE id = :d", d=document_id)
+    items = await scalar(
+        seeded,
+        "SELECT count(*) FROM proposal_items i JOIN extraction_jobs j "
+        "ON j.domain_id = i.domain_id AND j.id = i.job_id WHERE j.documents ? :d",
+        d=document_id,
+    )
+    status = await scalar(
+        seeded, "SELECT status::text FROM extraction_jobs WHERE documents ? :d", d=document_id
+    )
+    audited = await scalar(
+        seeded,
+        "SELECT details->>'jobs_cancelled' FROM audit_log WHERE action = 'document.purge' "
+        "AND target = :t",
+        t=document_id,
+    )
+    assert (chunks, text_hash, items, status, audited) == (0, None, 0, "cancelled", "1")

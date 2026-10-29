@@ -24,6 +24,7 @@ A reconciliation queue for contradictions between Sources, corrections that surv
 - Python client `client.reconciliation` (sync and async) and CLI `lorebase reconcile list|show|resolve|dismiss|reopen`.
 - Web app: a Reconciliation screen (`/{domain}/reconcile`) with a tab and count per type, filters by status, Kind, Attribute, source and signal, the claims of a candidate side by side with source, time, period and evidence, decisions with a preview and a required reason, duplicate merges, bulk decisions and sweeps. The Record page marks values with open candidates, the Proposal page links the candidates of its check, and the Source editor names the validity columns of `valid_time` Attributes. New settings `VITE_RECONCILIATION_PAGE_SIZE` and `VITE_RECONCILIATION_COUNT_LIMIT` ([tour](docs/tour.md#reconciliation)).
 - Metrics `lorebase.scribe.reconciliation.candidates`, `lorebase.scribe.reconciliation.sweep.duration` and `lorebase.scribe.reconciliation.open` ([metrics](docs/metrics.md)).
+- A purge no longer races a running extraction job of the same document: the purge and every write of the job (text, chunks, items, candidates, suggestions) lock the document row, the job stops (`cancelled`) when the document was retired or purged meanwhile, the purge cancels the queued and running extraction jobs of the document (`jobs_cancelled` in its audit entry), and a model answer is cached only while its chunk is stored.
 
 ### Changed
 

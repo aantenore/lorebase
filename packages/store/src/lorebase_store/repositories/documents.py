@@ -361,6 +361,23 @@ class DocumentRepository:
     async def get(self, document_id: str) -> DocumentRow | None:
         return await self._one(DOCUMENTS.c.id == document_id)
 
+    async def lock(self, document_id: str) -> DocumentRow | None:
+        """The document, its row locked until the end of the transaction (`FOR UPDATE`).
+        Extraction writes, retirement and purge take this lock, so a purge never interleaves
+        with a job writing the document's text, chunks or items."""
+        found = (
+            (
+                await self._session.execute(
+                    select(DOCUMENTS)
+                    .where(DOCUMENTS.c.domain_id == self._domain, DOCUMENTS.c.id == document_id)
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if found is None else _document(found)
+
     async def by_sha256(self, sha256: bytes) -> DocumentRow | None:
         """The keyless document holding these bytes (purged ones aside)."""
         return await self._one(
@@ -394,13 +411,22 @@ class DocumentRepository:
 
     async def set_text(
         self, document_id: str, *, text_hash: bytes, metadata: dict[str, Any]
-    ) -> None:
-        """Record the hash of the parsed text and merge `metadata` into the stored one."""
-        await self._session.execute(
-            update(DOCUMENTS)
-            .where(DOCUMENTS.c.domain_id == self._domain, DOCUMENTS.c.id == document_id)
-            .values(text_hash=text_hash, metadata=DOCUMENTS.c.metadata.op("||")(metadata))
-        )
+    ) -> bool:
+        """Record the hash of the parsed text and merge `metadata` into the stored one; a
+        retired or purged document is left as it is (`False`)."""
+        found = (
+            await self._session.execute(
+                update(DOCUMENTS)
+                .where(
+                    DOCUMENTS.c.domain_id == self._domain,
+                    DOCUMENTS.c.id == document_id,
+                    DOCUMENTS.c.status.not_in(NOT_EXTRACTED),
+                )
+                .values(text_hash=text_hash, metadata=DOCUMENTS.c.metadata.op("||")(metadata))
+                .returning(DOCUMENTS.c.id)
+            )
+        ).scalar_one_or_none()
+        return found is not None
 
 
 class ChunkRepository:
@@ -410,8 +436,23 @@ class ChunkRepository:
         self._session = session
         self._domain = domain_id
 
-    async def replace(self, document_id: str, chunks: Sequence[ChunkRow]) -> None:
-        """Store `chunks` as the chunks of the document, dropping the previous ones."""
+    async def replace(self, document_id: str, chunks: Sequence[ChunkRow]) -> bool:
+        """Store `chunks` as the chunks of the document, dropping the previous ones; nothing is
+        written for a retired or purged document (`False`). The document row is share-locked,
+        so a purge waits for this transaction."""
+        extractable = (
+            await self._session.execute(
+                select(DOCUMENTS.c.id)
+                .where(
+                    DOCUMENTS.c.domain_id == self._domain,
+                    DOCUMENTS.c.id == document_id,
+                    DOCUMENTS.c.status.not_in(NOT_EXTRACTED),
+                )
+                .with_for_update(read=True)
+            )
+        ).scalar_one_or_none()
+        if extractable is None:
+            return False
         await self._session.execute(
             delete(CHUNKS).where(
                 CHUNKS.c.domain_id == self._domain, CHUNKS.c.document_id == document_id
@@ -433,6 +474,21 @@ class ChunkRepository:
                     for chunk in chunks
                 ],
             )
+        return True
+
+    async def held(self, chunk_hash: bytes) -> bool:
+        """Whether a chunk with this hash is stored in the Domain, share-locking it, so a
+        purge deleting it waits for the caller's transaction (or runs first and leaves
+        nothing to find)."""
+        found = (
+            await self._session.execute(
+                select(CHUNKS.c.seq)
+                .where(CHUNKS.c.domain_id == self._domain, CHUNKS.c.chunk_hash == chunk_hash)
+                .limit(1)
+                .with_for_update(read=True)
+            )
+        ).scalar_one_or_none()
+        return found is not None
 
     async def of(self, document_id: str) -> list[ChunkRow]:
         result = await self._session.execute(
@@ -495,6 +551,21 @@ class ExtractionJobRepository:
             .where(EXTRACTION_JOBS.c.domain_id == self._domain, EXTRACTION_JOBS.c.id == job_id)
             .values(**values)
         )
+
+    async def cancel_of_document(self, document_id: str, *, at: datetime) -> list[str]:
+        """Mark the queued and running jobs that read the document `cancelled`; their ids."""
+        table = EXTRACTION_JOBS
+        result = await self._session.execute(
+            update(table)
+            .where(
+                table.c.domain_id == self._domain,
+                table.c.documents.contains([document_id]),
+                table.c.status.in_([RunStatus.QUEUED, RunStatus.RUNNING]),
+            )
+            .values(status=RunStatus.CANCELLED, finished_at=at)
+            .returning(table.c.id)
+        )
+        return sorted(str(i) for i in result.scalars())
 
     async def of_document(self, document_id: str, *, limit: int) -> list[ExtractionJobRow]:
         """Jobs that read the document, newest first."""

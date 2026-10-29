@@ -205,8 +205,12 @@ the erasure of a document, irreversible:
 - provenance rows stay (job, document id, offsets): Lineage still says a value came from the
   document, and reads `[erased]` for its quote. Values are not changed: retract them through
   the reconciliation queue or an Operation;
-- the purge and its audit entry (`document.purge`: reason, counts, hashes; never content)
-  commit together; purging again erases nothing.
+- the queued and running extraction jobs of the document are cancelled. The purge locks the
+  document row, and a running job locks it again before each write of text, chunks, items,
+  candidates or suggestions, so a job that was running stops at its next write (`cancelled`)
+  instead of writing content back; a model answer is cached only while its chunk is stored;
+- the purge and its audit entry (`document.purge`: reason, counts, hashes, `jobs_cancelled`;
+  never content) commit together; purging again erases nothing.
 
 What a purge does not reach: values written into Records (they are Revisions), Revisions of
 extraction branches, answers cached before migration `0041` (they hold no chunk hash: delete
