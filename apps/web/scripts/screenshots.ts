@@ -26,7 +26,7 @@
  * `--only documents,review-items` takes just the named pictures.
  *
  * `pnpm screenshots flow` records a short walk through the app instead (Explorer, Canvas, the
- * Modeler Source mapping and its preview, the Review resolver) and writes docs/images/tour.gif. It encodes the video with ffmpeg when it is
+ * Modeler Source mapping and its preview, the Review resolver, the Reconciliation queue) and writes docs/images/tour.gif. It encodes the video with ffmpeg when it is
  * installed, otherwise it stitches PNG frames with Pillow (`uv run --with pillow`).
  */
 import { spawnSync } from 'node:child_process';
@@ -277,6 +277,27 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
       { wait: 400 },
       { scrollToTop: '[role=tablist]', offset: 80 },
     ],
+  },
+  {
+    name: 'reconcile-queue',
+    path: `/${domain}/reconcile?candidate=rcn_risk_s1025`,
+    ready: 'article[aria-label="Claim 1"]',
+    steps: [{ wait: 400 }],
+  },
+  {
+    // A text contradiction: claims with their evidence, marked against the current value.
+    name: 'reconcile-contradiction',
+    path: `/${domain}/reconcile?candidate=rcn_note_trn`,
+    ready: 'article[aria-label="Claim 1"]',
+    steps: [{ wait: 400 }],
+    height: 1100,
+  },
+  {
+    name: 'reconcile-duplicate',
+    path: `/${domain}/reconcile?type=duplicate&candidate=rcn_dup_pl14_pl15`,
+    ready: '[aria-label="Merge into one Record"]',
+    steps: [{ wait: 400 }, { scrollToTop: '[aria-label^="Candidate "]', offset: 80 }],
+    height: 1100,
   },
   {
     name: 'settings',
@@ -651,7 +672,9 @@ async function capture(browser: Browser, origin: string, shot: Shot): Promise<st
 
 /**
  * The scripted walk behind docs/images/tour.gif: Explorer, a Record, the Canvas, the Source
- * mapping and its sample preview in the Modeler, and the Review resolver on Proposal 41. Every step reads like a user action; waits let the picture settle.
+ * mapping and its sample preview in the Modeler, the Review resolver on Proposal 41 and a
+ * contradiction in the Reconciliation queue. Every step reads like a user action; waits let the
+ * picture settle.
  */
 const FLOW = {
   start: `/${MOCK_DOMAIN}/explorer`,
@@ -697,6 +720,12 @@ const FLOW = {
     { wait: 900 },
     { click: 'button:has-text("Save resolution")' },
     { wait: 2200 },
+    { click: '[aria-label="Main"] >> text=Reconciliation' },
+    { waitFor: 'ul[aria-label="Candidates"] li' },
+    { wait: 1000 },
+    { click: 'ul[aria-label="Candidates"] >> text=Plant TRN' },
+    { waitFor: 'article[aria-label="Claim 1"]' },
+    { wait: 2400 },
   ] as Step[],
 };
 
