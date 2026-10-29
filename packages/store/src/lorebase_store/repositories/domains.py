@@ -76,9 +76,13 @@ class DomainRepository:
         *,
         display_name: str | None = None,
         description: str | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> DomainRow | None:
-        """Change display metadata; `None` leaves a field as it is. Returns the updated row."""
+        """Change display metadata or replace the settings; `None` leaves a field as it is.
+        Returns the updated row."""
         values: dict[str, Any] = {}
+        if settings is not None:
+            values["settings"] = settings
         if display_name is not None:
             values["display_name"] = display_name
         if description is not None:

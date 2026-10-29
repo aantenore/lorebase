@@ -9,7 +9,7 @@ import typer
 from lorebase_cli.commands.data import json_argument
 from lorebase_cli.context import AppContext, app_of
 from lorebase_cli.failures import CliError
-from lorebase_cli.options import AllOpt, DomainOpt, JsonOpt, LimitOpt
+from lorebase_cli.options import AllOpt, DomainOpt, JsonOpt, LimitOpt, MineOpt
 from lorebase_cli.output import Column, short_id
 from lorebase_client import models as m
 
@@ -26,6 +26,8 @@ PROPOSAL_COLUMNS = [
     Column("target", "target_ref"),
     Column("status", "status"),
     Column("author", "author"),
+    Column("stewards", "steward_roles"),
+    Column("assignees", "assignees"),
     Column("created", "created_at"),
 ]
 CONFLICT_COLUMNS = [
@@ -111,6 +113,7 @@ def proposal_list(
     author: Annotated[
         str | None, typer.Option("--author", help="Only Proposals by this principal.")
     ] = None,
+    mine: MineOpt = False,
     domain: DomainOpt = None,
     limit: LimitOpt = None,
     everything: AllOpt = False,
@@ -125,6 +128,7 @@ def proposal_list(
             source=source,
             target=target,
             author=author,
+            assigned="me" if mine else None,
         ),
         limit,
         everything,

@@ -752,7 +752,11 @@ export interface ExecuteOperationResponse {
 
 // ---------------------------------------------------------------- Proposals
 
+/** Narrows a list to the items assigned to the caller (`me`), to somebody (`any`) or to nobody. */
+export type AssignedFilter = 'me' | 'any' | 'none';
+
 export interface ProposalListParams extends PageParams {
+  assigned?: AssignedFilter;
   status?: ProposalStatus;
   origin?: ProposalOrigin;
 }

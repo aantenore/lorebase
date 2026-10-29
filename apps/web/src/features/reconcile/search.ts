@@ -30,6 +30,8 @@ export interface ReconcileSearch {
   attribute?: string | undefined;
   source?: string | undefined;
   signal?: string | undefined;
+  /** Only the candidates the caller can decide as steward (`assigned=me`). */
+  mine?: true | undefined;
   /** Id of the candidate on screen. */
   candidate?: string | undefined;
 }
@@ -49,6 +51,7 @@ export function validateReconcileSearch(raw: Record<string, unknown>): Reconcile
     attribute: kind === undefined ? undefined : readText(raw['attribute']),
     source: readText(raw['source']),
     signal: readText(raw['signal']),
+    mine: raw['mine'] === true || raw['mine'] === 'true' ? true : undefined,
     candidate: readText(raw['candidate']),
   };
 }

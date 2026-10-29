@@ -90,4 +90,33 @@ describe('Settings', () => {
       'No credential. Set the API token in Settings.',
     );
   });
+
+  it('shows the ingestion mode and the settings that are ignored', async () => {
+    const mock = sampleApi();
+    const withSettings = (domain: Awaited<ReturnType<typeof mock.domains.get>>) => ({
+      ...domain,
+      settings: { ...domain.settings, extraction: { mode: 'doubts_only' } },
+      ignored_settings: ['extraction.auto_accept_threshold'],
+    });
+    const api = {
+      ...mock,
+      domains: {
+        ...mock.domains,
+        get: async (...args: Parameters<typeof mock.domains.get>) =>
+          withSettings(await mock.domains.get(...args)),
+      },
+    };
+    renderApp('/supply/settings', testConfig(), api);
+    const domain = await screen.findByRole('table', { name: 'Domain settings' });
+    expect(within(domain).getByText('Review doubts only')).toBeInTheDocument();
+    const ignored = screen.getByRole('group', { name: 'Ignored settings' });
+    expect(within(ignored).getByText('extraction.auto_accept_threshold')).toBeInTheDocument();
+  });
+
+  it('falls back to the installation default ingestion mode and lists nothing ignored', async () => {
+    renderApp('/supply/settings');
+    const domain = await screen.findByRole('table', { name: 'Domain settings' });
+    expect(within(domain).getByText('Installation default')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Ignored settings' })).not.toBeInTheDocument();
+  });
 });

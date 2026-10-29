@@ -438,6 +438,7 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
         get<Page<Proposal>>(`${d(domain)}/proposals`, {
           status: params?.status,
           origin: params?.origin,
+          assigned: params?.assigned,
           ...pageParams(params),
         }),
       create: (domain, input) => create<ProposalDetail>(`${d(domain)}/proposals`, input),

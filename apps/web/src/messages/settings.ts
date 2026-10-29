@@ -25,6 +25,16 @@ export const settings = {
     createdBy: 'Created by',
     searchLanguage: 'Search language',
     defaultLanguage: 'default',
+    ingestionMode: 'Ingestion mode',
+    installationDefault: 'Installation default',
+    modes: {
+      review_all: 'Review all',
+      doubts_only: 'Review doubts only',
+      direct: 'Direct merge',
+    },
+    ignoredExplanation:
+      'These Domain settings are set but do not apply: they are invalid, or loosen a limit the installation does not let Domains loosen.',
+    ignoredLabel: 'Ignored settings',
   },
   runtime: {
     title: 'Runtime configuration',

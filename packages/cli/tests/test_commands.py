@@ -1944,6 +1944,8 @@ def test_proposal_list_filters_and_renders(http: respx.MockRouter) -> None:
         "target",
         "status",
         "author",
+        "stewards",
+        "assignees",
         "created",
     ]
     assert "prp_2" in result.stdout
@@ -1956,6 +1958,10 @@ def test_proposal_list_filters_and_renders(http: respx.MockRouter) -> None:
     )
     as_json = json.loads(run("proposal", "list", "-d", "supply", "-n", "1", "--json").stdout)
     assert [p["id"] for p in as_json] == ["prp_1"]
+    assert "assigned" not in params
+    mine = run("proposal", "list", "--mine", "-d", "supply")
+    assert mine.exit_code == 0, mine.output
+    assert route.calls.last.request.url.params["assigned"] == "me"
 
 
 def test_proposal_get_shows_review_state(http: respx.MockRouter) -> None:
@@ -2524,6 +2530,10 @@ def test_reconcile_list_and_show(http: respx.MockRouter) -> None:
         "attribute": "city",
         "source": "source:src_1",
     }
+    assert "assigned" not in params
+    mine = run("reconcile", "list", "--mine", "-d", "supply")
+    assert mine.exit_code == 0, mine.output
+    assert listing.calls.last.request.url.params["assigned"] == "me"
     shown = run("reconcile", "show", "rcc_1", "-d", "supply")
     assert shown.exit_code == 0, shown.output
     assert "Turin" in shown.stdout

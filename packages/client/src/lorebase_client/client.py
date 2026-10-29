@@ -246,9 +246,14 @@ class Domains(_Resource):
         return self._c.send(ep.get_domain(id))
 
     def update(
-        self, id: str, *, display_name: str | None = None, description: str | None = None
+        self,
+        id: str,
+        *,
+        display_name: str | None = None,
+        description: str | None = None,
+        settings: JsonObject | None = None,
     ) -> m.Domain:
-        body = m.DomainUpdate(display_name=display_name, description=description)
+        body = m.DomainUpdate(display_name=display_name, description=description, settings=settings)
         return self._c.send(ep.update_domain(id, body))
 
     def delete(self, id: str, *, confirm: str) -> None:
@@ -1196,6 +1201,7 @@ class Proposals(_Resource):
         source: str | None = None,
         target: str | None = None,
         author: str | None = None,
+        assigned: m.AssignedFilter | None = None,
         limit: int | None = None,
         cursor: str | None = None,
     ) -> m.Page[m.Proposal]:
@@ -1207,6 +1213,7 @@ class Proposals(_Resource):
                 source=source,
                 target=target,
                 author=author,
+                assigned=assigned,
                 limit=limit,
                 cursor=cursor,
             )
@@ -1221,6 +1228,7 @@ class Proposals(_Resource):
         source: str | None = None,
         target: str | None = None,
         author: str | None = None,
+        assigned: m.AssignedFilter | None = None,
         page_size: int | None = None,
     ) -> Iterator[m.Proposal]:
         call = ep.list_proposals(
@@ -1230,6 +1238,7 @@ class Proposals(_Resource):
             source=source,
             target=target,
             author=author,
+            assigned=assigned,
             limit=page_size,
         )
         return self._c.iterate(call)
@@ -1529,6 +1538,7 @@ class Reconciliation(_Resource):
         kind: str | None = None,
         attribute: str | None = None,
         source: str | None = None,
+        assigned: m.AssignedFilter | None = None,
         limit: int | None = None,
         cursor: str | None = None,
     ) -> m.Page[m.ReconciliationCandidate]:
@@ -1545,6 +1555,7 @@ class Reconciliation(_Resource):
                 kind=kind,
                 attribute=attribute,
                 source=source,
+                assigned=assigned,
                 limit=limit,
                 cursor=cursor,
             )
@@ -1560,6 +1571,7 @@ class Reconciliation(_Resource):
         kind: str | None = None,
         attribute: str | None = None,
         source: str | None = None,
+        assigned: m.AssignedFilter | None = None,
         page_size: int | None = None,
     ) -> Iterator[m.ReconciliationCandidate]:
         call = ep.list_reconciliation(
@@ -1570,6 +1582,7 @@ class Reconciliation(_Resource):
             kind=kind,
             attribute=attribute,
             source=source,
+            assigned=assigned,
             limit=page_size,
         )
         return self._c.iterate(call)

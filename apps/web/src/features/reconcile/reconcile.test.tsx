@@ -1,5 +1,8 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { KeeperApi } from '@/api';
+import { asRemote, createMockApi } from '@/api/mock/adapter';
+import { testConfig } from '@/config/env';
 import { renderApp } from '@/test/render';
 
 const PATH = '/supply/reconcile';
@@ -151,5 +154,39 @@ describe('Reconciliation', () => {
       'href',
       expect.stringContaining('/supply/reconcile?candidate=rcn_risk_s1025'),
     );
+  });
+
+  it('shows steward roles and assignees and filters to the candidates assigned to me', async () => {
+    const mock = asRemote(createMockApi({ pageSize: 50, searchLimit: 20, maxNodes: 200 }), 0);
+    const assigned: (string | undefined)[] = [];
+    const api: KeeperApi = {
+      ...mock,
+      reconciliation: {
+        ...mock.reconciliation,
+        list: (domain, params) => {
+          assigned.push(params?.assigned);
+          return mock.reconciliation.list(domain, params);
+        },
+      },
+    };
+    const user = userEvent.setup();
+    renderApp(PATH, testConfig(), api);
+    const list = await screen.findByRole('list', { name: 'Candidates' });
+    const row = within(list)
+      .getAllByRole('listitem')
+      .find((item) => item.textContent?.includes('Supplier S-1025'));
+    expect(row).toBeDefined();
+    expect(within(row!).getByText('supplier_steward')).toBeInTheDocument();
+    expect(within(row!).getByLabelText('Assignees')).toHaveTextContent('usr_mock');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Assigned to me' }));
+    await waitFor(() => {
+      expect(assigned).toContain('me');
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole('list', { name: 'Candidates' })).getAllByRole('listitem'),
+      ).toHaveLength(1);
+    });
   });
 });

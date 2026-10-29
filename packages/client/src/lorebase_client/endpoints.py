@@ -820,6 +820,7 @@ def list_proposals(
     source: str | None = None,
     target: str | None = None,
     author: str | None = None,
+    assigned: m.AssignedFilter | None = None,
     limit: int | None = None,
     cursor: str | None = None,
 ) -> Call[m.Page[m.Proposal]]:
@@ -833,6 +834,7 @@ def list_proposals(
             "source": source,
             "target": target,
             "author": author,
+            "assigned": assigned,
             "limit": limit,
             "cursor": cursor,
         },
@@ -1165,6 +1167,7 @@ def list_reconciliation(
     kind: str | None = None,
     attribute: str | None = None,
     source: str | None = None,
+    assigned: m.AssignedFilter | None = None,
     limit: int | None = None,
     cursor: str | None = None,
 ) -> Call[m.Page[m.ReconciliationCandidate]]:
@@ -1179,6 +1182,7 @@ def list_reconciliation(
             "kind": kind,
             "attribute": attribute,
             "source": source,
+            "assigned": assigned,
             "limit": limit,
             "cursor": cursor,
         },

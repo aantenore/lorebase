@@ -97,6 +97,13 @@ class MemGroups:
         ids |= {g for g, ext in self.s.group_rows.items() if ext in set(external)}
         return sorted(ids)
 
+    async def members(self, group_ids: Collection[str]) -> dict[str, list[str]]:
+        found: dict[str, list[str]] = {}
+        for group, principal in sorted(self.s.members):
+            if group in set(group_ids):
+                found.setdefault(group, []).append(principal)
+        return found
+
     async def subject_exists(self, subject_id: str) -> bool:
         return subject_id in self.s.principal_rows or subject_id in self.s.group_rows
 

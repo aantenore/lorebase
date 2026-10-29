@@ -790,19 +790,33 @@ const autoResolved: AutoResolution[] = [
 
 type ProposalInput = Omit<
   ProposalDetail,
-  'merged_revision' | 'reviews' | 'policy' | 'approval' | 'attempt' | 'updated_at'
+  | 'merged_revision'
+  | 'reviews'
+  | 'policy'
+  | 'approval'
+  | 'attempt'
+  | 'updated_at'
+  | 'steward_roles'
+  | 'assignees'
+  | 'assignees_truncated'
 > & {
   reviews?: { reviewer: string; verdict: ReviewVerdict; comment: string; at: string }[];
-} & Partial<Pick<ProposalDetail, 'merged_revision'>>;
+} & Partial<
+    Pick<ProposalDetail, 'merged_revision' | 'steward_roles' | 'assignees' | 'assignees_truncated'>
+  >;
 
 function proposal({ reviews = [], ...detail }: ProposalInput): ProposalDetail {
   return {
     merged_revision: null,
     updated_at: null,
     policy: {},
+    steward_roles: [],
+    assignees: null,
+    assignees_truncated: false,
     approval: {
       protected: false,
       required: 0,
+      stewards_unavailable: false,
       approvals: reviews.filter((r) => r.verdict === 'approve').length,
       approvers: [],
       changes_requested: [],
@@ -831,6 +845,9 @@ function proposals(): Map<string, ProposalState> {
         status: 'open',
         author: 'usr_marco',
         created_at: '2026-10-17T10:30:00Z',
+        steward_roles: ['risk_steward'],
+        assignees: ['usr_mock', 'usr_elena'],
+        assignees_truncated: true,
         checks: [
           { name: 'Schema validation', status: 'passed' },
           {

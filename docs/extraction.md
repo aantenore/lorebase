@@ -73,6 +73,8 @@ flowchart LR
    at once, whatever its confidence: it stays pending with `"hold": "local_edit"` in its match
    (`held_local_edit` in the job stats). A reviewer may still accept it
    ([design 9.1](design.md#91-structured-sources), "Corrections that stick").
+   The Domain's [ingestion mode](#ingestion-modes) may accept nothing at once (`review_all`)
+   or let Scribe merge an all-rules job with nothing pending (`direct`).
 7. **Review** (`GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide`).
    Reviewers accept, reject or reset items, one by one with edits or in bulk by filter. After
    each decision the branch is re-materialized to hold exactly the accepted items (a rejected
@@ -334,9 +336,60 @@ Client: `client.documents.upload(..., source_key=)`, `versions`, `retire`, `purg
 --confirm ID`. The Documents screen shows the key, version and status, the versions, the open
 `stale` candidates of a document, and Retire and Purge for those who hold the permissions.
 
+## Ingestion modes
+
+How much of an extraction a person sees is a Domain choice, within bounds the installation
+sets ([design 9.2](design.md#92-unstructured-extraction), AC-36). `extraction.mode`:
+
+| Mode | Accepted at once on `extract/<job>` | Proposal merge |
+|------|-------------------------------------|----------------|
+| `review_all` | nothing | by a person |
+| `doubts_only` (default) | complete, unambiguous items at or above `auto_accept_threshold` that are not held | by a person |
+| `direct` | as `doubts_only` | by Scribe, when the conditions below hold; otherwise by a person |
+
+- **Installation.** `scribe.extraction.mode` is `doubts_only` (default) or `review_all`;
+  `direct` there is refused at startup. Without a Domain setting a job runs exactly as before.
+- **Domain.** `PATCH /api/v1/domains/{d}` with `{"settings": {"extraction": {...}}}`
+  (`domain.settings`; `null` removes it) sets `mode`, `auto_accept_threshold`,
+  `min_confidence` and `rules`. The change is audited as `domain.update` with the member's
+  values before and after. Tightening always applies (a stricter mode, a higher threshold, a
+  lower `min_confidence`); loosening below the installation's values applies only to the
+  members listed in `scribe.extraction.domain_may_loosen` (default `[mode]`, `[]` forbids
+  it). A value that does not apply is ignored on its own and listed by `GET /domains/{d}` in
+  `ignored_settings` (for example `extraction.auto_accept_threshold`). Keeper reports it with
+  the `scribe.extraction` values of its own configuration, so give both services the same file.
+- **Rules.** `rules: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}]` set
+  the members for keyed documents whose `source_key` starts with the prefix; the longest
+  prefix wins, members a rule leaves out come from the Domain, keyless documents use the
+  Domain's. A job over several documents runs at the strictest mode, the highest threshold and
+  the lowest `min_confidence` among them.
+- **Tier cap.** A `direct` job whose Proposal holds any item a model produced (tier 1 or 2,
+  whatever its decision) runs as `doubts_only` and says `mode_capped: tier`: text a model read
+  never reaches a branch without a person.
+- **Direct merge.** Scribe merges the Proposal through the normal merge only when no item is
+  pending, the target accepts it (a protected target only with
+  `scribe.extraction.direct_merge_protected`, default true), the merge has no Conflict and the
+  `reconciliation` check does not block it. It is audited as `proposal.merge` with
+  `mode: direct`, the job id and the new head. Otherwise the Proposal waits for review and the
+  job's result says why in `direct_blocked`: `tier`, `pending_items`, `protected`,
+  `reconciliation` or `conflicts` (the first that applies).
+- **Job result.** The `extraction` job records `mode` (after the cap), `mode_capped`,
+  `direct_blocked`, `direct_merged`, `merged_revision` and the `ignored_settings` it met.
+
+```http
+PATCH /api/v1/domains/supply
+Content-Type: application/json
+
+{"settings": {"extraction": {"mode": "review_all",
+  "rules": [{"source_key_prefix": "feeds/erp/", "mode": "direct"}]}}}
+```
+
+Whatever the mode, a value item over a value a person set is held (`local_edit`).
+
 ## Configuration
 
-`scribe.extraction` (tiers, auto-accept threshold, chunking, matching thresholds, confidence
+`scribe.extraction` (tiers, auto-accept threshold, ingestion `mode`, `domain_may_loosen`,
+`direct_merge_protected`, chunking, matching thresholds, confidence
 per technique, budgets, prompt version, cache, `discovery` with the optional `llm_pass`, `versions`), `schema.suggestions` (support,
 listing, examples, name matching, variants and noise), `keeper.schema_suggestions` (review branch prefix) and
 `keeper.documents` (size limit, accepted

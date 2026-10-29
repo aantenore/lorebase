@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
@@ -97,18 +99,50 @@ async def page(store: StoreAccess, *, limit: int, after: str | None) -> list[Dom
         return await DomainRepository(session).list(limit=limit, after=after)
 
 
+@dataclass(frozen=True)
+class SettingChange:
+    """A Domain setting member changed by an update: its value before and after (`None`:
+    absent)."""
+
+    member: str
+    before: Any
+    after: Any
+
+
 async def update(
-    store: StoreAccess, domain_id: str, *, display_name: str | None, description: str | None
-) -> DomainRow:
-    """Change display metadata (not versioned: the Domain element of the schema is unchanged)."""
+    store: StoreAccess,
+    domain_id: str,
+    *,
+    display_name: str | None,
+    description: str | None,
+    settings: Mapping[str, Any] | None = None,
+) -> tuple[DomainRow, list[SettingChange]]:
+    """Change display metadata (not versioned: the Domain element of the schema is unchanged)
+    and replace the members of `settings` given (a `None` value removes the member). Returns
+    the row and the setting members that changed."""
+    changes: list[SettingChange] = []
     async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
+        current = await require_domain(session, domain_id)
+        merged: dict[str, Any] | None = None
+        if settings:
+            merged = dict(current.settings or {})
+            for member, value in settings.items():
+                before = merged.get(member)
+                if value is None:
+                    merged.pop(member, None)
+                else:
+                    merged[member] = value
+                if before != value:
+                    changes.append(SettingChange(member, before, value))
         row = await DomainRepository(session).update(
-            domain_id, display_name=display_name, description=description
+            domain_id,
+            display_name=display_name,
+            description=description,
+            settings=merged if changes else None,
         )
     if row is None:  # pragma: no cover - deleted concurrently
         raise ProblemError(NOT_FOUND, f"Domain {domain_id!r} not found.")
-    return row
+    return row, changes
 
 
 async def delete(store: StoreAccess, domain_id: str) -> None:

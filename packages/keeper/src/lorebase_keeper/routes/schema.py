@@ -46,6 +46,7 @@ from lorebase_keeper.reading.sensitivity import clearance_of, default_schema
 from lorebase_keeper.reading.visibility import visible
 from lorebase_keeper.services import schema as service
 from lorebase_keeper.services.errors import (
+    Finding,
     ProtectedBranchError,
     commit_problem,
     finding_documents,
@@ -246,6 +247,11 @@ class SchemaValidationOut(BaseModel):
     issues: list[dict[str, Any]]
     issue_count: int
     changes: list[ElementChangeOut]
+    warnings: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Findings that do not block the change, such as a steward role the "
+        "installation does not define (`schema.steward_role_unknown`).",
+    )
 
 
 def _invalid_body(error: ValidationError) -> ProblemError:
@@ -468,12 +474,21 @@ async def validate_schema(
         request, auth, principal, store, keeper, domain_id, body.branch, body.at
     )
     limits = keeper.schema_changes
-    issues, changes = await service.validate(store, domain_id, body.to_input(), target)
+    warnings: list[Finding] = []
+    issues, changes = await service.validate(
+        store,
+        domain_id,
+        body.to_input(),
+        target,
+        known_roles=auth.authorizer.role_names,
+        warnings=warnings,
+    )
     return SchemaValidationOut(
         valid=not issues,
         issues=finding_documents(issues, limits.max_issues),
         issue_count=len(issues),
         changes=_changes(changes, limits.max_listed_changes),
+        warnings=finding_documents(warnings, limits.max_issues),
     )
 
 

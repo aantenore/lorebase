@@ -189,6 +189,34 @@ first.
 - **Retirement** (`document.retire`, maintainers and admins) keeps the document readable and
   stops its extraction; audited `document.retire`.
 
+## Ingestion modes and stewards after the upgrade
+
+Migration `0042` adds `proposals.kinds` (the Kinds a Proposal's changes touch, with a GIN
+index), empty for existing rows; each Proposal fills it at its next merge preview (a review,
+an item decision, a merge attempt, a new run of its Source). Until then a Proposal counts as
+schema-only and gets the Domain's steward roles. Nothing else changes unless configured:
+
+- **Ingestion modes.** Without `settings.extraction` on a Domain, extraction accepts and holds
+  exactly what it did ([extraction](extraction.md#ingestion-modes)). `scribe.extraction.mode`
+  may be `review_all` or `doubts_only`; `direct` there stops Scribe at startup. To forbid
+  Domains from choosing `direct` (or any looser value), set
+  `scribe.extraction.domain_may_loosen: []`; to keep direct merges out of protected branches,
+  `scribe.extraction.direct_merge_protected: false`. Direct merges are in the audit log as
+  `proposal.merge` with `mode: direct`; setting changes as `domain.update`. Keeper reports
+  `ignored_settings` with the `scribe.extraction` values of its own configuration: give Keeper
+  and Scribe the same file.
+- **Stewards.** Declare `stewards: [role, ...]` on `domain` and on Kinds in the schema (a role
+  the installation does not define is a validation warning, `schema.steward_role_unknown`).
+  Assignees are computed from grants when read: listing them for callers with
+  `principal.read` scans at most `keeper.stewards.max_grants_scanned` grants and shows
+  `max_assignees_listed`. Principals who belong to a group only through an identity provider's
+  token are assignees for their own `assigned=me`, but are not listed (their membership is not
+  stored).
+- **Steward approvals.** `keeper.proposals.required_approvals_from_stewards` (or the Domain
+  setting of that name; default 0) requires approvals from assignees on protected branches. A
+  Proposal whose Kinds have steward roles but too few assignees answers 409
+  `stewards-unavailable` on merge: grant the role or lower the rule.
+
 ## Document purge
 
 `POST /api/v1/domains/{d}/documents/{id}/purge {"reason": "...", "confirm": "<id>"}` (or

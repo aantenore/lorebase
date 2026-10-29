@@ -170,7 +170,11 @@ async def test_merge_with_conflicts_end_to_end(
             "approvers": [],
             "changes_requested": [],
             "satisfied": False,
+            "required_from_stewards": None,
+            "steward_approvals": None,
+            "stewards_unavailable": False,
         }
+        assert (left["steward_roles"], left["assignees"]) == ([], None)  # no principal.read
         again = await http.post(
             PROPOSALS, json=proposal_body("left"), headers={**editor, "Idempotency-Key": "p-1"}
         )

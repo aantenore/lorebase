@@ -40,6 +40,7 @@ from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import operations as service
 from lorebase_keeper.services.errors import BRANCH_BUSY, commit_problem, finding_documents
+from lorebase_keeper.services.stewards import Stewards
 from lorebase_store.auth import NewAuditEntry
 from lorebase_store.commit import CommitError
 from lorebase_store.repositories import LockTimeoutError
@@ -331,6 +332,7 @@ async def execute_operation(
                 check=check,
                 roles_of=roles_of,
                 emit=emit,
+                stewards=Stewards(auth, keeper.stewards),
             )
     except LockTimeoutError:
         raise ProblemError(

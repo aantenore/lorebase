@@ -5,6 +5,13 @@ the configured role (`keeper.domains.creator_role`, default `admin`) in the new 
 Deleting one needs `domain.delete`, which only the Domain's `admin` role holds, and the Domain
 id repeated in `confirm`: the deletion removes every Revision, branch and grant of the Domain
 and cannot be undone (the audit log keeps its entries).
+
+`PATCH` also replaces the allowlisted settings members (`extraction`, the ingestion mode of
+design 9.2; `null` removes it), with `domain.settings`, audited as `domain.update` with the
+member's values before and after. `GET` reports `ignored_settings`: the paths of extraction
+values that do not apply because they loosen a member the installation does not let Domains
+loosen (`scribe.extraction.domain_may_loosen`, read from this process's configuration) or are
+invalid; Scribe resolves the same settings with its own configuration when it runs a job.
 """
 
 from __future__ import annotations
@@ -28,11 +35,13 @@ from lorebase_keeper.auth.deps import (
 )
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.context import StoreDep
-from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep
+from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep, SettingsDep
 from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, ValidationProblem
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.services import domains as service
 from lorebase_keeper.services.branches import check_ref_name
+from lorebase_platform.settings import Settings
+from lorebase_store.extraction import modes
 from lorebase_store.repositories import DomainRow
 
 router = APIRouter(tags=["domains"])
@@ -60,11 +69,22 @@ class DomainCreate(BaseModel):
     )
 
 
+UPDATABLE_SETTINGS = (modes.SETTING_KEY,)
+"""Domain settings members `PATCH /domains/{d}` may replace."""
+
+
 class DomainUpdate(BaseModel):
-    """Display metadata; omitted members are left unchanged."""
+    """Display metadata and allowlisted settings members; omitted members are left
+    unchanged."""
 
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
+    settings: dict[str, JsonValue] | None = Field(
+        default=None,
+        description="Settings members to replace, `null` to remove one: `extraction` (`mode`: "
+        "review_all, doubts_only or direct; `auto_accept_threshold`; `min_confidence`; "
+        "`rules`: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}]).",
+    )
 
 
 class DomainOut(BaseModel):
@@ -78,10 +98,44 @@ class DomainOut(BaseModel):
     created_at: datetime
     created_by: str
     head: str | None = Field(description="Head Revision of the default branch.")
+    ignored_settings: list[str] = Field(
+        default_factory=list,
+        description="Paths of settings values that do not apply (invalid, or loosening a "
+        "member the installation does not let Domains loosen), e.g. `extraction.mode`.",
+    )
 
 
-def _out(row: DomainRow, head: bytes | None) -> DomainOut:
+def installation_bounds(settings: Settings) -> modes.Installation:
+    """The extraction bounds of the installation (`scribe.extraction`), as configured for this
+    process."""
+    scribe = (settings.model_extra or {}).get("scribe")
+    raw = scribe.get(modes.SETTING_KEY) if isinstance(scribe, dict) else None
+    return modes.Installation.from_section(raw if isinstance(raw, dict) else None)
+
+
+def _settings_problems(settings: dict[str, Any] | None, pointer: str) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    for key, value in (settings or {}).items():
+        if key == modes.SETTING_KEY:
+            found.extend(
+                {"pointer": f"{pointer}/{key}{at}", "message": message, "code": "invalid"}
+                for at, message in modes.setting_problems(value)
+            )
+    return found
+
+
+def _require_valid(problems: list[dict[str, str]]) -> None:
+    if problems:
+        raise ProblemError(
+            VALIDATION_FAILED,
+            "One or more request members are invalid.",
+            extensions={"errors": problems},
+        )
+
+
+def _out(row: DomainRow, head: bytes | None, bounds: modes.Installation | None = None) -> DomainOut:
     return DomainOut(
+        ignored_settings=[] if bounds is None else modes.ignored_settings(bounds, row.settings),
         id=row.id,
         display_name=row.display_name,
         description=row.description,
@@ -110,6 +164,7 @@ async def create_domain(
     status 200 and `Idempotent-Replayed: true`.
     """
     check_ref_name(body.default_branch, keeper.branches, "/body/default_branch")
+    _require_valid(_settings_problems(body.settings, "/body/settings"))
     domain = Domain(
         id=body.id,
         display_name=body.display_name,
@@ -159,33 +214,56 @@ async def list_domains(
 async def get_domain(
     domain_id: str,
     store: StoreDep,
+    settings: SettingsDep,
     _: Annotated[Access, Depends(require(Permission.SCHEMA_READ, kind_limited=True))],
 ) -> DomainOut:
-    """The Domain and the head Revision of its default branch."""
+    """The Domain, the head Revision of its default branch and its ignored settings."""
     row, head = await service.get(store, domain_id)
-    return _out(row, head)
+    return _out(row, head, installation_bounds(settings))
 
 
-@router.patch("/domains/{domain_id}", summary="Update Domain display metadata", responses=_ERRORS)
+@router.patch(
+    "/domains/{domain_id}", summary="Update Domain metadata and settings", responses=_ERRORS
+)
 async def update_domain(
     domain_id: str,
     body: DomainUpdate,
     request: Request,
     store: StoreDep,
+    settings: SettingsDep,
     _: Annotated[Access, Depends(require(Permission.DOMAIN_SETTINGS))],
 ) -> DomainOut:
-    """Change the display name or description. They are not versioned."""
-    await service.update(
-        store, domain_id, display_name=body.display_name, description=body.description
+    """Change the display name, the description or allowlisted settings members (`extraction`).
+    They are not versioned; setting changes are audited with their values before and after."""
+    unknown = sorted(set(body.settings or {}) - set(UPDATABLE_SETTINGS))
+    _require_valid(
+        [
+            {
+                "pointer": f"/body/settings/{key}",
+                "message": "not a setting this request may change "
+                f"({', '.join(UPDATABLE_SETTINGS)})",
+                "code": "invalid",
+            }
+            for key in unknown
+        ]
+        + _settings_problems(body.settings, "/body/settings")
+    )
+    _row, changes = await service.update(
+        store,
+        domain_id,
+        display_name=body.display_name,
+        description=body.description,
+        settings=body.settings,
     )
     annotate(
         request,
         action="domain.update",
         target=domain_id,
         fields=sorted(body.model_dump(exclude_unset=True)),
+        settings=[{"member": c.member, "before": c.before, "after": c.after} for c in changes],
     )
     row, head = await service.get(store, domain_id)
-    return _out(row, head)
+    return _out(row, head, installation_bounds(settings))
 
 
 @router.delete(

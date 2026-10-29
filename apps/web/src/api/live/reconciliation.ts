@@ -84,6 +84,7 @@ export const candidateQuery = (filter: CandidateFilter | undefined) => ({
   kind: filter?.kind,
   attribute: filter?.attribute,
   source: filter?.source,
+  assigned: filter?.assigned,
 });
 
 export const resolveBody = (input: ResolveCandidateInput): S['ReconciliationResolveIn'] => ({

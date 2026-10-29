@@ -289,6 +289,35 @@ def test_domain_examples_round_trip_and_stay_absent_when_empty() -> None:
     assert "examples" not in schema_to_document(empty)["domain"]
 
 
+def test_stewards_round_trip_and_stay_absent_when_empty() -> None:
+    document = base_document()
+    document["domain"]["stewards"] = ["supply-steward", "supply-steward"]
+    document["kinds"]["Part"]["stewards"] = ["risk-analyst"]
+    schema = schema_from_document(document)
+    assert schema.domain.stewards == ("supply-steward",)
+    part = schema.kind_by_api_name("Part")
+    assert part is not None
+    assert part.stewards == ("risk-analyst",)
+    assert load_schema(dump_schema(schema)) == schema
+    assert schema_to_document(schema)["kinds"]["Part"]["stewards"] == ["risk-analyst"]
+
+    document["domain"]["stewards"] = []
+    document["kinds"]["Part"]["stewards"] = []
+    empty = schema_from_document(document)
+    assert empty.domain.stewards is None
+    assert "stewards" not in empty.content()["domain"]
+    assert "stewards" not in schema_to_document(empty)["kinds"]["Part"]
+
+
+def test_invalid_stewards_are_reported() -> None:
+    document = base_document()
+    document["domain"]["stewards"] = [""]
+    document["kinds"]["Part"]["stewards"] = "risk-analyst"
+    problems = problems_of(document)
+    assert ("domain", "stewards", 0) in problems
+    assert any(path[:3] == ("kinds", "Part", "stewards") for path in problems)
+
+
 def test_invalid_domain_examples_are_reported() -> None:
     document = base_document()
     document["domain"]["examples"] = [

@@ -342,7 +342,7 @@ export interface paths {
         };
         /**
          * Get a Domain
-         * @description The Domain and the head Revision of its default branch.
+         * @description The Domain, the head Revision of its default branch and its ignored settings.
          */
         get: operations["get_domain_api_v1_domains__domain_id__get"];
         put?: never;
@@ -355,8 +355,9 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Update Domain display metadata
-         * @description Change the display name or description. They are not versioned.
+         * Update Domain metadata and settings
+         * @description Change the display name, the description or allowlisted settings members (`extraction`).
+         *     They are not versioned; setting changes are audited with their values before and after.
          */
         patch: operations["update_domain_api_v1_domains__domain_id__patch"];
         trace?: never;
@@ -1301,7 +1302,8 @@ export interface paths {
         };
         /**
          * List Proposals
-         * @description Proposals the caller may read, newest first.
+         * @description Proposals the caller may read, newest first. With `assigned`, a page may hold fewer
+         *     items than asked while `next_cursor` is set.
          */
         get: operations["list_proposals_api_v1_domains__domain_id__proposals_get"];
         put?: never;
@@ -1329,7 +1331,7 @@ export interface paths {
         };
         /**
          * Get a Proposal
-         * @description The Proposal with its reviews, approval state and latest merge attempt.
+         * @description The Proposal with its reviews, approval state, latest merge attempt and stewards.
          */
         get: operations["get_proposal_api_v1_domains__domain_id__proposals__proposal_id__get"];
         put?: never;
@@ -2089,6 +2091,22 @@ export interface components {
             changes_requested: string[];
             /** Satisfied */
             satisfied: boolean;
+            /**
+             * Required From Stewards
+             * @description Approvals that must come from the Proposal's assignees (protection rule required_approvals_from_stewards); null when the rule does not apply.
+             */
+            required_from_stewards?: number | null;
+            /**
+             * Steward Approvals
+             * @description Approvals given by assignees, when the rule applies.
+             */
+            steward_approvals?: number | null;
+            /**
+             * Stewards Unavailable
+             * @description Steward roles are declared but fewer principals can approve than the rule requires (merge refused with stewards-unavailable).
+             * @default false
+             */
+            stewards_unavailable: boolean;
         };
         /**
          * AttemptOut
@@ -3346,16 +3364,29 @@ export interface components {
              * @description Head Revision of the default branch.
              */
             head: string | null;
+            /**
+             * Ignored Settings
+             * @description Paths of settings values that do not apply (invalid, or loosening a member the installation does not let Domains loosen), e.g. `extraction.mode`.
+             */
+            ignored_settings?: string[];
         };
         /**
          * DomainUpdate
-         * @description Display metadata; omitted members are left unchanged.
+         * @description Display metadata and allowlisted settings members; omitted members are left
+         *     unchanged.
          */
         DomainUpdate: {
             /** Display Name */
             display_name?: string | null;
             /** Description */
             description?: string | null;
+            /**
+             * Settings
+             * @description Settings members to replace, `null` to remove one: `extraction` (`mode`: review_all, doubts_only or direct; `auto_accept_threshold`; `min_confidence`; `rules`: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}]).
+             */
+            settings?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
         };
         /**
          * DuplicateGroup
@@ -4862,6 +4893,21 @@ export interface components {
             };
             /** Checks */
             checks: components["schemas"]["CheckOut"][];
+            /**
+             * Steward Roles
+             * @description Roles that look after the Kinds the changes touch (design 10.7).
+             */
+            steward_roles?: string[];
+            /**
+             * Assignees
+             * @description Principals who can review it as stewards (callers with principal.read only; at most keeper.stewards.max_assignees_listed).
+             */
+            assignees?: string[] | null;
+            /**
+             * Assignees Truncated
+             * @default false
+             */
+            assignees_truncated: boolean;
             /** Reviews */
             reviews: components["schemas"]["ReviewOut"][];
             approval: components["schemas"]["ApprovalOut"];
@@ -5258,6 +5304,21 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Steward Roles
+             * @description Roles that look after its Kind (design 10.7).
+             */
+            steward_roles?: string[];
+            /**
+             * Assignees
+             * @description Principals who can decide it as stewards (callers with principal.read only; at most keeper.stewards.max_assignees_listed).
+             */
+            assignees?: string[] | null;
+            /**
+             * Assignees Truncated
+             * @default false
+             */
+            assignees_truncated: boolean;
         };
         /**
          * ReconciliationChoice
@@ -5999,6 +6060,13 @@ export interface components {
             issue_count: number;
             /** Changes */
             changes: components["schemas"]["ElementChangeOut"][];
+            /**
+             * Warnings
+             * @description Findings that do not block the change, such as a steward role the installation does not define (`schema.steward_role_unknown`).
+             */
+            warnings?: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * SearchCorrection
@@ -7044,6 +7112,21 @@ export interface components {
             };
             /** Checks */
             checks: components["schemas"]["CheckOut"][];
+            /**
+             * Steward Roles
+             * @description Roles that look after the Kinds the changes touch (design 10.7).
+             */
+            steward_roles?: string[];
+            /**
+             * Assignees
+             * @description Principals who can review it as stewards (callers with principal.read only; at most keeper.stewards.max_assignees_listed).
+             */
+            assignees?: string[] | null;
+            /**
+             * Assignees Truncated
+             * @default false
+             */
+            assignees_truncated: boolean;
         };
         /**
          * ProposalOut
@@ -11782,6 +11865,8 @@ export interface operations {
                 /** @description Target branch. */
                 target?: string | null;
                 author?: string | null;
+                /** @description `me`: Proposals the caller is an assignee of; `any`: with steward roles; `none`: without (design 10.7). */
+                assigned?: ("me" | "any" | "none") | null;
                 /** @description Page size. */
                 limit?: number | null;
                 /** @description Opaque page cursor. */
@@ -11822,7 +11907,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11904,7 +11989,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11981,7 +12066,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12062,7 +12147,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12139,7 +12224,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12220,7 +12305,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12303,7 +12388,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12388,7 +12473,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12470,7 +12555,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12551,7 +12636,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12602,6 +12687,8 @@ export interface operations {
                 attribute?: string | null;
                 /** @description Source identity of a claim, e.g. `source:src_...`. */
                 source?: string | null;
+                /** @description `me`: candidates the caller is an assignee of; `any`: with steward roles; `none`: without (design 10.7). A page may then hold fewer items than asked while `next_cursor` is set. */
+                assigned?: ("me" | "any" | "none") | null;
                 /** @description Page size. */
                 limit?: number | null;
                 /** @description Opaque page cursor. */

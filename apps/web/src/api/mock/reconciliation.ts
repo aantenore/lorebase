@@ -10,6 +10,7 @@ import type {
   ResolveCandidatesResult,
 } from '../reconciliation-types';
 import type { JsonValue, ProposalCheck } from '../types';
+import { assignedTo } from './builders';
 import { decodeCursor, encodeCursor } from './engine';
 import { buildReconciliation } from './sample/reconciliation';
 import type { BranchData, StoredRecord } from './state';
@@ -96,7 +97,7 @@ function matches(candidate: ReconciliationCandidate, filter: CandidateFilter, br
   if (filter.source !== undefined && !candidate.claims.some((c) => c.source === filter.source)) {
     return false;
   }
-  return true;
+  return assignedTo(candidate.assignees ?? [], candidate.steward_roles ?? [], filter.assigned);
 }
 
 const newestFirst = (a: ReconciliationCandidate, b: ReconciliationCandidate) =>

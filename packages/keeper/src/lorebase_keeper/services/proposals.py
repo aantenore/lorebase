@@ -9,6 +9,11 @@ review policy:
   `keeper.proposals.required_approvals`, overridden by the Domain setting of the same name):
   the latest approve or request-changes verdict of each reviewer counts, the author's only
   when self-approval is allowed, and an outstanding request for changes blocks the merge;
+- `required_approvals_from_stewards` (setting and Domain setting of that name, default 0) of
+  those approvals must come from the Proposal's assignees (`services.stewards`, design 10.7):
+  the Proposal then needs the larger of the two in all. A Proposal whose Kinds declare no
+  stewards satisfies it; one with steward roles but fewer assignees than required cannot merge
+  (409 `stewards-unavailable`);
 - the merge policy of a Proposal is the Domain's `merge_policy` setting when it is created;
 - the `reconciliation` check (`keeper.reconciliation.merge_check`, or the Domain setting
   `reconciliation_check` when that is stricter) lists the open reconciliation candidates of a
@@ -44,6 +49,7 @@ from lorebase_keeper.services.proposal_reads import (
 )
 from lorebase_keeper.services.reconciliation_settle import settle_merged
 from lorebase_keeper.services.schema import SchemaGuard, schema_at
+from lorebase_keeper.services.stewards import Stewards, proposal_subject
 from lorebase_store.merging import (
     AttemptResult,
     MergeRequest,
@@ -57,6 +63,7 @@ from lorebase_store.models.enums import (
     ProposalStatus,
     ReviewVerdict,
 )
+from lorebase_store.reads import head_schema
 from lorebase_store.repositories import (
     EVERY_PARTITION,
     ConflictRepository,
@@ -74,6 +81,7 @@ from lorebase_store.repositories import (
     ReviewRepository,
     ReviewRow,
 )
+from lorebase_store.runtime import StoreRuntime
 
 PROPOSAL_PREFIX = "prp"
 REVIEW_PREFIX = "prr"
@@ -81,6 +89,8 @@ POLICY_KEY = "merge_policy"
 """Key of the merge policy in a Domain's settings and in a Proposal's `policies`."""
 APPROVALS_KEY = "required_approvals"
 """Domain setting overriding `keeper.proposals.required_approvals`."""
+STEWARD_APPROVALS_KEY = "required_approvals_from_stewards"
+"""Domain setting overriding `keeper.proposals.required_approvals_from_stewards`."""
 
 PROPOSAL_NOT_OPEN = ProblemType("proposal-not-open", 409, "Proposal is not open")
 APPROVALS_REQUIRED = ProblemType("approvals-required", 409, "Approvals required")
@@ -89,6 +99,9 @@ SELF_APPROVAL = ProblemType("self-approval", 403, "Self-approval is not allowed"
 BRANCH_MISSING = ProblemType("proposal-branch-missing", 409, "Proposal branch missing")
 RECONCILIATION_OPEN = ProblemType(
     "reconciliation-open", 409, "Open contradictions between Sources block the merge"
+)
+STEWARDS_UNAVAILABLE = ProblemType(
+    "stewards-unavailable", 409, "Fewer stewards can approve than the branch requires"
 )
 
 
@@ -102,6 +115,27 @@ class NewProposal:
 
 
 @dataclass(frozen=True)
+class StewardApproval:
+    """The steward rule of a protected target (design 10.7): `required` approvals from the
+    `assignees` of the Proposal's steward `roles`; `approvers` are the assignees who
+    approved."""
+
+    required: int
+    roles: tuple[str, ...]
+    assignees: int
+    approvers: tuple[str, ...]
+
+    @property
+    def unavailable(self) -> bool:
+        """Steward roles are declared but too few principals can approve."""
+        return bool(self.roles) and self.assignees < self.required
+
+    @property
+    def satisfied(self) -> bool:
+        return not self.roles or len(self.approvers) >= self.required
+
+
+@dataclass(frozen=True)
 class Approval:
     """Review state of a Proposal against its target's protection."""
 
@@ -110,13 +144,15 @@ class Approval:
     approvers: tuple[str, ...]
     changes_requested: tuple[str, ...]
     blocking: bool
+    stewards: StewardApproval | None = None
 
     @property
     def satisfied(self) -> bool:
         if not self.protected:
             return True
         blocked = self.blocking and bool(self.changes_requested)
-        return len(self.approvers) >= self.required and not blocked
+        stewards = self.stewards is None or self.stewards.satisfied
+        return len(self.approvers) >= self.required and not blocked and stewards
 
 
 @dataclass(frozen=True)
@@ -204,6 +240,44 @@ def required_approvals(domain: DomainRow, settings: ProposalSettings) -> int:
     return settings.required_approvals
 
 
+def required_from_stewards(domain: DomainRow, settings: ProposalSettings) -> int:
+    value = (domain.settings or {}).get(STEWARD_APPROVALS_KEY)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return settings.required_approvals_from_stewards
+
+
+async def steward_approval(
+    session: AsyncSession,
+    domain: DomainRow,
+    proposal: ProposalRow,
+    approval: Approval,
+    settings: ProposalSettings,
+    runtime: StoreRuntime | None,
+    stewards: Stewards | None,
+) -> StewardApproval | None:
+    """The steward rule of the Proposal (module doc); `None` when it does not apply. Without
+    `stewards` (no way to find assignees) it fails closed: none are counted."""
+    required = required_from_stewards(domain, settings)
+    if required == 0 or not approval.protected:
+        return None
+    head = await head_schema(session, domain.id, proposal.target_ref, runtime=runtime)
+    subject = proposal_subject(
+        None if head is None else head.schema, proposal.kinds, proposal.target_ref
+    )
+    if not subject.roles:
+        return StewardApproval(required, (), 0, ())
+    if stewards is None:
+        return StewardApproval(required, subject.roles, 0, ())
+    assignees = await stewards.assignees(domain.id, subject)
+    return StewardApproval(
+        required,
+        subject.roles,
+        len(assignees),
+        tuple(a for a in approval.approvers if a in assignees),
+    )
+
+
 def approval_of(
     proposal: ProposalRow,
     reviews: Sequence[ReviewRow],
@@ -269,7 +343,13 @@ async def _proposal(
 
 
 async def _view(
-    session: AsyncSession, domain: DomainRow, proposal: ProposalRow, settings: ProposalSettings
+    session: AsyncSession,
+    domain: DomainRow,
+    proposal: ProposalRow,
+    settings: ProposalSettings,
+    *,
+    runtime: StoreRuntime | None = None,
+    stewards: Stewards | None = None,
 ) -> ProposalView:
     reviews = await ReviewRepository(session, domain.id).of(proposal.id)
     target = await RefRepository(session, domain.id).get(proposal.target_ref)
@@ -280,6 +360,9 @@ async def _view(
         required=required_approvals(domain, settings),
         settings=settings,
     )
+    rule = await steward_approval(session, domain, proposal, approval, settings, runtime, stewards)
+    if rule is not None:
+        approval = replace(approval, required=max(approval.required, rule.required), stewards=rule)
     attempt = await MergeAttemptRepository(session, domain.id).latest(proposal.id)
     return ProposalView(proposal, reviews, approval, attempt)
 
@@ -312,6 +395,7 @@ async def create(
     *,
     idempotency_key: str | None,
     reconciliation_check: str | None = None,
+    stewards: Stewards | None = None,
 ) -> CreatedProposal:
     """Open a Proposal to merge `source_ref` into `target_ref`, with its merge preview.
 
@@ -327,7 +411,9 @@ async def create(
             if idempotency_key is not None:
                 existing = await proposals.by_key(principal.id, idempotency_key)
                 if existing is not None:
-                    return await _replay(session, domain, existing, new, settings)
+                    return await _replay(
+                        session, domain, existing, new, settings, store.runtime, stewards
+                    )
             await require_branch(session, domain_id, new.source_ref)
             await require_branch(session, domain_id, new.target_ref)
             duplicates = await proposals.page(
@@ -368,7 +454,11 @@ async def create(
                     _request(row, principal.id, reconciliation_check=reconciliation_check)
                 )
             created = await _proposal(session, domain_id, row.id)
-            return CreatedProposal(await _view(session, domain, created, settings))
+            return CreatedProposal(
+                await _view(
+                    session, domain, created, settings, runtime=store.runtime, stewards=stewards
+                )
+            )
     except IntegrityError:
         if idempotency_key is None:
             raise
@@ -379,7 +469,7 @@ async def create(
             )
             if existing is None:
                 raise
-            return await _replay(session, domain, existing, new, settings)
+            return await _replay(session, domain, existing, new, settings, store.runtime, stewards)
 
 
 async def _replay(
@@ -388,6 +478,8 @@ async def _replay(
     existing: ProposalRow,
     new: NewProposal,
     settings: ProposalSettings,
+    runtime: StoreRuntime | None = None,
+    stewards: Stewards | None = None,
 ) -> CreatedProposal:
     if (existing.source_ref, existing.target_ref) != (new.source_ref, new.target_ref):
         raise ProblemError(
@@ -395,16 +487,29 @@ async def _replay(
             "The idempotency key was used for another Proposal.",
             extensions={"proposal": existing.id},
         )
-    return CreatedProposal(await _view(session, domain, existing, settings), replayed=True)
+    return CreatedProposal(
+        await _view(session, domain, existing, settings, runtime=runtime, stewards=stewards),
+        replayed=True,
+    )
 
 
 async def get(
-    store: StoreAccess, domain_id: str, proposal_id: str, settings: ProposalSettings
+    store: StoreAccess,
+    domain_id: str,
+    proposal_id: str,
+    settings: ProposalSettings,
+    *,
+    stewards: Stewards | None = None,
 ) -> ProposalView:
     async with store.sessions() as session, session.begin():
         domain = await require_domain(session, domain_id)
         return await _view(
-            session, domain, await _proposal(session, domain_id, proposal_id), settings
+            session,
+            domain,
+            await _proposal(session, domain_id, proposal_id),
+            settings,
+            runtime=store.runtime,
+            stewards=stewards,
         )
 
 
@@ -436,6 +541,7 @@ async def update(
     *,
     title: str | None,
     description: str | None,
+    stewards: Stewards | None = None,
 ) -> ProposalView:
     """Change the title or description of an open Proposal."""
     async with store.sessions() as session, session.begin():
@@ -454,11 +560,18 @@ async def update(
             )
             assert updated is not None
             proposal = updated
-        return await _view(session, domain, proposal, settings)
+        return await _view(
+            session, domain, proposal, settings, runtime=store.runtime, stewards=stewards
+        )
 
 
 async def close(
-    store: StoreAccess, domain_id: str, proposal_id: str, settings: ProposalSettings
+    store: StoreAccess,
+    domain_id: str,
+    proposal_id: str,
+    settings: ProposalSettings,
+    *,
+    stewards: Stewards | None = None,
 ) -> ProposalView:
     """Close an open Proposal; its merge attempts are abandoned. Closing twice is a no-op."""
     async with store.sessions() as session, session.begin():
@@ -473,7 +586,9 @@ async def close(
             )
             assert closed is not None
             proposal = closed
-        return await _view(session, domain, proposal, settings)
+        return await _view(
+            session, domain, proposal, settings, runtime=store.runtime, stewards=stewards
+        )
 
 
 async def review(
@@ -485,6 +600,7 @@ async def review(
     *,
     verdict: ReviewVerdict,
     comment: str | None,
+    stewards: Stewards | None = None,
 ) -> tuple[ReviewRow, ProposalView]:
     """Record a review of an open Proposal."""
     async with store.sessions() as session, session.begin():
@@ -514,7 +630,9 @@ async def review(
             at=store.clock(),
         )
         await ReviewRepository(session, domain_id).insert(row)
-        return row, await _view(session, domain, proposal, settings)
+        return row, await _view(
+            session, domain, proposal, settings, runtime=store.runtime, stewards=stewards
+        )
 
 
 async def merge(
@@ -530,6 +648,7 @@ async def merge(
     scope: ConflictScope = FULL_SCOPE,
     schema_guard: SchemaGuard | None = None,
     reconciliation_check: str | None = None,
+    stewards: Stewards | None = None,
 ) -> MergeOutcome:
     """Run (or re-run) the merge of an open Proposal and commit it when no Conflict remains.
 
@@ -557,8 +676,27 @@ async def merge(
                 return MergeOutcome(proposal, None, view, head=done.revision, replayed=True)
         if proposal.status is not ProposalStatus.OPEN:
             raise _not_open(proposal)
-        view_now = await _view(session, domain, proposal, settings)
+        view_now = await _view(
+            session, domain, proposal, settings, runtime=store.runtime, stewards=stewards
+        )
         approval = view_now.approval
+        if (
+            not approval.satisfied
+            and approval.stewards is not None
+            and (approval.stewards.unavailable)
+        ):
+            rule = approval.stewards
+            raise ProblemError(
+                STEWARDS_UNAVAILABLE,
+                f"Merging into {proposal.target_ref!r} needs {rule.required} approval(s) from the "
+                f"stewards of this Proposal ({', '.join(rule.roles)}), but only "
+                f"{rule.assignees} principal(s) can give them.",
+                extensions={
+                    "required_from_stewards": rule.required,
+                    "steward_roles": list(rule.roles),
+                    "assignees": rule.assignees,
+                },
+            )
         if not approval.satisfied:
             raise ProblemError(
                 APPROVALS_REQUIRED,
@@ -569,6 +707,14 @@ async def merge(
                     "approvals": len(approval.approvers),
                     "approvers": list(approval.approvers),
                     "changes_requested": list(approval.changes_requested),
+                    **(
+                        {}
+                        if approval.stewards is None
+                        else {
+                            "required_from_stewards": approval.stewards.required,
+                            "steward_approvals": len(approval.stewards.approvers),
+                        }
+                    ),
                 },
             )
         refs = RefRepository(session, domain_id)

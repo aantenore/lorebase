@@ -42,6 +42,7 @@ ChangeKind = Literal["created", "updated", "deleted"]
 LinkDirection = Literal["forward", "inverse"]
 ProposalStatus = Literal["open", "merged", "closed"]
 ProposalOrigin = Literal["manual", "source_sync", "extraction", "operation"]
+AssignedFilter = Literal["me", "any", "none"]
 ReviewVerdict = Literal["approve", "request_changes", "comment"]
 ConflictStatus = Literal["open", "resolved"]
 CandidateType = Literal["duplicate", "contradiction", "superseded", "stale"]
@@ -144,6 +145,14 @@ class DomainUpdate(RequestModel):
 
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
+    settings: dict[str, JsonValue] | None = None
+    """Members to set; a member set to `None` (e.g. `extraction`) is cleared."""
+
+    def payload(self) -> dict[str, Any]:
+        body = super().payload()
+        if self.settings is not None:
+            body["settings"] = dict(self.settings)
+        return body
 
 
 class Domain(Model):
@@ -154,6 +163,7 @@ class Domain(Model):
     description: str | None = None
     default_branch: str
     settings: dict[str, Any] = Field(default_factory=dict)
+    ignored_settings: list[str] = Field(default_factory=list)
     created_at: datetime
     created_by: str
     head: str | None = Field(default=None, description="Head of the default branch (get only).")
@@ -353,6 +363,7 @@ class SchemaValidation(Model):
     issues: list[dict[str, Any]]
     issue_count: int
     changes: list[ElementChange]
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # Operations -------------------------------------------------------------------------------
@@ -977,6 +988,9 @@ class Approval(Model):
     approvers: list[str]
     changes_requested: list[str]
     satisfied: bool
+    required_from_stewards: int | None = None
+    steward_approvals: int | None = None
+    stewards_unavailable: bool = False
 
 
 class Resolution(Model):
@@ -1053,6 +1067,9 @@ class Proposal(Model):
     merged_revision: str | None
     policy: dict[str, Any]
     checks: list[Check]
+    steward_roles: list[str] = Field(default_factory=list)
+    assignees: list[str] | None = None
+    assignees_truncated: bool = False
 
 
 class ProposalDetail(Proposal):
@@ -1119,6 +1136,9 @@ class ReconciliationCandidate(Model):
     decided_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    steward_roles: list[str] = Field(default_factory=list)
+    assignees: list[str] | None = None
+    assignees_truncated: bool = False
 
 
 class ReconcileIn(RequestModel):

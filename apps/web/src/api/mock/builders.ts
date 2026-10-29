@@ -189,3 +189,14 @@ export function revision(
     stats: { partitions_changed: 1, changes: options.changes ?? 1 },
   };
 }
+
+/** Whether an item with these steward `assignees` and `roles` passes an `assigned` filter of the mock caller. */
+export function assignedTo(
+  assignees: readonly string[],
+  roles: readonly string[],
+  assigned: 'me' | 'any' | 'none' | undefined,
+): boolean {
+  if (assigned === undefined) return true;
+  if (assigned === 'me') return assignees.includes('usr_mock');
+  return assigned === 'any' ? assignees.length > 0 : roles.length === 0 && assignees.length === 0;
+}

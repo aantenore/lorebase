@@ -152,6 +152,22 @@ class GroupRepository:
             )
         return sorted(str(item) for item in (await self._session.execute(statement)).scalars())
 
+    async def members(self, group_ids: Collection[str]) -> dict[str, list[str]]:
+        """Stored members of each of `group_ids` that is a group (provider groups carried in
+        tokens are not stored and not listed)."""
+        wanted = sorted(set(group_ids))
+        if not wanted:
+            return {}
+        rows = await self._session.execute(
+            select(GroupMember.group_id, GroupMember.principal_id)
+            .where(GroupMember.group_id.in_(wanted))
+            .order_by(GroupMember.group_id, GroupMember.principal_id)
+        )
+        found: dict[str, list[str]] = {}
+        for group_id, principal_id in rows:
+            found.setdefault(str(group_id), []).append(str(principal_id))
+        return found
+
     async def subject_exists(self, subject_id: str) -> bool:
         """Whether `subject_id` names a principal or a group (grant subjects)."""
         principal = await self._session.get(Principal, subject_id)

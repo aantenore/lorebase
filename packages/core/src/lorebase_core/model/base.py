@@ -19,6 +19,22 @@ class Model(BaseModel):
         return self.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+#: Role names of a steward list (design 10.7): the names grants use, at most this long.
+MAX_STEWARD_ROLE_CHARS = 64
+#: Upper bound of the roles one steward list names.
+MAX_STEWARD_ROLES = 20
+
+
+def steward_roles(value: object) -> object:
+    """Normalize a steward list before validation: an empty list is the same as none (absent,
+    so canonical content without stewards is unchanged); duplicates are dropped in order."""
+    if isinstance(value, list | tuple):
+        if not value:
+            return None
+        return tuple(dict.fromkeys(value))
+    return value
+
+
 class ElementStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"

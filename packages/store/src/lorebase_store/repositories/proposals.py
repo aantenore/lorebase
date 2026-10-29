@@ -33,6 +33,9 @@ class ProposalRow:
     policies: dict[str, Any] | None = None
     idempotency_key: str | None = None
     updated_at: datetime | None = None
+    kinds: tuple[str, ...] | None = None
+    """Ids of the Kinds its changes touch, from the latest merge attempt (design 10.7);
+    `None` until one ran."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +60,10 @@ class ReviewRow:
 
 
 def _proposal(found: Any) -> ProposalRow:
-    return ProposalRow(**{k: v for k, v in found.items() if k != "domain_id"})
+    values = {k: v for k, v in found.items() if k != "domain_id"}
+    kinds = values.get("kinds")
+    values["kinds"] = None if kinds is None else tuple(kinds)
+    return ProposalRow(**values)
 
 
 class ProposalRepository:
@@ -85,6 +91,7 @@ class ProposalRepository:
                 policies=row.policies,
                 idempotency_key=row.idempotency_key,
                 updated_at=row.updated_at,
+                kinds=None if row.kinds is None else list(row.kinds),
             )
         )
 
@@ -151,11 +158,22 @@ class ProposalRepository:
 
     async def update(self, proposal_id: str, *, at: datetime, **values: Any) -> ProposalRow | None:
         """Set columns (`title`, `description`, `status`, `merged_revision`, `checks`,
-        `policies`) and `updated_at`; returns the row, `None` when it does not exist."""
-        allowed = {"title", "description", "status", "merged_revision", "checks", "policies"}
+        `policies`, `kinds`) and `updated_at`; returns the row, `None` when it does not
+        exist."""
+        allowed = {
+            "title",
+            "description",
+            "status",
+            "merged_revision",
+            "checks",
+            "policies",
+            "kinds",
+        }
         unknown = values.keys() - allowed
         if unknown:
             raise ValueError(f"cannot update {sorted(unknown)}")
+        if values.get("kinds") is not None:
+            values["kinds"] = sorted(values["kinds"])
         await self._session.execute(
             update(PROPOSALS)
             .where(PROPOSALS.c.domain_id == self._domain, PROPOSALS.c.id == proposal_id)

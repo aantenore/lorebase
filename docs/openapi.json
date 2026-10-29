@@ -1471,7 +1471,7 @@
           "domains"
         ],
         "summary": "Get a Domain",
-        "description": "The Domain and the head Revision of its default branch.",
+        "description": "The Domain, the head Revision of its default branch and its ignored settings.",
         "operationId": "get_domain_api_v1_domains__domain_id__get",
         "security": [
           {
@@ -1556,8 +1556,8 @@
         "tags": [
           "domains"
         ],
-        "summary": "Update Domain display metadata",
-        "description": "Change the display name or description. They are not versioned.",
+        "summary": "Update Domain metadata and settings",
+        "description": "Change the display name, the description or allowlisted settings members (`extraction`).\nThey are not versioned; setting changes are audited with their values before and after.",
         "operationId": "update_domain_api_v1_domains__domain_id__patch",
         "security": [
           {
@@ -8011,7 +8011,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8047,7 +8047,7 @@
           "proposals"
         ],
         "summary": "List Proposals",
-        "description": "Proposals the caller may read, newest first.",
+        "description": "Proposals the caller may read, newest first. With `assigned`, a page may hold fewer\nitems than asked while `next_cursor` is set.",
         "operationId": "list_proposals_api_v1_domains__domain_id__proposals_get",
         "security": [
           {
@@ -8149,6 +8149,29 @@
             }
           },
           {
+            "name": "assigned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "me",
+                    "any",
+                    "none"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`me`: Proposals the caller is an assignee of; `any`: with steward roles; `none`: without (design 10.7).",
+              "title": "Assigned"
+            },
+            "description": "`me`: Proposals the caller is an assignee of; `any`: with steward roles; `none`: without (design 10.7)."
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -8229,7 +8252,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8267,7 +8290,7 @@
           "proposals"
         ],
         "summary": "Get a Proposal",
-        "description": "The Proposal with its reviews, approval state and latest merge attempt.",
+        "description": "The Proposal with its reviews, approval state, latest merge attempt and stewards.",
         "operationId": "get_proposal_api_v1_domains__domain_id__proposals__proposal_id__get",
         "security": [
           {
@@ -8336,7 +8359,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8451,7 +8474,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8558,7 +8581,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8675,7 +8698,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8815,7 +8838,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8998,7 +9021,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9124,7 +9147,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9241,7 +9264,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), too few stewards can approve it (`stewards-unavailable`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9399,6 +9422,29 @@
               "title": "Source"
             },
             "description": "Source identity of a claim, e.g. `source:src_...`."
+          },
+          {
+            "name": "assigned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "me",
+                    "any",
+                    "none"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`me`: candidates the caller is an assignee of; `any`: with steward roles; `none`: without (design 10.7). A page may then hold fewer items than asked while `next_cursor` is set.",
+              "title": "Assigned"
+            },
+            "description": "`me`: candidates the caller is an assignee of; `any`: with steward roles; `none`: without (design 10.7). A page may then hold fewer items than asked while `next_cursor` is set."
           },
           {
             "name": "limit",
@@ -12662,6 +12708,36 @@
           "satisfied": {
             "type": "boolean",
             "title": "Satisfied"
+          },
+          "required_from_stewards": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required From Stewards",
+            "description": "Approvals that must come from the Proposal's assignees (protection rule required_approvals_from_stewards); null when the rule does not apply."
+          },
+          "steward_approvals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steward Approvals",
+            "description": "Approvals given by assignees, when the rule applies."
+          },
+          "stewards_unavailable": {
+            "type": "boolean",
+            "title": "Stewards Unavailable",
+            "description": "Steward roles are declared but fewer principals can approve than the rule requires (merge refused with stewards-unavailable).",
+            "default": false
           }
         },
         "type": "object",
@@ -15640,6 +15716,14 @@
             ],
             "title": "Head",
             "description": "Head Revision of the default branch."
+          },
+          "ignored_settings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ignored Settings",
+            "description": "Paths of settings values that do not apply (invalid, or loosening a member the installation does not let Domains loosen), e.g. `extraction.mode`."
           }
         },
         "type": "object",
@@ -15682,11 +15766,26 @@
               }
             ],
             "title": "Description"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings",
+            "description": "Settings members to replace, `null` to remove one: `extraction` (`mode`: review_all, doubts_only or direct; `auto_accept_threshold`; `min_confidence`; `rules`: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}])."
           }
         },
         "type": "object",
         "title": "DomainUpdate",
-        "description": "Display metadata; omitted members are left unchanged."
+        "description": "Display metadata and allowlisted settings members; omitted members are left\nunchanged."
       },
       "DuplicateGroup": {
         "properties": {
@@ -19494,6 +19593,34 @@
             "type": "array",
             "title": "Checks"
           },
+          "steward_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Steward Roles",
+            "description": "Roles that look after the Kinds the changes touch (design 10.7)."
+          },
+          "assignees": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignees",
+            "description": "Principals who can review it as stewards (callers with principal.read only; at most keeper.stewards.max_assignees_listed)."
+          },
+          "assignees_truncated": {
+            "type": "boolean",
+            "title": "Assignees Truncated",
+            "default": false
+          },
           "reviews": {
             "items": {
               "$ref": "#/components/schemas/ReviewOut"
@@ -20539,6 +20666,34 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "steward_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Steward Roles",
+            "description": "Roles that look after its Kind (design 10.7)."
+          },
+          "assignees": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignees",
+            "description": "Principals who can decide it as stewards (callers with principal.read only; at most keeper.stewards.max_assignees_listed)."
+          },
+          "assignees_truncated": {
+            "type": "boolean",
+            "title": "Assignees Truncated",
+            "default": false
           }
         },
         "type": "object",
@@ -22443,6 +22598,15 @@
             },
             "type": "array",
             "title": "Changes"
+          },
+          "warnings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Findings that do not block the change, such as a steward role the installation does not define (`schema.steward_role_unknown`)."
           }
         },
         "type": "object",
@@ -25033,6 +25197,34 @@
             },
             "type": "array",
             "title": "Checks"
+          },
+          "steward_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Steward Roles",
+            "description": "Roles that look after the Kinds the changes touch (design 10.7)."
+          },
+          "assignees": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignees",
+            "description": "Principals who can review it as stewards (callers with principal.read only; at most keeper.stewards.max_assignees_listed)."
+          },
+          "assignees_truncated": {
+            "type": "boolean",
+            "title": "Assignees Truncated",
+            "default": false
           }
         },
         "type": "object",

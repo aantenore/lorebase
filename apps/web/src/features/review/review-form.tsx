@@ -5,6 +5,7 @@ import type { ProposalDetail, ReviewVerdict } from '@/api/types';
 import { review as reviewMessages } from '@/messages/review';
 import { Button } from '@/ui/button';
 import { Select, Textarea } from '@/ui/field';
+import { Stewards } from '@/features/admin/stewards';
 import { Badge } from '@/ui/layout';
 import { useToast } from '@/ui/toast';
 
@@ -55,7 +56,25 @@ export function ReviewForm({ domain, proposal }: { domain: string; proposal: Pro
           {proposal.approval.satisfied ? text.approved : text.waiting}
         </Badge>
         <span>{approvalSummary(proposal)}</span>
+        {proposal.approval.required_from_stewards != null && (
+          <span>
+            {text.fromStewards(
+              proposal.approval.steward_approvals ?? 0,
+              proposal.approval.required_from_stewards,
+            )}
+          </span>
+        )}
       </p>
+      {proposal.approval.stewards_unavailable && (
+        <p role="alert" className="text-sm text-danger">
+          {text.stewardsUnavailable}
+        </p>
+      )}
+      <Stewards
+        roles={proposal.steward_roles}
+        assignees={proposal.assignees}
+        truncated={proposal.assignees_truncated}
+      />
       {proposal.status === 'open' && (
         <form
           aria-label={text.label}

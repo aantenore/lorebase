@@ -27,6 +27,15 @@ function Row({ name, value }: { name: string; value: string | number }) {
   );
 }
 
+const ingestionMode = (settings: Record<string, unknown>): string => {
+  const extraction = settings['extraction'];
+  if (typeof extraction === 'object' && extraction !== null && 'mode' in extraction) {
+    const mode = String(extraction.mode);
+    return mode in T.domain.modes ? T.domain.modes[mode as keyof typeof T.domain.modes] : mode;
+  }
+  return T.domain.installationDefault;
+};
+
 const searchLanguage = (settings: Record<string, unknown>): string => {
   const language = settings['search_language'];
   return typeof language === 'string' ? language : T.domain.defaultLanguage;
@@ -72,8 +81,21 @@ function General() {
             <Row name={T.domain.defaultBranch} value={domainInfo.default_branch} />
             <Row name={T.domain.createdBy} value={domainInfo.created_by} />
             <Row name={T.domain.searchLanguage} value={searchLanguage(domainInfo.settings)} />
+            <Row name={T.domain.ingestionMode} value={ingestionMode(domainInfo.settings)} />
           </TBody>
         </Table>
+        {(domainInfo.ignored_settings ?? []).length > 0 && (
+          <div role="group" aria-label={T.domain.ignoredLabel} className="mt-3 text-sm">
+            <p className="text-muted">{T.domain.ignoredExplanation}</p>
+            <ul className="mt-1 list-disc pl-5">
+              {(domainInfo.ignored_settings ?? []).map((path) => (
+                <li key={path} className="font-mono text-xs">
+                  {path}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </Section>
 
       <Section title={T.runtime.title}>
