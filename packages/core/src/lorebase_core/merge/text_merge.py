@@ -44,11 +44,11 @@ MAX_TOKENS: Final = 20_000
 MAX_COST: Final = 4_000_000
 
 #: A line break followed by one or more blank lines.
-_PARAGRAPH_BREAK = re.compile(r"(\n[ \t\r]*\n(?:[ \t\r]*\n)*)")
+_PARAGRAPH_BREAK = re.compile(r"(\n[ \t\r]*+\n(?:[ \t\r]*+\n)*+)")
 
 #: The end of a sentence: ``.``, ``!``, ``?`` or ``…`` (and closing quotes or brackets), then
 #: whitespace. A full stop inside a word or a number is not followed by whitespace.
-_SENTENCE_END = re.compile(r"[.!?…]+[\"')\]»”\u2019]*\s+")
+_SENTENCE_END = re.compile(r"(?<![.!?…])[.!?…]++[\"')\]»”\u2019]*+\s+")
 
 
 class TextGranularity(StrEnum):

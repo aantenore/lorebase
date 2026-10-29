@@ -73,6 +73,47 @@ def test_tokens_concatenate_to_the_text(text: str, granularity: TextGranularity)
     assert "".join(tokenize(text, granularity)) == text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "." * 200_000,
+        "a." + ")" * 200_000,
+        "a." + ")" * 200_000 + " b.",
+        ".)" * 100_000,
+        "\n" + " " * 200_000,
+        "\n" + " " * 200_000 + "x",
+        "\n \t" * 70_000,
+        "x" + "\n" * 200_000,
+        "a." + " " * 200_000 + "b",
+    ],
+)
+@pytest.mark.parametrize("granularity", [SENTENCE, PARAGRAPH])
+def test_tokenizing_long_runs_is_fast_and_exact(text: str, granularity: TextGranularity) -> None:
+    started = time.monotonic()
+    tokens = tokenize(text, granularity)
+    assert time.monotonic() - started < 2
+    assert "".join(tokens) == text
+
+
+def test_merging_a_long_punctuation_run_is_fast() -> None:
+    base = "." * 100_000
+    started = time.monotonic()
+    result = merge_text(base, base + " ours", base + "!", max_chars=10**6)
+    assert time.monotonic() - started < 5
+    assert result is None or sides(result) == (base, base + " ours", base + "!")
+
+
+def test_sentence_ends_after_a_closer_still_split() -> None:
+    assert tokenize("Wait...) ok. Next.) Done.  End", SENTENCE) == [
+        "Wait...) ",
+        "ok. ",
+        "Next.) ",
+        "Done.  ",
+        "End",
+    ]
+    assert tokenize("a.). b", SENTENCE) == ["a.). ", "b"]
+
+
 def test_sentences_keep_their_trailing_whitespace() -> None:
     assert tokenize("One. Two!  Three?\n\nFour", SENTENCE) == [
         "One. ",
