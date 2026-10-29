@@ -24,7 +24,8 @@ before its `LIMIT`. With pgvector 0.8 or later and `search.semantic.iterative_sc
 statement runs under `hnsw.iterative_scan = relaxed_order` (`lorebase_store.embeddings`) in a
 materialized subquery that the outer query orders again by exact distance. Otherwise the
 index subquery returns `search.candidates * search.semantic.overfetch_factor` nearest rows
-and the outer query filters and trims them. A list shorter than `search.candidates` while
+(`hnsw.ef_search` is raised to that, up to pgvector's 1000, for the transaction) and the
+outer query filters and trims them. A list shorter than `search.candidates` while
 more Records match the filters (the scan bound was reached) is reported as
 `semantic_truncated`.
 
@@ -98,6 +99,7 @@ from lorebase_store.embeddings import (
     index_precision,
     iterative_scans,
     template_fingerprints,
+    use_ef_search,
     use_iterative_scan,
 )
 from lorebase_store.models import metadata
@@ -670,6 +672,9 @@ async def _semantic_scan(session: AsyncSession, runtime: ReadRuntime) -> Semanti
     if semantic.iterative_scan == "auto" and await iterative_scans(session):
         await use_iterative_scan(session, semantic.max_scan_tuples)
         return SemanticScan(None)
+    # The index scan ends after `hnsw.ef_search` rows, whatever the LIMIT: raise it to what is
+    # over-fetched (pgvector caps it at 1000).
+    await use_ef_search(session, runtime.search.candidates * semantic.overfetch_factor)
     return SemanticScan(semantic.overfetch_factor)
 
 

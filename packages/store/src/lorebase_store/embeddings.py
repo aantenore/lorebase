@@ -556,6 +556,22 @@ async def iterative_scans(session: AsyncSession) -> bool:
     return version is not None and version >= ITERATIVE_SCAN_MIN_VERSION
 
 
+HNSW_MAX_EF_SEARCH = 1000
+"""Largest `hnsw.ef_search` pgvector accepts."""
+
+
+async def use_ef_search(session: AsyncSession, wanted: int) -> int:
+    """Let HNSW scans of the rest of the transaction (`SET LOCAL`) return up to `wanted` rows
+    (at most `HNSW_MAX_EF_SEARCH`); returns the value set. Without iterative scans an HNSW
+    scan ends after `hnsw.ef_search` rows (40 by default) whatever the `LIMIT` of its
+    statement, so an over-fetching statement needs this to fetch what it asks for."""
+    ef_search = max(1, min(wanted, HNSW_MAX_EF_SEARCH))
+    await session.execute(
+        sql_text("SELECT set_config('hnsw.ef_search', :ef, true)"), {"ef": str(ef_search)}
+    )
+    return ef_search
+
+
 async def use_iterative_scan(session: AsyncSession, max_scan_tuples: int) -> None:
     """Turn on relaxed-order iterative HNSW scans for the rest of the transaction
     (`SET LOCAL`), bounded to `max_scan_tuples` tuples per scan: the filters of a statement

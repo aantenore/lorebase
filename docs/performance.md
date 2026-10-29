@@ -1180,6 +1180,60 @@ That is not negligible, so `halfvec` is the `compact` choice only; `balanced` an
 full precision. Stored vectors keep full precision in every profile, so switching back costs
 an index build and no data.
 
+### Filtered semantic search
+
+`tests/perf/test_filtered_vectors.py` (`pytest tests/perf/test_filtered_vectors.py -m perf`,
+about a minute at 100,000 vectors; `LOREBASE_PERF_VECTOR_RECORDS` changes the size): Records
+of six Kinds (Supplier 40%, Part 30%, Plant 15%, PurchaseOrder 10%, Contract 4%, RiskFlag 1%),
+each with a synthetic unit vector of 384 dimensions around one of 400 cluster centres (fixed
+seed; the cluster of a Record is unrelated to its Kind, the hard case for a filter), HNSW index
+built after the load (`vector`, m=16, ef_construction=64, pgvector 0.8.7, Postgres 16 in
+Docker Desktop). 40 queries from the same distribution go through the Keeper application
+(`POST /search`, `mode: semantic`, limit 20, default `search` settings) as a role subject to
+row-level security. Recall@20 is against the exact cosine top 20 of the filter (sequential scan,
+index scans off). Milliseconds are the whole request.
+
+| search | results (mean / fewest) | recall@20 | `semantic_truncated` | p50 | p95 |
+|---|---|---:|---:|---:|---:|
+| no filter, iterative scan | 20.0 / 20 | 1.000 | 0 of 40 | 81.2 | 98.7 |
+| 40% filter, iterative scan | 20.0 / 20 | 1.000 | 0 of 40 | 53.8 | 77.0 |
+| 1% filter, iterative scan | 20.0 / 20 | 1.000 | 0 of 40 | 15.0 | 17.6 |
+| 1% filter, over-fetch x4 | 7.8 / 2 | 0.389 | 40 of 40 | 20.6 | 23.6 |
+| 40% filter, over-fetch x4 | 20.0 / 20 | 0.964 | 0 of 40 | 35.9 | 68.0 |
+| 1% filter, over-fetch x100 | 9.8 / 2 | 0.491 | 39 of 40 | 33.5 | 78.7 |
+
+The same run on 300,000 vectors (index 586 MB, built in 57 s), p50 / p95: no filter 269.7 /
+327.6 ms, 40% filter 133.4 / 213.9, 1% filter 20.3 / 32.2, over-fetch x4 at 1% 24.2 / 32.3 and
+at 40% 58.5 / 72.6.
+
+- **The limit is kept and the order is exact** with iterative scans (20 results of 20, recall
+  1.000, no `semantic_truncated`), and a 1% filter is the cheapest case. The budget of design
+  8.7 is 200 ms p95 at 100,000 vectors (measured 99 to 141 ms, the unfiltered case); the test asserts it, a recall of at least 0.90 and the
+  limit.
+- **The plan does not read the HNSW index.** The statement joins `embeddings` to `mat_records`
+  on `object_hash`, and `mat_records` has no index on `(domain_id, branch, object_hash)`.
+  Postgres keeps the order of an HNSW scan through a join only with a nested loop, which needs
+  that index for the Record side. Without it the planner computes the distance of every vector
+  of the model and sorts (hash join of both tables), or, for a selective filter, reads the
+  filter's Records by key and computes the distance of their vectors. Both are exact, which is
+  why recall is 1.000 and why iterative scans change nothing today. The first is linear in the
+  table (82 ms at 100,000 vectors, 270 ms at 300,000) and misses the budget past about
+  200,000 vectors; the second costs the size of the filter, so a 1% filter is the cheap case.
+  Tried by hand on the 100,000-vector database with an index on `mat_records (domain_id,
+  branch, object_hash)`: the planner runs the HNSW scan under the join and stops as soon as
+  200 rows pass (9 ms with no filter against 78, 21 ms at 40% against 50), and keeps the exact
+  plan for the 1% filter (36 ms). The index is not in the migrations (one more index on the
+  largest table), so `test_iterative_scan_reads_the_hnsw_index` is an expected failure that
+  starts failing when it exists.
+- **Over-fetch** (`iterative_scan: off`, or pgvector before 0.8) reads the HNSW index and is
+  fast, but it sees only the nearest `candidates * overfetch_factor` rows: a 1% filter finds
+  about 8 of the 200 wanted, so the list is short (7.8 results of 20, recall 0.39 here) and
+  `semantic_truncated` says so on every query; a broad filter fills the list (recall 0.96).
+  Before the fix of this release the same run returned 0.2 results of 20: an HNSW scan ends
+  after `hnsw.ef_search` rows (40) whatever its `LIMIT`, so the over-fetch never happened.
+  `ef_search` follows the over-fetch now, capped at pgvector's 1000, so a factor above 5 with
+  the default 200 candidates adds nothing (the x100 row).
+
 ## Storage profiles
 
 `store.storage.profile` (`compact`, `balanced`, `fast`, default `balanced`; compose
