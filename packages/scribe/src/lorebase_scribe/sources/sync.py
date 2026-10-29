@@ -8,19 +8,26 @@
    `source/{source}`): create it from the target branch, or, when no Proposal from it is open
    and its head differs from the target's, recreate it at the target head, so every run
    compares the Source with what the target holds now.
-4. Compute the delta against the branch head and commit it in batches of `commit_batch`
-   changes with origin `source_sync` and one provenance entry per changed row (Source id, run
-   id, row locator).
+4. Read the Source's last-written state (`source_written`, the open Proposal's pending state
+   over it) and who set the branch's values, compute the delta (`delta`: upstream changes
+   only; local edits per `local_edits`, design 9.1 "Corrections that stick") and commit it in
+   batches of `commit_batch` changes with origin `source_sync` and one provenance entry per
+   changed row (Source id, run id, row locator).
 5. Open the Source's Proposal into the target branch, or update the open one (title with the
-   run's counts, idempotent per run), raise the reconciliation candidates of the run's changes
-   against the target head (design 10.6, `lorebase_scribe.reconcile.sources`; linked to the
-   Proposal, so its `reconciliation` check sees them), then apply the merge policy:
-   `proposal` computes the merge preview only; `auto_when_clean` merges when no Conflict
-   remains; and `auto_with_authority` also resolves value Conflicts on Attributes whose
-   `authority` is the Source in the Source's favor.
+   run's counts, idempotent per run), and stage the run's last-written state in it (it
+   becomes the state when the Proposal merges, `MergeService`; a run with nothing to merge
+   records it at once). Raise the reconciliation candidates of the run's changes against the
+   target head (design 10.6, `lorebase_scribe.reconcile.sources`; linked to the Proposal, so
+   its `reconciliation` check sees them). Under `local_edits: keep`, resolve the local-edit
+   Conflicts of the merge attempt by the ranking of `delta.KEPT_ORIGINS` (resolver
+   `policy:local_edits`). Then apply the merge policy: `proposal` computes the merge preview
+   only; `auto_when_clean` merges when no Conflict remains, local-edit Conflicts included;
+   and `auto_with_authority` also writes the Attributes whose `authority` is the Source over
+   local edits and resolves their value Conflicts in the Source's favor. Every local edit
+   is audited as `source.local_edit_conflict`.
 
 A dry run reads, maps and computes the delta against the state step 3 would produce, then
-records the counts without writing to any branch.
+records the counts (local edits and seeding included) without writing to any branch.
 """
 
 from __future__ import annotations
@@ -38,7 +45,7 @@ from typing import Any
 from pydantic import JsonValue, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from lorebase_core.merge import MergePolicy, Side
+from lorebase_core.merge import MergePolicy, Resolution, ResolutionChoice, Side
 from lorebase_core.model import (
     IdPrefix,
     ProvenanceEntry,
@@ -52,6 +59,7 @@ from lorebase_core.model.source import MergePolicy as SourcePolicy
 from lorebase_core.model.source import SyncMode
 from lorebase_core.reconcile import ReconcileOptions
 from lorebase_core.revision import Author, Origin
+from lorebase_core.tree import kind_partition
 from lorebase_core.types.encoding import format_timestamp
 from lorebase_scribe.reconcile.detector import Detector, Raised, SemanticStage, effective_options
 from lorebase_scribe.reconcile.sources import sync_disagreements
@@ -60,7 +68,11 @@ from lorebase_scribe.sources.connectors import ConnectorFactory, default_connect
 from lorebase_scribe.sources.delta import (
     CurrentState,
     Delta,
+    EditRules,
+    Outcome,
+    Setter,
     StoredRecord,
+    WrittenState,
     batches,
     compute_delta,
 )
@@ -72,6 +84,7 @@ from lorebase_scribe.sources.mapping import (
     SourceDefinitionError,
 )
 from lorebase_scribe.telemetry import SOURCE_CHANGES, SOURCE_ROWS, tracer
+from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.commit import Change, ValidationFailedError, commit
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize import create_branch
@@ -85,8 +98,11 @@ from lorebase_store.repositories import (
     ProposalRepository,
     ProposalRow,
     RefRepository,
+    ResolutionRepository,
+    ResolutionRow,
     SourceRunRepository,
     SourceRunRow,
+    SourceWrittenRepository,
     scope_to_domain,
 )
 from lorebase_store.runtime import StoreRuntime
@@ -99,6 +115,10 @@ POLICY_KEY = "merge_policy"
 """Key of the merge policy in a Domain's settings and in a Proposal's `policies`."""
 SYNC_ORIGIN = "source_sync"
 ISSUE_SAMPLES = 10
+LOCAL_EDITS_RESOLVER = "policy:local_edits"
+"""Resolver of the local-edit Conflicts a `keep` Source resolves (design 6.10)."""
+LOCAL_EDIT_ACTION = "source.local_edit_conflict"
+"""Audit action of each local edit a run meets (design 9.1)."""
 
 Clock = Callable[[], datetime]
 
@@ -210,6 +230,10 @@ class SyncReport:
     errors: list[dict[str, JsonValue]] = field(default_factory=list)
     watermark: dict[str, JsonValue] | None = None
     duration_ms: int = 0
+    #: Local edits met, by outcome (`conflict`, `kept`, `overwritten`, `deleted`).
+    local_edits: dict[str, int] = field(default_factory=dict)
+    #: Keys seen without last-written state.
+    seeded: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -234,6 +258,8 @@ class SyncReport:
             "errors": list(self.errors),
             "watermark": self.watermark,
             "duration_ms": self.duration_ms,
+            "local_edits": dict(self.local_edits),
+            "seeded": self.seeded,
         }
 
 
@@ -272,21 +298,33 @@ def domain_merge_policy(domain: DomainRow) -> MergePolicy:
         return MergePolicy()
 
 
+def authority_attributes(schema: Schema, source: Source) -> frozenset[str]:
+    """Attributes whose `authority` is the Source, under `auto_with_authority` (else none)."""
+    if source.target_branch_policy.merge_policy is not SourcePolicy.AUTO_WITH_AUTHORITY:
+        return frozenset()
+    kind = schema.kinds.get(source.target_kind)
+    return frozenset(
+        attribute.id
+        for attribute in (kind.attributes.values() if kind else ())
+        if attribute.authority == source.id
+    )
+
+
 def merge_policy(domain: DomainRow, schema: Schema, source: Source) -> MergePolicy:
     """The policy of the Source's merges: the Domain's, plus, for `auto_with_authority`, the
     Source's side on every Attribute it is the authority of."""
     policy = domain_merge_policy(domain)
-    if source.target_branch_policy.merge_policy is not SourcePolicy.AUTO_WITH_AUTHORITY:
+    authority = dict.fromkeys(authority_attributes(schema, source), Side.THEIRS)
+    if not authority:
         return policy
-    kind = schema.kinds.get(source.target_kind)
-    authority = {
-        attribute.id: Side.THEIRS
-        for attribute in (kind.attributes.values() if kind else ())
-        if attribute.authority == source.id
-    }
     return policy.model_copy(
         update={"prefer_attributes": {**policy.prefer_attributes, **authority}}
     )
+
+
+def edit_rules(schema: Schema, source: Source) -> EditRules:
+    """How the Source's runs treat local edits (design 9.1)."""
+    return EditRules(source.local_edit_mode, authority_attributes(schema, source))
 
 
 def _issues(error: ValidationFailedError) -> list[dict[str, Any]]:
@@ -428,15 +466,20 @@ class SourceSync:
             await scope_to_domain(session, domain.id)
             state_branch = await self._prepare_branch(session, domain, report)
             current = await self._current(session, domain.id, state_branch, mapper, source)
+            written = await self._written(session, domain.id, mapper, source, report)
         delete_missing = source.sync_mode is SyncMode.SNAPSHOT and report.rows_failed == 0
         delta = compute_delta(
             mapper,
             read.rows,
             current,
+            written,
             delete_missing=delete_missing,
             provenance=lambda row: self._provenance(source, report.run_id, row),
+            rules=edit_rules(schema, source),
         )
         report.counts = delta.counts()
+        report.local_edits = delta.local_edit_counts()
+        report.seeded = delta.seeded
         SOURCE_CHANGES.add(
             delta.change_count, {"lorebase.source": source.api_name, "dry_run": report.dry_run}
         )
@@ -588,20 +631,66 @@ class SourceSync:
         async for page in rows.stream_records(mapper.kind.id, batch=batch):
             for row in page:
                 records[row.key] = StoredRecord(row.object_hash, row.values)
-        owned = await rows.record_keys_with_origin(
-            mapper.kind.id,
-            origin_type=SYNC_ORIGIN,
-            origin_field="source_id",
-            origin_value=source.id,
-        )
+        origin = {
+            "origin_type": SYNC_ORIGIN,
+            "origin_field": "source_id",
+            "origin_value": source.id,
+        }
+        owned = await rows.record_keys_with_origin(mapper.kind.id, **origin)
+        foreign = {
+            (found.key, found.attribute): Setter(found.origin_type, found.actor)
+            for found in await rows.attribute_origins_except(mapper.kind.id, **origin)
+        }
         links: dict[str, dict[str, frozenset[str]]] = {}
+        owned_links: dict[str, frozenset[tuple[str, str]]] = {}
         for relation_id in mapper.relations:
             by_from: dict[str, set[str]] = defaultdict(set)
             async for link_page in rows.stream_links(relation_id, batch=batch):
                 for link in link_page:
                     by_from[link.from_key].add(link.to_key)
             links[relation_id] = {key: frozenset(to) for key, to in by_from.items()}
-        return CurrentState(records=records, owned=frozenset(owned), links=links)
+            owned_links[relation_id] = frozenset(
+                await rows.link_pairs_with_origin(relation_id, **origin)
+            )
+        return CurrentState(
+            records=records,
+            owned=frozenset(owned),
+            links=links,
+            foreign=foreign,
+            owned_links=owned_links,
+        )
+
+    async def _written(
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        mapper: RowMapper,
+        source: Source,
+        report: SyncReport,
+    ) -> WrittenState:
+        """The Source's last-written state, with the pending state of its open Proposal over
+        it (the Proposal's branch holds what that state describes)."""
+        repository = SourceWrittenRepository(
+            session, domain_id, writes=self._runtime.settings.writes
+        )
+        elements = (mapper.kind.id, *mapper.relations)
+        state = {
+            element: await repository.current(source.id, report.target, element)
+            for element in elements
+        }
+        preserve: dict[str, tuple[str, ...]] = {}
+        proposal = await self._open_proposal(session, domain_id, report.branch, report.target)
+        if proposal is not None:
+            for element in elements:
+                pending = await repository.pending(proposal.id, element)
+                state[element].update(pending)
+                if element == mapper.kind.id:
+                    preserve = {key: row.preserve for key, row in pending.items() if row.preserve}
+        return WrittenState(
+            records=state[mapper.kind.id],
+            links={relation_id: state[relation_id] for relation_id in mapper.relations},
+            preserve=preserve,
+        )
 
     def _provenance(self, source: Source, run_id: str, row: MappedRow) -> ProvenanceEntry:
         return ProvenanceEntry(
@@ -722,8 +811,12 @@ class SourceSync:
                     session, domain.id, report.branch, report.target
                 )
             automatic = mode is not SourcePolicy.PROPOSAL
+            delta = None if changes is None else changes[1]
             if not report.revisions and (proposal is None or not automatic):
-                # Nothing new: an open Proposal is left as it is (a no-op run).
+                # Nothing new: an open Proposal is left as it is (a no-op run). With no
+                # Proposal the branch holds the target's values: the state is recorded now.
+                if delta is not None:
+                    await self._keep_state(session, domain.id, source, report, delta, proposal)
                 if proposal is not None:
                     report.proposal_id = proposal.id
                     report.proposal_status = proposal.status.value
@@ -754,17 +847,130 @@ class SourceSync:
                 assert updated is not None
                 proposal = updated
             report.proposal_id = proposal.id
+            if delta is not None and proposal.status is ProposalStatus.OPEN:
+                await self._keep_state(session, domain.id, source, report, delta, proposal)
             if changes is not None:
                 await self._reconcile(session, domain, schema, source, report, changes, proposal.id)
             if proposal.status is not ProposalStatus.OPEN:
                 report.proposal_status = proposal.status.value
                 return
+            if delta is not None:
+                await self._resolve_local_edits(session, domain.id, proposal, policy, delta, source)
             result = await self._merge(session, domain.id, proposal, policy, mode, report)
             report.merge_status = result.attempt.status.value
             if result.computation is not None:
                 report.conflicts = result.computation.open_count
             final = await proposals.get(proposal.id)
             report.proposal_status = None if final is None else final.status.value
+            if delta is not None:
+                await self._audit_local_edits(session, domain.id, source, report, delta)
+
+    async def _keep_state(
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        source: Source,
+        report: SyncReport,
+        delta: Delta,
+        proposal: ProposalRow | None,
+    ) -> None:
+        """Stage the run's last-written state in the open Proposal, or, without one, record
+        it as the current state (module doc, step 5)."""
+        if not delta.states:
+            return
+        ref = await RefRepository(session, domain_id).require(report.branch)
+        rows = [draft.row(ref.head, report.run_id) for draft in delta.states]
+        repository = SourceWrittenRepository(
+            session, domain_id, writes=self._runtime.settings.writes
+        )
+        keep = None if proposal is None else proposal.id
+        await repository.discard_others(source.id, report.target, keep)
+        if proposal is None:
+            await repository.record(source.id, report.target, rows)
+        else:
+            await repository.stage(proposal.id, source.id, report.target, rows)
+
+    async def _resolve_local_edits(
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        proposal: ProposalRow,
+        policy: MergePolicy,
+        delta: Delta,
+        source: Source,
+    ) -> None:
+        """Resolve the local-edit Conflicts a `keep` Source decides (design 9.1, 6.10)."""
+        partition = kind_partition(source.target_kind)
+        decided: dict[tuple[str, str | None, str | None], Outcome] = {
+            (partition, edit.key, edit.attribute): edit.outcome
+            for edit in delta.local_edits
+            if edit.preserved and edit.outcome in (Outcome.KEPT, Outcome.OVERWRITTEN)
+        }
+        if not decided:
+            return
+        service = MergeService(session, domain_id, runtime=self._runtime, clock=self._clock)
+        preview = await service.recompute(
+            MergeRequest(proposal=proposal, actor=self._principal, policy=policy)
+        )
+        if preview.computation is None:
+            return
+        now = self._clock()
+        rows: list[ResolutionRow] = []
+        for state in preview.computation.conflicts:
+            conflict = state.conflict
+            found = (conflict.partition, conflict.key, conflict.attribute)
+            outcome = decided.get(found)
+            if not state.open or outcome is None:
+                continue
+            choice = ResolutionChoice.OURS if outcome is Outcome.KEPT else ResolutionChoice.THEIRS
+            resolution = Resolution(fingerprint=conflict.fingerprint, choice=choice)
+            rows.append(
+                ResolutionRow(
+                    fingerprint=conflict.fingerprint,
+                    resolution=resolution.model_dump(mode="json", exclude={"resolver"}),
+                    resolved_by=LOCAL_EDITS_RESOLVER,
+                    at=now,
+                )
+            )
+        await ResolutionRepository(session, domain_id).upsert_many(proposal.id, rows)
+
+    async def _audit_local_edits(
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        source: Source,
+        report: SyncReport,
+        delta: Delta,
+    ) -> None:
+        """One `source.local_edit_conflict` entry per local edit; never values."""
+        if not delta.local_edits:
+            return
+        mode = source.local_edit_mode.value
+        now = self._clock()
+        await AuditRepository(session).append_many(
+            [
+                NewAuditEntry(
+                    actor=self._principal,
+                    action=LOCAL_EDIT_ACTION,
+                    domain_id=domain_id,
+                    target=report.proposal_id,
+                    details={
+                        "source": source.id,
+                        "run": report.run_id,
+                        "proposal": report.proposal_id,
+                        "kind": source.target_kind,
+                        "key": edit.key,
+                        "attribute": edit.attribute,
+                        "origin_type": None if edit.setter is None else edit.setter.origin_type,
+                        "actor": None if edit.setter is None else edit.setter.actor,
+                        "local_edits": mode,
+                        "outcome": edit.outcome.value,
+                    },
+                    at=now,
+                )
+                for edit in delta.local_edits
+            ]
+        )
 
     async def _merge(
         self,

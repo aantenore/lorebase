@@ -213,6 +213,12 @@ export const modelerEditors = {
       branchTemplate: 'Branch template',
       branchTemplatePlaceholder: 'source/{source}',
       mergePolicy: 'Merge policy',
+      localEdits: 'Local edits',
+      localEditsHint:
+        'What an upstream change does to a value someone changed since the last sync.',
+      review: 'review: a Conflict for a reviewer',
+      keep: "keep: the person's value stays",
+      sourceWins: 'source_wins: the upstream value overwrites it',
     },
     preview: {
       intro: (rows: number, kind: string | null) =>

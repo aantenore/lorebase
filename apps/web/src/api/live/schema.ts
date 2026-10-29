@@ -347,6 +347,7 @@ const SOURCE_KEYS = [
   'sync_mode',
   'schedule',
   'target_branch_policy',
+  'local_edits',
 ] as const;
 
 function source(raw: Raw): Source {
@@ -361,6 +362,7 @@ function source(raw: Raw): Source {
   const recordsPath = strOrNull(raw['records_path']);
   const separator = strOrNull(raw['flatten_separator']);
   const http = isRaw(raw['http']) ? raw['http'] : undefined;
+  const localEdits = strOrNull(raw['local_edits']);
   const extra = omit(raw, SOURCE_KEYS);
   return {
     id: str(raw['id']),
@@ -390,6 +392,9 @@ function source(raw: Raw): Source {
       })),
     scope_filter: strOrNull(raw['scope_filter']),
     sync_mode: str(raw['sync_mode'], 'snapshot') as Source['sync_mode'],
+    ...(localEdits === null
+      ? {}
+      : { local_edits: localEdits as NonNullable<Source['local_edits']> }),
     schedule: strOrNull(raw['schedule']),
     target_branch_policy: {
       ...(typeof policy['branch_template'] === 'string'

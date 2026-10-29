@@ -7,6 +7,11 @@ with its Conflicts (the previous open attempt of the Proposal becomes `stale`); 
 are read from `conflict_resolutions` and matched by fingerprint, so an attempt recomputed
 against moved heads keeps the resolutions whose Conflicts did not change.
 
+A Source Proposal whose run met local edits (design 9.1) merges against a preserved base: the
+merge base with the values the Source last wrote (`merging.preserved`). When it merges, the
+last-written state it carries advances in the same transaction
+(`SourceWrittenRepository.promote`).
+
 `merge` runs under the target branch lock and, when no Conflict remains, writes the outcome
 like the commit pipeline (design 6.6): objects, nodes, the merge Revision with parents
 `[target head, source head]`, changeset and provenance, materialization of the changeset on the
@@ -84,7 +89,13 @@ from lorebase_store.merging.attempts import (
     taken_provenance,
 )
 from lorebase_store.merging.lineage import BranchLineage, MergeLineage
-from lorebase_store.models.enums import MergeAttemptStatus, ProposalStatus, RefKind
+from lorebase_store.merging.preserved import base_overrides
+from lorebase_store.models.enums import (
+    MergeAttemptStatus,
+    ProposalOrigin,
+    ProposalStatus,
+    RefKind,
+)
 from lorebase_store.nodestore import PgNodeStore
 from lorebase_store.objectstore import EncodedObject, SessionObjectStore
 from lorebase_store.repositories.deferred_events import DeferredEventRepository
@@ -113,6 +124,7 @@ from lorebase_store.repositories.refs import (
 )
 from lorebase_store.repositories.revisions import PgRevisionGraph, RevisionRow
 from lorebase_store.repositories.scope import scope_to_domain
+from lorebase_store.repositories.source_written import SourceWrittenRepository
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.telemetry import MERGE_ATTEMPTS
 
@@ -347,6 +359,9 @@ class MergeService:
         created_at = self._clock()
         attempt_id = f"{ATTEMPT_PREFIX}_{new_ulid()}"
         runtime = self._runtime
+        from_source = request.proposal.origin is ProposalOrigin.SOURCE_SYNC
+        written = SourceWrittenRepository(session, domain_id, writes=settings.writes)
+        preserved = await written.preserved(request.proposal.id) if from_source else []
 
         def compute(sync: Session) -> _Computed:
             store = PgNodeStore(
@@ -375,6 +390,9 @@ class MergeService:
                 policy=request.policy,
                 tree_params=TreeParams(domain.leaf_size),
                 schema_rules=runtime.schema.rules(),
+                base_overrides=base_overrides(preserved, store, objects, graph)
+                if preserved
+                else {},
             )
             computation = compute_attempt(merge_input, resolutions)
             prepared = None
@@ -396,6 +414,8 @@ class MergeService:
         events: list[int] = []
         if commit and computation.clean:
             head = await self._commit(request, target, source, computed, created_at)
+            if from_source:
+                await written.promote(request.proposal.id)
             events = await DeferredEventRepository(session, domain_id).release(
                 source.name,
                 source.head,

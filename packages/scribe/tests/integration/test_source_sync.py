@@ -185,17 +185,17 @@ async def test_direct_merge_snapshot_deletes_and_refresh(
     assert removed.proposal_status == "merged"
     assert await count_records(sessions, "main") == 29
 
-    # A manual edit on main of an Attribute the Source owns: the next run starts the Source
-    # branch from main again and puts the Source's value back.
+    # A manual edit on main of an Attribute the Source owns: upstream did not change it, so
+    # the next run leaves it (design 9.1 "Corrections that stick").
     kind = schema.kind_by_api_name("Supplier")
     assert kind is not None
     original = next(r for r in rows("supplier.csv") if r["supplier_code"] == "S-1001")
     await commit_on(
         sessions, runtime, clock, [record_change(kind, {**original, "legal_name": "Renamed"})]
     )
-    restored = await sync.run(DOMAIN, SUPPLIERS)
-    assert restored.counts["changed"] == 1
-    assert restored.proposal_status == "merged"
+    kept = await sync.run(DOMAIN, SUPPLIERS)
+    assert kept.counts["changed"] == 0
+    assert kept.revisions == []
     legal_name = kind.attribute_by_api_name("legal_name")
     assert legal_name is not None
     value = await scalar(
@@ -205,7 +205,7 @@ async def test_direct_merge_snapshot_deletes_and_refresh(
         a=legal_name.id,
         d=DOMAIN,
     )
-    assert value == original["legal_name"]
+    assert value == "Renamed"
 
 
 async def test_dry_run_writes_nothing(

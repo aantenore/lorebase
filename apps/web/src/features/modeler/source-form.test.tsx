@@ -188,6 +188,17 @@ describe('Source editor', () => {
     });
   });
 
+  it('sets what an upstream change does to local edits, review being the default', async () => {
+    const user = userEvent.setup();
+    const { current } = renderForm(SourcesForm, document());
+    const localEdits = screen.getByRole('combobox', { name: 'Local edits' });
+    expect(localEdits).toHaveValue('review');
+    await user.selectOptions(localEdits, 'keep');
+    expect(source(current())['local_edits']).toBe('keep');
+    await user.selectOptions(localEdits, 'review');
+    expect(source(current())).not.toHaveProperty('local_edits');
+  });
+
   it('shows validation errors next to their fields', () => {
     renderForm(SourcesForm, document(), [
       {

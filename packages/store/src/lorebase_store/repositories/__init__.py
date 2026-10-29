@@ -31,6 +31,7 @@ from lorebase_store.repositories.materializations import (
     copy_fence,
 )
 from lorebase_store.repositories.materialized import (
+    AttributeOrigin,
     HistoryRow,
     HistoryStep,
     LinkRow,
@@ -87,6 +88,11 @@ from lorebase_store.repositories.revisions import (
 )
 from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.repositories.source_runs import SourceRunRepository, SourceRunRow
+from lorebase_store.repositories.source_written import (
+    PreservedRow,
+    SourceWrittenRepository,
+    WrittenRow,
+)
 from lorebase_store.repositories.suggestions import (
     MergeOutcome,
     RecordOutcome,
@@ -96,6 +102,7 @@ from lorebase_store.repositories.suggestions import (
 
 __all__ = [
     "EVERY_PARTITION",
+    "AttributeOrigin",
     "BranchMaterializationRepository",
     "CandidateFilter",
     "CandidateRow",
@@ -134,6 +141,7 @@ __all__ = [
     "OutboxRepository",
     "PartitionFilter",
     "PgRevisionGraph",
+    "PreservedRow",
     "ProposalChecks",
     "ProposalFilter",
     "ProposalItemRepository",
@@ -160,8 +168,10 @@ __all__ = [
     "SchemaSuggestionRepository",
     "SourceRunRepository",
     "SourceRunRow",
+    "SourceWrittenRepository",
     "SuggestionRow",
     "UpsertOutcome",
+    "WrittenRow",
     "advisory_lock_key",
     "copy_fence",
     "scope_to_domain",

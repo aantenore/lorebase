@@ -728,6 +728,24 @@ function Sync({
           setPolicy('merge_policy', event.target.value);
         }}
       />
+      <Select
+        label={t.sync.localEdits}
+        hint={t.sync.localEditsHint}
+        value={asText(source['local_edits']) || 'review'}
+        error={errorAt(issues, `${path}/local_edits`)}
+        options={[
+          { value: 'review', label: t.sync.review },
+          { value: 'keep', label: t.sync.keep },
+          { value: 'source_wins', label: t.sync.sourceWins },
+        ]}
+        onChange={(event) => {
+          const value = event.target.value;
+          change((target) => {
+            // `review` is the default: left out, as the server stores it.
+            setOrDelete(target, 'local_edits', value === 'review' ? '' : value);
+          });
+        }}
+      />
     </div>
   );
 }

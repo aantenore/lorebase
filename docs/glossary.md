@@ -45,7 +45,7 @@ A computed Attribute or Relation, defined declaratively and recomputed from its 
 Example: `Part.single_sourced` is `true` when the Part has exactly one `supplied_by` Link.
 
 ### Source
-External backing data mapped into a Kind: a database table or query, a CSV or Parquet file, or an API. A Source defines key mapping, Attribute mapping with transforms, Relation mapping, scope, sync mode and merge policy.
+External backing data mapped into a Kind: a database table or query, a CSV or Parquet file, or an API. A Source defines key mapping, Attribute mapping with transforms, Relation mapping, scope, sync mode, merge policy and what an upstream change does to a local edit (`local_edits`). A Source writes only what changed upstream since it last wrote it, so a correction made on the target stays until upstream changes that value.
 
 Example: the Source `erp.vendors` maps the ERP Postgres table `vendors` to the Kind `Supplier`, with `vendor_id` as key, nightly `snapshot` sync and the policy `auto_with_authority` for Attributes the ERP owns.
 
@@ -75,6 +75,11 @@ Example: Revision `9f2c41...` "Sync erp.vendors run 7" changed 1,840 Records and
 A request to merge one Branch into another, with diff, checks, reviews and Conflict resolution. Extraction jobs and Source syncs also produce Proposals, with per-item evidence when the content comes from documents.
 
 Example: Proposal #42 "Contracts batch October" proposes 280 new `Contract` Records, each with a quoted evidence span from a PDF.
+
+### Local edit
+A value someone other than a Source (a person through an Operation, a Conflict resolution, another Source) set on the target since that Source last wrote it. When upstream changes the same value, the Source's Proposal holds a Conflict whose base is the Source's previous value (`local_edits: review`), the person's value wins (`keep`) or the upstream value overwrites it (`source_wins`) ([design 9.1](design.md#91-structured-sources)).
+
+Example: Sofia corrects `Supplier/S-1003.risk_score` to `10`; the nightly sync keeps it while the CSV still says `32`, and opens a `DV1` (base `32`, ours `10`, theirs `71`) the night the CSV says `71`.
 
 ### Conflict
 A disagreement found while merging. Attribute-level Conflicts arise when both sides changed the same value differently; structural Conflicts arise when the merged schema and data would break a rule (removed Kind with new Records, failed type cast, cardinality violation, and others). A long text edited in different sentences on each side is merged, not a Conflict; when the same sentence changed on both sides, the resolver shows the text passage by passage.

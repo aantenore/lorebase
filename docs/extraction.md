@@ -65,6 +65,11 @@ flowchart LR
    document, evidence offsets, model, prompt version, and the value's validity period when the
    item states one). The rest wait for review, and so do value items that contradict the
    current value's source (`scribe.reconciliation.hold_auto_accept`, [Scribe](scribe.md#reconciliation)).
+   A value item over a value a person set last (an Operation, or a Conflict resolution or
+   reconciliation decision by a principal rather than a policy; agents count) is never accepted
+   at once, whatever its confidence: it stays pending with `"hold": "local_edit"` in its match
+   (`held_local_edit` in the job stats). A reviewer may still accept it
+   ([design 9.1](design.md#91-structured-sources), "Corrections that stick").
 7. **Review** (`GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide`).
    Reviewers accept, reject or reset items, one by one with edits or in bulk by filter. After
    each decision the branch is re-materialized to hold exactly the accepted items (a rejected

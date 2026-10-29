@@ -1,7 +1,9 @@
 """Three-way merge engine (design 6.8 to 6.10): orchestration and resolution application.
 
 ``merge`` finds the merge base (a virtual one for criss-cross histories, AC-13), merges the
-schema, then the data under the merged schema, then checks consistency. The outcome is a
+schema, then the data under the merged schema, then checks consistency. ``base_overrides``
+replace values of chosen elements in that base (a preserved base, design 9.1), so a change
+the base no longer shows is merged as a change of both sides. The outcome is a
 ``MergedTree`` ready for the commit pipeline, or a ``MergeAttempt`` listing Conflicts.
 ``apply_resolutions`` re-runs the merge with the resolver's decisions.
 """
@@ -12,7 +14,11 @@ import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import cast
 
+from pydantic import JsonValue
+
+from lorebase_core.canonical import ObjectType, normalize
 from lorebase_core.merge.conflicts import (
     AutoResolution,
     Conflict,
@@ -30,6 +36,8 @@ from lorebase_core.merge.objects import (
     ObjectStore,
     SchemaLoader,
     data_object_type,
+    load_object,
+    partition_element,
     tree_schema_loader,
 )
 from lorebase_core.merge.policies import ChangeStamp, MergePolicy
@@ -53,10 +61,12 @@ from lorebase_core.tree import (
     tree_apply,
     tree_diff,
     tree_entries,
+    tree_get,
 )
 from lorebase_core.validate import IndexView, SchemaRules
 
 __all__ = [
+    "BaseOverrides",
     "IndexViewFactory",
     "LineageLoader",
     "MergeAttempt",
@@ -81,7 +91,13 @@ the last change of each Attribute of an element at a Revision. Read by the ``aut
 and ``newest_wins`` policies for ``ours`` and ``theirs``; an element without Lineage maps to
 an empty mapping."""
 
+BaseOverrides = Mapping[tuple[str, str], Mapping[str, JsonValue]]
+"""``(partition, key) -> {attribute id: value}``: values the merge base of an element takes
+instead of its own; ``None`` means absent. A Record the base does not hold is added with the
+values given; other elements the base does not hold are left as they are."""
+
 _VIRTUAL_LABEL = b"lb1\x00virtual-base\x00"
+_PRESERVED_LABEL = b"lb1\x00preserved-base\x00"
 
 
 @dataclass(frozen=True)
@@ -93,7 +109,8 @@ class MergeInput:
     ``resolutions`` are matched to Conflicts by fingerprint. ``schema_rules`` are the options
     of the static checks of the merged schema (the defaults when unset). ``lineage`` gives the
     ``authority`` and ``newest_wins`` policies the provenance entries of both sides; without
-    it those policies never decide.
+    it those policies never decide. ``base_overrides`` turn the base into a virtual one with
+    those values (module doc); a merge they change is always three-way.
     """
 
     store: NodeStore
@@ -111,6 +128,7 @@ class MergeInput:
     tree_params: TreeParams = field(default_factory=TreeParams)
     resolutions: tuple[Resolution, ...] = ()
     schema_rules: SchemaRules | None = None
+    base_overrides: BaseOverrides = field(default_factory=dict)
 
 
 class MergeResult(StrEnum):
@@ -251,6 +269,10 @@ class _Engine:
         assert theirs_root is not None
         if status is MergeStatus.UP_TO_DATE:
             return self.unchanged(ours_root, base)
+        if merge_input.base_overrides:
+            preserved = self.preserve_base(base)
+            if preserved is not None:
+                return self.three_way(preserved, True)
         if status is MergeStatus.FAST_FORWARD and merge_input.policy.fast_forward:
             return self.fast_forward(ours_root, theirs_root, base)
         return self.three_way(base, virtual)
@@ -448,6 +470,53 @@ class _Engine:
                 loader(revision, partition, key)
             )
         return found
+
+    # Preserved base (design 9.1) -------------------------------------------------------
+
+    def preserve_base(self, base: bytes | None) -> bytes | None:
+        """A virtual Revision whose tree is the base's with ``base_overrides`` applied, or
+        ``None`` when they change nothing."""
+        root = self.root_of(base)
+        if base is None or root is None:
+            return None
+        objects = self.input.objects
+        changes: list[TreeChange] = []
+        for (partition, key), values in sorted(self.input.base_overrides.items()):
+            found = tree_get(self.store, root, partition, key)
+            if found is not None:
+                payload = load_object(objects, found)
+            elif data_object_type(partition) is ObjectType.RECORD and any(
+                v is not None for v in values.values()
+            ):
+                # A Record the base lacks (deleted before the base) takes the values given.
+                kind = partition_element(partition)
+                assert kind is not None
+                payload = {"kind": kind, "key": key, "values": {}}
+            else:
+                continue
+            stored = payload.get("values")
+            current = dict(stored) if isinstance(stored, dict) else {}
+            updated = dict(current)
+            for attribute, value in values.items():
+                if value is None:
+                    updated.pop(attribute, None)
+                else:
+                    updated[attribute] = value
+            if updated == current:
+                continue
+            body = cast(JsonValue, normalize({**payload, "values": updated}))
+            changes.append(
+                TreeChange(partition, key, objects.put(data_object_type(partition), body))
+            )
+        if not changes:
+            return None
+        new_root = tree_apply(self.store, root, changes, self.input.tree_params)
+        digest = hashlib.sha256(_PRESERVED_LABEL)
+        for part in (base, new_root):
+            digest.update(part)
+        virtual = digest.digest()
+        self.virtual_roots[virtual] = new_root
+        return virtual
 
     # Virtual merge base (AC-13) -----------------------------------------------------------
 
