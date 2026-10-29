@@ -25,9 +25,14 @@ A typed, directional connection between two Kinds, with a forward name, an inver
 Example: `Part supplied_by Supplier` (inverse `supplies`), `many_to_many`, with link Attribute `is_primary: boolean`.
 
 ### Trait
-A shared set of Attributes that several Kinds implement by mapping their own Attributes to it. Queries and Operations can target a Trait instead of a single Kind.
+A shared set of Attributes that several Kinds implement by mapping their own Attributes to it. Queries, search, context packs and Operations can target a Trait instead of a single Kind.
 
 Example: the Trait `Located` (`country`, `city`) is implemented by `Supplier` and `Plant`; a query on `Located` with `country = "IT"` returns both Italian suppliers and Italian plants.
+
+### Lens
+A named, schema-validated preset of a read: which Kinds and Traits it is about, which Relations to follow, how deep, which optional sections to include and a budget. A request through a lens (`lens` on search and context packs) takes the lens's members as defaults; what the request names wins. A lens is a preset, not a permission: grants apply to everything it names.
+
+Example: the lens `supplier_risk` (Supplier, Contract, Part, RiskFlag; depth 1) turns "what should I know about this supplier" into `{"lens": "supplier_risk", "refs": ["Supplier/S-1001"]}`.
 
 ### Operation
 A governed write with parameters, preconditions, steps, permissions, review policy and audit. Operations are the only way users and agents change data. Lorebase provides built-in Operations per Kind and Relation; teams define custom ones for business intent.

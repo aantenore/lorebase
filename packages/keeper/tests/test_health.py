@@ -79,13 +79,13 @@ def test_database_check_is_built_from_settings(
 ) -> None:
     monkeypatch.setenv("TEST_DB_DSN", DSN)
     app = make_app(sections={"database": {"dsn": "secret://env/TEST_DB_DSN"}})
-    [check] = app.state.readiness_checks
+    check = app.state.readiness_checks[0]
     assert isinstance(check, DatabaseCheck)
 
 
 def test_database_section_name_is_configurable(make_app: Callable[..., FastAPI]) -> None:
     app = make_app({"readiness": {"database_section": "store"}}, sections={"store": {"dsn": DSN}})
-    [check] = app.state.readiness_checks
+    check = app.state.readiness_checks[0]
     assert isinstance(check, DatabaseCheck)
 
 

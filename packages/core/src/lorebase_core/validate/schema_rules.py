@@ -21,6 +21,7 @@ from lorebase_core.model.derivation import (
 )
 from lorebase_core.model.embedding import template_problems
 from lorebase_core.model.kind import Kind
+from lorebase_core.model.lens import Lens
 from lorebase_core.model.operation import (
     SIDE_EFFECT_MAX_LENGTH,
     CreateLinkStep,
@@ -298,6 +299,13 @@ class _Checker:
             self.check_name(source.api_name, NameStyle.DOTTED_SNAKE, path)
             source_names.append((source.api_name, path))
         self.check_unique(source_names, "Sources")
+
+        lens_names = []
+        for lens in schema.lenses.values():
+            path = ("lenses", lens.id, "api_name")
+            self.check_name(lens.api_name, NameStyle.SNAKE, path)
+            lens_names.append((lens.api_name, path))
+        self.check_unique(lens_names, "Lenses")
 
     def check_attribute_names(
         self, attributes: dict[str, Attribute], owner: tuple[PathPart, ...], *, reserved: bool
@@ -1178,6 +1186,35 @@ class _Checker:
 
     # Sources -------------------------------------------------------------------------
 
+    def check_lens(self, lens: Lens) -> None:
+        """References of a lens exist and its numbers are in range (design 5.13)."""
+        base: tuple[PathPart, ...] = ("lenses", lens.id)
+        schema = self.schema
+        for section, known in (
+            ("kinds", schema.kinds),
+            ("traits", schema.traits),
+            ("relations", schema.relations),
+        ):
+            for index, element_id in enumerate(getattr(lens, section)):
+                if element_id not in known:
+                    self.add(
+                        IssueCode.SCHEMA_LENS_REFERENCE_UNKNOWN,
+                        (*base, section, index),
+                        f"lens {lens.api_name!r} names {element_id}, which is not in {section}",
+                    )
+        if lens.depth is not None and lens.depth < 0:
+            self.add(
+                IssueCode.SCHEMA_LENS_INVALID,
+                (*base, "depth"),
+                f"depth is {lens.depth}; it cannot be below 0",
+            )
+        if lens.budget_tokens is not None and lens.budget_tokens < 1:
+            self.add(
+                IssueCode.SCHEMA_LENS_INVALID,
+                (*base, "budget_tokens"),
+                f"budget_tokens is {lens.budget_tokens}; it must be at least 1",
+            )
+
     def check_source(self, source: Source) -> None:
         base: tuple[PathPart, ...] = ("sources", source.id)
         if not source.connection.startswith(SECRET_REFERENCE_PREFIX):
@@ -1294,6 +1331,8 @@ class _Checker:
         self.check_operation_sensitivity()
         for source in self.schema.sources.values():
             self.check_source(source)
+        for lens in self.schema.lenses.values():
+            self.check_lens(lens)
         if self.rules.allow_expressions:
             self.check_expressions()
         return self.issues

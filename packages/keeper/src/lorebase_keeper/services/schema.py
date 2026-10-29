@@ -75,7 +75,7 @@ SCHEMA_CHANGE_ORIGIN = "schema_change"
 DEFAULT_MESSAGE = "Schema change"
 REBASE_TAGS_MESSAGE = "Take the sensitivity tags of the default branch"
 DOCUMENT_ISSUE = "schema.document_invalid"
-SECTIONS = ("kinds", "relations", "traits", "operations", "derivations", "sources")
+SECTIONS = ("kinds", "relations", "traits", "operations", "derivations", "sources", "lenses")
 
 SchemaGuard = Callable[[Schema, Schema], Awaitable[None]]
 """Checks a schema change of any branch, `(current, target)`; raises to refuse it."""
@@ -174,6 +174,7 @@ def _section_of(element: SchemaElementModel) -> str:
         "schema.operation": "operations",
         "schema.derivation": "derivations",
         "schema.source": "sources",
+        "schema.lens": "lenses",
     }[element.object_type]
 
 

@@ -452,7 +452,7 @@ export interface paths {
         };
         /**
          * Get a schema element
-         * @description A Kind, Relation, Trait, Operation, Derivation or Source by api name or id.
+         * @description A Kind, Relation, Trait, Operation, Derivation, Source or Lens by api name or id.
          *
          *     Built-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are
          *     described with the parameters derived from the schema.
@@ -2357,7 +2357,7 @@ export interface components {
             over_budget: boolean;
             /**
              * Capped
-             * @description True when graph caps cut the neighborhood.
+             * @description True when graph caps cut the neighborhood, or a depth or budget of the lens was served at the configured cap.
              */
             capped: boolean;
         };
@@ -2664,24 +2664,34 @@ export interface components {
             depth?: number | null;
             /**
              * Relations
-             * @description Relation api names to follow (forward or inverse); default: all.
+             * @description Relation api names to follow (forward or inverse); default: all, or the Relations of `lens`.
              */
             relations?: string[] | null;
             /**
-             * Include Schema
-             * @default true
+             * Traits
+             * @description Trait api names: with `search` or `query` seeds, only Records of the Kinds implementing them (that the caller may read) become seeds, and only Records of those Kinds are neighbors. Seeds named by `refs` are always kept.
              */
-            include_schema: boolean;
+            traits?: string[] | null;
+            /**
+             * Lens
+             * @description Lens api name (a read preset of the schema): its Relations, depth, sections and budget are the defaults of this request, its Kinds and Traits limit neighbors and `search` and `query` seeds like `traits`. Members given here win.
+             */
+            lens?: string | null;
+            /**
+             * Include Schema
+             * @description Default: the lens's, else true.
+             */
+            include_schema?: boolean | null;
             /**
              * Include Recent Changes
-             * @default true
+             * @description Default: the lens's, else true.
              */
-            include_recent_changes: boolean;
+            include_recent_changes?: boolean | null;
             /**
              * Include Lineage
-             * @default true
+             * @description Default: the lens's, else true.
              */
-            include_lineage: boolean;
+            include_lineage?: boolean | null;
             /**
              * Since
              * @description Revision id or tag: recent changes after it; default: the latest changes.
@@ -3259,7 +3269,7 @@ export interface components {
              * Section
              * @enum {string}
              */
-            section: "kinds" | "relations" | "traits" | "operations" | "derivations" | "sources";
+            section: "kinds" | "relations" | "traits" | "operations" | "derivations" | "sources" | "lenses";
             /**
              * Name
              * @description Api name or id of the element.
@@ -5831,8 +5841,18 @@ export interface components {
              */
             kinds?: string[] | null;
             /**
+             * Traits
+             * @description Trait api names: each stands for the Kinds implementing it that the caller may read. With `kinds`, the union is searched.
+             */
+            traits?: string[] | null;
+            /**
+             * Lens
+             * @description Lens api name: its Kinds and Traits are searched when the request names neither `kinds` nor `traits`.
+             */
+            lens?: string | null;
+            /**
              * Where
-             * @description DSL filter; needs exactly one Kind in `kinds`.
+             * @description DSL filter; needs exactly one Kind in the searched Kinds.
              */
             where?: (components["schemas"]["AllOf"] | components["schemas"]["AnyOf"] | components["schemas"]["NotCondition"] | components["schemas"]["ViaCondition"] | components["schemas"]["CountCondition"] | components["schemas"]["MatchCondition"] | components["schemas"]["DerivedCondition"] | components["schemas"]["AttributeCondition"]) | null;
             /**
@@ -5873,6 +5893,12 @@ export interface components {
              * @default false
              */
             truncated_candidates: boolean;
+            /**
+             * Semantic Truncated
+             * @description The vector list is shorter than asked for because the index scan reached its bound (search.semantic.max_scan_tuples, or the over-fetched nearest rows) while more Records match the filters: narrow the Kinds or the filter, or raise the bound.
+             * @default false
+             */
+            semantic_truncated: boolean;
         };
         /**
          * SearchTuning
@@ -8349,7 +8375,7 @@ export interface operations {
             header?: never;
             path: {
                 domain_id: string;
-                section: "kinds" | "relations" | "traits" | "operations" | "derivations" | "sources";
+                section: "kinds" | "relations" | "traits" | "operations" | "derivations" | "sources" | "lenses";
                 name: string;
             };
             cookie?: never;

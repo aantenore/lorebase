@@ -28,6 +28,7 @@ from lorebase_core.model.ids import (
     DerivationId,
     IdPrefix,
     KindId,
+    LensId,
     OperationId,
     ProvenanceId,
     RelationId,
@@ -39,6 +40,7 @@ from lorebase_core.model.ids import (
     new_ulid,
 )
 from lorebase_core.model.kind import BuiltinOperation, Kind, KindSearch, TraitImplementation
+from lorebase_core.model.lens import Lens
 from lorebase_core.model.lineage import (
     ExtractionOrigin,
     ImportOrigin,
@@ -168,6 +170,8 @@ __all__ = [
     "Kind",
     "KindId",
     "KindSearch",
+    "Lens",
+    "LensId",
     "LineageMap",
     "Link",
     "LinkDirection",

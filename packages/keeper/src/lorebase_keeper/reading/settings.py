@@ -9,7 +9,7 @@ built with (`store.materialize.text_search_config`) and the vector dimension is
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -219,6 +219,24 @@ class SemanticSettings(SectionModel):
         min_length=1,
         description="Embedding model whose vectors are searched; equals "
         "inference.embeddings.model. The dimension is store.embeddings.dims.",
+    )
+    iterative_scan: Literal["auto", "off"] = Field(
+        default="auto",
+        description="auto: with pgvector 0.8 or later, filtered vector search runs under "
+        "hnsw.iterative_scan = relaxed_order, so filters do not shorten its list; off: it "
+        "over-fetches nearest rows by overfetch_factor instead.",
+    )
+    max_scan_tuples: int = Field(
+        default=20_000,
+        ge=1,
+        description="hnsw.max_scan_tuples of an iterative scan: index tuples visited before "
+        "the scan gives up (the response then says semantic_truncated).",
+    )
+    overfetch_factor: int = Field(
+        default=4,
+        ge=1,
+        description="Without iterative scans, the index returns search.candidates * this many "
+        "nearest rows before the filters apply.",
     )
 
 

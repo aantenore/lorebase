@@ -907,6 +907,13 @@ search:
     model: BAAI/bge-small-en-v1.5   # embedding model searched: the name Scribe stores vectors
                                     # under (inference.embeddings.model; `fake:<model>` for the
                                     # fake provider)
+    # Vector search under filters (Kinds, Traits, lens, where) keeps its limit (design 8.8):
+    iterative_scan: auto         # auto: hnsw.iterative_scan = relaxed_order with pgvector >= 0.8
+                                 #   (see /readyz); off: over-fetch by overfetch_factor instead
+    max_scan_tuples: 20000       # hnsw.max_scan_tuples of an iterative scan; past it the
+                                 #   response says semantic_truncated
+    overfetch_factor: 4          # without iterative scans: candidates * factor nearest rows
+                                 #   are fetched before the filters apply
   hybrid:                        # reciprocal rank fusion: w / (rrf_k + rank) per list
     rrf_k: 60
     lexical_weight: 1.0

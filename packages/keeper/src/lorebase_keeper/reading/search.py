@@ -16,8 +16,17 @@
 - hybrid: reciprocal rank fusion of both candidate lists, computed in SQL:
   `w_lex / (k + rank_lex) + w_sem / (k + rank_sem)`.
 
-Filters (`kinds`, `where`) apply before ranking and fusion. Snippets come from `ts_headline`
-over the title and the searchable Attributes.
+Filters (`kinds`, `traits`, `lens`, `where`) apply before ranking and fusion. Snippets come
+from `ts_headline` over the title and the searchable Attributes.
+
+Filtered vector search (design 8.8): the filters stay in the statement of the semantic list,
+before its `LIMIT`. With pgvector 0.8 or later and `search.semantic.iterative_scan: auto`, the
+statement runs under `hnsw.iterative_scan = relaxed_order` (`lorebase_store.embeddings`) in a
+materialized subquery that the outer query orders again by exact distance. Otherwise the
+index subquery returns `search.candidates * search.semantic.overfetch_factor` nearest rows
+and the outer query filters and trims them. A list shorter than `search.candidates` while
+more Records match the filters (the scan bound was reached) is reported as
+`semantic_truncated`.
 
 Lexical search without `where` goes through the store primitive `search_records` (design
 8.7), through the security definer function `lb_search_bounded`, so its index plans hold
@@ -34,6 +43,8 @@ searches are compiled here, with `ts_rank_cd`, whatever the backend.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pgvector.sqlalchemy import HALFVEC, VECTOR
@@ -66,6 +77,7 @@ from lorebase_core.model import Kind
 from lorebase_core.model.embedding import TemplateError, kind_template
 from lorebase_core.query import QueryError, Target, condition_kinds, resolve_where
 from lorebase_keeper.reading.compiler import Compiler, json_text
+from lorebase_keeper.reading.lenses import resolve_lens, trait_kinds
 from lorebase_keeper.reading.points import ReadPoint
 from lorebase_keeper.reading.problems import invalid, query_problem
 from lorebase_keeper.reading.records import compiler_for
@@ -81,7 +93,13 @@ from lorebase_keeper.reading.views import (
     served,
 )
 from lorebase_keeper.tracing.explain import explain
-from lorebase_store.embeddings import fingerprint_of, index_precision, template_fingerprints
+from lorebase_store.embeddings import (
+    fingerprint_of,
+    index_precision,
+    iterative_scans,
+    template_fingerprints,
+    use_iterative_scan,
+)
 from lorebase_store.models import metadata
 from lorebase_store.reads import (
     CommonTerms,
@@ -117,7 +135,12 @@ def search_mode(request: SearchRequest) -> SearchMode:
 
 
 def _target(point: ReadPoint, request: SearchRequest) -> Target:
-    if request.kinds is None:
+    """The Kinds to search: those named by `kinds` and `traits`, else those of the lens, else
+    every Kind the caller may read. A name in the request wins over the lens."""
+    resolved = None if request.lens is None else resolve_lens(point, request.lens, "/body/lens")
+    if request.kinds is None and request.traits is None:
+        if resolved is not None and resolved.kinds is not None:
+            return Target("search", resolved.kinds)
         # Default: every Kind the caller may read; Kinds named explicitly must be readable.
         kinds = tuple(
             sorted(
@@ -126,16 +149,23 @@ def _target(point: ReadPoint, request: SearchRequest) -> Target:
             )
         )
         return Target("search", kinds)
-    point.scope.precheck(request.kinds)
-    found: list[Kind] = []
-    for index, name in enumerate(request.kinds):
-        kind = point.schema.kind_by_api_name(name)
-        if kind is None:
-            raise invalid(f"/body/kinds/{index}", f"unknown Kind {name!r}", "unknown_kind")
-        found.append(kind)
-    if not found:
-        raise invalid("/body/kinds", "name at least one Kind", "missing")
-    return Target(found[0].api_name if len(found) == 1 else "search", tuple(found))
+    found: dict[str, Kind] = {}
+    if request.kinds is not None:
+        point.scope.precheck(request.kinds)
+        for index, name in enumerate(request.kinds):
+            kind = point.schema.kind_by_api_name(name)
+            if kind is None:
+                raise invalid(f"/body/kinds/{index}", f"unknown Kind {name!r}", "unknown_kind")
+            found.setdefault(kind.id, kind)
+        if not request.kinds and not request.traits:
+            raise invalid("/body/kinds", "name at least one Kind", "missing")
+    if request.traits is not None:
+        for kind in trait_kinds(point, request.traits, "/body/traits"):
+            found.setdefault(kind.id, kind)
+    kinds_found = tuple(found.values())
+    if len(kinds_found) == 1:
+        return Target(kinds_found[0].api_name, kinds_found)
+    return Target("search", kinds_found)
 
 
 async def search(
@@ -196,10 +226,15 @@ async def search(
         return await _lexical_page(
             session, runtime, compiler, point, target, request.q, limit, corrections, partial
         )
+
+    def filters(rows: Any) -> list[ColumnElement[bool]]:
+        found = [compiler.record_scope(rows, target)]
+        if where is not None:
+            found.append(compiler.condition(rows, where, target))
+        return found
+
     r = compiler.records("r")
-    base = [compiler.record_scope(r, target)]
-    if where is not None:
-        base.append(compiler.condition(r, where, target))
+    base = filters(r)
 
     alternatives = None
     if request.q is not None and partial is not None and mode in ("lexical", "hybrid"):
@@ -216,6 +251,7 @@ async def search(
     if mode in ("semantic", "hybrid"):
         assert request.query_vector is not None
         precision = await index_precision(session, dims)
+        scan = await _semantic_scan(session, runtime)
         lists.append(
             (
                 _semantic(
@@ -224,7 +260,9 @@ async def search(
                     request.query_vector,
                     runtime,
                     target,
+                    point.domain.id,
                     half=precision == "half",
+                    scan=scan,
                 ),
                 settings.hybrid.semantic_weight,
             )
@@ -251,6 +289,11 @@ async def search(
     fused = len(lists) > 1
     exact_first = [] if fused else [ranked.c[c].desc() for c in ("full", "exact") if c in ranked.c]
     full = ranked.c.full if "full" in ranked.c else literal(None, Boolean)
+    semantic_found: list[ColumnElement[Any]] = []
+    if mode == "semantic":
+        semantic_found = [over(func.count()).label("semantic_found")]
+    elif mode == "hybrid":
+        semantic_found = [over(func.count(ranked.c.semantic_rank)).label("semantic_found")]
     query = (
         select(
             ranked.c.kind_id,
@@ -259,6 +302,7 @@ async def search(
             full.label("full"),
             final.c.title,
             snippet.label("snippet"),
+            *semantic_found,
         )
         .select_from(ranked)
         .join(
@@ -274,7 +318,7 @@ async def search(
         .limit(limit)
     )
     await explain(session, query, point.domain.id, f"search:{mode}")
-    rows = (await session.execute(query)).mappings()
+    rows = list((await session.execute(query)).mappings())
     items = [
         SearchHit(
             kind=kind_name(point.schema, row["kind_id"]),
@@ -286,8 +330,19 @@ async def search(
         )
         for row in rows
     ]
+    truncated = False
+    if semantic_found:
+        found = int(rows[0]["semantic_found"]) if rows else 0
+        if found < settings.candidates:
+            truncated = await _semantic_cut_short(
+                session, runtime, compiler, point, target, filters, found
+            )
     return SearchResponse(
-        **served(point), mode=mode, items=items, corrections=_applied(corrections)
+        **served(point),
+        mode=mode,
+        items=items,
+        corrections=_applied(corrections),
+        semantic_truncated=truncated,
     )
 
 
@@ -599,41 +654,139 @@ def _embedded_readable(r: Any, point: ReadPoint, target: Target) -> ColumnElemen
     return r.c.kind_id.in_(readable) if readable else false()
 
 
+@dataclass(frozen=True, slots=True)
+class SemanticScan:
+    """How the filtered vector list is fetched (design 8.8): `overfetch` nearest rows per
+    wanted one before the filters apply, or, with `overfetch` of `None`, an iterative index
+    scan that goes on until the filters leave enough rows (`lorebase_store.embeddings`)."""
+
+    overfetch: int | None
+
+
+async def _semantic_scan(session: AsyncSession, runtime: ReadRuntime) -> SemanticScan:
+    """The fetch strategy of this transaction. An iterative scan is turned on for it with
+    `SET LOCAL` when `search.semantic.iterative_scan` is `auto` and pgvector is 0.8 or later."""
+    semantic = runtime.search.semantic
+    if semantic.iterative_scan == "auto" and await iterative_scans(session):
+        await use_iterative_scan(session, semantic.max_scan_tuples)
+        return SemanticScan(None)
+    return SemanticScan(semantic.overfetch_factor)
+
+
+def _embedding_match(r: Any, e: Any, runtime: ReadRuntime, target: Target) -> ColumnElement[bool]:
+    """Joins Records to the vectors of the configured model stored for their object hash under
+    the fingerprint of their Kind's embedding template in the searched branch's schema."""
+    dims = runtime.store_settings.embeddings.dims
+    fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
+    return and_(
+        e.c.domain_id == r.c.domain_id,
+        e.c.object_hash == r.c.object_hash,
+        e.c.model == literal(runtime.search.semantic.model),
+        e.c.fingerprint == fingerprint,
+        e.c.dims == literal(dims, literal_execute=True),
+    )
+
+
 def _semantic(
     r: Any,
     base: list[ColumnElement[bool]],
     vector: list[float],
     runtime: ReadRuntime,
     target: Target,
+    domain_id: str,
     *,
     half: bool = False,
+    scan: SemanticScan | None = None,
 ) -> Select[Any]:
     """Records ranked by the vector stored for their object hash under the fingerprint of
     their Kind's embedding template in the searched branch's schema: another branch's vector
     for the same content, rendered by a different template, is never used. With `half`, the
     distance is computed in half precision, as the HNSW index of the storage profile holds it
-    (`lorebase_store.embeddings.index_precision`)."""
+    (`lorebase_store.embeddings.index_precision`).
+
+    The filters of `base` are part of the statement and come before its `LIMIT`
+    (`SemanticScan` says how the index copes with them): iterative scans run in a materialized
+    subquery, and the rows are ordered again by exact distance outside it."""
     dims = runtime.store_settings.embeddings.dims
-    fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
+    candidates = runtime.search.candidates
     e = EMBEDDINGS.alias("e")
     kind = HALFVEC(dims) if half else VECTOR(dims)
-    distance = cast(e.c.embedding, kind).op("<=>", return_type=Float)(literal(vector, kind))
-    return (
-        select(r.c.kind_id, r.c.key, (literal(1.0, Float) - distance).label("score"))
-        .join(
-            e,
-            and_(
-                e.c.domain_id == r.c.domain_id,
-                e.c.object_hash == r.c.object_hash,
+    vector_literal = literal(vector, kind)
+
+    def distance_to(embedding: Any) -> ColumnElement[Any]:
+        return cast(embedding, kind).op("<=>", return_type=Float)(vector_literal)
+
+    if scan is not None and scan.overfetch is not None:
+        # The index returns the nearest rows of the model; the filters apply to those only.
+        distance = distance_to(e.c.embedding)
+        nearest = (
+            select(e.c.domain_id, e.c.object_hash, e.c.fingerprint, distance.label("distance"))
+            .where(
+                e.c.domain_id == literal(domain_id),
                 e.c.model == literal(runtime.search.semantic.model),
-                e.c.fingerprint == fingerprint,
                 e.c.dims == literal(dims, literal_execute=True),
-            ),
+            )
+            .order_by(distance)
+            .limit(candidates * scan.overfetch)
+            .subquery("nearest")
         )
+        fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
+        return (
+            select(r.c.kind_id, r.c.key, (literal(1.0, Float) - nearest.c.distance).label("score"))
+            .join(
+                nearest,
+                and_(
+                    nearest.c.domain_id == r.c.domain_id,
+                    nearest.c.object_hash == r.c.object_hash,
+                    nearest.c.fingerprint == fingerprint,
+                ),
+            )
+            .where(*base)
+            .order_by(nearest.c.distance, r.c.kind_id, r.c.key)
+            .limit(candidates)
+        )
+    distance = distance_to(e.c.embedding)
+    listed = (
+        select(r.c.kind_id, r.c.key, (literal(1.0, Float) - distance).label("score"))
+        .join(e, _embedding_match(r, e, runtime, target))
         .where(*base)
         .order_by(distance, r.c.kind_id, r.c.key)
-        .limit(runtime.search.candidates)
+        .limit(candidates)
     )
+    if scan is None:
+        return listed
+    # Relaxed-order scans return rows slightly out of order: the CTE is computed as written
+    # and ordered again, by exact distance, where it is read.
+    nearest_rows = listed.cte("nearest_records").prefix_with("MATERIALIZED")
+    return select(nearest_rows).order_by(
+        nearest_rows.c.score.desc(), nearest_rows.c.kind_id, nearest_rows.c.key
+    )
+
+
+async def _semantic_cut_short(
+    session: AsyncSession,
+    runtime: ReadRuntime,
+    compiler: Compiler,
+    point: ReadPoint,
+    target: Target,
+    filters: Callable[[Any], list[ColumnElement[bool]]],
+    found: int,
+) -> bool:
+    """Whether a vector list of `found` rows (fewer than `search.candidates`) is short because
+    the index scan stopped at its bound rather than because no more Records match: some more
+    Record with a vector satisfies the same filters. Counts at most `search.candidates`
+    matches, unordered, without the index."""
+    r = compiler.records("r")
+    e = EMBEDDINGS.alias("e")
+    matches = (
+        select(r.c.key)
+        .join(e, _embedding_match(r, e, runtime, target))
+        .where(*filters(r), _embedded_readable(r, point, target))
+        .limit(runtime.search.candidates)
+        .subquery("matches")
+    )
+    exact = (await session.execute(select(func.count()).select_from(matches))).scalar_one()
+    return int(exact) > found
 
 
 def _fused(lists: list[tuple[Select[Any], float]], runtime: ReadRuntime) -> Any:
@@ -666,6 +819,7 @@ def _fused(lists: list[tuple[Select[Any], float]], runtime: ReadRuntime) -> Any:
             func.coalesce(first.c.kind_id, second.c.kind_id).label("kind_id"),
             func.coalesce(first.c.key, second.c.key).label("key"),
             cast(score, Float).label("score"),
+            second.c["rank"].label("semantic_rank"),
             *([func.coalesce(*full).label("full")] if full else []),
         )
         .select_from(

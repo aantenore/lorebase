@@ -50,8 +50,10 @@ DSL of design 8.2) or `search` (lexical search text).
 | `branch` | the default branch | branch read, at its head |
 | `budget_tokens` | `agents.context.default_budget_tokens` | estimated token budget |
 | `depth` | `agents.context.default_depth` | neighborhood depth; `0` for the seeds alone |
-| `relations` | all | Relation api names to follow (forward or inverse) |
-| `include_schema`, `include_recent_changes`, `include_lineage` | `true` | optional sections |
+| `relations` | all, or the lens's | Relation api names to follow (forward or inverse) |
+| `traits` | none | Trait api names: `search` and `query` seeds, and neighbors, are limited to the Kinds that implement them and you may read |
+| `lens` | none | a [lens](#lenses-and-traits): its Relations, depth, sections and budget are the defaults of the request, its Kinds and Traits limit neighbors and `search` and `query` seeds |
+| `include_schema`, `include_recent_changes`, `include_lineage` | the lens's, else `true` | optional sections |
 | `since` | none | Revision id or tag: recent changes after it (default: the latest ones) |
 | `format` | `json` | `markdown` answers `text/markdown`, ready to paste into a prompt |
 
@@ -179,6 +181,46 @@ The `ETag` names the head Revision and a digest of the request. Repeat the reque
 `If-None-Match: <etag>` to get `304` while nothing changed; the pack is also cached in Keeper,
 keyed by Revision, so commits never serve a stale pack.
 
+### Lenses and Traits
+
+A **lens** is a named read preset the schema declares (`lenses` in the schema document, design
+5.13): which Kinds and Traits a read is about, which Relations to follow, how deep, which
+optional sections to include and a budget. Agents use one instead of repeating the same
+members on every call, and the schema author keeps them in one place.
+
+```yaml
+lenses:
+  supplier_risk:
+    description: A supplier with its contracts, parts and open risk flags.
+    kinds: [Supplier, Contract, Part, RiskFlag]
+    relations: [with_supplier, supplied_by, flags]
+    depth: 1
+    include_recent_changes: true
+```
+
+```http
+POST /api/v1/domains/supply/context
+{"lens": "supplier_risk", "refs": ["Supplier/S-1001"]}
+```
+
+- Members the request gives (`relations`, `depth`, `include_*`, `budget_tokens`) win over the
+  lens's; the lens's win over the settings. A lens `relations` entry is followed in both
+  directions. A lens `depth` or `budget_tokens` over `agents.context.max_depth` or
+  `max_budget_tokens` is served at the cap and the pack says `capped: true` in `budget`.
+- The lens's `kinds` and `traits` (a Trait stands for the Kinds implementing it) restrict the
+  neighbors, with their Links, and the Kinds of `search` and `query` seeds. Seeds named by
+  `refs` are always kept, whatever their Kind. `traits` in the request does the same without
+  a lens and replaces the lens's Kinds.
+- `POST /search` takes `traits` and `lens` too: a Trait expands to its implementing Kinds the
+  caller may read, `kinds` and `traits` together search the union, and a lens supplies the
+  Kinds only when the request names neither ([search](search.md#traits-lenses-and-filtered-vector-search)).
+- A lens is not a permission. Grants and `keeper.auth.authz.invisible_kinds` apply as to the
+  same request written out: Kinds, Traits and Relations the caller may not read are dropped from
+  the lens, and a lens none of whose Kinds is readable answers like an unknown one (422
+  `lens_unknown`, 404 for a schema element). `GET /schema` lists the lenses, and so does
+  `lorebase_schema` in [Herald](mcp.md#tools).
+- CLI: `lorebase context --lens supplier_risk`, `lorebase search TEXT --trait Located`.
+
 ## 2. Targeted reads
 
 | Need | Call |
@@ -190,7 +232,7 @@ keyed by Revision, so commits never serve a stale pack.
 | Records matching a filter | `POST /query` (design 8.2) |
 | a path of Relations | `POST /traverse` |
 | the graph around some Records | `POST /neighborhood` (`values: false` for headers and Link endpoints only) |
-| Records by text or vector | `POST /search` |
+| Records by text or vector, by Kind, Trait or lens | `POST /search` |
 | what changed between two Revisions | `GET /diff?from=&to=` |
 | whether the data is sound | `GET /health`, `GET /kinds/{kind}/health` (section 6) |
 

@@ -123,6 +123,8 @@ $ lorebase search [OPTIONS] {TEXT}
 **Options**:
 
 * `--kind <str>`: Only this Kind. Repeatable.
+* `--trait <str>`: Only the Kinds that implement this Trait. Repeatable; adds to --kind.
+* `--lens <str>`: Search the Kinds and Traits of this lens unless --kind or --trait.
 * `--mode <str>`: lexical, semantic or hybrid (default: lexical, hybrid with --vector-file).
 * `--vector-file <str>`: Query vector of the Domain&#x27;s embedding model: a JSON array, or the output of `lorebase-inference embed`; `-` reads standard input.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
@@ -203,6 +205,8 @@ $ lorebase context [OPTIONS]
 * `--budget <int range>`: Token budget of the pack.  [x&gt;=1]
 * `--depth <int range>`: Hops to expand around the seeds.  [x&gt;=0]
 * `--relation <str>`: Follow only this Relation. Repeatable.
+* `--trait <str>`: Limit --search and --query seeds and neighbors to the Kinds implementing this Trait. Repeatable.
+* `--lens <str>`: Apply this lens: its Relations, depth, budget and Kinds are defaults.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
 * `--at <str>`: Revision id or tag to read at (time travel).

@@ -45,6 +45,7 @@ class ObjectType(StrEnum):
     SCHEMA_OPERATION = "schema.operation"
     SCHEMA_DERIVATION = "schema.derivation"
     SCHEMA_SOURCE = "schema.source"
+    SCHEMA_LENS = "schema.lens"
     SCHEMA_DOMAIN = "schema.domain"
     RECORD = "record"
     LINK = "link"

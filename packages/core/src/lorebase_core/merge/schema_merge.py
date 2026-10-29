@@ -69,6 +69,7 @@ _CODE_KINDS: dict[IssueCode, ConflictKind] = {
     IssueCode.SCHEMA_OPERATION_REFERENCE_UNKNOWN: ConflictKind.BROKEN_REFERENCE,
     IssueCode.SCHEMA_DERIVATION_REFERENCE_UNKNOWN: ConflictKind.BROKEN_REFERENCE,
     IssueCode.SCHEMA_SOURCE_REFERENCE_UNKNOWN: ConflictKind.BROKEN_REFERENCE,
+    IssueCode.SCHEMA_LENS_REFERENCE_UNKNOWN: ConflictKind.BROKEN_REFERENCE,
 }
 
 ConflictHandler = Callable[[tuple[str, ...], Value, Value, Value], Value]

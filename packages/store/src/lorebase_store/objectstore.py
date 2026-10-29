@@ -30,6 +30,7 @@ OBJECT_TYPE_CODES: Mapping[ObjectType, int] = MappingProxyType(
         ObjectType.SCHEMA_SOURCE: 7,
         ObjectType.RECORD: 8,
         ObjectType.LINK: 9,
+        ObjectType.SCHEMA_LENS: 10,
     }
 )
 """`objects.object_type` codes. Stored data depends on them: never renumber."""

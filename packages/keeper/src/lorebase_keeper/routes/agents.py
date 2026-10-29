@@ -16,7 +16,7 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from lorebase_keeper.agents.context import JSON, MARKDOWN, PackContext, build_pack
+from lorebase_keeper.agents.context import JSON, MARKDOWN, PackContext, build_pack, effective
 from lorebase_keeper.agents.explain import ExplainOut, explain_markdown, explain_record
 from lorebase_keeper.agents.pack import ContextPackOut, ContextRequest, dumps
 from lorebase_keeper.agents.settings import AgentSettings, agent_settings
@@ -77,7 +77,8 @@ async def context_pack(
     point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     since: str | None = None
     floor: int | None = None
-    if body.since is not None and body.include_recent_changes:
+    bounds = effective(body, settings.context, runtime, point)
+    if body.since is not None and bounds.include_recent_changes:
         found = await open_revision(session, access, point.domain, body.since)
         since, floor = found.id.hex(), found.generation
     digest = fingerprint("context", body.model_dump(mode="json"), since)

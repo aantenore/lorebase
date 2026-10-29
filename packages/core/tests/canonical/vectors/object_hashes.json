@@ -59,6 +59,15 @@
       "hash": "3ca2c23a45518533098a97d243e4cf2340af3c40fa432a33e89093a797d6c1f4"
     },
     {
+      "object_type": "schema.lens",
+      "value": {
+        "id": "lns_01JB8Z0000000000000000000H",
+        "depth": 1
+      },
+      "canonical": "{\"depth\":1,\"id\":\"lns_01JB8Z0000000000000000000H\"}",
+      "hash": "27d57dce4177666b4d6c4ff8e9c9f36be311b4dec0bf1acf39674393b10f1a1b"
+    },
+    {
       "object_type": "schema.domain",
       "value": {
         "id": "supply",

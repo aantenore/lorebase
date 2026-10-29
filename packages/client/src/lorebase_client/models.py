@@ -17,7 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 DOMAIN_ID_PATTERN = r"^[a-z][a-z0-9_-]*$"
 
-SchemaSection = Literal["kinds", "relations", "traits", "operations", "derivations", "sources"]
+SchemaSection = Literal[
+    "kinds", "relations", "traits", "operations", "derivations", "sources", "lenses"
+]
 SearchMode = Literal["lexical", "semantic", "hybrid"]
 BranchMode = Literal["copy", "overlay"]
 MaterializationStatus = Literal["pending", "running", "done", "failed"]
@@ -593,6 +595,9 @@ class SearchResult(Served):
     corrections: list[SearchCorrection] = Field(default_factory=list)
     truncated_candidates: bool = False
     """Only a sample of the matches was ranked (every term of q is very common): narrow q."""
+    semantic_truncated: bool = False
+    """The vector list is shorter than asked for because the index scan reached its bound while
+    more Records match the filters: narrow the Kinds or the filter."""
 
 
 class QueryRequest(RequestModel):
@@ -668,6 +673,10 @@ class SearchRequest(RequestModel):
     at: str | None = None
     q: str | None = Field(default=None, min_length=1)
     kinds: list[str] | None = None
+    traits: list[str] | None = None
+    """Trait api names, standing for the Kinds that implement them (and the caller may read)."""
+    lens: str | None = None
+    """Lens api name: its Kinds and Traits are searched when `kinds` and `traits` are not."""
     where: dict[str, JsonValue] | None = None
     mode: SearchMode | None = None
     query_vector: list[float] | None = None
@@ -1209,9 +1218,13 @@ class ContextRequest(RequestModel):
     budget_tokens: int | None = Field(default=None, ge=1)
     depth: int | None = Field(default=None, ge=0)
     relations: list[str] | None = None
-    include_schema: bool = True
-    include_recent_changes: bool = True
-    include_lineage: bool = True
+    traits: list[str] | None = None
+    """Trait api names limiting `search` and `query` seeds and neighbors to their Kinds."""
+    lens: str | None = None
+    """Lens api name: defaults for relations, depth, sections and budget, and Kinds limits."""
+    include_schema: bool | None = None
+    include_recent_changes: bool | None = None
+    include_lineage: bool | None = None
     since: str | None = None
     format: ContextFormat = "json"
 

@@ -183,6 +183,12 @@ class SearchResponse(Served):
         "ranked, as happens when every term of q is very common: better matches may exist. "
         "Add a rarer term, a Kind or a filter to narrow q.",
     )
+    semantic_truncated: bool = Field(
+        default=False,
+        description="The vector list is shorter than asked for because the index scan reached "
+        "its bound (search.semantic.max_scan_tuples, or the over-fetched nearest rows) while "
+        "more Records match the filters: narrow the Kinds or the filter, or raise the bound.",
+    )
 
 
 # Rendering ----------------------------------------------------------------------------------

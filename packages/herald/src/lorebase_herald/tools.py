@@ -116,6 +116,35 @@ class LorebaseTools:
         text = views.schema_text(view, detail=detail, output=self.output)
         return render(view, text, self.fmt(fmt), self.output)
 
+    async def lens(
+        self,
+        credential: str | None,
+        *,
+        domain: str | None,
+        lens: str,
+        fmt: str | None,
+    ) -> str:
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            document = await client.schema.get(name, branch=self.branch(None))
+        view = next(
+            (
+                item
+                for item in views.schema_view(document, kinds=None, detail="summary").get(
+                    "lenses", []
+                )
+                if item["name"] == lens
+            ),
+            None,
+        )
+        if view is None:
+            raise invalid_input(
+                "lens-unknown",
+                f"no lens {lens!r} in Domain {name}",
+                "read the LENSES of lorebase_schema",
+            )
+        return render(view, views.lens_text(view), self.fmt(fmt), self.output)
+
     async def get(
         self,
         credential: str | None,
@@ -183,6 +212,8 @@ class LorebaseTools:
         branch: str | None,
         at: str | None,
         fmt: str | None,
+        traits: Sequence[str] | None = None,
+        lens: str | None = None,
     ) -> str:
         if not query and not query_vector:
             raise invalid_input(
@@ -196,6 +227,8 @@ class LorebaseTools:
             query_vector=list(query_vector) if query_vector else None,
             mode=None if query_vector else "lexical",
             kinds=list(kinds) if kinds else None,
+            traits=list(traits) if traits else None,
+            lens=lens or None,
             where=dict(where) if where else None,
             limit=limit or None,
             branch=self.branch(branch),
@@ -253,6 +286,8 @@ class LorebaseTools:
         branch: str | None,
         at: str | None,
         fmt: str | None,
+        traits: Sequence[str] | None = None,
+        lens: str | None = None,
     ) -> str:
         settings = self.settings.context
         name = self.domain(domain)
@@ -273,6 +308,8 @@ class LorebaseTools:
                         m.SearchRequest,
                         q=question,
                         mode="lexical",
+                        traits=list(traits) if traits else None,
+                        lens=lens or None,
                         limit=settings.search_seeds,
                         branch=branch,
                         at=at,
@@ -287,12 +324,16 @@ class LorebaseTools:
                 found_by: str | None = "search"
             else:
                 found_by = None
+            # With a lens, depth and budget are the lens's unless the call gives them.
+            wanted = token_budget or (None if lens else settings.token_budget)
             request = self.request(
                 m.ContextRequest,
                 refs=[f"{s.kind}/{s.key}" for s in seeds[: settings.max_seeds]],
-                depth=depth or settings.depth,
-                budget_tokens=min(token_budget or settings.token_budget, settings.max_token_budget),
+                depth=depth or (None if lens else settings.depth),
+                budget_tokens=None if wanted is None else min(wanted, settings.max_token_budget),
                 relations=list(relations) if relations else None,
+                traits=list(traits) if traits else None,
+                lens=lens or None,
                 branch=branch,
                 at=at,
             )

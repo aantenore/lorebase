@@ -31,6 +31,7 @@ Document layout (every section is optional except ``domain``)::
     operations: {...}                 # parameters, preconditions, steps, review_policy, ...
     derivations: {...}                # definition: {variant: expression | aggregate | path, ...}
     sources: {...}                    # key = dotted api name such as erp.vendors
+    lenses: {...}                     # read presets: kinds, traits, relations, depth, ...
 
 Fields not mentioned above keep the names of the model (``display_name``, ``description``,
 ``status``, ``constraints``, ``sensitivity``, ``indexed``, ``searchable`` and so on) and are
@@ -70,6 +71,7 @@ from lorebase_core.model.derivation import (
 from lorebase_core.model.domain import Domain
 from lorebase_core.model.ids import IdPrefix, id_prefix, new_id
 from lorebase_core.model.kind import Kind, TraitImplementation
+from lorebase_core.model.lens import Lens
 from lorebase_core.model.operation import (
     CreateLinkStep,
     CreateRecordStep,
@@ -101,6 +103,7 @@ _SECTIONS: tuple[tuple[str, IdPrefix], ...] = (
     ("operations", IdPrefix.OPERATION),
     ("derivations", IdPrefix.DERIVATION),
     ("sources", IdPrefix.SOURCE),
+    ("lenses", IdPrefix.LENS),
 )
 _ROOT_KEYS = frozenset({"format", "domain", *(name for name, _ in _SECTIONS)})
 
@@ -745,6 +748,20 @@ class _Reader:
             fields["relation_mapping"] = tuple(mappings)
         return self.build(Source, path, data, **fields)
 
+    def lens(self, name: str, entry: object) -> Lens:
+        path: _Path = ("lenses", name)
+        data = _mapping(entry, path)
+        data.pop("id", None)
+        fields: dict[str, Any] = {"id": self.ids["lenses"][name], "api_name": name}
+        for key, section in (("kinds", "kinds"), ("traits", "traits"), ("relations", "relations")):
+            if key in data:
+                names_path = (*path, key)
+                fields[key] = tuple(
+                    self.lookup(section, item, (*names_path, index))
+                    for index, item in enumerate(_names(data.pop(key), names_path))
+                )
+        return self.build(Lens, path, data, **fields)
+
     def read(self, document: object) -> Schema:
         with self.collect():
             root = _mapping(document, ())
@@ -767,6 +784,7 @@ class _Reader:
                 "operations": self.operation,
                 "derivations": self.derivation,
                 "sources": self.source,
+                "lenses": self.lens,
             }
             built: dict[str, dict[str, Any]] = {name: {} for name, _ in _SECTIONS}
             for section, _ in _SECTIONS:
@@ -960,6 +978,15 @@ class _Writer:
         order = ("type", "connection", "target_kind", "key_mapping", "attribute_mapping")
         return _compose(source.id, _plain(source, exclude), extras, order)
 
+    def lens(self, lens: Lens) -> dict[str, Any]:
+        extras = {
+            "kinds": [self.name(k) for k in lens.kinds],
+            "traits": [self.name(t) for t in lens.traits],
+            "relations": [self.name(r) for r in lens.relations],
+        }
+        plain = _plain(lens, {"id", "api_name", "kinds", "traits", "relations"})
+        return _compose(lens.id, plain, extras, ("kinds", "traits", "relations"))
+
     def document(self) -> dict[str, Any]:
         schema = self.schema
         document: dict[str, Any] = {
@@ -973,6 +1000,7 @@ class _Writer:
             "operations": schema.operations.values(),
             "derivations": schema.derivations.values(),
             "sources": schema.sources.values(),
+            "lenses": schema.lenses.values(),
         }
         writers: dict[str, Callable[[Any], dict[str, Any]]] = {
             "kinds": self.kind,
@@ -981,6 +1009,7 @@ class _Writer:
             "operations": self.operation,
             "derivations": self.derivation,
             "sources": self.source,
+            "lenses": self.lens,
         }
         for section, elements in sections.items():
             items = {element.api_name: writers[section](element) for element in elements}

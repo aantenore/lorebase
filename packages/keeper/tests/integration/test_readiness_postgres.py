@@ -30,10 +30,11 @@ async def test_ready_after_migrations(database_url: str) -> None:
     async with client_for(database_url) as http:
         response = await http.get("/readyz")
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ready",
-        "checks": {"database": {"status": "ok", "detail": None}},
-    }
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["checks"]["database"] == {"status": "ok", "detail": None}
+    assert body["checks"]["vector_search"]["status"] == "ok"
+    assert body["checks"]["vector_search"]["detail"].startswith("pgvector ")
 
 
 async def test_not_ready_before_migrations(empty_database_url: str) -> None:

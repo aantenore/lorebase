@@ -91,8 +91,18 @@ class SearchRequest(_Body):
     at: str | None = Field(default=None, description=AT)
     q: str | None = Field(default=None, min_length=1, description="Text query (web search syntax).")
     kinds: list[str] | None = Field(default=None, description="Kind api names; default: all.")
+    traits: list[str] | None = Field(
+        default=None,
+        description="Trait api names: each stands for the Kinds implementing it that the "
+        "caller may read. With `kinds`, the union is searched.",
+    )
+    lens: str | None = Field(
+        default=None,
+        description="Lens api name: its Kinds and Traits are searched when the request names "
+        "neither `kinds` nor `traits`.",
+    )
     where: Predicate | None = Field(
-        default=None, description="DSL filter; needs exactly one Kind in `kinds`."
+        default=None, description="DSL filter; needs exactly one Kind in the searched Kinds."
     )
     mode: SearchMode | None = Field(
         default=None,
