@@ -16,7 +16,7 @@ The animation is recorded in mock mode with `pnpm screenshots flow`. The picture
 
 ![Explorer, Domain home](images/explorer-home.png)
 
-The entry point of a Domain on a Branch: search over Records with a Kind filter, the Kinds of the Domain, the latest Revisions of the Branch (with their origin, such as `import` or `schema_change`) and the Proposals waiting for review. The Domain and Branch selectors and the head Revision in the top bar apply to every screen; "New Branch" starts a Branch at the head of the one on screen. Live.
+The entry point of a Domain on a Branch: search over Records with a Kind or Trait filter (and a lens selector when the schema declares [lenses](agents.md#lenses-and-traits)), the Kinds of the Domain, the latest Revisions of the Branch (with their origin, such as `import` or `schema_change`) and the Proposals waiting for review. The Domain and Branch selectors and the head Revision in the top bar apply to every screen; "New Branch" starts a Branch at the head of the one on screen. Live.
 
 ### Kind table
 
@@ -164,13 +164,13 @@ Every call an agent made in a session, step by step: notes, tool calls with thei
 
 ![Retrieval lab](images/retrieval-lab.png)
 
-Two sets of search parameters side by side on the same question (mode, weights, typo tolerance, candidates, Kinds), the ranks they produce compared line by line, the context pack an agent would get within a token budget, with why each Record is in it, and the Records involved on a graph ([retrieval lab](retrieval-lab.md)). The example questions of the Domain, when it declares any, fill the question in one click; "Ask the guide" opens Explore. Live.
+Two sets of search parameters side by side on the same question (mode, weights, typo tolerance, candidates, Kinds), the ranks they produce compared line by line, the context pack an agent would get within a token budget (both searches and the pack can take a lens of the schema), with why each Record is in it, and the Records involved on a graph ([retrieval lab](retrieval-lab.md)). The example questions of the Domain, when it declares any, fill the question in one click; "Ask the guide" opens Explore. Live.
 
 ## Settings
 
 ![Settings](images/settings.png)
 
-Appearance (system, light or dark theme), the connection (where Keeper is, which API token this browser sends, and who Keeper says the caller is), the settings of the Domain (with its ingestion mode and any settings the installation ignores, [extraction](extraction.md#ingestion-modes)) and the runtime configuration the app was started with. Three more tabs hold the Admin basics: API keys (create with a role and a lifetime, the secret is shown once, revoke after a confirmation), principals and the grants of the Domain (read only), and the audit log with filters over the loaded entries. Live.
+Appearance (system, light or dark theme), the connection (where Keeper is, which API token this browser sends, and who Keeper says the caller is), the settings of the Domain (with any settings the installation ignores) and, for a caller who holds `domain.settings`, its ingestion settings to edit: mode, auto-accept threshold, minimum confidence and rules by source key prefix, with Keeper's refusals shown at the fields ([extraction](extraction.md#ingestion-modes)) and the runtime configuration the app was started with. Three more tabs hold the Admin basics: API keys (create with a role and a lifetime, the secret is shown once, revoke after a confirmation), principals and the grants of the Domain (read only), and the audit log with filters over the loaded entries. Live.
 
 ## Dark theme
 

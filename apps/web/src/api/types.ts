@@ -28,6 +28,8 @@ export type CreateProposalInput = Schemas['ProposalCreate'];
 export type ReviewInput = Schemas['ReviewIn'];
 export type Domain = Schemas['DomainOut'];
 export type CreateDomainInput = Schemas['DomainCreate'];
+/** Display metadata and allowlisted settings members; `null` removes a settings member. */
+export type UpdateDomainInput = Schemas['DomainUpdate'];
 export type CreateBranchInput = Schemas['BranchCreate'];
 export type WhereOperator = Schemas['Operator'];
 export type WhoAmI = Schemas['WhoAmI'];
@@ -270,6 +272,19 @@ export interface Trait {
   status?: ElementStatus;
 }
 
+/**
+ * A named read preset of the schema (`lenses`, design 5.13): which Kinds and Traits a search or
+ * context pack is about, and its other defaults. Kinds and Traits by api name.
+ */
+export interface Lens {
+  id: ElementId;
+  api_name: string;
+  display_name: string;
+  description: string;
+  kinds: string[];
+  traits: string[];
+}
+
 export interface OperationParameter {
   name: string;
   type: AttributeType | 'ref';
@@ -422,6 +437,8 @@ export interface Schema {
   operations: Operation[];
   derivations: Derivation[];
   sources: Source[];
+  /** Read presets; absent or empty when the schema declares none. */
+  lenses?: Lens[];
   search: SearchCapabilities;
 }
 
@@ -652,6 +669,10 @@ export type SearchMode = 'lexical' | 'hybrid' | 'semantic';
 export interface SearchRequest {
   q: string;
   kinds?: string[];
+  /** Trait api names: each stands for the Kinds implementing it; with `kinds`, the union. */
+  traits?: string[];
+  /** Lens api name: its Kinds and Traits are searched when neither `kinds` nor `traits` is given. */
+  lens?: string;
   where?: Where;
   mode?: SearchMode;
   query_vector?: number[];

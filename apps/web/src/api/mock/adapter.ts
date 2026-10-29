@@ -3,6 +3,7 @@ import { notFound, notSupported, stateError } from '../errors';
 import type {
   Branch,
   BranchName,
+  Domain,
   DomainId,
   MergeAttempt,
   Page,
@@ -27,6 +28,7 @@ import {
 import { createAdminMock } from './admin';
 import { buildContext } from './context';
 import { createDocumentsMock } from './documents';
+import { extractionProblems, ignoredSettings, rejectedSettings } from './domain-settings';
 import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
@@ -77,6 +79,9 @@ function paginate<T>(
 }
 
 /** An in-memory Keeper. Same interface as the HTTP adapter; state lives for the page lifetime. */
+/** The mock caller administers every Domain. */
+const withCan = (domain: Domain): Domain => ({ ...domain, can: { settings: true } });
+
 export function createMockApi(options: MockOptions): KeeperApi {
   const seed = options.seed ?? buildSampleSeed();
   const domains = new Map<DomainId, DomainData>(seed.domains.map((d) => [d.domain.id, d]));
@@ -331,7 +336,34 @@ export function createMockApi(options: MockOptions): KeeperApi {
         domains.set(input.id, created);
         return Promise.resolve(created.domain);
       },
-      get: (id) => Promise.resolve(domainOf(id).domain),
+      get: (id) => Promise.resolve(withCan(domainOf(id).domain)),
+      update: (id, input) => {
+        const data = domainOf(id);
+        const changed = input.settings ?? {};
+        const unknown = Object.keys(changed).filter((key) => key !== 'extraction');
+        const issues = [
+          ...unknown.map((key) => ({
+            pointer: `/body/settings/${key}`,
+            message: 'not a setting this request may change (extraction)',
+            code: 'invalid',
+          })),
+          ...('extraction' in changed ? extractionProblems(changed['extraction']) : []),
+        ];
+        if (issues.length > 0) return Promise.reject(rejectedSettings(issues));
+        const settings: Record<string, unknown> = { ...data.domain.settings };
+        for (const [key, value] of Object.entries(changed)) {
+          if (value === null) delete settings[key];
+          else settings[key] = value;
+        }
+        data.domain = {
+          ...data.domain,
+          ...(input.display_name == null ? {} : { display_name: input.display_name }),
+          ...(input.description === undefined ? {} : { description: input.description }),
+          settings,
+          ignored_settings: ignoredSettings(settings),
+        };
+        return Promise.resolve(withCan(data.domain));
+      },
     },
 
     branches: {

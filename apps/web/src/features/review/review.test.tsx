@@ -209,7 +209,8 @@ describe('Review merge attempt', () => {
     await user.click(screen.getByRole('button', { name: 'Apply resolutions' }));
     const dialog = await screen.findByRole('dialog', { name: 'Apply with open Conflicts' });
     expect(dialog).toHaveTextContent('6 Conflicts are still open');
-    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.queryByText(/Merge run:/)).not.toBeInTheDocument();
   });

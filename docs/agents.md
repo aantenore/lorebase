@@ -219,7 +219,8 @@ POST /api/v1/domains/supply/context
   the lens, and a lens none of whose Kinds is readable answers like an unknown one (422
   `lens_unknown`, 404 for a schema element). `GET /schema` lists the lenses, and so does
   `lorebase_schema` in [Herald](mcp.md#tools).
-- CLI: `lorebase context --lens supplier_risk`, `lorebase search TEXT --trait Located`.
+- CLI: `lorebase context --lens supplier_risk`, `lorebase search TEXT --trait Located`. The web
+  app's Retrieval lab builds its context pack with a lens chosen beside the question.
 
 ## 2. Targeted reads
 

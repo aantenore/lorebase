@@ -15,28 +15,48 @@ import { DomainHome } from './domain-home';
 import { RecordsTable } from './records-table';
 
 const ALL_KINDS = '';
+const NO_LENS = '';
+/** Prefix of a Trait in the Kind filter, whose values are otherwise Kind api names. */
+const TRAIT = 'trait:';
 
 const t = explorerMessages;
 
-function SearchForm({ schema, q, kind }: { schema: Schema; q: string; kind: string }) {
-  const navigate = useNavigate();
-  const [draft, setDraft] = useState(q);
-  const scopeSearch = useScopeSearch();
+/** What the Explorer searches: the query, a Kind or a Trait, and a lens. */
+export interface ExplorerFilter {
+  q?: string | undefined;
+  kind?: string | undefined;
+  trait?: string | undefined;
+  lens?: string | undefined;
+}
 
-  const go = (nextQ: string, nextKind: string) => {
+function SearchForm({ schema, filter }: { schema: Schema; filter: ExplorerFilter }) {
+  const navigate = useNavigate();
+  const [draft, setDraft] = useState(filter.q ?? '');
+  const scopeSearch = useScopeSearch();
+  const lenses = schema.lenses ?? [];
+  const lens = lenses.find((l) => l.api_name === filter.lens);
+  const target =
+    filter.trait !== undefined ? `${TRAIT}${filter.trait}` : (filter.kind ?? ALL_KINDS);
+
+  const go = (next: { q?: string; target?: string; lens?: string }) => {
+    const q = (next.q ?? draft).trim();
+    const chosen = next.target ?? target;
+    const nextLens = next.lens ?? filter.lens ?? NO_LENS;
     void navigate({
       to: '.',
       search: {
         ...scopeSearch,
-        q: nextQ.trim() === '' ? undefined : nextQ.trim(),
-        kind: nextKind === ALL_KINDS ? undefined : nextKind,
+        q: q === '' ? undefined : q,
+        kind: chosen === ALL_KINDS || chosen.startsWith(TRAIT) ? undefined : chosen,
+        trait: chosen.startsWith(TRAIT) ? chosen.slice(TRAIT.length) : undefined,
+        lens: nextLens === NO_LENS ? undefined : nextLens,
       },
     });
   };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    go(draft, kind);
+    go({ q: draft });
   };
 
   return (
@@ -54,15 +74,36 @@ function SearchForm({ schema, q, kind }: { schema: Schema; q: string; kind: stri
         <Select
           label={t.search.kind}
           className="w-full sm:w-48"
-          value={kind}
+          value={target}
           options={[
             { value: ALL_KINDS, label: commonMessages.allKinds },
             ...schema.kinds.map((k) => ({ value: k.api_name, label: k.display_name })),
+            ...schema.traits.map((trait) => ({
+              value: `${TRAIT}${trait.api_name}`,
+              label: t.search.traitOption(trait.display_name || trait.api_name),
+            })),
           ]}
           onChange={(event) => {
-            go(draft, event.target.value);
+            go({ target: event.target.value });
           }}
         />
+        {lenses.length > 0 && (
+          <Select
+            label={t.search.lens}
+            className="w-full sm:w-48"
+            value={filter.lens ?? NO_LENS}
+            hint={
+              lens === undefined || lens.description === '' ? t.search.lensHint : lens.description
+            }
+            options={[
+              { value: NO_LENS, label: t.search.noLens },
+              ...lenses.map((l) => ({ value: l.api_name, label: l.display_name })),
+            ]}
+            onChange={(event) => {
+              go({ lens: event.target.value });
+            }}
+          />
+        )}
         <FormAction>
           <Button type="submit" variant="primary">
             {commonMessages.search}
@@ -73,12 +114,14 @@ function SearchForm({ schema, q, kind }: { schema: Schema; q: string; kind: stri
   );
 }
 
-function SearchResults({ q, kind }: { q: string; kind: string }) {
+function SearchResults({ filter, q }: { filter: ExplorerFilter; q: string }) {
   const scope = useScope();
   const config = useConfig();
   const results = useSearch(scope, {
     q,
-    ...(kind === ALL_KINDS ? {} : { kinds: [kind] }),
+    ...(filter.kind === undefined ? {} : { kinds: [filter.kind] }),
+    ...(filter.trait === undefined ? {} : { traits: [filter.trait] }),
+    ...(filter.lens === undefined ? {} : { lens: filter.lens }),
     limit: config.searchLimit,
   });
 
@@ -138,10 +181,11 @@ function KindRecords({ schema, kind }: { schema: Schema; kind: string }) {
   );
 }
 
-/** Explorer entry: search box, Kind filter, and results or the Domain home. */
-export function ExplorerPage({ q, kind }: { q: string | undefined; kind: string | undefined }) {
+/** Explorer entry: search box, Kind or Trait filter, lens, and results or the Domain home. */
+export function ExplorerPage(filter: ExplorerFilter) {
   const scope = useScope();
   const schema = useSchema(scope);
+  const { q, kind, trait } = filter;
 
   return (
     <>
@@ -149,9 +193,11 @@ export function ExplorerPage({ q, kind }: { q: string | undefined; kind: string 
       <QueryBoundary query={schema}>
         {(data) => (
           <>
-            <SearchForm schema={data} q={q ?? ''} kind={kind ?? ALL_KINDS} />
+            <SearchForm schema={data} filter={filter} />
             {q !== undefined ? (
-              <SearchResults q={q} kind={kind ?? ALL_KINDS} />
+              <SearchResults filter={filter} q={q} />
+            ) : trait !== undefined ? (
+              <EmptyState>{t.search.traitNeedsQuery(trait)}</EmptyState>
             ) : kind !== undefined ? (
               <KindRecords schema={data} kind={kind} />
             ) : (

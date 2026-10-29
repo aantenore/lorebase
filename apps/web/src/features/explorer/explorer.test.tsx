@@ -65,6 +65,41 @@ describe('Explorer', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('searches the Kinds of a Trait, or of a lens when no Kind or Trait is chosen', async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp('/supply/explorer?q=brevik');
+    await screen.findByRole('table', { name: 'Search results' });
+
+    await user.selectOptions(screen.getByLabelText('Kind'), 'Trait: Located');
+    await screen.findByRole('link', { name: 'Brevik Bearings S.p.A.' });
+    expect(
+      screen.queryByRole('link', { name: 'Brevik master supply agreement' }),
+    ).not.toBeInTheDocument();
+    expect(router.state.location.search).toMatchObject({ trait: 'Located' });
+
+    await user.selectOptions(screen.getByLabelText('Kind'), 'All Kinds');
+    await user.selectOptions(screen.getByLabelText('Lens'), 'Supplier risk');
+    expect(
+      await screen.findByRole('link', { name: 'Brevik master supply agreement' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Lens')).toHaveAccessibleDescription(
+      'A supplier with its contracts and parts.',
+    );
+    await user.selectOptions(screen.getByLabelText('Lens'), 'Sites');
+    await screen.findByRole('link', { name: 'Brevik Bearings S.p.A.' });
+    expect(
+      screen.queryByRole('link', { name: 'Brevik master supply agreement' }),
+    ).not.toBeInTheDocument();
+    expect(router.state.location.search).toMatchObject({ lens: 'sites' });
+  });
+
+  it('offers no lens or Trait when the schema declares none', async () => {
+    renderApp('/hr/explorer');
+    const kind = await screen.findByLabelText('Kind');
+    expect(within(kind).queryByRole('option', { name: /^Trait:/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Lens')).not.toBeInTheDocument();
+  });
+
   it('lists the Records of a Kind when no text is typed', async () => {
     const user = userEvent.setup();
     renderApp('/supply/explorer');

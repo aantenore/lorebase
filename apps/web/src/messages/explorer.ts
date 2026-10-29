@@ -7,6 +7,12 @@ export const explorer = {
     label: 'Search Records',
     placeholder: 'Name, code or text',
     kind: 'Kind',
+    traitOption: (name: string) => `Trait: ${name}`,
+    traitNeedsQuery: (name: string) =>
+      `Type a search to find the Records of the Kinds implementing ${name}.`,
+    lens: 'Lens',
+    noLens: 'No lens',
+    lensHint: 'A lens searches its Kinds and Traits when no Kind or Trait is chosen.',
     resultsCaption: 'Search results',
     columnRecord: 'Record',
     columnKind: 'Kind',

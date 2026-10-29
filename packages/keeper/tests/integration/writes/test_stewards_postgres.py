@@ -27,6 +27,7 @@ from lorebase_store.settings import DatabaseSettings
 
 from .conftest import PEPPER
 from .test_proposals_postgres import (
+    API,
     ATTRIBUTE,
     DOMAIN,
     LOADER,
@@ -325,7 +326,14 @@ async def test_domain_extraction_setting(
     async with keeper() as http:
         await setup_domain(http, admin, loader)
         viewer = await role_key(http, "supply", "viewer")
-        assert (await http.get(url, headers=admin)).json()["ignored_settings"] == []
+        initial = (await http.get(url, headers=admin)).json()
+        assert initial["ignored_settings"] == []
+        assert initial["can"] == {"settings": True}
+        assert (await http.get(url, headers=viewer)).json()["can"] == {"settings": False}
+        assert all(
+            d["can"] is None
+            for d in (await http.get(f"{API}/domains", headers=admin)).json()["items"]
+        )
         loose = {"extraction": {"mode": "direct", "auto_accept_threshold": 0.5}}
         denied = await http.patch(url, json={"settings": loose}, headers=viewer)
         assert denied.status_code == 403
@@ -334,6 +342,7 @@ async def test_domain_extraction_setting(
         body = changed.json()
         assert body["settings"]["extraction"] == loose["extraction"]
         assert body["ignored_settings"] == ["extraction.auto_accept_threshold"]
+        assert body["can"] == {"settings": True}
         invalid = await http.patch(
             url, json={"settings": {"extraction": {"mode": "fast"}}}, headers=admin
         )

@@ -8,7 +8,7 @@ import { ExampleQuestions, useDomainExamples } from '@/features/explore/domain-e
 import { useGuideAuth } from '@/features/explore/guide-auth';
 import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
 import { Button } from '@/ui/button';
-import { Input, Textarea } from '@/ui/field';
+import { Input, Select, Textarea } from '@/ui/field';
 import { FormAction, FormRow, PageHeader, QueryBoundary, Section } from '@/ui/layout';
 import { embed, parseVector } from './guide-client';
 import { LabCanvas } from './lab-canvas';
@@ -52,6 +52,9 @@ export function RetrievalLabPage({
   const [setA, setSetA] = useState<LabParams>(defaultParams);
   const [setB, setSetB] = useState<LabParams>(() => ({ ...defaultParams(), mode: 'hybrid' }));
   const [pasted, setPasted] = useState('');
+  const [lens, setLens] = useState('');
+  const lenses = schema.data?.lenses ?? [];
+  const withLens = lens === '' ? {} : { lens };
 
   const embedding = useQuery({
     queryKey: ['guide', 'embed', guideUrl, question],
@@ -68,11 +71,15 @@ export function RetrievalLabPage({
   const requestB = toRequest(effective(setB, vector), question ?? '', vector, searchLimit);
   const ready = (params: LabParams) =>
     question !== undefined && !(needsVector(params.mode) && waiting);
-  const searchA = useSearch(scope, requestA.request, ready(setA));
-  const searchB = useSearch(scope, requestB.request, ready(setB));
+  const searchA = useSearch(scope, { ...requestA.request, ...withLens }, ready(setA));
+  const searchB = useSearch(scope, { ...requestB.request, ...withLens }, ready(setB));
   const pack = useContextPack(
     scope,
-    { search: question ?? '', ...(budget === undefined ? {} : { budget_tokens: budget }) },
+    {
+      search: question ?? '',
+      ...withLens,
+      ...(budget === undefined ? {} : { budget_tokens: budget }),
+    },
     question !== undefined,
   );
 
@@ -136,6 +143,21 @@ export function RetrievalLabPage({
               }}
               className="min-w-0 flex-1 basis-64"
             />
+            {lenses.length > 0 && (
+              <Select
+                label={T.lens.label}
+                hint={T.lens.hint}
+                value={lens}
+                options={[
+                  { value: '', label: T.lens.none },
+                  ...lenses.map((l) => ({ value: l.api_name, label: l.display_name })),
+                ]}
+                onChange={(event) => {
+                  setLens(event.target.value);
+                }}
+                className="w-56"
+              />
+            )}
             <Input
               label={T.budget.label}
               hint={T.budget.hint}

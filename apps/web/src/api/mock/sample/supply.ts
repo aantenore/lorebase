@@ -289,6 +289,24 @@ const mainSchema: SchemaBody = {
       },
     },
   ],
+  lenses: [
+    {
+      id: eid('lns', 'supplier_risk'),
+      api_name: 'supplier_risk',
+      display_name: 'Supplier risk',
+      description: 'A supplier with its contracts and parts.',
+      kinds: ['Supplier', 'Contract', 'Part'],
+      traits: [],
+    },
+    {
+      id: eid('lns', 'sites'),
+      api_name: 'sites',
+      display_name: 'Sites',
+      description: 'Everything with a location.',
+      kinds: [],
+      traits: ['Located'],
+    },
+  ],
   search: { modes: ['lexical'], embedding: null },
 };
 

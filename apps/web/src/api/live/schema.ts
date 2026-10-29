@@ -456,6 +456,14 @@ export function mapSchema(out: SchemaOut): Schema {
     operations: entries(body['operations']).map((o) => operation(o, names)),
     derivations: entries(body['derivations']).map((d) => derivation(d, names)),
     sources: entries(body['sources']).map(source),
+    lenses: entries(body['lenses']).map((l) => ({
+      id: str(l['id']),
+      api_name: str(l['api_name']),
+      display_name: str(l['display_name']) || str(l['api_name']),
+      description: str(l['description']),
+      kinds: list(l['kinds']).map((id) => names.of(id)),
+      traits: list(l['traits']).map((id) => names.of(id)),
+    })),
     search: { modes: [...out.search.modes], embedding: out.search.embedding },
   };
 }
