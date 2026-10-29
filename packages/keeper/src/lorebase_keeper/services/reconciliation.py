@@ -241,6 +241,15 @@ def unreadable(masking: Masking, attribute: Attribute, kind_id: str) -> bool:
     return vault or masking.hidden(attribute, [kind_id])
 
 
+def stored_attribute(kind: Kind, name: str) -> Attribute:
+    """The stored Attribute of `kind` a duplicate merge's `values` entry `name` sets; any
+    other name (unknown, derived, or an Operation parameter such as `key`) is refused (422)."""
+    attribute = kind.attribute_by_api_name(name)
+    if attribute is None or attribute.is_derived:
+        raise _invalid(f"/body/values/{name}", f"is not a stored Attribute of Kind {kind.api_name}")
+    return attribute
+
+
 def placeholder(masking: Masking, value: Any) -> bool:
     """Whether `value` is what reads show instead of a value (masked or erased)."""
     settings = masking.settings
@@ -1037,8 +1046,8 @@ async def _merge_duplicates(
     masking: Masking,
 ) -> DecisionOutcome:
     """Survivor update, Links re-created on it and the absorbed Record deleted, proposed.
-    `values` may not name an Attribute the caller may not read (403) nor hold a masked or
-    erased placeholder (422)."""
+    `values` may only name stored Attributes of the Kind (422), none the caller may not read
+    (403), and may not hold a masked or erased placeholder (422)."""
     keys = list(candidate.keys)
     if decision.survivor not in keys or len(keys) != 2:
         raise _invalid("/body/survivor", f"must be one of {', '.join(keys)}")
@@ -1052,8 +1061,8 @@ async def _merge_duplicates(
     requests: list[ExecutionRequest] = []
     values = dict(decision.values or {})
     for name, value in values.items():
-        attribute = kind.attribute_by_api_name(name)
-        if attribute is not None and unreadable(masking, attribute, kind.id):
+        attribute = stored_attribute(kind, name)
+        if unreadable(masking, attribute, kind.id):
             raise _uncleared(candidate.id)
         if placeholder(masking, value):
             raise _invalid(
@@ -1068,7 +1077,7 @@ async def _merge_duplicates(
         requests.append(
             ExecutionRequest(
                 operation=_builtin(kind, "update"),
-                parameters={"key": survivor, **values},
+                parameters={**values, "key": survivor},
                 message=message,
                 reconciliation=origin,
             )

@@ -31,6 +31,7 @@ from lorebase_keeper.services.reconciliation import (
     placeholder,
     raw_value,
     shown,
+    stored_attribute,
     unreadable,
 )
 from lorebase_store.repositories import CandidateRow, wrap_claim
@@ -226,6 +227,24 @@ def test_values_the_caller_may_not_read_and_placeholders(schema: Schema) -> None
     assert placeholder(blind, blind.settings.erased_value)
     assert not placeholder(blind, "Poznan")
     assert not placeholder(blind, {"$vault": "tok"})
+
+
+def test_merge_values_name_only_stored_attributes(schema: Schema) -> None:
+    supplier, part = schema.kind_by_api_name("Supplier"), schema.kind_by_api_name("Part")
+    assert supplier is not None
+    assert part is not None
+    assert stored_attribute(supplier, "city").api_name == "city"
+    for kind, name in ((supplier, "key"), (supplier, "valid"), (supplier, "nope")):
+        with pytest.raises(ProblemError) as refused:
+            stored_attribute(kind, name)
+        assert refused.value.status_code == 422
+        assert refused.value.extensions["errors"][0]["pointer"] == f"/body/values/{name}"
+    derived = part.attribute_by_api_name("supplier_count")
+    assert derived is not None
+    assert derived.is_derived
+    with pytest.raises(ProblemError) as refused:
+        stored_attribute(part, "supplier_count")
+    assert refused.value.extensions["errors"][0]["pointer"] == "/body/values/supplier_count"
 
 
 async def test_update_takes_validity_periods_of_valid_time_values(schema: Schema) -> None:
