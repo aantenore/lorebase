@@ -1501,10 +1501,18 @@ class DocumentFromUrl(RequestModel):
     filename: str | None = Field(default=None, max_length=255)
     extract: bool | None = None
     tiers: list[int] | None = None
+    source_key: str | None = Field(default=None, min_length=1)
+
+
+DocumentStatus = Literal["active", "superseded", "retired", "purged"]
 
 
 class Document(Model):
-    """A stored document; `text_sha256` is set once Scribe parsed its text."""
+    """A stored document; `text_sha256` is set once Scribe parsed its text.
+
+    Documents sharing a `source_key` are versions of one source; `replaces` names the version
+    a document superseded.
+    """
 
     id: str
     filename: str
@@ -1515,6 +1523,14 @@ class Document(Model):
     metadata: dict[str, JsonValue]
     created_at: datetime | None = None
     created_by: str
+    source_key: str | None = None
+    version: int
+    replaces: str | None = None
+    status: DocumentStatus
+    retired_at: datetime | None = None
+    retired_by: str | None = None
+    purged_at: datetime | None = None
+    purged_by: str | None = None
 
 
 class ExtractionJob(Model):
@@ -1535,6 +1551,9 @@ class DocumentDetail(Document):
     """A document with its extraction jobs, newest first."""
 
     extraction_jobs: list[ExtractionJob]
+    open_stale_candidates: int
+    can_retire: bool = False
+    can_purge: bool = False
 
 
 class DocumentText(Model):
@@ -1553,6 +1572,40 @@ class DocumentUploaded(Model):
     document: Document
     duplicate: bool
     job_id: int | None = None
+    check_job_id: int | None = None
+
+
+class RetirementIn(RequestModel):
+    """Why a document is retired; recorded in the audit."""
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class PurgeIn(RetirementIn):
+    """Irreversible erasure of a document's content; `confirm` is the document id."""
+
+    confirm: str = Field(min_length=1)
+
+
+class DocumentRetired(Model):
+    """The retired document and the queued evidence check (null if already retired)."""
+
+    document: Document
+    job_id: int | None = None
+
+
+class DocumentPurged(Model):
+    """The purged document and what the purge deleted or erased."""
+
+    document: Document
+    job_id: int | None = None
+    blob_deleted: bool
+    text_deleted: bool
+    chunks: int
+    cache_entries: int
+    items: int
+    candidates: int
+    suggestions: int
 
 
 # Extraction items -------------------------------------------------------------------------

@@ -542,6 +542,7 @@ Accepted file name suffixes and their stored media type
 | `keeper.documents.extract_on_upload` | `true` | queue an extraction job per upload unless the request says no |
 | `keeper.documents.jobs_listed` | `20` | extraction jobs shown with a document |
 | `keeper.documents.max_text_chars` | `2000000` | parsed text served by GET .../documents/{id}/text (cut above) |
+| `keeper.documents.max_source_key_chars` | `1024` | longest source_key of an upload (new bytes: a new version) |
 
 ### `keeper.trace`
 
@@ -1512,6 +1513,8 @@ Source synchronization (design 9.1)
 
 #### `scribe.sources.csv`
 
+What an upstream change does to a value someone else set since the last sync is set per Source in the schema: `local_edits: review` (default: a Conflict), `keep` or `source_wins`.
+
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `scribe.sources.csv.allowed_roots` | `[]` | directories local CSV files may be read from; empty: none |
@@ -1605,6 +1608,14 @@ Documents into reviewable Proposals (docs/extraction.md)
 | `scribe.extraction.prompt_version` | `extract-v1` | recorded in Lineage and the cache key; bump with prompts |
 | `scribe.extraction.cache` | `true` | reuse tier 2 answers for unchanged chunk, schema and model |
 | `scribe.extraction.max_tokens_per_job` | `2000000` | tier 2 stops after this many tokens; 0: no limit |
+
+#### `scribe.extraction.versions`
+
+Evidence check of new document versions and retirements
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.extraction.versions.max_values_per_job` | `5000` | values one document_version_check job looks at; the rest goes to a continuation job |
 
 #### `scribe.extraction.parser`
 
@@ -1767,6 +1778,7 @@ Contradictions between Sources (design 10.6); a Domain overrides any member in i
 |---------|---------|-------------|
 | `scribe.reconciliation.triggers.extraction` | `true` | check extraction value items while they are assembled |
 | `scribe.reconciliation.triggers.source_sync` | `true` | check a Source sync's changes before they are merged |
+| `scribe.reconciliation.triggers.document_versions` | `true` | check evidence quotes when a document gets a new version or is retired (stale candidates, signal evidence_gone) |
 
 #### `scribe.reconciliation.duplicates`
 

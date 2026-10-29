@@ -13,6 +13,7 @@ import { DocumentText } from './document-text';
 import { spansOf } from './document-spans';
 import { costOf, JobBadge, jobError, tokensOf } from './job-status';
 import { cn } from '@/ui/cn';
+import { LifecycleActions, LifecycleFacts, Versions } from './lifecycle';
 
 const DECISION_TONE = { pending: 'warning', accepted: 'success', rejected: 'neutral' } as const;
 
@@ -186,6 +187,9 @@ function Viewer({
       ?.id ??
     null;
 
+  if (detail.status === 'purged') {
+    return <EmptyState>{documentsMessages.viewer.wasPurged}</EmptyState>;
+  }
   if (text.isPending || (proposal != null && items.isPending)) {
     return (
       <p role="status" className="text-muted">
@@ -294,6 +298,11 @@ export function DocumentPage({
               </Link>
             }
           />
+          <LifecycleFacts detail={data} domain={scope.domain} />
+          <LifecycleActions detail={data} domain={scope.domain} />
+          <Section title={documentsMessages.lifecycle.versionsTitle}>
+            <Versions detail={data} domain={scope.domain} />
+          </Section>
           <Section title={documentsMessages.page.jobsTitle}>
             <Jobs detail={data} domain={scope.domain} />
           </Section>

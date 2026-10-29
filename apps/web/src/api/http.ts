@@ -106,6 +106,7 @@ function documentForm(file: File, input: UploadDocumentInput): FormData {
   form.append('file', file, file.name);
   if (input.extract !== undefined) form.append('extract', String(input.extract));
   if (input.tiers !== undefined) form.append('tiers', JSON.stringify(input.tiers));
+  if (input.source_key !== undefined) form.append('source_key', input.source_key);
   return form;
 }
 
@@ -512,8 +513,35 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
                 ...(input.filename === undefined ? {} : { filename: input.filename }),
                 ...(input.extract === undefined ? {} : { extract: input.extract }),
                 ...(input.tiers === undefined ? {} : { tiers: input.tiers }),
+                ...(input.source_key === undefined ? {} : { source_key: input.source_key }),
               });
-        return { ...answer, document: mapDocument(answer.document), job_id: answer.job_id ?? null };
+        return {
+          ...answer,
+          document: mapDocument(answer.document),
+          job_id: answer.job_id ?? null,
+          check_job_id: answer.check_job_id ?? null,
+        };
+      },
+      versions: async (domain, document, params) => {
+        const page = await get<S['Page_DocumentOut_']>(
+          `${d(domain)}/documents/${enc(document)}/versions`,
+          pageParams(params),
+        );
+        return { items: page.items.map(mapDocument), next_cursor: page.next_cursor ?? null };
+      },
+      retire: async (domain, document, reason) => {
+        const done = await post<S['DocumentRetired']>(
+          `${d(domain)}/documents/${enc(document)}/retirement`,
+          { reason },
+        );
+        return { document: mapDocument(done.document), job_id: done.job_id ?? null };
+      },
+      purge: async (domain, document, input) => {
+        const done = await post<S['DocumentPurged']>(
+          `${d(domain)}/documents/${enc(document)}/purge`,
+          input,
+        );
+        return { ...done, document: mapDocument(done.document), job_id: done.job_id ?? null };
       },
       // 404 until Scribe parsed the document.
       text: async (domain, document): Promise<DocumentText | null> => {

@@ -451,6 +451,7 @@ keeper:
     extract_on_upload: true      # queue an extraction job per upload unless the request says no
     jobs_listed: 20              # extraction jobs shown with a document
     max_text_chars: 2000000      # parsed text served by GET .../documents/{id}/text (cut above)
+    max_source_key_chars: 1024   # longest source_key of an upload (new bytes: a new version)
   trace:                         # agent trace (docs/agent-trace.md): steps of agent sessions
                                  # (query, counts, refs, latency; never values), written off the
                                  # request path to agent_trace_steps. Needs the `database` section
@@ -1210,6 +1211,9 @@ scribe:
     prompt_version: extract-v1   # recorded in Lineage and the cache key; bump with prompts
     cache: true                  # reuse tier 2 answers for unchanged chunk, schema and model
     max_tokens_per_job: 2000000  # tier 2 stops after this many tokens; 0: no limit
+    versions:                    # evidence check of new document versions and retirements
+      max_values_per_job: 5000   # values one document_version_check job looks at; the rest
+                                 # goes to a continuation job
     parser:                      # PDF and DOCX parsed in a child process without network
       isolated: true             # false: in a worker thread, bounded by max_input_bytes only
       timeout_s: 60.0            # wall-clock time per document
@@ -1314,6 +1318,8 @@ scribe:
     triggers:
       extraction: true           # check extraction value items while they are assembled
       source_sync: true          # check a Source sync's changes before they are merged
+      document_versions: true    # check evidence quotes when a document gets a new version
+                                 # or is retired (stale candidates, signal evidence_gone)
     duplicates:
       trigram_threshold: 0.8     # least title similarity of a duplicate candidate
       max_pairs_per_kind: 1000   # duplicate pairs examined per Kind and pass

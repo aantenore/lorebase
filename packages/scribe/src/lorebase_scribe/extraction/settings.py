@@ -234,6 +234,18 @@ class DiscoverySettings(SectionModel):
     )
 
 
+class VersionCheckSettings(SectionModel):
+    """The evidence check of a new document version or a retired document (job
+    `document_version_check`, design 9.2)."""
+
+    max_values_per_job: int = Field(
+        default=5000,
+        ge=1,
+        description="Values one document_version_check job looks at; the rest goes to a "
+        "continuation job.",
+    )
+
+
 class ExtractionSettings(SectionModel):
     """Document extraction into reviewable Proposals (design 9.2)."""
 
@@ -291,3 +303,4 @@ class ExtractionSettings(SectionModel):
     matching: MatchSettings = Field(default_factory=MatchSettings)
     confidence: ConfidenceSettings = Field(default_factory=ConfidenceSettings)
     discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)
+    versions: VersionCheckSettings = Field(default_factory=VersionCheckSettings)

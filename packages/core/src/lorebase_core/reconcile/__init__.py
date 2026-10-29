@@ -31,11 +31,13 @@ from lorebase_core.reconcile.claims import (
     value_hash,
 )
 from lorebase_core.reconcile.detect import (
+    EVIDENCE_GONE_SIGNAL,
     DuplicateRule,
     Outcome,
     StaleReason,
     Verdict,
     duplicate_draft,
+    evidence_gone_verdict,
     pairs,
     stale_reasons,
     stale_verdict,
@@ -66,6 +68,7 @@ from lorebase_core.reconcile.options import (
 
 __all__ = [
     "CANDIDATE_ID_PREFIX",
+    "EVIDENCE_GONE_SIGNAL",
     "STAGE_ORDER",
     "TRANSITIONS",
     "CandidateDraft",
@@ -98,6 +101,7 @@ __all__ = [
     "compare",
     "disagree",
     "duplicate_draft",
+    "evidence_gone_verdict",
     "fold_words",
     "identity",
     "merge_claims",

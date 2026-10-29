@@ -69,7 +69,7 @@ _REVIEWED = frozenset({CandidateType.CONTRADICTION, CandidateType.SUPERSEDED})
 DOMAIN_MEMBERS: Mapping[str, frozenset[str] | None] = {
     "enabled": None,
     "stages": None,
-    "triggers": frozenset({"extraction", "source_sync"}),
+    "triggers": frozenset({"extraction", "source_sync", "document_versions"}),
     "hold_auto_accept": None,
     "normalize": frozenset({"numeric_tolerance", "negation_words"}),
     "duplicates": frozenset({"trigram_threshold"}),

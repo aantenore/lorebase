@@ -198,7 +198,7 @@ async def run_llm_discovery(
         )
         data, model = answer.data, answer.model
         if cache is not None:
-            await cache.put(key, data, answer.usage, model)
+            await cache.put(key, data, answer.usage, model, chunk_hash=chunk.hash)
         result.usage = answer.usage
     if not isinstance(data, dict):
         result.discard("invalid_answer")

@@ -6335,7 +6335,7 @@
           "documents"
         ],
         "summary": "Upload a document for extraction",
-        "description": "Store a document (multipart upload or allowlisted URL) and queue its extraction.",
+        "description": "Store a document (multipart upload or allowlisted URL) and queue its extraction; with\na `source_key`, new bytes are a new version of the key's document.",
         "operationId": "upload_document_api_v1_domains__domain_id__documents_post",
         "security": [
           {
@@ -6386,6 +6386,16 @@
           },
           "404": {
             "description": "Domain or document not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The document is retired (`document-retired`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6452,6 +6462,10 @@
                   "tiers": {
                     "type": "string",
                     "description": "JSON list, e.g. [0, 1]"
+                  },
+                  "source_key": {
+                    "type": "string",
+                    "description": "Stable identity: new bytes are a new version."
                   }
                 },
                 "required": [
@@ -6509,6 +6523,18 @@
                     ],
                     "description": "Extraction tiers (0, 1, 2).",
                     "title": "Tiers"
+                  },
+                  "source_key": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Stable identity (path, URL or external id): new bytes under the same key are a new version of its document.",
+                    "title": "Source Key"
                   }
                 },
                 "required": [
@@ -6526,7 +6552,7 @@
           "documents"
         ],
         "summary": "List documents",
-        "description": "Documents of the Domain, newest first.",
+        "description": "Documents of the Domain, newest first; with `source_key`, the versions of that key.",
         "operationId": "list_documents_api_v1_domains__domain_id__documents_get",
         "security": [
           {
@@ -6542,6 +6568,24 @@
               "type": "string",
               "title": "Domain Id"
             }
+          },
+          {
+            "name": "source_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only the versions of this key (trimmed, exact).",
+              "title": "Source Key"
+            },
+            "description": "Only the versions of this key (trimmed, exact)."
           },
           {
             "name": "limit",
@@ -6615,6 +6659,16 @@
           },
           "404": {
             "description": "Domain or document not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The document is retired (`document-retired`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6730,6 +6784,16 @@
               }
             }
           },
+          "409": {
+            "description": "The document is retired (`document-retired`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "413": {
             "description": "The document is too large.",
             "content": {
@@ -6752,6 +6816,355 @@
           },
           "502": {
             "description": "The URL could not be fetched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/documents/{document_id}/versions": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "List the versions of a document",
+        "description": "The versions of the document's `source_key`, newest first (only itself when keyless).",
+        "operationId": "list_document_versions_api_v1_domains__domain_id__documents__document_id__versions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DocumentOut_"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission Domain-wide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or document not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The document is retired (`document-retired`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The document is too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsupported or invalid document, URL or fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The URL could not be fetched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/documents/{document_id}/retirement": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Retire a document",
+        "description": "Retire a document: it stays readable, is never extracted again, and values whose\nevidence was this document raise `stale` reconciliation candidates.",
+        "operationId": "retire_document_api_v1_domains__domain_id__documents__document_id__retirement_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetirementIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRetired"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission Domain-wide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or document not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid reason, or `confirm` is not the document id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/documents/{document_id}/purge": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Purge a document (irreversible)",
+        "description": "Delete a document's bytes, text, chunks and quotes, keeping its provenance (module\ndoc); retires it first if needed.",
+        "operationId": "purge_document_api_v1_domains__domain_id__documents__document_id__purge_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurgeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentPurged"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks the permission Domain-wide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain or document not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid reason, or `confirm` is not the document id.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14633,6 +15046,91 @@
             "type": "string",
             "title": "Created By"
           },
+          "source_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Key",
+            "description": "Stable identity; null: keyless."
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "description": "1 for keyless documents and the first version of a key."
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces",
+            "description": "The version this one replaced."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "superseded",
+              "retired",
+              "purged"
+            ],
+            "title": "Status"
+          },
+          "retired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retired At"
+          },
+          "retired_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retired By"
+          },
+          "purged_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purged At"
+          },
+          "purged_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purged By"
+          },
           "extraction_jobs": {
             "items": {
               "$ref": "#/components/schemas/ExtractionJobOut"
@@ -14640,6 +15138,21 @@
             "type": "array",
             "title": "Extraction Jobs",
             "description": "Newest first."
+          },
+          "open_stale_candidates": {
+            "type": "integer",
+            "title": "Open Stale Candidates",
+            "description": "Open `stale` reconciliation candidates whose claims come from this document (its evidence gone from a newer version, or the document retired)."
+          },
+          "can_retire": {
+            "type": "boolean",
+            "title": "Can Retire",
+            "description": "The caller holds `document.retire` Domain-wide."
+          },
+          "can_purge": {
+            "type": "boolean",
+            "title": "Can Purge",
+            "description": "The caller holds `document.purge` Domain-wide."
           }
         },
         "type": "object",
@@ -14651,7 +15164,12 @@
           "size",
           "metadata",
           "created_by",
-          "extraction_jobs"
+          "version",
+          "status",
+          "extraction_jobs",
+          "open_stale_candidates",
+          "can_retire",
+          "can_purge"
         ],
         "title": "DocumentDetailOut"
       },
@@ -14709,6 +15227,91 @@
           "created_by": {
             "type": "string",
             "title": "Created By"
+          },
+          "source_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Key",
+            "description": "Stable identity; null: keyless."
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "description": "1 for keyless documents and the first version of a key."
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces",
+            "description": "The version this one replaced."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "superseded",
+              "retired",
+              "purged"
+            ],
+            "title": "Status"
+          },
+          "retired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retired At"
+          },
+          "retired_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retired By"
+          },
+          "purged_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purged At"
+          },
+          "purged_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purged By"
           }
         },
         "type": "object",
@@ -14719,9 +15322,101 @@
           "sha256",
           "size",
           "metadata",
-          "created_by"
+          "created_by",
+          "version",
+          "status"
         ],
         "title": "DocumentOut"
+      },
+      "DocumentPurged": {
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/DocumentOut"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id",
+            "description": "Queued evidence check of the retirement, if this purge retired the document."
+          },
+          "blob_deleted": {
+            "type": "boolean",
+            "title": "Blob Deleted",
+            "description": "The bytes were deleted (no other document holds them)."
+          },
+          "text_deleted": {
+            "type": "boolean",
+            "title": "Text Deleted",
+            "description": "The parsed text was deleted."
+          },
+          "chunks": {
+            "type": "integer",
+            "title": "Chunks",
+            "description": "Chunks deleted."
+          },
+          "cache_entries": {
+            "type": "integer",
+            "title": "Cache Entries",
+            "description": "Cached model answers of its chunks deleted."
+          },
+          "items": {
+            "type": "integer",
+            "title": "Items",
+            "description": "Proposal items whose evidence quotes were erased."
+          },
+          "candidates": {
+            "type": "integer",
+            "title": "Candidates",
+            "description": "Reconciliation candidates whose quotes were erased."
+          },
+          "suggestions": {
+            "type": "integer",
+            "title": "Suggestions",
+            "description": "Schema suggestions whose example quotes were erased."
+          }
+        },
+        "type": "object",
+        "required": [
+          "document",
+          "blob_deleted",
+          "text_deleted",
+          "chunks",
+          "cache_entries",
+          "items",
+          "candidates",
+          "suggestions"
+        ],
+        "title": "DocumentPurged"
+      },
+      "DocumentRetired": {
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/DocumentOut"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id",
+            "description": "Queued evidence check; null when it was retired before."
+          }
+        },
+        "type": "object",
+        "required": [
+          "document"
+        ],
+        "title": "DocumentRetired"
       },
       "DocumentTextOut": {
         "properties": {
@@ -14781,6 +15476,18 @@
             ],
             "title": "Job Id",
             "description": "Queued extraction job, if any."
+          },
+          "check_job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Job Id",
+            "description": "Evidence check of a new version queued now (without extraction; with it, the extraction job queues the check once it finished)."
           }
         },
         "type": "object",
@@ -18967,6 +19674,30 @@
         "title": "ProvenanceOut",
         "description": "A provenance entry (design 5.11): where a change came from."
       },
+      "PurgeIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "description": "Why, recorded in the audit."
+          },
+          "confirm": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Confirm",
+            "description": "The document id, to confirm the purge."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason",
+          "confirm"
+        ],
+        "title": "PurgeIn"
+      },
       "Query": {
         "properties": {
           "kind": {
@@ -20884,6 +21615,23 @@
           "resolutions"
         ],
         "title": "ResolveManyIn"
+      },
+      "RetirementIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "description": "Why, recorded in the audit."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "RetirementIn"
       },
       "ReviewIn": {
         "properties": {

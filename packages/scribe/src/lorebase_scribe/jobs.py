@@ -15,6 +15,7 @@
 | `audit_checkpoint` | none | `checkpoints.publish_checkpoints` |
 | `vault.rotate` | `{"after": [domain id, token]}` optional | `lorebase_store.vault.rotate` |
 | `reconcile_sweep` | `{"branch", "resume"}` optional, Domain set | `ReconcileSweep.run` |
+| `document_version_check` | `{"document", "mode", "resume"}`, Domain set | `DocumentVersionCheck` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -48,6 +49,11 @@ A `reconcile_sweep` job (design 10.6) that did `scribe.reconciliation.sweep_max_
 units of work before its pass is complete queues its continuation (same branch plus `resume`)
 and succeeds.
 
+A `document_version_check` job (design 9.2) that found more than
+`scribe.extraction.versions.max_values_per_job` values to look at queues its continuation (same
+document and mode plus `resume`) and succeeds. Keeper queues one when a document is retired;
+an `extraction` job queues one for each new version of a key it read, once it finished.
+
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
 
@@ -77,6 +83,7 @@ from lorebase_scribe.reconcile.semantic import (
     build_semantic_stage,
 )
 from lorebase_scribe.reconcile.sweep import ReconcileSweep, SweepError
+from lorebase_scribe.reconcile.versions import DocumentVersionCheck, VersionCheckError
 from lorebase_scribe.settings import ScribeSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
@@ -90,6 +97,7 @@ from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
     BRANCH_DELETE_JOB,
+    DOCUMENT_VERSION_CHECK_JOB,
     EMBEDDINGS_JOB,
     EXTRACTION_JOB,
     GC_JOB,
@@ -101,6 +109,7 @@ from lorebase_store.jobs import (
     SOURCE_SYNC_JOB,
     VAULT_ROTATE_JOB,
     JobRow,
+    document_version_check_payload,
     embeddings_payload,
     enqueue_job,
     reconcile_sweep_payload,
@@ -137,6 +146,7 @@ JOB_TYPES = (
     AUDIT_CHECKPOINT_JOB,
     VAULT_ROTATE_JOB,
     RECONCILE_SWEEP_JOB,
+    DOCUMENT_VERSION_CHECK_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -459,6 +469,43 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                 )
         return result
 
+    async def document_version_check(job: JobRow) -> Mapping[str, Any]:
+        domain = _domain(job)
+        document = job.payload.get("document")
+        mode = job.payload.get("mode")
+        if not isinstance(document, str) or not document or not isinstance(mode, str):
+            raise PermanentJobError("a document_version_check job needs `document` and `mode`")
+        resume = job.payload.get("resume")
+        if resume is not None and (
+            not isinstance(resume, list) or not all(isinstance(part, str) for part in resume)
+        ):
+            raise PermanentJobError("`resume` must be a list of strings")
+        check = DocumentVersionCheck(
+            context.sessions,
+            context.runtime,
+            context.settings.extraction,
+            context.settings.reconciliation,
+            principal=context.settings.worker.principal,
+            clock=context.clock,
+        )
+        try:
+            report = await check.run(domain, document, mode=mode, resume=resume)
+        except VersionCheckError as error:
+            raise PermanentJobError(str(error)) from None
+        result = report.as_dict()
+        if report.resume is not None:
+            async with context.sessions() as session, session.begin():
+                result["continuation"] = await enqueue_job(
+                    session,
+                    DOCUMENT_VERSION_CHECK_JOB,
+                    domain_id=domain,
+                    payload=document_version_check_payload(
+                        document, mode=mode, resume=report.resume
+                    ),
+                    unique=True,
+                )
+        return result
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -474,6 +521,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         AUDIT_CHECKPOINT_JOB: audit_checkpoint,
         VAULT_ROTATE_JOB: vault_rotate,
         RECONCILE_SWEEP_JOB: reconcile_sweep,
+        DOCUMENT_VERSION_CHECK_JOB: document_version_check,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())

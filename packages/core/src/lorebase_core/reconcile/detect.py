@@ -14,7 +14,9 @@ caller to the drafts these functions return.
 - **Classification.** On a ``valid_time`` Attribute, claims with disjoint periods are
   ``superseded``; otherwise ``contradiction`` (`classify`).
 - **Stale.** A current value older than ``stale.max_age``, whose period has ended, or whose
-  source identity has a newer pending claim.
+  source identity has a newer pending claim; or a value whose evidence quote is gone from a
+  new version of its document, or whose document was retired (``evidence_gone``, design 9.2:
+  the caller checks the quote, `evidence_gone_verdict` builds the candidate).
 - **Duplicates** (stage a). Two Records of one Kind that look alike: one candidate per pair of
   keys, whatever rule found it (the rules are recorded in ``signals``).
 """
@@ -83,6 +85,7 @@ class StaleReason(StrEnum):
     MAX_AGE = "max_age"
     PERIOD_ENDED = "period_ended"
     PENDING_CLAIM = "pending_claim"
+    EVIDENCE_GONE = "evidence_gone"
 
 
 def _groups_disagree(groups: Sequence[Sequence[Claim]]) -> bool:
@@ -195,6 +198,47 @@ def stale_verdict(
     return Verdict(Outcome.RAISED, draft)
 
 
+def evidence_gone_verdict(
+    current: Claim,
+    *,
+    branch: str,
+    kind_id: str,
+    key: str,
+    attribute_id: str,
+    document_id: str,
+    from_version: int,
+    to_version: int | None,
+    quote: str | None,
+    evidence: dict[str, JsonValue] | None = None,
+) -> Verdict:
+    """A ``stale`` candidate for a current value whose evidence quote is no longer found in
+    its document (design 9.2): absent from the version `to_version` of the document, or the
+    document retired (`to_version` `None`). The caller made the literal check; the claim is
+    the current value with the old evidence passage (`evidence`), and the signal names the
+    document, both versions and the quote (`None` when it was no longer readable)."""
+    claim = current if evidence is None else current.model_copy(update={"evidence": evidence})
+    signal: dict[str, JsonValue] = {
+        "document": document_id,
+        "from_version": from_version,
+        "to_version": to_version,
+        "quote": quote,
+    }
+    draft = CandidateDraft(
+        type=CandidateType.STALE,
+        branch=branch,
+        kind_id=kind_id,
+        keys=(key,),
+        attribute_id=attribute_id,
+        claims=(claim,),
+        signals={"stale": [StaleReason.EVIDENCE_GONE.value], EVIDENCE_GONE_SIGNAL: signal},
+    )
+    return Verdict(Outcome.RAISED, draft)
+
+
+EVIDENCE_GONE_SIGNAL = StaleReason.EVIDENCE_GONE.value
+"""Signal of a ``stale`` candidate raised by a document version check."""
+
+
 def duplicate_draft(
     *,
     branch: str,
@@ -237,12 +281,14 @@ def pairs(keys: Sequence[str], *, limit: int) -> list[tuple[str, str]]:
 
 __all__ = [
     "AGREE",
+    "EVIDENCE_GONE_SIGNAL",
     "FILTERED",
     "DuplicateRule",
     "Outcome",
     "StaleReason",
     "Verdict",
     "duplicate_draft",
+    "evidence_gone_verdict",
     "pairs",
     "stale_reasons",
     "stale_verdict",

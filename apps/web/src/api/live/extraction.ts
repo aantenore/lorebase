@@ -117,6 +117,12 @@ export const mapDocument = (raw: S['DocumentOut']): DocumentInfo => ({
   ...raw,
   text_sha256: raw.text_sha256 ?? null,
   created_at: raw.created_at ?? null,
+  source_key: raw.source_key ?? null,
+  replaces: raw.replaces ?? null,
+  retired_at: raw.retired_at ?? null,
+  retired_by: raw.retired_by ?? null,
+  purged_at: raw.purged_at ?? null,
+  purged_by: raw.purged_by ?? null,
 });
 
 const mapJob = (raw: S['ExtractionJobOut']): ExtractionJob => ({
@@ -131,6 +137,9 @@ const mapJob = (raw: S['ExtractionJobOut']): ExtractionJob => ({
 export const mapDocumentDetail = (raw: S['DocumentDetailOut']): DocumentDetail => ({
   ...mapDocument(raw),
   extraction_jobs: raw.extraction_jobs.map(mapJob),
+  open_stale_candidates: raw.open_stale_candidates,
+  can_retire: raw.can_retire,
+  can_purge: raw.can_purge,
 });
 
 /** The filters of Keeper's item list, one query parameter per value. */

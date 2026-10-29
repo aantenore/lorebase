@@ -1484,6 +1484,14 @@ DOCUMENT_ROW = {
     "metadata": {},
     "created_at": NOW,
     "created_by": "usr_1",
+    "source_key": None,
+    "version": 1,
+    "replaces": None,
+    "status": "active",
+    "retired_at": None,
+    "retired_by": None,
+    "purged_at": None,
+    "purged_by": None,
 }
 ITEM_ROW = {
     "id": "itm_1",
@@ -1565,7 +1573,7 @@ def test_documents_list_and_get(http: respx.MockRouter) -> None:
         "error": None,
     }
     http.get("/domains/supply/documents/doc_1").respond(
-        200, json={**DOCUMENT_ROW, "extraction_jobs": [job]}
+        200, json={**DOCUMENT_ROW, "extraction_jobs": [job], "open_stale_candidates": 0}
     )
     listed = run("documents", "list", "-d", "supply")
     assert listed.exit_code == 0, listed.output
@@ -1576,6 +1584,74 @@ def test_documents_list_and_get(http: respx.MockRouter) -> None:
     assert "proposal prp_1" in shown.stdout
     as_json = json.loads(run("documents", "get", "doc_1", "-d", "supply", "--json").stdout)
     assert as_json["extraction_jobs"][0]["id"] == "ext_1"
+
+
+def test_documents_keys_versions_retire_and_purge(http: respx.MockRouter, tmp_path: Path) -> None:
+    v2 = {**DOCUMENT_ROW, "id": "doc_2", "source_key": "k", "version": 2, "replaces": "doc_1"}
+    upload = http.post("/domains/supply/documents").respond(
+        201, json={"document": v2, "duplicate": False, "job_id": None, "check_job_id": 9}
+    )
+    listing = http.get("/domains/supply/documents").respond(
+        200, json={"items": [v2], "next_cursor": None}
+    )
+    http.get("/domains/supply/documents/doc_2/versions").respond(
+        200, json={"items": [v2, DOCUMENT_ROW], "next_cursor": None}
+    )
+    retired = {**v2, "status": "retired", "retired_at": NOW, "retired_by": "usr_1"}
+    retire = http.post("/domains/supply/documents/doc_2/retirement").respond(
+        200, json={"document": retired, "job_id": 11}
+    )
+    purge = http.post("/domains/supply/documents/doc_2/purge").respond(
+        200,
+        json={
+            "document": {**retired, "status": "purged"},
+            "job_id": None,
+            "blob_deleted": True,
+            "text_deleted": True,
+            "chunks": 3,
+            "cache_entries": 2,
+            "items": 1,
+            "candidates": 0,
+            "suggestions": 0,
+        },
+    )
+    spec = tmp_path / "spec.txt"
+    spec.write_bytes(b"hello")
+    sent = run("documents", "upload", str(spec), "--key", "k", "-d", "supply")
+    assert sent.exit_code == 0, sent.output
+    assert b'name="source_key"\r\n\r\nk' in upload.calls.last.request.content
+    assert "check job" in sent.stdout
+    by_url = run(
+        "documents", "upload", "--url", "https://example.test/a", "--key", "k", "-d", "supply"
+    )
+    assert by_url.exit_code == 0, by_url.output
+    assert json.loads(upload.calls.last.request.content)["source_key"] == "k"
+    listed = run("documents", "list", "--key", "k", "-d", "supply")
+    assert listed.exit_code == 0, listed.output
+    assert listing.calls.last.request.url.params["source_key"] == "k"
+    assert "retired" not in listed.stdout
+    versions = run("documents", "versions", "doc_2", "-d", "supply")
+    assert versions.exit_code == 0, versions.output
+    assert "doc_1" in versions.stdout
+    done = run("documents", "retire", "doc_2", "--reason", "obsolete", "-d", "supply")
+    assert done.exit_code == 0, done.output
+    assert "retired" in done.stdout
+    assert request_bodies(retire) == [{"reason": "obsolete"}]
+    erased = run(
+        "documents", "purge", "doc_2", "--reason", "gdpr", "--confirm", "doc_2", "-d", "supply"
+    )
+    assert erased.exit_code == 0, erased.output
+    assert request_bodies(purge) == [{"reason": "gdpr", "confirm": "doc_2"}]
+    assert "chunks" in erased.stdout
+
+
+def test_documents_purge_refuses_a_wrong_confirmation(http: respx.MockRouter) -> None:
+    route = http.post("/domains/supply/documents/doc_2/purge")
+    result = run(
+        "documents", "purge", "doc_2", "--reason", "x", "--confirm", "doc_3", "-d", "supply"
+    )
+    assert result.exit_code == 1
+    assert not route.called
 
 
 def test_documents_text_prints_the_parsed_text(http: respx.MockRouter) -> None:

@@ -169,6 +169,51 @@ What to expect and watch:
   Relation for Links), with hashes only. Rows of a deleted target branch stay until the Source
   is removed; they are small.
 
+## Document versions after the upgrade
+
+Migration `0041` adds `source_key`, `version`, `replaces`, `status` and the retired and purged
+columns to `documents` (existing rows read as keyless, version 1, `active`), makes the unique
+`(domain_id, sha256)` index partial (keyless rows that are not purged), adds the indexes of
+keyed versions, and adds `chunk_hash` to `extraction_cache`. It is metadata only: nothing is
+rewritten, and uploads without a `source_key` behave as before. Callers that upload the same
+path or URL repeatedly (a Source, a script) should start sending it as `source_key`, so
+changed bytes become versions whose evidence is checked ([extraction](extraction.md#document-versions-and-lifecycle)).
+The downgrade stops if documents share bytes (versions, or purged rows); remove the extra rows
+first.
+
+- **Version checks.** `document_version_check` jobs are queued by extraction jobs of new
+  versions and by retirements; each looks at `scribe.extraction.versions.max_values_per_job`
+  values and queues its continuation. They raise `stale` candidates in the reconciliation
+  queue (signal `evidence_gone`), counted with the other candidates. A Domain turns them off
+  with `reconciliation.triggers.document_versions: false`.
+- **Retirement** (`document.retire`, maintainers and admins) keeps the document readable and
+  stops its extraction; audited `document.retire`.
+
+## Document purge
+
+`POST /api/v1/domains/{d}/documents/{id}/purge {"reason": "...", "confirm": "<id>"}` (or
+`lorebase documents purge ID --reason TEXT --confirm ID`; `document.purge`, `admin` only) is
+the erasure of a document, irreversible:
+
+- retired first if needed (its evidence check is queued), then its bytes and parsed text are
+  deleted from the blob store unless another document holds the same blob (the same bytes
+  under another key, or a keyless copy), its chunks deleted, and the cached model answers of
+  chunk hashes no other document of the Domain holds deleted;
+- the evidence quotes of its Proposal items, reconciliation candidates (claims, signals and
+  recorded decisions) and schema suggestion examples are replaced by
+  `keeper.reads.sensitivity.erased_value` (`[erased]`); offsets and document ids stay;
+- provenance rows stay (job, document id, offsets): Lineage still says a value came from the
+  document, and reads `[erased]` for its quote. Values are not changed: retract them through
+  the reconciliation queue or an Operation;
+- the purge and its audit entry (`document.purge`: reason, counts, hashes; never content)
+  commit together; purging again erases nothing.
+
+What a purge does not reach: values written into Records (they are Revisions), Revisions of
+extraction branches, answers cached before migration `0041` (they hold no chunk hash: delete
+them with `DELETE FROM extraction_cache WHERE chunk_hash IS NULL` if needed; they are
+recomputed on the next extraction) and backups taken before. Keyless re-uploads of the same
+bytes after a purge create a new document.
+
 ## Backup and restore of a Domain
 
 A bundle is a portable copy of one Domain's versioned content: all Revisions reachable from a

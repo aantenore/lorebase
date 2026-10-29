@@ -191,6 +191,7 @@ function document(
   createdAt: string,
   jobs: DocumentDetail['extraction_jobs'],
   by = 'usr_sofia',
+  lineage: Partial<DocumentDetail> = {},
 ): MockDocument {
   return {
     text,
@@ -204,7 +205,19 @@ function document(
       metadata: { source: 'upload' },
       created_at: createdAt,
       created_by: by,
+      source_key: null,
+      version: 1,
+      replaces: null,
+      status: 'active',
+      retired_at: null,
+      retired_by: null,
+      purged_at: null,
+      purged_by: null,
       extraction_jobs: jobs,
+      open_stale_candidates: 0,
+      can_retire: true,
+      can_purge: true,
+      ...lineage,
     },
   };
 }
@@ -215,6 +228,7 @@ export const DOC_NOTICE = 'doc_quality_notice_114';
 export const DOC_REVIEW = 'doc_supplier_review_q4';
 export const DOC_OCTOBER = 'doc_contracts_oct';
 export const DOC_SCAN = 'doc_scan_1999';
+export const DOC_NOTICE_V1 = 'doc_quality_notice_114_v1';
 
 const job44 = (finished: string) => ({
   id: 'job_44',
@@ -259,6 +273,8 @@ export function supplyDocuments(): MockDocument[] {
       NOTICE_TEXT.length,
       '2026-10-20T07:58:20Z',
       [job44('2026-10-20T08:01:12Z')],
+      'usr_sofia',
+      { source_key: 'quality/notice-p-10016', version: 2, replaces: DOC_NOTICE_V1 },
     ),
     document(
       DOC_REVIEW,
@@ -317,6 +333,22 @@ export function supplyDocuments(): MockDocument[] {
         },
       ],
       'usr_marco',
+    ),
+    document(
+      DOC_NOTICE_V1,
+      'quality-notice-p-10016.md',
+      MARKDOWN,
+      NOTICE_TEXT,
+      NOTICE_TEXT.length - 12,
+      '2026-10-12T09:30:00Z',
+      [],
+      'usr_sofia',
+      {
+        source_key: 'quality/notice-p-10016',
+        version: 1,
+        status: 'superseded',
+        open_stale_candidates: 1,
+      },
     ),
   ];
 }

@@ -448,18 +448,32 @@ def _hidden(masking: Masking, schema: Schema | None, candidate: CandidateRow) ->
     return attribute is not None and masking.hidden(attribute, [candidate.kind_id])
 
 
+def _mask_signals(signals: dict[str, Any], masked: str) -> dict[str, Any]:
+    return {
+        name: (
+            {**signal, "quote": masked}
+            if isinstance(signal, dict) and signal.get("quote") is not None
+            else signal
+        )
+        for name, signal in signals.items()
+    }
+
+
 def shown(candidate: CandidateRow, schema: Schema | None, masking: Masking) -> dict[str, Any]:
-    """Claims and decision of `candidate` as the caller may see them (module doc), before vault
-    references are opened (`Disclosure`)."""
+    """Claims, signals and decision of `candidate` as the caller may see them (module doc),
+    before vault references are opened (`Disclosure`). The quote a signal carries
+    (`evidence_gone`) is masked like evidence quotes."""
     masked = masking.masked
     cleared = _cleared(masking, candidate.kind_id)
     claims = [_unwrap(c, cleared, masked) for c in candidate.claims]
+    signals = _unwrap(dict(candidate.signals or {}), cleared, masked)
     decision = None if candidate.decision is None else _unwrap(candidate.decision, cleared, masked)
     if _hidden(masking, schema, candidate):
         claims = [_mask_claim(c, masked) for c in claims]
+        signals = _mask_signals(signals, masked)
         if isinstance(decision, dict):
             decision = _mask_decision(decision, masked)
-    return {"claims": claims, "decision": decision}
+    return {"claims": claims, "signals": signals, "decision": decision}
 
 
 def _mask_decision(decision: dict[str, Any], masked: str) -> dict[str, Any]:

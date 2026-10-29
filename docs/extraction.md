@@ -30,7 +30,10 @@ flowchart LR
    allowlisted host. The media type comes from the file name suffix and is checked against the
    content. Bytes are stored content addressed (SHA-256) through the blob store interface
    (default backend: Postgres `document_blobs`); uploading the same bytes again returns the
-   stored document. An `extraction` job is queued unless `extract` is false.
+   stored document. An `extraction` job is queued unless `extract` is false. An upload may
+   name a `source_key` (a path, URL or external id): new bytes under the same key are a new
+   version of its document ([below](#document-versions-and-lifecycle)). Retired and purged
+   documents are not extracted.
 2. **Parse and chunk** (Scribe). Markdown and text natively; PDF with `pypdf` and DOCX with
    `python-docx` (the `documents` extra of `lorebase-scribe`), each in a child process without
    network access and with a wall-clock limit, CPU and address-space limits and a size limit
@@ -274,13 +277,70 @@ suggests an Attribute `ends` of Supplier (three table rows, typed `date`) and a 
 `purchase_order`, and the contract an Attribute `buyer` of Contract, each listed with `all=true`
 until another document supports it.
 
+## Document versions and lifecycle
+
+Documents change upstream like any Source ([design 9.2](design.md#92-unstructured-extraction),
+AC-35). A keyless upload keeps the content addressing above. A keyed one
+(`source_key`, multipart field or JSON member; trimmed, compared exactly, at most
+`keeper.documents.max_source_key_chars`, default 1024) is a version of the document of that
+key:
+
+| Upload under a key | Answer |
+|--------------------|--------|
+| first bytes | 201, `version` 1 |
+| bytes of the active version | 200, `duplicate`, the active version (a no-op) |
+| other bytes (an older version's included, an upstream revert) | 201, `version` n + 1, `replaces` the previous version, which becomes `superseded`; audited `document.version` (key, version, replaced id, sizes and hashes) |
+
+The same bytes under two keys are two documents sharing one blob. Each document has a
+`status`: `active`, `superseded`, `retired` or `purged`.
+`GET .../documents?source_key=K` lists the versions of a key, and
+`GET .../documents/{id}/versions` the versions of a document's key, newest first.
+
+**Evidence check of a new version.** A new version does not change any value by itself. Its
+own extraction proposes what it says, as for any document; then a `document_version_check`
+job (queued by that extraction job once it finished, or at upload when nothing is extracted)
+looks at every value whose current provenance is `extraction` from an earlier version of the
+key, on the branch its Proposal targeted. A value the new version's extraction proposes again
+is left alone. For the others the old evidence quote is looked for verbatim in the new
+version's parsed text, white space aside (the match of evidence verification). Found: nothing
+happens. Gone, or no longer readable (purged): a reconciliation `stale` candidate with signal
+`evidence_gone` (`{document, from_version, to_version, quote}`), and a person decides
+([Scribe](scribe.md#reconciliation)). Nothing is retracted, changed or hidden, and no model is
+called. The quotes of sensitive Attributes are masked in candidates by clearance. The check
+follows the Domain's reconciliation options (`enabled`, `triggers.document_versions`) and looks
+at `scribe.extraction.versions.max_values_per_job` values per job (default 5000), continuing in
+a new job. Link values and derived, vault and key Attributes are not checked.
+
+**Retire.** `POST .../documents/{id}/retirement {"reason": "..."}` (permission
+`document.retire`: `maintainer`, `admin`) runs the same check with empty text, so every value
+whose evidence was this document (and, for the active version of a key, its earlier versions)
+raises a `stale` candidate. A retired document stays listed and readable, and is never
+extracted again: an upload asking to extract it (`extract=true`) answers 409
+`document-retired`, and an extraction job naming it fails. A later upload under its key starts
+a new active version. Audited `document.retire`; retiring again changes nothing.
+
+**Purge.** `POST .../documents/{id}/purge {"reason": "...", "confirm": "<document id>"}`
+(permission `document.purge`, `admin` only) retires the document if needed, then deletes its
+bytes and parsed text (unless another document holds the same blob), its chunks and the cached
+model answers of chunk hashes no other document holds. Provenance rows stay (document id,
+offsets, quote hash); the evidence quotes of its Proposal items, reconciliation candidates and
+schema suggestion examples read `[erased]` (`keeper.reads.sensitivity.erased_value`). It is
+irreversible, audited `document.purge` in the same transaction (counts only, never content),
+and purging again erases nothing. See [operations](operations.md#document-purge).
+
+Client: `client.documents.upload(..., source_key=)`, `versions`, `retire`, `purge`. CLI:
+`lorebase documents upload FILE --key KEY`, `lorebase documents versions ID`,
+`lorebase documents retire ID --reason TEXT`, `lorebase documents purge ID --reason TEXT
+--confirm ID`. The Documents screen shows the key, version and status, the versions, the open
+`stale` candidates of a document, and Retire and Purge for those who hold the permissions.
+
 ## Configuration
 
 `scribe.extraction` (tiers, auto-accept threshold, chunking, matching thresholds, confidence
-per technique, budgets, prompt version, cache, `discovery` with the optional `llm_pass`), `schema.suggestions` (support,
+per technique, budgets, prompt version, cache, `discovery` with the optional `llm_pass`, `versions`), `schema.suggestions` (support,
 listing, examples, name matching, variants and noise), `keeper.schema_suggestions` (review branch prefix) and
 `keeper.documents` (size limit, accepted
-suffixes, URL allowlist, extraction on upload, longest text served) are documented with their defaults in
+suffixes, URL allowlist, extraction on upload, longest text served, longest `source_key`) are documented with their defaults in
 [config/lorebase.example.yaml](../config/lorebase.example.yaml). Models are configured in the
 `inference` section ([inference.md](inference.md)).
 
@@ -300,6 +360,11 @@ suffixes, URL allowlist, extraction on upload, longest text served) are document
 - Trigram matching scans the titles of the named Kinds under row-level security (no index), and
   dictionary matching loads at most `matching.dictionary_max_titles` titles per job.
 - One job per uploaded document; a document extracted twice opens two Proposals.
+- The version check is literal: a reworded passage that still supports a value raises a
+  `stale` candidate, which a reviewer dismisses. Documents are not diffed, and nothing
+  watches upstream locations for new versions (a Source or the caller uploads them).
+- Model answers cached before migration `0041` do not name their chunk, so a purge does not
+  reach them; clear `extraction_cache` if they must go too ([operations](operations.md#document-purge)).
 - With `inference.local_extractors.relation_provider: cooccurrence` (or `fake`) tier 1 adds no
   relation model: tier 0 already links Records that share a sentence. The provider runs only
   when a job skips tier 0.

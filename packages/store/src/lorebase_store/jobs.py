@@ -68,6 +68,9 @@ migration 0032; payload `{}` (no Domain: queue one per branch holding such rows)
 EMBEDDINGS_JOB = "embeddings"
 """Job type of an embedding pass over a Domain's branches run by Scribe; payload from
 `embeddings_payload`."""
+DOCUMENT_VERSION_CHECK_JOB = "document_version_check"
+"""Job type of the evidence check of a new document version or a retired document run by
+Scribe (design 9.2); payload from `document_version_check_payload`."""
 RECONCILE_SWEEP_JOB = "reconcile_sweep"
 """Job type of a reconciliation sweep of one branch of a Domain run by Scribe (design 10.6);
 payload from `reconcile_sweep_payload`."""
@@ -206,6 +209,24 @@ def extraction_payload(
         "tiers": None if tiers is None else sorted(set(tiers)),
         "requested_by": requested_by,
     }
+
+
+VERSION_CHECK_MODES = ("version", "retire")
+"""What a `document_version_check` job checks: a new version against the versions it
+replaced, or a retired document (empty text)."""
+
+
+def document_version_check_payload(
+    document_id: str, *, mode: str, resume: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Payload of a `document_version_check` job: the new version (mode `version`) or the
+    retired document (mode `retire`) and, for a continuation, the cursor to resume after."""
+    if mode not in VERSION_CHECK_MODES:
+        raise ValueError(f"unknown document version check mode {mode!r}")
+    payload: dict[str, Any] = {"document": document_id, "mode": mode}
+    if resume is not None:
+        payload["resume"] = list(resume)
+    return payload
 
 
 def embeddings_payload(

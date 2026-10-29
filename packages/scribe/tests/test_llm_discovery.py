@@ -71,7 +71,9 @@ class Cache:
     async def get(self, key: bytes) -> tuple[Any, Usage, str] | None:
         return self.items.get(key)
 
-    async def put(self, key: bytes, data: Any, usage: Usage, model: str) -> None:
+    async def put(
+        self, key: bytes, data: Any, usage: Usage, model: str, *, chunk_hash: bytes | None = None
+    ) -> None:
         self.items[key] = (data, usage, model)
 
 

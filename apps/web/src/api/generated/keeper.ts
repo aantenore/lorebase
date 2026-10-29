@@ -1094,13 +1094,14 @@ export interface paths {
         };
         /**
          * List documents
-         * @description Documents of the Domain, newest first.
+         * @description Documents of the Domain, newest first; with `source_key`, the versions of that key.
          */
         get: operations["list_documents_api_v1_domains__domain_id__documents_get"];
         put?: never;
         /**
          * Upload a document for extraction
-         * @description Store a document (multipart upload or allowlisted URL) and queue its extraction.
+         * @description Store a document (multipart upload or allowlisted URL) and queue its extraction; with
+         *     a `source_key`, new bytes are a new version of the key's document.
          */
         post: operations["upload_document_api_v1_domains__domain_id__documents_post"];
         delete?: never;
@@ -1123,6 +1124,68 @@ export interface paths {
         get: operations["get_document_api_v1_domains__domain_id__documents__document_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/documents/{document_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the versions of a document
+         * @description The versions of the document's `source_key`, newest first (only itself when keyless).
+         */
+        get: operations["list_document_versions_api_v1_domains__domain_id__documents__document_id__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/documents/{document_id}/retirement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retire a document
+         * @description Retire a document: it stays readable, is never extracted again, and values whose
+         *     evidence was this document raise `stale` reconciliation candidates.
+         */
+        post: operations["retire_document_api_v1_domains__domain_id__documents__document_id__retirement_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/documents/{document_id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge a document (irreversible)
+         * @description Delete a document's bytes, text, chunks and quotes, keeping its provenance (module
+         *     doc); retires it first if needed.
+         */
+        post: operations["purge_document_api_v1_domains__domain_id__documents__document_id__purge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3001,10 +3064,53 @@ export interface components {
             /** Created By */
             created_by: string;
             /**
+             * Source Key
+             * @description Stable identity; null: keyless.
+             */
+            source_key?: string | null;
+            /**
+             * Version
+             * @description 1 for keyless documents and the first version of a key.
+             */
+            version: number;
+            /**
+             * Replaces
+             * @description The version this one replaced.
+             */
+            replaces?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "retired" | "purged";
+            /** Retired At */
+            retired_at?: string | null;
+            /** Retired By */
+            retired_by?: string | null;
+            /** Purged At */
+            purged_at?: string | null;
+            /** Purged By */
+            purged_by?: string | null;
+            /**
              * Extraction Jobs
              * @description Newest first.
              */
             extraction_jobs: components["schemas"]["ExtractionJobOut"][];
+            /**
+             * Open Stale Candidates
+             * @description Open `stale` reconciliation candidates whose claims come from this document (its evidence gone from a newer version, or the document retired).
+             */
+            open_stale_candidates: number;
+            /**
+             * Can Retire
+             * @description The caller holds `document.retire` Domain-wide.
+             */
+            can_retire: boolean;
+            /**
+             * Can Purge
+             * @description The caller holds `document.purge` Domain-wide.
+             */
+            can_purge: boolean;
         };
         /** DocumentOut */
         DocumentOut: {
@@ -3031,6 +3137,87 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by: string;
+            /**
+             * Source Key
+             * @description Stable identity; null: keyless.
+             */
+            source_key?: string | null;
+            /**
+             * Version
+             * @description 1 for keyless documents and the first version of a key.
+             */
+            version: number;
+            /**
+             * Replaces
+             * @description The version this one replaced.
+             */
+            replaces?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "retired" | "purged";
+            /** Retired At */
+            retired_at?: string | null;
+            /** Retired By */
+            retired_by?: string | null;
+            /** Purged At */
+            purged_at?: string | null;
+            /** Purged By */
+            purged_by?: string | null;
+        };
+        /** DocumentPurged */
+        DocumentPurged: {
+            document: components["schemas"]["DocumentOut"];
+            /**
+             * Job Id
+             * @description Queued evidence check of the retirement, if this purge retired the document.
+             */
+            job_id?: number | null;
+            /**
+             * Blob Deleted
+             * @description The bytes were deleted (no other document holds them).
+             */
+            blob_deleted: boolean;
+            /**
+             * Text Deleted
+             * @description The parsed text was deleted.
+             */
+            text_deleted: boolean;
+            /**
+             * Chunks
+             * @description Chunks deleted.
+             */
+            chunks: number;
+            /**
+             * Cache Entries
+             * @description Cached model answers of its chunks deleted.
+             */
+            cache_entries: number;
+            /**
+             * Items
+             * @description Proposal items whose evidence quotes were erased.
+             */
+            items: number;
+            /**
+             * Candidates
+             * @description Reconciliation candidates whose quotes were erased.
+             */
+            candidates: number;
+            /**
+             * Suggestions
+             * @description Schema suggestions whose example quotes were erased.
+             */
+            suggestions: number;
+        };
+        /** DocumentRetired */
+        DocumentRetired: {
+            document: components["schemas"]["DocumentOut"];
+            /**
+             * Job Id
+             * @description Queued evidence check; null when it was retired before.
+             */
+            job_id?: number | null;
         };
         /** DocumentTextOut */
         DocumentTextOut: {
@@ -3070,6 +3257,11 @@ export interface components {
              * @description Queued extraction job, if any.
              */
             job_id?: number | null;
+            /**
+             * Check Job Id
+             * @description Evidence check of a new version queued now (without extraction; with it, the extraction job queues the check once it finished).
+             */
+            check_job_id?: number | null;
         };
         /**
          * DomainCreate
@@ -4747,6 +4939,19 @@ export interface components {
              */
             at: string;
         };
+        /** PurgeIn */
+        PurgeIn: {
+            /**
+             * Reason
+             * @description Why, recorded in the audit.
+             */
+            reason: string;
+            /**
+             * Confirm
+             * @description The document id, to confirm the purge.
+             */
+            confirm: string;
+        };
         /**
          * Query
          * @description A query over the Records of one Kind or of the Kinds implementing a Trait.
@@ -5455,6 +5660,14 @@ export interface components {
         ResolveManyIn: {
             /** Resolutions */
             resolutions: components["schemas"]["FingerprintedResolutionIn"][];
+        };
+        /** RetirementIn */
+        RetirementIn: {
+            /**
+             * Reason
+             * @description Why, recorded in the audit.
+             */
+            reason: string;
         };
         /** ReviewIn */
         ReviewIn: {
@@ -10663,6 +10876,8 @@ export interface operations {
     list_documents_api_v1_domains__domain_id__documents_get: {
         parameters: {
             query?: {
+                /** @description Only the versions of this key (trimmed, exact). */
+                source_key?: string | null;
                 /** @description Page size. */
                 limit?: number | null;
                 /** @description Opaque page cursor. */
@@ -10696,6 +10911,15 @@ export interface operations {
             };
             /** @description Domain or document not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is retired (`document-retired`). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10758,6 +10982,8 @@ export interface operations {
                     extract?: boolean;
                     /** @description JSON list, e.g. [0, 1] */
                     tiers?: string;
+                    /** @description Stable identity: new bytes are a new version. */
+                    source_key?: string;
                 };
                 "application/json": {
                     /** Url */
@@ -10777,6 +11003,11 @@ export interface operations {
                      * @description Extraction tiers (0, 1, 2).
                      */
                     tiers?: number[] | null;
+                    /**
+                     * Source Key
+                     * @description Stable identity (path, URL or external id): new bytes under the same key are a new version of its document.
+                     */
+                    source_key?: string | null;
                 };
             };
         };
@@ -10810,6 +11041,15 @@ export interface operations {
             };
             /** @description Domain or document not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is retired (`document-retired`). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10894,6 +11134,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The document is retired (`document-retired`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description The document is too large. */
             413: {
                 headers: {
@@ -10914,6 +11163,223 @@ export interface operations {
             };
             /** @description The URL could not be fetched. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_document_versions_api_v1_domains__domain_id__documents__document_id__versions_get: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_DocumentOut_"];
+                };
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is retired (`document-retired`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document is too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unsupported or invalid document, URL or fields. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The URL could not be fetched. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retire_document_api_v1_domains__domain_id__documents__document_id__retirement_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetirementIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentRetired"];
+                };
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid reason, or `confirm` is not the document id. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    purge_document_api_v1_domains__domain_id__documents__document_id__purge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentPurged"];
+                };
+            };
+            /** @description The caller lacks the permission Domain-wide. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain or document not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid reason, or `confirm` is not the document id. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

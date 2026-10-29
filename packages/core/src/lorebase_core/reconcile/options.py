@@ -47,6 +47,11 @@ class TriggerOptions(_Options):
     source_sync: bool = Field(
         default=True, description="Check the changes of a Source sync before it is merged."
     )
+    document_versions: bool = Field(
+        default=True,
+        description="Check the evidence quotes of values when a new version of their document "
+        "arrives or the document is retired (job document_version_check).",
+    )
 
 
 class DuplicateOptions(_Options):

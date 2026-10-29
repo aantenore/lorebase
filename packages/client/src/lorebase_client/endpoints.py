@@ -1282,9 +1282,11 @@ def upload_document(
     filename: str | None = None,
     extract: bool | None = None,
     tiers: Sequence[int] | None = None,
+    source_key: str | None = None,
 ) -> Call[m.DocumentUploaded]:
     """Upload a document: a path (read here, named after the file) or bytes with a `filename`.
 
+    With a `source_key`, new bytes become a new version of the key's document.
     Not marked safe: a retry may queue a second extraction job.
     """
     if isinstance(file, bytes):
@@ -1299,6 +1301,8 @@ def upload_document(
         form["extract"] = "true" if extract else "false"
     if tiers is not None:
         form["tiers"] = json.dumps(list(tiers), separators=(",", ":"))
+    if source_key is not None:
+        form["source_key"] = source_key
     return Call(
         "POST",
         f"{_domain(domain)}/documents",
@@ -1319,14 +1323,51 @@ def upload_document_url(domain: str, body: m.DocumentFromUrl) -> Call[m.Document
 
 
 def list_documents(
-    domain: str, *, limit: int | None = None, cursor: str | None = None
+    domain: str,
+    *,
+    source_key: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
 ) -> Call[m.Page[m.Document]]:
     return Call(
         "GET",
         f"{_domain(domain)}/documents",
         parse_model(m.Page[m.Document]),
+        params={"source_key": source_key, "limit": limit, "cursor": cursor},
+        safe=True,
+    )
+
+
+def document_versions(
+    domain: str, document_id: str, *, limit: int | None = None, cursor: str | None = None
+) -> Call[m.Page[m.Document]]:
+    """The versions of the document's source key, newest first."""
+    return Call(
+        "GET",
+        f"{_domain(domain)}/documents/{_seg(document_id)}/versions",
+        parse_model(m.Page[m.Document]),
         params={"limit": limit, "cursor": cursor},
         safe=True,
+    )
+
+
+def retire_document(domain: str, document_id: str, body: m.RetirementIn) -> Call[m.DocumentRetired]:
+    """Not marked safe: a retry would be audited again."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/documents/{_seg(document_id)}/retirement",
+        parse_model(m.DocumentRetired),
+        body=body.payload(),
+    )
+
+
+def purge_document(domain: str, document_id: str, body: m.PurgeIn) -> Call[m.DocumentPurged]:
+    """Irreversible. Not marked safe."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/documents/{_seg(document_id)}/purge",
+        parse_model(m.DocumentPurged),
+        body=body.payload(),
     )
 
 

@@ -41,7 +41,7 @@ EXPECTED: dict[str, set[Permission]] = {
     | {P.BRANCH_CREATE, P.OPERATION_EXECUTE, P.PROPOSAL_CREATE, P.SOURCE_SYNC}
     | DOCUMENTS
     | {P.PROPOSAL_REVIEW, P.CONFLICT_RESOLVE}
-    | {P.PROPOSAL_MERGE, P.SOURCE_MANAGE, P.JOB_MANAGE},
+    | {P.PROPOSAL_MERGE, P.SOURCE_MANAGE, P.JOB_MANAGE, P.DOCUMENT_RETIRE},
     "admin": set(ALL),
     "agent-reader": READ,
 }
@@ -65,6 +65,13 @@ def user(identifier: str = "usr_u", *subjects: str, **overrides: Any) -> Princip
 
 def authorizer(store: Any, **settings: Any) -> Authorizer:
     return Authorizer(AuthzSettings(**settings), store=store)
+
+
+def test_only_admin_purges_documents_and_maintainers_retire_them() -> None:
+    holders = {name for name, held in BUILTIN_ROLES.items() if P.DOCUMENT_PURGE in held}
+    assert holders == {"admin"}
+    retirers = {name for name, held in BUILTIN_ROLES.items() if P.DOCUMENT_RETIRE in held}
+    assert retirers == {"maintainer", "admin"}
 
 
 def test_the_expected_matrix_covers_every_builtin_role() -> None:

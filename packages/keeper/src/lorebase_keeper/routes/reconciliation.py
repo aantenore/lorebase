@@ -320,7 +320,7 @@ async def _render(
                 "attribute_id": row.attribute_id,
                 "claims": seen["claims"],
                 "claim_count": row.claim_count,
-                "signals": dict(row.signals or {}),
+                "signals": seen["signals"],
                 "proposal_id": row.proposal_id,
                 "decision": seen["decision"],
                 "decided_by": row.decided_by,

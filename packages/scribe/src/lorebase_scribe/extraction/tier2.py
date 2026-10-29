@@ -71,7 +71,12 @@ DISCOVERY_PROMPT = (
 class AnswerCache(Protocol):
     async def get(self, key: bytes) -> tuple[Any, Usage, str] | None: ...
 
-    async def put(self, key: bytes, data: Any, usage: Usage, model: str) -> None: ...
+    async def put(
+        self, key: bytes, data: Any, usage: Usage, model: str, *, chunk_hash: bytes | None = None
+    ) -> None:
+        """Store an answer; `chunk_hash` names the chunk it was computed from, so a purge of
+        the document drops it."""
+        ...
 
 
 @dataclass
@@ -270,7 +275,7 @@ async def run_tier2(
         )
         data, usage, model = answer.data, answer.usage, answer.model
         if cache is not None:
-            await cache.put(key, data, usage, model)
+            await cache.put(key, data, usage, model, chunk_hash=chunk.hash)
         result.usage = usage
     if not isinstance(data, dict):
         result.discard("invalid_answer")

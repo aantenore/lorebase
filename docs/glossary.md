@@ -92,7 +92,7 @@ One value for one Attribute of one Record together with where it comes from: the
 Example: the ERP sync claims `Supplier/S-1025.risk_score = 30` (`source:erp.vendors`), the Q4 supplier review claims `74` (`document:doc_supplier_review_q4`).
 
 ### Reconciliation candidate
-A group of claims that disagree, waiting for a person in the reconciliation queue. Types: `contradiction` (different values from different sources, periods overlapping or unknown), `superseded` (the same on a valid time Attribute, with periods that do not overlap), `stale` (the current value is older than its maximum age, its period ended, or its source has a newer claim pending) and `duplicate` (two Records that probably describe one entity). Statuses: `open`, `resolved`, `dismissed`, `obsolete` (the disagreement left the data). Unlike a Conflict it concerns values already merged and survives the Proposal that raised it; nothing is changed because a candidate exists ([design 10.6](design.md#106-reconciliation-of-source-contradictions)).
+A group of claims that disagree, waiting for a person in the reconciliation queue. Types: `contradiction` (different values from different sources, periods overlapping or unknown), `superseded` (the same on a valid time Attribute, with periods that do not overlap), `stale` (the current value is older than its maximum age, its period ended, its source has a newer claim pending, or its evidence quote is gone from a new version of its document or the document was retired: `evidence_gone`) and `duplicate` (two Records that probably describe one entity). Statuses: `open`, `resolved`, `dismissed`, `obsolete` (the disagreement left the data). Unlike a Conflict it concerns values already merged and survives the Proposal that raised it; nothing is changed because a candidate exists ([design 10.6](design.md#106-reconciliation-of-source-contradictions)).
 
 Example: Sofia takes the document's claim for `S-1025.risk_score` with the reason "Q4 review supersedes the ERP score"; the value is written by `update_supplier` with a `reconciliation` provenance.
 
@@ -100,6 +100,11 @@ Example: Sofia takes the document's claim for `S-1025.risk_score` with the reaso
 An optional validity period (`valid_from`, `valid_to`) on the provenance of a value of an Attribute declared `valid_time: true`. It lives outside content, so hashes and merges ignore it; reconciliation uses it to tell a superseded value from a contradiction.
 
 Example: `Contract/C-2231.payment_terms_days` is 60 from April 2022 to March 2025 and 45 from April 2025, after an amendment: two disjoint periods, a `superseded` candidate, not a contradiction.
+
+### Document version
+A document uploaded under a stable `source_key` (a path, URL or external id) is one version of the document of that key: new bytes under the key become version n + 1, which `replaces` the previous one (now `superseded`); the same bytes are a no-op. A document is `active`, `superseded`, `retired` (kept and readable, never extracted again) or `purged` (bytes, text and quotes erased, provenance kept). A new version or a retirement checks, word for word, whether the evidence quotes of the values that came from the earlier version are still there; where one is gone, a `stale` Reconciliation candidate asks a person ([extraction](extraction.md#document-versions-and-lifecycle)).
+
+Example: `contracts/brevik-msa.pdf` version 2 no longer says "payment within 60 days": `Contract/C-2231.payment_terms_days = 60` gets a `stale` candidate with signal `evidence_gone`, and stays 60 until Sofia decides.
 
 ### Lineage
 Where a Record and each of its values came from: Source row, document span, Operation invocation, merge resolution or schema migration, with the Revision that introduced it.
