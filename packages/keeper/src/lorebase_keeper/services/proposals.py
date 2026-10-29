@@ -10,9 +10,9 @@ review policy:
   the latest approve or request-changes verdict of each reviewer counts, the author's only
   when self-approval is allowed, and an outstanding request for changes blocks the merge;
 - the merge policy of a Proposal is the Domain's `merge_policy` setting when it is created;
-- the `reconciliation` check (`keeper.reconciliation.merge_check`, overridden by the Domain
-  setting `reconciliation_check`) lists the open reconciliation candidates of a Proposal and,
-  in `block` mode, refuses its merge while contradictions are open (409
+- the `reconciliation` check (`keeper.reconciliation.merge_check`, or the Domain setting
+  `reconciliation_check` when that is stricter) lists the open reconciliation candidates of a
+  Proposal and, in `block` mode, refuses its merge while contradictions are open (409
   `reconciliation-open`); a merge that commits resolves the candidates whose decision opened
   the Proposal (`reconciliation_settle`).
 """

@@ -1,5 +1,5 @@
 import type { ReconciliationCandidate, ReconciliationClaim } from '@/api/reconciliation-types';
-import type { JsonValue } from '@/api/types';
+import type { Attribute, JsonValue, Kind } from '@/api/types';
 import { reconcile as reconcileMessages } from '@/messages/reconcile';
 import type { BadgeTone } from '@/ui/layout';
 
@@ -160,6 +160,38 @@ export function differingAttributes(
   second: Record<string, JsonValue>,
 ): string[] {
   return attributes.filter((name) => !sameValue(first[name], second[name]));
+}
+
+/** Whether reads may mask the Attribute's values: it is sensitive or held in the vault. */
+export function maskable(attribute: Attribute): boolean {
+  return attribute.sensitivity.length > 0 || attribute.vault === true;
+}
+
+/**
+ * The stored Attributes of a duplicate merge whose values differ: those a person may pick, and
+ * the maskable ones, which keep the value of the Record that stays (a read may show them
+ * masked, and a masked value must never be written back).
+ */
+export function mergeAttributes(
+  kind: Kind,
+  first: Record<string, JsonValue>,
+  second: Record<string, JsonValue>,
+): { pickable: string[]; kept: string[] } {
+  const stored = Object.values(kind.attributes).filter((a) => a.derivation_id === null);
+  const differing = new Set(
+    differingAttributes(
+      stored.map((a) => a.api_name),
+      first,
+      second,
+    ),
+  );
+  const pickable: string[] = [];
+  const kept: string[] = [];
+  for (const attribute of stored) {
+    if (!differing.has(attribute.api_name)) continue;
+    (maskable(attribute) ? kept : pickable).push(attribute.api_name);
+  }
+  return { pickable, kept };
 }
 
 /** The reason recorded with the last decision, if any. */

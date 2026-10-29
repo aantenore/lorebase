@@ -27,8 +27,11 @@ from lorebase_keeper.services.reconciliation import (
     ReconciliationPolicy,
     apply_policy,
     authority_ranking,
+    is_stale,
+    placeholder,
     raw_value,
     shown,
+    unreadable,
 )
 from lorebase_store.repositories import CandidateRow, wrap_claim
 
@@ -191,6 +194,38 @@ def test_sensitive_claims_are_shown_by_clearance(schema: Schema) -> None:
     narrowed = Masking(Clearance(kinds={Sensitivity.CONFIDENTIAL: frozenset({"knd_other"})}))
     assert shown(stored, schema, narrowed.over(schema))["claims"][0]["value"] == blind.masked
     assert raw_value(stored.claims[0]["value"]) == "PL123"
+
+
+def test_a_value_none_of_the_claims_holds_makes_the_candidate_stale() -> None:
+    stored = candidate(ERP, CRM)
+    assert not is_stale(stored, ERP["value_hash"])
+    assert not is_stale(stored, CRM["value_hash"])
+    assert not is_stale(stored, None)
+    assert is_stale(stored, value_hash("Krakow"))
+
+
+def test_values_the_caller_may_not_read_and_placeholders(schema: Schema) -> None:
+    kind = schema.kind_by_api_name("Supplier")
+    assert kind is not None
+    vat, city = kind.attribute_by_api_name("vat_number"), kind.attribute_by_api_name("city")
+    assert vat is not None
+    assert city is not None
+    vault = vat.model_copy(update={"vault": True, "sensitivity": (Sensitivity.PII,)})
+    blind = Masking(Clearance()).over(schema)
+    assert unreadable(blind, vat, kind.id)
+    assert unreadable(blind, vault, kind.id)
+    assert not unreadable(blind, city, kind.id)
+    confidential = Masking(Clearance(everywhere=frozenset({Sensitivity.CONFIDENTIAL})))
+    assert not unreadable(confidential.over(schema), vat, kind.id)
+    assert unreadable(confidential.over(schema), vault, kind.id)  # a vault value needs `pii`
+    both = frozenset({Sensitivity.PII, Sensitivity.CONFIDENTIAL})
+    assert not unreadable(Masking(Clearance(everywhere=both)).over(schema), vault, kind.id)
+    narrowed = Masking(Clearance(kinds={Sensitivity.CONFIDENTIAL: frozenset({"knd_other"})}))
+    assert unreadable(narrowed.over(schema), vat, kind.id)
+    assert placeholder(blind, blind.masked)
+    assert placeholder(blind, blind.settings.erased_value)
+    assert not placeholder(blind, "Poznan")
+    assert not placeholder(blind, {"$vault": "tok"})
 
 
 async def test_update_takes_validity_periods_of_valid_time_values(schema: Schema) -> None:

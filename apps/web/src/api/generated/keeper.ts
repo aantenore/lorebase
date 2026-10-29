@@ -12150,7 +12150,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12227,7 +12227,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12308,7 +12308,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12389,7 +12389,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12470,7 +12470,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12550,7 +12550,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12630,7 +12630,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            /** @description The candidate is not open (`candidate-not-open`), a decision on it awaits review in an open Proposal (`reconciliation-pending`), the Record's value changed since detection (`reconciliation-stale`), or the write needs review and its Proposal cannot be opened. */
             409: {
                 headers: {
                     [name: string]: unknown;

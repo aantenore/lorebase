@@ -781,7 +781,8 @@ class SourceSync:
             actor=self._principal,
             policy=policy,
             idempotency_key=report.run_id,
-            # The operator's mode, never the Domain's `reconciliation` override.
+            # The operator's mode; the merge service applies the Domain's setting only when
+            # it is stricter.
             reconciliation_check=None
             if self._reconciliation is None
             else self._reconciliation.merge_check,

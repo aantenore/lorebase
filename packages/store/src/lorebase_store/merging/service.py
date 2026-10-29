@@ -17,8 +17,10 @@ merge writes no Revision. Everything runs in the caller's transaction.
 
 Every attempt also records the `reconciliation` check (design 10.3, 10.6): the open
 reconciliation candidates of the Proposal (`ReconciliationCandidateRepository.proposal_checks`).
-Its mode is the Domain setting `reconciliation_check`, else the request's (the caller's
-installation default), else `warn`: `off` records nothing, `warn` lists the candidates, `block`
+Its mode is the stricter (`off` < `warn` < `block`) of the Domain setting `reconciliation_check`
+and the request's (the operator's installation mode): a Domain can tighten the operator's mode,
+never loosen it; with neither set it is `warn`. `off` records nothing, `warn` lists the
+candidates, `block`
 keeps a Proposal whose changes have open `contradiction` candidates from merging. A blocked
 merge stores the attempt without committing (`AttemptResult.reconciliation_blocked`), automatic
 Source merges included.
@@ -134,14 +136,15 @@ _BLOCKING_TYPES = (CandidateType.CONTRADICTION,)
 
 
 def reconciliation_check_mode(
-    domain_settings: Mapping[str, Any] | None, default: str | None
+    domain_settings: Mapping[str, Any] | None, installation: str | None
 ) -> str:
-    """The mode of the `reconciliation` check (module doc)."""
+    """The mode of the `reconciliation` check: the stricter of the Domain setting and the
+    operator's `installation` mode, unknown values ignored (module doc)."""
     configured = (domain_settings or {}).get(RECONCILIATION_CHECK_SETTING)
-    for mode in (configured, default):
-        if mode in RECONCILIATION_CHECK_MODES:
-            return str(mode)
-    return DEFAULT_RECONCILIATION_CHECK
+    modes = [m for m in (configured, installation) if m in RECONCILIATION_CHECK_MODES]
+    if not modes:
+        return DEFAULT_RECONCILIATION_CHECK
+    return str(max(modes, key=RECONCILIATION_CHECK_MODES.index))
 
 
 class ProposalBranchMissingError(BranchNotFoundError):
@@ -169,7 +172,8 @@ class MergeRequest:
     #: vault Attributes). Without it merges that remove sensitivity tags are refused
     #: (`SensitivityLoweredError`).
     schema_guard: Callable[[Schema, Schema], Awaitable[None]] | None = None
-    #: Mode of the `reconciliation` check when the Domain sets none (module doc).
+    #: The operator's mode of the `reconciliation` check; a Domain may only make it stricter
+    #: (module doc).
     reconciliation_check: str | None = None
 
 

@@ -168,6 +168,8 @@ export const reconcile = {
     keep: (key: string) => `Value of ${key}`,
     pick: (attribute: string, key: string) => `${attribute}: take the value of ${key}`,
     same: 'Every Attribute has the same value.',
+    sensitiveKept: (names: readonly string[]) =>
+      `Sensitive Attributes keep the value of the Record that stays: ${names.join(', ')}.`,
     absent: 'absent',
     apply: 'Merge through a Proposal',
     loading: 'Loading the Records...',
@@ -187,6 +189,8 @@ export const reconcile = {
     forbidden: 'Your credential cannot decide candidates on this Branch.',
     notOpen: 'Someone decided this candidate in the meantime. It is shown as it is now.',
     reconciliationOpen: 'Open reconciliation candidates block this merge.',
+    pending: 'A decision on this candidate waits in an open Proposal. Merge or close it first.',
+    stale: 'The value changed since this candidate was found. Run detection again before deciding.',
   },
 
   bulk: {

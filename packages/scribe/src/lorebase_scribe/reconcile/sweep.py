@@ -128,6 +128,52 @@ def stored_claims(row: CandidateRow) -> list[Claim]:
     return found
 
 
+@dataclass(frozen=True)
+class _Standing:
+    """Statuses of the Proposals and decisions of the items that claims of a page of
+    candidates come from, read in two queries for the page."""
+
+    proposals: Mapping[str, ProposalStatus]
+    items: Mapping[tuple[str, str], ItemDecision]
+
+    @classmethod
+    async def load(
+        cls, session: AsyncSession, domain_id: str, rows: Sequence[CandidateRow]
+    ) -> _Standing:
+        refs = {
+            (claim.proposal_item.proposal_id, claim.proposal_item.item_id)
+            for row in rows
+            if row.type not in (CandidateType.DUPLICATE.value, CandidateType.STALE.value)
+            for claim in stored_claims(row)
+            if claim.proposal_item is not None
+        }
+        if not refs:
+            return cls({}, {})
+        statuses = await ProposalRepository(session, domain_id).statuses(p for p, _ in refs)
+        decisions = await ProposalItemRepository(session, domain_id).decisions(refs)
+        return cls(statuses, decisions)
+
+    def live(self, claims: Sequence[Claim]) -> tuple[list[Claim], str | None]:
+        """The claims still standing, and why the others fell (closed Proposal, rejected
+        item)."""
+        live: list[Claim] = []
+        reason: str | None = None
+        for claim in claims:
+            ref = claim.proposal_item
+            if ref is None:
+                live.append(claim)
+                continue
+            status = self.proposals.get(ref.proposal_id)
+            if status is None or status is ProposalStatus.CLOSED:
+                reason = reason or "proposal_closed"
+                continue
+            if self.items.get((ref.proposal_id, ref.item_id)) is ItemDecision.REJECTED:
+                reason = reason or "item_rejected"
+                continue
+            live.append(claim)
+        return live, reason
+
+
 class ReconcileSweep:
     """Runs `reconcile_sweep` jobs against one database."""
 
@@ -233,8 +279,9 @@ class ReconcileSweep:
                     limit=batch,
                     after=after,
                 )
+                standing = await _Standing.load(session, report.domain, rows)
                 for row in rows:
-                    reason = await self._obsolete(session, detector, schema, report, row)
+                    reason = await self._obsolete(session, detector, schema, report, row, standing)
                     if reason is not None and await detector.retire(
                         session, report.domain, row, reason
                     ):
@@ -253,6 +300,7 @@ class ReconcileSweep:
         schema: Schema,
         report: SweepReport,
         row: CandidateRow,
+        standing: _Standing,
     ) -> str | None:
         """Why the candidate's disagreement left the data, if it did (module doc)."""
         kind = schema.kinds.get(row.kind_id)
@@ -285,42 +333,13 @@ class ReconcileSweep:
             return None
         if not await rows.records(kind.id, [key]):
             return "record_deleted"
-        live, dropped = await self._live(session, report.domain, stored_claims(row))
+        live, dropped = standing.live(stored_claims(row))
         verdict = detector.verdict(
             live, branch=report.branch, kind=kind, key=key, attribute=attribute
         )
         if verdict.raised:
             return None
         return dropped or "claims_converged"
-
-    async def _live(
-        self, session: AsyncSession, domain_id: str, claims: Sequence[Claim]
-    ) -> tuple[list[Claim], str | None]:
-        """The claims still standing, and why the others fell (closed Proposal, rejected
-        item)."""
-        live: list[Claim] = []
-        reason: str | None = None
-        proposals = ProposalRepository(session, domain_id)
-        items = ProposalItemRepository(session, domain_id)
-        decisions: dict[str, dict[str, ItemDecision]] = {}
-        for claim in claims:
-            ref = claim.proposal_item
-            if ref is None:
-                live.append(claim)
-                continue
-            proposal = await proposals.get(ref.proposal_id)
-            if proposal is None or proposal.status is ProposalStatus.CLOSED:
-                reason = reason or "proposal_closed"
-                continue
-            if ref.proposal_id not in decisions:
-                decisions[ref.proposal_id] = {
-                    i.item_id: i.decision for i in await items.all(ref.proposal_id)
-                }
-            if decisions[ref.proposal_id].get(ref.item_id) is ItemDecision.REJECTED:
-                reason = reason or "item_rejected"
-                continue
-            live.append(claim)
-        return live, reason
 
     # Phase 2: Records ---------------------------------------------------------------------------
 

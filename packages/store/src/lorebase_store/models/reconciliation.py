@@ -31,6 +31,15 @@ class ReconciliationCandidate(Base):
         UniqueConstraint("domain_id", "branch", "fingerprint"),
         Index(None, "domain_id", "branch", "status", "type"),
         Index(None, "domain_id", "branch", "kind_id", "keys"),
+        # The Proposal check and the merge's settlement look candidates up by Proposal.
+        Index(None, "domain_id", "proposal_id"),
+        # The Record page finds candidates naming a key (`keys @> '["key"]'`).
+        Index(
+            "ix_reconciliation_candidates_keys",
+            "keys",
+            postgresql_using="gin",
+            postgresql_ops={"keys": "jsonb_path_ops"},
+        ),
     )
 
     domain_id: Mapped[DomainKey]

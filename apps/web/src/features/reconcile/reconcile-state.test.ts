@@ -1,10 +1,12 @@
 import type { ReconciliationCandidate } from '@/api/reconciliation-types';
+import { attr, kind } from '@/api/mock/builders';
 import { buildReconciliation } from '@/api/mock/sample/reconciliation';
 import {
   candidateTitle,
   countLabel,
   currentClaim,
   differingAttributes,
+  mergeAttributes,
   periodOf,
   rankCandidates,
   sameValue,
@@ -92,5 +94,25 @@ describe('reconcile state', () => {
     ).toEqual(['b', 'c']);
     expect(countLabel(3, false)).toBe('3');
     expect(countLabel(500, true)).toBe('500+');
+  });
+
+  it('never offers the masked values of sensitive Attributes in a merge', () => {
+    const vendor = kind(
+      'Vendor',
+      [
+        attr('vendor', 'code', 'string', { required: true }),
+        attr('vendor', 'city', 'string'),
+        attr('vendor', 'vat_number', 'string', { sensitivity: ['confidential'] }),
+        { ...attr('vendor', 'email', 'string', { sensitivity: ['pii'] }), vault: true },
+        attr('vendor', 'tier', 'string'),
+      ],
+      { description: '', key: 'code', title: 'code', color: 'teal' },
+    );
+    const merged = mergeAttributes(
+      vendor,
+      { code: 'V-1', city: 'Graz', vat_number: '***', email: '***', tier: 'A' },
+      { code: 'V-2', city: 'Linz', vat_number: 'AT-1', email: 'a@b.c', tier: 'A' },
+    );
+    expect(merged).toEqual({ pickable: ['code', 'city'], kept: ['vat_number', 'email'] });
   });
 });

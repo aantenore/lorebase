@@ -50,6 +50,7 @@ from lorebase_scribe.worker import PermanentJobError
 from lorebase_store.commit import Change, commit
 from lorebase_store.jobs import RECONCILE_SWEEP_JOB, JobRow, reconcile_sweep_payload
 from lorebase_store.models.enums import ItemDecision
+from lorebase_store.repositories import ProposalItemRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.webhooks import WebhookSettings
 
@@ -328,6 +329,55 @@ async def test_extraction_holds_contested_values_and_raises_candidates(
     assert accepted.decision is ItemDecision.ACCEPTED
     assert "held_by_reconciliation" not in again.stats
     assert again.stats["reconciliation_claim_added"] == 1
+
+
+async def test_sweep_retires_candidates_whose_proposal_item_was_rejected(
+    sessions: Sessions, runtime: StoreRuntime, clock: Clock
+) -> None:
+    schema = supply_schema()
+    await seed_supply(sessions, runtime, clock, schema)
+    run = ExtractionRun(
+        sessions,
+        runtime,
+        ExtractionSettings(tiers=(2,), auto_accept_threshold=0.1, cache=False),
+        InferenceSettings(),
+        principal="svc_scribe",
+        clock=clock,
+        models=lambda tiers: ExtractionModels(chat=_RiskChat(), chat_model="test:risk"),
+        reconciliation=ReconcileOptions(),
+    )
+    document = await store_document(sessions, EXAMPLE / "documents" / "supplier-review-2025-q4.md")
+    report = await run.run(DOMAIN, [document], requested_by="usr_editor")
+    assert report.proposal_id is not None
+    (item,) = [
+        i for i in await proposal_items(sessions, report.proposal_id) if i.item_type == "value"
+    ]
+
+    def contested(found: Sequence[Any]) -> Any:
+        (candidate,) = [c for c in found if c.keys == ["S-1025"]]
+        return candidate
+
+    sweep = ReconcileSweep(
+        sessions, runtime, ReconcileOptions(), principal="svc_scribe", clock=clock
+    )
+    await sweep.run(DOMAIN)
+    assert contested(await _candidates(sessions)).status == "open"
+
+    # Rejecting the item drops its claim: the page's statuses are read once for the page.
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await ProposalItemRepository(session, DOMAIN).decide(
+            report.proposal_id,
+            item.item_id,
+            decision=ItemDecision.REJECTED,
+            decided_by="usr_editor",
+            decided_at=clock(),
+            edits=None,
+        )
+    retired = await sweep.run(DOMAIN)
+    assert retired.counts.as_dict()["obsolete"] >= 1
+    found = contested(await _candidates(sessions))
+    assert (found.status, found.decision["reason"]) == ("obsolete", "item_rejected")
 
 
 async def test_mapped_periods_land_on_the_provenance_of_their_values(

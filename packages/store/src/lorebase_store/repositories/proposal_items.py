@@ -15,12 +15,12 @@ item is accepted.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, func, insert, or_, select, update
+from sqlalchemy import Table, func, insert, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.models import metadata
@@ -188,6 +188,24 @@ class ProposalItemRepository:
             )
             .values(decision=decision, decided_by=decided_by, decided_at=decided_at, edits=edits)
         )
+
+    async def decisions(
+        self, refs: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], ItemDecision]:
+        """The decision of each `(proposal_id, item_id)` of `refs` that exists, in one query."""
+        wanted = sorted(set(refs))
+        if not wanted:
+            return {}
+        result = await self._session.execute(
+            select(ITEMS.c.proposal_id, ITEMS.c.item_id, ITEMS.c.decision).where(
+                ITEMS.c.domain_id == self._domain,
+                tuple_(ITEMS.c.proposal_id, ITEMS.c.item_id).in_(wanted),
+            )
+        )
+        return {
+            (str(proposal), str(item)): ItemDecision(decision)
+            for proposal, item, decision in result
+        }
 
     async def counts(self, proposal_id: str) -> dict[str, int]:
         """Number of items per decision."""

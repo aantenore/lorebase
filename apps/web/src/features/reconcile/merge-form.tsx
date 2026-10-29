@@ -8,7 +8,7 @@ import { reconcile as reconcileMessages } from '@/messages/reconcile';
 import { Button } from '@/ui/button';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { ReasonField, type Decide } from './decide';
-import { differingAttributes, showValue } from './reconcile-state';
+import { mergeAttributes, showValue } from './reconcile-state';
 
 const text = reconcileMessages;
 
@@ -52,10 +52,12 @@ export function MergeForm({
     [firstKey]: first.data.record.attributes as Record<string, JsonValue>,
     [secondKey]: second.data.record.attributes as Record<string, JsonValue>,
   };
-  const names = Object.values(kind.attributes)
-    .filter((a) => a.derivation_id === null)
-    .map((a) => a.api_name);
-  const differing = differingAttributes(names, values[firstKey] ?? {}, values[secondKey] ?? {});
+  // Sensitive Attributes are never offered: their values may be masked here.
+  const { pickable: differing, kept } = mergeAttributes(
+    kind,
+    values[firstKey] ?? {},
+    values[secondKey] ?? {},
+  );
   const absorbed = survivor === firstKey ? secondKey : firstKey;
   const chosen = (attribute: string) => picks[attribute] ?? survivor;
 
@@ -101,8 +103,10 @@ export function MergeForm({
         <p className="text-xs text-muted">{text.merge.absorbed(absorbed)}</p>
       </fieldset>
 
+      {kept.length > 0 && <p className="text-xs text-muted">{text.merge.sensitiveKept(kept)}</p>}
+
       {differing.length === 0 ? (
-        <p className="text-sm text-muted">{text.merge.same}</p>
+        kept.length === 0 && <p className="text-sm text-muted">{text.merge.same}</p>
       ) : (
         <Table caption={text.merge.valuesCaption}>
           <THead>
