@@ -107,6 +107,13 @@ describe('policyReason', () => {
     ).toBe('same time 2026-03-01T10:00:00+00:00, greater provenance id');
   });
 
+  it('counts the changes text_merge took from each side', () => {
+    const details = { ours_hunks: 1, theirs_hunks: 2 };
+    expect(
+      policyReason({ ...auto, choice: 'custom', resolver: 'policy:text_merge', details }),
+    ).toBe('text merged: 1 change from ours, 2 from theirs');
+  });
+
   it('has no reason for prefer', () => {
     expect(policyReason({ ...auto, resolver: 'policy:prefer' })).toBeNull();
   });

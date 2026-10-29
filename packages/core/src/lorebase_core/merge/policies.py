@@ -1,6 +1,7 @@
 """Merge policies (design 6.8, 6.10): options applied before any person sees a Conflict.
 
-Three policies resolve value Conflicts without a person:
+Three policies resolve value Conflicts without a person (a fourth step, the text merge,
+settles ``text`` values edited in different places before any of them):
 
 - ``prefer``: one side wins, globally, per Kind or Relation, or per Attribute.
 - ``authority``: a ranked list of origins (Sources, principals, actors, origin types); the
@@ -24,6 +25,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
 from lorebase_core.merge.conflicts import Side
+from lorebase_core.merge.text_merge import DEFAULT_MAX_CHARS, TextGranularity
 from lorebase_core.model import OperationOrigin, ProvenanceEntry, SourceSyncOrigin
 
 __all__ = [
@@ -52,6 +54,7 @@ class PolicyName(StrEnum):
     PREFER = "prefer"
     AUTHORITY = "authority"
     NEWEST_WINS = "newest_wins"
+    TEXT_MERGE = "text_merge"
 
     @property
     def resolver(self) -> str:
@@ -121,8 +124,17 @@ class MergePolicy(BaseModel):
       wins. Equal timestamps are decided by the greater provenance entry id, so the outcome
       does not depend on which branch is ours; no decision when the ids are equal too or the
       Lineage of a side is unknown (default: off).
+    - ``text_merge``, ``text_merge_elements``, ``text_merge_attributes``: on an Attribute
+      Conflict of a ``text`` Attribute the two sides are merged by ``text_merge_granularity``
+      (``sentence`` or ``paragraph``) when they changed different parts of the value; globally
+      (default ``True``), per Kind or Relation id or per Attribute id (``True`` or ``False``,
+      the most specific wins). Values above ``text_merge_max_chars`` characters (the three
+      together) are not merged. Without a base value (``DV3``) nothing is merged.
     - ``sample_size``: member keys listed in grouped Conflicts (default 10).
     - ``atomic_properties``: schema element properties merged as whole values.
+
+    A clean text merge resolves the Conflict before any rule is tried; a text merge that
+    leaves conflicting parts passes the Conflict on to the rules.
 
     Rules are tried from the most specific to the least: per Attribute (``prefer``, then
     ``authority``, then ``newest_wins``), per Kind or Relation (``prefer``), then global
@@ -144,6 +156,11 @@ class MergePolicy(BaseModel):
     schema_authority: bool = False
     newest_wins: bool = False
     newest_wins_attributes: frozenset[str] = frozenset()
+    text_merge: bool = True
+    text_merge_elements: dict[str, bool] = Field(default_factory=dict)
+    text_merge_attributes: dict[str, bool] = Field(default_factory=dict)
+    text_merge_granularity: TextGranularity = TextGranularity.SENTENCE
+    text_merge_max_chars: int = Field(default=DEFAULT_MAX_CHARS, ge=1)
     sample_size: int = Field(default=10, ge=1)
     atomic_properties: frozenset[str] = DEFAULT_ATOMIC_PROPERTIES
 
@@ -182,6 +199,15 @@ class MergePolicy(BaseModel):
         if element is not None and element in self.prefer_elements:
             return self.prefer_elements[element]
         return self.prefer
+
+    def merges_text(self, element: str | None, attribute: str | None) -> bool:
+        """Whether ``text`` values of ``element`` and ``attribute`` are merged by sentence or
+        paragraph."""
+        if attribute is not None and attribute in self.text_merge_attributes:
+            return self.text_merge_attributes[attribute]
+        if element is not None and element in self.text_merge_elements:
+            return self.text_merge_elements[element]
+        return self.text_merge
 
     def rules(
         self,

@@ -46,6 +46,7 @@ from lorebase_core.merge.policies import (
     PolicyName,
     origin_labels,
 )
+from lorebase_core.merge.text_merge import TextGranularity
 
 __all__ = [
     "CHOICES",
@@ -76,6 +77,7 @@ __all__ = [
     "ResolutionError",
     "SchemaLoader",
     "Side",
+    "TextGranularity",
     "TreeIndexView",
     "UnresolvedConflictsError",
     "apply_resolutions",

@@ -17,6 +17,7 @@ from pydantic import JsonValue
 from lorebase_core.canonical import ObjectType
 from lorebase_core.merge.conflicts import ConflictKind, ResolutionChoice, ResolutionError, Side
 from lorebase_core.merge.objects import data_object_type, partition_element
+from lorebase_core.merge.policies import PolicyName
 from lorebase_core.merge.schema_merge import SchemaMerge, pick
 from lorebase_core.merge.state import (
     MISSING,
@@ -28,9 +29,10 @@ from lorebase_core.merge.state import (
     as_json,
     same,
 )
+from lorebase_core.merge.text_merge import TextMerge, merge_text
 from lorebase_core.model import Attribute, Kind, Relation, Schema
 from lorebase_core.tree import PARTITION_SCHEMA, DiffEntry, relation_partition, tree_get
-from lorebase_core.types import CastError, CastRule, cast, cast_rule
+from lorebase_core.types import AttributeType, CastError, CastRule, cast, cast_rule
 
 __all__ = ["DataMerge", "Origin", "SideChanges", "merge_data", "side_changes"]
 
@@ -397,6 +399,9 @@ class _PartitionMerge:
         origin: Origin,
     ) -> Value:
         b, o, t = values
+        target = None if self.merged is None else self.merged.attributes.get(attribute_id)
+        frozen = self.partition in self.ctx.frozen
+        text = None if frozen else self.text_merge(attribute_id, target, values)
         conflict = self.ctx.conflict(
             kind,
             self.partition,
@@ -405,11 +410,19 @@ class _PartitionMerge:
             (as_json(b), as_json(o), as_json(t)),
             hashes,
             message=f"{attribute_id} of {key} changed differently on both sides",
+            details=None if text is None or text.clean else {"text_hunks": text.to_json()},
         )
-        if self.partition in self.ctx.frozen:
+        if frozen:
             self.ctx.open_keys.add((self.partition, key))
             return b
-        target = None if self.merged is None else self.merged.attributes.get(attribute_id)
+        if text is not None and text.clean and conflict.fingerprint not in self.ctx.resolutions:
+            self.ctx.record_auto(
+                conflict,
+                ResolutionChoice.CUSTOM,
+                PolicyName.TEXT_MERGE.resolver,
+                details={"ours_hunks": text.ours_changes, "theirs_hunks": text.theirs_changes},
+            )
+            return text.text
         resolution = self.ctx.decide(
             conflict,
             self.element_id,
@@ -424,6 +437,27 @@ class _PartitionMerge:
         if side is not None:
             origin.attributes[attribute_id] = side
         return pick(resolution, b, o, t)
+
+    def text_merge(
+        self, attribute_id: str, target: Attribute | None, values: tuple[Value, Value, Value]
+    ) -> TextMerge | None:
+        """Three-way merge of a ``text`` value changed on both sides; ``None`` when the value is
+        not merged as text (other types, no base value, policy off, over the size cap)."""
+        b, o, t = values
+        if not (isinstance(b, str) and isinstance(o, str) and isinstance(t, str)):
+            return None
+        if target is None or target.type.name is not AttributeType.TEXT or target.vault:
+            return None
+        policy = self.ctx.policy
+        if not policy.merges_text(self.element_id, attribute_id):
+            return None
+        return merge_text(
+            b,
+            o,
+            t,
+            granularity=policy.text_merge_granularity,
+            max_chars=policy.text_merge_max_chars,
+        )
 
 
 def _origin_of(choice: ResolutionChoice) -> Origin:
