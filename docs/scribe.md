@@ -395,6 +395,11 @@ limits and model spend (`normalize.units_file`, `sweep_*`, `max_claims_per_candi
 `duplicates.max_pairs_per_kind`, `semantic.judge`) are the operator's only; a member that is
 not allowed or not valid is logged and ignored, the rest of the setting still applies.
 
+The merges Scribe runs (Source syncs, extraction) apply the Proposal check `reconciliation`
+with the stricter of `scribe.reconciliation.merge_check` (`off`, `warn` by default, `block`) and
+the Domain setting `reconciliation_check`: in `block`, open contradictions hold the merge back
+and the Proposal stays open for review ([design 10.6](design.md#106-reconciliation-of-source-contradictions)).
+
 - **Extraction.** Value items whose value differs from the target's are compared with the
   claim of the current value (its provenance) while the items are assembled. With
   `hold_auto_accept` an item that raises a candidate (`contradiction` or `superseded`) stays

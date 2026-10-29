@@ -16,7 +16,7 @@
 
 Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. You model what your organization knows as a typed ontology (Kinds, Attributes, Relations, Operations) and change it the way developers change code: on a branch, reviewed, merged, traceable. Schema and data branch and merge together, with three-way Conflicts resolved per Attribute. Agents live outside Lorebase, in any framework. They read through a REST API or the MCP server, neither of which calls a language model, so answers are deterministic and fast, and they write only through governed Operations and Proposals. It is meant as an open-source alternative to proprietary ontology platforms and runs on a laptop with `docker compose`.
 
-![Lorebase web app: Explorer, a Record, the Canvas graph and the Review conflict resolver](docs/images/tour.gif)
+![Lorebase web app: Explorer, a Record, the Canvas graph, the Review conflict resolver and the Reconciliation queue](docs/images/tour.gif)
 
 <sub>The web app walking through Explorer, Canvas and a Conflict in Review. It runs on a mock API with sample data; see the [visual tour](docs/tour.md).</sub>
 
@@ -78,6 +78,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Derivations | Expression and aggregate Derivations recomputed in the materialized head; path Derivations composed from Relations at read time, or stored and kept current when `materialized` ([design 5.8](docs/design.md#58-derivation)). |
 | Versioning | Content-addressed Revisions, branches, tags, diff, three-way merge of schema and data with the full Conflict taxonomy and merge policies, and time travel reads at any Revision. Overlay branches store only the rows they change and are created in milliseconds. |
 | Review | Proposals with reviews, required approvals, branch protection and Conflict resolution over REST, CLI and the web app. Agent writes that need review run on a task branch and open a Proposal ([agents](docs/agents.md#writes-that-need-review)). |
+| Reconciliation | Values on which Sources disagree, Records that may be duplicates, stale and superseded values go to a review queue instead of the newest write winning unnoticed. Nothing is decided automatically: a person takes a claim, keeps the current value, applies a policy or merges duplicates, written through Operations with provenance and audit ([design 10.6](docs/design.md#106-reconciliation-of-source-contradictions), [Scribe](docs/scribe.md#reconciliation)). |
 | Reads | Records, Links, query DSL, traversal, neighborhood, lexical and typo-tolerant search, hybrid search over embeddings computed by Scribe, Record history and lineage, all with ETags. Context packs within a token budget and Record explanations ([agents](docs/agents.md)). |
 | Governance | API keys and OIDC, role grants per Domain, Kind, Operation and branch, a hash-chained audit log with signed checkpoints, shared rate limits, signed webhooks and a change feed. |
 | PII vault | Attributes tagged `pii`, `confidential` or `restricted` are masked without clearance on every read path and kept out of search. `vault: true` Attributes store encrypted values that `lorebase admin erase` removes from every Revision ([design 13.5](docs/design.md#135-personal-data-and-erasure)). |
@@ -87,7 +88,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Guide and Explore | An optional assistant answers questions about a Domain by reading it through Keeper, streamed step by step with links to the cited Records ([guide](docs/guide.md)). |
 | Agent trace | The steps of an agent session and the Records it touched are recorded and shown on the Canvas ([agent trace](docs/agent-trace.md)). |
 | Retrieval lab | Two search settings compared side by side, with the resulting context pack ([retrieval lab](docs/retrieval-lab.md)). |
-| Web app | Explorer, Canvas, Modeler, Review, Documents, Sources, Explore, Agent activity, Retrieval lab and Admin basics, on a mock API or on Keeper ([tour](docs/tour.md)). |
+| Web app | Explorer, Canvas, Modeler, Review, Reconciliation, Documents, Sources, Explore, Agent activity, Retrieval lab and Admin basics, on a mock API or on Keeper ([tour](docs/tour.md)). |
 | Storage profiles | `compact`, `balanced` and `fast` decide which secondary indexes exist and how lineage is stored; `python -m lorebase_store.storage apply` switches a running install ([performance](docs/performance.md#working-set)). |
 | Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI with CodeQL and signed images ([operations](docs/operations.md), [Kubernetes](docs/kubernetes.md)). |
 
@@ -111,7 +112,7 @@ Under row-level security Postgres cannot use non-leakproof operators (`->>`, cas
 
 ## See it
 
-Screens of the web app on a running demo stack with the supply sample: real data, a real answer of the guide service and its trace. The Conflict resolver comes from the mock API. The [visual tour](docs/tour.md) shows every screen and says where each picture comes from.
+Screens of the web app on a running demo stack with the supply sample: real data, a real answer of the guide service and its trace. The Conflict resolver and the Reconciliation queue come from the mock API. The [visual tour](docs/tour.md) shows every screen and says where each picture comes from.
 
 [![Lorebase in the dark theme: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home-dark.png)](docs/tour.md#dark-theme)
 
@@ -122,6 +123,8 @@ Screens of the web app on a running demo stack with the supply sample: real data
 | [![Explorer: a Domain home with Kinds, Revisions and Proposals](docs/images/explorer-home.png)](docs/tour.md#explorer) | [![Canvas: graph of Records colored by Kind](docs/images/canvas-graph.png)](docs/tour.md#canvas) | [![Record history: every change of a Record with the values before and after](docs/images/record-history.png)](docs/tour.md#record-page) |
 | **Extraction items** | **Schema suggestions** | **Conflict resolver** |
 | [![Extraction items: Records and Links proposed from a document, with evidence](docs/images/review-items.png)](docs/tour.md#extraction-items) | [![Schema suggestions: Attributes and Relations that documents mention](docs/images/review-suggestions.png)](docs/tour.md#schema-suggestions) | [![Conflict resolver: base, ours and theirs for one Conflict](docs/images/review-conflict.png)](docs/tour.md#merge-attempt-and-conflict-resolver) |
+| **Reconciliation queue** | **A contradiction** | **Duplicate merge** |
+| [![Reconciliation queue: candidates by type with their signals, and the claims of one with source and evidence](docs/images/reconcile-queue.png)](docs/tour.md#reconciliation) | [![A text contradiction between two Sources, marked against the current value](docs/images/reconcile-contradiction.png)](docs/tour.md#reconciliation) | [![Two Records that may be one, with the Record that stays and a value per Attribute](docs/images/reconcile-duplicate.png)](docs/tour.md#reconciliation) |
 
 ## Quickstart
 
@@ -234,7 +237,7 @@ Next up: the benchmark run on reference hardware.
 |-----------|-------|-----------|
 | M1 | Engine and API | Versioning engine, Keeper REST API, CLI, docker compose, CI |
 | M2 | Structured ingestion and exploration | Postgres, CSV and Parquet Sources, schema inference, Explorer, Canvas, Review basics |
-| M3 | Governance and agents | Custom Operations, full RBAC, Herald MCP server, Modeler, Conflict resolver UI |
+| M3 | Governance and agents | Custom Operations, full RBAC, Herald MCP server, Modeler, Conflict resolver UI, reconciliation queue |
 | M4 | Documents and semantic search | Offline extraction into Proposals with evidence, entity resolution, embeddings, hybrid search |
 | M5 | Enterprise hardening, 1.0 | Overlay branches, PII vault, Helm chart, storage profiles, LinkML import and export, 10M-Record performance, API stability |
 

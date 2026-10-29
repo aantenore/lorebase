@@ -92,7 +92,7 @@ Code: `packages/keeper/src/lorebase_keeper/auth/api_keys.py`, `auth/oidc.py`,
 ## TB3: Authorization inside Keeper
 
 Code: `packages/keeper/src/lorebase_keeper/auth/rbac.py`, `auth/permissions.py`, `auth/deps.py`,
-`reading/`, `services/agent_writes.py`, `services/proposals.py`.
+`reading/`, `services/agent_writes.py`, `services/proposals.py`, `services/reconciliation.py`.
 
 | | Threat | Mitigation | Residual risk |
 |-|--------|------------|---------------|
@@ -105,6 +105,7 @@ Code: `packages/keeper/src/lorebase_keeper/auth/rbac.py`, `auth/permissions.py`,
 | I | Raw documents to readers | `document.read` is held by `editor`, `reviewer`, `maintainer` and `admin` only; `viewer`, `explorer` and `agent-reader` never read documents (`auth/permissions.py`) | Documents are unmasked input: whoever reads them reads the sensitive values they hold |
 | I | Sensitive values to readers without clearance | Values of `pii`, `confidential` and `restricted` Attributes are masked unless the caller holds `pii.read`, `confidential.read` or `restricted.read` for the read (a Kind-narrowed clearance must cover every Kind a derived value's tags come from); responses are cached per clearance; filters, ordering and grouping on them need the clearance; sensitive Attributes are out of full-text vectors, the lexicon, snippets and titles; vault references are replaced after the cache and only for cleared callers (`reading/sensitivity.py`) | Validation messages quote values back to their writers; Kind health lists the keys of Records sharing a sensitive unique value (never the value); see residual risks 5 to 8 |
 | I | Personal data kept in history | `vault: true` Attributes store a reference in Record objects and the value encrypted in `vault`; erasure (`pii.erase`) clears it for every Revision and is audited in the same transaction (`lorebase_store/vault`, `routes/vault.py`) | Inline sensitive values (no vault) and Record keys stay in history; clients and caches outside Keeper keep what they read |
+| T | Reconciliation decisions that bypass review or clearance | A decision needs `conflict.resolve` and what its write needs (`operation.execute`, and `branch.create` and `proposal.create` when the branch needs review); values are written by `update_{kind}` through the Operation pipeline, so protected branches get a Proposal on a fresh `reconcile/{candidate}-{random}` branch that is never reused and must not move before it is proposed; choosing a vault claim, writing a custom value of a sensitive or vault Attribute and merging duplicates with such Attributes need the clearance; claim values, evidence quotes and decided values are masked by clearance on read, and vault claims keep no quote | A reviewer sees that a candidate exists for a value it cannot read, though not the value |
 | D | Expensive queries | DSL depth and fan-out caps, traverse and neighborhood limits, health scan caps, per-class rate limits | Statement timeout is the last line for queries that stay under the caps |
 
 ## TB4: Scribe connectors and other outbound reads
@@ -170,12 +171,13 @@ Code: `packages/store/src/lorebase_store/webhooks/`, `packages/scribe/src/loreba
 
 Keeper and Herald never call a model (`lorebase_keeper` and `lorebase_herald` do not import
 `lorebase_inference`, enforced by `.importlinter`). Scribe calls the configured providers for
-extraction and embeddings. Code: `packages/inference/src/lorebase_inference/settings.py`,
-`transport.py`, `chat.py`, `packages/scribe/src/lorebase_scribe/extraction/`.
+extraction, embeddings and the optional semantic stage of reconciliation. Code: `packages/inference/src/lorebase_inference/settings.py`,
+`transport.py`, `chat.py`, `packages/scribe/src/lorebase_scribe/extraction/`, `packages/scribe/src/lorebase_scribe/reconcile/semantic.py`.
 
 | | Threat | Mitigation | Residual risk |
 |-|--------|------------|---------------|
 | I | Domain content sent to a provider | Only Scribe sends text: document text for extraction, and Record texts of Kinds with an `embedding_template`; sensitive Attributes are left out of embedding texts unless `search.embedding_sensitive: true` | Whatever the templates and documents contain goes to the provider: choose a provider whose data handling you accept, or a local one |
+| I | Sensitive values sent through reconciliation | The semantic stage (off by default) embeds competing `text` values, and its judge (operator-only, off) sends two of them to the chat model; values of vault Attributes and of Attributes with any effective sensitivity tag are never sent, checked by the detector and again by the stage, and nothing is sent when the tags cannot be read | Untagged `text` values in competing claims go to the provider when the stage is on |
 | I | Keys sent to the wrong host | A task with its own `base_url` gets no key unless it sets one (F10); proxies from the environment ignored unless `trust_env` (F21) | `base_url` may be plain `http`: use https for remote providers |
 | I | Keys or tokens in error messages | Provider errors scrubbed of the key, `Bearer` values and key-shaped strings, cut to 300 characters, no body for 401 and 403 (F21) | None known |
 | T | Prompt injection from documents | The extraction model has no tools; outputs are validated against a JSON schema with bounded repair attempts; evidence spans are checked against the source; results open a Proposal of origin `extraction` | Items at or above `scribe.extraction.auto_accept_threshold` (0.9) are accepted on the extraction branch at once; merging still goes through the Proposal and its review rules. Set the threshold above 1 to accept nothing automatically |

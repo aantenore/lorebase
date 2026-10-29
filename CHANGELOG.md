@@ -4,7 +4,17 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
-Release automation, documentation, the web app's Conflict resolver and the merge of `text` values.
+A reconciliation queue for contradictions between Sources, release automation, documentation, the web app's Conflict resolver and the merge of `text` values. Two migrations (`0038`, `0039`) and new configuration sections `keeper.reconciliation` and `scribe.reconciliation`; no breaking change.
+
+### Added
+
+- Reconciliation queue ([design 10.6](docs/design.md#106-reconciliation-of-source-contradictions)): values on which Sources disagree no longer pass unnoticed when a one-sided write replaces another Source's value. Scribe raises candidates of type `contradiction`, `superseded`, `stale` and `duplicate` while extraction items are assembled, before a Source sync merges, and in the `reconcile_sweep` job (`scribe.reconciliation.sweep_interval_s`, off by default); nothing is changed, hidden or decided because a candidate exists. Stages run cheapest first: identity, values, normalization (units of a shipped table, numeric tolerance, case and punctuation, negation words) and an optional semantic stage (off by default) that marks paraphrases `equivalent` and compares stored Record vectors for duplicates. Candidates are fingerprinted by their values, so a dismissal holds until a new value appears ([Scribe](docs/scribe.md#reconciliation)).
+- Reconciliation decisions in Keeper under `/api/v1/domains/{d}/reconciliation`: list with filters, get, `POST .../{id}/resolution` (take a claim, keep the current value, a custom value, or a policy `authority`, `newest_wins`, `prefer_current`, `prefer_incoming`; `dry_run`), `POST .../{id}/dismissal`, `POST .../{id}/reopen`, `POST .../reconciliation:resolve` in bulk (at most `keeper.reconciliation.bulk_max`) and `POST .../reconciliation/sweeps` (202). Values are written by the Kind's `update_{kind}` with a `reconciliation` provenance; when the branch needs review the write goes on a new `reconcile/{candidate}-{random}` branch and Proposal. Duplicates merge into a surviving Record through a Proposal. A candidate whose decision waits in an open Proposal refuses new decisions (409), and a claim or policy decision is refused when a newer value was written since detection. Decisions need `conflict.resolve` plus what the write needs, and clearance for sensitive or vault values, and are audited (`reconciliation.resolve`, `reconciliation.dismiss`, `reconciliation.reopen`).
+- Proposal check `reconciliation`: `warn` (default) lists the open candidates of a Proposal, `block` stops the merge while contradictions are open (409 `reconciliation-open`). Set by `keeper.reconciliation.merge_check`, `scribe.reconciliation.merge_check` for the merges Scribe runs, and the Domain setting `reconciliation_check`; the stricter one applies.
+- Valid time: an Attribute may declare `valid_time: true` (not on derived Attributes). Its values carry a validity period on their provenance, never in content: from Source mappings (`attribute_mapping.{attribute}.valid_from`, `valid_to`), from tier 2 extraction when the dates are in the quote, and from the `valid` parameter of `update_{kind}`. Disjoint periods make a `superseded` candidate instead of a contradiction.
+- Python client `client.reconciliation` (sync and async) and CLI `lorebase reconcile list|show|resolve|dismiss|reopen`.
+- Web app: a Reconciliation screen (`/{domain}/reconcile`) with a tab and count per type, filters by status, Kind, Attribute, source and signal, the claims of a candidate side by side with source, time, period and evidence, decisions with a preview and a required reason, duplicate merges, bulk decisions and sweeps. The Record page marks values with open candidates, the Proposal page links the candidates of its check, and the Source editor names the validity columns of `valid_time` Attributes. New settings `VITE_RECONCILIATION_PAGE_SIZE` and `VITE_RECONCILIATION_COUNT_LIMIT` ([tour](docs/tour.md#reconciliation)).
+- Metrics `lorebase.scribe.reconciliation.candidates`, `lorebase.scribe.reconciliation.sweep.duration` and `lorebase.scribe.reconciliation.open` ([metrics](docs/metrics.md)).
 
 ### Changed
 
@@ -13,6 +23,14 @@ Release automation, documentation, the web app's Conflict resolver and the merge
 - Web app, Conflict resolver: string values that moved from the base are shown word by word (added and removed words marked, with text for screen readers), and the Ours and Theirs columns carry the names of the target and source Branches. In the custom editor, "Copy base", "Copy ours" and "Copy theirs" load a side into the field. Saving a resolution opens the next open Conflict. Outside text fields `o`, `t` and `b` pick a side, `e` opens the custom editor, `s` or Enter saves and `n` moves to the next open Conflict. Leaving a Conflict with unsaved changes asks first, and "Apply resolutions" asks when Conflicts are still open or the one on screen is unsaved. The bulk choice uses the same names as the resolver ("Take ours", "Restore the Record") instead of the raw choice.
 - The release workflow can be run by hand (`workflow_dispatch`, input `tag`) on an existing tag, and publishes the ten packages to PyPI through trusted publishing, each from its own environment (`pypi-<package>`), when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true` ([release process](docs/release.md#pypi-trusted-publishing)).
 - Documentation: the release verification commands name 0.2.3 and the identity of a run started by hand; the README, the quickstart and the MCP guide say how to install `lorebase-cli` and `lorebase-herald` from PyPI.
+
+### Not done yet
+
+- Reconciliation: no queries by valid time (periods classify claims, reads stay at Revisions), no key aliases after a duplicate merge (references to the absorbed key are not redirected), and no MCP tool for the queue. In the web app, tab counts stop at `VITE_RECONCILIATION_COUNT_LIMIT` and the signal filter and ranking apply to the pages loaded.
+
+### Upgrade notes
+
+- Migration `0038` creates `reconciliation_candidates` and adds two nullable columns to `provenance` (no backfill); `0039` adds indexes to the candidates. Run the migrations to `0039`, then restart Keeper and Scribe. Detection is on by default (`scribe.reconciliation.enabled`) and only raises candidates; the merge check defaults to `warn`, which blocks nothing.
 
 ## 0.2.3 - 2026-10-24
 

@@ -2,13 +2,13 @@
 
 Screenshots of the Lorebase web app (`apps/web`), taken at 1440 pixels wide in the light theme, with one picture in the dark theme at the end.
 
-**Where the pictures come from.** Most pictures show the current app against a running demo stack, read only: Postgres, Keeper, Scribe and the guide service with the `examples/supply` sample (30 Suppliers, 40 Parts, 20 Plants and their Links), its example documents, two extraction Proposals and the schema suggestions of those documents. The Explore picture is a real answer of the guide service, streamed while the picture was taken, and the Agent activity picture is the trace of such an answer. A demo stack has no Source runs, no Proposal with Conflicts and no upload to infer a schema from, so four pictures come from the in-memory mock of the Keeper API (`VITE_API_MODE=mock`, two sample Domains, no backend): Start from data, the Source mapping, Sources and the Conflict resolver. Each section says which. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change.
+**Where the pictures come from.** Most pictures show the current app against a running demo stack, read only: Postgres, Keeper, Scribe and the guide service with the `examples/supply` sample (30 Suppliers, 40 Parts, 20 Plants and their Links), its example documents, two extraction Proposals and the schema suggestions of those documents. The Explore picture is a real answer of the guide service, streamed while the picture was taken, and the Agent activity picture is the trace of such an answer. A demo stack has no Source runs, no Proposal with Conflicts and no upload to infer a schema from, so some pictures come from the in-memory mock of the Keeper API (`VITE_API_MODE=mock`, two sample Domains, no backend): Start from data, the Source mapping, Sources, the Conflict resolver and the Reconciliation queue. Each section says which. The side navigation of the pictures taken before the Reconciliation screen existed has no Reconciliation entry; the screens are otherwise current. The flows behind the pictures are exercised against a real Keeper by the Playwright suite in `apps/web/e2e` (browse a Supplier and its Canvas, create a Branch, change the schema through a Proposal, resolve Conflicts and merge, Settings), which CI runs on every change.
 
 The screens are domain-agnostic: every name in the pictures (Kinds, Records, the example questions of Explore) comes from the Domain on screen, not from the app.
 
-![Explorer, a Record, the Canvas, a Source mapping with its sample preview and the Review resolver in one pass](images/tour.gif)
+![Explorer, a Record, the Canvas, a Source mapping with its sample preview, the Review resolver and a contradiction in the Reconciliation queue in one pass](images/tour.gif)
 
-The animation is recorded in mock mode with `pnpm screenshots flow`. The pictures are regenerated in `apps/web` with `pnpm screenshots --live --keeper <url> --domain <id> --guide <url>` against a running stack, and the mock ones with `pnpm screenshots --only modeler-start,modeler-source-mapping,sources,review-conflict,review-passages`; see [apps/web/README.md](../apps/web/README.md#screenshots).
+The animation is recorded in mock mode with `pnpm screenshots flow`. The pictures are regenerated in `apps/web` with `pnpm screenshots --live --keeper <url> --domain <id> --guide <url>` against a running stack, and the mock ones with `pnpm screenshots --only modeler-start,modeler-source-mapping,sources,review-conflict,review-passages,reconcile-queue,reconcile-contradiction,reconcile-duplicate`; see [apps/web/README.md](../apps/web/README.md#screenshots).
 
 ## Explorer
 
@@ -131,6 +131,22 @@ Two Branches changed the same values, and the Proposal that merges the second en
 ![Review, a text Conflict by passage](images/review-passages.png)
 
 The passage view of a text Conflict: the sentence only one Branch changed is already merged (shown as plain text), and each of the two conflicting passages has its base, ours and theirs with the changed words marked. Here the first passage takes both sides, ours then theirs, the second is still open, and the composed text below marks it as `[passage 2 is open]`. Mock.
+
+## Reconciliation
+
+![Reconciliation queue](images/reconcile-queue.png)
+
+Values on which Sources disagree, and Records that may be duplicates ([design 10.6](design.md#106-reconciliation-of-source-contradictions)). A merge Conflict is two Branches changing one value; a reconciliation candidate is two Sources (a sync, a document, a person, an import) claiming different values for one fact, even when each write merged cleanly. Scribe raises the candidates during extraction, before a Source sync merges and in sweeps ([Scribe](scribe.md#reconciliation)); nothing is changed, hidden or decided because a candidate exists.
+
+The screen lists the candidates of the Branch on screen with a tab and a count per type (duplicates, contradictions, stale and superseded values), filters by status, Kind, Attribute, source identity and signal, and ranks negations (`not`, `no`, `never`) first and paraphrases marked `equivalent` last. A candidate shows every claim side by side with its source, time, validity period and evidence passage, with a link to the passage in the document viewer and to the Proposal item it came from. A decision takes a claim, keeps the current value, writes a custom value or applies a policy (`authority`, `newest_wins`, prefer current or incoming), with a preview and a required reason; it is written by the Kind's `update_{kind}` Operation, so permissions, validation and branch protection apply, and on a protected Branch it opens a Proposal. A selection or a filter takes a policy or a dismissal in bulk, a dismissed candidate can be reopened, and "Queue a sweep" asks Scribe for a pass over the Branch. Tab counts stop at `VITE_RECONCILIATION_COUNT_LIMIT` (shown as "500+"), and the signal filter and ranking apply to the pages loaded. Mock.
+
+![Reconciliation, a text contradiction](images/reconcile-contradiction.png)
+
+A text contradiction: two claims for the logistics note of a Plant, the incoming one marked word by word against the current value (`5 km` against `57 km`; the `unit` signal says the values were read as quantities and differ). Mock.
+
+![Reconciliation, a duplicate merge](images/reconcile-duplicate.png)
+
+Two Plants with similar titles that may be one. The merge picks the Record that stays and, per differing Attribute, the value to keep; it runs through a Proposal, the Links of the other Record move to the one that stays, and the other Record is deleted. The Record page marks values with open candidates, and the Proposal page lists the candidates of its `reconciliation` check, which a Domain can set to block a merge while contradictions are open. Mock.
 
 ## Explore
 

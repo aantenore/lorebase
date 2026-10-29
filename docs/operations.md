@@ -133,6 +133,17 @@ Scribe, `python -m lorebase_store.jobs work` does.
   branches still being deleted: `SELECT name, deleted_at FROM refs WHERE deleted_at IS NOT
   NULL`. Their heads stay garbage collection roots until the job ends.
 
+## Reconciliation queue
+
+Contradictions between Sources wait in the reconciliation queue ([design 10.6](design.md#106-reconciliation-of-source-contradictions)); Scribe raises them, people decide them. What an operator sets and watches:
+
+- **Sweeps.** `scribe.reconciliation.sweep_interval_s` (0, off, by default) schedules a `reconcile_sweep` per Domain; `POST /api/v1/domains/{d}/reconciliation/sweeps` (`job.manage`) or "Queue a sweep" in the web app queues one on demand. A sweep stops after `sweep_max_changes_per_job` units of work and queues its continuation ([Scribe](scribe.md#reconciliation)).
+- **Merge check.** `keeper.reconciliation.merge_check` (merges through Keeper) and `scribe.reconciliation.merge_check` (merges Scribe runs after syncs and extraction) are `off`, `warn` (default) or `block`; a Domain can make it stricter with its `reconciliation_check` setting, never looser. In `block`, a Proposal with open contradictions answers 409 `reconciliation-open` with the candidate ids; decide or dismiss them in the queue.
+- **Domain overrides.** A Domain's `reconciliation` setting changes an allowlist of detection settings (thresholds, triggers, stages left out); files, work limits and the semantic judge stay in the configuration. A member that is not allowed is logged and ignored.
+- **Metrics.** `lorebase.scribe.reconciliation.candidates` (raised, filtered, claim added, obsolete), `.sweep.duration` and the `.open` gauge per Domain and type ([metrics](metrics.md)). A growing open count means the queue is not being reviewed or a threshold is too loose.
+
+Nothing in the queue changes data on its own; decisions are Revisions (or Proposals) with a `reconciliation` provenance and audit entries `reconciliation.resolve`, `reconciliation.dismiss` and `reconciliation.reopen`.
+
 ## Backup and restore of a Domain
 
 A bundle is a portable copy of one Domain's versioned content: all Revisions reachable from a

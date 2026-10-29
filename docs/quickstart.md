@@ -164,7 +164,7 @@ Reads never call a model; every answer names the Revision it was served from in 
 `make up` already started it. Open `http://127.0.0.1:8090` (`LOREBASE_WEB_PORT` in `.env`). The
 app opens on the `supply` Domain and its `main` branch: Explorer lists the six Kinds, Canvas
 draws the graph around a Record, Review lists Proposals (the one that loaded the sample is under
-the Merged filter). There is no sign-in with authentication off; with an API key, paste it in
+the Merged filter), Reconciliation lists the values on which Sources disagree. There is no sign-in with authentication off; with an API key, paste it in
 Settings.
 
 The page and the API share one origin: the `web` service of the compose file
@@ -433,7 +433,9 @@ uv run lorebase proposal list --status open
 When the job has succeeded, the extraction is an open Proposal from branch `extract/<job>` to
 `main`, with one item per Record, value and Link and the evidence of each (here the Contract
 C-3099 and its `with_supplier` Link). Review it under Review in the web app, or with
-`uv run lorebase proposal items <id>` and `uv run lorebase proposal decide`. The documents of
+`uv run lorebase proposal items <id>` and `uv run lorebase proposal decide`. A value a document
+states differently from the current one is also held for review as a reconciliation candidate
+(Reconciliation in the web app, `uv run lorebase reconcile list`; [Scribe](scribe.md#reconciliation)). The documents of
 `examples/supply/documents` describe Records that `make example-data` already loaded, so their
 jobs succeed with no items and open no Proposal. With `lfm2.5:8b` on the host the job took 91
 seconds; a small model on the CPU inside Docker takes several minutes.
