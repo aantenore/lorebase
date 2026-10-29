@@ -20,6 +20,7 @@ from lorebase_cli.commands import (
     domains,
     history,
     proposals,
+    reconcile,
     schema,
     sources,
     trace,
@@ -139,6 +140,7 @@ app.add_typer(admin.admin_app, name="admin")
 app.add_typer(audit.audit_app, name="audit")
 app.add_typer(trace.trace_app, name="trace")
 app.add_typer(proposals.proposal_app, name="proposal")
+app.add_typer(reconcile.reconcile_app, name="reconcile")
 app.add_typer(sources.sources_app, name="sources")
 app.add_typer(documents.documents_app, name="documents")
 app.command("whoami")(domains.whoami)

@@ -149,6 +149,13 @@ RESPONSES: dict[type[m.Model], str] = {
     m.Page[m.SchemaSuggestion]: "Page_SuggestionOut_",
     m.SuggestionProposal: "SuggestionProposalOut",
     m.SuggestionsDecided: "DecideSuggestionsOut",
+    m.ReconciliationClaim: "ReconciliationClaimOut",
+    m.ReconciliationCandidate: "ReconciliationCandidateOut",
+    m.Page[m.ReconciliationCandidate]: "Page_ReconciliationCandidateOut_",
+    m.ReconciliationDecision: "ReconciliationDecisionOut",
+    m.BulkItem: "ReconciliationBulkItemOut",
+    m.BulkDecision: "ReconciliationBulkOut",
+    m.SweepQueued: "ReconciliationSweepOut",
 }
 REQUESTS: dict[type[m.RequestModel], str] = {
     m.EraseRequest: "EraseIn",
@@ -188,6 +195,11 @@ REQUESTS: dict[type[m.RequestModel], str] = {
     m.DecideItems: "DecideIn",
     m.SuggestionDecision: "SuggestionDecisionIn",
     m.DecideSuggestions: "DecideSuggestionsIn",
+    m.ReconcileIn: "ReconciliationResolveIn",
+    m.ReasonIn: "ReconciliationReasonIn",
+    m.ReconcileFilter: "ReconciliationFilterIn",
+    m.BulkReconcileIn: "ReconciliationBulkIn",
+    m.SweepRequest: "ReconciliationSweepIn",
 }
 # Members the server accepts through a Python-only alias or computes; none today.
 IGNORED: dict[str, set[str]] = {}
@@ -254,6 +266,8 @@ def test_enumerations_the_client_checks_match_the_document() -> None:
     assert set(SCHEMAS["ContextRequest"]["properties"]["format"]["enum"]) == set(
         get_args(m.ContextFormat)
     )
+    assert set(SCHEMAS["CandidateType"]["enum"]) == set(get_args(m.CandidateType))
+    assert set(SCHEMAS["CandidateStatus"]["enum"]) == set(get_args(m.CandidateStatus))
 
 
 # Endpoints ----------------------------------------------------------------------------------
@@ -363,6 +377,15 @@ def sample_calls() -> list[Any]:
         ep.decide_schema_suggestions(
             d, m.DecideSuggestions(decisions=[{"suggestion": "ssg_1", "decision": "rejected"}])
         ),
+        ep.list_reconciliation(d, branch="main", type="contradiction", status="open"),
+        ep.get_reconciliation_candidate(d, "rcn_1"),
+        ep.resolve_reconciliation(d, "rcn_1", m.ReconcileIn(choice="keep_current", reason="r")),
+        ep.dismiss_reconciliation(d, "rcn_1", m.ReasonIn(reason="r")),
+        ep.reopen_reconciliation(d, "rcn_1", m.ReasonIn(reason="r")),
+        ep.resolve_reconciliation_bulk(
+            d, m.BulkReconcileIn(ids=["rcn_1"], choice="dismiss", reason="r")
+        ),
+        ep.queue_reconciliation_sweep(d, m.SweepRequest()),
     ]
 
 

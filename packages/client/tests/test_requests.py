@@ -1458,3 +1458,144 @@ async def test_async_health_report(http: respx.MockRouter, sleeps: Sleeps) -> No
     async with amake(sleeps) as client:
         report = await client.agents.kind_health("supply", "Part")
     assert report.summary.records == 3
+
+
+# Reconciliation -------------------------------------------------------------------------------
+
+
+def _candidate(**extra: Any) -> dict[str, Any]:
+    return {
+        "id": "rcc_1",
+        "branch": "main",
+        "type": "contradiction",
+        "status": "open",
+        "kind": "Supplier",
+        "kind_id": "knd_1",
+        "keys": ["S-1"],
+        "attribute": "city",
+        "attribute_id": "att_1",
+        "claims": [
+            {"claim_id": "c1", "value": "Turin", "source": "source:src_1", "at": "2026-10-01"},
+            {"claim_id": "c2", "value": "Milan"},
+        ],
+        "claim_count": 2,
+        "signals": {},
+        "proposal_id": None,
+        "decision": None,
+        "decided_by": None,
+        "decided_at": None,
+        "created_at": "2026-10-01T08:00:00Z",
+        "updated_at": "2026-10-01T08:00:00Z",
+        **extra,
+    }
+
+
+def _decision(status: str = "resolved") -> dict[str, Any]:
+    return {"status": status, "candidate": _candidate(), "claim_id": "c1", "revision": "aa"}
+
+
+def test_reconciliation_lists_reads_and_decides(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["status"] == "open"
+        assert request.url.params["type"] == "contradiction"
+        assert request.url.params["source"] == "source:src_1"
+        cursor = request.url.params.get("cursor")
+        return httpx.Response(
+            200, json={"items": [_candidate()], "next_cursor": None if cursor else "c1"}
+        )
+
+    listing = http.get("/domains/supply/reconciliation").mock(side_effect=answer)
+    one = http.get("/domains/supply/reconciliation/rcc_1").respond(200, json=_candidate())
+    resolution = http.post("/domains/supply/reconciliation/rcc_1/resolution").respond(
+        200, json=_decision()
+    )
+    dismissal = http.post("/domains/supply/reconciliation/rcc_1/dismissal").respond(
+        200, json=_decision("dismissed")
+    )
+    reopened = http.post("/domains/supply/reconciliation/rcc_1/reopen").respond(
+        200, json=_decision("reopened")
+    )
+    bulk = http.post("/domains/supply/reconciliation:resolve").respond(
+        200,
+        json={
+            "count": 1,
+            "counts": {"dry_run": 1},
+            "items": [{"candidate": "rcc_1", "status": "dry_run", "detail": "newest"}],
+        },
+    )
+    sweep = http.post("/domains/supply/reconciliation/sweeps").respond(
+        202, json={"job_id": 4, "branch": "main"}
+    )
+    with make(sleeps) as client:
+        page = client.reconciliation.list(
+            "supply", status="open", type="contradiction", source="source:src_1", limit=1
+        )
+        ids = [
+            c.id
+            for c in client.reconciliation.iterate(
+                "supply", status="open", type="contradiction", source="source:src_1"
+            )
+        ]
+        found = client.reconciliation.get("supply", "rcc_1")
+        decided = client.reconciliation.resolve(
+            "supply", "rcc_1", "custom", reason="checked", value="Turin", dry_run=True
+        )
+        dismissed = client.reconciliation.dismiss("supply", "rcc_1", reason="same city")
+        again = client.reconciliation.reopen("supply", "rcc_1", reason="wrong")
+        many = client.reconciliation.resolve_many(
+            "supply",
+            "policy",
+            reason="newest",
+            policy="newest_wins",
+            where=m.ReconcileFilter(kind="Supplier", attribute="city"),
+            dry_run=True,
+        )
+        queued = client.reconciliation.queue_sweep("supply", branch="main")
+    assert page.next_cursor == "c1"
+    assert ids == ["rcc_1", "rcc_1"]
+    assert listing.call_count == 3
+    assert found.claims[0].source == "source:src_1"
+    assert decided.revision == "aa"
+    assert json.loads(resolution.calls.last.request.content) == {
+        "choice": "custom",
+        "value": "Turin",
+        "reason": "checked",
+        "dry_run": True,
+    }
+    assert dismissed.status == "dismissed"
+    assert json.loads(dismissal.calls.last.request.content) == {"reason": "same city"}
+    assert again.status == "reopened"
+    assert json.loads(reopened.calls.last.request.content) == {"reason": "wrong"}
+    assert many.counts == {"dry_run": 1}
+    assert json.loads(bulk.calls.last.request.content) == {
+        "filter": {"kind": "Supplier", "attribute": "city"},
+        "choice": "policy",
+        "policy": "newest_wins",
+        "reason": "newest",
+        "dry_run": True,
+    }
+    assert queued.job_id == 4
+    assert json.loads(sweep.calls.last.request.content) == {"branch": "main"}
+    assert one.called
+
+
+async def test_async_reconciliation(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    http.get("/domains/supply/reconciliation").respond(
+        200, json={"items": [_candidate()], "next_cursor": None}
+    )
+    resolution = http.post("/domains/supply/reconciliation/rcc_1/resolution").respond(
+        200, json=_decision()
+    )
+    http.post("/domains/supply/reconciliation/sweeps").respond(
+        202, json={"job_id": 4, "branch": "main"}
+    )
+    async with amake(sleeps) as client:
+        ids = [c.id async for c in client.reconciliation.iterate("supply")]
+        decided = await client.reconciliation.resolve(
+            "supply", "rcc_1", "claim", reason="r", claim_id="c1"
+        )
+        queued = await client.reconciliation.queue_sweep("supply")
+    assert ids == ["rcc_1"]
+    assert decided.claim_id == "c1"
+    assert json.loads(resolution.calls.last.request.content)["claim_id"] == "c1"
+    assert queued.branch == "main"
