@@ -341,6 +341,8 @@ export const SOURCE_TYPES = [
 export type SourceType = (typeof SOURCE_TYPES)[number];
 export type SyncMode = 'snapshot' | 'incremental';
 export type SourceMergePolicy = 'auto_when_clean' | 'proposal' | 'auto_with_authority';
+/** What an upstream change does to a value someone else set since the last sync. */
+export type LocalEdits = 'review' | 'keep' | 'source_wins';
 
 export interface SourceTransform {
   /** `cast`, `trim`, `lower`, `upper`, `parse_date`, `concat`, `constant`, `map` or `null_if`. */
@@ -382,6 +384,8 @@ export interface Source {
   /** Cron expression, or `null` for manual. */
   schedule: string | null;
   target_branch_policy: { branch_template?: string; merge_policy?: SourceMergePolicy };
+  /** Absent means `review`. */
+  local_edits?: LocalEdits;
   /** Keys the view does not model, kept verbatim so a save never drops them. */
   extra?: Record<string, unknown>;
 }

@@ -42,6 +42,56 @@ class SourceRun(Base):
     error: Mapped[dict[str, Any] | None]
 
 
+class SourceWritten(Base):
+    """What a Source last wrote to a target branch, per element (design 9.1 "Corrections that
+    stick"): the hash of each Attribute value (`written`, never the values), the Source branch
+    Revision holding them (`revision_id`; `value_revisions` names an older one for the
+    Attributes that Revision does not hold) and whether the Source last deleted the element.
+    Advanced only in the transaction that merges the Source's Proposal."""
+
+    __tablename__ = "source_written"
+    __table_args__ = (domain_fk(), h32_check("revision_id"))
+
+    domain_id: Mapped[DomainKey]
+    source_id: Mapped[str] = mapped_column(primary_key=True)
+    target_branch: Mapped[str] = mapped_column(primary_key=True)
+    element: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(primary_key=True)
+    written: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    revision_id: Mapped[H32 | None]
+    value_revisions: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    deleted: Mapped[bool] = mapped_column(server_default=text("false"))
+    run_id: Mapped[str]
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class SourceWrittenPending(Base):
+    """The last-written state a Source run carries in its open Proposal, moved to
+    `source_written` when the Proposal merges. `preserve` lists the Attributes whose merge
+    base keeps the last-written value (local edits, design 9.1)."""
+
+    __tablename__ = "source_written_pending"
+    __table_args__ = (
+        domain_fk(),
+        h32_check("revision_id"),
+        Index(None, "domain_id", "source_id", "target_branch"),
+    )
+
+    domain_id: Mapped[DomainKey]
+    proposal_id: Mapped[str] = mapped_column(primary_key=True)
+    element: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(primary_key=True)
+    source_id: Mapped[str]
+    target_branch: Mapped[str]
+    written: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    revision_id: Mapped[H32 | None]
+    value_revisions: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    deleted: Mapped[bool] = mapped_column(server_default=text("false"))
+    preserve: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    run_id: Mapped[str]
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
 class Document(Base):
     """Uploaded document; the bytes live in the blob store at `blob_ref`. One row per Domain
     and content hash."""

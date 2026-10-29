@@ -46,7 +46,9 @@ difference).
   `conflicts (domain_id, attempt_id, id)` with `fingerprint` unique per attempt,
   `conflict_resolutions (domain_id, proposal_id, fingerprint)`, `group_members (group_id,
   principal_id)`, `operation_invocations`, `source_runs`, `documents`, `extraction_jobs`, `vault`,
-  `schema_suggestions` on `(domain_id, id)`, `document_chunks (domain_id, document_id, seq)`.
+  `schema_suggestions` on `(domain_id, id)`, `document_chunks (domain_id, document_id, seq)`,
+  `source_written (domain_id, source_id, target_branch, element, key)` and
+  `source_written_pending (domain_id, proposal_id, element, key)` (revision `0040`).
 - `audit_log.seq`, `outbox.id` and `jobs.id` are `bigint` identities (ordering matters); other ids
   are application-generated prefixed text ids.
 - Timestamps that are hashed or carried by history (`revisions.created_at`, `ref_log.at`,

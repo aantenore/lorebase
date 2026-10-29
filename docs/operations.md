@@ -9,8 +9,9 @@ commands read the database and `store.*` settings from the Lorebase configuratio
 Objects, tree nodes and Revisions are immutable, so deleting a branch only removes its ref (and
 its materialized rows, in the background for a large branch: see [Large branches](#large-branches)).
 Collection reclaims what no ref reaches any more (design 6.13). Per Domain, it marks every
-Revision reachable from a branch or tag, from an open Proposal's merge attempts, or created less
-than `store.gc.grace_seconds` ago (default one hour), then the tree nodes and objects those
+Revision reachable from a branch or tag, from an open Proposal's merge attempts, from the
+last-written state of a Source (`source_written`, [Scribe](scribe.md#corrections-that-stick)),
+or created less than `store.gc.grace_seconds` ago (default one hour), then the tree nodes and objects those
 Revisions reach. It sweeps the rest in batches: unreachable Revisions with their parents,
 changesets and history rows, provenance entries nothing refers to any more, tree nodes and
 objects, and the embeddings (vectors of any model) whose Record content no branch head holds any
@@ -143,6 +144,30 @@ Contradictions between Sources wait in the reconciliation queue ([design 10.6](d
 - **Metrics.** `lorebase.scribe.reconciliation.candidates` (raised, filtered, claim added, obsolete), `.sweep.duration` and the `.open` gauge per Domain and type ([metrics](metrics.md)). A growing open count means the queue is not being reviewed or a threshold is too loose.
 
 Nothing in the queue changes data on its own; decisions are Revisions (or Proposals) with a `reconciliation` provenance and audit entries `reconciliation.resolve`, `reconciliation.dismiss` and `reconciliation.reopen`.
+
+## Source syncs after the upgrade to corrections that stick
+
+Migration `0040` creates `source_written` and `source_written_pending`, empty; nothing else is
+migrated. From then on a Source writes only what changed upstream since it last wrote it, and
+an upstream change that meets a value someone else set is a Conflict of the Source's Proposal
+(`local_edits: review`, the default) instead of an overwrite ([Scribe](scribe.md#corrections-that-stick)).
+What to expect and watch:
+
+- **First run of each Source.** It seeds the last-written state (`seeded` in the run stats).
+  Values whose Lineage is the Source count as last written. Any other value of an owned
+  Attribute (an import, an Operation, another Source) is compared only: equal to upstream, it
+  seeds the state; different, it is a local edit, so an `auto_when_clean` Source whose target
+  was edited by hand stops at a Proposal with Conflicts once. Run it with `dry_run: true`
+  first to see the counts (`local_edits`).
+- **Auto-merged Sources.** A run that meets a local edit is no longer merged without a person
+  under `review`. Look for open Source Proposals with Conflicts, or the audit action
+  `source.local_edit_conflict`.
+- **Old behavior.** Set `local_edits: source_wins` on a Source (in the schema: the Modeler or
+  `lorebase schema apply`) to let upstream values overwrite corrections again; `keep` lets a
+  person's value win without review.
+- **State size.** One row per Source, target branch and Record (and per Record and mapped
+  Relation for Links), with hashes only. Rows of a deleted target branch stay until the Source
+  is removed; they are small.
 
 ## Backup and restore of a Domain
 

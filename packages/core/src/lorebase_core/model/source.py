@@ -39,6 +39,18 @@ class MergePolicy(StrEnum):
     AUTO_WITH_AUTHORITY = "auto_with_authority"
 
 
+class LocalEdits(StrEnum):
+    """What an upstream change does to a value someone else set on the target since the
+    Source last wrote it (design 9.1 "Corrections that stick")."""
+
+    #: A Conflict of the Source Proposal, decided by a person (the default).
+    REVIEW = "review"
+    #: The same Conflict, resolved at once in favor of a person's value.
+    KEEP = "keep"
+    #: The upstream value overwrites the current one.
+    SOURCE_WINS = "source_wins"
+
+
 class TransformName(StrEnum):
     CAST = "cast"
     TRIM = "trim"
@@ -219,4 +231,11 @@ class Source(SchemaElement):
     #: Cron expression; ``None`` means manual runs only.
     schedule: str | None = None
     target_branch_policy: TargetBranchPolicy = Field(default_factory=TargetBranchPolicy)
+    #: ``None`` means ``review``; left out of the content so existing Sources keep their hash.
+    local_edits: LocalEdits | None = None
     status: ElementStatus = ElementStatus.ACTIVE
+
+    @property
+    def local_edit_mode(self) -> LocalEdits:
+        """The effective ``local_edits`` setting."""
+        return self.local_edits or LocalEdits.REVIEW

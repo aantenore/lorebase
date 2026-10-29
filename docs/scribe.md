@@ -124,6 +124,7 @@ sources:
       onboarded_on: {column: onboarded_on, transforms: [{name: parse_date, args: {format: '%Y-%m-%d'}}]}
     sync_mode: snapshot
     target_branch_policy: {branch_template: 'source/{source}', merge_policy: auto_when_clean}
+    local_edits: review                   # the default; keep or source_wins (below)
 
   erp.purchase_orders:
     id: src_01KEZF7C00PMKRJJ98PAYYB4SX
@@ -349,13 +350,14 @@ existing Record are kept, and Links of other Relations are left alone.
    or as text when the types differ, so string watermarks should be ISO timestamps too.
 3. It prepares the Source branch, `source/<api name>` by default: created from the target
    branch the first time, and recreated at the target head when no Proposal from it is open
-   and the heads differ. Every run therefore compares the Source with what the target holds now
-   (a manual edit of an owned Attribute on the target is put back by the next run).
-4. It computes the delta against the branch head: `added` keys, `changed` keys (the content
-   hash of the new Record differs from the stored one; Lineage is not content, so rewriting the
-   same values is no change) and `removed` keys. Snapshot Sources remove the Records they own
-   (their Lineage names this Source) that the run did not see, unless a row failed; incremental
-   Sources remove the Records of rows whose tombstone column is set.
+   and the heads differ, so schema and unrelated target changes are always current.
+4. It computes the delta against the branch head, writing only what changed upstream since the
+   Source last wrote it ([below](#corrections-that-stick)): `added` keys, `changed` keys (the
+   content hash of the new Record differs from the stored one; Lineage is not content, so
+   rewriting the same values is no change) and `removed` keys. Snapshot Sources remove the
+   Records they last wrote (before any last-written state: whose Lineage names this Source)
+   that the run did not see, unless a row failed; incremental Sources remove the Records of
+   rows whose tombstone column is set.
 5. It commits the delta on the Source branch in Revisions of at most `commit_batch` changes
    (the changes of one row stay together), with origin `source_sync` and one provenance entry
    per changed row: Source id, run id and row locator (`file.csv:17`, `orders:42`).
@@ -380,7 +382,52 @@ true): the policy is part of the reviewed schema. With it off, those Proposals s
 with no changes leaves an open Proposal untouched; with an automatic policy it retries its merge.
 
 A dry run (`dry_run: true`) reads, maps and computes the delta against the state step 3 would
-produce, records the counts in the run and writes nothing else.
+produce, records the counts in the run (`local_edits` and `seeded` included) and writes
+nothing else.
+
+### Corrections that stick
+
+A Source changes only what changed upstream ([design 9.1](design.md#91-structured-sources),
+AC-34). For each Source and target branch Lorebase keeps the **last-written state**
+(`source_written`): per Record (and per Record's Links of each mapped Relation) the hash of each
+value the Source last wrote, never the value, and the Source branch Revision that holds it.
+Each run compares the fresh value `F` with the last-written one `W`, not with the current one
+`C`:
+
+| Case | Action |
+|------|--------|
+| `F = W` (no upstream change) | nothing, whatever `C` is: a person's correction, an Operation or another Source's value stays |
+| `F != W`, `C = F` | nothing; the state advances |
+| `F != W`, `C` set by this Source | `F` is written |
+| `F != W`, `C` set by anyone else | a **local edit**: decided by `local_edits` |
+
+`local_edits` on the Source:
+
+- `review` (default): `F` is written on the Source branch and the Proposal's merge attempt
+  holds a `DV1` Conflict whose base is `W` (ours: the correction, theirs: the new upstream
+  value), resolved like any Conflict, by a person or by the Domain's merge policies. An
+  `auto_when_clean` Source therefore leaves such a run open.
+- `keep`: the same Conflict, resolved at once with resolver `policy:local_edits` by the ranking
+  `[principal:*, operation, merge_resolution, reconciliation, source:{id}]`: a value set by an
+  Operation or a decision stays; one set by another Source, an extraction or an import is
+  overwritten; an unknown origin stays a Conflict.
+- `source_wins`: the behavior before this change, `F` overwrites `C`.
+
+Under `auto_with_authority` the Attributes whose `authority` is the Source are always
+overwritten, as before. A snapshot deletion of a Record holding values someone else set is a
+`DV2` delete/modify Conflict (`keep`: the Record stays; `source_wins`: deleted). Links follow
+the same rule without Conflicts: a Link someone removed is not added again until upstream
+changes it, and a Link someone added is not removed. Each local edit writes one
+`source.local_edit_conflict` audit entry (Source, run, Proposal, Kind, key, Attribute, origin
+type and actor of the current value, mode and outcome `conflict`, `kept`, `overwritten` or
+`deleted`, never values), and the run's stats count them in `local_edits`.
+
+The state advances only when the Source's Proposal merges, in the merge transaction, whoever
+merges it: a Proposal closed unmerged advances nothing, and its upstream changes come back with
+the next run. A run with nothing to merge and no open Proposal records it at once. Sources
+synchronized before this change have no state: the first run seeds it (`seeded` in the
+stats). A value whose Lineage is this Source counts as last written; any other value is
+compare-only for that run, so an equal one seeds the state and a different one is a local edit.
 
 ## Reconciliation
 

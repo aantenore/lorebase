@@ -1155,6 +1155,8 @@ scribe:
     max_row_errors: 100          # skipped rows tolerated; more fail the run without committing
     error_samples: 20            # row errors kept in the run record
     auto_merge_protected: true   # automatic merge policies also merge into protected branches
+    # What an upstream change does to a value someone else set since the last sync is set per
+    # Source in the schema: `local_edits: review` (default: a Conflict), `keep` or `source_wins`.
     csv:
       allowed_roots: []          # directories local CSV files may be read from; empty: none
       allowed_hosts: []          # hosts CSV URLs may point at; empty: none

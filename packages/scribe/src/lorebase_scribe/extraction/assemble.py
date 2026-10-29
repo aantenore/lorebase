@@ -14,7 +14,9 @@
   at once too. Items that set a value of a vault Attribute are never accepted at once: the
   extraction commit checks vault values against erased ones, so a reviewer decides (design
   13.5). A value item `hold` says raises a reconciliation contradiction (design 10.6,
-  `hold_auto_accept`) is not accepted at once either.
+  `hold_auto_accept`) is not accepted at once either, nor is a value item over a value a
+  person set last (`CurrentState.personal`, design 9.1): it stays pending with hold reason
+  `local_edit` in its match (`held_local_edit` in the stats).
 - A value's validity period (a `valid_time` Attribute) goes with its evidence (`valid_from`,
   `valid_to`), from where the commit puts it on the provenance entry.
 """
@@ -45,12 +47,29 @@ ITEM_PREFIX = "pit"
 RecordKey = tuple[str, str]
 
 
+#: Hold reason of a value item over a value a person set (design 9.1).
+LOCAL_EDIT_HOLD = "local_edit"
+
+
+def by_person(origin_type: str, origin: Mapping[str, Any]) -> bool:
+    """Whether a value with this provenance was set by a principal: an Operation, or a merge
+    resolution or reconciliation decision whose resolver is not a policy (design 9.1)."""
+    if origin_type == "operation":
+        return True
+    if origin_type in ("merge_resolution", "reconciliation"):
+        resolver = str(origin.get("resolver") or "")
+        return bool(resolver) and not resolver.startswith("policy:")
+    return False
+
+
 @dataclass(frozen=True)
 class CurrentState:
-    """What the target branch holds for the Records and Links the candidates name."""
+    """What the target branch holds for the Records and Links the candidates name.
+    `personal` names the values a person set last: `(kind id, key, attribute id)`."""
 
     records: Mapping[RecordKey, Mapping[str, Any]]
     links: frozenset[tuple[str, str, str]]
+    personal: frozenset[tuple[str, str, str]] = frozenset()
 
 
 @dataclass
@@ -245,6 +264,11 @@ def assemble_items(
                 and resolution.status == "matched"
                 and not (target is not None and target.in_vault)
             )
+            personal = (element[0], element[1], attribute_id) in current.personal
+            if personal:
+                # Never accepted at once over a person's value, whatever its confidence.
+                result.count(f"held_{LOCAL_EDIT_HOLD}")
+                confident = False
             if confident and hold is not None and hold(value):
                 result.count("held_by_reconciliation")
                 confident = False
@@ -273,7 +297,10 @@ def assemble_items(
                         decided_by=by,
                         decided_at=at,
                         job_id=job_id,
-                        match=resolution.as_dict(),
+                        match={
+                            **resolution.as_dict(),
+                            **({"hold": LOCAL_EDIT_HOLD} if personal else {}),
+                        },
                         tier=value.tier,
                         model=value.model,
                     ),

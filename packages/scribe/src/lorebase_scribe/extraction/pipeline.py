@@ -54,7 +54,7 @@ from lorebase_inference.interfaces import (
     SpanExtractor,
     Usage,
 )
-from lorebase_scribe.extraction.assemble import CurrentState, assemble_items
+from lorebase_scribe.extraction.assemble import CurrentState, assemble_items, by_person
 from lorebase_scribe.extraction.candidates import (
     LinkCandidate,
     MatchCandidate,
@@ -119,6 +119,7 @@ from lorebase_store.repositories import (
     ProposalItemRepository,
     ProposalRepository,
     ProposalRow,
+    ProvenanceRepository,
     SchemaSuggestionRepository,
     scope_to_domain,
 )
@@ -974,6 +975,7 @@ class ExtractionRun:
                 pairs[link.relation_id].add((str(link.source.key), str(link.target.key)))
         records: dict[tuple[str, str], dict[str, Any]] = {}
         links: set[tuple[str, str, str]] = set()
+        lineage: dict[tuple[str, str, str], str] = {}
         writes = self._runtime.settings.writes
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
@@ -981,10 +983,23 @@ class ExtractionRun:
             for kind_id, kind_keys in keys.items():
                 for key, row in (await rows.records(kind_id, kind_keys)).items():
                     records[(kind_id, key)] = dict(row.values)
+                    lineage.update(
+                        ((kind_id, key, attribute), entry)
+                        for attribute, entry in row.lineage.items()
+                        if attribute in row.values
+                    )
             for relation_id, relation_pairs in pairs.items():
                 for pair in await rows.links(relation_id, relation_pairs):
                     links.add((relation_id, *pair))
-        return CurrentState(records=records, links=frozenset(links))
+            entries = await ProvenanceRepository(session, domain_id, writes=writes).get_many(
+                lineage.values()
+            )
+        personal = frozenset(
+            value
+            for value, entry in lineage.items()
+            if entry in entries and by_person(entries[entry].origin_type, entries[entry].origin_ref)
+        )
+        return CurrentState(records=records, links=frozenset(links), personal=personal)
 
     async def _vaulted(self, discovery: Discovery, domain_id: str) -> set[str]:
         """The evidence texts of `discovery` to withhold: those that hold a vault value of any

@@ -8,7 +8,9 @@ import pytest
 
 from lorebase_core.model import (
     IdPrefix,
+    LocalEdits,
     ProvenanceEntry,
+    Record,
     Schema,
     SourceSyncOrigin,
     new_id,
@@ -17,12 +19,18 @@ from lorebase_core.validate import LinkDelete, LinkUpsert, RecordDelete, RecordU
 from lorebase_scribe.sources.delta import (
     ChangeGroup,
     CurrentState,
+    EditRules,
+    Outcome,
+    Setter,
     StoredRecord,
+    WrittenState,
     batches,
     compute_delta,
     content_hash,
+    value_digest,
 )
 from lorebase_scribe.sources.mapping import MappedRow, RowMapper
+from lorebase_store.repositories import WrittenRow
 
 ORDER = {
     "po_no": "PO-200001",
@@ -180,3 +188,199 @@ def test_batches_never_split_a_group() -> None:
 
     packed = batches([group(3), group(3), group(1), group(5)], 4)
     assert [[len(g.changes) for g in batch] for batch in packed] == [[3], [3, 1], [5]]
+
+
+# Corrections that stick (design 9.1) ------------------------------------------------------------
+
+
+def status_id(schema: Schema) -> str:
+    kind = schema.kind_by_api_name("PurchaseOrder")
+    assert kind is not None
+    found = kind.attribute_by_api_name("status")
+    assert found is not None
+    return found.id
+
+
+def last_written(mapper: RowMapper, row: dict[str, Any], revision: bytes = b"\x01" * 32) -> Any:
+    """The state a merged run with `row` leaves."""
+    mapped = mapper.map(row, "x")
+    written = {a: value_digest(mapped.values.get(a)) for a in mapper.owned_attributes}
+    return WrittenRow(mapper.kind.id, mapped.key, written, revision, "srn_0")
+
+
+PERSON = Setter("operation", "usr_editor")
+
+
+def edited_state(
+    mapper: RowMapper, schema: Schema, setter: Setter = PERSON
+) -> tuple[str, CurrentState, WrittenState]:
+    """The branch holds a person's status over what the Source last wrote."""
+    key, record = stored(mapper, ORDER)
+    status = status_id(schema)
+    values = {**record.values, status: "cancelled"}
+    edited = Record(kind=mapper.kind.id, key=key, values=values)
+    current = CurrentState(
+        records={key: StoredRecord(content_hash(edited), values)},
+        foreign={(key, status): setter},
+    )
+    return key, current, WrittenState(records={key: last_written(mapper, ORDER)})
+
+
+def test_an_unchanged_upstream_value_leaves_a_correction(
+    mapper: RowMapper, supply_schema: Schema
+) -> None:
+    _key, current, written = edited_state(mapper, supply_schema)
+    delta = compute_delta(
+        mapper,
+        [mapper.map(ORDER, "r")],
+        current,
+        written,
+        delete_missing=True,
+        provenance=provenance,
+    )
+    assert delta.changed == []
+    assert delta.local_edits == []
+    assert delta.seeded == 0
+
+
+def test_an_upstream_change_over_a_correction_is_a_local_edit(
+    mapper: RowMapper, supply_schema: Schema
+) -> None:
+    key, current, written = edited_state(mapper, supply_schema)
+    status = status_id(supply_schema)
+    row = mapper.map({**ORDER, "state": "shipped"}, "r")
+    review = compute_delta(
+        mapper, [row], current, written, delete_missing=True, provenance=provenance
+    )
+    assert [(e.key, e.attribute, e.outcome) for e in review.local_edits] == [
+        (key, status, Outcome.CONFLICT)
+    ]
+    upsert = review.groups[0].changes[0].change
+    assert isinstance(upsert, RecordUpsert)
+    assert upsert.record.values[status] == "shipped"  # theirs on the Source branch
+    [state] = [s for s in review.states if s.element == mapper.kind.id]
+    assert state.preserve == (status,)
+    # Values upstream did not change keep the Revision that holds them.
+    assert set(state.kept) == set(mapper.owned_attributes) - {status}
+
+    wins = compute_delta(
+        mapper,
+        [row],
+        current,
+        written,
+        delete_missing=True,
+        provenance=provenance,
+        rules=EditRules(LocalEdits.SOURCE_WINS),
+    )
+    assert [e.outcome for e in wins.local_edits] == [Outcome.OVERWRITTEN]
+    assert all(not s.preserve for s in wins.states)
+
+    keep = EditRules(LocalEdits.KEEP)
+    kept = compute_delta(
+        mapper, [row], current, written, delete_missing=True, provenance=provenance, rules=keep
+    )
+    assert [e.outcome for e in kept.local_edits] == [Outcome.KEPT]
+    _key, extracted, _written = edited_state(mapper, supply_schema, Setter("extraction", "svc"))
+    overwritten = compute_delta(
+        mapper, [row], extracted, written, delete_missing=True, provenance=provenance, rules=keep
+    )
+    assert [e.outcome for e in overwritten.local_edits] == [Outcome.OVERWRITTEN]
+    # Under auto_with_authority the Source's own Attributes are always overwritten.
+    authority = EditRules(LocalEdits.REVIEW, frozenset({status}))
+    owned = compute_delta(
+        mapper,
+        [row],
+        current,
+        written,
+        delete_missing=True,
+        provenance=provenance,
+        rules=authority,
+    )
+    assert [e.outcome for e in owned.local_edits] == [Outcome.OVERWRITTEN]
+
+
+def test_upstream_catching_up_with_a_correction_is_no_change(
+    mapper: RowMapper, supply_schema: Schema
+) -> None:
+    _key, current, written = edited_state(mapper, supply_schema)
+    row = mapper.map({**ORDER, "state": "CANCELLED"}, "r")  # lowered by the mapping
+    delta = compute_delta(
+        mapper, [row], current, written, delete_missing=True, provenance=provenance
+    )
+    assert delta.changed == []
+    assert delta.local_edits == []
+    [state] = [s for s in delta.states if s.element == mapper.kind.id]
+    assert state.written[status_id(supply_schema)] == value_digest("cancelled")
+
+
+def test_a_deletion_of_a_corrected_record_is_a_local_edit(
+    mapper: RowMapper, supply_schema: Schema
+) -> None:
+    key, current, written = edited_state(mapper, supply_schema)
+    delta = compute_delta(mapper, [], current, written, delete_missing=True, provenance=provenance)
+    assert delta.removed == [key]
+    assert [(e.attribute, e.outcome) for e in delta.local_edits] == [(None, Outcome.CONFLICT)]
+    [state] = [s for s in delta.states if s.element == mapper.kind.id]
+    assert state.deleted
+    assert state.preserve == (status_id(supply_schema),)
+    wins = compute_delta(
+        mapper,
+        [],
+        current,
+        written,
+        delete_missing=True,
+        provenance=provenance,
+        rules=EditRules(LocalEdits.SOURCE_WINS),
+    )
+    assert [e.outcome for e in wins.local_edits] == [Outcome.DELETED]
+
+
+def test_seeding_compares_values_others_set(mapper: RowMapper, supply_schema: Schema) -> None:
+    _key, current, _written = edited_state(mapper, supply_schema)
+    same = compute_delta(
+        mapper,
+        [mapper.map({**ORDER, "state": "cancelled"}, "r")],
+        current,
+        delete_missing=True,
+        provenance=provenance,
+    )
+    assert (same.seeded, same.changed, same.local_edits) == (1, [], [])
+    other = compute_delta(
+        mapper, [mapper.map(ORDER, "r")], current, delete_missing=True, provenance=provenance
+    )
+    assert [e.attribute for e in other.local_edits] == [status_id(supply_schema)]
+
+
+def test_links_follow_upstream_changes_only(mapper: RowMapper, supply_schema: Schema) -> None:
+    key, record = stored(mapper, ORDER)
+    for_part = relation(supply_schema, "for_part")
+    delivered = relation(supply_schema, "delivered_to")
+    # A person removed the Link to P-10001 and added one to P-20000.
+    current = CurrentState(
+        records={key: record},
+        links={for_part: {key: frozenset({"P-20000"})}, delivered: {key: frozenset({"PL-10"})}},
+    )
+    last = {
+        for_part: {key: WrittenRow(for_part, key, {"P-10001": value_digest("P-10001")}, None, "x")},
+        delivered: {key: WrittenRow(delivered, key, {"PL-10": value_digest("PL-10")}, None, "x")},
+    }
+    written = WrittenState(records={key: last_written(mapper, ORDER)}, links=last)
+    unchanged = compute_delta(
+        mapper,
+        [mapper.map(ORDER, "r")],
+        current,
+        written,
+        delete_missing=True,
+        provenance=provenance,
+    )
+    assert unchanged.groups == []
+    moved = compute_delta(
+        mapper,
+        [mapper.map({**ORDER, "part_no": "P-10002"}, "r")],
+        current,
+        written,
+        delete_missing=True,
+        provenance=provenance,
+    )
+    changes = [c.change for c in moved.groups[0].changes]
+    assert [type(c) for c in changes] == [LinkUpsert]  # P-20000 stays, P-10001 is gone already

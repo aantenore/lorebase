@@ -135,6 +135,42 @@ _KEYS_WITH_ORIGIN = """
     ORDER BY r.key
     """
 
+_ORIGINS_EXCEPT = """
+    SELECT r.key, l.attribute, p.origin_type, p.actor, p.origin_ref FROM {records}
+    CROSS JOIN LATERAL jsonb_each_text(lb_lineage(r.domain_id, r.lineage))
+        AS l(attribute, provenance_id)
+    JOIN provenance p ON p.domain_id = r.domain_id AND p.id = l.provenance_id
+    WHERE r.domain_id = :domain AND r.branch = :branch AND r.kind_id = :kind
+      AND left(l.attribute, 1) <> '$'
+      AND NOT (p.origin_type = :origin_type
+               AND coalesce(p.origin_ref ->> :field, '') = :value)
+    ORDER BY r.key, l.attribute
+    """
+
+_LINKS_WITH_ORIGIN = """
+    SELECT k.from_key, k.to_key FROM {links}
+    WHERE k.domain_id = :domain AND k.branch = :branch AND k.relation_id = :relation
+      AND EXISTS (
+        SELECT 1 FROM jsonb_each_text(lb_lineage(k.domain_id, k.lineage))
+            AS l(attribute, provenance_id)
+        JOIN provenance p ON p.domain_id = k.domain_id AND p.id = l.provenance_id
+        WHERE p.origin_type = :origin_type AND p.origin_ref ->> :field = :value
+      )
+    ORDER BY k.from_key, k.to_key
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class AttributeOrigin:
+    """Who set the current value of one Attribute of a Record: the provenance entry of its
+    last change (origin type, actor and origin document)."""
+
+    key: str
+    attribute: str
+    origin_type: str
+    actor: str
+    origin: dict[str, Any]
+
 
 @dataclass(frozen=True, slots=True)
 class RecordRow:
@@ -683,6 +719,54 @@ class MaterializedRepository:
             },
         )
         return [str(key) for key in result.scalars()]
+
+    async def attribute_origins_except(
+        self, kind_id: str, *, origin_type: str, origin_field: str, origin_value: str
+    ) -> list[AttributeOrigin]:
+        """Who set each value of a Kind's Records whose Lineage names a provenance entry other
+        than one of `origin_type` with `origin_ref[origin_field] == origin_value` (for example
+        the values a Source did not write: `source_sync`, `source_id`)."""
+        records = (await self.layout()).records_from("r")
+        result = await self._session.execute(
+            text(_ORIGINS_EXCEPT.format(records=records)),
+            {
+                "domain": self._domain,
+                "branch": self._branch,
+                "kind": kind_id,
+                "origin_type": origin_type,
+                "field": origin_field,
+                "value": origin_value,
+            },
+        )
+        return [
+            AttributeOrigin(
+                key=str(key),
+                attribute=str(attribute),
+                origin_type=str(found_type),
+                actor=str(actor),
+                origin=dict(origin or {}),
+            )
+            for key, attribute, found_type, actor, origin in result
+        ]
+
+    async def link_pairs_with_origin(
+        self, relation_id: str, *, origin_type: str, origin_field: str, origin_value: str
+    ) -> list[tuple[str, str]]:
+        """`(from, to)` keys of a Relation's Links whose Lineage names a provenance entry of
+        `origin_type` with `origin_ref[origin_field] == origin_value`."""
+        links = (await self.layout()).links_from("k")
+        result = await self._session.execute(
+            text(_LINKS_WITH_ORIGIN.format(links=links)),
+            {
+                "domain": self._domain,
+                "branch": self._branch,
+                "relation": relation_id,
+                "origin_type": origin_type,
+                "field": origin_field,
+                "value": origin_value,
+            },
+        )
+        return [(str(start), str(end)) for start, end in result]
 
     async def record_counts(self) -> dict[str, int]:
         """Number of Records per Kind id."""
