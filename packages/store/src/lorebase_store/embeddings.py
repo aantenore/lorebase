@@ -417,6 +417,77 @@ async def prune_models(session: AsyncSession, domain_id: str, *, keep: str) -> i
     return int(getattr(result, "rowcount", 0) or 0)
 
 
+# Similar vectors --------------------------------------------------------------------------------
+
+_SIMILAR = sql_text(
+    """
+    SELECT a.key AS key, n.key AS other, 1 - n.distance AS score
+    FROM mat_records a
+    JOIN embeddings ea ON ea.domain_id = a.domain_id AND ea.object_hash = a.object_hash
+                      AND ea.model = :model AND ea.fingerprint = :fingerprint AND ea.dims = :dims
+    CROSS JOIN LATERAL (
+      SELECT b.key, eb.embedding <=> ea.embedding AS distance
+      FROM mat_records b
+      JOIN embeddings eb ON eb.domain_id = b.domain_id AND eb.object_hash = b.object_hash
+                        AND eb.model = :model AND eb.fingerprint = :fingerprint
+                        AND eb.dims = :dims
+      WHERE b.domain_id = :domain AND b.branch = :branch AND b.kind_id = :kind
+        AND b.deleted IS FALSE AND b.key <> a.key
+      ORDER BY distance, b.key
+      LIMIT :neighbours
+    ) n
+    WHERE a.domain_id = :domain AND a.branch = :branch AND a.kind_id = :kind
+      AND a.deleted IS FALSE AND a.key = ANY(:keys) AND 1 - n.distance >= :threshold
+    ORDER BY score DESC, a.key, n.key
+    """
+).bindparams(bindparam("keys", type_=ARRAY(Text())))
+
+
+@dataclass(frozen=True, slots=True)
+class SimilarPair:
+    key: str
+    other: str
+    score: float
+
+
+async def similar_vectors(
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    kind_id: str,
+    keys: Sequence[str],
+    *,
+    model: str,
+    fingerprint: str,
+    dims: int,
+    threshold: float,
+    neighbours: int,
+) -> list[SimilarPair]:
+    """For each of `keys` (live rows of `kind_id` on `branch`), its `neighbours` nearest Records
+    of the same Kind by the cosine similarity of the vectors stored for `model` under the
+    template `fingerprint`, kept when at least `threshold`; best first. Reads stored vectors
+    only: no model is called. Records without a vector have no neighbour."""
+    if not keys or neighbours < 1:
+        return []
+    rows = (
+        await session.execute(
+            _SIMILAR,
+            {
+                "domain": domain_id,
+                "branch": branch,
+                "kind": kind_id,
+                "keys": list(keys),
+                "model": model,
+                "fingerprint": fingerprint,
+                "dims": dims,
+                "threshold": threshold,
+                "neighbours": neighbours,
+            },
+        )
+    ).all()
+    return [SimilarPair(str(r.key), str(r.other), float(r.score)) for r in rows]
+
+
 # Index precision --------------------------------------------------------------------------------
 
 _INDEX_NAMES = sql_text(

@@ -12,8 +12,9 @@ A pass has two phases, each resumable:
    (`store.materialize.read_batch_rows`): values in `mat_history` that replaced a value of
    another source identity (stages b and c over both claims); current values older than
    `stale.max_age` or whose period ended (`stale`); duplicates (equal folded unique or title
-   values once per Kind, similar titles per Record, at most `duplicates.max_pairs_per_kind`
-   pairs per Kind and job).
+   values once per Kind, similar titles per Record and, with the semantic stage, stored Record
+   vectors at least `semantic.duplicate_threshold` similar; at most
+   `duplicates.max_pairs_per_kind` pairs per Kind and job).
 
 Work is counted in candidates examined, Records read, history changes read and title
 statements run; past `sweep_max_changes_per_job` the job stops after the current page and
@@ -50,6 +51,7 @@ from lorebase_scribe.reconcile.detector import (
     effective_options,
 )
 from lorebase_scribe.reconcile.duplicates import normalized_pairs, trigram_pairs
+from lorebase_scribe.reconcile.semantic import EmbeddingSemanticStage
 from lorebase_scribe.telemetry import OPEN_CANDIDATES, RECONCILIATION_SWEEP_DURATION, tracer
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models.enums import ItemDecision, ProposalStatus
@@ -137,12 +139,14 @@ class ReconcileSweep:
         *,
         principal: str,
         clock: Callable[[], datetime],
+        semantic: EmbeddingSemanticStage | None = None,
     ) -> None:
         self._sessions = sessions
         self._runtime = runtime
         self._options = options
         self._principal = principal
         self._clock = clock
+        self._semantic = semantic
 
     async def run(
         self, domain_id: str, *, branch: str | None = None, resume: Sequence[str] | None = None
@@ -164,7 +168,9 @@ class ReconcileSweep:
         if not options.enabled:
             report.skipped = "disabled"
             return report
-        detector = Detector(options, principal=self._principal, clock=self._clock)
+        detector = Detector(
+            options, principal=self._principal, clock=self._clock, semantic=self._semantic
+        )
         schema = load_compiled(compiled.compiled)
         with tracer.start_as_current_span(
             "scribe.reconcile_sweep",
@@ -358,6 +364,24 @@ class ReconcileSweep:
                         raised.extend(similar)
                         pairs_left -= len(similar)
                         work += statements
+                    if (
+                        self._semantic is not None
+                        and detector.runs(Stage.SEMANTIC)
+                        and pairs_left > 0
+                    ):
+                        close = await self._semantic.duplicates(
+                            session,
+                            kind,
+                            [r.key for r in page],
+                            domain_id=report.domain,
+                            read_branch=report.branch,
+                            branch=report.branch,
+                            threshold=detector.options.semantic.duplicate_threshold,
+                            limit=pairs_left,
+                        )
+                        raised.extend(close)
+                        pairs_left -= len(close)
+                        work += 1
                     report.counts.merge(await detector.store(session, report.domain, raised))
                     report.work += work + len(page)
                 after = page[-1].key

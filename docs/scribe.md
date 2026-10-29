@@ -386,14 +386,19 @@ produce, records the counts in the run and writes nothing else.
 
 Scribe detects contradictions between Sources ([design 10.6](design.md#106-reconciliation-of-source-contradictions))
 and stores them as reconciliation candidates for review; it never changes a value because of
-one. Settings are `scribe.reconciliation` ([configuration](reference/configuration.md)); a
-Domain overrides any member in its `reconciliation` setting (an invalid one is logged and
-ignored).
+one. Settings are `scribe.reconciliation` ([configuration](reference/configuration.md)). A
+Domain overrides some of them in its `reconciliation` setting: `enabled`, `triggers`,
+`hold_auto_accept`, `stale.max_age`, `normalize.numeric_tolerance` and `negation_words`,
+`duplicates.trigram_threshold`, `stages` (to leave stages out, never to add one) and, when the
+operator turned the semantic stage on, the members of `semantic`. Files and work limits
+(`normalize.units_file`, `sweep_*`, `max_claims_per_candidate`, `duplicates.max_pairs_per_kind`)
+are the operator's only; a member that is not allowed or not valid is logged and ignored, the
+rest of the setting still applies.
 
 - **Extraction.** Value items whose value differs from the target's are compared with the
   claim of the current value (its provenance) while the items are assembled. With
-  `hold_auto_accept` an item that raises a `contradiction` stays pending whatever its
-  confidence (`held_by_reconciliation` in the job stats). Mentions left ambiguous between two
+  `hold_auto_accept` an item that raises a candidate (`contradiction` or `superseded`) stays
+  pending whatever its confidence (`held_by_reconciliation` in the job stats). Mentions left ambiguous between two
   Records raise a `duplicate`. Tier 2 asks for an optional period (`valid`) per value of a
   `valid_time` Attribute, kept only when its dates are written in the value's quote.
 - **Source syncs.** After the commit, each value the run wrote is compared with the target's:
@@ -406,14 +411,31 @@ ignored).
   under the current options, stale value replaced); then walks the Records of each Kind for
   values in the branch history that replaced a value of another source identity, values older
   than `stale.max_age` or whose period ended, and duplicates (equal folded unique or title
-  values, similar titles). It stops after `sweep_max_changes_per_job` units of work and queues
+  values, similar titles, and stored Record vectors with the semantic stage). It stops after `sweep_max_changes_per_job` units of work and queues
   its continuation.
 
 Values of derived and vault Attributes are not compared, and claims whose source identity
 cannot be told (a merge resolution, a schema migration) are left out. The values written by a
 plain commit count as their import batch's (`import:{ref}`) or their author's
-(`principal:{id}`). The semantic stage is not implemented yet: `semantic.enabled` has no
-effect.
+(`principal:{id}`).
+
+**Semantic stage** (optional, off). It runs when `semantic.enabled` is set, `semantic` is in
+`stages` and an embedding model is configured (`inference.embeddings`); otherwise it is off,
+logged once. It only adds signals and filters, and never decides a candidate:
+
+- competing values of `text` Attributes are embedded; the least similarity of two of them is
+  the `similarity` signal; at `semantic.equivalent_similarity` (0.9) or more the candidate is
+  marked `equivalent` (near-paraphrases, ranked last); at `semantic.equivalence_threshold` or
+  more (null by default: always raised) it is not raised and counted `filtered`;
+- the sweep pairs Records of Kinds with an `embedding_template` whose stored vectors (from the
+  `embeddings` job) are at least `semantic.duplicate_threshold` similar, without any model
+  call: a `duplicate` with the `semantic` signal, counted in `duplicates.max_pairs_per_kind`;
+- with `semantic.judge` the chat model of task `reconciliation` is asked whether the two least
+  similar values contradict: a `judge` signal (`label`, `score`, `model`). Answers go through
+  the extraction cache (`scribe.extraction.cache`) and a job stops asking past
+  `scribe.extraction.max_tokens_per_job` tokens.
+
+A model that fails or is missing gives no signal; detection goes on.
 
 **Validity periods.** A Source mapping may give a `valid_time` Attribute the period of its
 value, from a column or an expression for either end; dates are their first instant in UTC:

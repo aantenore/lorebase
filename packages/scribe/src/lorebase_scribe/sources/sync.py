@@ -53,7 +53,7 @@ from lorebase_core.model.source import SyncMode
 from lorebase_core.reconcile import ReconcileOptions
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types.encoding import format_timestamp
-from lorebase_scribe.reconcile.detector import Detector, Raised, effective_options
+from lorebase_scribe.reconcile.detector import Detector, Raised, SemanticStage, effective_options
 from lorebase_scribe.reconcile.sources import sync_disagreements
 from lorebase_scribe.settings import SourceSettings
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
@@ -312,9 +312,11 @@ class SourceSync:
         connectors: ConnectorFactory = default_connector,
         clock: Clock = utc_now,
         reconciliation: ReconcileOptions | None = None,
+        semantic: SemanticStage | None = None,
     ) -> None:
         self._sessions = sessions
         self._reconciliation = reconciliation
+        self._semantic = semantic
         self._runtime = runtime
         self._settings = settings
         self._principal = principal
@@ -649,7 +651,9 @@ class SourceSync:
         options = effective_options(self._reconciliation, domain.settings)
         if not options.enabled or not options.triggers.source_sync:
             return None
-        return Detector(options, principal=self._principal, clock=self._clock)
+        return Detector(
+            options, principal=self._principal, clock=self._clock, semantic=self._semantic
+        )
 
     async def _reconcile(
         self,

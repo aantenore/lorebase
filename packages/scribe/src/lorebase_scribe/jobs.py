@@ -64,12 +64,18 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+import lorebase_inference
 from lorebase_inference import InferenceSettings
 from lorebase_scribe.checkpoints import CheckpointSink, build_sink, publish_checkpoints
 from lorebase_scribe.embeddings import PERMANENT_ERRORS as EMBEDDING_ERRORS
 from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass, Templates
 from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
-from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
+from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun, StoreCache
+from lorebase_scribe.reconcile.semantic import (
+    JUDGE_TASK,
+    EmbeddingSemanticStage,
+    build_semantic_stage,
+)
 from lorebase_scribe.reconcile.sweep import ReconcileSweep, SweepError
 from lorebase_scribe.settings import ScribeSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
@@ -177,6 +183,24 @@ class JobContext:
             templates=self.embedding_templates,
         )
 
+    def semantic_stage(self) -> EmbeddingSemanticStage | None:
+        """The semantic reconciliation stage of one job (design 10.6, stage d): None unless
+        `scribe.reconciliation.semantic.enabled` and an embedding model is configured. The
+        judge uses the chat model of task `reconciliation`, the extraction cache and the job
+        token budget of `scribe.extraction`."""
+        inference = self.inference
+        extraction = self.settings.extraction
+        llm = inference.llm.for_task(JUDGE_TASK)
+        return build_semantic_stage(
+            self.settings.reconciliation,
+            self.embedding_models,
+            chat=lambda: lorebase_inference.create_chat_model(inference, task=JUDGE_TASK),
+            chat_model=f"{llm.provider}:{llm.model}",
+            cache=StoreCache(self.sessions) if extraction.cache else None,
+            prompt_version=extraction.prompt_version,
+            max_tokens=extraction.max_tokens_per_job,
+        )
+
 
 def _domain(job: JobRow) -> str:
     if job.domain_id is None:
@@ -199,6 +223,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             connectors=context.connectors,
             clock=context.clock,
             reconciliation=context.settings.reconciliation,
+            semantic=context.semantic_stage(),
         )
         report = await sync.run(
             _domain(job), reference, dry_run=bool(job.payload.get("dry_run", False))
@@ -282,6 +307,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             models=context.extraction_models,
             clock=context.clock,
             reconciliation=context.settings.reconciliation,
+            semantic=context.semantic_stage(),
         )
         requested_by = job.payload.get("requested_by")
         report = await run.run(
@@ -415,6 +441,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             context.settings.reconciliation,
             principal=context.settings.worker.principal,
             clock=context.clock,
+            semantic=context.semantic_stage(),
         )
         try:
             report = await sweep.run(domain, branch=branch, resume=resume)

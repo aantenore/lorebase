@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from lorebase_core.model import (
     IdPrefix,
     ImportOrigin,
+    KindSearch,
     OperationOrigin,
     PeriodMapping,
     ProvenanceEntry,
@@ -28,13 +30,17 @@ from lorebase_core.revision import Author, Origin
 from lorebase_core.types.encoding import format_timestamp
 from lorebase_core.validate import RecordDelete, RecordUpsert
 from lorebase_inference import ChatResult, InferenceSettings, Usage
+from lorebase_inference.fake import embed_text
+from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass
 from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
 from lorebase_scribe.extraction.settings import ExtractionSettings
 from lorebase_scribe.jobs import JobContext, build_handlers
+from lorebase_scribe.reconcile.semantic import build_semantic_stage
 from lorebase_scribe.reconcile.sweep import ReconcileSweep
 from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import (
     CsvSourceSettings,
+    EmbeddingJobSettings,
     SchedulerSettings,
     ScribeSettings,
     SourceSettings,
@@ -429,3 +435,60 @@ async def test_sweep_job_continues_and_is_scheduled(
         sessions, "SELECT type, domain_id, payload FROM jobs WHERE id = :id", id=first[0]
     )
     assert [tuple(r) for r in queued] == [(RECONCILE_SWEEP_JOB, DOMAIN, {})]
+
+
+class _FoldedModel:
+    """The fake embedding model over case- and space-folded texts."""
+
+    name = "fake:folded"
+
+    def __init__(self, dims: int) -> None:
+        self.dims = dims
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return [embed_text(" ".join(t.split()).casefold(), self.dims) for t in texts]
+
+
+async def test_sweep_raises_duplicates_from_stored_vectors(
+    engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime, clock: Clock
+) -> None:
+    schema = supply_schema()
+    kind = schema.kind_by_api_name("Supplier")
+    assert kind is not None
+    kind = kind.model_copy(update={"search": KindSearch(embedding_template="{legal_name}")})
+    schema = schema.model_copy(update={"kinds": {**schema.kinds, kind.id: kind}})
+    await load_domain(sessions, runtime, clock, schema, kinds={"Supplier": "supplier.csv"})
+    original = _supplier(schema, "S-1003")
+    legal = kind.attribute_by_api_name("legal_name")
+    vat = kind.attribute_by_api_name("vat_number")
+    assert legal is not None
+    assert vat is not None
+    values = {k: v for k, v in original.values.items() if k != vat.id}
+    name = str(original.values[legal.id])
+    copy = Record(
+        kind=kind.id,
+        key="S-1999",
+        values={**values, kind.primary_key[0]: "S-1999", legal.id: f"  {name.upper()} "},
+    )
+    await _write(sessions, runtime, clock, RecordUpsert(record=copy), _operation())
+    dims = runtime.settings.embeddings.dims
+    model = _FoldedModel(dims)
+    models = EmbeddingModels(InferenceSettings(), dims=dims, factory=lambda: model)
+    embedded = await EmbeddingPass(
+        engine, sessions, models, EmbeddingJobSettings(), dims=dims, clock=clock
+    ).run(DOMAIN)
+    assert embedded.complete
+
+    # Identity left out: only the stored vectors can pair the two Records.
+    options = ReconcileOptions(
+        stages=["values", "normalize", "semantic"], semantic={"enabled": True}
+    )
+    stage = build_semantic_stage(options, models)
+    sweep = ReconcileSweep(
+        sessions, runtime, options, principal="svc_scribe", clock=clock, semantic=stage
+    )
+    report = await sweep.run(DOMAIN)
+    assert report.complete
+    duplicates = [c for c in await _candidates(sessions) if c.type == "duplicate"]
+    assert [c.keys for c in duplicates] == [["S-1003", "S-1999"]]
+    assert duplicates[0].signals["semantic"]["similarity"] == pytest.approx(1.0)

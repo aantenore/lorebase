@@ -108,6 +108,13 @@ class SemanticOptions(_Options):
         description="Similarity above which near-paraphrases are not raised; null raises them "
         "all, marked equivalent and ranked last.",
     )
+    equivalent_similarity: float = Field(
+        default=0.9,
+        gt=0,
+        le=1,
+        description="Least similarity of competing text values marked equivalent (near-"
+        "paraphrases, ranked last); they are still raised unless above equivalence_threshold.",
+    )
     duplicate_threshold: float = Field(
         default=0.92,
         gt=0,

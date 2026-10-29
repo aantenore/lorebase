@@ -1791,6 +1791,7 @@ Embeddings of competing text values (needs inference.embeddings)
 |---------|---------|-------------|
 | `scribe.reconciliation.semantic.enabled` | `false` | true also needs the stage in `stages` |
 | `scribe.reconciliation.semantic.equivalence_threshold` | `null` | similarity above which paraphrases are not raised; null: all |
+| `scribe.reconciliation.semantic.equivalent_similarity` | `0.9` | least similarity of text values marked equivalent (ranked last) |
 | `scribe.reconciliation.semantic.duplicate_threshold` | `0.92` | least similarity of stored Record vectors for a duplicate |
 | `scribe.reconciliation.semantic.judge` | `false` | ask the chat model whether two texts contradict |
 

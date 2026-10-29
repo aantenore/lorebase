@@ -87,7 +87,7 @@ from lorebase_scribe.extraction.text import (
 )
 from lorebase_scribe.extraction.tier2 import run_tier2
 from lorebase_scribe.extraction.values import heading_title, sentence_values
-from lorebase_scribe.reconcile.detector import Detector, effective_options
+from lorebase_scribe.reconcile.detector import Detector, SemanticStage, effective_options
 from lorebase_scribe.reconcile.extraction import ExtractionCheck
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
 from lorebase_scribe.telemetry import EVIDENCE_WITHHELD, EXTRACTION_ITEMS
@@ -371,9 +371,11 @@ class ExtractionRun:
         blobs: BlobStore | None = None,
         clock: Clock = utc_now,
         reconciliation: ReconcileOptions | None = None,
+        semantic: SemanticStage | None = None,
     ) -> None:
         self._sessions = sessions
         self._reconciliation = reconciliation
+        self._semantic = semantic
         self._runtime = runtime
         self._settings = settings
         self._inference = inference
@@ -584,7 +586,9 @@ class ExtractionRun:
         options = effective_options(self._reconciliation, domain.settings)
         if not options.enabled or not options.triggers.extraction:
             return None
-        detector = Detector(options, principal=self._principal, clock=self._clock)
+        detector = Detector(
+            options, principal=self._principal, clock=self._clock, semantic=self._semantic
+        )
         writes = self._runtime.settings.writes
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain.id)
