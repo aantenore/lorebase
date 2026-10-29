@@ -65,8 +65,11 @@ from lorebase_store.repositories.reconciliation_candidates import (
     CandidateFilter,
     CandidateRow,
     CandidateStateError,
+    ProposalChecks,
     ReconciliationCandidateRepository,
     UpsertOutcome,
+    wrap_claim,
+    wrap_decision,
 )
 from lorebase_store.repositories.refs import (
     LockTimeoutError,
@@ -131,6 +134,7 @@ __all__ = [
     "OutboxRepository",
     "PartitionFilter",
     "PgRevisionGraph",
+    "ProposalChecks",
     "ProposalFilter",
     "ProposalItemRepository",
     "ProposalRepository",
@@ -161,4 +165,6 @@ __all__ = [
     "advisory_lock_key",
     "copy_fence",
     "scope_to_domain",
+    "wrap_claim",
+    "wrap_decision",
 ]

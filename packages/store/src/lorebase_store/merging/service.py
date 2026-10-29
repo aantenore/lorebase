@@ -14,12 +14,20 @@ target branch, compare-and-swap of the ref, audit entry and outbox events (`revi
 and the Operation events deferred on the source branch, `repositories.deferred_events`). A
 fast-forward moves the ref to the source head and materializes the difference; an up-to-date
 merge writes no Revision. Everything runs in the caller's transaction.
+
+Every attempt also records the `reconciliation` check (design 10.3, 10.6): the open
+reconciliation candidates of the Proposal (`ReconciliationCandidateRepository.proposal_checks`).
+Its mode is the Domain setting `reconciliation_check`, else the request's (the caller's
+installation default), else `warn`: `off` records nothing, `warn` lists the candidates, `block`
+keeps a Proposal whose changes have open `contradiction` candidates from merging. A blocked
+merge stores the attempt without committing (`AttemptResult.reconciliation_blocked`), automatic
+Source merges included.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -45,6 +53,7 @@ from lorebase_core.model import (
     new_id,
     new_ulid,
 )
+from lorebase_core.reconcile import CandidateType
 from lorebase_core.revision import Author, ChangesetEntry, Origin, Revision
 from lorebase_core.tree import PARTITION_SCHEMA, Tree, TreeParams
 from lorebase_store.commit.errors import (
@@ -91,6 +100,9 @@ from lorebase_store.repositories.merges import (
 )
 from lorebase_store.repositories.proposals import ProposalRepository, ProposalRow
 from lorebase_store.repositories.provenance import ProvenanceRow
+from lorebase_store.repositories.reconciliation_candidates import (
+    ReconciliationCandidateRepository,
+)
 from lorebase_store.repositories.refs import (
     LockTimeoutError,
     RefMovedError,
@@ -113,6 +125,23 @@ REJECTED_DETAIL = (
 )
 
 Clock = Callable[[], datetime]
+
+RECONCILIATION_CHECK_SETTING = "reconciliation_check"
+"""Domain setting choosing the mode of the `reconciliation` check: off, warn or block."""
+RECONCILIATION_CHECK_MODES = ("off", "warn", "block")
+DEFAULT_RECONCILIATION_CHECK = "warn"
+_BLOCKING_TYPES = (CandidateType.CONTRADICTION,)
+
+
+def reconciliation_check_mode(
+    domain_settings: Mapping[str, Any] | None, default: str | None
+) -> str:
+    """The mode of the `reconciliation` check (module doc)."""
+    configured = (domain_settings or {}).get(RECONCILIATION_CHECK_SETTING)
+    for mode in (configured, default):
+        if mode in RECONCILIATION_CHECK_MODES:
+            return str(mode)
+    return DEFAULT_RECONCILIATION_CHECK
 
 
 class ProposalBranchMissingError(BranchNotFoundError):
@@ -140,6 +169,8 @@ class MergeRequest:
     #: vault Attributes). Without it merges that remove sensitivity tags are refused
     #: (`SensitivityLoweredError`).
     schema_guard: Callable[[Schema, Schema], Awaitable[None]] | None = None
+    #: Mode of the `reconciliation` check when the Domain sets none (module doc).
+    reconciliation_check: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +189,8 @@ class AttemptResult:
     source_deleted: bool = False
     events: tuple[int, ...] = ()
     """Outbox ids of the deferred Operation events this merge wrote (`release`)."""
+    reconciliation_blocked: bool = False
+    """The merge was clean but held back by open contradiction candidates (module doc)."""
 
     @property
     def merged(self) -> bool:
@@ -249,13 +282,46 @@ class MergeService:
             raise BranchLockTimeoutError(str(error)) from error
         target = await _branch(refs, request.proposal.target_ref, "target")
         source = await _branch(refs, request.proposal.source_ref, "source")
-        result = await self._run(request, target, source, commit=True)
+        blocked = await self._reconciliation_blocks(request)
+        result = await self._run(request, target, source, commit=not blocked)
+        if blocked:
+            result = replace(result, reconciliation_blocked=True)
         attempt = result.attempt
         clean = attempt.status is not MergeAttemptStatus.CONFLICTED
         MERGE_ATTEMPTS.add(
             1, {"result": attempt.result if clean and attempt.result else CONFLICTS_RESULT}
         )
         return result
+
+    async def _check_mode(self, request: MergeRequest) -> str:
+        domain = await DomainRepository(self._session).require(self._domain)
+        return reconciliation_check_mode(domain.settings, request.reconciliation_check)
+
+    async def _reconciliation_blocks(self, request: MergeRequest) -> bool:
+        if await self._check_mode(request) != "block":
+            return False
+        found = await ReconciliationCandidateRepository(
+            self._session, self._domain
+        ).proposal_checks(
+            request.proposal.id, request.proposal.source_ref, types=_BLOCKING_TYPES, limit=1
+        )
+        return found.open > 0
+
+    async def _reconciliation_check(self, request: MergeRequest) -> dict[str, Any] | None:
+        mode = await self._check_mode(request)
+        if mode == "off":
+            return None
+        found = await ReconciliationCandidateRepository(
+            self._session, self._domain
+        ).proposal_checks(request.proposal.id, request.proposal.source_ref)
+        blocking = sum(found.counts.get(t.value, 0) for t in _BLOCKING_TYPES)
+        return {
+            "mode": mode,
+            "open": found.open,
+            "counts": found.counts,
+            "candidates": found.ids,
+            "blocking": blocking if mode == "block" else 0,
+        }
 
     async def abandon(self, proposal_id: str) -> int:
         """Mark the open attempts of a closed Proposal `abandoned`."""
@@ -379,7 +445,14 @@ class MergeService:
             attempt_id, [_conflict_row(state, by_fingerprint) for state in computation.conflicts]
         )
         await attempts.prune(request.proposal.id, keep=self._retention)
-        changes: dict[str, Any] = {"checks": _checks(request.proposal, attempt, computation)}
+        changes: dict[str, Any] = {
+            "checks": _checks(
+                request.proposal,
+                attempt,
+                computation,
+                await self._reconciliation_check(request),
+            )
+        }
         if head is not None:
             changes.update(status=ProposalStatus.MERGED, merged_revision=head)
         await ProposalRepository(session, domain_id).update(
@@ -635,10 +708,18 @@ def _conflict_row(state: ConflictState, stored: Mapping[str, ResolutionRow]) -> 
 
 
 def _checks(
-    proposal: ProposalRow, attempt: MergeAttemptRow, computation: AttemptComputation
+    proposal: ProposalRow,
+    attempt: MergeAttemptRow,
+    computation: AttemptComputation,
+    reconciliation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Proposal checks with the merge preview of the latest attempt (design 10.3)."""
+    """Proposal checks with the merge preview of the latest attempt and the open
+    reconciliation candidates (design 10.3)."""
     checks = dict(proposal.checks or {})
+    if reconciliation is None:
+        checks.pop("reconciliation", None)
+    else:
+        checks["reconciliation"] = reconciliation
     checks["merge"] = {
         "attempt": attempt.id,
         "result": attempt.result,

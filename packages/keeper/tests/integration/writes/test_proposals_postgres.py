@@ -212,6 +212,7 @@ async def test_merge_with_conflicts_end_to_end(
             "name": "merge",
             "status": "failed",
             "message": right["checks"][0]["message"],
+            "candidates": None,
         }
         base = f"{PROPOSALS}/{right['id']}"
         self_approval = await http.post(

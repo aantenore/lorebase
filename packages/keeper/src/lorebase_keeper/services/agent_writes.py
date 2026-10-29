@@ -636,6 +636,7 @@ async def _upsert_proposal(
                 principal,
                 keeper.proposals,
                 idempotency_key=None,
+                reconciliation_check=keeper.reconciliation.merge_check,
             )
         except ProblemError as error:
             if error.problem is not ALREADY_EXISTS:
@@ -871,6 +872,7 @@ async def _settle(
             principal,
             keeper.proposals,
             proposals.ConflictQuery(limit=1),
+            reconciliation_check=keeper.reconciliation.merge_check,
         )
         attempt = _attempt_summary(conflicts)
         blockers = merge_blockers(view.approval, policy_review=policy_review)
@@ -969,9 +971,10 @@ async def _merge(
             idempotency_key=None,
             message=f"Merge {row.source_ref} (automatic)",
             page_limit=1,
+            reconciliation_check=keeper.reconciliation.merge_check,
         )
     except ProblemError as error:
-        if error.problem is proposals.APPROVALS_REQUIRED:
+        if error.problem in (proposals.APPROVALS_REQUIRED, proposals.RECONCILIATION_OPEN):
             return None
         raise
     return outcome

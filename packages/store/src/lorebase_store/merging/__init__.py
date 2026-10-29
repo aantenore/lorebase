@@ -14,15 +14,20 @@ from lorebase_store.merging.lineage import BranchLineage
 from lorebase_store.merging.service import (
     MERGE_ORIGIN,
     MERGE_REASON,
+    RECONCILIATION_CHECK_MODES,
+    RECONCILIATION_CHECK_SETTING,
     AttemptResult,
     MergeRequest,
     MergeService,
     ProposalBranchMissingError,
+    reconciliation_check_mode,
 )
 
 __all__ = [
     "MERGE_ORIGIN",
     "MERGE_REASON",
+    "RECONCILIATION_CHECK_MODES",
+    "RECONCILIATION_CHECK_SETTING",
     "AttemptComputation",
     "AttemptResult",
     "BranchLineage",
@@ -35,5 +40,6 @@ __all__ = [
     "complete_provenance",
     "compute_attempt",
     "decisions_of",
+    "reconciliation_check_mode",
     "taken_provenance",
 ]
