@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 import lorebase_inference
 from lorebase_core.expr.sensitivity import Tags
 from lorebase_core.model import Schema, new_ulid
+from lorebase_core.reconcile import ReconcileOptions
 from lorebase_inference import (
     InferenceError,
     InferenceSettings,
@@ -86,6 +87,8 @@ from lorebase_scribe.extraction.text import (
 )
 from lorebase_scribe.extraction.tier2 import run_tier2
 from lorebase_scribe.extraction.values import heading_title, sentence_values
+from lorebase_scribe.reconcile.detector import Detector, effective_options
+from lorebase_scribe.reconcile.extraction import ExtractionCheck
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
 from lorebase_scribe.telemetry import EVIDENCE_WITHHELD, EXTRACTION_ITEMS
 from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, BlobStore, PostgresBlobStore
@@ -367,8 +370,10 @@ class ExtractionRun:
         models: Callable[[Sequence[int]], ExtractionModels] | None = None,
         blobs: BlobStore | None = None,
         clock: Clock = utc_now,
+        reconciliation: ReconcileOptions | None = None,
     ) -> None:
         self._sessions = sessions
+        self._reconciliation = reconciliation
         self._runtime = runtime
         self._settings = settings
         self._inference = inference
@@ -542,6 +547,7 @@ class ExtractionRun:
         current = await self._current(domain.id, report.target, found)
         if discovery is not None:
             await self._suggest(discovery, current, report)
+        check = await self._check(domain, schema, report.target, found)
         assembled = assemble_items(
             ontology,
             found.mentions,
@@ -552,6 +558,7 @@ class ExtractionRun:
             principal=self._principal,
             now=self._clock(),
             settings=self._settings,
+            hold=check.contests if check is not None and check.holds else None,
         )
         for name, count in assembled.stats.items():
             report.count(name, count)
@@ -561,8 +568,48 @@ class ExtractionRun:
             tier = "none" if item.tier is None else str(item.tier)
             EXTRACTION_ITEMS.add(1, {"tier": tier, "decision": item.decision.value})
         if not items:
+            if check is not None:
+                async with self._sessions() as session, session.begin():
+                    await scope_to_domain(session, domain.id)
+                    await self._reconcile(session, check, [], None, found, report)
             return
-        await self._propose(domain, schema, documents, items, report)
+        await self._propose(domain, schema, documents, items, report, check, found)
+
+    async def _check(
+        self, domain: Any, schema: Schema, branch: str, found: _Found
+    ) -> ExtractionCheck | None:
+        """The reconciliation check of the job's values (design 10.6), when it runs."""
+        if self._reconciliation is None:
+            return None
+        options = effective_options(self._reconciliation, domain.settings)
+        if not options.enabled or not options.triggers.extraction:
+            return None
+        detector = Detector(options, principal=self._principal, clock=self._clock)
+        writes = self._runtime.settings.writes
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, domain.id)
+            return await ExtractionCheck.gather(
+                detector,
+                MaterializedRepository(session, domain.id, branch, writes=writes),
+                schema,
+                found.values,
+                writes=writes,
+                now=self._clock(),
+            )
+
+    async def _reconcile(
+        self,
+        session: AsyncSession,
+        check: ExtractionCheck,
+        items: Sequence[ItemRow],
+        proposal_id: str | None,
+        found: _Found,
+        report: ExtractionReport,
+    ) -> None:
+        raised = check.raised(items if proposal_id else [], proposal_id or "", found.mentions)
+        outcome = await check.detector.store(session, report.domain, raised)
+        for name, count in outcome.counts.items():
+            report.count(f"reconciliation_{name}", count)
 
     async def _document(
         self,
@@ -996,6 +1043,8 @@ class ExtractionRun:
         documents: Sequence[DocumentRow],
         items: list[ItemRow],
         report: ExtractionReport,
+        check: ExtractionCheck | None = None,
+        found: _Found | None = None,
     ) -> None:
         policy = domain_merge_policy(domain)
         context = MaterializeContext(
@@ -1038,6 +1087,8 @@ class ExtractionRun:
             await ProposalRepository(session, domain.id).insert(proposal)
             repository = ProposalItemRepository(session, domain.id)
             await repository.insert(proposal.id, items)
+            if check is not None and found is not None:
+                await self._reconcile(session, check, items, proposal.id, found, report)
             outcome = await self._materialize(session, context, schema, proposal, items, report)
             stored = await repository.all(proposal.id)
             await refresh_proposal(

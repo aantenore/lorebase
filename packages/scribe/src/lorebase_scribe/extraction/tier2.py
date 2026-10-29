@@ -8,7 +8,10 @@ fragment. The model has no tools.
 
 Every fact must quote its evidence verbatim from the chunk (whitespace-insensitive); a value must
 also appear in its quote (dates and numbers compared by value, text case-insensitively). Facts
-that fail are discarded and counted. Answers are cached by model, prompt version, schema hash
+that fail are discarded and counted. A value of a `valid_time` Attribute may come with a
+validity period (`valid`: `from`, `to`, design 10.6); each date of it must appear in the
+value's quote like a date value, or the period is dropped (`ungrounded_period`) and the value
+kept without it. Answers are cached by model, prompt version, schema hash
 and chunk hash, so a re-run on unchanged input makes no call.
 
 With schema discovery (`scribe.extraction.discovery.tier2`), the answer also lists `unlisted`
@@ -28,7 +31,7 @@ from typing import Any, Protocol
 
 from lorebase_core.infer.suggestions import Observation, SuggestionType
 from lorebase_core.model import Attribute, Relation
-from lorebase_core.types import AttributeType, EncodingError, encode_value
+from lorebase_core.types import AttributeType, EncodingError, TypeSpec, encode_value
 from lorebase_inference.interfaces import ChatModel, ChatOptions, Message, Usage
 from lorebase_scribe.extraction.candidates import (
     Evidence,
@@ -180,11 +183,16 @@ def grounded(attribute: Attribute, value: Any, quote: str, raw: Any = None) -> b
 
 
 _NAIVE_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?")
+_TIMESTAMP = TypeSpec.of(AttributeType.TIMESTAMP)
 
 
 def _encode(attribute: Attribute, raw: Any) -> Any:
+    return _encode_spec(attribute.type, raw)
+
+
+def _encode_spec(spec: TypeSpec, raw: Any) -> Any:
     if (
-        attribute.type.name is AttributeType.TIMESTAMP
+        spec.name is AttributeType.TIMESTAMP
         and isinstance(raw, str)
         and _NAIVE_TIMESTAMP.fullmatch(raw.strip())
     ):
@@ -194,9 +202,36 @@ def _encode(attribute: Attribute, raw: Any) -> Any:
         time = time or "00:00:00"
         raw = f"{day}T{time}{':00' if time.count(':') == 1 else ''}Z"
     try:
-        return encode_value(attribute.type, raw)
+        return encode_value(spec, raw)
     except (EncodingError, TypeError, ValueError):
         return None
+
+
+def period(
+    attribute: Attribute, raw: Any, quote: str, result: Tier2Result
+) -> tuple[str | None, str | None]:
+    """The validity period a value item states, as canonical timestamps; each end must be
+    written in the value's `quote` (module doc). Open ends are `None`."""
+    if not attribute.valid_time or not isinstance(raw, dict):
+        return None, None
+    ends: list[str | None] = []
+    for name in ("from", "to"):
+        given = raw.get(name)
+        if given is None or (isinstance(given, str) and not given.strip()):
+            ends.append(None)
+            continue
+        stamp = _encode_spec(_TIMESTAMP, given)
+        if not isinstance(stamp, str) or not any(
+            d.value in {stamp[:10], str(given)[:10]} for d in find_dates(quote, 0, len(quote))
+        ):
+            result.discard("ungrounded_period")
+            return None, None
+        ends.append(stamp)
+    start, stop = ends
+    if start is not None and stop is not None and stop < start:
+        result.discard("invalid_period")
+        return None, None
+    return start, stop
 
 
 async def run_tier2(
@@ -467,6 +502,9 @@ async def _records(
             if not grounded(attribute, value, value_evidence.quote, item.get("value")):
                 result.discard("ungrounded_value")
                 continue
+            valid_from, valid_to = period(
+                attribute, item.get("valid"), value_evidence.quote, result
+            )
             result.values.append(
                 ValueCandidate(
                     subject=subject,
@@ -476,6 +514,8 @@ async def _records(
                     confidence=settings.confidence.tier2,
                     tier=2,
                     model=model,
+                    valid_from=valid_from,
+                    valid_to=valid_to,
                 )
             )
 

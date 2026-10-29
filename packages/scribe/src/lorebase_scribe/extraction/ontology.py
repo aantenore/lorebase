@@ -258,19 +258,36 @@ def value_schema(attribute: Attribute) -> dict[str, Any]:
     return schema
 
 
-def _record_schema(view: KindView) -> dict[str, Any]:
-    values = {
-        a.api_name: {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "value": value_schema(a),
-                "evidence": {"type": "string", "description": "Verbatim quote holding the value"},
-            },
-            "required": ["value", "evidence"],
-        }
-        for a in view.attributes
+PERIOD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "description": "When the text states since when or until when the value holds; each date "
+    "must also appear in the value's evidence",
+    "properties": {
+        "from": {"type": "string", "description": "First day the value holds, YYYY-MM-DD"},
+        "to": {"type": "string", "description": "Day the value stops holding, YYYY-MM-DD"},
+    },
+}
+"""Optional validity period of a value of a `valid_time` Attribute (design 10.6)."""
+
+
+def _value_entry(attribute: Attribute) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "value": value_schema(attribute),
+        "evidence": {"type": "string", "description": "Verbatim quote holding the value"},
     }
+    if attribute.valid_time:
+        properties["valid"] = PERIOD_SCHEMA
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": ["value", "evidence"],
+    }
+
+
+def _record_schema(view: KindView) -> dict[str, Any]:
+    values = {a.api_name: _value_entry(a) for a in view.attributes}
     return {
         "type": "object",
         "additionalProperties": False,

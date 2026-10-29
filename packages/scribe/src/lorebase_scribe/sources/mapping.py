@@ -20,6 +20,12 @@ the row (`lorebase_core.expr.rows`: columns are variables, `row` holds them all)
 and the coercion then apply to that value like to a column's. Expressions are compiled once over
 the Source's columns (`use_columns`: the header, or every key of the rows read); a column a row
 lacks is null.
+
+A `valid_time` Attribute may map the validity period of its value (`valid_from`, `valid_to`:
+a column or an expression each, design 10.6). Each end is read as a timestamp (a date is its
+first instant in UTC, an empty value an open end) and goes to `MappedRow.periods`, from where
+the delta puts it on the provenance entry of the value. Periods of Attributes without
+`valid_time` are ignored.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from lorebase_core.model import (
     Source,
     record_key,
 )
-from lorebase_core.model.source import Transform, TransformName
+from lorebase_core.model.source import PeriodMapping, Transform, TransformName
 from lorebase_core.types import AttributeType, TypeSpec, TypeSystemError, cast, encode_value
 from lorebase_core.types.encoding import format_date, format_timestamp
 
@@ -61,6 +67,7 @@ _TEXTUAL = frozenset(
     }
 )
 _STRING = TypeSpec.of(AttributeType.STRING)
+_TIMESTAMP = TypeSpec.of(AttributeType.TIMESTAMP)
 _TRUE = frozenset({"true", "t", "yes", "y", "1"})
 _FALSE = frozenset({"false", "f", "no", "n", "0"})
 _CAST_TARGETS = frozenset(
@@ -84,16 +91,22 @@ class RowError(ValueError):
         return {"row": self.locator, "column": self.column, "message": str(self)}
 
 
+Period = tuple[str | None, str | None]
+"""A validity period: canonical timestamps `(valid_from, valid_to)`, either end open."""
+
+
 @dataclass(frozen=True)
 class MappedRow:
-    """A mapped row: Record key, canonical values of the Attributes the Source owns, and the
-    `to` keys of each mapped Relation (an empty set: no Link)."""
+    """A mapped row: Record key, canonical values of the Attributes the Source owns, the
+    `to` keys of each mapped Relation (an empty set: no Link) and the validity periods of
+    values of `valid_time` Attributes (only those with an end set)."""
 
     key: str
     values: dict[str, JsonValue]
     links: dict[str, frozenset[str]] = field(default_factory=dict)
     locator: str = ""
     tombstone: bool = False
+    periods: dict[str, Period] = field(default_factory=dict)
 
 
 def text_of(value: Any) -> str:
@@ -132,6 +145,20 @@ def coerce(value: Any, spec: TypeSpec) -> JsonValue:
     if isinstance(value, float) and spec.name is AttributeType.DECIMAL:
         value = Decimal(repr(value))
     return encode_value(spec, value)
+
+
+def period_bound(value: Any) -> str | None:
+    """A canonical timestamp for one end of a period: dates are their first instant in UTC,
+    naive times are UTC, empty values are an open end."""
+    if _is_empty(value):
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        value = datetime(value.year, value.month, value.day, tzinfo=UTC)
+    elif not isinstance(value, datetime):
+        value = _cast_native(value, "timestamp")
+    stamp = coerce(value, _TIMESTAMP)
+    assert isinstance(stamp, str)
+    return stamp
 
 
 def _cast_native(value: Any, target: str) -> Any:
@@ -238,6 +265,13 @@ class _AttributeRule:
 
 
 @dataclass(frozen=True)
+class _PeriodRule:
+    attribute: Attribute
+    valid_from: PeriodMapping | None
+    valid_to: PeriodMapping | None
+
+
+@dataclass(frozen=True)
 class _LinkRule:
     relation: Relation
     columns: tuple[str, ...]
@@ -266,6 +300,13 @@ class RowMapper:
             for attribute_id, column in zip(kind.primary_key, source.key_mapping, strict=True)
         ]
         self._rules = self._attribute_rules(kind, source)
+        self._periods = [
+            _PeriodRule(rule.attribute, mapping.valid_from, mapping.valid_to)
+            for rule in self._rules
+            if rule.attribute.valid_time
+            and (mapping := source.attribute_mapping[rule.attribute.id])
+            and (mapping.valid_from is not None or mapping.valid_to is not None)
+        ]
         self._links = self._link_rules(schema, kind, source)
 
     @staticmethod
@@ -338,12 +379,22 @@ class RowMapper:
                     names.update(str(c) for c in extra)
         for link in self._links:
             names.update(link.columns)
+        for period in self._periods:
+            names.update(
+                end.column
+                for end in (period.valid_from, period.valid_to)
+                if end is not None and end.column is not None
+            )
         return frozenset(names)
 
     @property
     def has_expressions(self) -> bool:
-        """Whether an Attribute is mapped by an expression."""
-        return any(rule.expression is not None for rule in self._rules)
+        """Whether an Attribute or a period is mapped by an expression."""
+        return any(rule.expression is not None for rule in self._rules) or any(
+            end is not None and end.expression is not None
+            for period in self._periods
+            for end in (period.valid_from, period.valid_to)
+        )
 
     def use_columns(self, columns: Sequence[str]) -> None:
         """Declare the Source's columns, which expressions are compiled over. Columns of a row
@@ -378,6 +429,29 @@ class RowMapper:
         if rule.expression is None:
             return row.get(str(rule.column))
         return self._expressions.evaluate(rule.expression, row, now=datetime.now(UTC))
+
+    def _bound(self, end: PeriodMapping | None, row: Row) -> Any:
+        if end is None:
+            return None
+        if end.expression is None:
+            return row.get(str(end.column))
+        return self._expressions.evaluate(end.expression, row, now=datetime.now(UTC))
+
+    def _period(self, rule: _PeriodRule, row: Row, locator: str) -> Period | None:
+        name = rule.attribute.api_name
+        bounds: list[str | None] = []
+        for label, end in (("valid_from", rule.valid_from), ("valid_to", rule.valid_to)):
+            try:
+                bounds.append(period_bound(self._bound(end, row)))
+            except (TypeSystemError, ValueError, ArithmeticError, ExprError) as error:
+                column = None if end is None else end.column
+                raise RowError(locator, f"{name}.{label}: {error}", column=column) from None
+        start, stop = bounds
+        if start is None and stop is None:
+            return None
+        if start is not None and stop is not None and stop < start:
+            raise RowError(locator, f"{name}: valid_to precedes valid_from")
+        return start, stop
 
     def map(self, row: Row, locator: str) -> MappedRow:
         """Map one row; raises `RowError` when a value does not fit."""
@@ -419,7 +493,14 @@ class RowMapper:
             if to_key is None:
                 raise RowError(locator, f"{link.relation.api_name}: no target key")
             links[link.relation.id] = frozenset({to_key})
-        return MappedRow(key=key, values=values, links=links, locator=locator)
+        periods: dict[str, Period] = {}
+        for period in self._periods:
+            if values.get(period.attribute.id) is None:
+                continue
+            found = self._period(period, row, locator)
+            if found is not None:
+                periods[period.attribute.id] = found
+        return MappedRow(key=key, values=values, links=links, locator=locator, periods=periods)
 
     def record(self, mapped: MappedRow, current: Mapping[str, JsonValue] | None) -> Record:
         """The new Record: values of Attributes the Source does not own are kept."""

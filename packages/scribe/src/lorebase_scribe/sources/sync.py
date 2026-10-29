@@ -12,10 +12,12 @@
    changes with origin `source_sync` and one provenance entry per changed row (Source id, run
    id, row locator).
 5. Open the Source's Proposal into the target branch, or update the open one (title with the
-   run's counts, idempotent per run), then apply the merge policy: `proposal` computes the
-   merge preview only; `auto_when_clean` merges when no Conflict remains; and
-   `auto_with_authority` also resolves value Conflicts on Attributes whose `authority` is the
-   Source in the Source's favor.
+   run's counts, idempotent per run), raise the reconciliation candidates of the run's changes
+   against the target head (design 10.6, `lorebase_scribe.reconcile.sources`; linked to the
+   Proposal, so its `reconciliation` check sees them), then apply the merge policy:
+   `proposal` computes the merge preview only; `auto_when_clean` merges when no Conflict
+   remains; and `auto_with_authority` also resolves value Conflicts on Attributes whose
+   `authority` is the Source in the Source's favor.
 
 A dry run reads, maps and computes the delta against the state step 3 would produce, then
 records the counts without writing to any branch.
@@ -48,8 +50,11 @@ from lorebase_core.model import (
 )
 from lorebase_core.model.source import MergePolicy as SourcePolicy
 from lorebase_core.model.source import SyncMode
+from lorebase_core.reconcile import ReconcileOptions
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types.encoding import format_timestamp
+from lorebase_scribe.reconcile.detector import Detector, Raised, effective_options
+from lorebase_scribe.reconcile.sources import sync_disagreements
 from lorebase_scribe.settings import SourceSettings
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
 from lorebase_scribe.sources.delta import (
@@ -306,8 +311,10 @@ class SourceSync:
         principal: str,
         connectors: ConnectorFactory = default_connector,
         clock: Clock = utc_now,
+        reconciliation: ReconcileOptions | None = None,
     ) -> None:
         self._sessions = sessions
+        self._reconciliation = reconciliation
         self._runtime = runtime
         self._settings = settings
         self._principal = principal
@@ -439,7 +446,7 @@ class SourceSync:
         else:
             previous = await self._previous_watermark(domain.id, source)
             report.watermark = previous
-        await self._propose(domain, schema, source, report)
+        await self._propose(domain, schema, source, report, (mapper, delta))
 
     # Reading --------------------------------------------------------------------------------
 
@@ -612,7 +619,7 @@ class SourceSync:
         summary = f"+{counts['added']} ~{counts['changed']} -{counts['removed']}"
         for index, batch in enumerate(planned, start=1):
             changes = [change for group in batch for change in group.changes]
-            entries = {c.provenance.id: c.provenance for c in changes if c.provenance is not None}
+            entries = {e.id: e for c in changes for e in c.entries}
             part = f" (batch {index} of {len(planned)})" if len(planned) > 1 else ""
             try:
                 async with self._sessions() as session, session.begin():
@@ -620,10 +627,7 @@ class SourceSync:
                         session,
                         domain_id,
                         report.branch,
-                        [
-                            Change(c.change, None if c.provenance is None else c.provenance.id)
-                            for c in changes
-                        ],
+                        [Change(c.change, c.attribution()) for c in changes],
                         author=Author(principal=self._principal),
                         message=f"Sync {source.api_name}: {summary}{part}",
                         origin=Origin(type=SYNC_ORIGIN, ref=report.run_id),
@@ -639,8 +643,55 @@ class SourceSync:
             if not result.no_op:
                 report.revisions.append(result.revision_id.hex())
 
+    def _detector(self, domain: DomainRow) -> Detector | None:
+        if self._reconciliation is None:
+            return None
+        options = effective_options(self._reconciliation, domain.settings)
+        if not options.enabled or not options.triggers.source_sync:
+            return None
+        return Detector(options, principal=self._principal, clock=self._clock)
+
+    async def _reconcile(
+        self,
+        session: AsyncSession,
+        domain: DomainRow,
+        source: Source,
+        report: SyncReport,
+        changes: tuple[RowMapper, Delta],
+        proposal_id: str,
+    ) -> None:
+        """Raise the candidates of the run's changes (module doc, step 5)."""
+        detector = self._detector(domain)
+        mapper, delta = changes
+        if detector is None or not report.revisions:
+            return
+        raised = await sync_disagreements(
+            detector,
+            session,
+            self._runtime,
+            mapper.kind,
+            delta,
+            owned=mapper.owned_attributes,
+            domain_id=domain.id,
+            branch=report.branch,
+            target=report.target,
+            waits=source.target_branch_policy.merge_policy is SourcePolicy.PROPOSAL,
+        )
+        linked = [
+            Raised(r.draft.model_copy(update={"proposal_id": proposal_id}), r.attribute)
+            for r in raised
+        ]
+        outcome = await detector.store(session, domain.id, linked)
+        for name, count in outcome.counts.items():
+            report.counts[f"reconciliation_{name}"] = count
+
     async def _propose(
-        self, domain: DomainRow, schema: Schema, source: Source, report: SyncReport
+        self,
+        domain: DomainRow,
+        schema: Schema,
+        source: Source,
+        report: SyncReport,
+        changes: tuple[RowMapper, Delta] | None = None,
     ) -> None:
         policy = merge_policy(domain, schema, source)
         mode = source.target_branch_policy.merge_policy
@@ -695,6 +746,8 @@ class SourceSync:
                 assert updated is not None
                 proposal = updated
             report.proposal_id = proposal.id
+            if changes is not None:
+                await self._reconcile(session, domain, source, report, changes, proposal.id)
             if proposal.status is not ProposalStatus.OPEN:
                 report.proposal_status = proposal.status.value
                 return

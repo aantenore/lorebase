@@ -76,6 +76,19 @@ AUDIT_CHECKPOINTS = meter.create_counter(
     description="Audit checkpoints published by audit_checkpoint jobs, by outcome.",
 )
 
+RECONCILIATION_CANDIDATES = meter.create_counter(
+    "lorebase.scribe.reconciliation.candidates",
+    unit="{candidate}",
+    description="Reconciliation candidates the detection stages produced, by type and outcome "
+    "(raised, filtered, claim_added, obsolete).",
+)
+RECONCILIATION_SWEEP_DURATION = meter.create_histogram(
+    "lorebase.scribe.reconciliation.sweep.duration",
+    unit="s",
+    description="Duration of one reconcile_sweep job.",
+    explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_S,
+)
+
 
 class QueueDepth:
     """The latest count of waiting and running jobs per (type, status), as the scheduler
@@ -110,4 +123,37 @@ meter.create_observable_gauge(
     unit="{job}",
     description="Jobs waiting or running, by type and status: queued (claimable), retrying "
     "(waiting for run_after) or running (scheduler leader only).",
+)
+
+
+class OpenCandidates:
+    """The latest count of open reconciliation candidates per (Domain, type), as the last
+    reconcile_sweep of each Domain in this process counted them; a type that empties reports
+    0."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._counts: dict[tuple[str, str], int] = {}
+
+    def update(self, domain_id: str, counts: Mapping[str, int]) -> None:
+        with self._lock:
+            known = {k: 0 for k in self._counts if k[0] == domain_id}
+            self._counts.update(known | {(domain_id, t): n for t, n in counts.items()})
+
+    def observe(self, _options: CallbackOptions | None = None) -> Iterable[Observation]:
+        with self._lock:
+            counts = dict(self._counts)
+        return [
+            Observation(count, {"domain": domain_id, "type": kind})
+            for (domain_id, kind), count in sorted(counts.items())
+        ]
+
+
+OPEN_CANDIDATES = OpenCandidates()
+meter.create_observable_gauge(
+    "lorebase.scribe.reconciliation.open",
+    callbacks=[OPEN_CANDIDATES.observe],
+    unit="{candidate}",
+    description="Open reconciliation candidates by Domain and type, counted by each "
+    "reconcile_sweep job.",
 )

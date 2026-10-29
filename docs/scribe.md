@@ -2,8 +2,9 @@
 
 Scribe is the Lorebase worker. It runs the jobs queued in Postgres and schedules the periodic
 ones: Source synchronization, document extraction ([extraction.md](extraction.md)), webhook
-delivery, queued index builds, garbage collection and embeddings
-([below](#embeddings)). Design references:
+delivery, queued index builds, garbage collection, embeddings
+([below](#embeddings)) and the detection of contradictions between Sources
+([below](#reconciliation)). Design references:
 [5.9](design.md#59-source) (Source), [9.1](design.md#91-structured-sources) (structured
 Sources), [6.6](design.md#66-the-commit-pipeline) (commit pipeline), AC-18 (no external broker).
 
@@ -47,6 +48,7 @@ Domain-wide `data.read` grant.
 | `gc` | the scheduler, at `gc_schedule` per Domain; `python -m lorebase_store.gc --enqueue` | Garbage collection of a Domain ([operations](operations.md)) |
 | `extraction` | `{"documents": [ids], "tiers": [..] or null, "requested_by"}` | Documents into a Proposal of items ([extraction.md](extraction.md)) |
 | `embeddings` | the scheduler, every `embeddings_interval_s` per Domain; a job that used its row budget (continuation) | One embedding pass over the Domain's materialized branches ([below](#embeddings)). Payload `{"branches"?, "reindex"?, "resume"?}`; the scheduled one is `{}` |
+| `reconcile_sweep` | the scheduler, every `scribe.reconciliation.sweep_interval_s` per Domain (0, the default, disables it); a job that used its work budget (continuation) | One reconciliation pass over a branch ([below](#reconciliation)). Payload `{"branch"?, "resume"?}`; the scheduled one is `{}` (the default branch) |
 | `audit_verify` | the scheduler, every `audit_verify_interval_s` | Recomputes every audit hash chain; the result names the first broken entry, and `lorebase.audit.verifications` counts the outcome ([operations](operations.md#audit-chain-verification)) |
 
 ### Worker loop
@@ -93,6 +95,8 @@ over at its next tick (`tick_s`). The leader requeues stale jobs and queues:
   Domain's default branch;
 - an `embeddings` job per Domain every `embeddings_interval_s` (0 disables; an identical queued
   job is reused);
+- a `reconcile_sweep` job per Domain every `scribe.reconciliation.sweep_interval_s` (0, the
+  default, disables it; an identical queued job is reused);
 - an `audit_verify` job every `audit_verify_interval_s` (one day; 0 disables; an identical queued
   job is reused). The interval is kept in memory, so a process that becomes leader queues one at
   its first tick.
@@ -355,9 +359,10 @@ existing Record are kept, and Links of other Relations are left alone.
 5. It commits the delta on the Source branch in Revisions of at most `commit_batch` changes
    (the changes of one row stay together), with origin `source_sync` and one provenance entry
    per changed row: Source id, run id and row locator (`file.csv:17`, `orders:42`).
-6. It applies the merge policy of `target_branch_policy` to the Source's Proposal into the
-   target branch, opened on the first changes and updated by later runs (its title carries the
-   counts of the last run):
+6. It raises the reconciliation candidates of the run's changes against the target head
+   ([below](#reconciliation)), linked to the Proposal, then applies the merge policy of
+   `target_branch_policy` to the Source's Proposal into the target branch, opened on the first
+   changes and updated by later runs (its title carries the counts of the last run):
 
 | Policy | Effect |
 |--------|--------|
@@ -376,6 +381,53 @@ with no changes leaves an open Proposal untouched; with an automatic policy it r
 
 A dry run (`dry_run: true`) reads, maps and computes the delta against the state step 3 would
 produce, records the counts in the run and writes nothing else.
+
+## Reconciliation
+
+Scribe detects contradictions between Sources ([design 10.6](design.md#106-reconciliation-of-source-contradictions))
+and stores them as reconciliation candidates for review; it never changes a value because of
+one. Settings are `scribe.reconciliation` ([configuration](reference/configuration.md)); a
+Domain overrides any member in its `reconciliation` setting (an invalid one is logged and
+ignored).
+
+- **Extraction.** Value items whose value differs from the target's are compared with the
+  claim of the current value (its provenance) while the items are assembled. With
+  `hold_auto_accept` an item that raises a `contradiction` stays pending whatever its
+  confidence (`held_by_reconciliation` in the job stats). Mentions left ambiguous between two
+  Records raise a `duplicate`. Tier 2 asks for an optional period (`valid`) per value of a
+  `valid_time` Attribute, kept only when its dates are written in the value's quote.
+- **Source syncs.** After the commit, each value the run wrote is compared with the target's:
+  different source identities raise a `contradiction` (or `superseded`, periods apart); the
+  same Source with a newer value waiting in a `proposal` Proposal raises `stale`. Added
+  Records are checked for duplicates. The run's counts carry `reconciliation_raised` and
+  `reconciliation_claim_added`.
+- **Sweep** (`reconcile_sweep`). Marks `obsolete`, with the reason, the open candidates whose
+  disagreement left the data (Record deleted, Proposal closed or item rejected, claims equal
+  under the current options, stale value replaced); then walks the Records of each Kind for
+  values in the branch history that replaced a value of another source identity, values older
+  than `stale.max_age` or whose period ended, and duplicates (equal folded unique or title
+  values, similar titles). It stops after `sweep_max_changes_per_job` units of work and queues
+  its continuation.
+
+Values of derived and vault Attributes are not compared, and claims whose source identity
+cannot be told (a merge resolution, a schema migration) are left out. The values written by a
+plain commit count as their import batch's (`import:{ref}`) or their author's
+(`principal:{id}`). The semantic stage is not implemented yet: `semantic.enabled` has no
+effect.
+
+**Validity periods.** A Source mapping may give a `valid_time` Attribute the period of its
+value, from a column or an expression for either end; dates are their first instant in UTC:
+
+```yaml
+attribute_mapping:
+  city:
+    column: city
+    valid_from: {column: moved_on}
+    valid_to: {expression: 'row.left_on'}
+```
+
+The period goes on the provenance entry of the value (one entry per value with a period),
+never into content: a run repeating the current value with another period changes nothing.
 
 ## Embeddings
 

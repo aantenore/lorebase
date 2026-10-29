@@ -18,6 +18,8 @@ Each tick of the leader:
   with its `dry_run` mode;
 - queues an `embeddings` pass per Domain every `embeddings_interval_s` (an identical queued
   pass is reused);
+- queues a `reconcile_sweep` of each Domain's default branch every
+  `scribe.reconciliation.sweep_interval_s` when it is above 0 (reused like the embedding pass);
 - queues a `source_sync` job for each Source whose `schedule` fired, read from the schema of
   the Domain's default branch;
 - counts the claimable, retrying and running jobs for the `lorebase.jobs.queue_depth` gauge
@@ -51,10 +53,12 @@ from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import (
     EMBEDDINGS_JOB,
     GC_JOB,
+    RECONCILE_SWEEP_JOB,
     SOURCE_SYNC_JOB,
     embeddings_payload,
     enqueue_job,
     queue_depth,
+    reconcile_sweep_payload,
     requeue_stale,
     source_sync_payload,
 )
@@ -95,8 +99,10 @@ class Scheduler:
         writes: WriteSettings,
         clock: Callable[[], datetime] = utc_now,
         checkpoint_interval_s: float = 0.0,
+        reconcile_interval_s: float = 0.0,
     ) -> None:
         self._engine = engine
+        self._reconcile_interval_s = reconcile_interval_s
         self._checkpoint_interval_s = checkpoint_interval_s
         self._sessions = sessions
         self._settings = settings
@@ -228,6 +234,7 @@ class Scheduler:
     async def _domains(self, session: AsyncSession, now: datetime) -> list[int]:
         gc = parse_cron(self._settings.gc_schedule) if self._settings.gc_schedule else None
         embed = self._interval_due(EMBEDDINGS_JOB, self._settings.embeddings_interval_s, now)
+        sweep = self._interval_due(RECONCILE_SWEEP_JOB, self._reconcile_interval_s, now)
         self._gc_queued = 0
         queued: list[int] = []
         after: str | None = None
@@ -260,6 +267,16 @@ class Scheduler:
                             EMBEDDINGS_JOB,
                             domain_id=domain.id,
                             payload=embeddings_payload(),
+                            unique=True,
+                        )
+                    )
+                if sweep:
+                    queued.append(
+                        await enqueue_job(
+                            session,
+                            RECONCILE_SWEEP_JOB,
+                            domain_id=domain.id,
+                            payload=reconcile_sweep_payload(),
                             unique=True,
                         )
                     )

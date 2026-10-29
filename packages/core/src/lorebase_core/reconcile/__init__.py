@@ -2,8 +2,9 @@
 detection triggers in Scribe and the decisions in Keeper.
 
 Claims and source identities (``claims``), candidate types, statuses and fingerprints, period
-classification and claim folding (``candidates``), the normalization stage (``normalize``) and
-the options of the pipeline (``options``). Nothing here decides a candidate or changes a value.
+classification and claim folding (``candidates``), the normalization stage (``normalize``), the
+detection stages over gathered claims (``detect``) and the options of the pipeline
+(``options``). Nothing here decides a candidate or changes a value.
 """
 
 from lorebase_core.reconcile.candidates import (
@@ -28,6 +29,17 @@ from lorebase_core.reconcile.claims import (
     identity,
     source_identity,
     value_hash,
+)
+from lorebase_core.reconcile.detect import (
+    DuplicateRule,
+    Outcome,
+    StaleReason,
+    Verdict,
+    duplicate_draft,
+    pairs,
+    stale_reasons,
+    stale_verdict,
+    value_verdict,
 )
 from lorebase_core.reconcile.normalize import (
     Comparison,
@@ -63,10 +75,12 @@ __all__ = [
     "Comparison",
     "DecisionAction",
     "DuplicateOptions",
+    "DuplicateRule",
     "IdentityKind",
     "MergedClaims",
     "NormalizeOptions",
     "Normalized",
+    "Outcome",
     "ProposalItemRef",
     "Quantity",
     "ReconcileOptions",
@@ -74,20 +88,27 @@ __all__ = [
     "Signal",
     "Stage",
     "StaleOptions",
+    "StaleReason",
     "TriggerOptions",
     "UnitTable",
     "UnitTableError",
+    "Verdict",
     "candidate_fingerprint",
     "classify",
     "compare",
     "disagree",
+    "duplicate_draft",
     "fold_words",
     "identity",
     "merge_claims",
     "new_candidate_id",
     "normalize_claims",
     "numbers_equal",
+    "pairs",
     "parse_quantity",
     "source_identity",
+    "stale_reasons",
+    "stale_verdict",
     "value_hash",
+    "value_verdict",
 ]

@@ -68,6 +68,9 @@ migration 0032; payload `{}` (no Domain: queue one per branch holding such rows)
 EMBEDDINGS_JOB = "embeddings"
 """Job type of an embedding pass over a Domain's branches run by Scribe; payload from
 `embeddings_payload`."""
+RECONCILE_SWEEP_JOB = "reconcile_sweep"
+"""Job type of a reconciliation sweep of one branch of a Domain run by Scribe (design 10.6);
+payload from `reconcile_sweep_payload`."""
 
 _COLUMNS = "id, type, domain_id, payload, priority, attempts, run_after, locked_by, created_at"
 
@@ -220,6 +223,21 @@ def embeddings_payload(
         payload["branches"] = sorted(set(branches))
     if reindex:
         payload["reindex"] = True
+    if resume is not None:
+        payload["resume"] = list(resume)
+    return payload
+
+
+def reconcile_sweep_payload(
+    *, branch: str | None = None, resume: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Payload of a `reconcile_sweep` job: the branch (`None`: the Domain's default branch)
+    and, for a continuation, the cursor to resume from (phase, then the phase's position).
+    The scheduler queues the default, `{}`, so identical scheduled sweeps are recognized by
+    `enqueue_job(unique)`."""
+    payload: dict[str, Any] = {}
+    if branch is not None:
+        payload["branch"] = branch
     if resume is not None:
         payload["resume"] = list(resume)
     return payload

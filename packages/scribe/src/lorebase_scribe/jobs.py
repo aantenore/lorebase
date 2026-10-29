@@ -14,6 +14,7 @@
 | `audit_verify` | none | `lorebase_store.auth.AuditRepository.verify` over every chain |
 | `audit_checkpoint` | none | `checkpoints.publish_checkpoints` |
 | `vault.rotate` | `{"after": [domain id, token]}` optional | `lorebase_store.vault.rotate` |
+| `reconcile_sweep` | `{"branch", "resume"}` optional, Domain set | `ReconcileSweep.run` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -43,6 +44,10 @@ earlier keys again under the current ones (`vault.rekey_batch` rows per transact
 `vault.rekey_rows_per_job` rows it queues its continuation from where it stopped and succeeds.
 Without vault keys it fails at once.
 
+A `reconcile_sweep` job (design 10.6) that did `scribe.reconciliation.sweep_max_changes_per_job`
+units of work before its pass is complete queues its continuation (same branch plus `resume`)
+and succeeds.
+
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
 
@@ -65,6 +70,7 @@ from lorebase_scribe.embeddings import PERMANENT_ERRORS as EMBEDDING_ERRORS
 from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass, Templates
 from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
 from lorebase_scribe.extraction.pipeline import ExtractionModels, ExtractionRun
+from lorebase_scribe.reconcile.sweep import ReconcileSweep, SweepError
 from lorebase_scribe.settings import ScribeSettings
 from lorebase_scribe.sources import PERMANENT_ERRORS, SourceSync
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
@@ -84,12 +90,14 @@ from lorebase_store.jobs import (
     INDEX_JOB,
     LINEAGE_BACKFILL_JOB,
     MATERIALIZE_JOB,
+    RECONCILE_SWEEP_JOB,
     SENSITIVITY_REFRESH_JOB,
     SOURCE_SYNC_JOB,
     VAULT_ROTATE_JOB,
     JobRow,
     embeddings_payload,
     enqueue_job,
+    reconcile_sweep_payload,
 )
 from lorebase_store.materialize import (
     run_branch_delete_job,
@@ -122,6 +130,7 @@ JOB_TYPES = (
     AUDIT_VERIFY_JOB,
     AUDIT_CHECKPOINT_JOB,
     VAULT_ROTATE_JOB,
+    RECONCILE_SWEEP_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -189,6 +198,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             principal=context.settings.worker.principal,
             connectors=context.connectors,
             clock=context.clock,
+            reconciliation=context.settings.reconciliation,
         )
         report = await sync.run(
             _domain(job), reference, dry_run=bool(job.payload.get("dry_run", False))
@@ -271,6 +281,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             principal=context.settings.worker.principal,
             models=context.extraction_models,
             clock=context.clock,
+            reconciliation=context.settings.reconciliation,
         )
         requested_by = job.payload.get("requested_by")
         report = await run.run(
@@ -388,6 +399,39 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                 )
         return result
 
+    async def reconcile_sweep(job: JobRow) -> Mapping[str, Any]:
+        domain = _domain(job)
+        branch = job.payload.get("branch")
+        if branch is not None and (not isinstance(branch, str) or not branch):
+            raise PermanentJobError("`branch` must be a branch name")
+        resume = job.payload.get("resume")
+        if resume is not None and (
+            not isinstance(resume, list) or not all(isinstance(part, str) for part in resume)
+        ):
+            raise PermanentJobError("`resume` must be a list of strings")
+        sweep = ReconcileSweep(
+            context.sessions,
+            context.runtime,
+            context.settings.reconciliation,
+            principal=context.settings.worker.principal,
+            clock=context.clock,
+        )
+        try:
+            report = await sweep.run(domain, branch=branch, resume=resume)
+        except SweepError as error:
+            raise PermanentJobError(str(error)) from None
+        result = report.as_dict()
+        if report.resume is not None:
+            async with context.sessions() as session, session.begin():
+                result["continuation"] = await enqueue_job(
+                    session,
+                    RECONCILE_SWEEP_JOB,
+                    domain_id=domain,
+                    payload=reconcile_sweep_payload(branch=branch, resume=report.resume),
+                    unique=True,
+                )
+        return result
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -402,6 +446,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         AUDIT_VERIFY_JOB: audit_verify,
         AUDIT_CHECKPOINT_JOB: audit_checkpoint,
         VAULT_ROTATE_JOB: vault_rotate,
+        RECONCILE_SWEEP_JOB: reconcile_sweep,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())
