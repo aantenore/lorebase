@@ -8,7 +8,7 @@ The screens are domain-agnostic: every name in the pictures (Kinds, Records, the
 
 ![Explorer, a Record, the Canvas, a Source mapping with its sample preview and the Review resolver in one pass](images/tour.gif)
 
-The animation is recorded in mock mode with `pnpm screenshots flow`. The pictures are regenerated in `apps/web` with `pnpm screenshots --live --keeper <url> --domain <id> --guide <url>` against a running stack, and the mock ones with `pnpm screenshots --only modeler-start,modeler-source-mapping,sources,review-conflict`; see [apps/web/README.md](../apps/web/README.md#screenshots).
+The animation is recorded in mock mode with `pnpm screenshots flow`. The pictures are regenerated in `apps/web` with `pnpm screenshots --live --keeper <url> --domain <id> --guide <url>` against a running stack, and the mock ones with `pnpm screenshots --only modeler-start,modeler-source-mapping,sources,review-conflict,review-passages`; see [apps/web/README.md](../apps/web/README.md#screenshots).
 
 ## Explorer
 
@@ -127,6 +127,10 @@ Kinds, Attributes and Relations that documents mention and the schema lacks, wit
 ![Review, Conflict resolver](images/review-conflict.png)
 
 Two Branches changed the same values, and the Proposal that merges the second ends up with Conflicts. Conflicts are grouped by type, filterable, and one is selected in the URL; they are named by Kind, key and Attribute, not by internal ids. The resolver shows base, ours and theirs side by side, with the Branch names in the headers and the words each side added or removed marked in text values, and offers only the resolutions that fit the Conflict (take ours, take theirs, revert to base, custom value, which can start from a copy of any side); grouped Conflicts take one value per member. Saving opens the next open Conflict, and outside text fields `o`, `t`, `b`, `e`, `s` or Enter, and `n` do the same from the keyboard. A text value that changed in the same sentences on both Branches is shown passage by passage: each conflicting passage takes ours, theirs, both or the base, or an edit in place, and a live preview shows the composed text against the Attribute's length limits before "Use merged text" saves it. Leaving a Conflict with unsaved changes asks first. "Apply resolutions" asks for confirmation while Conflicts remain, then asks Keeper to merge: while Conflicts remain it answers with the attempt, once every Conflict is resolved and the target has its approvals it creates the merge Revision. Mock.
+
+![Review, a text Conflict by passage](images/review-passages.png)
+
+The passage view of a text Conflict: the sentence only one Branch changed is already merged (shown as plain text), and each of the two conflicting passages has its base, ours and theirs with the changed words marked. Here the first passage takes both sides, ours then theirs, the second is still open, and the composed text below marks it as `[passage 2 is open]`. Mock.
 
 ## Explore
 
