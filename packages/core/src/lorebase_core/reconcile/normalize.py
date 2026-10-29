@@ -23,7 +23,7 @@ import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Context, Decimal, InvalidOperation, localcontext
 from enum import StrEnum
 from functools import cache
 from importlib import resources
@@ -39,6 +39,11 @@ from lorebase_core.reconcile.options import NormalizeOptions
 from lorebase_core.types import fold_text
 
 DEFAULT_UNITS = "units.yaml"
+DEFAULT_MAX_QUANTITY_LENGTH = 64
+
+# Arithmetic on parsed quantities traps every overflow (and never rounds silently into
+# infinities); callers turn the trap into "not a quantity" or "different".
+_CONTEXT = Context(prec=34, Emax=999_999, Emin=-999_999)
 
 
 class Comparison(StrEnum):
@@ -125,40 +130,59 @@ def _default_table() -> UnitTable:
     return UnitTable.parse(yaml.safe_load(text))
 
 
+# Matched on stripped text: the unit runs to the end, so no two quantifiers compete for the
+# same characters and matching stays linear.
 _QUANTITY = re.compile(
-    r"^\s*(?P<number>[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?P<unit>[^\d\s].*?)?\s*$"
+    r"(?P<number>[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?P<unit>[^\d\s].*)?"
 )
+#: Largest decimal exponent of a number read as a quantity; larger ones are not quantities.
+MAX_EXPONENT = 64
 _PUNCTUATION = frozenset("PS")  # Unicode categories folded away: punctuation, symbols
 
 
-def parse_quantity(text: str, units: UnitTable) -> Quantity | None:
+def parse_quantity(
+    text: str, units: UnitTable, *, max_length: int = DEFAULT_MAX_QUANTITY_LENGTH
+) -> Quantity | None:
     """``5 km`` -> 5000 in ``length``; ``42`` -> a plain number; ``None`` when the text is not a
-    number, optionally followed by a unit of ``units``."""
-    match = _QUANTITY.match(text)
+    number, optionally followed by a unit of ``units``, or is longer than ``max_length``, or its
+    exponent exceeds ``MAX_EXPONENT``."""
+    stripped = text.strip()
+    if len(stripped) > max_length:
+        return None
+    match = _QUANTITY.fullmatch(stripped)
     if match is None:
         return None
     try:
-        number = Decimal(match["number"])
-    except InvalidOperation:
+        with localcontext(_CONTEXT):
+            number = Decimal(match["number"])
+            if not number.is_finite() or abs(number.adjusted()) > MAX_EXPONENT:
+                return None
+            spelling = match["unit"]
+            if spelling is None:
+                return Quantity(number, None)
+            unit = units.get(spelling.strip())
+            if unit is None:
+                return None
+            magnitude = number * unit.factor
+    except ArithmeticError:
         return None
-    if not number.is_finite():
+    if not magnitude.is_finite():
         return None
-    spelling = match["unit"]
-    if spelling is None:
-        return Quantity(number, None)
-    unit = units.get(spelling.strip())
-    if unit is None:
-        return None
-    return Quantity(number * unit.factor, unit.dimension, unit.symbol)
+    return Quantity(magnitude, unit.dimension, unit.symbol)
 
 
 def numbers_equal(first: Decimal, second: Decimal, tolerance: float) -> bool:
-    """Equal within ``tolerance`` relative to the larger magnitude."""
+    """Equal within ``tolerance`` relative to the larger magnitude; numbers too far apart to
+    subtract are different."""
     if first == second:
         return True
     if tolerance <= 0:
         return False
-    return abs(first - second) <= Decimal(str(tolerance)) * max(abs(first), abs(second))
+    try:
+        with localcontext(_CONTEXT):
+            return abs(first - second) <= Decimal(str(tolerance)) * max(abs(first), abs(second))
+    except ArithmeticError:
+        return False
 
 
 def fold_words(text: str) -> tuple[str, ...]:
@@ -177,7 +201,10 @@ def _without(words: Sequence[str], negations: frozenset[str]) -> tuple[str, ...]
 def _as_number(value: JsonValue) -> Decimal | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    number = Decimal(str(value))
+    try:
+        number = Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None
     return number if number.is_finite() else None
 
 
@@ -193,7 +220,9 @@ def compare(
         return Comparison.EQUAL if equal else Comparison.DIFFERENT
     if not isinstance(first, str) or not isinstance(second, str):
         return Comparison.DIFFERENT
-    qa, qb = parse_quantity(first, units), parse_quantity(second, units)
+    limit = options.max_quantity_length
+    qa = parse_quantity(first, units, max_length=limit)
+    qb = parse_quantity(second, units, max_length=limit)
     if qa is not None and qb is not None:
         if qa.dimension != qb.dimension:
             return Comparison.DIFFERENT

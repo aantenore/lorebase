@@ -1779,6 +1779,7 @@ String and text values; never changes a stored value
 |---------|---------|-------------|
 | `scribe.reconciliation.normalize.units_file` | `null` | YAML table of units replacing the one shipped with lorebase_core |
 | `scribe.reconciliation.normalize.numeric_tolerance` | `0.0` | relative difference under which numbers are equal |
+| `scribe.reconciliation.normalize.max_quantity_length` | `64` | longer values are not read as a number and a unit |
 | `scribe.reconciliation.normalize.negation_words` | `[not, "no", never, without]` | equal without them: marked negation |
 
 #### `scribe.reconciliation.semantic`

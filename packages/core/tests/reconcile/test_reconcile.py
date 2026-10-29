@@ -3,6 +3,7 @@ period classification, claim folding, normalization and options."""
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -336,6 +337,29 @@ def test_parse_quantity() -> None:
     assert parse_quantity("5 parsecs", UNITS) is None
     assert parse_quantity("1,000 m", UNITS) is None
     assert parse_quantity("about 5 km", UNITS) is None
+    assert parse_quantity("  5 km  ", UNITS) is not None
+
+
+def test_parse_quantity_stays_linear_on_long_input() -> None:
+    hostile = "1" + " " * 50_000 + "x" + " " * 50_000 + "1"
+    started = time.perf_counter()
+    assert parse_quantity(hostile, UNITS) is None
+    assert parse_quantity(hostile, UNITS, max_length=1_000_000) is None
+    assert time.perf_counter() - started < 1.0
+    assert parse_quantity("5 km", UNITS, max_length=3) is None
+
+
+@pytest.mark.parametrize("text", ["1e999999999 km", "1e-999999999 km", "9e65 m", "1e999999999"])
+def test_parse_quantity_refuses_huge_exponents(text: str) -> None:
+    assert parse_quantity(text, UNITS) is None
+
+
+def test_compare_never_raises_on_huge_numbers() -> None:
+    assert compare("1e999999999 km", "1 km", options=NORMALIZE, units=UNITS) is (
+        Comparison.DIFFERENT
+    )
+    loose = NormalizeOptions(numeric_tolerance=0.5)
+    assert compare(1e308, -1e308, options=loose, units=UNITS) is Comparison.DIFFERENT
 
 
 def test_normalize_claims_groups_and_signals() -> None:
