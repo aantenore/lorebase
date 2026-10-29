@@ -1,0 +1,6 @@
+supplier_code,legal_name,country,city,tier,onboarded_on,risk_score
+S-1001, Brevik Bearings S.p.A. ,it ,Torino ,2,2021-03-15,35
+S-1002,Nordhaus Fasteners GmbH, de,Stuttgart,1,2019-11-02,12
+S-1003,Kestrel Castings Ltd,gb,Sheffield,3,2023-06-20,61
+S-1004,  Orlova Seals Sp. z o.o.,pl,Gdansk,2,2022-01-10,28
+S-1005,Tamura Precision KK,jp ,Nagoya,1,2018-09-05,17
