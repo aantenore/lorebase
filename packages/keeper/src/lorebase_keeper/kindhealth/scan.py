@@ -25,7 +25,6 @@ from sqlalchemy import (
     literal_column,
     or_,
     select,
-    text,
 )
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,29 +48,11 @@ from lorebase_keeper.kindhealth.models import (
     ViolationReport,
 )
 from lorebase_keeper.reading.views import kind_name
+from lorebase_store.duplicates import duplicate_attributes, duplicate_groups
 from lorebase_store.layout import BranchLayout
 
 BATCH = 500
 """Records fetched per round trip while re-validating."""
-
-_DUPLICATES = r"""
-    WITH normalized AS (
-        SELECT key, lower(regexp_replace(btrim("values" ->> :attribute), '\s+', ' ', 'g')) AS norm
-        FROM {records}
-        WHERE domain_id = :domain AND branch = :branch AND kind_id = :kind
-          AND "values" ->> :attribute IS NOT NULL
-    )
-    SELECT norm, count(*) AS members,
-           (array_agg(key ORDER BY key))[1:CAST(:keys AS int)] AS member_keys,
-           count(*) OVER () AS total_groups,
-           sum(count(*)) OVER () AS total_members
-    FROM normalized
-    WHERE norm <> ''
-    GROUP BY norm
-    HAVING count(*) > 1
-    ORDER BY count(*) DESC, norm
-    LIMIT :groups
-    """
 
 
 @dataclass(frozen=True)
@@ -243,15 +224,6 @@ async def validate_records(
 # Duplicates ---------------------------------------------------------------------------------
 
 
-def duplicate_attributes(kind: Kind) -> list[str]:
-    """Attribute ids checked for duplicates: unique ones, then the title Attribute."""
-    ids = [a.id for a in kind.attributes.values() if a.unique and not a.is_derived]
-    title = kind.attributes.get(kind.title_attribute) if kind.title_attribute else None
-    if title is not None and not title.is_derived and title.id not in ids:
-        ids.append(title.id)
-    return ids
-
-
 async def find_duplicates(
     session: AsyncSession,
     where: Branch,
@@ -279,29 +251,24 @@ async def find_duplicates(
     groups = 0
     for attribute_id in ids:
         attribute = kind.attributes[attribute_id]
-        rows = (
-            await session.execute(
-                text(_DUPLICATES.format(records=where.rows.records_from())),
-                {
-                    "domain": where.domain_id,
-                    "branch": where.branch,
-                    "kind": kind.id,
-                    "attribute": attribute_id,
-                    "keys": settings.duplicate_keys_per_group,
-                    "groups": settings.max_duplicate_groups,
-                },
-            )
-        ).all()
+        rows = await duplicate_groups(
+            session,
+            where.rows,
+            kind.id,
+            attribute_id,
+            keys_per_group=settings.duplicate_keys_per_group,
+            max_groups=settings.max_duplicate_groups,
+        )
         if rows:
-            groups += int(rows[0].total_groups)
+            groups += rows[0].total_groups
         if hidden(attribute):
             if rows:
                 withheld.append(
                     HiddenDuplicates(
                         attribute=attribute.api_name,
                         unique=attribute.unique,
-                        groups=int(rows[0].total_groups),
-                        records=int(rows[0].total_members),
+                        groups=rows[0].total_groups,
+                        records=rows[0].total_members,
                     )
                 )
             continue
@@ -310,7 +277,7 @@ async def find_duplicates(
                 attribute=attribute.api_name,
                 unique=attribute.unique,
                 value=None if sensitive(attribute) else row.norm,
-                count=int(row.members),
+                count=row.members,
                 keys=list(row.member_keys),
             )
             for row in rows
