@@ -219,6 +219,15 @@ class ApprovalOut(BaseModel):
         description="Steward roles are declared but fewer principals can approve than the "
         "rule requires (merge refused with stewards-unavailable).",
     )
+    required_roles: list[str] | None = Field(
+        default=None,
+        description="Roles that must each have approved (protection rule required_roles); "
+        "null when the rule does not apply.",
+    )
+    missing_roles: list[str] | None = Field(
+        default=None,
+        description="Required roles without a counted approval yet, when the rule applies.",
+    )
 
 
 class ResolutionIn(BaseModel):
@@ -401,6 +410,11 @@ def _checks(
                 message=f"{len(approval.approvers)} of {approval.required} approval(s)"
                 + steward_text
                 + (
+                    f"; missing roles: {', '.join(approval.roles.missing)}"
+                    if approval.roles is not None and approval.roles.missing
+                    else ""
+                )
+                + (
                     f"; changes requested by {', '.join(approval.changes_requested)}"
                     if approval.changes_requested
                     else ""
@@ -505,6 +519,8 @@ def _approval(approval: service.Approval) -> ApprovalOut:
         required_from_stewards=None if rule is None else rule.required,
         steward_approvals=None if rule is None else len(rule.approvers),
         stewards_unavailable=rule is not None and rule.unavailable,
+        required_roles=None if approval.roles is None else list(approval.roles.roles),
+        missing_roles=None if approval.roles is None else list(approval.roles.missing),
     )
 
 

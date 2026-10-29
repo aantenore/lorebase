@@ -1,8 +1,8 @@
 """Stewards through the API against Postgres (design 10.7, AC-37): steward roles from the
 schema, assignees computed from grants (a principal who cannot read a Kind the work touches is
 none), the `assigned` filters of Proposals and reconciliation candidates, and the protection
-rule `required_approvals_from_stewards`; plus the Domain's ingestion mode setting (design 9.2):
-validation, `ignored_settings` and its audit entry."""
+rules `required_approvals_from_stewards` and `required_roles`; plus the Domain's ingestion
+mode setting (design 9.2): validation, `ignored_settings` and its audit entry."""
 
 from __future__ import annotations
 
@@ -272,6 +272,49 @@ async def test_stewards_route_work_and_gate_approvals(
         unavailable = await http.post(f"{base}/merge", headers=maintainer)
         assert unavailable.status_code == 409
         assert unavailable.json()["code"] == "stewards-unavailable"
+
+
+async def test_required_roles_gate_merge(
+    keeper: Any, installation_admin: Any, role_key: Any, loader: Loader
+) -> None:
+    admin = installation_admin.headers
+    async with keeper(
+        auth=auth(installation_admin.id), proposals={"required_roles": [STEWARD_ROLE]}
+    ) as http:
+        await setup_domain(http, admin, loader, "sup", "doc")
+        editor = await role_key(http, "supply", "editor")
+        maintainer = await role_key(http, "supply", "maintainer")
+        _plain_id, plain = await principal(loader, "plain reviewer", [{"role": "reviewer"}])
+        holder_id, holder = await principal(
+            loader, "role holder", [{"role": STEWARD_ROLE}, {"role": "viewer"}]
+        )
+        await loader.edit("sup", "S-1001", city="Gdansk")
+        created = (await http.post(PROPOSALS, json=proposal_body("sup"), headers=editor)).json()
+        base = f"{PROPOSALS}/{created['id']}"
+
+        # Enough approvals, none from the role: refused, the role named.
+        approved = await http.post(f"{base}/reviews", json={"verdict": "approve"}, headers=plain)
+        assert approved.status_code == 201, approved.text
+        approval = approved.json()["approval"]
+        assert (approval["required"], approval["approvals"]) == (1, 1)
+        assert (approval["required_roles"], approval["missing_roles"]) == (
+            [STEWARD_ROLE],
+            [STEWARD_ROLE],
+        )
+        assert approval["satisfied"] is False
+        refused = await http.post(f"{base}/merge", headers=maintainer)
+        assert refused.status_code == 409
+        assert refused.json()["code"] == "approvals-required"
+        assert STEWARD_ROLE in refused.json()["detail"]
+        assert refused.json()["missing_roles"] == [STEWARD_ROLE]
+
+        # A role holder approves: the merge goes through.
+        by_holder = await http.post(f"{base}/reviews", json={"verdict": "approve"}, headers=holder)
+        assert by_holder.status_code == 201, by_holder.text
+        assert by_holder.json()["approval"]["missing_roles"] == []
+        assert holder_id in by_holder.json()["approval"]["approvers"]
+        merged = await http.post(f"{base}/merge", headers=maintainer)
+        assert merged.status_code == 200, merged.text
 
 
 async def test_domain_extraction_setting(

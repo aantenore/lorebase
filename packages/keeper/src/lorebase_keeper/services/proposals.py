@@ -14,6 +14,12 @@ review policy:
   the Proposal then needs the larger of the two in all. A Proposal whose Kinds declare no
   stewards satisfies it; one with steward roles but fewer assignees than required cannot merge
   (409 `stewards-unavailable`);
+- `required_roles` (setting and Domain setting of that name, default none) lists RBAC roles
+  that must each have approved: at least one counted approval from a principal holding the
+  role through a grant covering the Domain who may review the Proposal on the target (the
+  assignee rule of `services.stewards`, for that role alone). It does not raise the approvals
+  count; a missing role refuses the merge (409 `approvals-required`, naming the roles). Without
+  a way to find those principals no role is satisfied;
 - the merge policy of a Proposal is the Domain's `merge_policy` setting when it is created;
 - the `reconciliation` check (`keeper.reconciliation.merge_check`, or the Domain setting
   `reconciliation_check` when that is stricter) lists the open reconciliation candidates of a
@@ -92,6 +98,8 @@ APPROVALS_KEY = "required_approvals"
 """Domain setting overriding `keeper.proposals.required_approvals`."""
 STEWARD_APPROVALS_KEY = "required_approvals_from_stewards"
 """Domain setting overriding `keeper.proposals.required_approvals_from_stewards`."""
+ROLES_KEY = "required_roles"
+"""Domain setting overriding `keeper.proposals.required_roles`."""
 
 PROPOSAL_NOT_OPEN = ProblemType("proposal-not-open", 409, "Proposal is not open")
 APPROVALS_REQUIRED = ProblemType("approvals-required", 409, "Approvals required")
@@ -137,6 +145,23 @@ class StewardApproval:
 
 
 @dataclass(frozen=True)
+class RoleApproval:
+    """The role rule of a protected target: each of `roles` needs an approval; `approvers`
+    maps each role to the approvers holding it."""
+
+    roles: tuple[str, ...]
+    approvers: dict[str, tuple[str, ...]]
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        return tuple(role for role in self.roles if not self.approvers.get(role))
+
+    @property
+    def satisfied(self) -> bool:
+        return not self.missing
+
+
+@dataclass(frozen=True)
 class Approval:
     """Review state of a Proposal against its target's protection."""
 
@@ -146,6 +171,7 @@ class Approval:
     changes_requested: tuple[str, ...]
     blocking: bool
     stewards: StewardApproval | None = None
+    roles: RoleApproval | None = None
 
     @property
     def satisfied(self) -> bool:
@@ -153,7 +179,8 @@ class Approval:
             return True
         blocked = self.blocking and bool(self.changes_requested)
         stewards = self.stewards is None or self.stewards.satisfied
-        return len(self.approvers) >= self.required and not blocked and stewards
+        roles = self.roles is None or self.roles.satisfied
+        return len(self.approvers) >= self.required and not blocked and stewards and roles
 
 
 @dataclass(frozen=True)
@@ -246,6 +273,39 @@ def required_from_stewards(domain: DomainRow, settings: ProposalSettings) -> int
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
     return settings.required_approvals_from_stewards
+
+
+def required_role_names(domain: DomainRow, settings: ProposalSettings) -> tuple[str, ...]:
+    value = (domain.settings or {}).get(ROLES_KEY)
+    if isinstance(value, list) and all(isinstance(r, str) and r for r in value):
+        return tuple(dict.fromkeys(value))
+    return tuple(dict.fromkeys(settings.required_roles))
+
+
+async def role_approval(
+    session: AsyncSession,
+    domain: DomainRow,
+    proposal: ProposalRow,
+    approval: Approval,
+    settings: ProposalSettings,
+    runtime: StoreRuntime | None,
+    stewards: Stewards | None,
+) -> RoleApproval | None:
+    """The role rule of the Proposal (module doc); `None` when it does not apply. Without
+    `stewards` (no way to find role holders) it fails closed: no approver is counted."""
+    roles = required_role_names(domain, settings)
+    if not roles or not approval.protected:
+        return None
+    if stewards is None:
+        return RoleApproval(roles, {})
+    head = await head_schema(session, domain.id, proposal.target_ref, runtime=runtime)
+    kinds = await proposal_kinds(session, domain.id, proposal)
+    subject = proposal_subject(None if head is None else head.schema, kinds, proposal.target_ref)
+    approvers: dict[str, tuple[str, ...]] = {}
+    for role in roles:
+        holders = await stewards.assignees(domain.id, replace(subject, roles=(role,)))
+        approvers[role] = tuple(a for a in approval.approvers if a in holders)
+    return RoleApproval(roles, approvers)
 
 
 async def steward_approval(
@@ -364,6 +424,10 @@ async def _view(
     rule = await steward_approval(session, domain, proposal, approval, settings, runtime, stewards)
     if rule is not None:
         approval = replace(approval, required=max(approval.required, rule.required), stewards=rule)
+    approval = replace(
+        approval,
+        roles=await role_approval(session, domain, proposal, approval, settings, runtime, stewards),
+    )
     attempt = await MergeAttemptRepository(session, domain.id).latest(proposal.id)
     return ProposalView(proposal, reviews, approval, attempt)
 
@@ -702,7 +766,12 @@ async def merge(
             raise ProblemError(
                 APPROVALS_REQUIRED,
                 f"Merging into the protected branch {proposal.target_ref!r} needs "
-                f"{approval.required} approval(s) and no outstanding request for changes.",
+                f"{approval.required} approval(s) and no outstanding request for changes"
+                + (
+                    f", and an approval from each of the roles {', '.join(approval.roles.missing)}."
+                    if approval.roles is not None and approval.roles.missing
+                    else "."
+                ),
                 extensions={
                     "required": approval.required,
                     "approvals": len(approval.approvers),
@@ -714,6 +783,14 @@ async def merge(
                         else {
                             "required_from_stewards": approval.stewards.required,
                             "steward_approvals": len(approval.stewards.approvers),
+                        }
+                    ),
+                    **(
+                        {}
+                        if approval.roles is None
+                        else {
+                            "required_roles": list(approval.roles.roles),
+                            "missing_roles": list(approval.roles.missing),
                         }
                     ),
                 },

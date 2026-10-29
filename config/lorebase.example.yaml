@@ -390,13 +390,15 @@ keeper:
       max_string_length: 65536   # characters of a string built during evaluation
       max_record_lookups: 100    # Records and link lists read through record(), links()
       decimal_precision: 34      # significant digits of decimal arithmetic
-  proposals:                     # a Domain overrides required_approvals and
-                                 # required_approvals_from_stewards with its own settings of
-                                 # those names; its `merge_policy` setting holds the merge
+  proposals:                     # a Domain overrides required_approvals,
+                                 # required_approvals_from_stewards and required_roles
+                                 # with its own settings of those names; its `merge_policy` setting holds the merge
                                  # policy options of new Proposals
     required_approvals: 1        # approvals needed to merge into a protected branch
     required_approvals_from_stewards: 0  # of those, approvals from the Proposal's assignees
                                  # (stewards, design 10.7); the larger of the two is needed
+    required_roles: []           # roles that must each have approved (one approval from a holder
+                                 # who may review the Proposal); also a Domain setting
     allow_self_approval: false   # authors may approve their own Proposals into protected branches
     changes_requested_blocks: true   # an outstanding request_changes review blocks such merges
     auto_close_source_branch: false  # delete the source branch after the merge (never the

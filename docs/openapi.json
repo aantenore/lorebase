@@ -12738,6 +12738,36 @@
             "title": "Stewards Unavailable",
             "description": "Steward roles are declared but fewer principals can approve than the rule requires (merge refused with stewards-unavailable).",
             "default": false
+          },
+          "required_roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Roles",
+            "description": "Roles that must each have approved (protection rule required_roles); null when the rule does not apply."
+          },
+          "missing_roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Roles",
+            "description": "Required roles without a counted approval yet, when the rule applies."
           }
         },
         "type": "object",

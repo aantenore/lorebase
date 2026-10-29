@@ -12,10 +12,13 @@ from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.routes.proposals import _checks
 from lorebase_keeper.services.config import ProposalSettings
 from lorebase_keeper.services.proposals import (
+    RoleApproval,
     approval_of,
     domain_policy,
     proposal_policy,
     required_approvals,
+    required_role_names,
+    role_approval,
 )
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.repositories import DomainRow, ProposalRow, ReviewRow
@@ -100,6 +103,47 @@ def test_author_approval_counts_only_when_allowed() -> None:
     assert not strict.satisfied
     allowed = ProposalSettings(allow_self_approval=True)
     assert approval_of(proposal(), own, protected=True, required=1, settings=allowed).satisfied
+
+
+def test_required_roles_need_an_approval_from_each_role() -> None:
+    base = approval_of(
+        proposal(),
+        reviews(("usr_a", V.APPROVE)),
+        protected=True,
+        required=1,
+        settings=ProposalSettings(),
+    )
+    assert base.satisfied
+    both = RoleApproval(("a", "b"), {"a": ("usr_a",), "b": ()})
+    assert both.missing == ("b",)
+    assert not replace(base, roles=both).satisfied
+    done = RoleApproval(("a", "b"), {"a": ("usr_a",), "b": ("usr_a",)})
+    assert replace(base, roles=done).satisfied
+    assert not replace(base, roles=RoleApproval(("a",), {})).satisfied  # fail closed
+    unprotected = replace(base, protected=False, roles=both)
+    assert unprotected.satisfied
+
+
+def test_required_roles_setting_and_domain_override() -> None:
+    settings = ProposalSettings(required_roles=["x", "x", "y"])
+    assert required_role_names(domain(), settings) == ("x", "y")
+    assert required_role_names(domain(required_roles=["z"]), settings) == ("z",)
+    assert required_role_names(domain(required_roles=[]), settings) == ()
+    assert required_role_names(domain(required_roles="z"), settings) == ("x", "y")
+    assert required_role_names(domain(required_roles=["z", 3]), settings) == ("x", "y")
+
+
+async def test_role_rule_off_unprotected_or_without_stewards() -> None:
+    off = approval_of(proposal(), [], protected=True, required=1, settings=ProposalSettings())
+    on = ProposalSettings(required_roles=["x"])
+    assert (
+        await role_approval(None, domain(), proposal(), off, ProposalSettings(), None, None) is None
+    )  # type: ignore[arg-type]
+    open_ = replace(off, protected=False)
+    assert await role_approval(None, domain(), proposal(), open_, on, None, None) is None  # type: ignore[arg-type]
+    closed = await role_approval(None, domain(), proposal(), off, on, None, None)  # type: ignore[arg-type]
+    assert closed is not None
+    assert closed.missing == ("x",)
 
 
 def test_unprotected_targets_need_no_approval() -> None:

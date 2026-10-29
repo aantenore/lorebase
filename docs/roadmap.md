@@ -81,7 +81,7 @@ Goal: day 5 of the proof scenario, an external agent connected through MCP.
 - [x] Custom Operations with CEL, review policies, outbox and webhooks: Operations declare side effects, written to the outbox in their commit transaction and delivered at least once to signed webhooks with masking of sensitive values ([agents](agents.md#operation-events), [design 10.5](design.md#105-side-effects))
 - [x] Full RBAC: groups from the OIDC groups claim, Kind-scoped grants on reads, sensitivity masking with `pii.read`, `confidential.read` and `restricted.read` ([design 13.5](design.md#135-personal-data-and-erasure)), and Kind-scoped invisibility in queries: Kinds a Kind-narrowed caller may not read are left out of the schema it reads and answer like unknown names ([design 13.3](design.md#133-authorization-enforcement))
 - [x] Branch protection on the default branch
-- [x] Proposal checks (merge, approvals) and required approvals
+- [x] Proposal checks (merge, approvals), required approvals and required roles (`required_roles`, [design 10.3](design.md#103-proposals-as-governance)); allowed merge origins per protected branch are not done yet
 - [x] Modeler with every editor: Kinds, Relations, Traits, Operations (with dry run), Derivations and Sources in one form and YAML document, with Keeper's validation and CEL type check next to the fields
 - [x] Conflict resolver against live data
 - [x] Traits in queries, at branch heads and in time-travel reads (listings ordered by key, with the head's cursors)
