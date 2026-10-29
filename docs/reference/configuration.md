@@ -499,6 +499,17 @@ Operations that need review, written by agents (docs/agents.md) A request that n
 | `keeper.agent_writes.summary_value_chars` | `80` | characters of a parameter value kept in the description |
 | `keeper.agent_writes.max_summary_operations` | `20` | executions listed in one Proposal description |
 
+### `keeper.reconciliation`
+
+Reconciliation queue endpoints (design 10.6); detection is set in scribe.reconciliation
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.reconciliation.default_limit` | `50` | candidates listed per page |
+| `keeper.reconciliation.max_limit` | `500` | largest page a request may ask for |
+| `keeper.reconciliation.bulk_max` | `1000` | candidates one bulk resolution may decide |
+| `keeper.reconciliation.merge_check` | `warn` | Proposal check of open candidates: off, warn (listed) or block (open contradictions stop the merge); a Domain overrides it |
+
 ### `keeper.documents`
 
 Document intake for extraction (docs/extraction.md)
@@ -1732,3 +1743,57 @@ S3: PUT signed with Signature Version 4; use a bucket with versioning or object 
 | `scribe.audit_checkpoints.s3.allowed_schemes` | `[https]` |  |
 | `scribe.audit_checkpoints.s3.allow_private_targets` | `false` |  |
 | `scribe.audit_checkpoints.s3.timeout_s` | `10.0` |  |
+
+### `scribe.reconciliation`
+
+Contradictions between Sources (design 10.6); a Domain overrides any member in its `reconciliation` setting
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.reconciliation.enabled` | `true` | false: no candidate is raised |
+| `scribe.reconciliation.stages` | `[identity, values, normalize, semantic]` | run in this order; leave one out to disable it |
+| `scribe.reconciliation.hold_auto_accept` | `true` | extraction items raising a contradiction stay pending |
+| `scribe.reconciliation.sweep_interval_s` | `0.0` | scheduled sweep of every Domain; 0 disables it |
+| `scribe.reconciliation.sweep_max_changes_per_job` | `50000` | history changes one sweep job reads; then a continuation |
+| `scribe.reconciliation.max_claims_per_candidate` | `20` | newest claims kept per candidate; the others are counted |
+
+#### `scribe.reconciliation.triggers`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.reconciliation.triggers.extraction` | `true` | check extraction value items while they are assembled |
+| `scribe.reconciliation.triggers.source_sync` | `true` | check a Source sync's changes before they are merged |
+
+#### `scribe.reconciliation.duplicates`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.reconciliation.duplicates.trigram_threshold` | `0.8` | least title similarity of a duplicate candidate |
+| `scribe.reconciliation.duplicates.max_pairs_per_kind` | `1000` | duplicate pairs examined per Kind and pass |
+
+#### `scribe.reconciliation.normalize`
+
+String and text values; never changes a stored value
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.reconciliation.normalize.units_file` | `null` | YAML table of units replacing the one shipped with lorebase_core |
+| `scribe.reconciliation.normalize.numeric_tolerance` | `0.0` | relative difference under which numbers are equal |
+| `scribe.reconciliation.normalize.negation_words` | `[not, "no", never, without]` | equal without them: marked negation |
+
+#### `scribe.reconciliation.semantic`
+
+Embeddings of competing text values (needs inference.embeddings)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.reconciliation.semantic.enabled` | `false` | true also needs the stage in `stages` |
+| `scribe.reconciliation.semantic.equivalence_threshold` | `null` | similarity above which paraphrases are not raised; null: all |
+| `scribe.reconciliation.semantic.duplicate_threshold` | `0.92` | least similarity of stored Record vectors for a duplicate |
+| `scribe.reconciliation.semantic.judge` | `false` | ask the chat model whether two texts contradict |
+
+#### `scribe.reconciliation.stale`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.reconciliation.stale.max_age` | `null` | ISO 8601 duration (e.g. P30D); null: off. Per Kind and Attribute in the Domain settings |

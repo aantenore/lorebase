@@ -61,6 +61,13 @@ from lorebase_store.repositories.proposals import (
     ReviewRow,
 )
 from lorebase_store.repositories.provenance import ProvenanceRepository, ProvenanceRow
+from lorebase_store.repositories.reconciliation_candidates import (
+    CandidateFilter,
+    CandidateRow,
+    CandidateStateError,
+    ReconciliationCandidateRepository,
+    UpsertOutcome,
+)
 from lorebase_store.repositories.refs import (
     LockTimeoutError,
     RefLogRow,
@@ -87,6 +94,9 @@ from lorebase_store.repositories.suggestions import (
 __all__ = [
     "EVERY_PARTITION",
     "BranchMaterializationRepository",
+    "CandidateFilter",
+    "CandidateRow",
+    "CandidateStateError",
     "ChangesetRepository",
     "ChunkRepository",
     "ChunkRow",
@@ -127,6 +137,7 @@ __all__ = [
     "ProposalRow",
     "ProvenanceRepository",
     "ProvenanceRow",
+    "ReconciliationCandidateRepository",
     "RecordOutcome",
     "RecordRow",
     "RecordState",
@@ -146,6 +157,7 @@ __all__ = [
     "SourceRunRepository",
     "SourceRunRow",
     "SuggestionRow",
+    "UpsertOutcome",
     "advisory_lock_key",
     "copy_fence",
     "scope_to_domain",

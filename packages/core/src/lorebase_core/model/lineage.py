@@ -3,10 +3,15 @@
 A provenance entry describes one origin. Each change in a Revision changeset carries a
 ``LineageMap`` from the Attribute ids it changed to provenance entry ids. Provenance is never
 part of content hashes.
+
+A value of a ``valid_time`` Attribute may carry a validity period on its entry (``valid_from``,
+``valid_to``, design 10.6). A ``reconciliation`` origin marks a value written by a decision of
+the reconciliation queue; only Keeper builds one, callers never name an origin.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
@@ -26,6 +31,7 @@ class OriginType(StrEnum):
     MERGE_RESOLUTION = "merge_resolution"
     SCHEMA_MIGRATION = "schema_migration"
     IMPORT = "import"
+    RECONCILIATION = "reconciliation"
 
 
 class OperationOrigin(Model):
@@ -81,29 +87,79 @@ class ImportOrigin(Model):
     batch_id: str
 
 
+#: Prefixes of a reconciliation resolver: the person who decided, or the policy applied.
+RESOLVER_PREFIXES = ("principal:", "policy:")
+
+
+class ReconciliationOrigin(Model):
+    """A value written by a decision on reconciliation candidate ``candidate_id`` (design 10.6).
+
+    ``claim_id`` is the chosen claim (unset for a custom value); ``resolver`` is
+    ``principal:{id}`` or ``policy:{name}``; ``source`` is the source identity of the chosen
+    claim, so that the value keeps the identity it came from.
+    """
+
+    type: Literal["reconciliation"] = "reconciliation"
+    candidate_id: str
+    claim_id: str | None = None
+    resolver: str
+    source: str | None = None
+
+    @field_validator("resolver")
+    @classmethod
+    def _resolver(cls, value: str) -> str:
+        prefix = next((p for p in RESOLVER_PREFIXES if value.startswith(p)), None)
+        if prefix is None or len(value) == len(prefix):
+            raise ValueError("resolver must be principal:{id} or policy:{name}")
+        return value
+
+
 Origin = Annotated[
     OperationOrigin
     | SourceSyncOrigin
     | ExtractionOrigin
     | MergeResolutionOrigin
     | SchemaMigrationOrigin
-    | ImportOrigin,
+    | ImportOrigin
+    | ReconciliationOrigin,
     Field(discriminator="type"),
 ]
 
 
 class ProvenanceEntry(Model):
-    """One Lineage origin: ``{id, origin, actor, at}``; ``at`` is a canonical timestamp."""
+    """One Lineage origin: ``{id, origin, actor, at}``; ``at`` is a canonical timestamp.
+
+    ``valid_from`` and ``valid_to`` (canonical timestamps, either may be open) are the
+    validity period of the values of a ``valid_time`` Attribute the entry wrote; unset, the
+    entry has no period and is left out of content as before.
+    """
 
     id: ProvenanceId
     origin: Origin
     actor: str
     at: str
+    valid_from: str | None = None
+    valid_to: str | None = None
 
     @field_validator("at", mode="before")
     @classmethod
     def _canonical_timestamp(cls, value: object) -> object:
         return encode_value(_TIMESTAMP, value)
+
+    @field_validator("valid_from", "valid_to", mode="before")
+    @classmethod
+    def _canonical_period(cls, value: object) -> object:
+        return None if value is None else encode_value(_TIMESTAMP, value)
+
+    @model_validator(mode="after")
+    def _check_period(self) -> Self:
+        if (
+            self.valid_from is not None
+            and self.valid_to is not None
+            and datetime.fromisoformat(self.valid_to) < datetime.fromisoformat(self.valid_from)
+        ):
+            raise ValueError("valid_to must not precede valid_from")
+        return self
 
     @property
     def origin_type(self) -> OriginType:

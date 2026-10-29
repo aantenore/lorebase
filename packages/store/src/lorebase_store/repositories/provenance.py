@@ -18,6 +18,10 @@ from lorebase_store.settings import WriteSettings
 PROVENANCE: Table = metadata.tables["provenance"]
 
 
+def _time(value: str | None) -> datetime | None:
+    return None if value is None else datetime.fromisoformat(value)
+
+
 @dataclass(frozen=True, slots=True)
 class ProvenanceRow:
     id: str
@@ -25,6 +29,8 @@ class ProvenanceRow:
     origin_ref: dict[str, Any]
     actor: str
     at: datetime
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
 
     @classmethod
     def from_entry(cls, entry: ProvenanceEntry) -> ProvenanceRow:
@@ -35,6 +41,8 @@ class ProvenanceRow:
             origin_ref=entry.origin.content(),
             actor=entry.actor,
             at=datetime.fromisoformat(entry.at),
+            valid_from=_time(entry.valid_from),
+            valid_to=_time(entry.valid_to),
         )
 
 
@@ -55,6 +63,8 @@ class ProvenanceRepository:
                 "origin_ref": row.origin_ref,
                 "actor": row.actor,
                 "at": row.at,
+                "valid_from": row.valid_from,
+                "valid_to": row.valid_to,
             }
             for row in {row.id: row for row in rows}.values()
         ]
@@ -70,6 +80,8 @@ class ProvenanceRepository:
                     PROVENANCE.c.origin_ref,
                     PROVENANCE.c.actor,
                     PROVENANCE.c.at,
+                    PROVENANCE.c.valid_from,
+                    PROVENANCE.c.valid_to,
                 ).where(PROVENANCE.c.domain_id == self._domain, PROVENANCE.c.id.in_(chunk))
             )
             for row in result.mappings():

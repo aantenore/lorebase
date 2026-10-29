@@ -21,6 +21,7 @@ from lorebase_keeper.services.config import (
     DomainSettings,
     OperationSettings,
     ProposalSettings,
+    ReconciliationSettings,
     SchemaChangeSettings,
     SchemaInferenceSettings,
     SchemaSuggestionSettings,
@@ -279,6 +280,7 @@ class KeeperSettings(SectionModel):
     operations: OperationSettings = Field(default_factory=OperationSettings)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
     agent_writes: AgentWriteSettings = Field(default_factory=AgentWriteSettings)
+    reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
     trace: TraceSettings = Field(default_factory=TraceSettings)
 

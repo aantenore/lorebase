@@ -11,6 +11,7 @@ from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
+from lorebase_core.reconcile import ReconcileOptions
 from lorebase_platform.secrets import SecretValue
 from lorebase_platform.settings import SectionModel, Settings, register_section
 from lorebase_scribe.cron import CronError, parse_cron
@@ -505,6 +506,11 @@ class ScribeSettings(SectionModel):
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
     embeddings: EmbeddingJobSettings = Field(default_factory=EmbeddingJobSettings)
     audit_checkpoints: AuditCheckpointSettings = Field(default_factory=AuditCheckpointSettings)
+    reconciliation: ReconcileOptions = Field(
+        default_factory=ReconcileOptions,
+        description="Detection of contradictions between Sources (design 10.6); a Domain "
+        "overrides it in its reconciliation setting.",
+    )
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

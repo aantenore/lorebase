@@ -52,6 +52,7 @@ from lorebase_store.models.proposals import (
     ProposalReview,
 )
 from lorebase_store.models.queues import Job, OutboxConsumer, OutboxEvent, OutboxPending
+from lorebase_store.models.reconciliation import ReconciliationCandidate
 from lorebase_store.models.tracing import (
     AgentTraceSession,
     AgentTraceSessionDomain,
@@ -117,6 +118,7 @@ __all__ = [
     "ProposalReview",
     "Provenance",
     "RateLimitBucket",
+    "ReconciliationCandidate",
     "Ref",
     "RefLogEntry",
     "Revision",

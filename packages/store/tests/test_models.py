@@ -64,6 +64,8 @@ DESIGN_TABLES = {
     "inference_endpoint_modes",
     "vault_lineage",
     "installation_secrets",
+    # 10.6 reconciliation
+    "reconciliation_candidates",
     # 10.5 webhooks
     "webhooks",
     "webhook_deliveries",
@@ -116,4 +118,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_latest_migration() -> None:
-    assert head_revisions() == ("0037",)
+    assert head_revisions() == ("0038",)

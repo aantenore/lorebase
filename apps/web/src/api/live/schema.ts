@@ -119,6 +119,7 @@ function attribute(raw: Raw, names: Names): Attribute {
     derivation_id: strOrNull(raw['derivation_id']),
     authority: strOrNull(raw['authority']),
     ...(raw['vault'] === true ? { vault: true } : {}),
+    ...(raw['valid_time'] === true ? { valid_time: true } : {}),
   };
 }
 

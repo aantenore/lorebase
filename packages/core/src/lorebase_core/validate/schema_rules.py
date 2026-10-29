@@ -453,6 +453,13 @@ class _Checker:
                 f"{spec.describe()} attributes cannot be full-text searchable",
                 refs=refs,
             )
+        if attribute.valid_time and attribute.is_derived:
+            self.add(
+                IssueCode.SCHEMA_ATTRIBUTE_FLAG_INVALID,
+                (*path, "valid_time"),
+                "derived attributes have no provenance and cannot carry validity periods",
+                refs=refs,
+            )
         if attribute.derivation_id is not None:
             if relation_id is not None:
                 self.add(

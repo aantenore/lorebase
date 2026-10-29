@@ -193,6 +193,8 @@ export interface Attribute {
   authority: ElementId | null;
   /** Values are stored in the personal data vault (`pii` Attributes of a Kind only). */
   vault?: boolean;
+  /** Values carry a validity period on their provenance (reconciliation, design 10.6). */
+  valid_time?: boolean;
 }
 
 export interface TraitImplementation {

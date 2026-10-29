@@ -1,0 +1,43 @@
+# Units read by the normalization stage of reconciliation (design 10.6).
+#
+# Each dimension maps unit symbols to their factor to the dimension's base unit (the unit with
+# factor 1) and optional aliases. Symbols match case-sensitively first, then case-insensitively
+# when only one unit of the table answers to the folded spelling. Units with an offset
+# (temperatures) are not converted. Replace the table with `normalize.units_file`.
+length:
+  m: {factor: 1, aliases: [meter, meters, metre, metres]}
+  km: {factor: 1000, aliases: [kilometer, kilometers, kilometre, kilometres]}
+  cm: {factor: 0.01, aliases: [centimeter, centimeters, centimetre, centimetres]}
+  mm: {factor: 0.001, aliases: [millimeter, millimeters, millimetre, millimetres]}
+  in: {factor: 0.0254, aliases: [inch, inches]}
+  ft: {factor: 0.3048, aliases: [foot, feet]}
+  yd: {factor: 0.9144, aliases: [yard, yards]}
+  mi: {factor: 1609.344, aliases: [mile, miles]}
+mass:
+  kg: {factor: 1, aliases: [kilogram, kilograms, kilo, kilos]}
+  g: {factor: 0.001, aliases: [gram, grams]}
+  mg: {factor: 0.000001, aliases: [milligram, milligrams]}
+  t: {factor: 1000, aliases: [tonne, tonnes, metric ton, metric tons]}
+  lb: {factor: 0.45359237, aliases: [lbs, pound, pounds]}
+  oz: {factor: 0.028349523125, aliases: [ounce, ounces]}
+volume:
+  l: {factor: 1, aliases: [L, liter, liters, litre, litres]}
+  ml: {factor: 0.001, aliases: [mL, milliliter, milliliters, millilitre, millilitres]}
+  m3: {factor: 1000, aliases: [cubic meter, cubic meters, cubic metre, cubic metres]}
+time:
+  s: {factor: 1, aliases: [sec, secs, second, seconds]}
+  min: {factor: 60, aliases: [mins, minute, minutes]}
+  h: {factor: 3600, aliases: [hr, hrs, hour, hours]}
+  d: {factor: 86400, aliases: [day, days]}
+  wk: {factor: 604800, aliases: [week, weeks]}
+data:
+  B: {factor: 1, aliases: [byte, bytes]}
+  kB: {factor: 1000, aliases: [KB, kilobyte, kilobytes]}
+  MB: {factor: 1000000, aliases: [megabyte, megabytes]}
+  GB: {factor: 1000000000, aliases: [gigabyte, gigabytes]}
+  TB: {factor: 1000000000000, aliases: [terabyte, terabytes]}
+  KiB: {factor: 1024}
+  MiB: {factor: 1048576}
+  GiB: {factor: 1073741824}
+ratio:
+  "%": {factor: 0.01, aliases: [percent, pct]}

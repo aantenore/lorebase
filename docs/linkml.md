@@ -84,7 +84,7 @@ that lists what to add; set `status: active` once it is complete.
 | `cardinality` | `multivalued` of the two slots | `many_to_one`: the forward slot is single valued |
 | `required_from` | `required` of the forward slot | |
 | element `id` | `lorebase.id` | |
-| `indexed`, `searchable`, `search_weight`, `vault`, `icon`, `color`, `title_attribute`, `search`, `status`, `on_delete`, `backing`, link Attributes and any other field | `lorebase.<field>` | |
+| `indexed`, `searchable`, `search_weight`, `vault`, `valid_time`, `icon`, `color`, `title_attribute`, `search`, `status`, `on_delete`, `backing`, link Attributes and any other field | `lorebase.<field>` | |
 | path Derivation | a slot on the class where the path starts, with the class where it ends as range | annotations `lorebase.derivation_variant: path`, `lorebase.steps` (JSON), `lorebase.inverse_api_name`, `lorebase.materialized`, `lorebase.id`; `multivalued` when a step can reach several Records |
 | Operations, other Derivations, Sources | schema annotations `lorebase.operations`, `lorebase.derivations`, `lorebase.sources` | export only |
 

@@ -20,6 +20,8 @@ def test_defaults() -> None:
     assert scribe.scheduler.gc_schedule == "0 3 * * *"
     assert scribe.sources.commit_batch == 5000
     assert scribe.sources.csv.allowed_roots == ()
+    assert scribe.reconciliation.hold_auto_accept
+    assert scribe.reconciliation.max_claims_per_candidate == 20
 
 
 def test_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -28,6 +30,20 @@ def test_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     scribe = scribe_settings(load_settings())
     assert scribe.worker.concurrency == 4
     assert scribe.sources.csv.allowed_roots == ("/data/supply",)
+
+
+def test_reconciliation_stages_run_in_a_fixed_order() -> None:
+    scribe = ScribeSettings.model_validate(
+        {
+            "reconciliation": {
+                "stages": ["normalize", "values"],
+                "normalize": {"numeric_tolerance": 0.01},
+            }
+        }
+    )
+    assert [s.value for s in scribe.reconciliation.stages] == ["values", "normalize"]
+    with pytest.raises(ValueError, match="numeric_tolerance"):
+        ScribeSettings.model_validate({"reconciliation": {"normalize": {"numeric_tolerance": -1}}})
 
 
 def test_invalid_gc_schedule_is_refused() -> None:

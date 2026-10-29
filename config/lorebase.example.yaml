@@ -427,6 +427,13 @@ keeper:
                                      # false: names only (values may be sensitive)
     summary_value_chars: 80      # characters of a parameter value kept in the description
     max_summary_operations: 20   # executions listed in one Proposal description
+  reconciliation:                # reconciliation queue endpoints (design 10.6); detection is
+                                 # set in scribe.reconciliation
+    default_limit: 50            # candidates listed per page
+    max_limit: 500               # largest page a request may ask for
+    bulk_max: 1000               # candidates one bulk resolution may decide
+    merge_check: warn            # Proposal check of open candidates: off, warn (listed) or block
+                                 # (open contradictions stop the merge); a Domain overrides it
   documents:                     # document intake for extraction (docs/extraction.md)
     max_bytes: 20971520          # largest document (20 MiB); the upload route allows this much
     multipart_overhead_bytes: 65536  # plus this, whatever limits.max_request_body_bytes says
@@ -1281,3 +1288,30 @@ scribe:
       allowed_schemes: [https]
       allow_private_targets: false
       timeout_s: 10.0
+  reconciliation:                # contradictions between Sources (design 10.6); a Domain
+                                 # overrides any member in its `reconciliation` setting
+    enabled: true                # false: no candidate is raised
+    stages: [identity, values, normalize, semantic]   # run in this order; leave one out to
+                                 # disable it
+    hold_auto_accept: true       # extraction items raising a contradiction stay pending
+    sweep_interval_s: 0.0        # scheduled sweep of every Domain; 0 disables it
+    sweep_max_changes_per_job: 50000   # history changes one sweep job reads; then a continuation
+    max_claims_per_candidate: 20 # newest claims kept per candidate; the others are counted
+    triggers:
+      extraction: true           # check extraction value items while they are assembled
+      source_sync: true          # check a Source sync's changes before they are merged
+    duplicates:
+      trigram_threshold: 0.8     # least title similarity of a duplicate candidate
+      max_pairs_per_kind: 1000   # duplicate pairs examined per Kind and pass
+    normalize:                   # string and text values; never changes a stored value
+      units_file: null           # YAML table of units replacing the one shipped with lorebase_core
+      numeric_tolerance: 0.0     # relative difference under which numbers are equal
+      negation_words: [not, "no", never, without]   # equal without them: marked negation
+    semantic:                    # embeddings of competing text values (needs inference.embeddings)
+      enabled: false             # true also needs the stage in `stages`
+      equivalence_threshold: null   # similarity above which paraphrases are not raised; null: all
+      duplicate_threshold: 0.92  # least similarity of stored Record vectors for a duplicate
+      judge: false               # ask the chat model whether two texts contradict
+    stale:
+      max_age: null              # ISO 8601 duration (e.g. P30D); null: off. Per Kind and
+                                 # Attribute in the Domain settings
