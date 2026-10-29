@@ -55,7 +55,10 @@ TABLES = {
         "SELECT revision_id, partition, element_key, old_hash, new_hash, provenance "
         "FROM changesets ORDER BY revision_id, partition, element_key"
     ),
-    "provenance": "SELECT id, origin_type, origin_ref, actor, at FROM provenance ORDER BY id",
+    "provenance": (
+        "SELECT id, origin_type, origin_ref, actor, at, valid_from, valid_to FROM provenance "
+        "ORDER BY id"
+    ),
     "refs": (
         "SELECT name, kind::text, head, protected, materialization::text, version, created_at, "
         "created_by FROM refs ORDER BY name"
@@ -143,6 +146,28 @@ async def table_rows(engine: AsyncEngine) -> dict[str, list[tuple[Any, ...]]]:
         }
 
 
+async def set_periods(engine: AsyncEngine) -> None:
+    """Give two provenance entries validity periods (one open ended), as a sync would."""
+    async with async_sessionmaker(engine)() as session, session.begin():
+        await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
+        ids = [
+            r[0]
+            for r in await session.execute(text("SELECT id FROM provenance ORDER BY id LIMIT 2"))
+        ]
+        assert len(ids) == 2
+        await session.execute(
+            text(
+                "UPDATE provenance SET valid_from = '2024-01-01T00:00:00Z', "
+                "valid_to = '2025-01-01T00:00:00Z' WHERE id = :id"
+            ),
+            {"id": ids[0]},
+        )
+        await session.execute(
+            text("UPDATE provenance SET valid_from = '2025-01-01T00:00:00Z' WHERE id = :id"),
+            {"id": ids[1]},
+        )
+
+
 async def hashes(engine: AsyncEngine, table: str) -> set[bytes]:
     async with async_sessionmaker(engine)() as session:
         await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', false)"))
@@ -178,6 +203,7 @@ async def test_round_trip_into_a_second_database(
     tmp_path: Path,
 ) -> None:
     await populate(sessions, runtime)
+    await set_periods(engine)
     garbage = await collect_garbage(engine, DOMAIN, runtime=runtime, dry_run=True, grace_seconds=0)
     assert garbage.revisions == 1
 

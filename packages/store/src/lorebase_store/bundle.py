@@ -14,7 +14,7 @@ Layout (the `.jsonl` names carry `.gz` when `store.bundle.compression` is gzip):
     ref_log.jsonl      head movements of every ref
     revisions.jsonl    id, root, generation, parents, author, message, origin, stats, created_at
     changesets.jsonl   element changes of each Revision
-    provenance.jsonl   provenance entries
+    provenance.jsonl   provenance entries (validity periods only when set)
     nodes.jsonl        tree nodes: hash and base64 body
     objects.jsonl      objects: hash, type and canonical body
     vault.jsonl        only with vault values: token, binding, value or erased (see below)
@@ -375,7 +375,7 @@ _CHANGESETS = text(
     """
 )
 _PROVENANCE = text(
-    "SELECT id, origin_type, origin_ref, actor, at FROM provenance "
+    "SELECT id, origin_type, origin_ref, actor, at, valid_from, valid_to FROM provenance "
     "WHERE domain_id = :d AND id > :last ORDER BY id LIMIT :n"
 )
 _REF_LOG = text(
@@ -717,15 +717,20 @@ async def _export_provenance(session: AsyncSession, out: _Output, domain: str, b
             if not rows:
                 return lines.records
             for row in rows:
-                lines.write(
-                    {
-                        "id": row.id,
-                        "origin_type": row.origin_type,
-                        "origin_ref": row.origin_ref,
-                        "actor": row.actor,
-                        "at": _timestamp(row.at),
-                    }
-                )
+                entry = {
+                    "id": row.id,
+                    "origin_type": row.origin_type,
+                    "origin_ref": row.origin_ref,
+                    "actor": row.actor,
+                    "at": _timestamp(row.at),
+                }
+                # Validity periods (design 10.6) are written only when set, so bundles of
+                # Domains without periods read as before.
+                if row.valid_from is not None:
+                    entry["valid_from"] = _timestamp(row.valid_from)
+                if row.valid_to is not None:
+                    entry["valid_to"] = _timestamp(row.valid_to)
+                lines.write(entry)
             last = rows[-1].id
 
 
@@ -1617,6 +1622,10 @@ async def _import_changesets(c: _Import) -> None:
     c.expect("changesets", total)
 
 
+def _optional_time(value: Any) -> datetime | None:
+    return None if value is None else datetime.fromisoformat(value)
+
+
 async def _import_provenance(c: _Import) -> None:
     writes = c.runtime.settings.writes
     total = 0
@@ -1629,6 +1638,8 @@ async def _import_provenance(c: _Import) -> None:
                 "origin_ref": line["origin_ref"],
                 "actor": line["actor"],
                 "at": datetime.fromisoformat(line["at"]),
+                "valid_from": _optional_time(line.get("valid_from")),
+                "valid_to": _optional_time(line.get("valid_to")),
             }
             for line in batch
         ]
