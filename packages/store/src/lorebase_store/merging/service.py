@@ -33,7 +33,7 @@ Source merges included.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -61,7 +61,13 @@ from lorebase_core.model import (
     new_ulid,
 )
 from lorebase_core.reconcile import CandidateType
-from lorebase_core.revision import Author, ChangesetEntry, Origin, Revision
+from lorebase_core.revision import (
+    Author,
+    ChangesetEntry,
+    Origin,
+    Revision,
+    lowest_common_ancestors,
+)
 from lorebase_core.tree import PARTITION_SCHEMA, Tree, TreeParams
 from lorebase_store.commit.errors import (
     BranchLockTimeoutError,
@@ -712,24 +718,42 @@ def touched_kinds(
     both ends. A virtual base is not in the graph: the partitions of the merged changes and of
     the Conflicts stand in for it. The schema partition alone names no Kind."""
     outcome = computation.outcome
+    if not outcome.virtual_base:
+        return kinds_since(store, objects, graph, (outcome.base,), theirs)
+    partitions = {state.conflict.partition for state in computation.conflicts}
+    if isinstance(outcome, MergedTree):
+        partitions |= {entry.partition for entry in outcome.changes}
+    return _partition_kinds(store, objects, graph.root(theirs), partitions)
+
+
+def kinds_since(
+    store: PgNodeStore,
+    objects: SessionObjectStore,
+    graph: PgRevisionGraph,
+    bases: Sequence[bytes | None],
+    theirs: bytes,
+) -> tuple[str, ...]:
+    """Ids of the Kinds whose partitions differ between any of `bases` and `theirs`."""
     theirs_root = graph.root(theirs)
     tree = Tree.load(store, theirs_root)
-    partitions: set[str]
-    if outcome.virtual_base:
-        partitions = {state.conflict.partition for state in computation.conflicts}
-        if isinstance(outcome, MergedTree):
-            partitions |= {entry.partition for entry in outcome.changes}
-    else:
-        base = {} if outcome.base is None else Tree.load(store, graph.root(outcome.base)).partitions
-        partitions = {
+    partitions: set[str] = set()
+    for found in bases:
+        base = {} if found is None else Tree.load(store, graph.root(found)).partitions
+        partitions |= {
             name
             for name in set(tree.partitions) | set(base)
             if tree.partitions.get(name) != base.get(name)
         }
-    partitions.discard(PARTITION_SCHEMA)
+    return _partition_kinds(store, objects, theirs_root, partitions)
+
+
+def _partition_kinds(
+    store: PgNodeStore, objects: SessionObjectStore, root: bytes, partitions: set[str]
+) -> tuple[str, ...]:
+    partitions = partitions - {PARTITION_SCHEMA}
     if not partitions:
         return ()
-    schema = tree_schema_loader(store, objects)(theirs_root)
+    schema = tree_schema_loader(store, objects)(root)
     kinds: set[str] = set()
     for name in partitions:
         try:
@@ -743,6 +767,32 @@ def touched_kinds(
             if relation is not None:
                 kinds.update((relation.from_kind, relation.to_kind))
     return tuple(sorted(kinds))
+
+
+async def proposal_kinds(
+    session: AsyncSession, domain_id: str, proposal: ProposalRow
+) -> tuple[str, ...] | None:
+    """The Kinds a Proposal touches: the stored ones, else (a Proposal no attempt has
+    computed them for yet, such as one opened before they were stored) the Kinds that differ
+    between its branches' common ancestors and the source head. `None` when a branch is
+    gone."""
+    if proposal.kinds is not None:
+        return tuple(proposal.kinds)
+    refs = RefRepository(session, domain_id)
+    target = await refs.get(proposal.target_ref)
+    source = await refs.get(proposal.source_ref)
+    if target is None or source is None:
+        return None
+    ours, theirs = target.head, source.head
+
+    def compute(sync: Session) -> tuple[str, ...]:
+        store = PgNodeStore(sync, domain_id)
+        objects = SessionObjectStore(sync, domain_id)
+        graph = PgRevisionGraph(sync, domain_id)
+        common = lowest_common_ancestors(graph, ours, theirs)
+        return kinds_since(store, objects, graph, common or (None,), theirs)
+
+    return await session.run_sync(compute)
 
 
 def _summary(computation: AttemptComputation) -> dict[str, Any]:

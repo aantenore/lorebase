@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from lorebase_core.model import LocalEdits, Schema
+from lorebase_core.model import Link, LocalEdits, Schema
 from lorebase_core.model.source import MergePolicy as SourcePolicy
+from lorebase_core.validate import LinkUpsert
 from lorebase_scribe.sources import SourceSync
 from lorebase_store.merging import MergeRequest, MergeService
 from lorebase_store.repositories import (
@@ -298,6 +299,144 @@ async def test_a_snapshot_deletion_of_an_edited_record_is_a_conflict(
     assert [(c.code, c.element_key) for c in codes] == [("DV2", "S-1030")]
     [entry] = await audit(sessions)
     assert (entry["attribute"], entry["outcome"]) == (None, "conflict")
+
+
+async def link_part(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+    part: str,
+    supplier: str,
+) -> None:
+    """A person adds a Part and its `supplied_by` Link to a Supplier on main."""
+    kind = schema.kind_by_api_name("Part")
+    found = schema.relation_by_api_name("supplied_by")
+    assert kind is not None
+    assert found is not None
+    row = next(r for r in rows("part.csv") if r["part_number"] == part)
+    link = Link(relation=found[0].id, from_key=part, to_key=supplier)
+    await commit_on(sessions, runtime, clock, [record_change(kind, row), LinkUpsert(link=link)])
+
+
+async def links_to(sessions: async_sessionmaker[AsyncSession], supplier: str) -> list[str]:
+    found = await fetch(
+        sessions,
+        "SELECT from_key FROM mat_links WHERE domain_id = :d AND branch = 'main' "
+        "AND to_key = :k AND NOT deleted ORDER BY from_key",
+        d=DOMAIN,
+        k=supplier,
+    )
+    return [row.from_key for row in found]
+
+
+async def test_a_kept_record_keeps_its_links(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    suppliers_csv: Path,
+) -> None:
+    schema = schema_with(LocalEdits.KEEP)
+    sync = await setup(sessions, runtime, clock, suppliers_csv, schema)
+    await link_part(sessions, runtime, clock, schema, "P-10039", "S-1030")
+    await edit(sessions, runtime, clock, schema, "S-1030", status="on_hold")
+    rewrite(suppliers_csv, lambda data: [r for r in data if r["supplier_code"] != "S-1030"])
+
+    report = await sync.run(DOMAIN, SUPPLIERS)
+    assert report.local_edits == {"kept": 1}
+    assert report.proposal_status == "merged"
+    # The deletion is not taken, and neither is the removal of the Links it carried.
+    assert await value_on(sessions, schema, "S-1030", "status") == "on_hold"
+    assert await links_to(sessions, "S-1030") == ["P-10039"]
+
+
+async def test_a_deletion_taken_by_the_reviewer_removes_the_links(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    suppliers_csv: Path,
+) -> None:
+    schema = schema_with(None)
+    sync = await setup(sessions, runtime, clock, suppliers_csv, schema)
+    await link_part(sessions, runtime, clock, schema, "P-10039", "S-1030")
+    await edit(sessions, runtime, clock, schema, "S-1030", status="on_hold")
+    rewrite(suppliers_csv, lambda data: [r for r in data if r["supplier_code"] != "S-1030"])
+    report = await sync.run(DOMAIN, SUPPLIERS)
+    assert report.merge_status == "conflicted"
+    assert await links_to(sessions, "S-1030") == ["P-10039"]
+
+    fingerprint = await scalar(
+        sessions,
+        "SELECT encode(c.fingerprint, 'hex') FROM conflicts c JOIN merge_attempts m "
+        "ON m.domain_id = c.domain_id AND m.id = c.attempt_id "
+        "WHERE m.proposal_id = :p AND m.status = 'conflicted'",
+        p=report.proposal_id,
+    )
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await ResolutionRepository(session, DOMAIN).upsert_many(
+            str(report.proposal_id),
+            [
+                ResolutionRow(
+                    fingerprint=fingerprint,
+                    resolution={"choice": "theirs"},
+                    resolved_by="usr_reviewer",
+                    at=clock(),
+                )
+            ],
+        )
+        proposal = await ProposalRepository(session, DOMAIN).get(str(report.proposal_id))
+        assert proposal is not None
+        merged = await MergeService(session, DOMAIN, runtime=runtime, clock=clock).merge(
+            MergeRequest(proposal=proposal, actor="usr_reviewer")
+        )
+        assert merged.merged
+    assert await value_on(sessions, schema, "S-1030", "status") is None
+    assert await links_to(sessions, "S-1030") == []
+
+
+async def test_keep_decides_again_a_conflict_a_person_reopened(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    suppliers_csv: Path,
+) -> None:
+    # A Proposal left open (merged by people): a new edit of the kept value makes a new
+    # Conflict, which the next run decides for the person again.
+    schema = schema_with(LocalEdits.KEEP, SourcePolicy.PROPOSAL)
+    await load_domain(sessions, runtime, clock, schema)
+    sync = SourceSync(
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
+    )
+    await sync.run(DOMAIN, SUPPLIERS)
+    proposal_id = await scalar(sessions, "SELECT id FROM proposals WHERE status = 'open'")
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        proposal = await ProposalRepository(session, DOMAIN).get(str(proposal_id))
+        assert proposal is not None
+        first = await MergeService(session, DOMAIN, runtime=runtime, clock=clock).merge(
+            MergeRequest(proposal=proposal, actor="usr_reviewer")
+        )
+        assert first.merged
+    await edit(sessions, runtime, clock, schema, "S-1003", risk_score="10")
+    rewrite(suppliers_csv, set_column("S-1003", "risk_score", "71"))
+    report = await sync.run(DOMAIN, SUPPLIERS)
+    assert report.local_edits == {"kept": 1}
+    assert (report.proposal_status, report.conflicts) == ("open", 0)
+
+    await edit(sessions, runtime, clock, schema, "S-1003", risk_score="12")
+    rewrite(suppliers_csv, set_column("S-1001", "city", "Turin"))
+    again = await sync.run(DOMAIN, SUPPLIERS)
+    assert again.proposal_id == report.proposal_id
+    assert again.local_edits == {}
+    assert again.conflicts == 0
+    resolvers = await fetch(
+        sessions,
+        "SELECT resolved_by FROM conflict_resolutions WHERE proposal_id = :p",
+        p=report.proposal_id,
+    )
+    assert [r.resolved_by for r in resolvers] == ["policy:local_edits"] * 2
+    assert await value_on(sessions, schema, "S-1003", "risk_score") == "12"
 
 
 async def test_seeding_without_state(

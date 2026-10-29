@@ -155,6 +155,15 @@ async def candidate(loader: Loader, key: str) -> str:
     return outcome.row.id
 
 
+async def forget_kinds(loader: Loader, proposal_id: str) -> None:
+    """The Proposal as one opened before its Kinds were stored."""
+    async with loader.session() as session, session.begin():
+        await scope_to_domain(session, "supply")
+        await session.execute(
+            text("UPDATE proposals SET kinds = NULL WHERE id = :id"), {"id": proposal_id}
+        )
+
+
 def ids(response: Any) -> list[str]:
     assert response.status_code == 200, response.text
     return [item["id"] for item in response.json()["items"]]
@@ -198,6 +207,8 @@ async def test_stewards_route_work_and_gate_approvals(
         none = await http.get(PROPOSALS, params={"assigned": "none"}, headers=viewer)
         assert set(ids(none)) == {sup["id"], doc["id"]}
 
+        # Kinds not stored yet (a Proposal from before they were): computed when read.
+        await forget_kinds(loader, sup["id"])
         await declare_stewards(loader)
         everything = {
             i["id"]: i for i in (await http.get(PROPOSALS, headers=admin)).json()["items"]
@@ -235,6 +246,7 @@ async def test_stewards_route_work_and_gate_approvals(
         auth=auth(installation_admin.id), proposals={"required_approvals_from_stewards": 1}
     ) as http:
         base = f"{PROPOSALS}/{sup['id']}"
+        await forget_kinds(loader, sup["id"])
         approved = await http.post(f"{base}/reviews", json={"verdict": "approve"}, headers=reviewer)
         assert approved.status_code == 201, approved.text
         approval = approved.json()["approval"]

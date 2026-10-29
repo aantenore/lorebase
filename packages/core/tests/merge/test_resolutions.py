@@ -34,7 +34,10 @@ from .support import (
     Edit,
     Fork,
     attempt,
+    fork,
     merged,
+    part,
+    supplied_by,
     supplier,
 )
 
@@ -82,6 +85,47 @@ def test_delete_modify_keeps_deleted_or_modified() -> None:
     assert scenario.repo.values(deleted.root, PART, "P-3") is None
     _, kept = resolve_only(scenario, C.THEIRS)
     assert scenario.repo.values(kept.root, PART, "P-3") is not None
+
+
+def test_a_kept_record_keeps_the_links_its_deletion_removed() -> None:
+    # Theirs deletes P-1 with its Link, ours modifies P-1.
+    scenario = fork(
+        Edit().upsert(part("P-1", "Renamed")),
+        Edit().remove(part("P-1"), supplied_by("P-1", "S-1")),
+    )
+    _, kept = resolve_only(scenario, C.OURS)
+    assert scenario.repo.values(kept.root, PART, "P-1") is not None
+    assert scenario.repo.has_link(kept.root, SUPPLIED_BY, "P-1", "S-1")
+    _, deleted = resolve_only(scenario, C.THEIRS)
+    assert scenario.repo.values(deleted.root, PART, "P-1") is None
+    assert not scenario.repo.has_link(deleted.root, SUPPLIED_BY, "P-1", "S-1")
+
+
+def test_links_into_a_kept_record_and_from_either_side_are_kept() -> None:
+    # A Link pointing at the Record (removed by `on_delete`) is kept as well.
+    into = fork(
+        Edit().upsert(supplier("S-1", "Renamed", vat="IT001", country="IT", rating="3")),
+        Edit().remove(supplier("S-1"), supplied_by("P-1", "S-1")),
+    )
+    _, kept = resolve_only(into, C.OURS)
+    assert into.repo.has_link(kept.root, SUPPLIED_BY, "P-1", "S-1")
+    # Ours deleted, theirs modified, the modified version wins: ours' Link comes back.
+    reverse = fork(
+        Edit().remove(part("P-1"), supplied_by("P-1", "S-1")),
+        Edit().upsert(part("P-1", "Renamed")),
+    )
+    _, restored = resolve_only(reverse, C.THEIRS)
+    assert reverse.repo.has_link(restored.root, SUPPLIED_BY, "P-1", "S-1")
+
+
+def test_a_link_the_keeping_side_removed_stays_removed() -> None:
+    scenario = fork(
+        Edit().upsert(part("P-1", "Renamed")).remove(supplied_by("P-1", "S-1")),
+        Edit().remove(part("P-1"), supplied_by("P-1", "S-1")),
+    )
+    _, kept = resolve_only(scenario, C.OURS)
+    assert scenario.repo.values(kept.root, PART, "P-1") is not None
+    assert not scenario.repo.has_link(kept.root, SUPPLIED_BY, "P-1", "S-1")
 
 
 def test_schema_property_custom_value() -> None:

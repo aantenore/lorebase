@@ -384,3 +384,31 @@ def test_links_follow_upstream_changes_only(mapper: RowMapper, supply_schema: Sc
     )
     changes = [c.change for c in moved.groups[0].changes]
     assert [type(c) for c in changes] == [LinkUpsert]  # P-20000 stays, P-10001 is gone already
+
+
+def test_a_record_recreated_over_a_deletion_gets_its_links(
+    mapper: RowMapper, supply_schema: Schema
+) -> None:
+    key, _record = stored(mapper, ORDER)
+    for_part = relation(supply_schema, "for_part")
+    delivered = relation(supply_schema, "delivered_to")
+    # Someone else deleted the Record, and its Links with it; upstream then changed it.
+    last = {
+        for_part: {key: WrittenRow(for_part, key, {"P-10001": value_digest("P-10001")}, None, "x")},
+        delivered: {key: WrittenRow(delivered, key, {"PL-10": value_digest("PL-10")}, None, "x")},
+    }
+    written = WrittenState(records={key: last_written(mapper, ORDER)}, links=last)
+    delta = compute_delta(
+        mapper,
+        [mapper.map({**ORDER, "state": "shipped"}, "r")],
+        CurrentState(),
+        written,
+        delete_missing=True,
+        provenance=provenance,
+    )
+    assert [(e.key, e.attribute, e.outcome) for e in delta.local_edits] == [
+        (key, None, Outcome.CONFLICT)
+    ]
+    changes = [c.change for c in delta.groups[0].changes]
+    assert [type(c) for c in changes] == [RecordUpsert, LinkUpsert, LinkUpsert]
+    assert {c.link.to_key for c in changes if isinstance(c, LinkUpsert)} == {"P-10001", "PL-10"}
