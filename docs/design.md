@@ -59,6 +59,10 @@ Teams putting agents in front of real business processes hit the same wall:
 4. It must be **open source** under a permissive license, with enterprise features (RBAC, audit, SSO) in the open core, not behind a paywall.
 5. Model inference is a **pluggable, local-first utility**: the whole product runs free on a laptop with open models, and scales to any paid hosted model by configuration, never by code change.
 
+### 1.4 Principles of record
+
+A value has exactly one current home: the Record, Attribute and branch head that hold it. Copies (Source branches, extraction branches, context packs, caches, exports) are never edited in place; they are rebuilt from that home or proposed back to it. A value changes for one of two reasons only: its system of record changed it upstream (a Source sync, a new version of a document), or a person decided (an Operation, a Conflict resolution, a reconciliation decision). Lorebase never silently drops either: an upstream change that meets a person's correction becomes a Conflict, and a correction is never overwritten by a Source that did not change (9.1, AC-34). Corrections, stale signals and contradictions are recorded as reviewable objects (Conflicts, held Proposal items, reconciliation candidates) with their evidence; they are never guessed by a model and never applied by a score.
+
 ---
 
 ## 2. Goals, non-goals, anti-goals
@@ -88,6 +92,9 @@ Teams putting agents in front of real business processes hit the same wall:
 - Real-time CDC streaming ingestion in v1 (incremental sync by watermark is supported; CDC is a later connector).
 - Training, fine-tuning or serving models. Lorebase calls model servers through one abstraction; the optional Ollama compose profile is a convenience, not a serving product.
 - Multi-region active-active writes.
+- Environment and release management. Versions of systems, deployments and releases are modelled as Records (a `Release` Kind, a `deployed_to` Relation), tags on Revisions or `valid_time` periods (5.4, 10.6); release tooling stays the system of record and reaches Lorebase as a Source.
+- Key aliases. A Record absorbed by a duplicate merge loses its key; outside references are not redirected (10.6).
+- Live federated reads. Lorebase answers from its own materialized heads; it does not query Sources or other Domains at read time (AC-04, AC-17).
 
 ### 2.3 Anti-goals (things Lorebase refuses to do)
 
@@ -183,7 +190,7 @@ Lorebase uses its own vocabulary consistently in code, API, UI and docs. The ful
 
 ### 5.1 Identity rules
 
-- Every schema element (Kind, Attribute, Relation, Trait, Operation, Derivation, Source) has a **stable id** minted at creation: a prefixed ULID, for example `knd_01JB8Z...`, `att_01JB8Z...`, `rel_...`, `trt_...`, `opr_...`, `drv_...`, `src_...`.
+- Every schema element (Kind, Attribute, Relation, Trait, Operation, Derivation, Source, Lens) has a **stable id** minted at creation: a prefixed ULID, for example `knd_01JB8Z...`, `att_01JB8Z...`, `rel_...`, `trt_...`, `opr_...`, `drv_...`, `src_...`, `lns_...`.
 - Every schema element also has an **api name** (`snake_case` for Attributes, Relations, Operations; `PascalCase` for Kinds and Traits) unique within its scope, and a display name. Api names may be renamed; ids never change. **[Architect call AC-01]** Identity by id makes rename-on-one-side plus edit-on-the-other a clean merge.
 - A **Record** is identified by `(kind_id, key)`. `key` is the value of the Kind's primary key Attribute(s), rendered as a canonical string. Kinds without a natural key mint a ULID at creation. **[Architect call AC-02]**
 - A **Link** is identified by `(relation_id, from_key, to_key)`. There are no parallel Links between the same two Records for the same Relation; multiplicity is modeled with an intermediate Kind. **[Architect call AC-03]**
@@ -196,7 +203,8 @@ Lorebase uses its own vocabulary consistently in code, API, UI and docs. The ful
 | id | slug | `supply`; immutable |
 | display_name, description | string | |
 | default_branch | string | default `main` |
-| settings | object | search language, materialization policy, extraction defaults, merge policies |
+| settings | object | search language, materialization policy, extraction defaults (`extraction.mode`, thresholds and `source_key` prefix rules, 9.2 "Ingestion modes"), merge policies |
+| stewards | list of role names | optional, in the schema's `domain` section (5.13): the roles that review this Domain's Proposals and reconciliation candidates by default (10.7) |
 | examples | list of `{label, question}` | optional sample questions that clients offer as ready-made prompts (the web app's Explore and Retrieval lab); at most 20, labels unique, label up to 80 and question up to 500 characters; absent when empty |
 | created_at, created_by | | |
 
@@ -215,6 +223,7 @@ A Domain is the unit of isolation for data, permissions, storage scoping (object
 | search | `{text_attributes: [...weights], embedding_template: string or null, embedding_sensitive: bool or null}`; a Kind with a template is embedded (9.3) |
 | icon, color | presentation hints for Explorer and Canvas |
 | operations_builtin | which built-in Operations are enabled (`create`, `update`, `delete`) |
+| stewards | optional list of role names; overrides the Domain's `stewards` for work touching this Kind (10.7) |
 
 ### 5.4 Attribute
 
@@ -261,7 +270,7 @@ Cardinality is enforced on every commit and checked again after merges.
 
 ### 5.6 Trait
 
-A Trait declares a set of Attributes (name, type, required). A Kind implements a Trait by mapping each Trait Attribute to one of its own Attributes with a compatible type. Queries and search may target a Trait (`Located` returns Suppliers and Plants), and Operations may be declared against a Trait. Traits cannot hold data themselves. A Trait change that a Kind no longer satisfies is a structural Conflict at merge time and a validation error at commit time.
+A Trait declares a set of Attributes (name, type, required). A Kind implements a Trait by mapping each Trait Attribute to one of its own Attributes with a compatible type. Queries and search may target a Trait (`Located` returns Suppliers and Plants), context packs may take Traits as seed targets (8.8), and Operations may be declared against a Trait. Traits cannot hold data themselves. A Trait change that a Kind no longer satisfies is a structural Conflict at merge time and a validation error at commit time.
 
 ### 5.7 Operation
 
@@ -339,6 +348,7 @@ Custom code Derivations (Python functions) are out of scope until after M5; when
 | sync_mode | `snapshot` (Source owns its scope; missing keys are deletions) or `incremental` (by watermark column; no deletions unless tombstone column) |
 | schedule | cron expression, or manual |
 | target_branch_policy | branch name template (default `source/{source}`) and merge policy: `auto_when_clean`, `proposal`, `auto_with_authority` |
+| local_edits | `review` (default), `keep` or `source_wins`: what an upstream change does to a value someone else set on the target since this Source last wrote it (9.1 "Corrections that stick") |
 
 ### 5.10 Record and Link
 
@@ -353,6 +363,7 @@ Lineage answers "where did this value come from". It is attached to changes, not
 - The materialized head keeps, per Record, the latest provenance per Attribute and the Revision of that change (`lineage_revisions`, revision `0032`, folded in the commit transaction like the provenance, and by rebuilds from the branch history, with the Revision that created the Record under `$created`). That Revision is the one on the branch's first-parent chain: for a value merged from another branch, the merge Revision, whose changeset attributes only the values the merge changes, so values it leaves keep their Revision (folds diff a merge step's values against the branch's previous value, so merges made before that restriction read the same). A fast-forward makes the source's first-parent chain the branch's, so a Record it writes takes the source row's lineage, lineage revisions and update Revision, as a rebuild folding that chain does, and the branch history gets one row per change of each fast-forwarded Revision, as a rebuild writes it, when the range is at most `store.materialize.fast_forward_history_max_revisions` (1000) Revisions of the source head's first-parent chain; a longer range, or one reached through a second parent, is recorded as one change per element at the source head, so the history endpoint and the change count of lineage show fewer changes there than after a rebuild. Rows materialized before `0032` are filled by the `store.lineage_backfill` job, queued once by a starting job worker (`"recompute": true`, or `python -m lorebase_store.jobs lineage-backfill --recompute`, also folds again the rows naming a merge Revision, and rewrites the history of earlier fast-forwards one Revision at a time within that bound, folding again the Records they updated and the lineage of the Links they wrote; a fast-forwarded Link takes the source row's lineage too); until then lineage reads the newest `read.history.lineage_scan_changes` changes of the Record for what they lack. Full per-value history is available from the branch history table.
 - Provenance is **not** part of content hashes. Two Sources writing the same value produce no diff; Lineage records which change set it last. **[Architect call AC-08]**
 - A provenance entry of a value of a `valid_time` Attribute may carry `valid_from` and `valid_to`. The origin type `reconciliation` (candidate id, claim id, resolver) marks a value written by a reconciliation decision (10.6).
+- Lineage tells who set the **current** value. What a Source **last wrote** is kept apart, per Source, in its last-written state (`source_written`, 9.1): the two differ exactly when someone else changed a value the Source wrote. The last-written state is bookkeeping for syncs, not provenance: it is outside content and hashes (AC-08) and is never shown as the origin of a value.
 
 ### 5.12 Invariants
 
@@ -368,7 +379,7 @@ Lineage answers "where did this value come from". It is attached to changes, not
 A Domain schema is also a YAML document, read and written by `lorebase_core.model.yaml_schema` (`load_schema`, `dump_schema`). The document is the human-facing form of the same `Schema` (goal G1). The demo Domain is [examples/supply/schema.yaml](../examples/supply/schema.yaml).
 
 - **Format marker.** `format: lorebase.schema/v1` is optional on load and written on every dump.
-- **Sections.** `domain` (required), then `kinds`, `relations`, `traits`, `operations`, `derivations`, `sources`, each optional. An unknown section or key, a duplicate key and an unknown reference are reported as problems with a path into the document (`SchemaYamlError.problems`); the loader reports everything it finds, not only the first.
+- **Sections.** `domain` (required), then `kinds`, `relations`, `traits`, `operations`, `derivations`, `sources`, `lenses`, each optional. An unknown section or key, a duplicate key and an unknown reference are reported as problems with a path into the document (`SchemaYamlError.problems`); the loader reports everything it finds, not only the first.
 - **Keys are api names.** Elements are keyed by api name (a relation by its forward name, a source by its dotted name such as `erp.vendors`) and refer to each other by api name: `primary_key`, `from_kind`, `authority`, trait `attribute_map`, Derivation and Source targets. Model fields keep their model names, except `derivation` and `trait`, which hold api names instead of the ids of `derivation_id` and `trait_id`. Defaults are omitted from dumps. Expressions are CEL source strings.
 - **Ids.** Every element and Attribute has a stable `id` (5.1). On load, an explicit `id` wins; an element without one reuses the id of the element with the same api name in the optional `base` schema; otherwise a new id is minted. Dumps always write ids.
 - **Rename rule.** Renaming is changing the key and keeping the `id`. A renamed key without an `id` is a new element (new id) unless the `base` schema has that api name, so keep the `id` when renaming. This is what lets a rename on one branch merge cleanly with an edit on another (AC-01).
@@ -381,6 +392,24 @@ A Domain schema is also a YAML document, read and written by `lorebase_core.mode
     examples:
       - label: Single-source risk
         question: Which parts depend on a single supplier, and how risky is that supplier?
+  ```
+- **Stewards.** `domain.stewards` and `kinds.{Kind}.stewards` list role names (10.2 built-in roles or `keeper.auth.authz.custom_roles`). A name the installation does not define is a warning (`schema.steward_role_unknown`), not an error: roles live in configuration and may be added later. An empty list is the same as none and is not written (10.7).
+- **Lenses.** `lenses.{name}` holds a named read preset: `description`, `kinds`, `traits`, `relations`, `depth`, `include_schema`, `include_recent_changes`, `include_lineage`, `budget_tokens`, all optional except `description`. Names are snake_case, unique among lenses; references are api names, stored as ids like every other reference, so renames do not break a lens. A lens is a schema element with a stable id (prefix `lns_`): it merges and conflicts like any other (SC1 to SC3, XS11 for a removed Kind, Trait or Relation it names), and static validation refuses unknown names (`schema.lens_reference_unknown`) and a `depth` below 0 (8.8).
+
+  ```yaml
+  domain:
+    id: supply
+    stewards: [supply-steward]
+  kinds:
+    Supplier:
+      stewards: [risk-analyst]
+  lenses:
+    supplier_risk:
+      description: A supplier with its contracts, parts and open risk flags.
+      kinds: [Supplier, Contract, Part, RiskFlag]
+      relations: [with_supplier, supplied_by, flags]
+      depth: 1
+      include_recent_changes: true
   ```
 - **Type syntax.** Scalars by name (`string`, `integer`, `date`); parameters in parentheses (`decimal(12,2)`, `ref(Supplier)`); `array<string>`; and a one-key mapping for enums and for arrays of complex types: `{enum: [low, high]}`, `{array: {enum: [a, b]}}`.
 
@@ -600,7 +629,7 @@ Grouped Conflicts (XS classes over many Records) are presented as one Conflict w
 - **Interactive.** Review shows base, ours and theirs side by side; the resolver picks a choice or enters a custom value (validated against the merged schema). Grouped Conflicts offer bulk choices.
 - **Policies.** A Proposal or a Source can carry merge policies applied before humans see anything:
   - `prefer: ours | theirs` per Kind or per Attribute;
-  - `authority`: a ranked list of origins (Sources, principals, actors, origin types); the side whose change comes from the higher ranked origin wins per Attribute, and the Source that owns an Attribute can rank first (`schema_authority`; Source syncs with `auto_with_authority` prefer the Source's side on those Attributes);
+  - `authority`: a ranked list of origins (Sources, principals, actors, origin types); the side whose change comes from the higher ranked origin wins per Attribute, and the Source that owns an Attribute can rank first (`schema_authority`; Source syncs with `auto_with_authority` prefer the Source's side on those Attributes). A Source with `local_edits: keep` (9.1) applies the ranking `[principal:*, operation, merge_resolution, reconciliation, source:{id}]` to its local-edit Conflicts, so the person's value wins and the decision is recorded as resolver `policy:local_edits`;
   - `newest_wins` by provenance timestamp, globally or for specified Attributes, ties decided by provenance entry id;
   - `cascade_dangling: true`;
   - `text_merge`: on by default, merges `text` values edited in different places (6.8 step 3), also settable per Kind, Relation or Attribute and by `paragraph` instead of `sentence`.
@@ -991,7 +1020,12 @@ create table jobs (id, type, domain_id, payload jsonb, status, priority, run_aft
 create table source_runs (domain_id, id, source_id, status, started_at, finished_at, stats jsonb,
   revision_id bytea, proposal_id text, error jsonb);
 create table documents (domain_id, id, filename, media_type, sha256 bytea, size bigint,
-  blob_ref text, text_hash bytea, metadata jsonb, created_at, created_by);
+  blob_ref text, text_hash bytea, metadata jsonb, created_at, created_by,
+  source_key text, version int, replaces text, status /* active | superseded | retired | purged */,
+  retired_at, retired_by, purged_at, purged_by);                            -- 9.2 document versions
+create table source_written (domain_id, source_id, target_branch, element /* kind_id | relation_id */,
+  key text, written jsonb /* {attribute_id: value_hash} */, revision_id bytea, deleted bool,
+  run_id text, updated_at);                                                 -- 9.1 last-written state
 create table document_chunks (domain_id, document_id, seq int, start_offset int, end_offset int,
   text text, chunk_hash bytea);
 create table extraction_jobs (domain_id, id, documents jsonb, schema_hash bytea, model text,
@@ -1051,6 +1085,7 @@ Operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `between`, `contains` (ar
 - **Query vectors.** Semantic and hybrid search take a `query_vector` supplied by the caller. Keeper and Herald never call a model, not even an embedding model. `describe_domain` and `GET /schema` advertise the embedding model name and dimension so agents compute compatible vectors themselves (for example with the same fastembed model, locally and for free). Without a vector, search runs in lexical mode. **[Architect call AC-17]**
 - **Where query vectors come from (implemented).** The caller embeds its query with the model Scribe uses, on its own side. `lorebase_inference` is the only package that calls models, and the import contracts allow it in Scribe only among the services: Keeper and Herald must not import it, and the CLI and the Python client depend on nothing internal. So the query side is: `lorebase-inference embed TEXT` prints `{model, dims, vector}` from the configured `inference.embeddings` (the same settings as Scribe's, so the same model and dimension), and `lorebase search TEXT --vector-file FILE` (or `-` for standard input) sends it as `query_vector`; Python callers use `create_embedding_model(settings).embed([text])` and pass the vector to `records.search`. Herald takes `query_vector` as given and never embeds text: a Herald that turned text into vectors through an embedding sidecar would put a model call (and its latency, cost and failure modes) back in the agent read path, which AC-17 rules out. Agents that need semantic search over MCP embed on their side, as above. A Keeper with `search.semantic.model` naming a model with no stored vectors returns no semantic hits; a vector of another dimension than `store.embeddings.dims` is refused with `dimension_mismatch`. `GET /schema` (and `lorebase_schema` in Herald) advertises the model: a `search` block with `modes` and `embedding: {model, dims}`, set when a Kind of the schema has an `embedding_template`. Keeper reads the name from `search.semantic.model` and the dimension from `store.embeddings.dims`; it does not import `lorebase_inference`. Models that expect prefixes use `inference.embeddings.query_prefix` (applied by `lorebase-inference embed --query`) and `document_prefix` (applied by Scribe).
 - **Hybrid.** Reciprocal rank fusion of lexical and vector candidate lists, computed in SQL, with filters applied before fusion.
+- **Filtered vector search.** Filters (Domain, branch, readable Kinds, `kinds`, `traits`, `lens`, `where`) stay in the statement before its limit, so a vector list never holds a Record the caller may not read; with an approximate index they must also not shorten the list. 8.8 settles how.
 - **BM25 ranking (optional).** With `search.backend: bm25` and a server that preloads ParadeDB `pg_search` (AGPL-3.0, opt-in image), lexical search without filters ranks with a BM25 index of the same search vectors (`lb_search_terms`, revision `0037`) through a top-k scan, so very common terms no longer cost their matches' rows; typo corrections, partial matching, Kind filters and masking are unchanged, scores are relative to the best hit. Without the extension or a valid index search keeps `ts_rank_cd` and `/readyz` says so. Details, the licence note and the cross-Domain statistics caveat: [search](search.md#bm25-ranking).
 - Search results return `{kind, key, title, snippet, score, match, revision}` and the typo `corrections` applied; snippets come from `ts_headline` on searchable Attributes.
 
@@ -1110,6 +1145,31 @@ An external agent reasons in a loop of reads, so every read it makes must cost m
 
 **Deferred.** Read replicas with `min_revision` (8.1); per-relation keyset pagination of Links.
 
+### 8.8 Read presets and filtered vector search
+
+Three read features that agents and people reach for repeatedly: Traits as search targets and context seeds, named lenses, and vector search that keeps its limit under filters. None of them calls a model or widens what a caller may read. **[Architect call AC-38]**
+
+**Traits as targets.** `POST /search` and the `search` and `query` seeds of `POST /context` take `traits: [TraitName, ...]` beside `kinds`. A Trait expands to its implementing Kinds **the caller may read** in the schema of the branch read; `kinds` and `traits` together target the union. With `keeper.auth.authz.invisible_kinds`, a Trait none of whose implementing Kinds is readable answers like an unknown Trait (422, the same text as a name that does not exist), and implementing Kinds left out of the projection are silently not searched. Hits keep their concrete `kind`. Masking is per Kind as for any hit. Herald: `lorebase_search` and `lorebase_context` take `traits`. CLI: `lorebase search TEXT --trait Located`.
+
+**Lenses.** A lens (5.13) is a named, schema-validated preset of a read: which Kinds and Traits it is about, which Relations to follow, how deep, which optional sections to include, and a budget.
+
+- **Context packs.** `POST /context {"lens": "supplier_risk", "refs": [...]}`. The lens supplies defaults; members given in the request win over the lens's (`relations`, `depth`, `include_*`, `budget_tokens`). The lens's `kinds` and `traits` restrict the neighborhood (neighbors of other Kinds and their Links are left out) and the Kinds of `search` and `query` seeds; seeds named by `refs` are kept whatever their Kind. `depth` and `budget_tokens` are still capped by `agents.context.max_depth` and `max_budget_tokens`; a lens over the caps is served at the caps and the pack says `capped: true`.
+- **Search.** `POST /search {"q": ..., "lens": "supplier_risk"}` targets the lens's `kinds` and `traits` when the request names neither; a request naming them wins.
+- **Discovery.** `GET /schema` (and `lorebase_schema`, `lorebase_describe_domain`) lists lenses with their description and resolved members. MCP resource `lorebase://{domain}/lenses/{lens}`.
+- **Grants.** A lens is a preset, not a permission. Every Kind, Trait and Relation it names is projected like any other name: members the caller may not read are dropped from the lens as served, and a lens whose every Kind is invisible answers like an unknown lens (404 on the resource, 422 in a request). Requests through a lens are authorized and masked exactly as the same request written out.
+- **Validation.** Static validation at commit time (5.13). At request time an unknown lens is 422 `lens_unknown`; a lens whose references a schema change on the branch broke cannot be committed (I1), so a lens read never meets a dangling name.
+
+**Filtered vector search.** The semantic list (8.6 "Search") joins stored embeddings to the branch's materialized Records and filters them; the HNSW index returns its nearest neighbours first and the filters run after, so a selective filter can leave fewer than `search.candidates` rows, or none, without saying so. Settled:
+
+1. Filters stay in the same statement and before its `LIMIT`: Domain, branch, readable Kinds and fingerprints as today, plus `kinds`, `traits`, `lens` and `where`. Nothing outside the caller's grants is ever ranked, fetched or counted (row-level security and the definer rules of 8.7 are unchanged).
+2. With pgvector 0.8 or later (detected at startup and reported by `/readyz`) and `search.semantic.iterative_scan: auto` (default), the semantic statement runs under `SET LOCAL hnsw.iterative_scan = relaxed_order` and `SET LOCAL hnsw.max_scan_tuples = search.semantic.max_scan_tuples` (default 20000) inside the read transaction, in a materialized subquery that the outer query orders again by exact distance, so the relaxed order of the scan never reaches the response.
+3. Without it (older pgvector, or `iterative_scan: off`), the index subquery fetches `search.candidates * search.semantic.overfetch_factor` (default 4) nearest rows before the filters, and the outer query filters and limits to `search.candidates`.
+4. When the list is still shorter than asked because the scan bound was reached, the response says `semantic_truncated: true` (Herald: `truncated`), like `truncated_candidates` for lexical search; a list that is short because fewer Records match is not flagged.
+
+Hybrid search uses the same semantic list. Half-precision indexes (8.6) are unaffected. Performance budgets (8.7) gain a row for filtered semantic search measured with a selective `where`.
+
+**Non-goals.** Lenses as a permission or sharing mechanism; lenses with free text or model-built selections; query-time embedding of text (AC-17); exact (non-approximate) vector search as a default.
+
 ---
 
 ## 9. Ingestion: Sources, extraction, Proposals
@@ -1135,12 +1195,40 @@ class SourceConnector(Protocol):
 - Output: a schema change set on a new branch and a Proposal. Inference never writes to `main`.
 
 **Sync run:**
-1. Read source batches; apply mapping and transforms; build canonical Record and Link objects.
-2. Look up current hashes for the batch keys on the Source branch (indexed reads on the materialized head).
-3. Emit changes only for differing hashes. For `snapshot` mode, keys owned by this Source (by Lineage and scope) and not seen in the run become deletions.
-4. Commit in batches (configurable, default 5k changes per Revision) on the Source branch.
-5. Open or update the Source's Proposal into the target branch; apply the merge policy (`auto_when_clean`, `proposal`, `auto_with_authority`).
+1. Read source batches; apply mapping and transforms; build the **fresh** values per Record and Link.
+2. Look up, for the batch keys, the Source's last-written state (`source_written`) and the current values and their lineage on the Source branch (indexed reads on the materialized head).
+3. Per Attribute, compare the fresh value with the **last-written** one, not with the current one (below). Only upstream changes are written; a value someone else set and the Source did not change upstream is left as it is. The Record written is the current Record with the upstream-changed Attributes replaced, so unchanged Attributes keep the current value and produce no diff.
+4. For `snapshot` mode, keys in the Source's last-written state (not marked deleted, within scope) and not seen in the run are deletions, subject to the local-edit rule below.
+5. Commit in batches (`scribe.sources.commit_batch`, default 5000 changes per Revision) on the Source branch.
+6. Open or update the Source's Proposal into the target branch. Local edits that meet an upstream change are Conflicts of its merge attempt (below); then apply the merge policy (`auto_when_clean`, `proposal`, `auto_with_authority`).
+7. When the Proposal merges, advance the last-written state of every element it carried to the fresh values of the run, in the merge transaction, whatever the resolutions chose. A Proposal closed unmerged advances nothing: its upstream changes are raised again by the next run.
 Provenance per changed Attribute: `source_sync` with Source id, run id and row locator.
+
+**Corrections that stick.** **[Architect call AC-34]** Until now the Source branch was reset to the target head whenever no Proposal was open, and the mapper wrote every Attribute it owned; a person's correction on the target was overwritten by the next clean merge even when the upstream value had not changed, and a snapshot run could delete a Record a person had edited. The rule now is that a Source changes only what changed upstream, and an upstream change that meets someone else's value is a decision for a person.
+
+- **Last-written state.** Per `(source, target branch, element, key)` (element: a Kind for Records, a Relation for Links of `relation_mapping`), `source_written` holds the hash of each Attribute value the Source last wrote (`written: {attribute_id: value_hash}`, canonical value hashes as in 6.1, never the values: sensitive and vault values are not copied), the Revision of the Source branch that last wrote the element (`revision_id`, where the value itself is read when needed), whether the Source last deleted it, and the run. It is keyed by Source, so two Sources mapping the same Kind keep separate states.
+- **Comparison per Attribute** (fresh `F`, last-written `W`, current `C` with its lineage):
+
+| Case | Meaning | Action |
+|------|---------|--------|
+| `F = W` | no upstream change | nothing, whatever `C` is: a correction, an Operation or another Source's value stays |
+| `F ≠ W`, `C = F` | upstream caught up with the current value | no change; state advances on merge |
+| `F ≠ W`, `C` set by this Source (lineage `source_sync` of this Source) | plain upstream change | write `F` |
+| `F ≠ W`, `C ≠ F`, `C` set by anyone else | **local edit** meets an upstream change | per `local_edits` (below) |
+
+- **Local edits.** `local_edits` on the Source (5.9):
+  - `review` (default): `F` is written on the Source branch and the Source Proposal's merge attempt carries a real `DV1` Conflict, built with a **preserved base**: the base value of that Attribute is the last-written `W` (read from `revision_id`), ours is `C`, theirs is `F`. The attempt uses the virtual base mechanism of AC-13 (a base Revision built for the attempt, not on any branch) with only those Attributes replaced, so every other change of the run still merges against the real merge base. The fingerprint (6.10) holds the hashes of `W`, `C` and `F`: a stored resolution re-applies while they hold, and the existing choices (ours, theirs, base, custom) and policies (6.10, the authority ranking included) decide it. `auto_when_clean` therefore no longer merges a run that meets a local edit: "clean" means no Conflict, local-edit Conflicts included.
+  - `keep`: the same Conflict is raised and resolved at once by the authority ranking `[principal:*, operation, merge_resolution, reconciliation, source:{id}]` (resolver `policy:local_edits`), so the person's value wins, the resolution is recorded on the attempt and the state still advances on merge.
+  - `source_wins`: the earlier behaviour, as an explicit escape hatch: `F` is written and merges as a one-sided change, overwriting `C`. Each overwrite is still audited (below).
+  - Under `auto_with_authority`, Attributes whose `authority` is this Source resolve in the Source's favor, as before: declaring an Attribute's authority is the explicit statement that the Source is its system of record. Every other Attribute follows `local_edits`.
+- **Deletions.** A snapshot deletion of a Record whose current values include any set by someone other than this Source is a `DV2` delete/modify Conflict with a preserved base (base: the Record as last written, ours: the current Record, theirs: deleted). `keep` resolves it as "keep modified"; `source_wins` deletes. A Record with only this Source's values is deleted as before. Deleting a Record whose Links were added by others follows `on_delete` as for any deletion.
+- **Audit and events.** Each local edit met by a run writes one `source.local_edit_conflict` audit entry when the attempt is stored: Source, run, Proposal, Kind, key, Attribute, the origin type and actor of the current value, the `local_edits` mode and the outcome (`conflict`, `kept`, `overwritten`, `deleted`); never values. The run's stats count `local_edits` per outcome.
+- **Branch handling.** The Source branch is still cut fresh from the target head when no Proposal is open, so schema and unrelated target changes are always current; the preserved base, not the branch's history, carries the Source's previous view. An open Proposal keeps its branch, and a new run updates it as before.
+- **Upgrade and new mappings.** An element or Attribute with no last-written entry (every Source before this change, a newly mapped Attribute, a Source added over existing data) is seeded on first sight: when `C`'s lineage is this Source, `W := C` and the normal rules apply. Otherwise the Attribute is **compare-only** for that run: `F = C` seeds `W := F` with no change; `F ≠ C` is treated as a local edit (above). Seeding is written with the merge like any state advance, so a seeded run that is closed unmerged seeds again next time. Dry runs report what seeding and local edits would do. No migration of data is needed beyond creating `source_written`.
+- **Extraction.** Documents have no last-written state; the same principle applies through the hold: a value item whose target Attribute's current value was last set by a principal (origin `operation`, or `merge_resolution` and `reconciliation` with a `principal:` resolver) is never accepted at once, whatever its confidence or the Domain's ingestion mode: it stays `pending` with hold reason `local_edit` (counted as `held_local_edit`). A reviewer may still accept it. Agent principals count: their writes are deliberate, governed Operations.
+- **Incremental Sources (follow-up, design only).** An `incremental` Source sees changed rows only, so it cannot tell a Record removed upstream from one unchanged. The follow-up records `last_seen_run` per Source-owned element and lets the reconciliation sweep (10.6) raise a `stale` candidate for elements not seen within a Source's `stale_after` (ISO 8601 duration, default null: off); nothing is deleted on that signal.
+
+**Non-goals.** Merging a person's correction back to the upstream system (the Source is read-only). Field-level locks. Guessing whether an upstream change "agrees" with a correction beyond canonical equality.
 
 ### 9.2 Unstructured extraction
 
@@ -1158,7 +1246,7 @@ A job declares its tiers. Default: `[0, 1, 2]` when an LLM is configured, `[0, 1
 
 **Pipeline** (Scribe job `extraction`):
 
-1. **Intake.** Document stored through the blob store interface (default backend: Postgres `bytea`; optional S3-compatible backend). SHA-256 recorded; duplicates detected.
+1. **Intake.** Document stored through the blob store interface (default backend: Postgres `bytea`; optional S3-compatible backend). SHA-256 recorded; duplicates detected. An upload may name a stable identity, `source_key`; a keyed upload with new bytes is a new **version** of the document of that key (below, "Document versions and lifecycle"). Retired and purged documents are not extracted.
 2. **Parse.** Parser plugins convert to text with structure (headings, pages, tables) and stable character offsets. Default parsers: PDF via `pypdf`, DOCX via `python-docx`, HTML via `beautifulsoup4`, Markdown and plain text natively. OCR is out of scope; scanned PDFs are flagged.
 3. **Chunk.** Structure-aware chunks with overlap, each with `(start_offset, end_offset, chunk_hash)`.
 4. **Tier 0 and tier 1.** Rule extractors and local span models run per chunk and emit candidates with exact offsets (evidence is the span itself).
@@ -1168,10 +1256,38 @@ A job declares its tiers. Default: `[0, 1, 2]` when an LLM is configured, `[0, 1
 8. **Validate.** JSON Schema validation, type casting, constraint checks. **Evidence verification**: each extracted value must cite a quote that appears in the chunk (normalized whitespace match); items without verifiable evidence are discarded and counted.
 9. **Resolve entities.** Match candidates to existing Records: exact key, normalized title equality, trigram similarity, optional embedding similarity, plus Attribute agreement scoring. Outcomes: `matched` (update proposal), `new` (create proposal), `ambiguous` (top candidates kept for the reviewer). Thresholds configurable per Kind.
 10. **Schema discovery (optional mode).** When the model reports facts that do not fit the schema, they are aggregated into schema suggestions (new Attribute, new Kind, new Relation) with frequency and examples.
-11. **Propose.** Changes are committed to branch `extract/{job_id}` and a Proposal is opened with one **Proposal item** per proposed Record, Attribute value, Link or schema suggestion, each with evidence (document, page, offsets, quote), confidence and match details.
+11. **Propose.** Changes are committed to branch `extract/{job_id}` and a Proposal is opened with one **Proposal item** per proposed Record, Attribute value, Link or schema suggestion, each with evidence (document, page, offsets, quote), confidence and match details. Which items are accepted at once, and whether the Proposal may merge without a person, follows the job's ingestion mode (below); value items over a person's value are held (`local_edit`, 9.1).
 12. **Review.** Reviewers accept or reject items individually, in bulk, or by threshold. Rejecting an item commits a revert change on the extraction branch. Merging follows the normal merge algorithm; Conflicts with concurrent changes are resolved as usual.
 
 **Budgets and safety.** Per-job limits on tokens, cost estimate, documents and concurrency; jobs stop cleanly when a limit is reached. Budgets are expressed in tokens and in cost; prices per token come from configuration (zero for local models). Prompt injection inside documents can only influence proposed values, which are validated, evidence-checked and reviewed; it cannot trigger actions because the model has no tools and no write access. **[Architect call AC-19]**
+
+**Ingestion modes.** **[Architect call AC-36]** How much of an extraction a person sees is a Domain choice, within bounds the installation sets. `extraction.mode`:
+
+| Mode | Accepted at once on `extract/{job}` | Proposal merge |
+|------|-------------------------------------|----------------|
+| `review_all` | nothing (as an `auto_accept_threshold` above 1) | by a person |
+| `doubts_only` | complete items at or above the effective `auto_accept_threshold`, not ambiguous and not held (the current rule) | by a person |
+| `direct` | as `doubts_only` | by Scribe, automatically, when the conditions below hold; otherwise by a person |
+
+- **Default.** Without a Domain setting the mode is `scribe.extraction.mode` (default `doubts_only`) with the installation's `scribe.extraction.auto_accept_threshold` (0.9) and `min_confidence` (0.3): exactly today's behaviour. The installation's mode may be `review_all` or `doubts_only`; `direct` is refused there at startup, so it is never a default.
+- **Domain setting.** `settings.extraction` overrides an allowlist of members: `mode`, `auto_accept_threshold`, `min_confidence` and `rules`. **Tightening** is always allowed: a stricter mode (`review_all` > `doubts_only` > `direct`), a higher `auto_accept_threshold`, a lower `min_confidence` (fewer candidates dropped unseen). **Loosening** below the installation's values applies only to members listed in `scribe.extraction.domain_may_loosen` (default `[mode]`; `[]` forbids loosening altogether); a loosening value for an unlisted member is ignored on its own and reported by `GET /domains/{d}` as `ignored_settings`, as for other allowlisted settings. Changing `settings.extraction` needs `domain.settings` and is audited (`domain.update` with the before and after values of the member).
+- **Rules by `source_key` prefix.** `settings.extraction.rules: [{source_key_prefix, mode?, auto_accept_threshold?, min_confidence?}]` sets the members for keyed documents whose key starts with the prefix; the longest prefix wins, members a rule leaves out come from the Domain, keyless documents use the Domain's. Rule values obey the same tightening and loosening rules. A job over several documents runs at the strictest effective mode and the highest effective threshold among them.
+- **Tier cap (`direct`).** Only deterministic output may merge without a person: a job whose Proposal holds any item produced by tier 1 or tier 2 (accepted, pending or rejected) is capped at `doubts_only`, and its result says `mode_capped: tier`. Tier 0 rules read the document literally and cannot be steered by its prose, so AC-19 keeps its meaning: text a model read never reaches a branch without a person.
+- **Direct merge conditions.** Scribe merges the Proposal through the normal merge (6.8, Proposal checks of 10.3) only when the effective mode is `direct` after the cap, no item is pending (held for `local_edit`, reconciliation or ambiguity, below threshold or not yet decided), the merge attempt has no Conflict, and the `reconciliation` check is not `failed`. Into a protected branch only with `scribe.extraction.direct_merge_protected` (default `true`, as `scribe.sources.auto_merge_protected` for Source merges); otherwise the Proposal waits for its approvals. Schema suggestions never merge this way (they are schema changes with their own review). The merge is audited as `proposal.merge` with `mode: direct` and the job id; a capped or blocked job records why in its result (`direct_blocked: pending_items | conflicts | reconciliation | protected | tier`).
+- **Local edits.** Whatever the mode, an item over a value a person set is held (`local_edit`, 9.1).
+
+**Document versions and lifecycle.** **[Architect call AC-35]**
+
+- **Identity.** `POST /documents` takes an optional `source_key` (a path, URL or external id; at most `keeper.documents.max_source_key_chars`, default 1024; compared exactly, after trimming surrounding whitespace). Uniqueness: keyless documents keep `(domain, sha256)` as today (same bytes return the existing document); keyed documents are unique by `(domain, source_key, sha256)`. The same bytes under two keys are two documents sharing one blob.
+- **Versions.** A keyed upload whose bytes differ from the key's current version creates a new document with `version` = previous + 1 and `replaces` = the previous version's id; the previous one becomes `superseded`. Bytes equal to the current version are a no-op that returns it (200, not 201). Bytes equal to an older version (an upstream revert) are a new version too, reusing the blob. `GET /documents/{id}/versions` lists the versions of its key, newest first; `GET /documents?source_key=` finds them. Each new version is audited (`document.version`: key, version, replaced id, sizes and hashes).
+- **Evidence check of a new version.** Besides the normal extraction of the new version, a `document_version_check` job looks at every value on the branch the previous version's Proposals merged into whose current provenance is `extraction` from a previous version of the key, and that the new version's own extraction does not support with the same value. For each, it checks deterministically whether the old evidence quote still appears verbatim in the new version's parsed text, with the normalized-whitespace match of evidence verification (step 8). Present: nothing changes. Absent, or the quote is no longer readable (purged): a reconciliation `stale` candidate (10.6) with signal `evidence_gone` (`{document, from_version, to_version, quote}`). The value is never retracted, changed or hidden (AC-33); a person decides. The job is bounded by `scribe.extraction.versions.max_values_per_job` (default 5000) and continues in a continuation job, like sweeps.
+- **Retire.** `POST /documents/{id}/retirement {reason}` (permission `document.retire`, held by `maintainer` and `admin`) runs the same check with empty text, so every value whose only evidence was this document raises a `stale` candidate. A retired document is kept and readable, listed with `status: retired`, and never extracted again (409 `document-retired` on a new job). A later upload under its key starts a new active version. Audited `document.retire`.
+- **Purge.** `POST /documents/{id}/purge {reason, confirm: <document id>}` (permission `document.purge`, held by `admin` only among built-in roles) retires the document first if needed, then deletes its bytes (the blob when no other document shares it), parsed text, chunks and the extraction cache entries of chunk hashes no other document has. Provenance rows stay (document id, offsets, quote hash), as do Proposal items, whose evidence quotes are replaced by `[erased]`; lineage, explanations and candidates read `[erased]` for the quote. Irreversible; audited `document.purge` (never with content).
+- **Masking.** Evidence quotes in `stale` candidates and their claims follow 10.6: wrapped with the tags of a sensitive Attribute and masked by clearance, absent for `vault` Attributes.
+- **Storage.** `documents` gains `source_key`, `version`, `replaces`, `status` (`active`, `superseded`, `retired`, `purged`) and who retired or purged it when (7.4). Indexes: unique `(domain_id, sha256) where source_key is null` (the current unique index, now partial), unique `(domain_id, source_key, sha256) where source_key is not null`, unique `(domain_id, source_key, version)`. Existing rows read as keyless, version 1, `active`; the migration is metadata only.
+- **Surface.** REST as above; Python client `client.documents.versions|retire|purge`; CLI `lorebase documents upload FILE --key KEY`, `lorebase documents versions ID`, `lorebase documents retire ID --reason`, `lorebase documents purge ID --reason --confirm ID`; the Documents screen shows versions, status and the candidates a version raised.
+
+**Non-goals.** Automatic retraction of values whose evidence changed; diffing documents beyond the quote check; crawling or watching upstream locations for new versions (a Source or the caller uploads them).
 
 **Provenance.** `extraction` with job id, document id, offsets, quote hash, model and prompt version.
 
@@ -1280,8 +1396,8 @@ Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run
 | `operator` | execute granted custom Operations on any branch allowed by policy |
 | `modeler` | schema change sets on branches; Source mappings |
 | `reviewer` | review Proposals, resolve Conflicts |
-| `maintainer` | merge Proposals into protected branches; manage Sources and jobs |
-| `admin` | grants, API keys, Domain settings |
+| `maintainer` | merge Proposals into protected branches; manage Sources and jobs; retire documents (`document.retire`) |
+| `admin` | grants, API keys, Domain settings; purge documents (`document.purge`) |
 | `agent-reader` | viewer for service principals, no saved views |
 
 **Scopes.** Grants apply at `domain`, `kind` (read or write limited to some Kinds), `operation` (execute a specific Operation), or `branch` pattern (`agent/*`). Deny by default.
@@ -1295,6 +1411,7 @@ Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run
 - Proposal checks: schema validity, merge preview (Conflicts count), size, required reviewers, CI-like custom checks (CEL predicates over the diff, for example "no deletion of more than 1% of Suppliers").
 - Branch protection rules per protected branch: required approvals count, required roles, allowed merge origins.
 - Self-approval is configurable and off by default for protected branches.
+- `required_approvals_from_stewards` (protection rule, default 0): approvals that must come from the Proposal's assignees (10.7), counted among the approvals; the Proposal needs `max(required_approvals, required_approvals_from_stewards)` approvals in all.
 
 ### 10.4 Audit
 
@@ -1330,7 +1447,7 @@ Nothing in it is decided by the system. Every candidate opens as `open` ("to rev
 | `duplicate` | two Records of one Kind (different keys) probably describe the same entity | merge into one Record, or dismiss |
 | `contradiction` | one Record and Attribute, at least two distinct values from different source identities, periods overlapping or unknown | pick a claim, apply a policy, custom value, or dismiss |
 | `superseded` | as above on a `valid_time` Attribute, with periods that do not overlap | confirm the newer period as current (the older stays in history), or dismiss |
-| `stale` | the current value is older than the Attribute's maximum age, its period has ended, or its source identity has a newer claim pending | pick the newer claim, or dismiss |
+| `stale` | the current value is older than the Attribute's maximum age, its period has ended, its source identity has a newer claim pending, or its only evidence is gone from a new version of its document or the document was retired (`evidence_gone`, 9.2) | pick the newer claim, custom value, or dismiss |
 
 Statuses: `open`, `resolved`, `dismissed`, `obsolete`. Only the pipeline sets `obsolete`, and only when the disagreement no longer exists in the data: the Record was deleted, the Attribute was removed (`attribute_removed`), the claims converged, the value a claim stood for was replaced (`value_replaced`), or the Proposal holding the only competing claim was closed or its item rejected. The reason is recorded. A score never makes a candidate obsolete.
 
@@ -1338,7 +1455,8 @@ Statuses: `open`, `resolved`, `dismissed`, `obsolete`. Only the pipeline sets `o
 
 1. **Extraction** (9.2 step 11). Value items whose `current` value differs are checked while items are assembled, before the auto-accept decision. With `hold_auto_accept` (default on) an item that raises any candidate (a `superseded` one included) stays `pending` whatever its confidence.
 2. **Source syncs** (9.1 step 5). Before the merge policy is applied, the changes of the Source branch are compared with the target head and with the lineage of the values they replace.
-3. **Sweep** (job `reconcile_sweep`, on demand or every `sweep_interval_s`). Walks `mat_history` of a branch for values that replaced a value of another source identity, checks ages for `stale` and Records for `duplicate`. It resumes from a `(kind, key)` cursor and caps its work per job, like embedding passes (9.3).
+3. **Document versions** (job `document_version_check`, 9.2). A new version or a retirement of a document raises `stale` candidates for values whose evidence quote is gone; the check is a literal match, no model.
+4. **Sweep** (job `reconcile_sweep`, on demand or every `sweep_interval_s`). Walks `mat_history` of a branch for values that replaced a value of another source identity, checks ages for `stale` and Records for `duplicate`. It resumes from a `(kind, key)` cursor and caps its work per job, like embedding passes (9.3).
 
 Stages run cheapest first; each sees only what the previous ones kept.
 
@@ -1391,7 +1509,7 @@ Indexed by `(domain_id, branch, status, type)` and by `(domain_id, branch, kind_
 
 Claim evidence keeps no quote for `vault` Attributes; for sensitive Attributes the evidence and the decided values are wrapped like claim values.
 
-**API** (Keeper, 11.1). Under `/domains/{d}`: `GET /reconciliation` (filters `branch`, `type`, `status`, `kind`, `attribute`, `source` and a cursor), `GET /reconciliation/{id}`, `POST /reconciliation/{id}/resolution` (`{choice, claim_id | value | policy, reason, dry_run}`; policies `authority`, `newest_wins`, `prefer_current`, `prefer_incoming`), `POST /reconciliation/{id}/dismissal` (`{reason}`), `POST /reconciliation/{id}/reopen`, `POST /reconciliation:resolve` (a policy or a dismissal over `ids` or a `filter`) and `POST /reconciliation/sweeps` (202, queues `reconcile_sweep`). Reads need `data.read` on the branch and are scoped like Record reads: a Kind-narrowed grant sees the candidates of its Kinds only, and claim values, evidence quotes and decided values are masked by clearance. Decisions need `conflict.resolve` plus whatever the write itself needs (10.1): `operation.execute` for `update_{kind}`, and `branch.create` and `proposal.create` when the write needs review, so a plain `reviewer` can keep the current value, dismiss and reopen only. Choosing the claim of a `vault` Attribute, writing a custom value of a sensitive or `vault` Attribute and merging duplicates with such Attributes need the clearance (403 otherwise); the web app leaves masked values out of its choices. Sweeps need `job.manage`. Every decision is audited (`reconciliation.resolve`, `reconciliation.dismiss`, `reconciliation.reopen`). Herald exposes no governance tools (its tools are reads, `lorebase_execute` and branches), so none is added; the Python client (`client.reconciliation`) and the CLI (`lorebase reconcile list|show|resolve|dismiss|reopen`) follow the REST routes.
+**API** (Keeper, 11.1). Under `/domains/{d}`: `GET /reconciliation` (filters `branch`, `type`, `status`, `kind`, `attribute`, `source`, `assigned` (10.7) and a cursor), `GET /reconciliation/{id}`, `POST /reconciliation/{id}/resolution` (`{choice, claim_id | value | policy, reason, dry_run}`; policies `authority`, `newest_wins`, `prefer_current`, `prefer_incoming`), `POST /reconciliation/{id}/dismissal` (`{reason}`), `POST /reconciliation/{id}/reopen`, `POST /reconciliation:resolve` (a policy or a dismissal over `ids` or a `filter`) and `POST /reconciliation/sweeps` (202, queues `reconcile_sweep`). Reads need `data.read` on the branch and are scoped like Record reads: a Kind-narrowed grant sees the candidates of its Kinds only, and claim values, evidence quotes and decided values are masked by clearance. Decisions need `conflict.resolve` plus whatever the write itself needs (10.1): `operation.execute` for `update_{kind}`, and `branch.create` and `proposal.create` when the write needs review, so a plain `reviewer` can keep the current value, dismiss and reopen only. Choosing the claim of a `vault` Attribute, writing a custom value of a sensitive or `vault` Attribute and merging duplicates with such Attributes need the clearance (403 otherwise); the web app leaves masked values out of its choices. Sweeps need `job.manage`. Every decision is audited (`reconciliation.resolve`, `reconciliation.dismiss`, `reconciliation.reopen`). Herald exposes no governance tools (its tools are reads, `lorebase_execute` and branches), so none is added; the Python client (`client.reconciliation`) and the CLI (`lorebase reconcile list|show|resolve|dismiss|reopen`) follow the REST routes.
 
 **UI** (12.3). A Reconciliation screen in Review (`/$domain/reconcile`): one queue, tabs per type, filters by status, Kind, Attribute, source and signal, counts per tab. A candidate shows every claim side by side with its source, time, period and evidence passage (the document viewer link of extraction items); `text` values reuse the text diff of the Conflict resolver. Actions: pick a claim, keep current, custom value, apply a policy, dismiss with a reason, merge duplicates (survivor and per-Attribute picker, then the Proposal), bulk policy or dismissal over a selection, queue a sweep. The Record page marks values with open candidates and the Proposal page links the candidates of its `reconciliation` check. Limits of the screen: tab counts stop at a count limit (shown as "N+"), the signal filter and the ranking (negations first, equivalents last) apply to the pages loaded, and Record marks look within the count limit.
 
@@ -1422,6 +1540,20 @@ keeper:
 
 **Non-goals.** Automatic resolution or invalidation by any stage or score. Queries by valid time (periods classify claims; reads stay at Revisions). Key aliases after a duplicate merge. New dependencies: the unit table is in-house and similarity goes through the existing inference interfaces. Any model call in Keeper or Herald.
 
+### 10.7 Stewards
+
+Stewards say who looks after which part of a Domain, so Proposals and reconciliation candidates reach the people who can decide them. They reuse RBAC roles (10.2): there is no new principal, group or ownership model. **[Architect call AC-37]**
+
+- **Declaration.** `stewards: [role, ...]` in the schema, on the Domain (`domain.stewards`) and per Kind (`kinds.{Kind}.stewards`, 5.3, 5.13). A Kind's list replaces the Domain's for that Kind; a Kind without one falls back to the Domain's. Stewards are schema, so they are versioned, branched and reviewed like the rest of it.
+- **Steward roles of an object.** A Proposal: the union of the steward roles of the Kinds its diff touches (Records, and both ends of Links); schema-only Proposals use the Domain's. A reconciliation candidate: those of its Kind. Proposals record the Kinds they touch (`proposals.kinds`, refreshed with the summary) so the computation is an index lookup.
+- **Assignees.** Computed when read, never stored: the principals holding one of the object's steward roles through a grant that covers the Domain or the Kind, that may read every Kind the object touches (with `keeper.auth.authz.invisible_kinds`, a principal who could not see one of them is not an assignee), and that hold the permission to act on it (`proposal.review` for Proposals, `conflict.resolve` for candidates). Group grants count through the OIDC groups claim as for any grant.
+- **Filters.** `GET /proposals` and `GET /reconciliation` take `assigned=me|any|none` (`me`: the caller is an assignee; `any`: the object has steward roles; `none`: it has none). Each item carries `steward_roles` and, for callers with `principal.read`, `assignees` (principal ids, at most `keeper.stewards.max_assignees_listed`, default 50, with `assignees_truncated`). CLI: `lorebase proposal list --mine`, `lorebase reconcile list --mine`. Web: an "Assigned to me" toggle on Review and Reconciliation, and the assignees on each item.
+- **Approvals.** `required_approvals_from_stewards` (protection rule, 10.3) counts approvals by assignees only. A Proposal whose Kinds declare no stewards satisfies it trivially; one that has steward roles but fewer assignees than required fails its approvals check with `stewards-unavailable`, so a missing steward is visible instead of silently skipped. Self-approval rules are unchanged.
+- **No stewards, no change.** A Domain whose schema declares none behaves exactly as before; `assigned=me` returns nothing and the protection rule defaults to 0.
+- **Audit.** Stewards change through schema change sets (audited as schema changes); assignment writes nothing, since it is derived.
+
+**Non-goals.** Notifications and reminders (webhooks and the change feed carry events; delivery to people belongs to the tools that receive them). Workload balancing or round-robin assignment. Stewards as a permission: a steward role grants nothing beyond what its grants already give.
+
 ---
 
 ## 11. Agent interface: REST and MCP
@@ -1445,17 +1577,17 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
 | Query | `POST .../query` | full DSL (8.2) |
 | Traverse | `POST .../traverse` | |
 | Neighborhood | `POST .../neighborhood` | |
-| Search | `POST .../search` | `{q, kinds, where, mode, query_vector, limit}` |
+| Search | `POST .../search` | `{q, kinds, traits, lens, where, mode, query_vector, limit}`; `semantic_truncated` when a filtered vector scan hit its bound (8.8) |
 | Operations | `POST .../operations/{op}/execute` | `{parameters, branch, dry_run, idempotency_key}` |
 | Proposals | `GET/POST .../proposals`, `GET/PATCH .../proposals/{p}`, `GET .../proposals/{p}/diff`, `POST .../proposals/{p}/reviews`, `POST .../proposals/{p}/merge`, `POST .../proposals/{p}/close` | merge: 200 with the new target head, or 409 `merge-conflicts` carrying `attempt` |
 | Proposal items | `GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide` | bulk accept/reject |
 | Conflicts | `GET .../proposals/{p}/conflicts`, `POST .../proposals/{p}/conflicts/{c}/resolution`, `POST .../proposals/{p}/conflicts:resolve` | `{c}` is the fingerprint; bulk re-runs the merge |
 | Reconciliation | `GET .../reconciliation`, `GET .../reconciliation/{id}`, `POST .../reconciliation/{id}/resolution`, `POST .../reconciliation/{id}/dismissal`, `POST .../reconciliation/{id}/reopen`, `POST .../reconciliation:resolve`, `POST .../reconciliation/sweeps` | contradictions between Sources (10.6); decisions write through Operations (on a `reconcile/{candidate}-{16 hex}` branch and a Proposal when the branch needs review); a sweep answers 202 |
 | Sources | `GET/POST .../sources`, `POST .../sources/{s}/runs`, `GET .../sources/{s}/runs/{run}`, `POST /sources:infer` | |
-| Documents and extraction | `POST .../documents`, `GET .../documents/{doc}`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | |
+| Documents and extraction | `POST .../documents`, `GET .../documents?source_key=`, `GET .../documents/{doc}`, `GET .../documents/{doc}/versions`, `POST .../documents/{doc}/retirement`, `POST .../documents/{doc}/purge`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | upload takes `source_key`; a keyed upload with new bytes is a new version (9.2); retire needs `document.retire`, purge `document.purge` and `confirm` |
 | Admin | `GET .../audit`, `GET/POST /principals`, `POST /api-keys`, `GET/POST .../grants` | |
 | Record history and lineage | `GET .../kinds/{kind}/records/{key}/history?values=&limit=&cursor=`, `GET .../kinds/{kind}/records/{key}/lineage` | read from `mat_history`, the provenance entries and Proposals at the branch head; lineage in one statement, and also at `at` ([agents](agents.md#history-and-lineage)) |
-| Agent reads | `POST .../context`, `GET .../kinds/{kind}/records/{key}/explain` | one-call context pack within a token budget; why a Record is what it is ([agents](agents.md)) |
+| Agent reads | `POST .../context`, `GET .../kinds/{kind}/records/{key}/explain` | one-call context pack within a token budget, optionally through a `lens` and with `traits` on `search` and `query` seeds (8.8); why a Record is what it is ([agents](agents.md)) |
 | Change feed | `GET .../branches/{b}/events` (Server-Sent Events), `GET .../branches/{b}/changes?since=` | Revision events; resume with `Last-Event-ID` |
 | Webhooks | `GET/POST .../webhooks`, `DELETE .../webhooks/{id}` | HMAC-signed deliveries from the outbox |
 | Health | `GET /healthz`, `GET /readyz` | |
@@ -1507,7 +1639,7 @@ Design rules for tools:
 | Tool | Input | Output |
 |------|-------|--------|
 | `lorebase_describe_domain` | `{domain?, branch?, kinds?: [str], detail?: "summary" or "full"}` | `{domain, branch, revision, kinds: [{name, description, key, attributes: [{name, type, description, required}], relations: [{name, target, cardinality, inverse}], traits}], traits: [...], operations: [{name, description}], search: {modes: [str], embedding: {model, dims} or null}}` |
-| `lorebase_search` | `{query, kinds?, where?, mode?: "lexical" or "hybrid" or "semantic", query_vector?: [float], limit?: int}` | `{revision, results: [{ref, kind, title, snippet, score}], next_cursor?}` |
+| `lorebase_search` | `{query, kinds?, traits?, lens?, where?, mode?: "lexical" or "hybrid" or "semantic", query_vector?: [float], limit?: int}` | `{revision, results: [{ref, kind, title, snippet, score}], next_cursor?}` |
 | `lorebase_get_record` | `{ref, select?: [str], include_links?: [str], link_limit?: int}` | `{revision, record: {ref, kind, title, attributes: {...}, derived: {...}}, links: {relation: [{ref, title}]}, truncated?: {...}}` |
 | `lorebase_query` | `{kind or trait, where?, select?, include?, order_by?, limit?, cursor?}` | `{revision, rows: [...], next_cursor?}` |
 | `lorebase_traverse` | `{from: ref, path: [{relation, where?, limit?}], select?}` | `{revision, records: [...], paths?: [[ref, ...]]}` |
@@ -1520,7 +1652,7 @@ Design rules for tools:
 | `lorebase_open_proposal` | `{branch, title, description}` | `{proposal, url, checks}` |
 | `lorebase_diff` | `{from, to, kinds?, limit?}` | `{summary: {kind: {added, modified, removed}}, changes: [...], next_cursor?}` |
 
-**Resources.** `lorebase://{domain}/schema`, `lorebase://{domain}/kinds/{kind}`, `lorebase://{domain}/records/{kind}/{key}`, `lorebase://{domain}/operations/{op}`. Clients that support resources can attach the schema to context once instead of calling `describe_domain`.
+**Resources.** `lorebase://{domain}/schema`, `lorebase://{domain}/kinds/{kind}`, `lorebase://{domain}/records/{kind}/{key}`, `lorebase://{domain}/operations/{op}`, `lorebase://{domain}/lenses/{lens}` (8.8). `lorebase_context` takes `lens` and `traits` like `POST /context`. Clients that support resources can attach the schema to context once instead of calling `describe_domain`.
 
 **Prompts.** `explore_domain` (orientation over schema), `investigate_record` (a structured walkthrough of a Record, its links and Lineage). Prompts are templates; they contain no model calls.
 
@@ -1751,6 +1883,30 @@ network:
 
 **Implemented so far.** `lorebase_platform.settings` provides the layering above (`LOREBASE_CONFIG` names the YAML file; `LOREBASE__SECTION__KEY` overrides it) and `secret://env/NAME` and `secret://file//path` references. Packages declare their own sections with `register_section`, so a section is validated only where it is used. The sections `logging`, `telemetry`, `keeper`, `inference`, `database`, `store`, `read` and `search` exist in `config/lorebase.example.yaml`; `database.statement_timeout_ms` defaults to 30000 (bulk commits) rather than the 2000 shown above, which is a read-heavy tuning. `store` holds schema-shape values read once by the initial migration (`layout.hash_partitions`, `embeddings.dims`; see [store-schema-notes.md](store-schema-notes.md)). `read` (page sizes, DSL limits, traversal caps, time travel and diff bounds, the 2000 ms statement timeout of read transactions) and `search` (ranking and fusion weights) belong to Keeper's read path (8.6); `keeper.reads` holds the response cache and the reachability bound of read authorization (`reachability_max_depth`). The sections `auth`, `materialization`, `extraction` and `webhooks` arrive with the milestones that use them. The write endpoints read `keeper.domains`, `keeper.branches` (the materialized branch cap of `materialization.max_full_branches_per_domain` lives here as `max_materialized_per_domain`), `keeper.schema_changes` and `keeper.operations` (bulk and dry-run limits, direct commits on protected branches, skipping CEL preconditions while expressions are not enabled). `keeper.reconciliation` (page sizes, bulk limit, merge check) and `scribe.reconciliation` (detection) configure the reconciliation queue (10.6); a Domain overrides an allowlist of the latter in its `reconciliation` setting and can tighten the merge check with its flat `reconciliation_check` setting.
 
+**Settings of the designed changes (not implemented yet).** Corrections that stick (9.1), document versions and ingestion modes (9.2), stewards (10.7) and read presets (8.8) add these keys; defaults keep today's behaviour wherever behaviour was defined before.
+
+```yaml
+scribe:
+  extraction:
+    mode: doubts_only              # review_all | doubts_only; direct is refused here (per Domain only)
+    domain_may_loosen: [mode]      # members a Domain may set looser than these; []: none
+    direct_merge_protected: true   # direct-mode merges may target protected branches
+    versions:
+      max_values_per_job: 5000     # values one document_version_check job looks at
+keeper:
+  documents:
+    max_source_key_chars: 1024
+  stewards:
+    max_assignees_listed: 50
+search:
+  semantic:
+    iterative_scan: auto           # auto: relaxed_order on pgvector >= 0.8; off: over-fetch
+    max_scan_tuples: 20000         # hnsw.max_scan_tuples of an iterative scan
+    overfetch_factor: 4            # without iterative scans: search.candidates * factor
+```
+
+Per Source (schema `sources.{name}`): `local_edits: review | keep | source_wins` (default `review`) and, as a follow-up, `stale_after` (ISO 8601 duration, default null). Per Domain (`settings.extraction`): `mode`, `auto_accept_threshold`, `min_confidence`, `rules: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}]`. Per branch protection rule: `required_approvals_from_stewards` (default 0). In the schema: `domain.stewards`, `kinds.{Kind}.stewards`, `lenses`.
+
 ---
 
 ## 17. Repository layout
@@ -1859,6 +2015,18 @@ Acceptance:
 - Security review checklist completed; threat model published.
 - Upgrade from M4 data with zero downtime migrations.
 
+### Next: knowledge that stays correct
+
+Scope: corrections that stick (per-Source last-written state, local-edit Conflicts with a preserved base, `local_edits`, the extraction `local_edit` hold; 9.1, AC-34); document versions and lifecycle (`source_key`, versions, the evidence check of a new version, retirement and purge; 9.2, AC-35); ingestion modes (`extraction.mode`, prefix rules, the tier cap of `direct`; 9.2, AC-36); stewards (assignees, `assigned` filters, `required_approvals_from_stewards`; 10.7, AC-37); read presets (Traits as search targets and context seeds, lenses, filtered vector search; 8.8, AC-38). Follow-up: `last_seen_run` and `stale_after` for incremental Sources.
+
+Acceptance:
+- A person's correction on the target survives any number of Source runs whose upstream value did not change; an upstream change to that value opens a `DV1` whose base is the Source's previous value, and a snapshot run never deletes a Record holding someone else's values without a `DV2`. Both are audited as `source.local_edit_conflict`.
+- `source_wins` reproduces the earlier behaviour exactly; upgrading a Source with existing data raises no Conflict where the fresh value equals the current one.
+- A keyed upload of changed bytes creates version n+1; values whose quote is gone from it raise `stale` candidates and are never changed; a purged document's evidence reads `[erased]` while its provenance rows remain.
+- Without Domain settings, extraction accepts and holds exactly what it did before; `direct` merges only all-tier-0 jobs with nothing pending, and any tier 1 or tier 2 item caps the job.
+- `assigned=me` lists exactly the Proposals and candidates whose assignees include the caller, and never one touching a Kind the caller cannot read.
+- A Trait or lens target never returns a Kind the caller cannot read; a filtered semantic search returns `limit` hits whenever that many readable Records match within the scan bound, and says `semantic_truncated` otherwise.
+
 ---
 
 ## 19. Risks
@@ -1882,6 +2050,10 @@ Acceptance:
 | Cost of the semantic reconciliation stage | Model spend, slow sweeps | Off by default; duplicates compare stored vectors without model calls, in the sweep only; the judge is off and the operator's alone; extraction cache and job budgets; sweeps paced and resumable |
 | Sensitive values reach a model through the semantic stage | Disclosure of `pii` or vault values to an inference provider | Values of vault and sensitivity-tagged Attributes are never sent (checked by the detector and again by the stage, fail closed); vault claims keep no evidence quote |
 | Entity resolution errors cascade into reconciliation | False contradictions on the wrong Record; wrong duplicate merges | Claims attach only to exact or resolved matches; fuzzy and semantic matches only raise `duplicate` candidates; duplicate merges are reviewed Proposals; candidates become `obsolete` when their claims go |
+| One contested value holds back a whole Source run | Upstream changes wait behind a local-edit Conflict under `review` | Conflicts are listed per Attribute and resolvable in bulk; stored resolutions re-apply on later runs; `keep` decides them by policy; the run's stats count local edits |
+| Last-written state drifts from what the Source really wrote | Missed or spurious local edits | State advances only in the merge transaction; seeding is compare-only for values of other origins; `admin verify` checks that every state Revision is reachable |
+| `direct` mode lets wrong deterministic output through | Errors on a protected branch without review | Never a default; tier 0 only; nothing pending; Conflicts and blocking reconciliation stop it; operator may forbid with `domain_may_loosen: []`; every merge audited |
+| Iterative vector scans cost more under very selective filters | Slower semantic search | Bounded by `max_scan_tuples`; flagged with `semantic_truncated`; over-fetch fallback; budget row in 8.7 |
 | Name collision or trademark issue with "Lorebase" | Rename cost | Trademark and package name search before first public release |
 
 ---
@@ -1923,6 +2095,11 @@ Acceptance:
 | AC-31 | Contradictions between Sources go to a reconciliation queue, separate from merge Conflicts | They concern values already merged, outlive the Proposal that raised them and compare N claims, not ours and theirs | Conflicts and candidates need one review flow |
 | AC-32 | Valid time is opt-in per Attribute and stored on provenance entries, not in content | No change to hashes, merge or materialized values; Attributes without it behave as before | Bitemporal queries become a goal |
 | AC-33 | Reconciliation never resolves, invalidates or hides a value on its own; every decision is a person's, or a policy a person applied, written through Operations | Overlapping facts are often both true; silent invalidation loses information | Never |
+| AC-34 | A Source writes only Attributes that changed upstream since it last wrote them (per-Source last-written state); an upstream change that meets someone else's value is a `DV1` or `DV2` with a preserved base, decided per `local_edits` (default `review`) | Corrections stick; upstream changes are never dropped; reuses the merge, Conflict and policy machinery | Sources need per-field write-back to upstream systems |
+| AC-35 | Documents have an optional stable `source_key`; changed bytes are a new version; values whose evidence quote is gone raise `stale` candidates, never retractions; purge deletes content but keeps provenance rows | Documents change upstream like any Source; the check is literal and deterministic | Evidence matching beyond verbatim quotes is needed |
+| AC-36 | Ingestion modes `review_all`, `doubts_only` (default, today's rule), `direct`; `direct` only per Domain, only for jobs whose items are all tier 0 | Lets deterministic feeds flow without weakening AC-19 | Never for tier 1 or 2 output |
+| AC-37 | Stewards are RBAC roles named in the schema; assignees are computed, never stored | No new principal model; follows grants and invisibility | Assignment needs per-person routing that roles cannot express |
+| AC-38 | Traits and lenses are read presets resolved against the caller's projection; filtered vector search keeps filters before the limit and uses iterative scans or over-fetch so it does not shorten silently | Presets never widen grants; results stay complete and leak-free | Exact vector search is needed by default |
 
 ### Implementation status
 

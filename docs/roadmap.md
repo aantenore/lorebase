@@ -8,6 +8,7 @@ Lorebase is pre-alpha. [v0.2.3](https://github.com/aantenore/lorebase/releases/t
 
 1. The 10M-Record benchmark on the 32 GB reference hardware of design 6.14, and the 1M-Record neighborhood on branches other than `main`, which is just over budget on a shared laptop (M5).
 2. API stability guarantees for `/api/v1`, which bind from 1.0 (M5).
+3. Knowledge that stays correct: corrections that stick, document versions, ingestion modes, stewards and read presets ([below](#next-knowledge-that-stays-correct)), designed and not started.
 
 Everything else on this page is merged and covered by tests. The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -113,9 +114,22 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 - [x] Threat model published and the security review checklist completed ([threat model](threat-model.md): STRIDE per trust boundary with mitigations and residual risks; [security review](security-review.md): 23 findings, all fixed, none open)
 - [x] Full proof scenario (days 1 to 5) as an automated end-to-end test: the five-day demo asserts every day against a real stack with the fake inference provider (a document extracted with the deterministic tiers, the agent over MCP writing through a Proposal), and the End-to-end workflow runs it on pushes to `main`, nightly and on relevant pull requests ([demo](demo.md#assertions-and-ci))
 
+## Next: knowledge that stays correct
+
+Designed in [section 18 of the design](design.md#next-knowledge-that-stays-correct); nothing below is implemented yet.
+
+- [ ] Corrections that stick ([design 9.1](design.md#91-structured-sources), AC-34): per-Source last-written state (`source_written`); a run writes only Attributes that changed upstream; an upstream change over someone else's value is a `DV1` with a preserved base, a snapshot deletion of a Record with others' values a `DV2`; Source setting `local_edits: review | keep | source_wins` (default `review`); seeding on first sight for existing Sources; audit `source.local_edit_conflict`
+- [ ] Extraction hold `local_edit`: value items over a value a person set are never accepted at once ([design 9.1](design.md#91-structured-sources))
+- [ ] Incremental Sources: `last_seen_run` per Source-owned Record and `stale` candidates after a Source's `stale_after` (follow-up, design only)
+- [ ] Document versions and lifecycle ([design 9.2](design.md#92-unstructured-extraction), AC-35): optional `source_key` on upload, keyed uniqueness `(domain, source_key, sha256)`, versions with `replaces`, `GET .../documents/{doc}/versions`; the `document_version_check` job raising `stale` candidates (`evidence_gone`) when an old quote is gone; retirement (`document.retire`) and purge (`document.purge`, admin only); audit `document.version`, `document.retire`, `document.purge`
+- [ ] Ingestion modes ([design 9.2](design.md#92-unstructured-extraction), AC-36): `extraction.mode: review_all | doubts_only | direct` per Domain and per `source_key` prefix, tightening always allowed, loosening per `scribe.extraction.domain_may_loosen`; `direct` only for all-tier-0 jobs with nothing pending
+- [ ] Stewards ([design 10.7](design.md#107-stewards), AC-37): `stewards` on the Domain and per Kind, computed assignees, `assigned=me|any|none` on Proposal and reconciliation lists (REST, CLI `--mine`, web), protection rule `required_approvals_from_stewards`
+- [ ] Traits as search targets and context-pack seeds (`traits`), and lenses (`lenses` in the schema; `lens` on context packs, search and MCP) ([design 8.8](design.md#88-read-presets-and-filtered-vector-search), AC-38)
+- [ ] Filtered vector search that keeps its limit: `hnsw.iterative_scan = relaxed_order` on pgvector 0.8 or later (`search.semantic.iterative_scan`, `max_scan_tuples`), over-fetch otherwise (`overfetch_factor`), `semantic_truncated` when the scan bound is reached ([design 8.8](design.md#88-read-presets-and-filtered-vector-search))
+
 ## Not on the roadmap
 
-These are written down as non-goals or anti-goals in the [design](design.md#2-goals-non-goals-anti-goals): a model in the agent read path, direct model writes to protected branches, schemaless writes, a second required datastore, an agent runtime, an ETL platform, BI dashboards, OWL reasoning, and multi-region active-active writes.
+These are written down as non-goals or anti-goals in the [design](design.md#2-goals-non-goals-anti-goals): a model in the agent read path, direct model writes to protected branches, schemaless writes, a second required datastore, an agent runtime, an ETL platform, BI dashboards, OWL reasoning, multi-region active-active writes, environment and release management (versions of systems are Records, tags or validity periods; release tooling stays the source), key aliases after duplicate merges, and live federated reads across Sources or Domains.
 
 ## How to influence it
 
