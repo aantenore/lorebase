@@ -180,6 +180,7 @@ export const review = {
     update: 'Update resolution',
     enterValue: 'Enter a value.',
     pickChoice: 'Pick a choice.',
+    pickPassages: 'Choose how to resolve every conflicting passage.',
     memberProblem: (member: string, problem: string) => `${member}: ${problem}`,
     newName: 'New name',
     customValue: 'Custom value',
@@ -204,6 +205,38 @@ export const review = {
     discardBody: 'This Conflict has changes that are not saved. Leave it and discard them?',
     discard: 'Discard and continue',
     keepEditing: 'Keep editing',
+  },
+
+  /** The passage view of a text Conflict whose sentences changed on both sides. */
+  hunks: {
+    legend: 'Text by passage',
+    unchanged: (characters: number) => `Unchanged passage (${characters.toString()} characters)`,
+    passage: (index: number, total: number) =>
+      `Conflicting passage ${index.toString()} of ${total.toString()}`,
+    choiceFor: (index: number) => `Choice for passage ${index.toString()}`,
+    choices: {
+      ours: 'Ours',
+      theirs: 'Theirs',
+      ours_theirs: 'Both, ours then theirs',
+      theirs_ours: 'Both, theirs then ours',
+      base: 'Base',
+      edit: 'Edit',
+    },
+    editLabel: (index: number) => `Edited text of passage ${index.toString()}`,
+    open: (open: number, total: number) =>
+      `${open.toString()} of ${total.toString()} ${total === 1 ? 'passage' : 'passages'} open`,
+    allChosen: 'Every passage has a choice.',
+    savedText: 'A custom text is saved for this Conflict.',
+    preview: 'Composed text',
+    previewOpen: (index: number) => `[passage ${index.toString()} is open]`,
+    length: (length: number, max: number | undefined) =>
+      max === undefined
+        ? `${length.toString()} characters`
+        : `${length.toString()} of ${max.toString()} characters`,
+    violates: (reason: string) => `Does not fit the Attribute: ${reason}`,
+    useMerged: 'Use merged text',
+    wholeText: 'Whole text, side by side',
+    keys: 'Passage keys, outside text fields: [ and ] move the highlight between passages; on the highlighted one 1 picks ours, 2 theirs, 3 both ours then theirs, 4 both theirs then ours, 0 base.',
   },
 
   sides: {

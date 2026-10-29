@@ -154,7 +154,11 @@ const riskFlag = kind(
       required: true,
       constraints: { enum_values: ['low', 'medium', 'high', 'critical'] },
     }),
-    attr('riskflag', 'reason', 'text', { required: true, searchable: 'B' }),
+    attr('riskflag', 'reason', 'text', {
+      required: true,
+      searchable: 'B',
+      constraints: { max_length: 240 },
+    }),
   ],
   {
     description: 'A recorded risk observation about a Supplier.',
@@ -716,6 +720,48 @@ function riskConflicts(): Conflict[] {
   ];
 }
 
+/**
+ * A text Attribute edited in the same passages on both Branches: Keeper splits it by
+ * sentence, keeps the passage only one side touched and lists the others as hunks.
+ */
+function reasonConflict(): Conflict {
+  const hunks = [
+    {
+      status: 'clean',
+      base: 'Single foundry for the motor housing. ',
+      ours: 'Single foundry for the motor housing. ',
+      theirs: 'Single foundry for the motor housing, ISO 9001 certified. ',
+      merged: 'Single foundry for the motor housing, ISO 9001 certified. ',
+    },
+    {
+      status: 'conflict',
+      base: 'Deliveries were late in Q3. ',
+      ours: 'Deliveries were late in Q3 by nine days on average. ',
+      theirs: 'Three of eleven deliveries missed the agreed date in Q3. ',
+      merged: null,
+    },
+    {
+      status: 'conflict',
+      base: 'No second source is qualified.',
+      ours: 'No second source is qualified; Plant MNZ holds four weeks of stock.',
+      theirs: 'A second source is being qualified for Q1.',
+      merged: null,
+    },
+  ];
+  const joined = (side: 'base' | 'ours' | 'theirs') => hunks.map((h) => h[side]).join('');
+  return makeConflict({
+    kind: 'DV1',
+    partition: 'RiskFlag',
+    key: 'F-1',
+    attribute: eid('att', 'riskflag_reason'),
+    base: joined('base'),
+    ours: joined('ours'),
+    theirs: joined('theirs'),
+    message: 'RiskFlag F-1: the reason was rewritten in the same sentences on both Branches.',
+    details: { text_hunks: hunks },
+  });
+}
+
 const autoResolved: AutoResolution[] = [
   {
     kind: 'DV1',
@@ -862,6 +908,24 @@ function proposals(): Map<string, ProposalState> {
           message: 'Supplier S-1001: the tier changed on both Branches.',
         }),
       ],
+      resolutions: [],
+      autoResolutions: [],
+      items: [],
+    },
+    {
+      detail: proposal({
+        id: '45',
+        title: 'Reword the F-1 risk reason',
+        description: 'Both the model branch and main edited the reason of RiskFlag F-1.',
+        source_ref: 'model/risk',
+        target_ref: 'main',
+        origin: 'manual',
+        status: 'open',
+        author: 'usr_marco',
+        created_at: '2026-10-19T11:20:00Z',
+        checks: [{ name: 'Schema validation', status: 'passed' }],
+      }),
+      conflicts: [reasonConflict()],
       resolutions: [],
       autoResolutions: [],
       items: [],

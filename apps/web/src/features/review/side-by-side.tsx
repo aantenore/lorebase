@@ -115,6 +115,12 @@ function WordDiff({ parts }: { parts: DiffPart[] }) {
   );
 }
 
+/** `value` with the words it added to or removed from `base` marked; plain when no diff applies. */
+export function DiffText({ base, value }: { base: string; value: string }) {
+  const parts = useMemo(() => wordDiff(base, value), [base, value]);
+  return parts === null ? <>{value}</> : <WordDiff parts={parts} />;
+}
+
 function Cell({ row, side }: { row: DiffRow; side: Side }) {
   const value = row[side];
   const changed = side !== 'base' && row.changed[side];

@@ -44,6 +44,21 @@ describe('Review', () => {
   });
 });
 
+describe('Review text passages', () => {
+  it('resolves a text Conflict passage by passage', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/review/45');
+    const first = await screen.findByRole('group', { name: 'Conflicting passage 1 of 2' });
+    await user.click(within(first).getByRole('radio', { name: 'Ours' }));
+    const second = screen.getByRole('group', { name: 'Conflicting passage 2 of 2' });
+    await user.click(within(second).getByRole('radio', { name: 'Theirs' }));
+    await user.click(screen.getByRole('button', { name: 'Use merged text' }));
+    expect(await screen.findByText('1 of 1 resolved')).toBeInTheDocument();
+    expect(await screen.findByText('resolved: custom')).toBeInTheDocument();
+    expect(screen.getByText('Every passage has a choice.')).toBeInTheDocument();
+  });
+});
+
 describe('Review form', () => {
   it('adds a review and shows it with the approval state', async () => {
     const user = userEvent.setup();
