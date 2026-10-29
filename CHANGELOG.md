@@ -45,6 +45,10 @@ A reconciliation queue for contradictions between Sources, corrections that surv
 - The release workflow can be run by hand (`workflow_dispatch`, input `tag`) on an existing tag, and publishes the ten packages to PyPI through trusted publishing, each from its own environment (`pypi-<package>`), when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true` ([release process](docs/release.md#pypi-trusted-publishing)).
 - Documentation: the release verification commands name 0.2.3 and the identity of a run started by hand; the README, the quickstart and the MCP guide say how to install `lorebase-cli` and `lorebase-herald` from PyPI.
 
+### Fixed
+
+- Semantic search without iterative scans (pgvector before 0.8, or `search.semantic.iterative_scan: off`) over-fetched less than configured: an HNSW scan ends after `hnsw.ef_search` rows (40), so `search.candidates * search.semantic.overfetch_factor` nearest rows never came back, and a filter keeping 1% of the Records left about 0.2 results of 20. The read transaction now raises `hnsw.ef_search` to the over-fetch count, up to pgvector's limit of 1000: 7.8 results of 20 on 100,000 vectors, flagged `semantic_truncated` ([performance](docs/performance.md#filtered-semantic-search)).
+
 ### Not done yet
 
 - Corrections that stick: incremental Sources still cannot tell a Record removed upstream from an unchanged one (the `stale_after` follow-up of design 9.1 is not built), and the last-written state of a Source is not shown in the web app or the API.

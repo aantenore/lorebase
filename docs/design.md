@@ -1128,6 +1128,7 @@ An external agent reasons in a loop of reads, so every read it makes must cost m
 | Neighborhood, depth 2 | 30 ms |
 | Query on an indexed Attribute, page of 50 | 25 ms |
 | Full-text search, 20 results | 50 ms |
+| Filtered semantic search, 20 results | 200 ms |
 
 **Primitives.** `lorebase_store.reads` and `lorebase_store.traverse` give Keeper one statement per read, each shaped for an index scan: `get_record`, `list_records` (keyset on key), `hydrate_records` (batched by `(kind, key)` arrays), `links_of_record`, `query_by_attribute`, `search_records`, `neighborhood`, `head_revision`, `head_schema`. Caps come from `store.reads` and `store.traverse`.
 
@@ -1168,7 +1169,7 @@ Three read features that agents and people reach for repeatedly: Traits as searc
 
 1. Filters stay in the same statement and before its `LIMIT`: Domain, branch, readable Kinds and fingerprints as today, plus `kinds`, `traits`, `lens` and `where`. Nothing outside the caller's grants is ever ranked, fetched or counted (row-level security and the definer rules of 8.7 are unchanged).
 2. With pgvector 0.8 or later (detected at startup and reported by `/readyz`) and `search.semantic.iterative_scan: auto` (default), the semantic statement runs under `SET LOCAL hnsw.iterative_scan = relaxed_order` and `SET LOCAL hnsw.max_scan_tuples = search.semantic.max_scan_tuples` (default 20000) inside the read transaction, in a materialized subquery that the outer query orders again by exact distance, so the relaxed order of the scan never reaches the response.
-3. Without it (older pgvector, or `iterative_scan: off`), the index subquery fetches `search.candidates * search.semantic.overfetch_factor` (default 4) nearest rows before the filters, and the outer query filters and limits to `search.candidates`.
+3. Without it (older pgvector, or `iterative_scan: off`), the index subquery fetches `search.candidates * search.semantic.overfetch_factor` (default 4) nearest rows before the filters, and the outer query filters and limits to `search.candidates`. The transaction raises `hnsw.ef_search` to that count (pgvector caps it at 1000), because an HNSW scan otherwise ends after 40 rows whatever its `LIMIT`.
 4. When the list is still shorter than asked because the scan bound was reached, the response says `semantic_truncated: true` (Herald: `truncated`), like `truncated_candidates` for lexical search; a list that is short because fewer Records match is not flagged.
 
 Hybrid search uses the same semantic list. Half-precision indexes (8.6) are unaffected. Performance budgets (8.7) gain a row for filtered semantic search measured with a selective `where`.
