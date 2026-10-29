@@ -3,7 +3,7 @@
  * in-memory Branch data. It follows the shape of Keeper's pack, not its exact ranking.
  */
 import type { ContextPack, ContextRequest, Query, RecordRef } from '../types';
-import { runQuery, runSearch, titleOf } from './engine';
+import { runQuery, runSearch, searchedKinds, titleOf } from './engine';
 import { refOf, type BranchData, type StoredRecord } from './state';
 
 /** Characters one token stands for in the estimate; Keeper reports its own in the pack. */
@@ -19,7 +19,9 @@ const tokens = (value: unknown) => Math.ceil(JSON.stringify(value).length / CHAR
 function seedsOf(data: BranchData, request: ContextRequest): RecordRef[] {
   if (request.refs != null) return request.refs;
   if (request.search != null) {
-    return runSearch(data, { q: request.search }, SEED_LIMIT).map((hit) => hit.ref);
+    return runSearch(data, { q: request.search, ...readKinds(request) }, SEED_LIMIT).map(
+      (hit) => hit.ref,
+    );
   }
   if (request.query?.kind != null) {
     const query = { ...request.query, limit: SEED_LIMIT } as Query;
@@ -41,6 +43,12 @@ function linksOf(
   return grouped;
 }
 
+/** The Kind filter members of a context request, as a search takes them. */
+const readKinds = (request: ContextRequest) => ({
+  ...(request.traits == null ? {} : { traits: request.traits }),
+  ...(request.lens == null ? {} : { lens: request.lens }),
+});
+
 export function buildContext(
   domain: string,
   branch: string,
@@ -52,6 +60,7 @@ export function buildContext(
     data.records.map((r) => [refOf(r.kind, r.key), r]),
   );
   const seedRefs = seedsOf(data, request).filter((ref) => known.has(ref));
+  const kindsKept = searchedKinds(data, readKinds(request));
   const relationOk = (name: string) =>
     request.relations == null || request.relations.length === 0 || request.relations.includes(name);
 
@@ -64,7 +73,11 @@ export function buildContext(
       for (const link of data.links) {
         if (!relationOk(link.relation)) continue;
         const other = link.from === current ? link.to : link.to === current ? link.from : null;
-        if (other === null || depthOf.has(other) || !known.has(other)) continue;
+        if (other === null || depthOf.has(other)) continue;
+        const neighbor = known.get(other);
+        if (neighbor === undefined || (kindsKept !== null && !kindsKept.has(neighbor.kind))) {
+          continue;
+        }
         depthOf.set(other, depth);
         next.push(other);
       }

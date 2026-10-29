@@ -10,6 +10,11 @@ export const retrievalLab = {
     examples: 'Example questions',
     ask: 'Ask',
   },
+  lens: {
+    label: 'Lens',
+    none: 'No lens',
+    hint: 'Searches (sets without Kinds) and the pack',
+  },
   budget: {
     label: 'Pack budget (tokens)',
     hint: 'Empty: default',

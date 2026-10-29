@@ -250,6 +250,35 @@ export interface MockSearch {
  * stand-in similarity. `tuning` is honored loosely: the weights scale the two scores and
  * `candidates` caps the hits.
  */
+/**
+ * The Kinds a search covers, by api name; `null` for all. `kinds` and the Kinds implementing
+ * `traits` are searched together; a lens supplies both when the request names neither.
+ */
+export function searchedKinds(
+  data: BranchData,
+  request: Pick<SearchRequest, 'kinds' | 'traits' | 'lens'>,
+): Set<string> | null {
+  let kinds = request.kinds ?? [];
+  let traits = request.traits ?? [];
+  if (kinds.length === 0 && traits.length === 0 && request.lens !== undefined) {
+    const lens = (data.schema.lenses ?? []).find((l) => l.api_name === request.lens);
+    if (lens === undefined)
+      throw problem(422, 'Unknown lens', `Lens ${request.lens} does not exist.`, 'lens_unknown');
+    kinds = lens.kinds;
+    traits = lens.traits;
+  }
+  if (kinds.length === 0 && traits.length === 0) return null;
+  const traitIds = new Set(
+    data.schema.traits.filter((t) => traits.includes(t.api_name)).map((t) => t.id),
+  );
+  return new Set([
+    ...kinds,
+    ...data.schema.kinds
+      .filter((k) => k.traits.some((t) => traitIds.has(t.trait_id)))
+      .map((k) => k.api_name),
+  ]);
+}
+
 export function runSearchFull(
   data: BranchData,
   request: SearchRequest,
@@ -276,14 +305,10 @@ export function runSearchFull(
   });
   if (terms.length === 0) return { results: [], mode, corrections };
 
+  const searched = searchedKinds(data, request);
   const results: SearchResult[] = [];
   for (const rec of data.records) {
-    if (
-      request.kinds !== undefined &&
-      request.kinds.length > 0 &&
-      !request.kinds.includes(rec.kind)
-    )
-      continue;
+    if (searched !== null && !searched.has(rec.kind)) continue;
     if (!matchesWhere(data, rec, request.where)) continue;
     const title = titleOf(data, rec).toLowerCase();
     const body = Object.values(rec.values).map((v) => text(v).toLowerCase());

@@ -16,7 +16,9 @@ Beside `kinds`, `POST /search` takes `traits` and `lens` ([design 8.8](design.md
   when the request names neither `kinds` nor `traits`. An unknown lens is 422 `lens_unknown`.
 - A lens and a Trait never widen a search: grants and `where` apply as to the same request
   written out, and `where` still needs exactly one Kind among those searched.
-- CLI: `lorebase search TEXT --trait Located --lens supplier_risk`.
+- CLI: `lorebase search TEXT --trait Located --lens supplier_risk`. Web app: the Explorer's
+  Kind filter lists the Traits, and a lens selector appears beside it (and in the Retrieval lab,
+  for both searches and the context pack) when the schema declares lenses.
 
 **Filters before the limit.** The semantic list (semantic and hybrid search) keeps the Domain,
 branch, readable Kinds, `kinds`, `traits`, `lens` and `where` in the same statement and before

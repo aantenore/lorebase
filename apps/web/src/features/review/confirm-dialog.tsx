@@ -1,8 +1,11 @@
 import { common as commonMessages } from '@/messages/common';
 import { Button } from '@/ui/button';
-import { Dialog } from '@/ui/dialog';
+import { AUTOFOCUS, Dialog } from '@/ui/dialog';
 
-/** Asks before something that cannot be taken back or that loses work. */
+/**
+ * Asks before something that cannot be taken back or that loses work. Focus starts on the
+ * cancel button, the least destructive choice, so Enter right after opening loses nothing.
+ */
 export function ConfirmDialog({
   open,
   title,
@@ -25,7 +28,9 @@ export function ConfirmDialog({
       <div className="flex flex-col gap-3">
         <p className="text-sm">{message}</p>
         <div className="flex justify-end gap-2">
-          <Button onClick={onCancel}>{cancelLabel}</Button>
+          <Button {...AUTOFOCUS} onClick={onCancel}>
+            {cancelLabel}
+          </Button>
           <Button variant="primary" onClick={onConfirm}>
             {confirmLabel}
           </Button>

@@ -1,15 +1,15 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from './button';
-import { Dialog } from './dialog';
+import { AUTOFOCUS, Dialog } from './dialog';
 import { Input, Select } from './field';
 import { RouteFallback } from './route-fallback';
 import { Table, TBody, TD, TH, THead, TR } from './table';
 import { Tabs } from './tabs';
 import { ToastProvider, useToast } from './toast';
 
-function DialogHarness() {
+function DialogHarness({ children = <Button>Inside</Button> }: { children?: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -27,7 +27,7 @@ function DialogHarness() {
           setOpen(false);
         }}
       >
-        <Button>Inside</Button>
+        {children}
       </Dialog>
     </>
   );
@@ -52,11 +52,33 @@ describe('ui primitives', () => {
     await user.click(opener);
     const dialog = screen.getByRole('dialog', { name: 'Confirm' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByRole('button', { name: 'Inside' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Close dialog' })).toHaveTextContent('Close');
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
+  });
+
+  it('focuses the marked control, else the title of a dialog without controls', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <DialogHarness>
+        <Button>First</Button>
+        <Button {...AUTOFOCUS}>Marked</Button>
+      </DialogHarness>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    expect(screen.getByRole('button', { name: 'Marked' })).toHaveFocus();
+    unmount();
+
+    render(
+      <DialogHarness>
+        <p>Nothing to do here.</p>
+      </DialogHarness>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    expect(screen.getByRole('heading', { name: 'Confirm' })).toHaveFocus();
   });
 
   it('traps Tab inside the dialog', async () => {

@@ -66,6 +66,25 @@ describe('Retrieval lab', () => {
     ).toBeInTheDocument();
   });
 
+  it('limits both searches and the pack to the Kinds of a lens', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/retrieval-lab?q=brevik');
+    const a = await resultsA();
+    expect(await a.findByText('Brevik master supply agreement')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText(T.lens.label), 'Sites');
+    expect(await a.findByText('Brevik Bearings S.p.A.')).toBeInTheDocument();
+    expect(a.queryByText('Brevik master supply agreement')).not.toBeInTheDocument();
+    const pack = await screen.findByRole('table', { name: 'Records in the context pack' });
+    expect(within(pack).queryByText('Brevik master supply agreement')).not.toBeInTheDocument();
+  });
+
+  it('offers no lens when the schema declares none', async () => {
+    renderApp('/hr/retrieval-lab');
+    await screen.findByLabelText(T.question.label);
+    expect(screen.queryByLabelText(T.lens.label)).not.toBeInTheDocument();
+  });
+
   it('puts the question in the URL when asked', async () => {
     const user = userEvent.setup();
     const { router } = renderApp('/supply/retrieval-lab');

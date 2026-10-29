@@ -52,6 +52,7 @@ import type {
   TraceTimeline,
   TraverseRequest,
   TraverseResponse,
+  UpdateDomainInput,
   Webhook,
   WebhookCreated,
   WhoAmI,
@@ -117,6 +118,8 @@ export interface KeeperApi {
     list(): Promise<Page<Domain>>;
     create(input: CreateDomainInput): Promise<Domain>;
     get(domain: DomainId): Promise<Domain>;
+    /** Needs `domain.settings`; a 422 names the invalid members by pointer. */
+    update(domain: DomainId, input: UpdateDomainInput): Promise<Domain>;
   };
 
   readonly branches: {

@@ -12,6 +12,8 @@ member's values before and after. `GET` reports `ignored_settings`: the paths of
 values that do not apply because they loosen a member the installation does not let Domains
 loosen (`scribe.extraction.domain_may_loosen`, read from this process's configuration) or are
 invalid; Scribe resolves the same settings with its own configuration when it runs a job.
+`GET` and `PATCH` also report `can`: what the caller may do with the Domain itself (for
+clients that show or hide controls), computed by the authorizer like the 403s it predicts.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ from lorebase_keeper.auth.deps import (
     require_installation,
 )
 from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.auth.principals import Principal
+from lorebase_keeper.auth.rbac import NO_CONTEXT
+from lorebase_keeper.auth.runtime import AuthRuntime
 from lorebase_keeper.context import StoreDep
 from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep, SettingsDep
 from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, ValidationProblem
@@ -87,6 +92,14 @@ class DomainUpdate(BaseModel):
     )
 
 
+class DomainCan(BaseModel):
+    """What the caller may do with the Domain itself."""
+
+    settings: bool = Field(
+        description="The caller holds `domain.settings`: it may `PATCH` the Domain."
+    )
+
+
 class DomainOut(BaseModel):
     """A Domain and the head Revision of its default branch."""
 
@@ -102,6 +115,11 @@ class DomainOut(BaseModel):
         default_factory=list,
         description="Paths of settings values that do not apply (invalid, or loosening a "
         "member the installation does not let Domains loosen), e.g. `extraction.mode`.",
+    )
+    can: DomainCan | None = Field(
+        default=None,
+        description="What the caller may do with the Domain; reported by `GET` and `PATCH` of "
+        "one Domain, null in lists.",
     )
 
 
@@ -133,8 +151,22 @@ def _require_valid(problems: list[dict[str, str]]) -> None:
         )
 
 
-def _out(row: DomainRow, head: bytes | None, bounds: modes.Installation | None = None) -> DomainOut:
+async def _can(auth: AuthRuntime, principal: Principal, domain_id: str) -> DomainCan:
+    return DomainCan(
+        settings=await auth.authorizer.allows(
+            principal, Permission.DOMAIN_SETTINGS, domain_id, NO_CONTEXT
+        )
+    )
+
+
+def _out(
+    row: DomainRow,
+    head: bytes | None,
+    bounds: modes.Installation | None = None,
+    can: DomainCan | None = None,
+) -> DomainOut:
     return DomainOut(
+        can=can,
         ignored_settings=[] if bounds is None else modes.ignored_settings(bounds, row.settings),
         id=row.id,
         display_name=row.display_name,
@@ -215,11 +247,14 @@ async def get_domain(
     domain_id: str,
     store: StoreDep,
     settings: SettingsDep,
-    _: Annotated[Access, Depends(require(Permission.SCHEMA_READ, kind_limited=True))],
+    auth: AuthDep,
+    access: Annotated[Access, Depends(require(Permission.SCHEMA_READ, kind_limited=True))],
 ) -> DomainOut:
-    """The Domain, the head Revision of its default branch and its ignored settings."""
+    """The Domain, the head Revision of its default branch, its ignored settings and what the
+    caller may do with it."""
     row, head = await service.get(store, domain_id)
-    return _out(row, head, installation_bounds(settings))
+    can = await _can(auth, access.principal, domain_id)
+    return _out(row, head, installation_bounds(settings), can)
 
 
 @router.patch(
@@ -231,7 +266,8 @@ async def update_domain(
     request: Request,
     store: StoreDep,
     settings: SettingsDep,
-    _: Annotated[Access, Depends(require(Permission.DOMAIN_SETTINGS))],
+    auth: AuthDep,
+    access: Annotated[Access, Depends(require(Permission.DOMAIN_SETTINGS))],
 ) -> DomainOut:
     """Change the display name, the description or allowlisted settings members (`extraction`).
     They are not versioned; setting changes are audited with their values before and after."""
@@ -263,7 +299,9 @@ async def update_domain(
         settings=[{"member": c.member, "before": c.before, "after": c.after} for c in changes],
     )
     row, head = await service.get(store, domain_id)
-    return _out(row, head, installation_bounds(settings))
+    return _out(
+        row, head, installation_bounds(settings), await _can(auth, access.principal, domain_id)
+    )
 
 
 @router.delete(

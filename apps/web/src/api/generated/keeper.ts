@@ -342,7 +342,8 @@ export interface paths {
         };
         /**
          * Get a Domain
-         * @description The Domain, the head Revision of its default branch and its ignored settings.
+         * @description The Domain, the head Revision of its default branch, its ignored settings and what the
+         *     caller may do with it.
          */
         get: operations["get_domain_api_v1_domains__domain_id__get"];
         put?: never;
@@ -3292,6 +3293,17 @@ export interface components {
             check_job_id?: number | null;
         };
         /**
+         * DomainCan
+         * @description What the caller may do with the Domain itself.
+         */
+        DomainCan: {
+            /**
+             * Settings
+             * @description The caller holds `domain.settings`: it may `PATCH` the Domain.
+             */
+            settings: boolean;
+        };
+        /**
          * DomainCreate
          * @description A new Domain.
          */
@@ -3379,6 +3391,8 @@ export interface components {
              * @description Paths of settings values that do not apply (invalid, or loosening a member the installation does not let Domains loosen), e.g. `extraction.mode`.
              */
             ignored_settings?: string[];
+            /** @description What the caller may do with the Domain; reported by `GET` and `PATCH` of one Domain, null in lists. */
+            can?: components["schemas"]["DomainCan"] | null;
         };
         /**
          * DomainUpdate

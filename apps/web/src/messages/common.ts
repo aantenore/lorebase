@@ -8,6 +8,7 @@ export const common = {
   save: 'Save',
   cancel: 'Cancel',
   close: 'Close',
+  closeDialog: 'Close dialog',
   apply: 'Apply',
   search: 'Search',
   retry: 'Try again',

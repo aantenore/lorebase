@@ -111,6 +111,64 @@ describe('Settings', () => {
     expect(within(domain).getByText('Review doubts only')).toBeInTheDocument();
     const ignored = screen.getByRole('group', { name: 'Ignored settings' });
     expect(within(ignored).getByText('extraction.auto_accept_threshold')).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'Ingestion settings' });
+    expect(within(form).getByLabelText('Mode')).toHaveValue('doubts_only');
+    expect(within(form).getByLabelText('Auto-accept threshold')).toHaveAccessibleDescription(
+      /Ignored: this value does not apply/,
+    );
+  });
+
+  it('edits the ingestion settings and their rules', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/settings');
+    const form = await screen.findByRole('form', { name: 'Ingestion settings' });
+    await user.selectOptions(within(form).getByLabelText('Mode'), 'review_all');
+    await user.click(within(form).getByRole('button', { name: 'Add rule' }));
+    const rule = within(form).getByRole('group', { name: 'Rule 1' });
+    await user.type(within(rule).getByLabelText('Source key prefix'), 'erp/');
+    await user.selectOptions(within(rule).getByLabelText('Mode'), 'direct');
+    await user.click(within(form).getByRole('button', { name: 'Save ingestion settings' }));
+
+    expect(await screen.findByText('Ingestion settings saved.')).toBeInTheDocument();
+    const domain = screen.getByRole('table', { name: 'Domain settings' });
+    expect(within(domain).getByText('Review all')).toBeInTheDocument();
+    expect(within(rule).getByLabelText('Source key prefix')).toHaveValue('erp/');
+  });
+
+  it('shows the fields Keeper refuses next to them', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/settings');
+    const form = await screen.findByRole('form', { name: 'Ingestion settings' });
+    await user.type(within(form).getByLabelText('Minimum confidence'), '2');
+    await user.click(within(form).getByRole('button', { name: 'Add rule' }));
+    await user.click(within(form).getByRole('button', { name: 'Save ingestion settings' }));
+
+    expect(await within(form).findByRole('alert')).toHaveTextContent('Keeper refused');
+    const minimum = within(form).getAllByLabelText('Minimum confidence')[0];
+    expect(minimum).toHaveAttribute('aria-invalid', 'true');
+    expect(minimum).toHaveAccessibleDescription('must be a number from 0 to 1');
+    const prefix = within(within(form).getByRole('group', { name: 'Rule 1' })).getByLabelText(
+      'Source key prefix',
+    );
+    expect(prefix).toHaveAccessibleDescription('must be a non-empty string');
+  });
+
+  it('keeps the Domain settings read-only without domain.settings', async () => {
+    const mock = sampleApi();
+    const api = {
+      ...mock,
+      domains: {
+        ...mock.domains,
+        get: async (...args: Parameters<typeof mock.domains.get>) => ({
+          ...(await mock.domains.get(...args)),
+          can: { settings: false },
+        }),
+      },
+    };
+    renderApp('/supply/settings', testConfig(), api);
+    await screen.findByRole('table', { name: 'Domain settings' });
+    expect(screen.getByText(/needs the domain.settings permission/)).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Ingestion settings' })).not.toBeInTheDocument();
   });
 
   it('falls back to the installation default ingestion mode and lists nothing ignored', async () => {

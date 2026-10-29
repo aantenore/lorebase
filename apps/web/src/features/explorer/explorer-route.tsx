@@ -9,8 +9,8 @@ const record = getRouteApi('/$domain/explorer/$kind/$key');
 
 /** The Explorer home bound to its URL state; loaded lazily by the route. */
 export function ExplorerRoute() {
-  const { q, kind } = home.useSearch();
-  return <ExplorerPage q={q} kind={kind} />;
+  const { q, kind, trait, lens } = home.useSearch();
+  return <ExplorerPage q={q} kind={kind} trait={trait} lens={lens} />;
 }
 
 /** The records of one Kind bound to its URL state; loaded lazily by the route. */

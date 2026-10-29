@@ -231,6 +231,7 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
       list: () => get<Page<S['DomainOut']>>('/domains'),
       create: (input) => create('/domains', input),
       get: (domain) => get(d(domain)),
+      update: (domain, input) => http.json('PATCH', d(domain), { body: input }),
     },
 
     branches: {

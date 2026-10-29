@@ -7,6 +7,7 @@ import { AccessPanel } from '@/features/admin/access-panel';
 import { ApiKeysPanel } from '@/features/admin/api-keys-panel';
 import { AuditPanel } from '@/features/admin/audit-panel';
 import { ConnectionSection } from './connection-section';
+import { ExtractionForm } from './extraction-form';
 import { Select } from '@/ui/field';
 import { PageHeader, Section } from '@/ui/layout';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
@@ -96,7 +97,14 @@ function General() {
             </ul>
           </div>
         )}
+        {domainInfo.can?.settings !== true && (
+          <p className="mt-3 text-sm text-muted">{T.domain.readOnly}</p>
+        )}
       </Section>
+
+      {domainInfo.can?.settings === true && (
+        <ExtractionForm key={domainInfo.id} domain={domainInfo} />
+      )}
 
       <Section title={T.runtime.title}>
         <Table caption={T.runtime.caption}>

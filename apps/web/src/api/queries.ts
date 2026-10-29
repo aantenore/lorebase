@@ -25,6 +25,7 @@ import type {
   RevisionId,
   SearchRequest,
   TraceSessionParams,
+  UpdateDomainInput,
 } from './types';
 
 /**
@@ -119,6 +120,19 @@ export function useDomains() {
 export function useDomain(domain: DomainId) {
   const api = useKeeperApi();
   return useQuery({ queryKey: keys.domain(domain), queryFn: () => api.domains.get(domain) });
+}
+
+/** Change a Domain's metadata or settings; failures are shown inline by the form. */
+export function useUpdateDomain(domain: DomainId) {
+  const api = useKeeperApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateDomainInput) => api.domains.update(domain, input),
+    meta: { inlineError: true },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(keys.domain(domain), updated);
+    },
+  });
 }
 
 export function useBranches(domain: DomainId) {
