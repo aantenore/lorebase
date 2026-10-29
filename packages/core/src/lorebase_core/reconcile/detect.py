@@ -75,6 +75,8 @@ class DuplicateRule(StrEnum):
     """Titles above ``duplicates.trigram_threshold`` by trigram similarity."""
     AMBIGUOUS = "ambiguous"
     """An extraction mention left ambiguous between the two Records."""
+    SEMANTIC = "semantic"
+    """Stored Record vectors above ``semantic.duplicate_threshold`` (stage d)."""
 
 
 class StaleReason(StrEnum):

@@ -9,9 +9,11 @@ options in force for a Domain (`scribe.reconciliation`, overridden by the Domain
 - Values of derived and vault Attributes are not compared (vault values are references).
 - Claims whose source identity cannot be told (a merge resolution or schema migration whose
   carried identity is not known) are left out: they cannot be told apart from any other.
-- The semantic stage (d) is an extension point: a `SemanticStage` given to the detector sees
-  the drafts the cheaper stages raised, when `semantic.enabled` and the stage is listed, and
-  returns the drafts to store (with signals added). None ships yet, so no model is called.
+- The semantic stage (d, `lorebase_scribe.reconcile.semantic`): a `SemanticStage` given to the
+  detector sees the `contradiction` and `superseded` drafts of `text` Attributes the cheaper
+  stages raised, when `semantic.enabled` and the stage is listed, and returns the drafts to
+  store (with signals added); those it leaves out are counted `filtered`.
+- Candidates of vault Attributes are stored without evidence quotes (`vault=True`).
 - `obsolete` is set only by `retire`, with the reason the disagreement left the data.
 """
 
@@ -56,23 +58,100 @@ OVERRIDE_KEY = "reconciliation"
 """Key of the Domain setting that overrides `scribe.reconciliation`."""
 
 _TEXTUAL = frozenset({AttributeType.STRING, AttributeType.TEXT})
+_REVIEWED = frozenset({CandidateType.CONTRADICTION, CandidateType.SUPERSEDED})
+
+
+DOMAIN_MEMBERS: Mapping[str, frozenset[str] | None] = {
+    "enabled": None,
+    "stages": None,
+    "triggers": frozenset({"extraction", "source_sync"}),
+    "hold_auto_accept": None,
+    "normalize": frozenset({"numeric_tolerance", "negation_words"}),
+    "duplicates": frozenset({"trigram_threshold"}),
+    "semantic": frozenset(
+        {
+            "enabled",
+            "equivalence_threshold",
+            "equivalent_similarity",
+            "duplicate_threshold",
+            "judge",
+        }
+    ),
+    "stale": frozenset({"max_age"}),
+}
+"""What a Domain's `reconciliation` setting may override: whole members (None) or the listed
+members of a section. Files (`normalize.units_file`), work limits (`sweep_*`,
+`max_claims_per_candidate`, `duplicates.max_pairs_per_kind`, `normalize.max_quantity_length`)
+and `merge_check` are the operator's only."""
+
+
+def _domain_override(base: ReconcileOptions, raw: Mapping[str, Any]) -> dict[str, Any]:
+    """The members of `raw` a Domain may set, merged into `base`'s dump; the others are
+    logged and ignored (module doc of `effective_options`)."""
+    merged = base.model_dump(mode="python")
+    for name, value in raw.items():
+        if name not in DOMAIN_MEMBERS:
+            log.warning("the Domain setting %s.%s is not allowed, ignored", OVERRIDE_KEY, name)
+            continue
+        allowed = DOMAIN_MEMBERS[name]
+        if name == "stages":
+            # A Domain may leave stages out, never add one the operator left out.
+            if not isinstance(value, list | tuple):
+                log.warning("the Domain setting %s.stages is not a list, ignored", OVERRIDE_KEY)
+                continue
+            value = [s for s in value if s in {stage.value for stage in base.stages}]
+        elif name == "semantic" and not base.semantic.enabled:
+            log.warning("the Domain setting %s.semantic is ignored: the stage is off", OVERRIDE_KEY)
+            continue
+        if allowed is not None:
+            if not isinstance(value, Mapping):
+                log.warning(
+                    "the Domain setting %s.%s is not an object, ignored", OVERRIDE_KEY, name
+                )
+                continue
+            section = dict(merged[name])
+            for member, inner in value.items():
+                if member not in allowed:
+                    log.warning(
+                        "the Domain setting %s.%s.%s is not allowed, ignored",
+                        OVERRIDE_KEY,
+                        name,
+                        member,
+                    )
+                    continue
+                section[member] = inner
+            value = section
+        candidate = {**merged, name: value}
+        try:
+            ReconcileOptions.model_validate(candidate)
+        except ValidationError as error:
+            log.warning(
+                "the Domain setting %s.%s is not valid, ignored: %s", OVERRIDE_KEY, name, error
+            )
+            continue
+        merged = candidate
+    return merged
 
 
 def effective_options(
     base: ReconcileOptions, domain_settings: Mapping[str, Any] | None
 ) -> ReconcileOptions:
-    """`base` with the members the Domain's `reconciliation` setting overrides. A setting that
-    is not valid is logged and ignored: detection then runs with `base`."""
+    """`base` with the members the Domain's `reconciliation` setting overrides.
+
+    Only the members of `DOMAIN_MEMBERS` are taken; a Domain can leave stages out but not add
+    one, and tunes the semantic stage only when the operator turned it on. A member that is
+    not allowed or not valid is logged and ignored, the rest of the setting still applies; a
+    setting that is not an object is ignored whole."""
     raw = (domain_settings or {}).get(OVERRIDE_KEY)
     if raw is None:
         return base
-    try:
-        if not isinstance(raw, Mapping):
-            raise ValueError("must be an object")
-        return ReconcileOptions.model_validate({**base.model_dump(mode="python"), **raw})
-    except (ValidationError, ValueError) as error:
-        log.warning("the Domain setting %s is not valid, ignored: %s", OVERRIDE_KEY, error)
+    if not isinstance(raw, Mapping):
+        log.warning("the Domain setting %s is not an object, ignored", OVERRIDE_KEY)
         return base
+    if not raw:
+        return base
+    found = ReconcileOptions.model_validate(_domain_override(base, raw))
+    return base if found == base else found
 
 
 def compared(attribute: Attribute | None) -> bool:
@@ -81,10 +160,10 @@ def compared(attribute: Attribute | None) -> bool:
 
 
 class SemanticStage(Protocol):
-    """Stage d of design 10.6: compares competing ``text`` values (and Record vectors for
-    duplicates) and returns the drafts to store, each with its signals (``equivalent``,
-    ``similarity``, ``judge``) added; it may drop a draft only above
-    ``semantic.equivalence_threshold``."""
+    """Stage d of design 10.6: compares competing ``text`` values (the detector hands it the
+    value candidates of ``text`` Attributes only) and returns the drafts to store, each with
+    its signals (``equivalent``, ``similarity``, ``judge``) added; it may drop a draft only
+    above ``semantic.equivalence_threshold``."""
 
     async def review(
         self, drafts: Sequence[CandidateDraft], options: ReconcileOptions
@@ -197,9 +276,7 @@ class Detector:
         if not raised:
             return report
         attributes = {r.draft.fingerprint: r.attribute for r in raised}
-        drafts = [r.draft for r in raised]
-        if self._semantic is not None and self.runs(Stage.SEMANTIC):
-            drafts = await self._semantic.review(drafts, self.options)
+        drafts = await self._review([r.draft for r in raised], attributes, report)
         repository = ReconciliationCandidateRepository(session, domain_id)
         now = self._clock()
         for draft in drafts:
@@ -207,6 +284,7 @@ class Detector:
             outcome = await repository.upsert(
                 draft,
                 sensitivity=() if attribute is None else attribute.sensitivity,
+                vault=attribute is not None and attribute.in_vault,
                 max_claims=self.options.max_claims_per_candidate,
                 now=now,
                 new_id=new_candidate_id,
@@ -221,6 +299,44 @@ class Detector:
             if name != "seen":
                 RECONCILIATION_CANDIDATES.add(1, {"type": draft.type.value, "outcome": name})
         return report
+
+    async def _review(
+        self,
+        drafts: list[CandidateDraft],
+        attributes: Mapping[bytes, Attribute | None],
+        report: ReconcileReport,
+    ) -> list[CandidateDraft]:
+        """The drafts after the semantic stage: it sees the value candidates of `text`
+        Attributes only; those it leaves out are counted `filtered`. A stage that fails leaves
+        the drafts as they were."""
+        if self._semantic is None or not self.runs(Stage.SEMANTIC):
+            return drafts
+        reviewed = [
+            d
+            for d in drafts
+            if d.type in _REVIEWED
+            and (attribute := attributes.get(d.fingerprint)) is not None
+            and attribute.type.name is AttributeType.TEXT
+        ]
+        if not reviewed:
+            return drafts
+        try:
+            returned = await self._semantic.review(reviewed, self.options)
+        except Exception as error:
+            log.warning("semantic reconciliation stage failed, no signal: %s", error)
+            return drafts
+        asked = {d.fingerprint for d in reviewed}
+        kept = {d.fingerprint: d for d in returned if d.fingerprint in asked}
+        found: list[CandidateDraft] = []
+        for draft in drafts:
+            if draft.fingerprint not in asked:
+                found.append(draft)
+            elif draft.fingerprint in kept:
+                found.append(kept[draft.fingerprint])
+            else:
+                report.count("filtered")
+                RECONCILIATION_CANDIDATES.add(1, {"type": draft.type.value, "outcome": "filtered"})
+        return found
 
     async def retire(
         self, session: AsyncSession, domain_id: str, row: CandidateRow, reason: str
@@ -258,6 +374,7 @@ def ambiguous_duplicates(branch: str, pairs: Iterable[tuple[str, str, str, float
 
 
 __all__ = [
+    "DOMAIN_MEMBERS",
     "OVERRIDE_KEY",
     "Detector",
     "Raised",

@@ -2,11 +2,12 @@
 
 Before items are assembled, the claims of the current values the extraction would change are
 read from the target branch (`gather`). While items are assembled, `contests` tells whether a
-value item raises a `contradiction` against them: with `hold_auto_accept` such an item stays
-pending whatever its confidence. Once the Proposal holds the items, `raised` gives the
-candidates to store: one per contested value (its claims are the current value's and the
-item's, with the evidence passage and the period the item carries) and one `duplicate` per
-mention left ambiguous between two Records.
+value item raises a candidate against them (`contradiction` or `superseded`): with
+`hold_auto_accept` such an item stays pending whatever its confidence, so a value with a newer
+period is never auto-accepted over the current one. Once the Proposal holds the items,
+`raised` gives the candidates to store: one per contested value (its claims are the current
+value's and the item's, with the evidence passage and the period the item carries) and one
+`duplicate` per mention left ambiguous between two Records.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from lorebase_core.model import Schema
-from lorebase_core.reconcile import CandidateType, Claim, Stage
+from lorebase_core.reconcile import Claim, Stage
 from lorebase_scribe.extraction.candidates import Resolved, ValueCandidate
 from lorebase_scribe.reconcile.detector import (
     Detector,
@@ -140,7 +141,7 @@ class ExtractionCheck:
         return verdict, attribute
 
     def contests(self, value: ValueCandidate) -> bool:
-        """Whether the value item would raise a `contradiction` (module doc)."""
+        """Whether the value item would raise a candidate (module doc)."""
         subject = value.subject
         evidence = {
             **value.evidence.as_dict(),
@@ -153,11 +154,7 @@ class ExtractionCheck:
         verdict, _attribute = self._verdict(
             subject.kind_id, str(subject.key), value.attribute_id, claim, None
         )
-        return (
-            verdict is not None
-            and verdict.draft is not None
-            and verdict.draft.type is CandidateType.CONTRADICTION
-        )
+        return verdict is not None and verdict.raised
 
     def raised(
         self, items: Sequence[ItemRow], proposal_id: str, mentions: Iterable[Resolved]
