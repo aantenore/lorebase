@@ -42,7 +42,9 @@ the same blob), its chunks and the cached answers of its chunks, and replaces th
 quotes of Proposal items, reconciliation candidates and schema suggestions by
 `keeper.reads.sensitivity.erased_value`; provenance rows and offsets stay. It is irreversible
 and audited `document.purge` in its own transaction, without content. Retiring or purging again
-changes nothing.
+changes nothing. Both lock the document row, as extraction jobs do before writing its text,
+chunks or items, and a purge cancels the queued and running extraction jobs of the document: a
+job running across a purge stops instead of writing content back.
 
 The text route serves the text Scribe parsed, which the evidence offsets of extraction items
 index (Unicode code points). It answers 404 until Scribe parsed the document, is cut at
@@ -91,6 +93,7 @@ from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, PostgresBlobSt
 from lorebase_store.jobs import (
     DOCUMENT_VERSION_CHECK_JOB,
     EXTRACTION_JOB,
+    cancel_queued_jobs,
     document_version_check_payload,
     enqueue_job,
     extraction_payload,
@@ -720,7 +723,7 @@ async def retire_document(
     annotate(request, action=RETIRE_ACTION, target=document_id, reason=body.reason)
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
-        row = await DocumentRepository(session, domain_id).get(document_id)
+        row = await DocumentRepository(session, domain_id).lock(document_id)
         if row is None:
             raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
         row, job = await _retire(session, domain_id, row, access.principal.id, store.clock())
@@ -751,7 +754,9 @@ async def purge_document(
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
         repository = DocumentRepository(session, domain_id)
-        row = await repository.get(document_id)
+        # The row lock serialises the purge with extraction jobs writing this document's
+        # text, chunks or items: they take it too and stop once it is retired or purged.
+        row = await repository.lock(document_id)
         if row is None:
             raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
         at = store.clock()
@@ -759,7 +764,16 @@ async def purge_document(
         job: int | None = None
         if not already:
             row, job = await _retire(session, domain_id, row, access.principal.id, at)
-        jobs = await ExtractionJobRepository(session, domain_id).ids_of_document(document_id)
+        extraction_jobs = ExtractionJobRepository(session, domain_id)
+        queued = await cancel_queued_jobs(
+            session,
+            EXTRACTION_JOB,
+            domain_id=domain_id,
+            match={"documents": [document_id]},
+            reason=f"document {document_id} purged",
+        )
+        cancelled = await extraction_jobs.cancel_of_document(document_id, at=at)
+        jobs = await extraction_jobs.ids_of_document(document_id)
         items = await ProposalItemRepository(session, domain_id).erase_quotes(
             jobs, document_id, erased
         )
@@ -806,6 +820,7 @@ async def purge_document(
                     "sha256": row.sha256.hex(),
                     "source_key": row.source_key,
                     "version": row.version,
+                    "jobs_cancelled": queued + len(cancelled),
                     **outcome.model_dump(exclude={"document"}),
                 },
                 at=at,

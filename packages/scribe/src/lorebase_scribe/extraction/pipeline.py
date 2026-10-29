@@ -20,6 +20,11 @@ Nothing is written to the default branch: reviewers decide item by item and merg
 Proposal. A tier 1 model that is not installed degrades to tier 0 with a warning in the job's
 stats; a tier 2 model that cannot be created fails the job, and a chunk whose answer stays
 invalid after the repair attempts is skipped with a warning.
+
+Every write of document-derived content (text, chunks, items, candidates, suggestions) first
+locks the job's document rows and checks them still extractable (`lock_extractable`), as
+retirement and purge lock them: a document retired or purged while the job runs stops it
+(`cancelled`, `DocumentRetiredError`) before anything more is written.
 """
 
 from __future__ import annotations
@@ -159,6 +164,26 @@ class DocumentRetiredError(ExtractionError):
     problem type `document-retired` in Keeper)."""
 
 
+async def lock_extractable(
+    session: AsyncSession, domain_id: str, document_ids: Sequence[str]
+) -> list[DocumentRow]:
+    """Lock the documents of a job (`FOR UPDATE`, in id order) and check that none was retired
+    or purged since the job started; raises `DocumentRetiredError` otherwise. Every write of
+    document-derived content takes it, as retirement and purge do, so a purge either runs
+    before the write (which then aborts the job) or after it (and erases what it wrote)."""
+    repository = DocumentRepository(session, domain_id)
+    rows: list[DocumentRow] = []
+    for document_id in sorted(set(document_ids)):
+        row = await repository.lock(document_id)
+        if row is None or not row.extractable:
+            status = "gone" if row is None else row.status
+            raise DocumentRetiredError(
+                f"document {document_id!r} is {status}: the extraction job stops"
+            )
+        rows.append(row)
+    return rows
+
+
 PERMANENT_ERRORS: tuple[type[Exception], ...] = (ExtractionError, ParseError, BlobNotFoundError)
 
 
@@ -289,10 +314,15 @@ class StoreLookup:
 
 
 class StoreCache:
-    """`AnswerCache` over `extraction_cache`."""
+    """`AnswerCache` over `extraction_cache`. With `domain_id`, an answer computed from a chunk
+    is stored only while that chunk is still stored in the Domain, so a job running across a
+    purge does not cache answers of the purged text."""
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], domain_id: str | None = None
+    ) -> None:
         self._sessions = sessions
+        self._domain = domain_id
 
     async def get(self, key: bytes) -> tuple[Any, Usage, str] | None:
         async with self._sessions() as session, session.begin():
@@ -310,6 +340,10 @@ class StoreCache:
         self, key: bytes, data: Any, usage: Usage, model: str, *, chunk_hash: bytes | None = None
     ) -> None:
         async with self._sessions() as session, session.begin():
+            if self._domain is not None and chunk_hash is not None:
+                await scope_to_domain(session, self._domain)
+                if not await ChunkRepository(session, self._domain).held(chunk_hash):
+                    return
             await ExtractionCacheRepository(session).put(
                 key,
                 model=model,
@@ -473,8 +507,13 @@ class ExtractionRun:
             )
         except Exception as error:
             report.duration_ms = int((time.monotonic() - started) * 1000)
+            # A document retired or purged while the job ran cancels it (the purge marks it
+            # cancelled too); anything else fails it.
+            status = (
+                RunStatus.CANCELLED if isinstance(error, DocumentRetiredError) else RunStatus.FAILED
+            )
             await self._finish(
-                report, RunStatus.FAILED, {"type": type(error).__name__, "message": str(error)}
+                report, status, {"type": type(error).__name__, "message": str(error)}
             )
             raise
         report.duration_ms = int((time.monotonic() - started) * 1000)
@@ -608,6 +647,7 @@ class ExtractionRun:
             if check is not None:
                 async with self._sessions() as session, session.begin():
                     await scope_to_domain(session, domain.id)
+                    await lock_extractable(session, domain.id, report.documents)
                     await self._reconcile(session, check, [], None, found, report)
             return
         await self._propose(domain, schema, documents, items, report, check, found)
@@ -689,17 +729,20 @@ class ExtractionRun:
         encoded = text.encode("utf-8")
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
-            await ChunkRepository(session, domain_id).replace(
+            await lock_extractable(session, domain_id, [document.id])
+            stored = await ChunkRepository(session, domain_id).replace(
                 document.id,
                 [ChunkRow(c.seq, c.start, c.end, c.text, c.hash) for c in chunks],
             )
             # The parsed text the evidence offsets index, served by Keeper's document text route.
             text_ref = await self._blobs.put(session, domain_id, encoded)
-            await DocumentRepository(session, domain_id).set_text(
+            stored = stored and await DocumentRepository(session, domain_id).set_text(
                 document.id,
                 text_hash=hashlib.sha256(encoded).digest(),
                 metadata={**parsed.metadata(), "chunks": len(chunks), TEXT_REF_KEY: text_ref},
             )
+            if not stored:  # pragma: no cover - the lock above already refused it
+                raise DocumentRetiredError(f"document {document.id!r} is no longer extractable")
         report.count("chunks", len(chunks))
         sentences = sentence_bounds(text)
         tiers = report.tiers
@@ -887,7 +930,7 @@ class ExtractionRun:
         assert models.chat is not None
         discover = discovery is not None and self._settings.discovery.tier2
         budget = self._settings.max_tokens_per_job
-        cache = StoreCache(self._sessions) if self._settings.cache else None
+        cache = StoreCache(self._sessions, report.domain) if self._settings.cache else None
         for chunk in chunks:
             # The discovery pass has a budget of its own: its tokens do not count here.
             used = (
@@ -947,7 +990,7 @@ class ExtractionRun:
         cap (`discovery.llm_max_tokens`); a provider error costs that chunk, not the job."""
         assert models.discovery_chat is not None
         cap = self._settings.discovery.llm_max_tokens
-        cache = StoreCache(self._sessions) if self._settings.cache else None
+        cache = StoreCache(self._sessions, report.domain) if self._settings.cache else None
 
         def spend(usage: Usage) -> None:
             report.usage["input_tokens"] += usage.input_tokens
@@ -1078,6 +1121,7 @@ class ExtractionRun:
             return
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, report.domain)
+            await lock_extractable(session, report.domain, report.documents)
             outcome = await SchemaSuggestionRepository(session, report.domain).record(
                 observations,
                 job_id=report.job_id,
@@ -1115,6 +1159,7 @@ class ExtractionRun:
         )
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain.id)
+            await lock_extractable(session, domain.id, report.documents)
             await create_branch(
                 session,
                 domain.id,
