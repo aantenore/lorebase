@@ -56,6 +56,7 @@ from lorebase_store.merging import (
     MergeService,
     ProposalBranchMissingError,
     check_resolution,
+    proposal_kinds,
 )
 from lorebase_store.models.enums import (
     MergeAttemptStatus,
@@ -262,9 +263,9 @@ async def steward_approval(
     if required == 0 or not approval.protected:
         return None
     head = await head_schema(session, domain.id, proposal.target_ref, runtime=runtime)
-    subject = proposal_subject(
-        None if head is None else head.schema, proposal.kinds, proposal.target_ref
-    )
+    # Computed when no attempt stored them yet (a Proposal opened before they were stored).
+    kinds = await proposal_kinds(session, domain.id, proposal)
+    subject = proposal_subject(None if head is None else head.schema, kinds, proposal.target_ref)
     if not subject.roles:
         return StewardApproval(required, (), 0, ())
     if stewards is None:

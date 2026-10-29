@@ -20,6 +20,7 @@ from lorebase_store.merging.service import (
     MergeRequest,
     MergeService,
     ProposalBranchMissingError,
+    proposal_kinds,
     reconciliation_check_mode,
 )
 
@@ -40,6 +41,7 @@ __all__ = [
     "complete_provenance",
     "compute_attempt",
     "decisions_of",
+    "proposal_kinds",
     "reconciliation_check_mode",
     "taken_provenance",
 ]

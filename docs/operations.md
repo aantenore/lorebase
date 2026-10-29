@@ -153,15 +153,32 @@ an upstream change that meets a value someone else set is a Conflict of the Sour
 (`local_edits: review`, the default) instead of an overwrite ([Scribe](scribe.md#corrections-that-stick)).
 What to expect and watch:
 
-- **First run of each Source.** It seeds the last-written state (`seeded` in the run stats).
-  Values whose Lineage is the Source count as last written. Any other value of an owned
-  Attribute (an import, an Operation, another Source) is compared only: equal to upstream, it
-  seeds the state; different, it is a local edit, so an `auto_when_clean` Source whose target
-  was edited by hand stops at a Proposal with Conflicts once. Run it with `dry_run: true`
-  first to see the counts (`local_edits`).
-- **Auto-merged Sources.** A run that meets a local edit is no longer merged without a person
-  under `review`. Look for open Source Proposals with Conflicts, or the audit action
-  `source.local_edit_conflict`.
+- **First run of each Source is compare-only.** It seeds the last-written state (`seeded` in
+  the run stats). Values whose Lineage is the Source count as last written. Any other value of
+  an owned Attribute (an import, an Operation, another Source) is compared
+  only: equal to upstream, it seeds the state; different, it is a local edit. Under the
+  default `local_edits: review` every such Attribute is a `DV1` Conflict of the run's
+  Proposal, and every Record holding such values that the snapshot no longer has is a `DV2`.
+  A Source whose target was loaded by an import, or edited by hand, can therefore meet many
+  Conflicts on that first run.
+- **`auto_when_clean` Sources stop.** A Source that merged every run without a person before
+  the upgrade leaves the first run after it open whenever it meets a local edit, and merges
+  again only once the Proposal is reviewed and merged (or closed: the next run raises the same
+  Conflicts). Its later runs update the same open Proposal. Look for open Source Proposals
+  with Conflicts, or the audit action `source.local_edit_conflict` (one entry per local
+  edit, with its Proposal).
+- **Before the first run.** Run each Source with `dry_run: true` to see the counts
+  (`local_edits`, `seeded`). When the target's differing values are known to be stale
+  copies of upstream (an import from the same system), set `local_edits: source_wins` on the
+  Source for that first run, as the escape hatch: upstream values overwrite them as before
+  the upgrade, each overwrite audited, and the state is seeded; set it back to `review`
+  afterwards. `keep` lets values set by a person or an Operation win without review instead.
+- **Reviewing in bulk.** `lorebase proposal conflicts PROPOSAL --status open --json` lists
+  the Conflicts (their `id` is the fingerprint); `lorebase proposal resolve PROPOSAL --file
+  resolutions.json` (a JSON array of `{fingerprint, choice}`, `ours` to keep the target's
+  value, `theirs` to take upstream's) stores them all and re-runs the merge, as does
+  `POST .../proposals/{p}/conflicts:resolve`; the Review screen of the web app offers the same
+  choices. Then merge the Proposal.
 - **Old behavior.** Set `local_edits: source_wins` on a Source (in the schema: the Modeler or
   `lorebase schema apply`) to let upstream values overwrite corrections again; `keep` lets a
   person's value win without review.
@@ -193,8 +210,11 @@ first.
 
 Migration `0042` adds `proposals.kinds` (the Kinds a Proposal's changes touch, with a GIN
 index), empty for existing rows; each Proposal fills it at its next merge preview (a review,
-an item decision, a merge attempt, a new run of its Source). Until then a Proposal counts as
-schema-only and gets the Domain's steward roles. Nothing else changes unless configured:
+an item decision, a merge attempt, a new run of its Source). Until then its Kinds are
+computed when its steward roles, assignees or approval rule are read, from the Kinds that
+differ between its branches' common ancestor and its source head, so steward approvals apply
+to existing Proposals at once (the `assigned` filters included). Nothing else changes unless
+configured:
 
 - **Ingestion modes.** Without `settings.extraction` on a Domain, extraction accepts and holds
   exactly what it did ([extraction](extraction.md#ingestion-modes)). `scribe.extraction.mode`

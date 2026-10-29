@@ -88,6 +88,7 @@ from lorebase_keeper.services.stewards import (
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError, ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
+from lorebase_store.merging import proposal_kinds
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.reads import head_schema
 from lorebase_store.repositories import (
@@ -427,14 +428,17 @@ async def _assignments(
 ) -> dict[str, _Assignment]:
     """The steward assignment of each Proposal, by the schema of its target's head."""
     schemas: dict[str, Schema | None] = {}
+    kinds: dict[str, tuple[str, ...] | None] = {}
     async with store.sessions() as session, session.begin():
         await scope_to_domain(session, domain_id)
         for target in sorted({row.target_ref for row in rows}):
             head = await head_schema(session, domain_id, target, runtime=store.runtime)
             schemas[target] = None if head is None else head.schema
+        for row in rows:
+            kinds[row.id] = await proposal_kinds(session, domain_id, row)
     found: dict[str, _Assignment] = {}
     for row in rows:
-        subject = proposal_subject(schemas[row.target_ref], row.kinds, row.target_ref)
+        subject = proposal_subject(schemas[row.target_ref], kinds[row.id], row.target_ref)
         found[row.id] = _Assignment(
             roles=subject.roles,
             assignees=await stewards.listing(principal, domain_id, subject),

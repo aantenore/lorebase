@@ -416,7 +416,11 @@ Each run compares the fresh value `F` with the last-written one `W`, not with th
 
 Under `auto_with_authority` the Attributes whose `authority` is the Source are always
 overwritten, as before. A snapshot deletion of a Record holding values someone else set is a
-`DV2` delete/modify Conflict (`keep`: the Record stays; `source_wins`: deleted). Links follow
+`DV2` delete/modify Conflict (`keep`: the Record stays, with its Links; `source_wins`:
+deleted, with its Links). A Record someone else deleted and upstream changed comes back, when
+the `DV2` takes upstream's side, with every Link upstream holds. While a `keep` Source's
+Proposal stays open, each run decides again the Conflicts a person reopened by editing a kept
+value again. Links follow
 the same rule without Conflicts: a Link someone removed is not added again until upstream
 changes it, and a Link someone added is not removed. Each local edit writes one
 `source.local_edit_conflict` audit entry (Source, run, Proposal, Kind, key, Attribute, origin

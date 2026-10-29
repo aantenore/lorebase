@@ -29,17 +29,21 @@ class ResolvedLens:
 
 
 def trait_kinds(point: ReadPoint, names: Iterable[str], pointer: str) -> list[Kind]:
-    """The Kinds the caller may read that implement the Traits `names` (422 for an unknown
-    Trait, which a Trait the caller cannot see is too), by Kind id."""
+    """The Kinds the caller may read that implement the Traits `names`, by Kind id. 422 for
+    an unknown Trait, which with invisible Kinds a Trait none of whose implementing Kinds the
+    caller may read is too; otherwise the Kinds it may not read are left out."""
     schema = point.schema
     found: dict[str, Kind] = {}
     for index, name in enumerate(names):
         trait = schema.trait_by_api_name(name)
-        if trait is None:
+        readable = (
+            []
+            if trait is None
+            else [k for k in schema.kinds_implementing(trait.id) if point.scope.allows(k.api_name)]
+        )
+        if trait is None or (point.scope.invisible and not readable):
             raise invalid(f"{pointer}/{index}", f"unknown Trait {name!r}", "unknown_trait")
-        for kind in schema.kinds_implementing(trait.id):
-            if point.scope.allows(kind.api_name):
-                found[kind.id] = kind
+        found.update((kind.id, kind) for kind in readable)
     return sorted(found.values(), key=lambda k: k.id)
 
 

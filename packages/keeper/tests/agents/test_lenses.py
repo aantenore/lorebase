@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -112,6 +113,18 @@ def test_a_trait_the_caller_cannot_see_is_unknown_like_any_other_name(lensed: Sc
         ]
     }
     assert codes(missing) == codes(nonsense) == ["unknown_trait"]
+
+
+def test_a_trait_with_no_readable_kind_is_unknown_only_with_invisible_kinds(
+    lensed: Schema,
+) -> None:
+    # The Trait itself is in the schema read (a point not projected to the caller's Kinds).
+    invisible = replace(point_for(lensed, "Part", invisible=True), schema=lensed)
+    with pytest.raises(ProblemError) as raised:
+        trait_kinds(invisible, ["Located"], "/body/traits")
+    assert codes(raised) == ["unknown_trait"]
+    # Without invisible Kinds the Kinds the caller may not read are left out.
+    assert trait_kinds(point_for(lensed, "Part"), ["Located"], "/body/traits") == []
 
 
 def test_search_targets_the_union_of_kinds_and_traits(lensed: Schema) -> None:

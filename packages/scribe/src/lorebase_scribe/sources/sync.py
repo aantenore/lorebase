@@ -48,6 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lorebase_core.merge import MergePolicy, Resolution, ResolutionChoice, Side
 from lorebase_core.model import (
     IdPrefix,
+    LocalEdits,
     ProvenanceEntry,
     Schema,
     Source,
@@ -320,6 +321,21 @@ def merge_policy(domain: DomainRow, schema: Schema, source: Source) -> MergePoli
     return policy.model_copy(
         update={"prefer_attributes": {**policy.prefer_attributes, **authority}}
     )
+
+
+def _source_origin(source: Source) -> dict[str, str]:
+    """The Lineage filter of the values a Source wrote."""
+    return {"origin_type": SYNC_ORIGIN, "origin_field": "source_id", "origin_value": source.id}
+
+
+async def _setters(
+    rows: MaterializedRepository, kind_id: str, source: Source
+) -> dict[tuple[str, str], Setter]:
+    """Who set each value of `kind_id` that `source` did not write, by key and Attribute."""
+    return {
+        (found.key, found.attribute): Setter(found.origin_type, found.actor)
+        for found in await rows.attribute_origins_except(kind_id, **_source_origin(source))
+    }
 
 
 def edit_rules(schema: Schema, source: Source) -> EditRules:
@@ -631,16 +647,9 @@ class SourceSync:
         async for page in rows.stream_records(mapper.kind.id, batch=batch):
             for row in page:
                 records[row.key] = StoredRecord(row.object_hash, row.values)
-        origin = {
-            "origin_type": SYNC_ORIGIN,
-            "origin_field": "source_id",
-            "origin_value": source.id,
-        }
+        origin = _source_origin(source)
         owned = await rows.record_keys_with_origin(mapper.kind.id, **origin)
-        foreign = {
-            (found.key, found.attribute): Setter(found.origin_type, found.actor)
-            for found in await rows.attribute_origins_except(mapper.kind.id, **origin)
-        }
+        foreign = await _setters(rows, mapper.kind.id, source)
         links: dict[str, dict[str, frozenset[str]]] = {}
         owned_links: dict[str, frozenset[tuple[str, str]]] = {}
         for relation_id in mapper.relations:
@@ -855,7 +864,10 @@ class SourceSync:
                 report.proposal_status = proposal.status.value
                 return
             if delta is not None:
-                await self._resolve_local_edits(session, domain.id, proposal, policy, delta, source)
+                rules = edit_rules(schema, source)
+                await self._resolve_local_edits(
+                    session, domain.id, proposal, policy, delta, source, rules
+                )
             result = await self._merge(session, domain.id, proposal, policy, mode, report)
             report.merge_status = result.attempt.status.value
             if result.computation is not None:
@@ -898,13 +910,23 @@ class SourceSync:
         policy: MergePolicy,
         delta: Delta,
         source: Source,
+        rules: EditRules,
     ) -> None:
-        """Resolve the local-edit Conflicts a `keep` Source decides (design 9.1, 6.10)."""
+        """Resolve the local-edit Conflicts a `keep` Source decides (design 9.1, 6.10): those
+        of this run and, decided again, those its open Proposal already carried."""
         partition = kind_partition(source.target_kind)
-        decided: dict[tuple[str, str | None, str | None], Outcome] = {
-            (partition, edit.key, edit.attribute): edit.outcome
+        decided: dict[tuple[str, str | None, str | None], Outcome] = {}
+        if rules.mode is LocalEdits.KEEP:
+            decided.update(await self._redecided(session, domain_id, proposal, source, rules))
+        decided.update(
+            ((partition, edit.key, edit.attribute), edit.outcome)
             for edit in delta.local_edits
-            if edit.preserved and edit.outcome in (Outcome.KEPT, Outcome.OVERWRITTEN)
+            if edit.preserved
+        )
+        decided = {
+            found: outcome
+            for found, outcome in decided.items()
+            if outcome in (Outcome.KEPT, Outcome.OVERWRITTEN)
         }
         if not decided:
             return
@@ -933,6 +955,40 @@ class SourceSync:
                 )
             )
         await ResolutionRepository(session, domain_id).upsert_many(proposal.id, rows)
+
+    async def _redecided(
+        self,
+        session: AsyncSession,
+        domain_id: str,
+        proposal: ProposalRow,
+        source: Source,
+        rules: EditRules,
+    ) -> dict[tuple[str, str | None, str | None], Outcome]:
+        """The local edits the open Proposal preserves, decided again with who set the
+        target's current values: a person may have edited a kept value again, which makes a
+        new Conflict a run that meets no upstream change would otherwise leave open. One
+        decision per preserved Attribute plus one for the whole Record (a `DV2`); a decision
+        matching no open Conflict is ignored."""
+        settings = self._runtime.settings
+        written = SourceWrittenRepository(session, domain_id, writes=settings.writes)
+        preserved = [
+            row.pending
+            for row in await written.preserved(proposal.id)
+            if row.pending.element == source.target_kind
+        ]
+        if not preserved:
+            return {}
+        target = MaterializedRepository(
+            session, domain_id, proposal.target_ref, writes=settings.writes
+        )
+        setters = await _setters(target, source.target_kind, source)
+        partition = kind_partition(source.target_kind)
+        found: dict[tuple[str, str | None, str | None], Outcome] = {}
+        for pending in preserved:
+            for attribute in (None, *pending.preserve):
+                setter = None if attribute is None else setters.get((pending.key, attribute))
+                found[(partition, pending.key, attribute)] = rules.outcome(attribute, setter)
+        return found
 
     async def _audit_local_edits(
         self,

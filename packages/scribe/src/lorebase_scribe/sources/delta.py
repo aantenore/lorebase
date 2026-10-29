@@ -365,7 +365,7 @@ class _Run:
             delta.unchanged += 1
         for relation_id in self.mapper.relations:
             desired = row.links.get(relation_id, frozenset())
-            adds, removes = self.link_changes(relation_id, key, desired)
+            adds, removes = self.link_changes(relation_id, key, desired, stored is None)
             if (adds or removes) and entry is None:
                 entry = self.provenance(row)
             changes.extend(_link_changes(relation_id, key, adds, removes, entry, delta))
@@ -435,11 +435,12 @@ class _Run:
     # Links ------------------------------------------------------------------------------
 
     def link_changes(
-        self, relation_id: str, key: str, desired: frozenset[str]
+        self, relation_id: str, key: str, desired: frozenset[str], created: bool = False
     ) -> tuple[set[str], set[str]]:
         """Links to add and remove: the upstream changes since the Source last wrote them;
         before any state, the differences with the branch (removing only the Source's own
-        Links)."""
+        Links). A Record the run `created` (re-created after someone else deleted it) gets
+        every Link upstream holds: its deletion took the earlier ones with it."""
         existing = self.current.links.get(relation_id, {}).get(key, frozenset())
         last = self.written.links.get(relation_id, {}).get(key)
         if last is None:
@@ -451,7 +452,8 @@ class _Run:
             }
             return set(desired - existing), removes
         previous = set(last.written)
-        return set(desired - previous - existing), (previous - desired) & existing
+        adds = desired - existing if created else desired - previous - existing
+        return set(adds), (previous - desired) & existing
 
     # Removals ---------------------------------------------------------------------------
 

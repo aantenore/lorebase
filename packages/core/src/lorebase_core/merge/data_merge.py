@@ -31,7 +31,13 @@ from lorebase_core.merge.state import (
 )
 from lorebase_core.merge.text_merge import TextMerge, merge_text
 from lorebase_core.model import Attribute, Kind, Relation, Schema
-from lorebase_core.tree import PARTITION_SCHEMA, DiffEntry, relation_partition, tree_get
+from lorebase_core.tree import (
+    PARTITION_SCHEMA,
+    DiffEntry,
+    kind_partition,
+    relation_partition,
+    tree_get,
+)
 from lorebase_core.types import AttributeType, CastError, CastRule, cast, cast_rule
 
 __all__ = ["DataMerge", "Origin", "SideChanges", "merge_data", "side_changes"]
@@ -85,6 +91,7 @@ def merge_data(ctx: Context, schema: SchemaMerge, changes: Mapping[Side, SideCha
     for partition in sorted(by_partition):
         merger = _PartitionMerge(ctx, schema, changes, partition, result)
         merger.run(by_partition[partition])
+    _keep_links_of_kept_records(ctx, schema, changes, result)
     _apply_directives(ctx, result)
     if ctx.policy.apply_defaults and not ctx.virtual:
         _apply_defaults(ctx, schema, result)
@@ -477,6 +484,51 @@ def _values(payload: Payload | None) -> dict[str, JsonValue]:
 
 def _with_values(template: Payload, values: Mapping[str, JsonValue]) -> Payload:
     return {**template, "values": {k: v for k, v in values.items() if v is not None}}
+
+
+def _keep_links_of_kept_records(
+    ctx: Context, schema: SchemaMerge, changes: Mapping[Side, SideChanges], result: DataMerge
+) -> None:
+    """A Record one side deleted and the merge keeps (a delete/modify Conflict open or
+    resolved for the modified version) keeps its Links: the deleting side's removal of a
+    Link touching it, explicit or by ``on_delete``, follows the Record's deletion, so it is
+    undone where the other side left the Link as in the base."""
+    kept: dict[tuple[str, str], Side] = {}
+    for side in SIDES:
+        for location, (base_hash, side_hash) in changes[side].items():
+            if (
+                base_hash is not None
+                and side_hash is None
+                and data_object_type(location[0]) is ObjectType.RECORD
+                and result.states.get(location) is not None
+            ):
+                kept[location] = side
+    if not kept:
+        return
+    relations = schema.schema.relations
+    for side in SIDES:
+        other = changes[Side.THEIRS if side is Side.OURS else Side.OURS]
+        for location, (base_hash, side_hash) in sorted(changes[side].items()):
+            if (
+                base_hash is None
+                or side_hash is not None
+                or data_object_type(location[0]) is not ObjectType.LINK
+                or location in other
+                or result.states.get(location) is not None
+            ):
+                continue
+            payload = ctx.document(base_hash)
+            relation = None if payload is None else relations.get(str(payload["relation"]))
+            if payload is None or relation is None:
+                continue
+            ends = (
+                (kind_partition(relation.from_kind), str(payload["from"])),
+                (kind_partition(relation.to_kind), str(payload["to"])),
+            )
+            if any(kept.get(end) is side for end in ends):
+                result.states[location] = payload
+                # Theirs' version when ours deleted it, for provenance; ours' is unchanged.
+                result.origins[location] = Origin(whole=Side.THEIRS if side is Side.OURS else None)
 
 
 def _apply_directives(ctx: Context, result: DataMerge) -> None:
