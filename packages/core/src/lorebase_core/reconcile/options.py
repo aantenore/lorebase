@@ -187,8 +187,8 @@ class ReconcileOptions(_Options):
     merge_check: MergeCheck = Field(
         default="warn",
         description="Proposal check of open candidates for the Proposals Scribe merges or "
-        "previews (Source syncs, extraction): off, warn or block. Set by the operator only; a "
-        "Domain chooses with its reconciliation_check setting.",
+        "previews (Source syncs, extraction): off, warn or block. Set by the operator; a "
+        "Domain's reconciliation_check setting can only make it stricter.",
     )
 
     @field_validator("stages")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -95,6 +96,18 @@ class ProposalRepository:
             query = query.with_for_update()
         found = (await self._session.execute(query)).mappings().one_or_none()
         return None if found is None else _proposal(found)
+
+    async def statuses(self, proposal_ids: Iterable[str]) -> dict[str, ProposalStatus]:
+        """The status of each of `proposal_ids` that exists, in one query."""
+        wanted = sorted(set(proposal_ids))
+        if not wanted:
+            return {}
+        result = await self._session.execute(
+            select(PROPOSALS.c.id, PROPOSALS.c.status).where(
+                PROPOSALS.c.domain_id == self._domain, PROPOSALS.c.id.in_(wanted)
+            )
+        )
+        return {str(found): ProposalStatus(status) for found, status in result}
 
     async def by_key(self, author: str, idempotency_key: str) -> ProposalRow | None:
         """The Proposal an author created under an idempotency key."""

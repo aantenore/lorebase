@@ -1,10 +1,13 @@
 """The reconciliation queue through the API against Postgres (design 10.6): reads masked by
 clearance, decisions written through `update_{kind}` with a `reconciliation` provenance, keep
 current, dismissal and reopening, a decision proposed on the protected default branch and
-settled by its merge, the blocking merge check, bulk dismissal and sweeps."""
+settled by its merge, the blocking merge check, bulk dismissal and sweeps; one pending
+decision at a time, withdrawal of a failed proposal, stale candidates and clearance of the
+values a decision writes."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from itertools import count
@@ -13,10 +16,14 @@ from typing import Any
 import pytest
 
 from lorebase_core.model import Sensitivity
-from lorebase_core.reconcile import CandidateDraft, CandidateType, Claim
+from lorebase_core.reconcile import CandidateDraft, CandidateType, Claim, DecisionAction
 from lorebase_store import storage
 from lorebase_store.db import create_engine
-from lorebase_store.repositories import ReconciliationCandidateRepository, scope_to_domain
+from lorebase_store.repositories import (
+    CandidateStateError,
+    ReconciliationCandidateRepository,
+    scope_to_domain,
+)
 from lorebase_store.settings import DatabaseSettings, StorageSettings, StoreSettings
 
 from .test_proposals_postgres import (
@@ -360,3 +367,192 @@ async def test_duplicates_merge_through_a_proposal(
         assert kept.json()["record"]["values"]["city"] == "Szczecin"
         settled = (await http.get(f"{QUEUE}/{candidate}", headers=admin)).json()
         assert settled["status"] == "resolved"
+
+
+async def duplicate(loader: Loader, branch: str, *keys: str) -> str:
+    async with loader.session() as session, session.begin():
+        await scope_to_domain(session, "supply")
+        outcome = await ReconciliationCandidateRepository(session, "supply").upsert(
+            CandidateDraft(
+                type=CandidateType.DUPLICATE, branch=branch, kind_id=SUPPLIER.id, keys=keys
+            ),
+            max_claims=20,
+            now=T0,
+            new_id=lambda: f"rcn_{next(IDS):026d}",
+        )
+    return outcome.row.id
+
+
+async def decision_branches(loader: Loader, candidate: str) -> int:
+    return int(
+        await loader.scalar(
+            "SELECT count(*) FROM refs WHERE domain_id = 'supply' AND name LIKE :p",
+            p=f"reconcile/{candidate}-%",
+        )
+    )
+
+
+async def decision_proposals(loader: Loader, candidate: str, status: str) -> int:
+    return int(
+        await loader.scalar(
+            "SELECT count(*) FROM proposals WHERE domain_id = 'supply' AND status = :s "
+            "AND source_ref LIKE :p",
+            s=status,
+            p=f"reconcile/{candidate}-%",
+        )
+    )
+
+
+async def test_one_pending_decision_at_a_time_and_failed_proposals_are_withdrawn(
+    keeper: Any,
+    installation_admin: Any,
+    role_key: Any,
+    loader: Loader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = installation_admin.headers
+    async with keeper() as http:
+        await setup_domain(http, admin, loader)
+        maintainer = await role_key(http, "supply", "maintainer")
+        first, second = list(loader.rows)[:2]
+        candidate = await seed(
+            loader,
+            "main",
+            first,
+            claim("prv_a", city(loader, first), "source:src_erp", 0),
+            claim("prv_b", "Lyon", "source:src_crm", 1),
+        )
+        url = f"{QUEUE}/{candidate}/resolution"
+        decide = {"choice": "claim", "claim_id": "prv_b", "reason": "confirmed"}
+
+        # Two decisions at once on the protected branch: one is proposed, the other refused
+        # and its branch and Proposal (if it got that far) withdrawn.
+        both = await asyncio.gather(
+            http.post(url, json=decide, headers=maintainer),
+            http.post(url, json=decide, headers=maintainer),
+        )
+        by_status = {r.status_code: r for r in both}
+        assert sorted(by_status) == [200, 409], [r.text for r in both]
+        proposed = by_status[200].json()
+        assert proposed["status"] == "proposed"
+        refused = by_status[409].json()
+        assert (refused["code"], refused["proposal"]) == (
+            "reconciliation-pending",
+            proposed["proposal"],
+        )
+        assert await decision_branches(loader, candidate) == 1
+        assert await decision_proposals(loader, candidate, "open") == 1
+
+        # No other decision while that Proposal is open, not even one that writes nothing.
+        kept = await http.post(
+            url, json={"choice": "keep_current", "reason": "ERP"}, headers=maintainer
+        )
+        assert kept.status_code == 409, kept.text
+        assert kept.json()["code"] == "reconciliation-pending"
+
+        # Once it is closed, a new decision replaces the pending one.
+        closed = await http.post(f"{PROPOSALS}/{proposed['proposal']}/close", headers=maintainer)
+        assert closed.status_code == 200, closed.text
+        again = await http.post(url, json=decide, headers=maintainer)
+        assert again.status_code == 200, again.text
+        assert again.json()["proposal"] != proposed["proposal"]
+        assert again.json()["candidate"]["decision"]["proposal"] == again.json()["proposal"]
+
+        # Recording the pending decision fails (the candidate was dismissed meanwhile): the
+        # Proposal is closed, the branch deleted and the withdrawal audited.
+        other = await seed(
+            loader,
+            "main",
+            second,
+            claim("prv_c", city(loader, second), "source:src_erp", 0),
+            claim("prv_d", "Nice", "source:src_crm", 1),
+        )
+
+        async def dismissed(self: Any, candidate_id: str, *_args: Any, **_kwargs: Any) -> Any:
+            raise CandidateStateError(candidate_id, "dismissed", DecisionAction.RESOLVE)
+
+        monkeypatch.setattr(ReconciliationCandidateRepository, "set_pending", dismissed)
+        failed = await http.post(
+            f"{QUEUE}/{other}/resolution",
+            json={"choice": "claim", "claim_id": "prv_d", "reason": "confirmed"},
+            headers=maintainer,
+        )
+        assert failed.status_code == 409, failed.text
+        assert failed.json()["code"] == "candidate-not-open"
+        assert await decision_branches(loader, other) == 0
+        assert await decision_proposals(loader, other, "open") == 0
+        assert await decision_proposals(loader, other, "closed") == 1
+        withdrawn = await loader.scalar(
+            "SELECT count(*) FROM audit_log WHERE action = 'reconciliation.resolve' "
+            "AND target = :t AND details ->> 'status' = 'withdrawn' "
+            "AND details ->> 'outcome' = 'rejected'",
+            t=other,
+        )
+        assert withdrawn == 1
+
+
+async def test_stale_candidates_and_values_the_caller_may_not_read_are_refused(
+    keeper: Any, installation_admin: Any, role_key: Any, loader: Loader
+) -> None:
+    admin = installation_admin.headers
+    async with keeper() as http:
+        await setup_domain(http, admin, loader, "side")
+        maintainer = await role_key(http, "supply", "maintainer")
+        first, second, third = list(loader.rows)[:3]
+
+        # A third value was written since detection: claim and policy choices need a new one.
+        moved = await seed(
+            loader,
+            "side",
+            second,
+            claim("prv_a", city(loader, second), "source:src_erp", 0),
+            claim("prv_b", "Nice", "source:src_crm", 1),
+        )
+        await loader.edit("side", second, city="Brest")
+        for body in (
+            {"choice": "claim", "claim_id": "prv_b", "reason": "CRM"},
+            {"choice": "policy", "policy": "newest_wins", "reason": "newest"},
+        ):
+            stale = await http.post(f"{QUEUE}/{moved}/resolution", json=body, headers=maintainer)
+            assert stale.status_code == 409, stale.text
+            assert stale.json()["code"] == "reconciliation-stale"
+            assert "detection" in stale.json()["detail"]
+
+        # A confidential value: written only by a caller cleared to read it.
+        vat = loader.rows[first]["vat_number"]
+        secret = await seed(
+            loader,
+            "side",
+            first,
+            claim("prv_c", vat, "source:src_erp", 0),
+            claim("prv_d", "PL-OTHER", "source:src_crm", 1),
+            attribute=VAT,
+            tags=(Sensitivity.CONFIDENTIAL,),
+        )
+        url = f"{QUEUE}/{secret}/resolution"
+        for body in (
+            {"choice": "claim", "claim_id": "prv_d", "reason": "CRM"},
+            {"choice": "custom", "value": "PL-NEW", "reason": "typed"},
+        ):
+            refused = await http.post(url, json=body, headers=maintainer)
+            assert refused.status_code == 403, refused.text
+        cleared = await http.post(
+            url, json={"choice": "claim", "claim_id": "prv_d", "reason": "CRM"}, headers=admin
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["status"] == "resolved"
+
+        # A duplicate merge may not write a value the caller cannot read, nor a placeholder.
+        pair = await duplicate(loader, "side", first, third)
+        merge_url = f"{QUEUE}/{pair}/resolution"
+        merge = {"choice": "merge", "survivor": first, "reason": "same company"}
+        sensitive = await http.post(
+            merge_url, json={**merge, "values": {"vat_number": "PL-X"}}, headers=maintainer
+        )
+        assert sensitive.status_code == 403, sensitive.text
+        masked = await http.post(
+            merge_url, json={**merge, "values": {"city": "***"}}, headers=maintainer
+        )
+        assert masked.status_code == 422, masked.text
+        assert masked.json()["errors"][0]["pointer"] == "/body/values/city"
+        assert await decision_branches(loader, pair) == 0

@@ -66,8 +66,10 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"model": Problem, "description": "Domain, branch or candidate not found."},
     409: {
         "model": Problem,
-        "description": "The candidate is not open (`candidate-not-open`), or the write needs "
-        "review and its Proposal cannot be opened.",
+        "description": "The candidate is not open (`candidate-not-open`), a decision on it "
+        "awaits review in an open Proposal (`reconciliation-pending`), the Record's value "
+        "changed since detection (`reconciliation-stale`), or the write needs review and its "
+        "Proposal cannot be opened.",
     },
     422: {"model": ValidationProblem, "description": "Invalid request, or the value is invalid."},
     503: {"model": Problem, "description": "The branch is locked by another writer."},

@@ -338,20 +338,28 @@ class ReconciliationCandidateRepository:
             table.c.proposal_id == proposal_id,
             table.c.decision["pending"].as_boolean().is_(True),
         )
-        query = select(table.c.id, table.c.type).where(
+        conditions = [
             self._scoped(),
             table.c.status == CandidateStatus.OPEN.value,
             or_(table.c.proposal_id == proposal_id, table.c.branch == source_ref),
             ~func.coalesce(resolving, False),
-        )
+        ]
         wanted = [t.value for t in types]
         if wanted:
-            query = query.where(table.c.type.in_(wanted))
-        rows = (await self._session.execute(query.order_by(table.c.created_at, table.c.id))).all()
-        counts: dict[str, int] = {}
-        for _id, kind in rows:
-            counts[kind] = counts.get(kind, 0) + 1
-        return ProposalChecks(counts, [row[0] for row in rows[:limit]])
+            conditions.append(table.c.type.in_(wanted))
+        counted = await self._session.execute(
+            select(table.c.type, func.count()).where(*conditions).group_by(table.c.type)
+        )
+        counts = {str(kind): int(number) for kind, number in counted}
+        if not counts:
+            return ProposalChecks({}, [])
+        first = await self._session.execute(
+            select(table.c.id)
+            .where(*conditions)
+            .order_by(table.c.created_at, table.c.id)
+            .limit(limit)
+        )
+        return ProposalChecks(counts, list(first.scalars()))
 
     async def pending_for(self, proposal_id: str) -> list[CandidateRow]:
         """Open candidates waiting for the merge of the Proposal a decision opened

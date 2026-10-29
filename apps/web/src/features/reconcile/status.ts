@@ -14,6 +14,8 @@ export const STATUS_TONE: Record<CandidateStatus, BadgeTone> = {
 const CODES: Readonly<Record<string, string>> = {
   'candidate-not-open': reconcileMessages.errors.notOpen,
   'reconciliation-open': reconcileMessages.errors.reconciliationOpen,
+  'reconciliation-pending': reconcileMessages.errors.pending,
+  'reconciliation-stale': reconcileMessages.errors.stale,
 };
 
 /**

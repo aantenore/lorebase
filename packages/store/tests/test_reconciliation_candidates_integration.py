@@ -1,5 +1,5 @@
-"""Reconciliation candidates and provenance periods against Postgres (design 10.6, migration
-`0038`)."""
+"""Reconciliation candidates and provenance periods against Postgres (design 10.6, migrations
+`0038` and `0039`)."""
 
 from __future__ import annotations
 
@@ -230,6 +230,100 @@ async def test_listing_filters_and_pages(sessions: async_sessionmaker[AsyncSessi
         assert await repo.page(CandidateFilter(kind_id=KIND, branch="dev"), limit=10) == []
         record = await repo.for_record("main", KIND, "S-1", statuses=[CandidateStatus.OPEN])
         assert [r.keys for r in record] == [["S-1"]]
+
+
+async def test_proposal_checks_count_in_sql_and_list_the_first_ids(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        repo = ReconciliationCandidateRepository(session, DOMAIN)
+        on_source = []
+        for index in range(3):
+            stored = await repo.upsert(
+                draft(
+                    claim(f"s{index}a", "x", "source:a"),
+                    claim(f"s{index}b", f"y{index}", "source:b"),
+                    key=f"S-{index}",
+                ).model_copy(update={"branch": "feature"}),
+                max_claims=10,
+                now=NOW + timedelta(minutes=index),
+                new_id=new_id,
+            )
+            on_source.append(stored.row.id)
+        raised = await repo.upsert(
+            draft(claim("r1", "x", "source:a"), claim("r2", "z", "source:b"), key="S-9"),
+            max_claims=10,
+            now=NOW + timedelta(minutes=5),
+            new_id=new_id,
+        )
+        await repo.upsert(
+            CandidateDraft(
+                type=CandidateType.DUPLICATE,
+                branch="feature",
+                kind_id=KIND,
+                keys=("S-1", "S-2"),
+                proposal_id="prp_1",
+            ),
+            max_claims=10,
+            now=NOW + timedelta(minutes=6),
+            new_id=new_id,
+        )
+        await repo.upsert(
+            draft(claim("r3", "x", "source:a"), claim("r4", "w", "source:b"), key="S-8"),
+            max_claims=10,
+            now=NOW + timedelta(minutes=7),
+            new_id=new_id,
+        )
+        # Raised by the Proposal, then decided through it: its merge resolves it, not counted.
+        resolving = await repo.upsert(
+            draft(claim("r5", "x", "source:a"), claim("r6", "v", "source:b"), key="S-7"),
+            max_claims=10,
+            now=NOW + timedelta(minutes=8),
+            new_id=new_id,
+        )
+        await repo.set_pending(
+            resolving.row.id, "prp_1", decision={"choice": "claim"}, reason="r", by="u", at=NOW
+        )
+        await session.execute(
+            text("UPDATE reconciliation_candidates SET proposal_id = 'prp_1' WHERE id = :id"),
+            {"id": raised.row.id},
+        )
+        checks = await repo.proposal_checks("prp_1", "feature", limit=2)
+        assert checks.counts == {"contradiction": 4, "duplicate": 1}
+        assert checks.open == 5
+        assert checks.ids == on_source[:2]
+        only = await repo.proposal_checks("prp_1", "feature", types=[CandidateType.DUPLICATE])
+        assert only.counts == {"duplicate": 1}
+        assert len(only.ids) == 1
+        empty = await repo.proposal_checks("prp_2", "other")
+        assert (empty.counts, empty.ids) == ({}, [])
+
+
+async def test_lookups_by_proposal_and_key_have_indexes(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessions() as session, session.begin():
+        found = await session.execute(
+            text(
+                "SELECT indexname, indexdef FROM pg_indexes "
+                "WHERE tablename = 'reconciliation_candidates'"
+            )
+        )
+        indexes = {str(name): str(definition) for name, definition in found}
+        assert (
+            "(domain_id, proposal_id)"
+            in indexes["ix_reconciliation_candidates_domain_id_proposal_id"]
+        )
+        assert "gin (keys jsonb_path_ops)" in indexes["ix_reconciliation_candidates_keys"]
+        # The GIN index answers the containment test of the Record page.
+        await session.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = await session.execute(
+            text(
+                "EXPLAIN SELECT id FROM reconciliation_candidates WHERE keys @> '[\"S-1\"]'::jsonb"
+            )
+        )
+        assert "ix_reconciliation_candidates_keys" in "\n".join(plan.scalars())
 
 
 async def test_sensitive_claim_values_are_wrapped(

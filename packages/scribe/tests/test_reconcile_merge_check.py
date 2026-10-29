@@ -1,6 +1,6 @@
 """The operator's `reconciliation` merge check reaches the merges Scribe runs (design 10.3,
 10.6): Source syncs hand `scribe.reconciliation.merge_check` to the merge service, whose Domain
-setting `reconciliation_check` still wins."""
+setting `reconciliation_check` applies only when it is stricter."""
 
 from __future__ import annotations
 
@@ -42,11 +42,29 @@ def test_merge_check_is_an_operator_option() -> None:
         ReconcileOptions(merge_check="strict")
 
 
-def test_the_domain_setting_wins_over_the_installation_mode() -> None:
-    assert reconciliation_check_mode(None, "block") == "block"
-    assert reconciliation_check_mode({"reconciliation_check": "off"}, "block") == "off"
-    assert reconciliation_check_mode({"reconciliation_check": "nonsense"}, "block") == "block"
-    assert reconciliation_check_mode({}, None) == "warn"
+@pytest.mark.parametrize(
+    ("domain", "installation", "expected"),
+    [
+        (None, "block", "block"),
+        ("off", "block", "block"),
+        ("warn", "block", "block"),
+        ("block", "off", "block"),
+        ("block", "warn", "block"),
+        ("off", "warn", "warn"),
+        ("warn", "off", "warn"),
+        ("off", "off", "off"),
+        ("nonsense", "block", "block"),
+        ("off", None, "off"),
+        ("block", None, "block"),
+        ("nonsense", None, "warn"),
+        (None, None, "warn"),
+    ],
+)
+def test_the_stricter_of_domain_and_installation_mode_applies(
+    domain: str | None, installation: str | None, expected: str
+) -> None:
+    settings = {} if domain is None else {"reconciliation_check": domain}
+    assert reconciliation_check_mode(settings, installation) == expected
 
 
 @pytest.mark.parametrize(("options", "expected"), [(None, None), ("block", "block")])

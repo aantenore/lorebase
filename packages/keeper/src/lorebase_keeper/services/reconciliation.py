@@ -27,7 +27,17 @@ write. When the write needs review (protected branch), it is made on a new branc
 previous one left) and proposed instead: the candidate stays open, linked to that Proposal,
 until the merge resolves it (`reconciliation_settle`). `keep_current`, a claim equal to the
 current value, dismissals and reopenings write no Revision; they are recorded on the candidate
-and in the audit log. Every decision needs a reason.
+and in the audit log. Every decision needs a reason. While the Proposal of a pending decision is
+open, no other decision is taken (409 `reconciliation-pending`); once it is closed, a new
+decision replaces the pending one. When proposing fails after the branch was created, the
+Proposal (if any) is closed, the branch deleted and the withdrawal audited, best effort.
+
+A `claim` or `policy` choice is refused (409 `reconciliation-stale`) when the Record's value
+changed since detection to one none of the claims holds: detection must run again. A decision
+that writes a value of an Attribute the caller may not read (a sensitive Attribute without the
+clearance, a vault Attribute without `pii`) is refused (403), whether the value comes from a
+claim, from the person (`custom`) or from a duplicate merge's `values`; a merge value equal to
+the masked or erased placeholder is refused (422).
 
 Reads (`view`) mask claim values, evidence quotes and decided values by clearance: wrapped
 values are shown to callers cleared for their tags on the candidate's Kind, vault references
@@ -37,6 +47,7 @@ masked.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -83,21 +94,26 @@ from lorebase_keeper.services.reconciliation_settle import (
     audit,
 )
 from lorebase_keeper.settings import KeeperSettings
-from lorebase_store.models.enums import ProposalOrigin
+from lorebase_store.models.enums import ProposalOrigin, ProposalStatus
 from lorebase_store.reads import head_schema, links_of_record
 from lorebase_store.repositories import (
     CandidateRow,
     CandidateStateError,
     MaterializedRepository,
+    ProposalRepository,
     ReconciliationCandidateRepository,
     wrap_decision,
 )
+
+logger = logging.getLogger("lorebase.keeper.reconciliation")
 
 BRANCH_PREFIX = "reconcile"
 """Branches of decisions that need review: `reconcile/{candidate}-{random}`."""
 BRANCH_TOKEN_BYTES = 8
 BRANCH_MOVED = ProblemType("reconciliation-branch-moved", 409, "Decision branch moved")
 CANDIDATE_NOT_OPEN = ProblemType("candidate-not-open", 409, "Candidate is not open")
+DECISION_PENDING = ProblemType("reconciliation-pending", 409, "Decision awaiting review")
+CANDIDATE_STALE = ProblemType("reconciliation-stale", 409, "Candidate is out of date")
 SENSITIVE_KEY = "$sensitive"
 VAULT_KEY = "$vault"
 
@@ -209,6 +225,35 @@ def raw_value(stored: Any) -> Any:
 
 def _is_reference(value: Any) -> bool:
     return isinstance(value, dict) and VAULT_KEY in value
+
+
+def is_stale(candidate: CandidateRow, current_hash: str | None) -> bool:
+    """Whether the Record's value changed since detection to one none of the claims holds."""
+    if current_hash is None:
+        return False
+    return current_hash not in {c.get("value_hash") for c in candidate.claims}
+
+
+def unreadable(masking: Masking, attribute: Attribute, kind_id: str) -> bool:
+    """Whether the caller may not read values of `attribute` of the Kind `kind_id`: a
+    sensitive Attribute without the clearance, a vault Attribute without `pii`."""
+    vault = attribute.in_vault and not masking.clearance.covers((Sensitivity.PII,), [kind_id])
+    return vault or masking.hidden(attribute, [kind_id])
+
+
+def placeholder(masking: Masking, value: Any) -> bool:
+    """Whether `value` is what reads show instead of a value (masked or erased)."""
+    settings = masking.settings
+    return isinstance(value, str) and value in (settings.masked_value, settings.erased_value)
+
+
+def _uncleared(candidate_id: str) -> ProblemError:
+    return ProblemError(
+        FORBIDDEN,
+        "This decision writes a value of an Attribute the caller may not read; a cleared "
+        "reviewer must decide it.",
+        extensions={"candidate": candidate_id},
+    )
 
 
 def _now(store: StoreAccess) -> datetime:
@@ -460,6 +505,7 @@ async def _record(
     **details: Any,
 ) -> CandidateRow:
     at = _now(ctx.store)
+    await _require_decidable(session, ctx, candidate.id)
     try:
         row = await ReconciliationCandidateRepository(session, ctx.domain_id).resolve(
             candidate.id,
@@ -496,6 +542,37 @@ def _require_open(candidate: CandidateRow) -> None:
         )
 
 
+async def _awaiting(session: AsyncSession, ctx: Context, candidate: CandidateRow) -> str | None:
+    """The open Proposal carrying the candidate's pending decision, if there is one."""
+    if candidate.proposal_id is None or not (candidate.decision or {}).get("pending"):
+        return None
+    found = await ProposalRepository(session, ctx.domain_id).get(candidate.proposal_id)
+    return found.id if found is not None and found.status is ProposalStatus.OPEN else None
+
+
+def _pending(candidate_id: str, proposal_id: str) -> ProblemError:
+    return ProblemError(
+        DECISION_PENDING,
+        f"candidate {candidate_id} has a decision awaiting review in Proposal {proposal_id}; "
+        "merge or close that Proposal first.",
+        extensions={"candidate": candidate_id, "proposal": proposal_id},
+    )
+
+
+async def _require_decidable(session: AsyncSession, ctx: Context, candidate_id: str) -> None:
+    """Lock the candidate and refuse a decision while it is not open or its pending decision's
+    Proposal is open (module doc); a pending decision of a closed Proposal is replaced."""
+    row = await ReconciliationCandidateRepository(session, ctx.domain_id).get(
+        candidate_id, for_update=True
+    )
+    if row is None:
+        raise not_found(candidate_id)
+    _require_open(row)
+    proposal = await _awaiting(session, ctx, row)
+    if proposal is not None:
+        raise _pending(candidate_id, proposal)
+
+
 async def resolve(ctx: Context, candidate_id: str, decision: DecisionInput) -> DecisionOutcome:
     """Decide one candidate (module doc)."""
     if not decision.reason.strip():
@@ -503,6 +580,9 @@ async def resolve(ctx: Context, candidate_id: str, decision: DecisionInput) -> D
     async with ctx.store.sessions() as session, session.begin():
         candidate = await _load(session, ctx, candidate_id)
         _require_open(candidate)
+        awaiting = await _awaiting(session, ctx, candidate)
+        if awaiting is not None:
+            raise _pending(candidate.id, awaiting)
         target = await _target(session, ctx, candidate)
         masking = (await ctx.reveal(session)).over(target.schema)
         if target.attribute is not None:
@@ -514,7 +594,7 @@ async def resolve(ctx: Context, candidate_id: str, decision: DecisionInput) -> D
         expected = "merge" if duplicate else "claim, keep_current, custom or policy"
         raise _invalid("/body/choice", f"a {candidate.type} candidate takes {expected}")
     if decision.choice is ReconciliationChoice.MERGE:
-        return await _merge_duplicates(ctx, candidate, target, decision)
+        return await _merge_duplicates(ctx, candidate, target, decision, masking)
 
     record: dict[str, Any] = {"choice": decision.choice.value}
     chosen: Mapping[str, Any] | None = None
@@ -523,6 +603,16 @@ async def resolve(ctx: Context, candidate_id: str, decision: DecisionInput) -> D
         if current:
             record["claim_id"] = current[0]["claim_id"]
         return await _without_write(ctx, candidate, target, decision, record)
+    if decision.choice in (ReconciliationChoice.CLAIM, ReconciliationChoice.POLICY) and is_stale(
+        candidate, target.current_hash
+    ):
+        raise ProblemError(
+            CANDIDATE_STALE,
+            f"The value of candidate {candidate.id} changed since it was detected to one none "
+            "of its claims holds; run detection again (a reconciliation sweep) before "
+            "deciding.",
+            extensions={"candidate": candidate.id},
+        )
     if decision.choice is ReconciliationChoice.CLAIM:
         if decision.claim_id is None:
             raise _invalid("/body/claim_id", "required for the choice claim")
@@ -550,6 +640,9 @@ async def resolve(ctx: Context, candidate_id: str, decision: DecisionInput) -> D
         record["claim_id"] = chosen["claim_id"]
         if chosen.get("value_hash") == target.current_hash:
             return await _without_write(ctx, candidate, target, decision, record)
+    if target.attribute is not None and unreadable(masking, target.attribute, candidate.kind_id):
+        raise _uncleared(candidate.id)
+    if chosen is not None:
         value = raw_value(chosen.get("value"))
         if _is_reference(value):
             value = await _opened(ctx, target, candidate, value)
@@ -782,66 +875,77 @@ async def _propose(
             edits=edits,
         )
     name, base = await _open_branch(ctx, candidate)
-    head = base
-    revisions: list[str] = []
-    edits = []
-    for request in requests:
-        # Each write expects the head the previous one left: nothing else lands on the branch.
-        executed = await operations_service.execute(
-            ctx.store,
-            ctx.domain_id,
-            _on(request, name, dry_run=False, expected_head=head),
-            ctx.principal,
-            ctx.keeper.operations,
-            check=ctx.check,
-            proposals_path=ctx.proposals_path,
-            reveal=ctx.reveal,
-        )
-        head = executed.head if not executed.revisions else executed.revisions[-1]
-        revisions.extend(hex(r) for r in executed.revisions)
-        edits.extend(executed.edits)
-    async with ctx.store.sessions() as session, session.begin():
-        await require_domain(session, ctx.domain_id)
-        current = await require_branch(session, ctx.domain_id, name)
-    if current.head != head:
-        raise ProblemError(
-            BRANCH_MOVED,
-            f"Branch {name!r} moved while the decision was written; decide again.",
-            extensions={"branch": name},
-        )
-    proposal_id = await _proposal_into(ctx, candidate, name, title or f"Reconcile {candidate.id}")
-    record = {**record, "branch": name, "base": hex(base), "head": hex(head)}
-    at = _now(ctx.store)
-    async with ctx.store.sessions() as session, session.begin():
-        await require_domain(session, ctx.domain_id)
-        try:
-            row = await ReconciliationCandidateRepository(session, ctx.domain_id).set_pending(
-                candidate.id,
-                proposal_id,
-                decision=wrap_decision(record, tags),
-                reason=decision.reason,
-                by=ctx.principal.id,
-                at=at,
+    proposal_id: str | None = None
+    try:
+        head = base
+        revisions: list[str] = []
+        edits = []
+        for request in requests:
+            # Each write expects the head the previous one left: nothing else lands on the branch.
+            executed = await operations_service.execute(
+                ctx.store,
+                ctx.domain_id,
+                _on(request, name, dry_run=False, expected_head=head),
+                ctx.principal,
+                ctx.keeper.operations,
+                check=ctx.check,
+                proposals_path=ctx.proposals_path,
+                reveal=ctx.reveal,
             )
-        except CandidateStateError as error:
-            raise not_open(error) from None
-        if row is None:
-            raise not_found(candidate.id)
-        await audit(
-            session,
-            ctx.domain_id,
-            actor=ctx.principal.id,
-            action=RESOLVE_ACTION,
-            target=candidate.id,
-            at=at,
-            choice=record.get("choice"),
-            claim_id=record.get("claim_id"),
-            policy=record.get("policy"),
-            status=Outcome.PROPOSED.value,
-            branch=name,
-            proposal=proposal_id,
-            revisions=revisions,
+            head = executed.head if not executed.revisions else executed.revisions[-1]
+            revisions.extend(hex(r) for r in executed.revisions)
+            edits.extend(executed.edits)
+        async with ctx.store.sessions() as session, session.begin():
+            await require_domain(session, ctx.domain_id)
+            current = await require_branch(session, ctx.domain_id, name)
+        if current.head != head:
+            raise ProblemError(
+                BRANCH_MOVED,
+                f"Branch {name!r} moved while the decision was written; decide again.",
+                extensions={"branch": name},
+            )
+        proposal_id = await _proposal_into(
+            ctx, candidate, name, title or f"Reconcile {candidate.id}"
         )
+        record = {**record, "branch": name, "base": hex(base), "head": hex(head)}
+        at = _now(ctx.store)
+        async with ctx.store.sessions() as session, session.begin():
+            await require_domain(session, ctx.domain_id)
+            # Another decision may have been proposed meanwhile: its Proposal stays, this one
+            # is withdrawn.
+            await _require_decidable(session, ctx, candidate.id)
+            try:
+                row = await ReconciliationCandidateRepository(session, ctx.domain_id).set_pending(
+                    candidate.id,
+                    proposal_id,
+                    decision=wrap_decision(record, tags),
+                    reason=decision.reason,
+                    by=ctx.principal.id,
+                    at=at,
+                )
+            except CandidateStateError as error:
+                raise not_open(error) from None
+            if row is None:
+                raise not_found(candidate.id)
+            await audit(
+                session,
+                ctx.domain_id,
+                actor=ctx.principal.id,
+                action=RESOLVE_ACTION,
+                target=candidate.id,
+                at=at,
+                choice=record.get("choice"),
+                claim_id=record.get("claim_id"),
+                policy=record.get("policy"),
+                status=Outcome.PROPOSED.value,
+                branch=name,
+                proposal=proposal_id,
+                revisions=revisions,
+            )
+    except Exception as error:
+        moved = isinstance(error, ProblemError) and error.problem is BRANCH_MOVED
+        await _withdraw(ctx, candidate, record, name, proposal_id, keep_branch=moved)
+        raise
     return DecisionOutcome(
         Outcome.PROPOSED,
         row,
@@ -851,6 +955,60 @@ async def _propose(
         branch=name,
         edits=edits,
     )
+
+
+async def _withdraw(
+    ctx: Context,
+    candidate: CandidateRow,
+    record: Mapping[str, Any],
+    name: str,
+    proposal_id: str | None,
+    *,
+    keep_branch: bool,
+) -> None:
+    """Best effort after a proposed decision failed: close its Proposal, delete its branch
+    (unless someone else wrote to it) and audit the withdrawal of an opened Proposal."""
+    if proposal_id is not None:
+        try:
+            await proposals.close(ctx.store, ctx.domain_id, proposal_id, ctx.keeper.proposals)
+        except Exception:
+            logger.warning(
+                "could not close Proposal %s of a failed decision on %s",
+                proposal_id,
+                candidate.id,
+                exc_info=True,
+            )
+    if not keep_branch:
+        try:
+            await branches.delete(ctx.store, ctx.domain_id, name, ctx.keeper.branches)
+        except Exception:
+            logger.warning(
+                "could not delete branch %s of a failed decision on %s",
+                name,
+                candidate.id,
+                exc_info=True,
+            )
+    if proposal_id is None:
+        return
+    try:
+        at = _now(ctx.store)
+        async with ctx.store.sessions() as session, session.begin():
+            await require_domain(session, ctx.domain_id)
+            await audit(
+                session,
+                ctx.domain_id,
+                actor=ctx.principal.id,
+                action=RESOLVE_ACTION,
+                target=candidate.id,
+                at=at,
+                outcome="rejected",
+                status="withdrawn",
+                choice=record.get("choice"),
+                branch=name,
+                proposal=proposal_id,
+            )
+    except Exception:
+        logger.warning("could not audit the withdrawn decision on %s", candidate.id, exc_info=True)
 
 
 def _on(
@@ -872,9 +1030,15 @@ def _on(
 
 
 async def _merge_duplicates(
-    ctx: Context, candidate: CandidateRow, target: _Target, decision: DecisionInput
+    ctx: Context,
+    candidate: CandidateRow,
+    target: _Target,
+    decision: DecisionInput,
+    masking: Masking,
 ) -> DecisionOutcome:
-    """Survivor update, Links re-created on it and the absorbed Record deleted, proposed."""
+    """Survivor update, Links re-created on it and the absorbed Record deleted, proposed.
+    `values` may not name an Attribute the caller may not read (403) nor hold a masked or
+    erased placeholder (422)."""
     keys = list(candidate.keys)
     if decision.survivor not in keys or len(keys) != 2:
         raise _invalid("/body/survivor", f"must be one of {', '.join(keys)}")
@@ -887,6 +1051,15 @@ async def _merge_duplicates(
     message = f"Reconcile {candidate.id}: merge {kind.api_name}/{absorbed} into {survivor}"
     requests: list[ExecutionRequest] = []
     values = dict(decision.values or {})
+    for name, value in values.items():
+        attribute = kind.attribute_by_api_name(name)
+        if attribute is not None and unreadable(masking, attribute, kind.id):
+            raise _uncleared(candidate.id)
+        if placeholder(masking, value):
+            raise _invalid(
+                f"/body/values/{name}",
+                "is the placeholder reads show for a value the caller may not see, not a value",
+            )
     if any(a.is_sensitive for a in kind.attributes.values() if a.api_name in values):
         values_kept: dict[str, JsonValue] = {}
     else:

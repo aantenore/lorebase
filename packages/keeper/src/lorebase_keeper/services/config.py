@@ -303,7 +303,7 @@ class ReconciliationSettings(SectionModel):
         default="warn",
         description="Proposal check of open candidates: off, warn (the Proposal lists them) "
         "or block (open contradictions stop the merge, automatic Source merges included); "
-        "a Domain overrides it with its reconciliation_check setting.",
+        "a Domain's reconciliation_check setting can only make it stricter.",
     )
 
     @model_validator(mode="after")
